@@ -2,7 +2,7 @@
  * Ghost in the Shell - Context Watcher
  *
  * Watches the active window and clipboard to provide contextual awareness.
- * Engram sees what you see.
+ * Vestige sees what you see.
  *
  * Features:
  * - Active window title detection (macOS via AppleScript)
@@ -35,7 +35,7 @@ export interface SystemContext {
 // CONTEXT FILE LOCATION
 // ============================================================================
 
-const CONTEXT_FILE = path.join(os.homedir(), '.engram', 'context.json');
+const CONTEXT_FILE = path.join(os.homedir(), '.vestige', 'context.json');
 
 // ============================================================================
 // PLATFORM-SPECIFIC IMPLEMENTATIONS

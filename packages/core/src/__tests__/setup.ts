@@ -208,7 +208,7 @@ export function createTestDatabase(): Database.Database {
 
   // Metadata table
   db.exec(`
-    CREATE TABLE IF NOT EXISTS engram_metadata (
+    CREATE TABLE IF NOT EXISTS vestige_metadata (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL

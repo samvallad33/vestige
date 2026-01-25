@@ -12,7 +12,7 @@
  * @module jobs/ConsolidationJob
  */
 
-import type { EngramDatabase } from '../core/database.js';
+import type { VestigeDatabase } from '../core/database.js';
 import type { Job, JobHandler } from './JobQueue.js';
 
 // ============================================================================
@@ -55,7 +55,7 @@ export interface ConsolidationJobResult {
  * Run knowledge consolidation on the database
  */
 async function runConsolidation(
-  db: EngramDatabase,
+  db: VestigeDatabase,
   options: {
     mergeThreshold?: number;
     pruneOrphanedEdges?: boolean;
@@ -116,12 +116,12 @@ async function runConsolidation(
 /**
  * Create a consolidation job handler
  *
- * @param db - EngramDatabase instance
+ * @param db - VestigeDatabase instance
  * @returns Job handler function
  *
  * @example
  * ```typescript
- * const db = new EngramDatabase();
+ * const db = new VestigeDatabase();
  * const queue = new JobQueue();
  *
  * queue.register('consolidation', createConsolidationJobHandler(db), {
@@ -134,7 +134,7 @@ async function runConsolidation(
  * ```
  */
 export function createConsolidationJobHandler(
-  db: EngramDatabase
+  db: VestigeDatabase
 ): JobHandler<ConsolidationJobData, ConsolidationJobResult> {
   return async (job: Job<ConsolidationJobData>): Promise<ConsolidationJobResult> => {
     return runConsolidation(db, {
@@ -154,7 +154,7 @@ export function createConsolidationJobHandler(
  * Preview what consolidation would do without making changes
  */
 export async function previewConsolidation(
-  db: EngramDatabase
+  db: VestigeDatabase
 ): Promise<ConsolidationJobResult> {
   return runConsolidation(db, { dryRun: true });
 }
@@ -162,7 +162,7 @@ export async function previewConsolidation(
 /**
  * Get database health metrics relevant to consolidation
  */
-export function getConsolidationMetrics(db: EngramDatabase): {
+export function getConsolidationMetrics(db: VestigeDatabase): {
   totalNodes: number;
   totalEdges: number;
   databaseSizeMB: number;

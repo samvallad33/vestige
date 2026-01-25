@@ -3,7 +3,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { EngramDatabase, EngramDatabaseError } from './core/database.js';
+import { VestigeDatabase, VestigeDatabaseError } from './core/database.js';
 import {
   captureContext,
   formatContextForInjection,
@@ -20,7 +20,7 @@ import { FSRSScheduler, Grade, type ReviewGrade } from './core/fsrs.js';
 import { createEmbeddingService, type EmbeddingService } from './core/embeddings.js';
 import { createVectorStore, type IVectorStore } from './core/vector-store.js';
 import { runConsolidation } from './core/consolidation.js';
-import { getConfig, type EngramConfig } from './core/config.js';
+import { getConfig, type VestigeConfig } from './core/config.js';
 import { JobQueue } from './jobs/JobQueue.js';
 import { createDecayJobHandler } from './jobs/DecayJob.js';
 import { createREMCycleJobHandler } from './jobs/REMCycleJob.js';
@@ -34,11 +34,11 @@ import {
 import { logger, mcpLogger } from './utils/logger.js';
 
 // ============================================================================
-// ENGRAM MCP SERVER
+// VESTIGE MCP SERVER
 // ============================================================================
 
 const server = new McpServer({
-  name: 'engram',
+  name: 'vestige',
   version: '0.3.0',
 });
 
@@ -46,7 +46,7 @@ const server = new McpServer({
 const config = getConfig();
 
 // Initialize database
-const db = new EngramDatabase();
+const db = new VestigeDatabase();
 
 // Initialize FSRS scheduler
 const fsrsScheduler = new FSRSScheduler({
@@ -64,7 +64,7 @@ let jobQueue: JobQueue | null = null;
 // ============================================================================
 
 async function initializeServices(): Promise<void> {
-  logger.info('Initializing Engram services...');
+  logger.info('Initializing Vestige services...');
 
   // Initialize embedding service (with fallback)
   try {
@@ -122,7 +122,7 @@ async function initializeServices(): Promise<void> {
     logger.warn('Failed to initialize job queue', { error: String(error) });
   }
 
-  logger.info('Engram services initialization complete');
+  logger.info('Vestige services initialization complete');
 }
 
 // ============================================================================
@@ -139,7 +139,7 @@ function safeResponse(data: unknown): { content: Array<{ type: 'text'; text: str
 }
 
 function errorResponse(error: unknown): { content: Array<{ type: 'text'; text: string }> } {
-  const message = error instanceof EngramDatabaseError
+  const message = error instanceof VestigeDatabaseError
     ? { error: error.message, code: error.code }
     : { error: error instanceof Error ? error.message : 'Unknown error' };
 
@@ -1290,7 +1290,7 @@ function getHealthRecommendations(health: ReturnType<typeof db.checkHealth>): st
 // ============================================================================
 
 async function gracefulShutdown(): Promise<void> {
-  logger.info('Shutting down Engram...');
+  logger.info('Shutting down Vestige...');
 
   // Stop job queue
   if (jobQueue) {
@@ -1320,7 +1320,7 @@ async function gracefulShutdown(): Promise<void> {
   db.close();
   logger.info('Database closed');
 
-  logger.info('Engram shutdown complete');
+  logger.info('Vestige shutdown complete');
 }
 
 process.on('SIGINT', async () => {
@@ -1343,11 +1343,11 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info('Engram MCP server v0.3.0 running');
+  logger.info('Vestige MCP server v0.3.0 running');
 }
 
 main().catch((error) => {
-  logger.error('Failed to start Engram', error instanceof Error ? error : undefined);
+  logger.error('Failed to start Vestige', error instanceof Error ? error : undefined);
   db.close();
   process.exit(1);
 });

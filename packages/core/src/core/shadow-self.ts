@@ -3,10 +3,10 @@
  *
  * "Your subconscious that keeps working while you're not looking."
  *
- * When you say "I don't know how to fix this," Engram logs it.
+ * When you say "I don't know how to fix this," Vestige logs it.
  * The Shadow periodically re-attacks these problems with new context.
  *
- * This turns Engram from a passive memory into an active problem-solver.
+ * This turns Vestige from a passive memory into an active problem-solver.
  */
 
 import Database from 'better-sqlite3';
@@ -47,7 +47,7 @@ export interface ShadowInsight {
 // DATABASE SETUP
 // ============================================================================
 
-const SHADOW_DB_PATH = path.join(os.homedir(), '.engram', 'shadow.db');
+const SHADOW_DB_PATH = path.join(os.homedir(), '.vestige', 'shadow.db');
 
 function initializeShadowDb(): Database.Database {
   const dir = path.dirname(SHADOW_DB_PATH);
@@ -343,12 +343,12 @@ export class ShadowSelf {
 // SHADOW WORK - Background processing
 // ============================================================================
 
-import { EngramDatabase } from './database.js';
+import { VestigeDatabase } from './database.js';
 
 /**
  * Run Shadow work cycle - look for new insights on unsolved problems
  */
-export function runShadowCycle(shadow: ShadowSelf, engram: EngramDatabase): {
+export function runShadowCycle(shadow: ShadowSelf, vestige: VestigeDatabase): {
   problemsAnalyzed: number;
   insightsGenerated: number;
   insights: Array<{ problem: string; insight: string }>;
@@ -374,7 +374,7 @@ export function runShadowCycle(shadow: ShadowSelf, engram: EngramDatabase): {
     // Search knowledge base for related content
     for (const keyword of keywords.slice(0, 5)) {
       try {
-        const searchResult = engram.searchNodes(keyword, { limit: 3 });
+        const searchResult = vestige.searchNodes(keyword, { limit: 3 });
 
         for (const node of searchResult.items) {
           // Check if this node was added after the problem

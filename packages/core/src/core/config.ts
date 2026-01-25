@@ -1,9 +1,9 @@
 /**
- * Configuration Management for Engram MCP
+ * Configuration Management for Vestige MCP
  *
  * Provides centralized configuration with:
  * - Zod schema validation
- * - File-based configuration (~/.engram/config.json)
+ * - File-based configuration (~/.vestige/config.json)
  * - Environment variable overrides
  * - Type-safe accessors for all config sections
  *
@@ -27,9 +27,9 @@ import fs from 'fs';
  */
 const DatabaseConfigSchema = z.object({
   /** Path to the SQLite database file */
-  path: z.string().default(path.join(os.homedir(), '.engram', 'engram.db')),
+  path: z.string().default(path.join(os.homedir(), '.vestige', 'vestige.db')),
   /** Directory for database backups */
-  backupDir: z.string().default(path.join(os.homedir(), '.engram', 'backups')),
+  backupDir: z.string().default(path.join(os.homedir(), '.vestige', 'backups')),
   /** SQLite busy timeout in milliseconds */
   busyTimeout: z.number().default(5000),
   /** SQLite cache size in pages (negative = KB) */
@@ -133,7 +133,7 @@ const VectorStoreConfigSchema = z.object({
   /** ChromaDB host URL */
   chromaHost: z.string().default('http://localhost:8000'),
   /** Name of the embeddings collection */
-  collectionName: z.string().default('engram_embeddings'),
+  collectionName: z.string().default('vestige_embeddings'),
 }).default({});
 
 /**
@@ -198,7 +198,7 @@ const ConfigSchema = z.object({
 /**
  * Inferred TypeScript type from the Zod schema
  */
-export type EngramConfig = z.infer<typeof ConfigSchema>;
+export type VestigeConfig = z.infer<typeof ConfigSchema>;
 
 // ============================================================================
 // CONFIGURATION LOADING
@@ -207,12 +207,12 @@ export type EngramConfig = z.infer<typeof ConfigSchema>;
 /**
  * Singleton configuration instance
  */
-let config: EngramConfig | null = null;
+let config: VestigeConfig | null = null;
 
 /**
  * Partial configuration type for environment overrides
  */
-interface PartialEngramConfig {
+interface PartialVestigeConfig {
   database?: {
     path?: string;
     backupDir?: string;
@@ -242,12 +242,12 @@ interface PartialEngramConfig {
  * Load environment variable overrides
  * Environment variables take precedence over file configuration
  */
-function loadEnvConfig(): PartialEngramConfig {
-  const env: PartialEngramConfig = {};
+function loadEnvConfig(): PartialVestigeConfig {
+  const env: PartialVestigeConfig = {};
 
   // Database configuration
-  const dbPath = process.env['ENGRAM_DB_PATH'];
-  const backupDir = process.env['ENGRAM_BACKUP_DIR'];
+  const dbPath = process.env['VESTIGE_DB_PATH'];
+  const backupDir = process.env['VESTIGE_BACKUP_DIR'];
   if (dbPath || backupDir) {
     env.database = {};
     if (dbPath) env.database.path = dbPath;
@@ -255,14 +255,14 @@ function loadEnvConfig(): PartialEngramConfig {
   }
 
   // Logging configuration
-  const logLevel = process.env['ENGRAM_LOG_LEVEL'];
+  const logLevel = process.env['VESTIGE_LOG_LEVEL'];
   if (logLevel) {
     env.logging = { level: logLevel };
   }
 
   // Embeddings configuration
   const ollamaHost = process.env['OLLAMA_HOST'];
-  const embeddingModel = process.env['ENGRAM_EMBEDDING_MODEL'];
+  const embeddingModel = process.env['VESTIGE_EMBEDDING_MODEL'];
   if (ollamaHost || embeddingModel) {
     env.embeddings = {};
     if (ollamaHost) env.embeddings.ollamaHost = ollamaHost;
@@ -276,7 +276,7 @@ function loadEnvConfig(): PartialEngramConfig {
   }
 
   // FSRS configuration
-  const desiredRetention = process.env['ENGRAM_DESIRED_RETENTION'];
+  const desiredRetention = process.env['VESTIGE_DESIRED_RETENTION'];
   if (desiredRetention) {
     const retention = parseFloat(desiredRetention);
     if (!isNaN(retention)) {
@@ -285,14 +285,14 @@ function loadEnvConfig(): PartialEngramConfig {
   }
 
   // REM configuration
-  const remEnabled = process.env['ENGRAM_REM_ENABLED'];
+  const remEnabled = process.env['VESTIGE_REM_ENABLED'];
   if (remEnabled) {
     const enabled = remEnabled.toLowerCase() === 'true';
     env.rem = { enabled };
   }
 
   // Consolidation configuration
-  const consolidationEnabled = process.env['ENGRAM_CONSOLIDATION_ENABLED'];
+  const consolidationEnabled = process.env['VESTIGE_CONSOLIDATION_ENABLED'];
   if (consolidationEnabled) {
     const enabled = consolidationEnabled.toLowerCase() === 'true';
     env.consolidation = { enabled };
@@ -338,10 +338,10 @@ function deepMerge<T extends Record<string, unknown>>(target: T, source: Partial
  * @param customPath - Optional custom path to config file
  * @returns Validated configuration object
  */
-export function loadConfig(customPath?: string): EngramConfig {
+export function loadConfig(customPath?: string): VestigeConfig {
   if (config) return config;
 
-  const configPath = customPath || path.join(os.homedir(), '.engram', 'config.json');
+  const configPath = customPath || path.join(os.homedir(), '.vestige', 'config.json');
   let fileConfig: Record<string, unknown> = {};
 
   // Load from file if it exists
@@ -371,7 +371,7 @@ export function loadConfig(customPath?: string): EngramConfig {
  *
  * @returns The current configuration object
  */
-export function getConfig(): EngramConfig {
+export function getConfig(): VestigeConfig {
   if (!config) {
     return loadConfig();
   }
@@ -455,7 +455,7 @@ export const getLimitsConfig = () => getConfig().limits;
  * @returns Validated configuration object
  * @throws ZodError if validation fails
  */
-export function validateConfig(configObj: unknown): EngramConfig {
+export function validateConfig(configObj: unknown): VestigeConfig {
   return ConfigSchema.parse(configObj);
 }
 

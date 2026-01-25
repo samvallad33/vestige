@@ -162,8 +162,8 @@ export function captureGitContext(): GitContext | undefined {
 // CONSTANTS & CONFIGURATION
 // ============================================================================
 
-const DEFAULT_DB_PATH = path.join(os.homedir(), '.engram', 'engram.db');
-const BACKUP_DIR = path.join(os.homedir(), '.engram', 'backups');
+const DEFAULT_DB_PATH = path.join(os.homedir(), '.vestige', 'vestige.db');
+const BACKUP_DIR = path.join(os.homedir(), '.vestige', 'backups');
 
 // Size thresholds (in bytes)
 const SIZE_WARNING_THRESHOLD = 100 * 1024 * 1024;  // 100MB
@@ -217,7 +217,7 @@ function validateBackupPath(backupPath: string): void {
 
   // Check path is within backup directory
   if (!isPathWithinDirectory(resolvedPath, resolvedBackupDir)) {
-    throw new EngramDatabaseError(
+    throw new VestigeDatabaseError(
       'Backup path must be within the backup directory',
       'INVALID_BACKUP_PATH'
     );
@@ -225,7 +225,7 @@ function validateBackupPath(backupPath: string): void {
 
   // Validate file extension
   if (!resolvedPath.endsWith('.db')) {
-    throw new EngramDatabaseError(
+    throw new VestigeDatabaseError(
       'Backup file must have .db extension',
       'INVALID_BACKUP_EXTENSION'
     );
@@ -233,7 +233,7 @@ function validateBackupPath(backupPath: string): void {
 
   // Check for null bytes or other suspicious characters
   if (backupPath.includes('\0') || backupPath.includes('..')) {
-    throw new EngramDatabaseError(
+    throw new VestigeDatabaseError(
       'Invalid characters in backup path',
       'INVALID_BACKUP_PATH'
     );
@@ -275,7 +275,7 @@ function sanitizeErrorMessage(message: string): string {
  */
 function validateStringLength(value: string, maxLength: number, fieldName: string): void {
   if (value && value.length > maxLength) {
-    throw new EngramDatabaseError(
+    throw new VestigeDatabaseError(
       `${fieldName} exceeds maximum length of ${maxLength} characters`,
       'INPUT_TOO_LONG'
     );
@@ -287,7 +287,7 @@ function validateStringLength(value: string, maxLength: number, fieldName: strin
  */
 function validateArrayLength<T>(arr: T[] | undefined, maxLength: number, fieldName: string): void {
   if (arr && arr.length > maxLength) {
-    throw new EngramDatabaseError(
+    throw new VestigeDatabaseError(
       `${fieldName} exceeds maximum count of ${maxLength} items`,
       'INPUT_TOO_MANY_ITEMS'
     );
@@ -298,7 +298,7 @@ function validateArrayLength<T>(arr: T[] | undefined, maxLength: number, fieldNa
 // ERROR TYPES
 // ============================================================================
 
-export class EngramDatabaseError extends Error {
+export class VestigeDatabaseError extends Error {
   constructor(
     message: string,
     public readonly code: string,
@@ -306,7 +306,7 @@ export class EngramDatabaseError extends Error {
   ) {
     // Sanitize the message to prevent sensitive data leakage
     super(sanitizeErrorMessage(message));
-    this.name = 'EngramDatabaseError';
+    this.name = 'VestigeDatabaseError';
     // Don't expose the original cause in production - it may contain sensitive info
     if (process.env.NODE_ENV === 'development' && cause) {
       this.cause = cause;
@@ -350,7 +350,7 @@ export interface PaginatedResult<T> {
 // ============================================================================
 
 export function getDbPath(): string {
-  const envPath = process.env['ENGRAM_DB_PATH'];
+  const envPath = process.env['VESTIGE_DB_PATH'];
   return envPath || DEFAULT_DB_PATH;
 }
 
@@ -599,7 +599,7 @@ function createTables(db: Database.Database): void {
 
   // Metadata table for tracking backups and system info
   db.exec(`
-    CREATE TABLE IF NOT EXISTS engram_metadata (
+    CREATE TABLE IF NOT EXISTS vestige_metadata (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -729,7 +729,7 @@ class OperationMutex {
   }
 }
 
-export class EngramDatabase {
+export class VestigeDatabase {
   private db: Database.Database;
   private dbPath: string;
   private readonly writeMutex = new OperationMutex();
@@ -815,7 +815,7 @@ export class EngramDatabase {
     // Get last backup time
     let lastBackup: string | null = null;
     try {
-      const row = this.db.prepare('SELECT value FROM engram_metadata WHERE key = ?').get('last_backup') as { value: string } | undefined;
+      const row = this.db.prepare('SELECT value FROM vestige_metadata WHERE key = ?').get('last_backup') as { value: string } | undefined;
       lastBackup = row?.value || null;
 
       // Warn if no backup in 7 days
@@ -884,7 +884,7 @@ export class EngramDatabase {
   backup(customPath?: string): string {
     // Generate safe backup filename with timestamp
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const backupFileName = `engram-backup-${timestamp}.db`;
+    const backupFileName = `vestige-backup-${timestamp}.db`;
 
     // Determine backup path - always force it to be within BACKUP_DIR for security
     let backupPath: string;
@@ -899,7 +899,7 @@ export class EngramDatabase {
       } else if (isPathWithinDirectory(resolvedCustom, resolvedBackupDir)) {
         backupPath = resolvedCustom;
       } else {
-        throw new EngramDatabaseError(
+        throw new VestigeDatabaseError(
           'Custom backup path must be within the backup directory',
           'INVALID_BACKUP_PATH'
         );
@@ -931,7 +931,7 @@ export class EngramDatabase {
     // Update metadata
     const now = new Date().toISOString();
     this.db.prepare(`
-      INSERT OR REPLACE INTO engram_metadata (key, value, updated_at)
+      INSERT OR REPLACE INTO vestige_metadata (key, value, updated_at)
       VALUES (?, ?, ?)
     `).run('last_backup', now, now);
 
@@ -950,7 +950,7 @@ export class EngramDatabase {
     }
 
     const files = fs.readdirSync(BACKUP_DIR)
-      .filter(f => f.startsWith('engram-backup-') && f.endsWith('.db'))
+      .filter(f => f.startsWith('vestige-backup-') && f.endsWith('.db'))
       .map(f => {
         const fullPath = path.join(BACKUP_DIR, f);
         const stats = fs.statSync(fullPath);
@@ -979,7 +979,7 @@ export class EngramDatabase {
     const resolvedPath = path.resolve(backupPath);
 
     if (!fs.existsSync(resolvedPath)) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         'Backup file not found',
         'BACKUP_NOT_FOUND'
       );
@@ -995,14 +995,14 @@ export class EngramDatabase {
       // SQLite database files start with "SQLite format 3\0"
       const sqliteHeader = 'SQLite format 3\0';
       if (header.toString('utf8', 0, 16) !== sqliteHeader) {
-        throw new EngramDatabaseError(
+        throw new VestigeDatabaseError(
           'Invalid backup file format - not a valid SQLite database',
           'INVALID_BACKUP_FORMAT'
         );
       }
     } catch (error) {
-      if (error instanceof EngramDatabaseError) throw error;
-      throw new EngramDatabaseError(
+      if (error instanceof VestigeDatabaseError) throw error;
+      throw new VestigeDatabaseError(
         'Failed to validate backup file',
         'BACKUP_VALIDATION_FAILED'
       );
@@ -1051,7 +1051,7 @@ export class EngramDatabase {
         this.db = initializeDatabase(this.dbPath);
         fs.unlinkSync(preRestoreBackup);
       }
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         'Failed to restore backup',
         'RESTORE_FAILED'
       );
@@ -1156,8 +1156,8 @@ export class EngramDatabase {
 
       return { ...node, id } as KnowledgeNode;
     } catch (error) {
-      if (error instanceof EngramDatabaseError) throw error;
-      throw new EngramDatabaseError(
+      if (error instanceof VestigeDatabaseError) throw error;
+      throw new VestigeDatabaseError(
         'Failed to insert knowledge node',
         'INSERT_NODE_FAILED'
       );
@@ -1171,7 +1171,7 @@ export class EngramDatabase {
       if (!row) return null;
       return this.rowToNode(row);
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         `Failed to get node: ${id}`,
         'GET_NODE_FAILED',
         error
@@ -1194,7 +1194,7 @@ export class EngramDatabase {
       `);
       stmt.run(new Date().toISOString(), id);
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         `Failed to update node access: ${id}`,
         'UPDATE_ACCESS_FAILED',
         error
@@ -1222,7 +1222,7 @@ export class EngramDatabase {
     try {
       const node = this.getNode(id);
       if (!node) {
-        throw new EngramDatabaseError(`Node not found: ${id}`, 'NODE_NOT_FOUND');
+        throw new VestigeDatabaseError(`Node not found: ${id}`, 'NODE_NOT_FOUND');
       }
 
       const currentStability = node.stabilityFactor ?? SM2_MIN_STABILITY;
@@ -1285,8 +1285,8 @@ export class EngramDatabase {
         id
       );
     } catch (error) {
-      if (error instanceof EngramDatabaseError) throw error;
-      throw new EngramDatabaseError(
+      if (error instanceof VestigeDatabaseError) throw error;
+      throw new VestigeDatabaseError(
         'Failed to mark node as reviewed',
         'MARK_REVIEWED_FAILED'
       );
@@ -1346,8 +1346,8 @@ export class EngramDatabase {
         hasMore: safeOffset + items.length < total,
       };
     } catch (error) {
-      if (error instanceof EngramDatabaseError) throw error;
-      throw new EngramDatabaseError(
+      if (error instanceof VestigeDatabaseError) throw error;
+      throw new VestigeDatabaseError(
         'Search operation failed',
         'SEARCH_FAILED'
       );
@@ -1380,7 +1380,7 @@ export class EngramDatabase {
         hasMore: offset + items.length < total,
       };
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         'Failed to get recent nodes',
         'GET_RECENT_FAILED',
         error
@@ -1419,7 +1419,7 @@ export class EngramDatabase {
         hasMore: offset + items.length < total,
       };
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         'Failed to get decaying nodes',
         'GET_DECAYING_FAILED',
         error
@@ -1433,7 +1433,7 @@ export class EngramDatabase {
       const result = stmt.get() as { count: number };
       return result.count;
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         'Failed to get node count',
         'COUNT_FAILED',
         error
@@ -1450,7 +1450,7 @@ export class EngramDatabase {
       const result = stmt.run(id);
       return result.changes > 0;
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         `Failed to delete node: ${id}`,
         'DELETE_NODE_FAILED',
         error
@@ -1504,8 +1504,8 @@ export class EngramDatabase {
 
       return { ...person, id, createdAt: new Date(now), updatedAt: new Date(now) } as PersonNode;
     } catch (error) {
-      if (error instanceof EngramDatabaseError) throw error;
-      throw new EngramDatabaseError(
+      if (error instanceof VestigeDatabaseError) throw error;
+      throw new VestigeDatabaseError(
         'Failed to insert person',
         'INSERT_PERSON_FAILED'
       );
@@ -1519,7 +1519,7 @@ export class EngramDatabase {
       if (!row) return null;
       return this.rowToPerson(row);
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         `Failed to get person: ${id}`,
         'GET_PERSON_FAILED',
         error
@@ -1548,8 +1548,8 @@ export class EngramDatabase {
       if (!row) return null;
       return this.rowToPerson(row);
     } catch (error) {
-      if (error instanceof EngramDatabaseError) throw error;
-      throw new EngramDatabaseError(
+      if (error instanceof VestigeDatabaseError) throw error;
+      throw new VestigeDatabaseError(
         'Failed to get person by name',
         'GET_PERSON_BY_NAME_FAILED'
       );
@@ -1578,7 +1578,7 @@ export class EngramDatabase {
         hasMore: offset + items.length < total,
       };
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         'Failed to get all people',
         'GET_ALL_PEOPLE_FAILED',
         error
@@ -1622,7 +1622,7 @@ export class EngramDatabase {
         hasMore: offset + items.length < total,
       };
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         'Failed to get people to reconnect',
         'GET_RECONNECT_FAILED',
         error
@@ -1643,7 +1643,7 @@ export class EngramDatabase {
       const now = new Date().toISOString();
       stmt.run(now, now, id);
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         `Failed to update person contact: ${id}`,
         'UPDATE_CONTACT_FAILED',
         error
@@ -1660,7 +1660,7 @@ export class EngramDatabase {
       const result = stmt.run(id);
       return result.changes > 0;
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         `Failed to delete person: ${id}`,
         'DELETE_PERSON_FAILED',
         error
@@ -1691,7 +1691,7 @@ export class EngramDatabase {
 
       return { ...edge, id, createdAt: new Date(now) } as GraphEdge;
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         'Failed to insert edge',
         'INSERT_EDGE_FAILED',
         error
@@ -1731,7 +1731,7 @@ export class EngramDatabase {
 
       return Array.from(visited);
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         `Failed to get related nodes: ${nodeId}`,
         'GET_RELATED_FAILED',
         error
@@ -1755,7 +1755,7 @@ export class EngramDatabase {
         totalEdges: edgeCount.c,
       };
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         'Failed to get stats',
         'GET_STATS_FAILED',
         error
@@ -1779,7 +1779,7 @@ export class EngramDatabase {
       // Reindex for performance
       this.db.exec('REINDEX');
     } catch (error) {
-      throw new EngramDatabaseError(
+      throw new VestigeDatabaseError(
         'Failed to optimize database',
         'OPTIMIZE_FAILED',
         error
@@ -1891,8 +1891,8 @@ export class EngramDatabase {
       // Execute with IMMEDIATE mode (acquires RESERVED lock immediately)
       return transaction.immediate();
     } catch (error) {
-      if (error instanceof EngramDatabaseError) throw error;
-      throw new EngramDatabaseError(
+      if (error instanceof VestigeDatabaseError) throw error;
+      throw new VestigeDatabaseError(
         'Failed to apply decay',
         'APPLY_DECAY_FAILED'
       );

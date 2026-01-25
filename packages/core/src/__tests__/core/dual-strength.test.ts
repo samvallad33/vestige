@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { initializeDatabase, EngramDatabase, analyzeSentimentIntensity } from '../../core/database.js';
+import { initializeDatabase, VestigeDatabase, analyzeSentimentIntensity } from '../../core/database.js';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -26,18 +26,18 @@ import os from 'os';
  * Create a test database in a temporary location
  */
 function createTestDatabase(): Database.Database {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-test-'));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vestige-test-'));
   const dbPath = path.join(tempDir, 'test.db');
   return initializeDatabase(dbPath);
 }
 
 /**
- * Create a test EngramDatabase instance
+ * Create a test VestigeDatabase instance
  */
-function createTestEngramDatabase(): { db: EngramDatabase; path: string } {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-test-'));
+function createTestVestigeDatabase(): { db: VestigeDatabase; path: string } {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vestige-test-'));
   const dbPath = path.join(tempDir, 'test.db');
-  const db = new EngramDatabase(dbPath);
+  const db = new VestigeDatabase(dbPath);
   return { db, path: dbPath };
 }
 
@@ -53,9 +53,9 @@ function cleanupTestDatabase(db: Database.Database): void {
 }
 
 /**
- * Clean up EngramDatabase and its files
+ * Clean up VestigeDatabase and its files
  */
-function cleanupEngramDatabase(db: EngramDatabase, dbPath: string): void {
+function cleanupVestigeDatabase(db: VestigeDatabase, dbPath: string): void {
   try {
     db.close();
     // Clean up temp directory
@@ -171,14 +171,14 @@ function backdateNode(db: Database.Database, id: string, daysAgo: number): void 
 
 describe('Dual-Strength Memory Model', () => {
   describe('Storage Strength', () => {
-    let testDb: { db: EngramDatabase; path: string };
+    let testDb: { db: VestigeDatabase; path: string };
 
     beforeEach(() => {
-      testDb = createTestEngramDatabase();
+      testDb = createTestVestigeDatabase();
     });
 
     afterEach(() => {
-      cleanupEngramDatabase(testDb.db, testDb.path);
+      cleanupVestigeDatabase(testDb.db, testDb.path);
     });
 
     it('should start at 1.0 for new nodes', () => {
@@ -364,14 +364,14 @@ describe('Dual-Strength Memory Model', () => {
   // ============================================================================
 
   describe('Retrieval Strength', () => {
-    let testDb: { db: EngramDatabase; path: string };
+    let testDb: { db: VestigeDatabase; path: string };
 
     beforeEach(() => {
-      testDb = createTestEngramDatabase();
+      testDb = createTestVestigeDatabase();
     });
 
     afterEach(() => {
-      cleanupEngramDatabase(testDb.db, testDb.path);
+      cleanupVestigeDatabase(testDb.db, testDb.path);
     });
 
     it('should start at 1.0 for new nodes', () => {
@@ -746,14 +746,14 @@ describe('Dual-Strength Memory Model', () => {
   // ============================================================================
 
   describe('Edge Cases', () => {
-    let testDb: { db: EngramDatabase; path: string };
+    let testDb: { db: VestigeDatabase; path: string };
 
     beforeEach(() => {
-      testDb = createTestEngramDatabase();
+      testDb = createTestVestigeDatabase();
     });
 
     afterEach(() => {
-      cleanupEngramDatabase(testDb.db, testDb.path);
+      cleanupVestigeDatabase(testDb.db, testDb.path);
     });
 
     it('should handle new node with no accesses correctly', () => {
@@ -959,14 +959,14 @@ describe('Dual-Strength Memory Model', () => {
   // ============================================================================
 
   describe('Desirable Difficulty Principle', () => {
-    let testDb: { db: EngramDatabase; path: string };
+    let testDb: { db: VestigeDatabase; path: string };
 
     beforeEach(() => {
-      testDb = createTestEngramDatabase();
+      testDb = createTestVestigeDatabase();
     });
 
     afterEach(() => {
-      cleanupEngramDatabase(testDb.db, testDb.path);
+      cleanupVestigeDatabase(testDb.db, testDb.path);
     });
 
     it('should reward difficult recalls with higher storage increase', () => {

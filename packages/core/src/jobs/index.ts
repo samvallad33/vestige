@@ -1,5 +1,5 @@
 /**
- * Jobs Module - Background Job Processing for Engram MCP
+ * Jobs Module - Background Job Processing for Vestige MCP
  *
  * This module provides a production-ready job queue system with:
  * - Priority-based scheduling
@@ -18,10 +18,10 @@
  *   createREMCycleJobHandler,
  *   createConsolidationJobHandler,
  * } from './jobs';
- * import { EngramDatabase } from './core';
+ * import { VestigeDatabase } from './core';
  *
  * // Initialize
- * const db = new EngramDatabase();
+ * const db = new VestigeDatabase();
  * const queue = new JobQueue();
  *
  * // Register job handlers

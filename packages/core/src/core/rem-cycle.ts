@@ -15,7 +15,7 @@
  * 5. Exponential Temporal Proximity - Time-based connection strength decay
  */
 
-import { EngramDatabase } from './database.js';
+import { VestigeDatabase } from './database.js';
 import type { KnowledgeNode } from './types.js';
 import natural from 'natural';
 import {
@@ -354,7 +354,7 @@ interface SpreadingActivationResult {
  * If A -> B and B -> C exist, creates A -> C with decayed weight
  */
 function applySpreadingActivation(
-  db: EngramDatabase,
+  db: VestigeDatabase,
   maxDepth: number = 2,
   minWeight: number = 0.2
 ): SpreadingActivationResult {
@@ -470,7 +470,7 @@ function applySpreadingActivation(
  * Strengthen connections for recently accessed nodes
  * Implements memory reconsolidation - accessing memories makes them stronger
  */
-function reconsolidateConnections(db: EngramDatabase, nodeId: string): number {
+function reconsolidateConnections(db: VestigeDatabase, nodeId: string): number {
   let strengthened = 0;
 
   try {
@@ -508,7 +508,7 @@ function reconsolidateConnections(db: EngramDatabase, nodeId: string): number {
 /**
  * Get nodes that have few or no connections
  */
-function getDisconnectedNodes(db: EngramDatabase, maxEdges: number = 1): KnowledgeNode[] {
+function getDisconnectedNodes(db: VestigeDatabase, maxEdges: number = 1): KnowledgeNode[] {
   // Get all nodes
   const result = db.getRecentNodes({ limit: 500 });
   const allNodes = result.items;
@@ -538,7 +538,7 @@ function getDisconnectedNodes(db: EngramDatabase, maxEdges: number = 1): Knowled
  * 6. Run spreading activation to find transitive connections
  */
 export async function runREMCycle(
-  db: EngramDatabase,
+  db: VestigeDatabase,
   options: REMCycleOptions = {}
 ): Promise<REMCycleResult> {
   const startTime = Date.now();
@@ -708,7 +708,7 @@ export async function runREMCycle(
 /**
  * Get a summary of potential discoveries without creating edges
  */
-export async function previewREMCycle(db: EngramDatabase): Promise<REMCycleResult> {
+export async function previewREMCycle(db: VestigeDatabase): Promise<REMCycleResult> {
   return runREMCycle(db, { dryRun: true, maxAnalyze: 100 });
 }
 
@@ -716,6 +716,6 @@ export async function previewREMCycle(db: EngramDatabase): Promise<REMCycleResul
  * Trigger reconsolidation for a specific node
  * Call this when a node is accessed to strengthen its connections
  */
-export function triggerReconsolidation(db: EngramDatabase, nodeId: string): number {
+export function triggerReconsolidation(db: VestigeDatabase, nodeId: string): number {
   return reconsolidateConnections(db, nodeId);
 }

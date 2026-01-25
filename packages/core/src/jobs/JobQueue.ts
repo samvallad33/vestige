@@ -1,5 +1,5 @@
 /**
- * JobQueue - Background Job Processing for Engram MCP
+ * JobQueue - Background Job Processing for Vestige MCP
  *
  * A production-ready in-memory job queue with:
  * - Priority-based job scheduling

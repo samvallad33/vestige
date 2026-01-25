@@ -1,5 +1,5 @@
 /**
- * Centralized logging system for Engram MCP
+ * Centralized logging system for Vestige MCP
  *
  * Provides structured JSON logging with:
  * - Log levels (debug, info, warn, error)
@@ -161,7 +161,7 @@ export function createLogger(name: string, minLevel: LogLevel = 'info'): Logger 
 
 // Get log level from environment
 function getLogLevelFromEnv(): LogLevel {
-  const envLevel = process.env['ENGRAM_LOG_LEVEL']?.toLowerCase();
+  const envLevel = process.env['VESTIGE_LOG_LEVEL']?.toLowerCase();
   if (envLevel && envLevel in LOG_LEVELS) {
     return envLevel as LogLevel;
   }
@@ -171,7 +171,7 @@ function getLogLevelFromEnv(): LogLevel {
 const LOG_LEVEL = getLogLevelFromEnv();
 
 // Root logger
-export const logger = createLogger('engram', LOG_LEVEL);
+export const logger = createLogger('vestige', LOG_LEVEL);
 
 // Pre-configured child loggers for subsystems
 export const dbLogger = logger.child('database');

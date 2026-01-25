@@ -1,5 +1,5 @@
 /**
- * Embeddings Service - Semantic Understanding for Engram
+ * Embeddings Service - Semantic Understanding for Vestige
  *
  * Provides vector embeddings for knowledge nodes using Ollama.
  * Embeddings enable semantic similarity search and connection discovery.
@@ -30,7 +30,7 @@ const OLLAMA_HOST = process.env['OLLAMA_HOST'] || 'http://localhost:11434';
  * - High quality embeddings for semantic search
  * - 8192 token context window
  */
-const EMBEDDING_MODEL = process.env['ENGRAM_EMBEDDING_MODEL'] || 'nomic-embed-text';
+const EMBEDDING_MODEL = process.env['VESTIGE_EMBEDDING_MODEL'] || 'nomic-embed-text';
 
 /**
  * Maximum characters to embed. nomic-embed-text supports ~8192 tokens,

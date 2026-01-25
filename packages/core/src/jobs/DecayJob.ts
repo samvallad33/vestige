@@ -9,7 +9,7 @@
  * @module jobs/DecayJob
  */
 
-import type { EngramDatabase } from '../core/database.js';
+import type { VestigeDatabase } from '../core/database.js';
 import type { Job, JobHandler } from './JobQueue.js';
 
 // ============================================================================
@@ -39,12 +39,12 @@ export interface DecayJobResult {
 /**
  * Create a decay job handler
  *
- * @param db - EngramDatabase instance
+ * @param db - VestigeDatabase instance
  * @returns Job handler function
  *
  * @example
  * ```typescript
- * const db = new EngramDatabase();
+ * const db = new VestigeDatabase();
  * const queue = new JobQueue();
  *
  * queue.register('decay', createDecayJobHandler(db), {
@@ -57,7 +57,7 @@ export interface DecayJobResult {
  * ```
  */
 export function createDecayJobHandler(
-  db: EngramDatabase
+  db: VestigeDatabase
 ): JobHandler<DecayJobData, DecayJobResult> {
   return async (job: Job<DecayJobData>): Promise<DecayJobResult> => {
     const startTime = Date.now();
@@ -85,7 +85,7 @@ export function createDecayJobHandler(
  * Useful for generating review notifications
  */
 export async function getCriticallyDecayedNodes(
-  db: EngramDatabase,
+  db: VestigeDatabase,
   threshold: number = 0.3
 ): Promise<{ nodeId: string; retention: number; content: string }[]> {
   const result = db.getDecayingNodes(threshold, { limit: 50 });

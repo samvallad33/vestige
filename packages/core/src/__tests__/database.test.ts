@@ -10,7 +10,7 @@ import {
   generateTestId,
 } from './setup.js';
 
-describe('EngramDatabase', () => {
+describe('VestigeDatabase', () => {
   let db: Database.Database;
 
   beforeEach(() => {
@@ -36,7 +36,7 @@ describe('EngramDatabase', () => {
       expect(tableNames).toContain('graph_edges');
       expect(tableNames).toContain('sources');
       expect(tableNames).toContain('embeddings');
-      expect(tableNames).toContain('engram_metadata');
+      expect(tableNames).toContain('vestige_metadata');
     });
 
     it('should create required indexes', () => {

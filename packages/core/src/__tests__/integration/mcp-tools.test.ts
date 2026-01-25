@@ -1,5 +1,5 @@
 /**
- * Integration tests for all 14 MCP tools in Engram MCP
+ * Integration tests for all 14 MCP tools in Vestige MCP
  *
  * Tests cover the complete tool functionality including:
  * - Input validation
@@ -9,14 +9,14 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from '@rstest/core';
-import { EngramDatabase } from '../../core/database.js';
+import { VestigeDatabase } from '../../core/database.js';
 import type { KnowledgeNode, PersonNode } from '../../core/types.js';
 
 /**
  * Creates an in-memory test database instance
  */
-function createTestDatabase(): EngramDatabase {
-  return new EngramDatabase(':memory:');
+function createTestDatabase(): VestigeDatabase {
+  return new VestigeDatabase(':memory:');
 }
 
 /**
@@ -36,7 +36,7 @@ function mockTimestamp(daysAgo: number = 0): Date {
  * Creates mock MCP tool handlers that simulate the actual tool behavior
  * These handlers call the same database methods as the real MCP server
  */
-function createMCPToolHandler(db: EngramDatabase) {
+function createMCPToolHandler(db: VestigeDatabase) {
   return {
     // --- Tool 1: ingest ---
     async ingest(args: {
@@ -429,7 +429,7 @@ function createMCPToolHandler(db: EngramDatabase) {
 // ============================================================================
 
 describe('MCP Tools Integration', () => {
-  let db: EngramDatabase;
+  let db: VestigeDatabase;
   let tools: ReturnType<typeof createMCPToolHandler>;
 
   beforeAll(() => {

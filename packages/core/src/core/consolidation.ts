@@ -20,7 +20,7 @@
  * - Spreading Activation: Related memories are co-activated and strengthened
  */
 
-import { EngramDatabase } from './database.js';
+import { VestigeDatabase } from './database.js';
 import { runREMCycle } from './rem-cycle.js';
 import type { KnowledgeNode } from './types.js';
 import { logger } from '../utils/logger.js';
@@ -89,7 +89,7 @@ const MAX_CONNECTIONS_FOR_IMPORTANCE = 5;
  * These are candidates for consolidation processing
  */
 async function getShortTermMemories(
-  db: EngramDatabase,
+  db: VestigeDatabase,
   windowHours: number
 ): Promise<KnowledgeNode[]> {
   const windowStart = new Date(Date.now() - windowHours * 60 * 60 * 1000);
@@ -109,7 +109,7 @@ async function getShortTermMemories(
  *
  * @returns Importance score from 0 to 1
  */
-function calculateImportance(db: EngramDatabase, memory: KnowledgeNode): number {
+function calculateImportance(db: VestigeDatabase, memory: KnowledgeNode): number {
   // Get connection count for this memory
   const connections = db.getRelatedNodes(memory.id, 1).length;
 
@@ -144,7 +144,7 @@ function calculateImportance(db: EngramDatabase, memory: KnowledgeNode): number 
  * Boost factor ranges from 1x (importance=0) to 3x (importance=1)
  */
 async function promoteToLongTerm(
-  db: EngramDatabase,
+  db: VestigeDatabase,
   nodeId: string,
   importance: number
 ): Promise<void> {
@@ -180,7 +180,7 @@ async function promoteToLongTerm(
  * User-created connections are preserved regardless of weight.
  */
 async function pruneWeakConnections(
-  db: EngramDatabase,
+  db: VestigeDatabase,
   threshold: number
 ): Promise<number> {
   // Access the internal database connection
@@ -232,12 +232,12 @@ async function pruneWeakConnections(
  *   - Emotional memories decay slower
  *   - Well-encoded memories (high storage strength) decay slower
  *
- * @param db - EngramDatabase instance
+ * @param db - VestigeDatabase instance
  * @param options - Consolidation configuration options
  * @returns Results of the consolidation cycle
  */
 export async function runConsolidation(
-  db: EngramDatabase,
+  db: VestigeDatabase,
   options: ConsolidationOptions = {}
 ): Promise<ConsolidationResult> {
   const startTime = Date.now();
@@ -358,7 +358,7 @@ export function getNextConsolidationTime(): Date {
  * actual modification phases.
  */
 export async function previewConsolidation(
-  db: EngramDatabase,
+  db: VestigeDatabase,
   options: ConsolidationOptions = {}
 ): Promise<{
   shortTermCount: number;

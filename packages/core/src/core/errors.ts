@@ -1,5 +1,5 @@
 /**
- * Engram Error Types
+ * Vestige Error Types
  *
  * A comprehensive hierarchy of errors for proper error handling and reporting.
  * Includes type guards, utilities, and a Result type for functional error handling.
@@ -31,9 +31,9 @@ export function sanitizeErrorMessage(message: string): string {
 // =============================================================================
 
 /**
- * Base error class for all Engram errors
+ * Base error class for all Vestige errors
  */
-export class EngramError extends Error {
+export class VestigeError extends Error {
   constructor(
     message: string,
     public readonly code: string,
@@ -41,7 +41,7 @@ export class EngramError extends Error {
     public readonly details?: Record<string, unknown>
   ) {
     super(message);
-    this.name = 'EngramError';
+    this.name = 'VestigeError';
     Error.captureStackTrace(this, this.constructor);
   }
 
@@ -78,7 +78,7 @@ export class EngramError extends Error {
 /**
  * Validation errors (400)
  */
-export class ValidationError extends EngramError {
+export class ValidationError extends VestigeError {
   constructor(message: string, details?: Record<string, unknown>) {
     super(message, 'VALIDATION_ERROR', 400, details);
     this.name = 'ValidationError';
@@ -88,7 +88,7 @@ export class ValidationError extends EngramError {
 /**
  * Resource not found (404)
  */
-export class NotFoundError extends EngramError {
+export class NotFoundError extends VestigeError {
   constructor(resource: string, id?: string) {
     super(
       id ? `${resource} not found: ${id}` : `${resource} not found`,
@@ -103,7 +103,7 @@ export class NotFoundError extends EngramError {
 /**
  * Conflict errors (409)
  */
-export class ConflictError extends EngramError {
+export class ConflictError extends VestigeError {
   constructor(message: string, details?: Record<string, unknown>) {
     super(message, 'CONFLICT', 409, details);
     this.name = 'ConflictError';
@@ -113,7 +113,7 @@ export class ConflictError extends EngramError {
 /**
  * Database operation errors (500)
  */
-export class DatabaseError extends EngramError {
+export class DatabaseError extends VestigeError {
   constructor(message: string, cause?: unknown) {
     super(sanitizeErrorMessage(message), 'DATABASE_ERROR', 500, {
       cause: String(cause),
@@ -125,7 +125,7 @@ export class DatabaseError extends EngramError {
 /**
  * Security-related errors (403)
  */
-export class SecurityError extends EngramError {
+export class SecurityError extends VestigeError {
   constructor(message: string, details?: Record<string, unknown>) {
     super(message, 'SECURITY_ERROR', 403, details);
     this.name = 'SecurityError';
@@ -135,7 +135,7 @@ export class SecurityError extends EngramError {
 /**
  * Configuration errors (500)
  */
-export class ConfigurationError extends EngramError {
+export class ConfigurationError extends VestigeError {
   constructor(message: string, details?: Record<string, unknown>) {
     super(message, 'CONFIGURATION_ERROR', 500, details);
     this.name = 'ConfigurationError';
@@ -145,7 +145,7 @@ export class ConfigurationError extends EngramError {
 /**
  * Timeout errors (408)
  */
-export class TimeoutError extends EngramError {
+export class TimeoutError extends VestigeError {
   constructor(operation: string, timeoutMs: number) {
     super(`Operation timed out: ${operation}`, 'TIMEOUT', 408, {
       operation,
@@ -158,7 +158,7 @@ export class TimeoutError extends EngramError {
 /**
  * Embedding service errors
  */
-export class EmbeddingError extends EngramError {
+export class EmbeddingError extends VestigeError {
   constructor(message: string, cause?: unknown) {
     super(message, 'EMBEDDING_ERROR', 500, { cause: String(cause) });
     this.name = 'EmbeddingError';
@@ -168,7 +168,7 @@ export class EmbeddingError extends EngramError {
 /**
  * Concurrency/locking errors (409)
  */
-export class ConcurrencyError extends EngramError {
+export class ConcurrencyError extends VestigeError {
   constructor(message: string = 'Operation failed due to concurrent access') {
     super(message, 'CONCURRENCY_ERROR', 409);
     this.name = 'ConcurrencyError';
@@ -178,7 +178,7 @@ export class ConcurrencyError extends EngramError {
 /**
  * Rate limit errors (429)
  */
-export class RateLimitError extends EngramError {
+export class RateLimitError extends VestigeError {
   constructor(message: string, retryAfterMs?: number) {
     super(message, 'RATE_LIMIT', 429, { retryAfterMs });
     this.name = 'RateLimitError';
@@ -188,7 +188,7 @@ export class RateLimitError extends EngramError {
 /**
  * Authentication errors (401)
  */
-export class AuthenticationError extends EngramError {
+export class AuthenticationError extends VestigeError {
   constructor(message: string = 'Authentication required') {
     super(message, 'AUTHENTICATION_ERROR', 401);
     this.name = 'AuthenticationError';
@@ -200,22 +200,22 @@ export class AuthenticationError extends EngramError {
 // =============================================================================
 
 /**
- * Type guard for EngramError
+ * Type guard for VestigeError
  */
-export function isEngramError(error: unknown): error is EngramError {
-  return error instanceof EngramError;
+export function isVestigeError(error: unknown): error is VestigeError {
+  return error instanceof VestigeError;
 }
 
 /**
- * Convert unknown error to EngramError
+ * Convert unknown error to VestigeError
  */
-export function toEngramError(error: unknown): EngramError {
-  if (isEngramError(error)) {
+export function toVestigeError(error: unknown): VestigeError {
+  if (isVestigeError(error)) {
     return error;
   }
 
   if (error instanceof Error) {
-    return new EngramError(
+    return new VestigeError(
       sanitizeErrorMessage(error.message),
       'UNKNOWN_ERROR',
       500,
@@ -224,10 +224,10 @@ export function toEngramError(error: unknown): EngramError {
   }
 
   if (typeof error === 'string') {
-    return new EngramError(sanitizeErrorMessage(error), 'UNKNOWN_ERROR', 500);
+    return new VestigeError(sanitizeErrorMessage(error), 'UNKNOWN_ERROR', 500);
   }
 
-  return new EngramError('An unknown error occurred', 'UNKNOWN_ERROR', 500, {
+  return new VestigeError('An unknown error occurred', 'UNKNOWN_ERROR', 500, {
     errorType: typeof error,
   });
 }
@@ -237,7 +237,7 @@ export function toEngramError(error: unknown): EngramError {
  */
 export function wrapError<T extends (...args: unknown[]) => Promise<unknown>>(
   fn: T,
-  errorTransform?: (error: unknown) => EngramError
+  errorTransform?: (error: unknown) => VestigeError
 ): T {
   const wrapped = async (...args: Parameters<T>): Promise<ReturnType<T>> => {
     try {
@@ -246,7 +246,7 @@ export function wrapError<T extends (...args: unknown[]) => Promise<unknown>>(
       if (errorTransform) {
         throw errorTransform(error);
       }
-      throw toEngramError(error);
+      throw toVestigeError(error);
     }
   };
   return wrapped as T;
@@ -257,7 +257,7 @@ export function wrapError<T extends (...args: unknown[]) => Promise<unknown>>(
  */
 export async function withErrorHandling<T>(
   fn: () => Promise<T>,
-  errorTransform?: (error: unknown) => EngramError
+  errorTransform?: (error: unknown) => VestigeError
 ): Promise<T> {
   try {
     return await fn();
@@ -265,7 +265,7 @@ export async function withErrorHandling<T>(
     if (errorTransform) {
       throw errorTransform(error);
     }
-    throw toEngramError(error);
+    throw toVestigeError(error);
   }
 }
 
@@ -297,7 +297,7 @@ export async function withRetry<T>(
       lastError = error;
 
       if (attempt === maxRetries || !shouldRetry(error)) {
-        throw toEngramError(error);
+        throw toVestigeError(error);
       }
 
       const delay = Math.min(baseDelayMs * Math.pow(2, attempt), maxDelayMs);
@@ -305,7 +305,7 @@ export async function withRetry<T>(
     }
   }
 
-  throw toEngramError(lastError);
+  throw toVestigeError(lastError);
 }
 
 // =============================================================================
@@ -315,7 +315,7 @@ export async function withRetry<T>(
 /**
  * Result type for functional error handling
  */
-export type Result<T, E = EngramError> =
+export type Result<T, E = VestigeError> =
   | { success: true; data: T }
   | { success: false; error: E };
 
@@ -329,7 +329,7 @@ export function ok<T>(data: T): Result<T, never> {
 /**
  * Create an error result
  */
-export function err<E = EngramError>(error: E): Result<never, E> {
+export function err<E = VestigeError>(error: E): Result<never, E> {
   return { success: false, error };
 }
 
@@ -398,24 +398,24 @@ export function mapError<T, E, F>(
  */
 export async function tryCatch<T>(
   fn: () => Promise<T>
-): Promise<Result<T, EngramError>> {
+): Promise<Result<T, VestigeError>> {
   try {
     const data = await fn();
     return ok(data);
   } catch (error) {
-    return err(toEngramError(error));
+    return err(toVestigeError(error));
   }
 }
 
 /**
  * Execute a synchronous function and return a Result
  */
-export function tryCatchSync<T>(fn: () => T): Result<T, EngramError> {
+export function tryCatchSync<T>(fn: () => T): Result<T, VestigeError> {
   try {
     const data = fn();
     return ok(data);
   } catch (error) {
-    return err(toEngramError(error));
+    return err(toVestigeError(error));
   }
 }
 

@@ -1,5 +1,5 @@
 /**
- * Vector Store Integration for Engram MCP
+ * Vector Store Integration for Vestige MCP
  *
  * Provides semantic search capabilities via vector embeddings.
  * Primary: ChromaDB (when available) - fast, efficient vector database
@@ -18,7 +18,7 @@ import type Database from 'better-sqlite3';
 // ============================================================================
 
 const CHROMA_HOST = process.env['CHROMA_HOST'] ?? 'http://localhost:8000';
-const COLLECTION_NAME = 'engram_embeddings';
+const COLLECTION_NAME = 'vestige_embeddings';
 const DEFAULT_SIMILARITY_LIMIT = 10;
 const MAX_SIMILARITY_LIMIT = 100;
 
@@ -224,7 +224,7 @@ export class ChromaVectorStore implements IVectorStore {
         name: COLLECTION_NAME,
         metadata: {
           'hnsw:space': 'cosine', // Use cosine similarity
-          description: 'Engram knowledge node embeddings',
+          description: 'Vestige knowledge node embeddings',
         },
       });
 

@@ -10,7 +10,7 @@
  * @module jobs/REMCycleJob
  */
 
-import type { EngramDatabase } from '../core/database.js';
+import type { VestigeDatabase } from '../core/database.js';
 import { runREMCycle } from '../core/rem-cycle.js';
 import type { Job, JobHandler } from './JobQueue.js';
 
@@ -53,12 +53,12 @@ export interface REMCycleJobResult {
 /**
  * Create a REM cycle job handler
  *
- * @param db - EngramDatabase instance
+ * @param db - VestigeDatabase instance
  * @returns Job handler function
  *
  * @example
  * ```typescript
- * const db = new EngramDatabase();
+ * const db = new VestigeDatabase();
  * const queue = new JobQueue();
  *
  * queue.register('rem-cycle', createREMCycleJobHandler(db), {
@@ -71,7 +71,7 @@ export interface REMCycleJobResult {
  * ```
  */
 export function createREMCycleJobHandler(
-  db: EngramDatabase
+  db: VestigeDatabase
 ): JobHandler<REMCycleJobData, REMCycleJobResult> {
   return async (job: Job<REMCycleJobData>): Promise<REMCycleJobResult> => {
     const options = {
@@ -109,7 +109,7 @@ export function createREMCycleJobHandler(
  * Useful for testing or showing users potential discoveries
  */
 export async function previewREMCycleJob(
-  db: EngramDatabase,
+  db: VestigeDatabase,
   maxAnalyze: number = 100
 ): Promise<REMCycleJobResult> {
   const cycleResult = await runREMCycle(db, {

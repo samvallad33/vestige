@@ -1,5 +1,5 @@
 /**
- * Security Utilities for Engram
+ * Security Utilities for Vestige
  *
  * Provides comprehensive security controls including:
  * - Input validation and sanitization
@@ -917,7 +917,7 @@ export function logSecurityEvent(event: Omit<SecurityEvent, 'timestamp'>): void 
   }
 
   // Log to stderr in debug mode
-  if (process.env['ENGRAM_DEBUG']) {
+  if (process.env['VESTIGE_DEBUG']) {
     console.error(`[SECURITY:${fullEvent.severity.toUpperCase()}] ${fullEvent.type}: ${JSON.stringify(fullEvent.details)}`);
   }
 

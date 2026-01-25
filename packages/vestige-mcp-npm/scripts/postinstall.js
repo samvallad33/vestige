@@ -27,12 +27,12 @@ if (!platformStr || !archStr) {
   process.exit(1);
 }
 
-const binaryName = PLATFORM === 'win32' ? 'engram-mcp.exe' : 'engram-mcp';
+const binaryName = PLATFORM === 'win32' ? 'vestige-mcp.exe' : 'vestige-mcp';
 const targetDir = path.join(__dirname, '..', 'bin');
 const targetPath = path.join(targetDir, binaryName);
 
 // For now, just create a placeholder - real binaries come from GitHub releases
-console.log(`Engram MCP v${VERSION} installed for ${archStr}-${platformStr}`);
+console.log(`Vestige MCP v${VERSION} installed for ${archStr}-${platformStr}`);
 console.log(`Binary location: ${targetPath}`);
 
 // Ensure bin directory exists

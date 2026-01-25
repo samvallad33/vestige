@@ -423,7 +423,7 @@ export class CacheService<T = unknown> {
 // ============================================================================
 
 /**
- * Standard cache key patterns for Engram MCP.
+ * Standard cache key patterns for Vestige MCP.
  * These functions generate consistent cache keys for different entity types.
  */
 export const CACHE_KEYS = {

@@ -14,7 +14,7 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@engram/core':
+      '@vestige/core':
         specifier: workspace:*
         version: link:../../packages/core
       '@react-three/drei':
@@ -167,7 +167,7 @@ importers:
         specifier: ^5.4.5
         version: 5.8.3
 
-  packages/engram-mcp-npm: {}
+  packages/vestige-mcp-npm: {}
 
 packages:
 

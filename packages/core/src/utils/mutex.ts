@@ -1,5 +1,5 @@
 /**
- * Concurrency utilities for Engram MCP
+ * Concurrency utilities for Vestige MCP
  *
  * Provides synchronization primitives for managing concurrent access
  * to shared resources like database connections.

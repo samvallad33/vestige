@@ -1,22 +1,22 @@
 #!/usr/bin/env node
 
 /**
- * Engram CLI - Management commands for the Memory Palace
+ * Vestige CLI - Management commands for the Memory Palace
  *
  * Usage:
- *   engram stats           - Show knowledge base statistics and health
- *   engram health          - Detailed health check
- *   engram review          - Start a review session
- *   engram people          - List people in your network
- *   engram backup          - Create a backup
- *   engram backups         - List available backups
- *   engram restore <path>  - Restore from a backup
- *   engram optimize        - Optimize the database
- *   engram decay           - Apply memory decay
- *   engram eat <url|path>  - Ingest documentation/content (Man Page Absorber)
+ *   vestige stats           - Show knowledge base statistics and health
+ *   vestige health          - Detailed health check
+ *   vestige review          - Start a review session
+ *   vestige people          - List people in your network
+ *   vestige backup          - Create a backup
+ *   vestige backups         - List available backups
+ *   vestige restore <path>  - Restore from a backup
+ *   vestige optimize        - Optimize the database
+ *   vestige decay           - Apply memory decay
+ *   vestige eat <url|path>  - Ingest documentation/content (Man Page Absorber)
  */
 
-import { EngramDatabase, EngramDatabaseError } from './core/database.js';
+import { VestigeDatabase, VestigeDatabaseError } from './core/database.js';
 import {
   captureContext,
   formatContextForInjection,
@@ -297,7 +297,7 @@ function splitLargeSection(content: string, section: string, startIndex: number,
 /**
  * Ingest content from URL or file path
  */
-async function eatContent(source: string, db: EngramDatabase): Promise<void> {
+async function eatContent(source: string, db: VestigeDatabase): Promise<void> {
   console.log(`\n  Fetching content from: ${source}`);
 
   // Determine if URL or file
@@ -383,14 +383,14 @@ async function eatContent(source: string, db: EngramDatabase): Promise<void> {
 
   console.log(`  Created ${edgesCreated} sequential connections`);
   console.log(`\n  Successfully ingested ${chunks.length} chunks from ${sourceName}`);
-  console.log(`  Use 'engram recall' or ask Claude to find this knowledge.\n`);
+  console.log(`  Use 'vestige recall' or ask Claude to find this knowledge.\n`);
 }
 
 const command = process.argv[2];
 const args = process.argv.slice(3);
 
 async function main() {
-  const db = new EngramDatabase();
+  const db = new VestigeDatabase();
 
   try {
     switch (command) {
@@ -503,7 +503,7 @@ async function main() {
         const health = db.checkHealth();
         const size = db.getDatabaseSize();
 
-        console.log('\n  Engram Health Check\n');
+        console.log('\n  Vestige Health Check\n');
         console.log(`  Status:           ${getStatusEmoji(health.status)} ${health.status.toUpperCase()}`);
         console.log(`  Database Path:    ${health.dbPath}`);
         console.log(`  Database Size:    ${size.formatted}`);
@@ -594,7 +594,7 @@ async function main() {
       case 'backups': {
         const backups = db.listBackups();
         if (backups.length === 0) {
-          console.log('\n  No backups found. Create one with: engram backup\n');
+          console.log('\n  No backups found. Create one with: vestige backup\n');
           break;
         }
 
@@ -611,8 +611,8 @@ async function main() {
       case 'restore': {
         const backupPath = args[0];
         if (!backupPath) {
-          console.log('\n  Usage: engram restore <backup-path>');
-          console.log('  Use "engram backups" to see available backups.\n');
+          console.log('\n  Usage: vestige restore <backup-path>');
+          console.log('  Use "vestige backups" to see available backups.\n');
           break;
         }
 
@@ -639,7 +639,7 @@ async function main() {
           db.restore(safePath);
           console.log('  Restore completed successfully!\n');
         } catch (error) {
-          if (error instanceof EngramDatabaseError) {
+          if (error instanceof VestigeDatabaseError) {
             console.error(`  Error: ${error.message} (${error.code})\n`);
           } else {
             console.error(`  Error: ${error instanceof Error ? error.message : 'Unknown error'}\n`);
@@ -753,7 +753,7 @@ async function main() {
           case 'search': {
             const query = args.slice(1).join(' ');
             if (!query) {
-              console.log('\n  Usage: engram embeddings search "<query>"\n');
+              console.log('\n  Usage: vestige embeddings search "<query>"\n');
               break;
             }
 
@@ -800,9 +800,9 @@ async function main() {
 
           default:
             console.log(`
-  Engram Embeddings - Semantic Understanding
+  Vestige Embeddings - Semantic Understanding
 
-  Usage: engram embeddings <command>
+  Usage: vestige embeddings <command>
 
   Commands:
     status              Check embedding service availability
@@ -810,10 +810,10 @@ async function main() {
     search "<query>"    Semantic similarity search
 
   Examples:
-    engram embeddings status
-    engram embeddings generate
-    engram embeddings generate abc12345
-    engram embeddings search "authentication flow"
+    vestige embeddings status
+    vestige embeddings generate
+    vestige embeddings generate abc12345
+    vestige embeddings search "authentication flow"
 `);
         }
         break;
@@ -821,11 +821,11 @@ async function main() {
 
       case 'config': {
         const configCmd = args[0];
-        const configPath = path.join(os.homedir(), '.engram', 'config.json');
+        const configPath = path.join(os.homedir(), '.vestige', 'config.json');
 
         switch (configCmd) {
           case 'show': {
-            console.log('\n  Engram Configuration\n');
+            console.log('\n  Vestige Configuration\n');
             const config = getConfig();
             console.log(JSON.stringify(config, null, 2));
             console.log(`\n  Config file: ${configPath}\n`);
@@ -837,11 +837,11 @@ async function main() {
             const value = args.slice(2).join(' ');
 
             if (!key || !value) {
-              console.log('\n  Usage: engram config set <section.key> <value>');
+              console.log('\n  Usage: vestige config set <section.key> <value>');
               console.log('\n  Examples:');
-              console.log('    engram config set logging.level debug');
-              console.log('    engram config set fsrs.desiredRetention 0.85');
-              console.log('    engram config set rem.enabled false\n');
+              console.log('    vestige config set logging.level debug');
+              console.log('    vestige config set fsrs.desiredRetention 0.85');
+              console.log('    vestige config set rem.enabled false\n');
               break;
             }
 
@@ -916,9 +916,9 @@ async function main() {
 
           default:
             console.log(`
-  Engram Configuration Management
+  Vestige Configuration Management
 
-  Usage: engram config <command>
+  Usage: vestige config <command>
 
   Commands:
     show                Display current configuration
@@ -926,10 +926,10 @@ async function main() {
     reset               Reset to default configuration
 
   Examples:
-    engram config show
-    engram config set logging.level debug
-    engram config set fsrs.desiredRetention 0.85
-    engram config reset
+    vestige config show
+    vestige config set logging.level debug
+    vestige config set fsrs.desiredRetention 0.85
+    vestige config reset
 
   Configuration Sections:
     database      - Database paths and settings
@@ -947,7 +947,7 @@ async function main() {
       }
 
       case 'test': {
-        console.log('\n  Engram Self-Test Suite\n');
+        console.log('\n  Vestige Self-Test Suite\n');
         console.log('  Running diagnostic tests...\n');
 
         let allPassed = true;
@@ -1026,11 +1026,11 @@ async function main() {
       case 'ingest': {
         const content = args.join(' ');
         if (!content) {
-          console.log('\n  Usage: engram ingest "<content>"');
-          console.log('\n  Store knowledge directly into Engram.');
+          console.log('\n  Usage: vestige ingest "<content>"');
+          console.log('\n  Store knowledge directly into Vestige.');
           console.log('\n  Examples:');
-          console.log('    engram ingest "API rate limit is 100 req/min"');
-          console.log('    engram ingest "Meeting with John: discussed Q4 roadmap"\n');
+          console.log('    vestige ingest "API rate limit is 100 req/min"');
+          console.log('    vestige ingest "Meeting with John: discussed Q4 roadmap"\n');
           break;
         }
 
@@ -1071,11 +1071,11 @@ async function main() {
       case 'recall': {
         const query = args.join(' ');
         if (!query) {
-          console.log('\n  Usage: engram recall "<query>"');
+          console.log('\n  Usage: vestige recall "<query>"');
           console.log('\n  Search your memories.');
           console.log('\n  Examples:');
-          console.log('    engram recall "rate limit"');
-          console.log('    engram recall "meeting John"\n');
+          console.log('    vestige recall "rate limit"');
+          console.log('    vestige recall "meeting John"\n');
           break;
         }
 
@@ -1107,11 +1107,11 @@ async function main() {
       case 'eat': {
         const source = args[0];
         if (!source) {
-          console.log('\n  Usage: engram eat <url|path>');
+          console.log('\n  Usage: vestige eat <url|path>');
           console.log('\n  Examples:');
-          console.log('    engram eat https://docs.rs/tauri/latest/');
-          console.log('    engram eat ./README.md');
-          console.log('    engram eat ~/Documents/notes.txt');
+          console.log('    vestige eat https://docs.rs/tauri/latest/');
+          console.log('    vestige eat ./README.md');
+          console.log('    vestige eat ~/Documents/notes.txt');
           console.log('\n  The Man Page Absorber chunks content intelligently and');
           console.log('  creates interconnected knowledge nodes for retrieval.\n');
           break;
@@ -1246,11 +1246,11 @@ async function main() {
       case 'problem': {
         const description = args.join(' ');
         if (!description) {
-          console.log('\n  Usage: engram problem <description>');
+          console.log('\n  Usage: vestige problem <description>');
           console.log('\n  Log an unsolved problem for your Shadow to work on.\n');
           console.log('  Examples:');
-          console.log('    engram problem "How to implement efficient graph traversal"');
-          console.log('    engram problem "Why is the memory leak happening in the worker"');
+          console.log('    vestige problem "How to implement efficient graph traversal"');
+          console.log('    vestige problem "Why is the memory leak happening in the worker"');
           console.log('\n  The Shadow Self will periodically revisit these problems');
           console.log('  when new knowledge might provide insights.\n');
           break;
@@ -1285,7 +1285,7 @@ async function main() {
 
           if (problems.length === 0) {
             console.log('  No open problems. Your mind is at peace.\n');
-            console.log('  Log a problem with: engram problem "<description>"\n');
+            console.log('  Log a problem with: vestige problem "<description>"\n');
             break;
           }
 
@@ -1313,11 +1313,11 @@ async function main() {
         const solution = args.slice(1).join(' ');
 
         if (!problemId) {
-          console.log('\n  Usage: engram solve <problem-id> <solution>');
+          console.log('\n  Usage: vestige solve <problem-id> <solution>');
           console.log('\n  Mark a problem as solved with the solution.\n');
           console.log('  Example:');
-          console.log('    engram solve abc123 "Used memoization to optimize the traversal"');
-          console.log('\n  Use "engram problems" to see problem IDs.\n');
+          console.log('    vestige solve abc123 "Used memoization to optimize the traversal"');
+          console.log('\n  Use "vestige problems" to see problem IDs.\n');
           break;
         }
 
@@ -1329,7 +1329,7 @@ async function main() {
 
           if (!match) {
             console.log(`\n  Problem not found: ${problemId}`);
-            console.log('  Use "engram problems" to see open problems.\n');
+            console.log('  Use "vestige problems" to see open problems.\n');
             break;
           }
 
@@ -1383,9 +1383,9 @@ async function main() {
       case 'help':
       default:
         console.log(`
-  Engram CLI - Git Blame for AI Thoughts
+  Vestige CLI - Git Blame for AI Thoughts
 
-  Usage: engram <command> [options]
+  Usage: vestige <command> [options]
 
   Core Commands:
     ingest <content>     Store knowledge directly
@@ -1429,14 +1429,14 @@ async function main() {
     people               List people in your network
 
   Examples:
-    engram ingest "API rate limit is 100 req/min"
-    engram recall "rate limit"
-    engram stats detailed
-    engram embeddings search "authentication"
-    engram config set logging.level debug
-    engram eat https://docs.example.com/api
+    vestige ingest "API rate limit is 100 req/min"
+    vestige recall "rate limit"
+    vestige stats detailed
+    vestige embeddings search "authentication"
+    vestige config set logging.level debug
+    vestige eat https://docs.example.com/api
 
-  The Engram MCP server runs automatically when connected to Claude.
+  The Vestige MCP server runs automatically when connected to Claude.
   Your brain gets smarter while you sleep.
 `);
     }
