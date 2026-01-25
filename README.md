@@ -23,9 +23,8 @@
 
 <p align="center">
   <a href="#quick-start-2-minutes">Quick Start</a> |
-  <a href="#all-26-tools">All 26 Tools</a> |
-  <a href="#the-science">The Science</a> |
-  <a href="#comparison">Comparison</a>
+  <a href="#all-29-tools">All 29 Tools</a> |
+  <a href="#the-science">The Science</a>
 </p>
 
 <p align="center">
@@ -232,23 +231,6 @@ Memory retrieval is most effective when the retrieval context matches the encodi
 Memory retention decays exponentially: `R = e^(-t/S)`
 
 Where R = retrievability, t = time, S = stability.
-
----
-
-## Comparison
-
-| Feature | Vestige | Mem0 | Zep | Letta |
-|---------|---------|------|-----|-------|
-| **Tools** | 29 | ~5 | ~8 | ~10 |
-| Prediction Error Gating | Yes | No | No | No |
-| FSRS-6 spaced repetition | Yes | No | No | No |
-| Dual-strength memory | Yes | No | No | No |
-| Retroactive importance | Yes | No | No | No |
-| Memory states | Yes | No | No | No |
-| Context-dependent recall | Yes | No | No | No |
-| Local embeddings | Yes | No | No | No |
-| 100% local | Yes | No | No | No |
-| Free & open source | Yes | Freemium | Freemium | Yes |
 
 ---
 
