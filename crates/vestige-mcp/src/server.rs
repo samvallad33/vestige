@@ -121,6 +121,11 @@ impl McpServer {
                 input_schema: tools::ingest::schema(),
             },
             ToolDescription {
+                name: "smart_ingest".to_string(),
+                description: Some("INTELLIGENT memory ingestion with Prediction Error Gating. Automatically decides whether to CREATE new, UPDATE existing, or SUPERSEDE outdated memories based on semantic similarity. Solves the 'bad vs good similar memory' problem.".to_string()),
+                input_schema: tools::smart_ingest::schema(),
+            },
+            ToolDescription {
                 name: "recall".to_string(),
                 description: Some("Search and retrieve knowledge from memory. Returns matches ranked by relevance and retention strength.".to_string()),
                 input_schema: tools::recall::schema(),
@@ -244,6 +249,22 @@ impl McpServer {
                 description: Some("Search memories with context-dependent retrieval. Based on Tulving's Encoding Specificity Principle (1973).".to_string()),
                 input_schema: tools::context::schema(),
             },
+            // Feedback / preference learning
+            ToolDescription {
+                name: "promote_memory".to_string(),
+                description: Some("Promote a memory (thumbs up). Use when a memory led to a good outcome. Increases retrieval strength so it surfaces more often.".to_string()),
+                input_schema: tools::feedback::promote_schema(),
+            },
+            ToolDescription {
+                name: "demote_memory".to_string(),
+                description: Some("Demote a memory (thumbs down). Use when a memory led to a bad outcome or was wrong. Decreases retrieval strength so better alternatives surface. Does NOT delete.".to_string()),
+                input_schema: tools::feedback::demote_schema(),
+            },
+            ToolDescription {
+                name: "request_feedback".to_string(),
+                description: Some("Ask the user if a memory was helpful. Use after applying advice from a memory. Returns options for the user to choose: helpful (promote), wrong (demote), or skip.".to_string()),
+                input_schema: tools::feedback::request_feedback_schema(),
+            },
         ];
 
         let result = ListToolsResult { tools };
@@ -263,6 +284,7 @@ impl McpServer {
         let result = match request.name.as_str() {
             // Core memory tools
             "ingest" => tools::ingest::execute(&self.storage, request.arguments).await,
+            "smart_ingest" => tools::smart_ingest::execute(&self.storage, request.arguments).await,
             "recall" => tools::recall::execute(&self.storage, request.arguments).await,
             "semantic_search" => tools::search::execute_semantic(&self.storage, request.arguments).await,
             "hybrid_search" => tools::search::execute_hybrid(&self.storage, request.arguments).await,
@@ -291,6 +313,10 @@ impl McpServer {
             "find_tagged" => tools::tagging::execute_find(&self.storage, request.arguments).await,
             "tagging_stats" => tools::tagging::execute_stats(&self.storage).await,
             "match_context" => tools::context::execute(&self.storage, request.arguments).await,
+            // Feedback / preference learning
+            "promote_memory" => tools::feedback::execute_promote(&self.storage, request.arguments).await,
+            "demote_memory" => tools::feedback::execute_demote(&self.storage, request.arguments).await,
+            "request_feedback" => tools::feedback::execute_request_feedback(&self.storage, request.arguments).await,
 
             name => {
                 return Err(JsonRpcError::method_not_found_with_message(&format!(

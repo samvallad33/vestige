@@ -138,7 +138,8 @@ pub use fsrs::{
 
 // Storage layer
 pub use storage::{
-    ConsolidationHistoryRecord, InsightRecord, IntentionRecord, Result, Storage, StorageError,
+    ConsolidationHistoryRecord, InsightRecord, IntentionRecord, Result, SmartIngestResult, Storage,
+    StorageError,
 };
 
 // Consolidation (sleep-inspired memory processing)
@@ -215,6 +216,18 @@ pub use advanced::{
     UsageEvent,
     UsagePattern,
     UserAction,
+    // Prediction Error Gating (solves bad vs good similar memory problem)
+    CandidateMemory,
+    CreateReason,
+    EvaluationIntent,
+    GateDecision,
+    GateStats,
+    MergeStrategy,
+    PredictionErrorConfig,
+    PredictionErrorGate,
+    SimilarityResult as PredictionSimilarityResult,
+    SupersedeReason,
+    UpdateType,
 };
 
 // Codebase memory (Vestige's killer differentiator)
@@ -437,6 +450,10 @@ pub mod prelude {
         // Reconsolidation
         ReconsolidationManager,
         SpeculativeRetriever,
+        // Prediction Error Gating
+        PredictionErrorGate,
+        GateDecision,
+        EvaluationIntent,
     };
 
     // Codebase memory

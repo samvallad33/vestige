@@ -52,6 +52,24 @@ pub enum StorageError {
 /// Storage result type
 pub type Result<T> = std::result::Result<T, StorageError>;
 
+/// Result of smart ingest with prediction error gating
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartIngestResult {
+    /// Decision made: "create", "update", "supersede", "merge", "reinforce", etc.
+    pub decision: String,
+    /// The resulting node (new or updated)
+    pub node: KnowledgeNode,
+    /// ID of superseded memory (if any)
+    pub superseded_id: Option<String>,
+    /// Similarity to closest existing memory (0.0 - 1.0)
+    pub similarity: Option<f32>,
+    /// Prediction error (1.0 - similarity)
+    pub prediction_error: Option<f32>,
+    /// Human-readable explanation of the decision
+    pub reason: String,
+}
+
 // ============================================================================
 // STORAGE
 // ============================================================================
@@ -236,6 +254,244 @@ impl Storage {
             .ok_or_else(|| StorageError::NotFound(id))
     }
 
+    /// Smart ingest with Prediction Error Gating
+    ///
+    /// Uses neuroscience-inspired prediction error to decide whether to:
+    /// - Create a new memory (high prediction error)
+    /// - Update an existing memory (low prediction error)
+    /// - Supersede a demoted/outdated memory (correction)
+    ///
+    /// This solves the "bad vs good similar memory" problem.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest(
+        &mut self,
+        input: IngestInput,
+    ) -> Result<SmartIngestResult> {
+        use crate::advanced::prediction_error::{
+            CandidateMemory, GateDecision, PredictionErrorGate, UpdateType,
+        };
+
+        // Generate embedding for new content
+        if !self.embedding_service.is_ready() {
+            // Fall back to regular ingest if embeddings not available
+            let node = self.ingest(input)?;
+            return Ok(SmartIngestResult {
+                decision: "create".to_string(),
+                node,
+                superseded_id: None,
+                similarity: None,
+                prediction_error: Some(1.0),
+                reason: "Embeddings not available, falling back to regular ingest".to_string(),
+            });
+        }
+
+        let new_embedding = self
+            .embedding_service
+            .embed(&input.content)
+            .map_err(|e| StorageError::Init(format!("Embedding failed: {}", e)))?;
+
+        // Find similar memories using semantic search
+        let similar = self.semantic_search_raw(&input.content, 10)?;
+
+        // Build candidate memories
+        let mut candidates: Vec<CandidateMemory> = Vec::new();
+        for (node_id, similarity) in similar.iter() {
+            if let Some(node) = self.get_node(node_id)? {
+                // Get embedding for this node
+                if let Some(emb) = self.get_node_embedding(node_id)? {
+                    // Check if this memory was previously demoted (low retrieval strength)
+                    let was_demoted = node.retrieval_strength < 0.3;
+                    let was_promoted = node.retrieval_strength > 0.85;
+
+                    candidates.push(CandidateMemory {
+                        id: node.id.clone(),
+                        content: node.content.clone(),
+                        embedding: emb,
+                        retrieval_strength: node.retrieval_strength,
+                        retention_strength: node.retention_strength,
+                        tags: node.tags.clone(),
+                        source: node.source.clone(),
+                        was_demoted,
+                        was_promoted,
+                    });
+                }
+            }
+        }
+
+        // Evaluate with prediction error gate
+        let mut gate = PredictionErrorGate::new();
+        let decision = gate.evaluate(&input.content, &new_embedding.vector, &candidates);
+
+        match decision {
+            GateDecision::Create { prediction_error, related_memory_ids, reason, .. } => {
+                // Create new memory
+                let node = self.ingest(input)?;
+                Ok(SmartIngestResult {
+                    decision: "create".to_string(),
+                    node,
+                    superseded_id: None,
+                    similarity: None,
+                    prediction_error: Some(prediction_error),
+                    reason: format!("Created new memory: {:?}. Related: {:?}", reason, related_memory_ids),
+                })
+            }
+            GateDecision::Update { target_id, similarity, update_type, prediction_error } => {
+                match update_type {
+                    UpdateType::Reinforce => {
+                        // Just strengthen the existing memory
+                        self.strengthen_on_access(&target_id)?;
+                        let node = self.get_node(&target_id)?
+                            .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
+                        Ok(SmartIngestResult {
+                            decision: "reinforce".to_string(),
+                            node,
+                            superseded_id: None,
+                            similarity: Some(similarity),
+                            prediction_error: Some(prediction_error),
+                            reason: "Content nearly identical - reinforced existing memory".to_string(),
+                        })
+                    }
+                    UpdateType::Merge | UpdateType::Append => {
+                        // Update the existing memory with merged content
+                        let existing = self.get_node(&target_id)?
+                            .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
+
+                        let merged_content = format!(
+                            "{}\n\n[Updated {}]\n{}",
+                            existing.content,
+                            chrono::Utc::now().format("%Y-%m-%d"),
+                            input.content
+                        );
+
+                        self.update_node_content(&target_id, &merged_content)?;
+                        self.strengthen_on_access(&target_id)?;
+
+                        let node = self.get_node(&target_id)?
+                            .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
+
+                        Ok(SmartIngestResult {
+                            decision: "update".to_string(),
+                            node,
+                            superseded_id: None,
+                            similarity: Some(similarity),
+                            prediction_error: Some(prediction_error),
+                            reason: "Merged with existing similar memory".to_string(),
+                        })
+                    }
+                    UpdateType::Replace => {
+                        // Replace content entirely
+                        self.update_node_content(&target_id, &input.content)?;
+                        let node = self.get_node(&target_id)?
+                            .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
+
+                        Ok(SmartIngestResult {
+                            decision: "replace".to_string(),
+                            node,
+                            superseded_id: None,
+                            similarity: Some(similarity),
+                            prediction_error: Some(prediction_error),
+                            reason: "Replaced existing memory with new content".to_string(),
+                        })
+                    }
+                    UpdateType::AddContext => {
+                        // Add as context without modifying main content
+                        let existing = self.get_node(&target_id)?
+                            .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
+
+                        let merged_content = format!(
+                            "{}\n\n---\nContext: {}",
+                            existing.content,
+                            input.content
+                        );
+
+                        self.update_node_content(&target_id, &merged_content)?;
+                        let node = self.get_node(&target_id)?
+                            .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
+
+                        Ok(SmartIngestResult {
+                            decision: "add_context".to_string(),
+                            node,
+                            superseded_id: None,
+                            similarity: Some(similarity),
+                            prediction_error: Some(prediction_error),
+                            reason: "Added new content as context to existing memory".to_string(),
+                        })
+                    }
+                }
+            }
+            GateDecision::Supersede { old_memory_id, similarity, supersede_reason, prediction_error } => {
+                // Demote the old memory and create new
+                self.demote_memory(&old_memory_id)?;
+
+                // Create the new improved memory
+                let node = self.ingest(input)?;
+
+                Ok(SmartIngestResult {
+                    decision: "supersede".to_string(),
+                    node,
+                    superseded_id: Some(old_memory_id),
+                    similarity: Some(similarity),
+                    prediction_error: Some(prediction_error),
+                    reason: format!("New memory supersedes old: {:?}", supersede_reason),
+                })
+            }
+            GateDecision::Merge { memory_ids, avg_similarity, strategy } => {
+                // For now, create new and link to existing
+                let node = self.ingest(input)?;
+
+                Ok(SmartIngestResult {
+                    decision: "merge".to_string(),
+                    node,
+                    superseded_id: None,
+                    similarity: Some(avg_similarity),
+                    prediction_error: Some(1.0 - avg_similarity),
+                    reason: format!("Created new memory linked to {} similar memories ({:?})", memory_ids.len(), strategy),
+                })
+            }
+        }
+    }
+
+    /// Get the embedding vector for a node
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn get_node_embedding(&self, node_id: &str) -> Result<Option<Vec<f32>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT embedding FROM node_embeddings WHERE node_id = ?1"
+        )?;
+
+        let embedding_bytes: Option<Vec<u8>> = stmt
+            .query_row(params![node_id], |row| row.get(0))
+            .optional()?;
+
+        Ok(embedding_bytes.and_then(|bytes| {
+            crate::embeddings::Embedding::from_bytes(&bytes).map(|e| e.vector)
+        }))
+    }
+
+    /// Update the content of an existing node
+    pub fn update_node_content(&mut self, id: &str, new_content: &str) -> Result<()> {
+        let now = Utc::now();
+
+        self.conn.execute(
+            "UPDATE knowledge_nodes SET content = ?1, updated_at = ?2 WHERE id = ?3",
+            params![new_content, now.to_rfc3339(), id],
+        )?;
+
+        // Regenerate embedding for updated content
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        {
+            // Remove old embedding from index
+            if let Ok(mut index) = self.vector_index.lock() {
+                let _ = index.remove(id);
+            }
+            // Generate new embedding
+            if let Err(e) = self.generate_embedding_for_node(id, new_content) {
+                tracing::warn!("Failed to regenerate embedding for {}: {}", id, e);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Generate embedding for a node
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn generate_embedding_for_node(&mut self, node_id: &str, content: &str) -> Result<()> {
@@ -372,23 +628,30 @@ impl Storage {
 
     /// Recall memories matching a query
     pub fn recall(&self, input: RecallInput) -> Result<Vec<KnowledgeNode>> {
-        match input.search_mode {
+        let nodes = match input.search_mode {
             SearchMode::Keyword => {
-                self.keyword_search(&input.query, input.limit, input.min_retention)
+                self.keyword_search(&input.query, input.limit, input.min_retention)?
             }
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
             SearchMode::Semantic => {
                 let results = self.semantic_search(&input.query, input.limit, 0.3)?;
-                Ok(results.into_iter().map(|r| r.node).collect())
+                results.into_iter().map(|r| r.node).collect()
             }
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
             SearchMode::Hybrid => {
                 let results = self.hybrid_search(&input.query, input.limit, 0.5, 0.5)?;
-                Ok(results.into_iter().map(|r| r.node).collect())
+                results.into_iter().map(|r| r.node).collect()
             }
             #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
-            _ => self.keyword_search(&input.query, input.limit, input.min_retention),
-        }
+            _ => self.keyword_search(&input.query, input.limit, input.min_retention)?,
+        };
+
+        // Auto-strengthen memories on access (Testing Effect - Roediger & Karpicke 2006)
+        // This implements "use it or lose it" - accessed memories get stronger
+        let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+        let _ = self.strengthen_batch_on_access(&ids); // Ignore errors, don't fail recall
+
+        Ok(nodes)
     }
 
     /// Keyword search with FTS5
@@ -497,6 +760,76 @@ impl Storage {
                 result.interval,
                 id,
             ],
+        )?;
+
+        self.get_node(id)?
+            .ok_or_else(|| StorageError::NotFound(id.to_string()))
+    }
+
+    /// Passively strengthen a memory when it's accessed (recalled/searched)
+    /// This implements the "use it or lose it" principle - memories that are
+    /// accessed get a small boost, those that aren't decay naturally.
+    /// Based on Testing Effect (Roediger & Karpicke 2006)
+    pub fn strengthen_on_access(&self, id: &str) -> Result<()> {
+        let now = Utc::now();
+
+        // Small retrieval strength boost (0.05) on each access
+        // This is much smaller than a full review but compounds over time
+        self.conn.execute(
+            "UPDATE knowledge_nodes SET
+                last_accessed = ?1,
+                retrieval_strength = MIN(1.0, retrieval_strength + 0.05),
+                retention_strength = MIN(1.0, retention_strength + 0.02)
+            WHERE id = ?2",
+            params![now.to_rfc3339(), id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Batch strengthen multiple memories on access
+    pub fn strengthen_batch_on_access(&self, ids: &[&str]) -> Result<()> {
+        for id in ids {
+            self.strengthen_on_access(id)?;
+        }
+        Ok(())
+    }
+
+    /// Promote a memory (thumbs up) - used when a memory led to a good outcome
+    /// Significantly boosts retrieval strength so it surfaces more often
+    pub fn promote_memory(&self, id: &str) -> Result<KnowledgeNode> {
+        let now = Utc::now();
+
+        // Strong boost: +0.2 retrieval, +0.1 retention
+        self.conn.execute(
+            "UPDATE knowledge_nodes SET
+                last_accessed = ?1,
+                retrieval_strength = MIN(1.0, retrieval_strength + 0.20),
+                retention_strength = MIN(1.0, retention_strength + 0.10),
+                stability = stability * 1.5
+            WHERE id = ?2",
+            params![now.to_rfc3339(), id],
+        )?;
+
+        self.get_node(id)?
+            .ok_or_else(|| StorageError::NotFound(id.to_string()))
+    }
+
+    /// Demote a memory (thumbs down) - used when a memory led to a bad outcome
+    /// Significantly reduces retrieval strength so better alternatives surface
+    /// Does NOT delete - the memory stays for reference but ranks lower
+    pub fn demote_memory(&self, id: &str) -> Result<KnowledgeNode> {
+        let now = Utc::now();
+
+        // Strong penalty: -0.3 retrieval, -0.15 retention, halve stability
+        self.conn.execute(
+            "UPDATE knowledge_nodes SET
+                last_accessed = ?1,
+                retrieval_strength = MAX(0.05, retrieval_strength - 0.30),
+                retention_strength = MAX(0.05, retention_strength - 0.15),
+                stability = stability * 0.5
+            WHERE id = ?2",
+            params![now.to_rfc3339(), id],
         )?;
 
         self.get_node(id)?

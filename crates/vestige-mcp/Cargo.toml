@@ -13,6 +13,10 @@ repository = "https://github.com/samvallad33/vestige"
 name = "vestige-mcp"
 path = "src/main.rs"
 
+[[bin]]
+name = "vestige-restore"
+path = "src/bin/restore.rs"
+
 [dependencies]
 # ============================================================================
 # VESTIGE CORE - The cognitive science engine
@@ -39,6 +43,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 # Error handling
 thiserror = "2"
+anyhow = "1"
 
 # Logging
 tracing = "0.1"

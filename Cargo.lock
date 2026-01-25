@@ -3406,6 +3406,7 @@ dependencies = [
 name = "vestige-mcp"
 version = "1.0.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "directories",
  "rmcp",

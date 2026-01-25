@@ -23,6 +23,7 @@ pub mod cross_project;
 pub mod dreams;
 pub mod importance;
 pub mod intent;
+pub mod prediction_error;
 pub mod reconsolidation;
 pub mod speculative;
 
@@ -59,5 +60,10 @@ pub use reconsolidation::{
     AccessContext, AccessTrigger, AppliedModification, ChangeSummary, LabileState, MemorySnapshot,
     Modification, ReconsolidatedMemory, ReconsolidationManager, ReconsolidationStats,
     RelationshipType, RetrievalRecord,
+};
+pub use prediction_error::{
+    CandidateMemory, CreateReason, EvaluationIntent, GateDecision, GateStats, MergeStrategy,
+    PredictionErrorConfig, PredictionErrorGate, SimilarityResult, SupersedeReason, UpdateType,
+    cosine_similarity,
 };
 pub use speculative::{PredictedMemory, PredictionContext, SpeculativeRetriever, UsagePattern};

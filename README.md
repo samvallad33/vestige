@@ -130,10 +130,11 @@ Claude will now have access to persistent, biologically-inspired memory.
 | **Prospective Memory** | Future intentions with time/context triggers |
 | **Basic Consolidation** | Decay + prune cycles |
 
-### MCP Tools (25 Total)
+### MCP Tools (26 Total)
 
-**Core Memory (7):**
+**Core Memory (8):**
 - `ingest` - Store new memories
+- `smart_ingest` - Prediction Error Gating (auto-decides create/update/supersede)
 - `recall` - Semantic retrieval
 - `semantic_search` - Pure embedding search
 - `hybrid_search` - BM25 + semantic fusion
