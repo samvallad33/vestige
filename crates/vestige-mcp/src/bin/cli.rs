@@ -12,7 +12,7 @@ use vestige_core::{IngestInput, Storage};
 #[derive(Parser)]
 #[command(name = "vestige")]
 #[command(author = "samvallad33")]
-#[command(version = "1.0.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "CLI for the Vestige cognitive memory system")]
 #[command(long_about = "Vestige is a cognitive memory system based on 130 years of memory research.\n\nIt implements FSRS-6, spreading activation, synaptic tagging, and more.")]
 struct Cli {
