@@ -7,7 +7,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_HOME: /home/runner/.cargo
   CARGO_INCREMENTAL: 0
 
 jobs:
