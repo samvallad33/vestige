@@ -52,7 +52,8 @@ tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros"] }
 tracing = "0.1"
 
 # Git integration for codebase memory
-git2 = "0.20"
+# vendored-openssl: Compile OpenSSL from source for cross-compilation support
+git2 = { version = "0.20", features = ["vendored-openssl"] }
 
 # File watching for codebase memory
 notify = "8"
