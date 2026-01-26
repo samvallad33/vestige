@@ -83,11 +83,13 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn truncate(s: &str, max_len: usize) -> String {
+/// Truncate a string for display (UTF-8 safe)
+fn truncate(s: &str, max_chars: usize) -> String {
     let s = s.replace('\n', " ");
-    if s.len() <= max_len {
+    if s.chars().count() <= max_chars {
         s
     } else {
-        format!("{}...", &s[..max_len])
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{}...", truncated)
     }
 }

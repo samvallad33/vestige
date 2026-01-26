@@ -17,6 +17,10 @@ path = "src/main.rs"
 name = "vestige-restore"
 path = "src/bin/restore.rs"
 
+[[bin]]
+name = "vestige"
+path = "src/bin/cli.rs"
+
 [dependencies]
 # ============================================================================
 # VESTIGE CORE - The cognitive science engine
@@ -54,6 +58,10 @@ directories = "6"
 
 # Official Anthropic MCP Rust SDK
 rmcp = "0.14"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+colored = "3"
 
 [dev-dependencies]
 tempfile = "3"
