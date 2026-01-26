@@ -10,6 +10,39 @@ The only MCP memory server built on cognitive science. FSRS-6 spaced repetition,
 
 ---
 
+## What's New in v1.1
+
+> **Released January 2025** — 11 hours after v1.0
+
+### Tool Consolidation: 29 → 8
+| Old Tools | New Tool | Why Better |
+|-----------|----------|------------|
+| `recall`, `semantic_search`, `hybrid_search` | `search` | Hybrid is always best—no decision needed |
+| `get_knowledge`, `delete_knowledge`, `get_memory_state` | `memory` | One tool for all operations |
+| `remember_pattern`, `remember_decision`, `get_codebase_context` | `codebase` | Unified codebase memory |
+| 5 separate intention tools | `intention` | Familiar action-based API |
+
+### New CLI Binary
+```bash
+vestige stats              # Memory statistics
+vestige stats --tagging    # Retention distribution
+vestige stats --states     # Cognitive state distribution
+vestige health             # System health check
+vestige consolidate        # Run memory maintenance
+vestige restore <file>     # Restore from backup
+```
+
+### Documentation
+- **30+ FAQ entries** with verified neuroscience claims
+- **Storage modes**: Global, per-project, multi-Claude household
+- **CLAUDE.md templates** for proactive memory use
+- **Version pinning** via git tags
+
+### Backward Compatible
+Old tool names still work (with deprecation warnings). They'll be removed in v2.0.
+
+---
+
 ## Why Vestige?
 
 | Problem | How Vestige Solves It |
