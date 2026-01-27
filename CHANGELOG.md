@@ -5,6 +5,17 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2025-01-27
+
+### Fixed
+- Embedding model cache now uses platform-appropriate directories instead of polluting project folders
+  - macOS: `~/Library/Caches/com.vestige.core/fastembed`
+  - Linux: `~/.cache/vestige/fastembed`
+  - Windows: `%LOCALAPPDATA%\vestige\cache\fastembed`
+- Can still override with `FASTEMBED_CACHE_PATH` environment variable
+
+---
+
 ## [1.1.1] - 2025-01-27
 
 ### Fixed
