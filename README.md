@@ -87,7 +87,8 @@ export PATH="$PATH:/path/to/vestige/target/release"
 
 **Option A: One-liner (Recommended)**
 ```bash
-claude mcp add vestige vestige-mcp
+# User scope (works across all projects)
+claude mcp add vestige vestige-mcp -s user
 ```
 
 **Option B: Manual Config**
@@ -160,9 +161,20 @@ Vestige downloads the **Nomic Embed Text v1.5** model (~130MB) from Hugging Face
 
 **All subsequent runs are fully offline.**
 
-Model cache location:
-- macOS/Linux: `~/.cache/huggingface/`
-- Windows: `%USERPROFILE%\.cache\huggingface\`
+Model cache location (fastembed):
+- Creates `.fastembed_cache/` in the **current working directory** on first run
+- Contains symlinks to model files in `~/.cache/huggingface/`
+
+**Recommended**: Run your first Vestige command from your home directory to create the cache there:
+```bash
+cd ~
+vestige health   # Creates ~/.fastembed_cache/ once
+```
+
+Or set the environment variable to control cache location:
+```bash
+export FASTEMBED_CACHE_PATH="$HOME/.fastembed_cache"
+```
 
 ### Data Storage & Backup
 
@@ -345,7 +357,7 @@ One shared memory for all projects. Good for:
 
 ```bash
 # Default behavior - no configuration needed
-claude mcp add vestige vestige-mcp
+claude mcp add vestige vestige-mcp -s user
 ```
 
 Database location: `~/Library/Application Support/com.vestige.core/vestige.db`
@@ -1389,9 +1401,20 @@ which vestige-mcp
 
 If not found:
 ```bash
-# Use full path in Claude config
-claude mcp add vestige /full/path/to/vestige-mcp
+# Use full path in Claude config (with -s user for global access)
+claude mcp add vestige /full/path/to/vestige-mcp -s user
 ```
+
+### `.fastembed_cache` folder appearing in project directories
+
+This folder is created by the fastembed library on first run, in whatever directory you're in. **This is a known issue.**
+
+**Solutions:**
+1. **Run first command from home**: `cd ~ && vestige health` (creates cache there once)
+2. **Set cache path**: `export FASTEMBED_CACHE_PATH="$HOME/.fastembed_cache"`
+3. **Add to `.gitignore`**: The folder is already in Vestige's `.gitignore` template
+
+The cache contains model files (~130MB) and symlinks. Once created, it's reused for all future runs.
 
 ### Model download fails
 
