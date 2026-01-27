@@ -18,12 +18,8 @@ const FTS5_OPERATORS: &[&str] = &["OR", "AND", "NOT", "NEAR"];
 /// - Prefix/suffix wildcards for data extraction
 /// - DoS via complex query patterns
 pub fn sanitize_fts5_query(query: &str) -> String {
-    // Limit query length to prevent DoS
-    let limited = if query.len() > 1000 {
-        &query[..1000]
-    } else {
-        query
-    };
+    // Limit query length to prevent DoS (char-aware to avoid UTF-8 boundary issues)
+    let limited: String = query.chars().take(1000).collect();
 
     // Remove FTS5 special characters and operators
     let mut sanitized = limited.to_string();
@@ -44,12 +40,16 @@ pub fn sanitize_fts5_query(query: &str) -> String {
         sanitized = sanitized.replace(&pattern, " ");
         sanitized = sanitized.replace(&pattern.to_lowercase(), " ");
 
-        // Handle operators at start/end
-        if sanitized.to_uppercase().starts_with(&format!("{} ", op)) {
-            sanitized = sanitized[op.len()..].to_string();
+        // Handle operators at start/end (using char-aware operations)
+        let upper = sanitized.to_uppercase();
+        let start_pattern = format!("{} ", op);
+        if upper.starts_with(&start_pattern) {
+            sanitized = sanitized.chars().skip(op.len()).collect();
         }
-        if sanitized.to_uppercase().ends_with(&format!(" {}", op)) {
-            sanitized = sanitized[..sanitized.len() - op.len()].to_string();
+        let end_pattern = format!(" {}", op);
+        if upper.ends_with(&end_pattern) {
+            let char_count = sanitized.chars().count();
+            sanitized = sanitized.chars().take(char_count.saturating_sub(op.len())).collect();
         }
     }
 
@@ -170,15 +170,18 @@ impl KeywordSearcher {
             let lower_text = result.to_lowercase();
             let lower_term = term.to_lowercase();
 
-            if let Some(pos) = lower_text.find(&lower_term) {
-                let matched = &result[pos..pos + term.len()];
+            if let Some(byte_pos) = lower_text.find(&lower_term) {
+                // Convert byte position to char position for safe slicing
+                let char_pos = lower_text[..byte_pos].chars().count();
+                let term_char_len = lower_term.chars().count();
+
+                // Extract matched portion using char indices
+                let prefix: String = result.chars().take(char_pos).collect();
+                let matched: String = result.chars().skip(char_pos).take(term_char_len).collect();
+                let suffix: String = result.chars().skip(char_pos + term_char_len).collect();
+
                 let highlighted = format!("**{}**", matched);
-                result = format!(
-                    "{}{}{}",
-                    &result[..pos],
-                    highlighted,
-                    &result[pos + term.len()..]
-                );
+                result = format!("{}{}{}", prefix, highlighted, suffix);
             }
         }
 

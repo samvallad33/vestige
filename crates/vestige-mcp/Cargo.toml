@@ -9,6 +9,11 @@ keywords = ["mcp", "ai", "memory", "fsrs", "neuroscience", "cognitive-science", 
 categories = ["command-line-utilities", "database"]
 repository = "https://github.com/samvallad33/vestige"
 
+[features]
+default = ["embeddings", "vector-search"]
+embeddings = ["vestige-core/embeddings"]
+vector-search = ["vestige-core/vector-search"]
+
 [[bin]]
 name = "vestige-mcp"
 path = "src/main.rs"
@@ -27,7 +32,7 @@ path = "src/bin/cli.rs"
 # ============================================================================
 # Includes: FSRS-6, spreading activation, synaptic tagging, hippocampal indexing,
 # memory states, context memory, importance signals, dreams, and more
-vestige-core = { version = "1.0.0", path = "../vestige-core", features = ["full"] }
+vestige-core = { version = "1.0.0", path = "../vestige-core" }
 
 # ============================================================================
 # MCP Server Dependencies

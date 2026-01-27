@@ -52,6 +52,10 @@ impl StdioTransport {
                         }
                         Err(e) => {
                             error!("Failed to serialize error response: {}", e);
+                            // Send a minimal error response so client doesn't hang
+                            let fallback = r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error"}}"#;
+                            let _ = writeln!(stdout, "{}", fallback);
+                            let _ = stdout.flush();
                         }
                     }
                     continue;
@@ -68,6 +72,10 @@ impl StdioTransport {
                     }
                     Err(e) => {
                         error!("Failed to serialize response: {}", e);
+                        // Send a minimal error response so client doesn't hang
+                        let fallback = r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error"}}"#;
+                        let _ = writeln!(stdout, "{}", fallback);
+                        let _ = stdout.flush();
                     }
                 }
             }

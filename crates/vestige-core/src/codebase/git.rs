@@ -540,8 +540,10 @@ impl GitAnalyzer {
 
         // Extract the description (first line, removing the prefix)
         let first_line = message.lines().next().unwrap_or("");
-        let symptom = if let Some(colon_pos) = first_line.find(':') {
-            first_line[colon_pos + 1..].trim().to_string()
+        let symptom = if let Some(colon_byte_pos) = first_line.find(':') {
+            // Convert byte position to char position for safe slicing
+            let colon_char_pos = first_line[..colon_byte_pos].chars().count();
+            first_line.chars().skip(colon_char_pos + 1).collect::<String>().trim().to_string()
         } else {
             first_line.to_string()
         };
@@ -574,10 +576,13 @@ impl GitAnalyzer {
                 || line_lower.contains("closes #")
                 || line_lower.contains("resolves #")
             {
-                // Extract issue number
-                if let Some(hash_pos) = line.find('#') {
-                    let issue_num: String = line[hash_pos + 1..]
+                // Extract issue number (using char-aware iteration)
+                if let Some(hash_byte_pos) = line.find('#') {
+                    // Convert byte position to char position for safe slicing
+                    let hash_char_pos = line[..hash_byte_pos].chars().count();
+                    let issue_num: String = line
                         .chars()
+                        .skip(hash_char_pos + 1)
                         .take_while(|c| c.is_ascii_digit())
                         .collect();
                     if !issue_num.is_empty() {

@@ -959,23 +959,26 @@ impl IntentionParser {
         original: &str,
     ) -> Result<(IntentionTrigger, String)> {
         // Check for "remind me to X when Y" pattern
-        if let Some(when_idx) = text_lower.find(" when ") {
-            let content_part = if text_lower.starts_with("remind me to ") {
-                &original[13..when_idx]
+        if let Some(when_byte_idx) = text_lower.find(" when ") {
+            // Convert byte index to char index for safe slicing
+            let when_char_idx = text_lower[..when_byte_idx].chars().count();
+
+            let content_part: String = if text_lower.starts_with("remind me to ") {
+                original.chars().skip(13).take(when_char_idx.saturating_sub(13)).collect()
             } else if text_lower.starts_with("remind me ") {
-                &original[10..when_idx]
+                original.chars().skip(10).take(when_char_idx.saturating_sub(10)).collect()
             } else {
-                &original[..when_idx]
+                original.chars().take(when_char_idx).collect()
             };
 
-            let condition_part = &original[when_idx + 6..];
+            let condition_part: String = original.chars().skip(when_char_idx + 6).collect();
 
             return Ok((
                 IntentionTrigger::EventBased {
-                    condition: condition_part.to_string(),
-                    pattern: TriggerPattern::contains(condition_part),
+                    condition: condition_part.clone(),
+                    pattern: TriggerPattern::contains(&condition_part),
                 },
-                content_part.to_string(),
+                content_part,
             ));
         }
 
@@ -992,10 +995,11 @@ impl IntentionParser {
             // For now, treat as a simple event trigger
             let parts: Vec<&str> = original.splitn(2, " at ").collect();
             if parts.len() == 2 {
-                let content = if parts[0].to_lowercase().starts_with("remind me to ") {
-                    parts[0][13..].to_string()
-                } else if parts[0].to_lowercase().starts_with("remind me ") {
-                    parts[0][10..].to_string()
+                let part0_lower = parts[0].to_lowercase();
+                let content: String = if part0_lower.starts_with("remind me to ") {
+                    parts[0].chars().skip(13).collect()
+                } else if part0_lower.starts_with("remind me ") {
+                    parts[0].chars().skip(10).collect()
                 } else {
                     parts[0].to_string()
                 };
@@ -1014,14 +1018,15 @@ impl IntentionParser {
             || text_lower.starts_with("don't forget to ")
             || text_lower.starts_with("remember to ")
         {
-            let content = if text_lower.starts_with("i should ") {
-                original[9..].to_string()
+            // Use char-aware slicing to avoid UTF-8 boundary issues
+            let content: String = if text_lower.starts_with("i should ") {
+                original.chars().skip(9).collect()
             } else if text_lower.starts_with("i need to ") {
-                original[10..].to_string()
+                original.chars().skip(10).collect()
             } else if text_lower.starts_with("don't forget to ") {
-                original[16..].to_string()
+                original.chars().skip(16).collect()
             } else {
-                original[12..].to_string()
+                original.chars().skip(12).collect()
             };
 
             // Extract entity if mentioned
