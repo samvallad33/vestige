@@ -1,4 +1,5 @@
-//! Intentions Tools
+#![allow(dead_code)]
+//! Intentions Tools (Deprecated - use intention_unified instead)
 //!
 //! Prospective memory tools for setting and checking future intentions.
 

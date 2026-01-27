@@ -1,4 +1,5 @@
-//! Context-Dependent Memory Tool
+#![allow(dead_code)]
+//! Context-Dependent Memory Tool (Deprecated)
 //!
 //! Retrieval based on encoding context match.
 //! Based on Tulving & Thomson's Encoding Specificity Principle (1973).

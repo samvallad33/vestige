@@ -40,8 +40,10 @@ const MIN_ACTIVATION_THRESHOLD: f64 = 0.1;
 /// Types of associative links between memories
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum LinkType {
     /// Same topic/category
+    #[default]
     Semantic,
     /// Occurred together in time
     Temporal,
@@ -55,11 +57,6 @@ pub enum LinkType {
     UserDefined,
 }
 
-impl Default for LinkType {
-    fn default() -> Self {
-        LinkType::Semantic
-    }
-}
 
 // ============================================================================
 // ASSOCIATION EDGE

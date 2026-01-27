@@ -127,6 +127,7 @@ impl JsonRpcError {
         Self::new(ErrorCode::ServerNotInitialized, "Server not initialized")
     }
 
+    #[allow(dead_code)] // Reserved for future resource handling
     pub fn resource_not_found(uri: &str) -> Self {
         Self::new(ErrorCode::ResourceNotFound, &format!("Resource not found: {}", uri))
     }

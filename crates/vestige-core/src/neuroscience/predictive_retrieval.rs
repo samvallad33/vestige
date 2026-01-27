@@ -797,7 +797,7 @@ impl PredictiveMemory {
             .map_err(|e| PredictiveMemoryError::LockPoisoned(e.to_string()))?;
 
         for tag in tags {
-            cache.invalidate(*tag);
+            cache.invalidate(tag);
         }
 
         Ok(())

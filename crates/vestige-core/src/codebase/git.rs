@@ -133,7 +133,7 @@ impl GitAnalyzer {
         let mut has_untracked = false;
 
         for entry in statuses.iter() {
-            let path = entry.path().map(|p| PathBuf::from(p)).unwrap_or_default();
+            let path = entry.path().map(PathBuf::from).unwrap_or_default();
 
             let status = entry.status();
 

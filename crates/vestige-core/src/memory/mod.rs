@@ -274,6 +274,7 @@ impl Default for MemoryStats {
 /// Result of a memory consolidation run (sleep-inspired processing)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct ConsolidationResult {
     /// Number of nodes processed
     pub nodes_processed: i64,
@@ -289,18 +290,6 @@ pub struct ConsolidationResult {
     pub embeddings_generated: i64,
 }
 
-impl Default for ConsolidationResult {
-    fn default() -> Self {
-        Self {
-            nodes_processed: 0,
-            nodes_promoted: 0,
-            nodes_pruned: 0,
-            decay_applied: 0,
-            duration_ms: 0,
-            embeddings_generated: 0,
-        }
-    }
-}
 
 // ============================================================================
 // SEARCH RESULTS
@@ -351,6 +340,7 @@ pub struct SimilarityResult {
 /// Result of embedding generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct EmbeddingResult {
     /// Successfully generated embeddings
     pub successful: i64,
@@ -362,13 +352,3 @@ pub struct EmbeddingResult {
     pub errors: Vec<String>,
 }
 
-impl Default for EmbeddingResult {
-    fn default() -> Self {
-        Self {
-            successful: 0,
-            failed: 0,
-            skipped: 0,
-            errors: vec![],
-        }
-    }
-}

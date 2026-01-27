@@ -208,10 +208,12 @@ pub struct ArchitecturalDecision {
 /// Status of an architectural decision
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum DecisionStatus {
     /// Decision is proposed but not yet implemented
     Proposed,
     /// Decision is accepted and being implemented
+    #[default]
     Accepted,
     /// Decision has been superseded by another
     Superseded,
@@ -219,11 +221,6 @@ pub enum DecisionStatus {
     Deprecated,
 }
 
-impl Default for DecisionStatus {
-    fn default() -> Self {
-        Self::Accepted
-    }
-}
 
 // ============================================================================
 // BUG FIX
@@ -266,19 +263,16 @@ pub struct BugFix {
 /// Severity level of a bug
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BugSeverity {
     Critical,
     High,
+    #[default]
     Medium,
     Low,
     Trivial,
 }
 
-impl Default for BugSeverity {
-    fn default() -> Self {
-        Self::Medium
-    }
-}
 
 // ============================================================================
 // CODE PATTERN

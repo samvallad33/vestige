@@ -105,9 +105,11 @@ const DEFAULT_MAX_CLUSTER_SIZE: usize = 50;
 /// - Logarithmic: Very slow decay, good for important memories
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DecayFunction {
     /// Exponential decay: strength = initial * e^(-lambda * t)
     /// Best for modeling biological tag decay
+    #[default]
     Exponential,
     /// Linear decay: strength = initial * (1 - t/lifetime)
     /// Simple, predictable decay
@@ -120,11 +122,6 @@ pub enum DecayFunction {
     Logarithmic,
 }
 
-impl Default for DecayFunction {
-    fn default() -> Self {
-        DecayFunction::Exponential
-    }
-}
 
 impl DecayFunction {
     /// Calculate decayed strength

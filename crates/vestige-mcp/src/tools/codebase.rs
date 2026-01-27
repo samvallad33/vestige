@@ -1,4 +1,5 @@
-//! Codebase Tools
+#![allow(dead_code)]
+//! Codebase Tools (Deprecated - use codebase_unified instead)
 //!
 //! Remember patterns, decisions, and context about codebases.
 //! This is a differentiating feature for AI-assisted development.

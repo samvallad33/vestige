@@ -1,4 +1,5 @@
-//! Review Tool
+#![allow(dead_code)]
+//! Review Tool (Deprecated)
 //!
 //! Mark memories as reviewed using FSRS-6 algorithm.
 

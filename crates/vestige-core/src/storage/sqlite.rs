@@ -295,7 +295,7 @@ impl Storage {
 
         // Build candidate memories
         let mut candidates: Vec<CandidateMemory> = Vec::new();
-        for (node_id, similarity) in similar.iter() {
+        for (node_id, _similarity) in similar.iter() {
             if let Some(node) = self.get_node(node_id)? {
                 // Get embedding for this node
                 if let Some(emb) = self.get_node_embedding(node_id)? {
@@ -1034,10 +1034,8 @@ impl Storage {
                     self.row_to_node(row)
                 })?;
                 let mut nodes = Vec::new();
-                for row in rows {
-                    if let Ok(node) = row {
-                        nodes.push(node);
-                    }
+                for node in rows.flatten() {
+                    nodes.push(node);
                 }
                 Ok(nodes)
             }
@@ -1051,10 +1049,8 @@ impl Storage {
                 )?;
                 let rows = stmt.query_map(params![node_type, limit], |row| self.row_to_node(row))?;
                 let mut nodes = Vec::new();
-                for row in rows {
-                    if let Ok(node) = row {
-                        nodes.push(node);
-                    }
+                for node in rows.flatten() {
+                    nodes.push(node);
                 }
                 Ok(nodes)
             }
@@ -1296,10 +1292,8 @@ impl Storage {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                 })?;
 
-                for row in rows {
-                    if let Ok(r) = row {
-                        result_nodes.push(r);
-                    }
+                for r in rows.flatten() {
+                    result_nodes.push(r);
                 }
             }
             result_nodes
@@ -1512,7 +1506,7 @@ impl Storage {
         )? as i64;
 
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-        let embeddings_generated = self.generate_missing_embeddings()? as i64;
+        let embeddings_generated = self.generate_missing_embeddings()?;
         #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
         let embeddings_generated = 0i64;
 

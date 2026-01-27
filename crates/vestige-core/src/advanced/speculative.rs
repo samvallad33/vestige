@@ -290,7 +290,7 @@ impl SpeculativeRetriever {
             for patterns_list in patterns.values_mut() {
                 for pattern in patterns_list.iter_mut() {
                     let days_old = (now - pattern.last_seen).num_days() as f64;
-                    pattern.weight = pattern.weight * PATTERN_DECAY_RATE.powf(days_old);
+                    pattern.weight *= PATTERN_DECAY_RATE.powf(days_old);
                 }
 
                 // Remove patterns that are too weak
@@ -393,9 +393,7 @@ impl SpeculativeRetriever {
                                 memory_id: event.memory_id.clone(),
                                 content_preview: String::new(),
                                 confidence: 0.6,
-                                reasoning: format!(
-                                    "This memory was helpful when you searched for similar terms before"
-                                ),
+                                reasoning: "This memory was helpful when you searched for similar terms before".to_string(),
                                 trigger: PredictionTrigger::SemanticSimilarity {
                                     query: query.clone(),
                                     similarity: 0.8,
@@ -492,7 +490,7 @@ impl SpeculativeRetriever {
                 for pattern in patterns_list.iter_mut() {
                     if pattern.predicted_id == memory_id {
                         pattern.weight *= factor;
-                        pattern.success_rate = pattern.success_rate * 0.95;
+                        pattern.success_rate *= 0.95;
                     }
                 }
             }

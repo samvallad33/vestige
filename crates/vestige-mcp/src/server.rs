@@ -619,7 +619,13 @@ mod tests {
     #[tokio::test]
     async fn test_initialize_returns_server_info() {
         let (mut server, _dir) = test_server().await;
-        let request = make_request("initialize", None);
+        // Send with current protocol version to get it back
+        let params = serde_json::json!({
+            "protocolVersion": MCP_VERSION,
+            "capabilities": {},
+            "clientInfo": { "name": "test", "version": "1.0" }
+        });
+        let request = make_request("initialize", Some(params));
 
         let response = server.handle_request(request).await.unwrap();
         let result = response.result.unwrap();

@@ -387,7 +387,7 @@ impl ContextCapture {
         // Get last modified time
         let last_modified = fs::metadata(path)
             .ok()
-            .and_then(|m| m.modified().ok().map(|t| DateTime::<Utc>::from(t)));
+            .and_then(|m| m.modified().ok().map(DateTime::<Utc>::from));
 
         // Detect module
         let module = self.detect_module(path);
@@ -640,7 +640,7 @@ impl ContextCapture {
                     let name = line
                         .trim_start_matches("module ")
                         .split('/')
-                        .last()
+                        .next_back()
                         .unwrap_or("")
                         .to_string();
                     if !name.is_empty() {

@@ -451,7 +451,7 @@ impl MemoryCompressor {
 
     fn extract_sentences<'a>(&self, content: &'a str) -> Vec<&'a str> {
         content
-            .split(|c| c == '.' || c == '!' || c == '?')
+            .split(['.', '!', '?'])
             .map(|s| s.trim())
             .filter(|s| s.len() > 10) // Filter very short fragments
             .collect()
@@ -462,7 +462,7 @@ impl MemoryCompressor {
 
         // Length factor (prefer medium-length sentences)
         let words = sentence.split_whitespace().count();
-        if words >= 5 && words <= 25 {
+        if (5..=25).contains(&words) {
             score += 0.3;
         }
 

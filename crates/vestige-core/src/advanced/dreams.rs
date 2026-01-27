@@ -1539,7 +1539,7 @@ impl MemoryDreamer {
             // Hidden connection
             let insight = format!(
                 "Connection between '{}' and '{}' found across {} memories",
-                common_tags.get(0).map(|s| s.as_str()).unwrap_or("A"),
+                common_tags.first().map(|s| s.as_str()).unwrap_or("A"),
                 common_tags.get(1).map(|s| s.as_str()).unwrap_or("B"),
                 memories.len()
             );

@@ -1,4 +1,5 @@
-//! Recall Tool
+#![allow(dead_code)]
+//! Recall Tool (Deprecated - use search_unified instead)
 //!
 //! Search and retrieve knowledge from memory.
 

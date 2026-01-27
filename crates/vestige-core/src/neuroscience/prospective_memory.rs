@@ -131,10 +131,12 @@ pub type Result<T> = std::result::Result<T, ProspectiveMemoryError>;
 
 /// Priority levels for intentions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum Priority {
     /// Low priority - nice to remember
     Low = 1,
     /// Normal priority - should remember
+    #[default]
     Normal = 2,
     /// High priority - important to remember
     High = 3,
@@ -142,11 +144,6 @@ pub enum Priority {
     Critical = 4,
 }
 
-impl Default for Priority {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
 
 impl Priority {
     /// Get numeric value for comparison
@@ -182,8 +179,10 @@ impl Priority {
 
 /// Status of an intention
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum IntentionStatus {
     /// Intention is active and being monitored
+    #[default]
     Active,
     /// Intention has been triggered but not yet fulfilled
     Triggered,
@@ -197,11 +196,6 @@ pub enum IntentionStatus {
     Snoozed,
 }
 
-impl Default for IntentionStatus {
-    fn default() -> Self {
-        Self::Active
-    }
-}
 
 /// Pattern for matching trigger conditions
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -516,7 +510,7 @@ impl RecurrencePattern {
                             Utc,
                         );
                     }
-                    candidate = candidate + Duration::days(1);
+                    candidate += Duration::days(1);
                 }
                 from + Duration::days(7) // Fallback
             }
@@ -1030,7 +1024,7 @@ impl IntentionParser {
             };
 
             // Extract entity if mentioned
-            if let Some(entity) = self.extract_entity(&text_lower) {
+            if let Some(entity) = self.extract_entity(text_lower) {
                 return Ok((
                     IntentionTrigger::EventBased {
                         condition: format!("Meeting or conversation with {}", entity),
@@ -1287,12 +1281,10 @@ impl ProspectiveMemory {
             if intention
                 .trigger
                 .is_triggered(context, &context.recent_events)
-            {
-                if intention.should_remind() {
+                && intention.should_remind() {
                     intention.mark_triggered();
                     triggered.push(intention.clone());
                 }
-            }
 
             // Check for deadline escalation
             if self.config.enable_escalation {
@@ -1450,10 +1442,10 @@ impl ProspectiveMemory {
 
         Ok(IntentionStats {
             total_active: active,
-            triggered: triggered,
-            overdue: overdue,
+            triggered,
+            overdue,
             fulfilled_lifetime: fulfilled,
-            high_priority: high_priority,
+            high_priority,
         })
     }
 

@@ -1,4 +1,5 @@
-//! Synaptic Tagging Tool
+#![allow(dead_code)]
+//! Synaptic Tagging Tool (Deprecated)
 //!
 //! Retroactive importance assignment based on Synaptic Tagging & Capture theory.
 //! Frey & Morris (1997), Redondo & Morris (2011).

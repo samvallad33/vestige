@@ -1,4 +1,5 @@
-//! Consolidation Tool
+#![allow(dead_code)]
+//! Consolidation Tool (Deprecated)
 //!
 //! Run memory consolidation cycle with FSRS decay and embedding generation.
 

@@ -1,4 +1,5 @@
-//! Feedback Tools
+#![allow(dead_code)]
+//! Feedback Tools (Deprecated - use promote_memory/demote_memory instead)
 //!
 //! Promote and demote memories based on outcome quality.
 //! Implements preference learning for Vestige.
