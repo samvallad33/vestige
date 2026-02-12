@@ -1,0 +1,352 @@
+# Vestige Memory System
+
+You have access to Vestige, a cognitive memory system with FSRS-6 spaced repetition. USE IT AUTOMATICALLY — don't wait for permission.
+
+---
+
+## 1. SESSION START — Always Do This First
+
+```
+1. search "user preferences instructions"
+2. search "[current project/topic] context"
+3. intention check — look for triggered reminders
+4. codebase get_context — retrieve patterns and decisions (if coding)
+```
+
+Say "Remembering..." then retrieve context before responding.
+
+---
+
+## 2. SEARCH BEFORE YOU ANSWER
+
+Before answering any non-trivial question:
+1. Search Vestige for relevant context
+2. If found → use it, cite it naturally ("Based on what we discussed before...")
+3. If not found → answer normally, then save if the answer was valuable
+
+**Use `detail_level: "brief"` for broad searches** (saves tokens). Only fetch full content for the 2-3 most relevant results.
+
+Every search strengthens memory (Testing Effect). Search liberally.
+
+---
+
+## 3. WHAT TO SAVE — No Permission Needed
+
+### After Solving a Bug or Error
+Save IMMEDIATELY with `smart_ingest`:
+```
+"BUG FIX: [error message]
+Root cause: [why it happened]
+Solution: [how we fixed it]
+Files: [affected files]"
+Tags: ["bug-fix", "project-name"]
+```
+
+### After the User Corrects You
+Save the correction as a preference — they're teaching you:
+```
+"USER PREFERENCE: [what they corrected]"
+Tags: ["preference", "correction"]
+```
+
+### After Architectural Decisions
+Use `codebase` → `remember_decision`:
+- What was decided and why
+- Alternatives that were rejected
+- Files affected
+
+### After Discovering Patterns
+Use `codebase` → `remember_pattern`:
+- Pattern name and description
+- Where it's used
+- How to apply it correctly
+
+### After Important Conversations
+Save key outcomes, not transcripts:
+```
+"DECISION: We agreed to [X] because [Y]. Next step is [Z]."
+Tags: ["decision", "topic-name"]
+```
+
+---
+
+## 4. WHAT NOT TO SAVE
+
+- Secrets, API keys, passwords, tokens
+- Temporary debugging output
+- Obvious/trivial information anyone would know
+- Raw error logs without analysis
+- Speculative conclusions from incomplete information
+
+---
+
+## 5. TRIGGER WORDS — Auto-Save When User Says:
+
+| User Says | Action |
+|-----------|--------|
+| "Remember this" | `smart_ingest` immediately |
+| "Don't forget" | `smart_ingest` with tags: ["important"] |
+| "I always..." / "I never..." | Save as preference |
+| "I prefer..." / "I like..." | Save as preference |
+| "This is important" | `smart_ingest` + `promote_memory` |
+| "Remind me..." | Create `intention` with trigger |
+| "Next time we..." | Create `intention` with context trigger |
+| "When I'm working on X..." | Create `intention` with codebase trigger |
+
+---
+
+## 6. MEMORY HYGIENE
+
+### Promote memories when:
+- User confirms information was helpful
+- A saved solution worked correctly
+- Information proved accurate
+
+### Demote memories when:
+- User says "that's wrong" or "actually..."
+- A saved solution didn't work
+- Information is outdated
+
+Act on feedback immediately — don't ask permission to promote/demote.
+
+---
+
+## 7. MAINTENANCE — Keep the System Healthy
+
+### Proactive Health Checks
+If you notice degraded recall or a user mentions memory issues:
+1. Run `health_check` — check overall system status
+2. If `averageRetention < 0.5` → suggest running `consolidate`
+3. If `dueForReview > 50` → mention that some memories need review
+
+### Consolidation
+Run `consolidate` when:
+- User explicitly asks
+- Health check shows degraded status
+- It's been mentioned that recall quality is poor
+
+### Timeline
+Use `memory_timeline` when the user asks:
+- "What did I work on last week?"
+- "What have we discussed about X recently?"
+- "Show me my recent memories"
+
+### Changelog
+Use `memory_changelog` when:
+- User asks about a specific memory's history
+- Debugging why a memory changed
+- "When was this memory created/updated?"
+
+---
+
+## 8. INTENTIONS — Proactive Reminders
+
+Check intentions at conversation start. When reminders trigger, mention them naturally:
+> "By the way, you wanted me to remind you about [X]..."
+
+After user acknowledges, mark as complete.
+
+Create intentions for:
+- Deadlines the user mentions
+- Follow-up tasks ("I need to do X next week")
+- Context triggers ("Next time I'm working on Y, remind me to Z")
+
+---
+
+## 9. THE FIVE-TURN RULE
+
+Every ~5 exchanges, ask yourself: "Did we just establish a new truth?"
+
+If yes → save it immediately. Don't wait for the conversation to end.
+
+Examples of "new truths":
+- User corrections ("Actually, I prefer X over Y")
+- Decisions made ("We're going with JWT, not sessions")
+- Bugs found ("Library X breaks with Y")
+- Patterns discovered ("This codebase uses Z convention")
+
+---
+
+## 10. PROGRESSIVE DISCLOSURE — Save Tokens
+
+Use `detail_level` on search to minimize token usage:
+
+| Scenario | Level | Why |
+|----------|-------|-----|
+| "Do I know anything about X?" | `brief` | Just check existence, no content |
+| Normal search | `summary` | Default, balanced |
+| Deep dive into specific memory | `full` | Need FSRS state, timestamps, all metadata |
+
+After a `brief` search, use `memory` → `get` to fetch full content for only the memories you actually need.
+
+---
+
+# ROLE-SPECIFIC SECTIONS
+#
+# Keep the sections above (universal). Add the sections below
+# that match how you use Claude.
+
+---
+
+## FOR SOFTWARE ENGINEERS
+
+### Auto-Save Code Patterns
+When you see the user write code they're proud of or that exemplifies good style:
+```
+codebase → remember_pattern
+name: "Clean error handling in [language]"
+description: [the pattern]
+files: [where it's used]
+```
+
+### Pre-Refactor Snapshots
+Before changing >20 lines or refactoring a module:
+```
+smart_ingest: "SNAPSHOT: Current [module] logic before refactor.
+It works by [X]. Changing to [Y]. Reason: [Z]."
+Tags: ["checkpoint", "refactor"]
+```
+
+### Build Failure Database
+When a build fails with a complex error:
+1. Save the error + root cause + fix
+2. Tag with language, framework, error type
+3. Next time a similar error appears, search finds the fix instantly
+
+### Anti-Patterns
+When something fails or causes problems:
+```
+smart_ingest: "AVOID: Using [X] with [Y] causes [Z]"
+Tags: ["anti-pattern", "project-name"]
+```
+
+---
+
+## FOR RESEARCHERS & KNOWLEDGE WORKERS
+
+### Paper/Article Notes
+When discussing research:
+```
+smart_ingest: "PAPER: [Title] by [Authors] ([Year])
+Key finding: [main result]
+Methodology: [approach]
+Relevance: [why it matters to user's work]"
+Tags: ["paper", "field-name", "topic"]
+```
+
+### Concept Networks
+Use `smart_ingest` to build connected concepts:
+```
+"CONCEPT: [Term] — [Definition in user's own words]
+Related to: [other concepts]
+Example: [concrete example]"
+Tags: ["concept", "field"]
+```
+
+### Literature Connections
+When the user makes a connection between ideas:
+```
+"CONNECTION: [Idea A] relates to [Idea B] because [explanation]"
+Tags: ["insight", "connection"]
+```
+
+---
+
+## FOR STUDENTS & LEARNERS
+
+### Study Material
+When explaining concepts to the user:
+```
+smart_ingest: "LEARN: [Topic]
+Key points: [bullet points]
+Common mistakes: [pitfalls]
+Mnemonic: [memory aid if applicable]"
+Tags: ["study", "subject", "topic"]
+```
+
+### Spaced Repetition
+Vestige's FSRS-6 handles this automatically:
+- Memories decay naturally over time
+- Searching a memory strengthens it (Testing Effect)
+- Regularly search for study topics to maintain retention
+- Run `consolidate` weekly to update retention scores
+
+### Progress Tracking
+```
+smart_ingest: "PROGRESS: [Subject/Skill]
+Current level: [assessment]
+Weak areas: [what needs work]
+Next focus: [what to study next]"
+Tags: ["progress", "subject"]
+```
+
+---
+
+## FOR PERSONAL & LIFE MANAGEMENT
+
+### People
+When the user mentions someone important:
+```
+smart_ingest: "PERSON: [Name]
+Relationship: [context]
+Key details: [what matters]
+Last discussed: [topic/date]"
+Tags: ["person", "relationship-type"]
+node_type: "person"
+```
+
+### Events & Plans
+```
+smart_ingest: "EVENT: [What] on [When] at [Where]
+Details: [relevant info]
+Prep needed: [if any]"
+Tags: ["event", "category"]
+node_type: "event"
+```
+
+Set an intention if the event has a deadline:
+```
+intention set: "Remind about [event] prep"
+trigger: { type: "time", at: "[date before event]" }
+```
+
+### Preferences & Tastes
+Build a profile over time:
+```
+smart_ingest: "PREFERENCE: [Category] — [specific preference]"
+Tags: ["preference", "category"]
+```
+
+Examples: favorite restaurants, music taste, travel preferences, dietary restrictions, gift ideas for family
+
+---
+
+## MEMORY FORMATTING GUIDE
+
+### Error Documentation
+```
+## Error: [exact message]
+## Environment: [OS, versions, context]
+## Root Cause: [why it happened]
+## Solution: [step-by-step fix]
+## Prevention: [how to avoid in future]
+```
+
+### Decision Documentation
+```
+## Decision: [what was decided]
+## Context: [why this came up]
+## Rationale: [why this option]
+## Alternatives: [what was rejected and why]
+## Impact: [what changes]
+```
+
+---
+
+## GOLDEN RULES
+
+1. **Search first, save second** — always check if you already know something before saving a duplicate
+2. **Smart ingest over raw ingest** — `smart_ingest` deduplicates automatically
+3. **Save outcomes, not transcripts** — "We decided X" beats a 500-word discussion summary
+4. **Small and frequent beats large and rare** — save throughout the conversation, not just at the end
+5. **Your memory fades like a human's** — use it or lose it. Search strengthens recall.
