@@ -7,7 +7,7 @@ const os = require('os');
 const { execSync } = require('child_process');
 
 const VERSION = require('../package.json').version;
-const BINARY_VERSION = '1.1.0'; // GitHub release version for binaries
+const BINARY_VERSION = '1.1.2'; // GitHub release version for binaries
 const PLATFORM = os.platform();
 const ARCH = os.arch();
 
@@ -109,7 +109,7 @@ function extract(archivePath, destDir) {
 function makeExecutable(binDir) {
   if (isWindows) return;
 
-  const binaries = ['vestige-mcp', 'vestige'];
+  const binaries = ['vestige-mcp', 'vestige', 'vestige-restore'];
   for (const bin of binaries) {
     const binPath = path.join(binDir, bin);
     if (fs.existsSync(binPath)) {

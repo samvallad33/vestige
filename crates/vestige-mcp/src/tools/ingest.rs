@@ -76,14 +76,50 @@ pub async fn execute(
     };
 
     let mut storage = storage.lock().await;
-    let node = storage.ingest(input).map_err(|e| e.to_string())?;
 
-    Ok(serde_json::json!({
-        "success": true,
-        "nodeId": node.id,
-        "message": format!("Knowledge ingested successfully. Node ID: {}", node.id),
-        "hasEmbedding": node.has_embedding.unwrap_or(false),
-    }))
+    // Route through smart_ingest when embeddings are available to prevent duplicates.
+    // Falls back to raw ingest only when embeddings aren't ready.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    {
+        let fallback_input = input.clone();
+        match storage.smart_ingest(input) {
+            Ok(result) => {
+                return Ok(serde_json::json!({
+                    "success": true,
+                    "nodeId": result.node.id,
+                    "decision": result.decision,
+                    "message": format!("Knowledge ingested successfully. Node ID: {} ({})", result.node.id, result.decision),
+                    "hasEmbedding": result.node.has_embedding.unwrap_or(false),
+                    "similarity": result.similarity,
+                    "reason": result.reason,
+                }));
+            }
+            Err(_) => {
+                // smart_ingest failed — fall through to raw ingest with cloned input
+                let node = storage.ingest(fallback_input).map_err(|e| e.to_string())?;
+                return Ok(serde_json::json!({
+                    "success": true,
+                    "nodeId": node.id,
+                    "decision": "create",
+                    "message": format!("Knowledge ingested successfully. Node ID: {}", node.id),
+                    "hasEmbedding": node.has_embedding.unwrap_or(false),
+                }));
+            }
+        }
+    }
+
+    // Fallback for builds without embedding features
+    #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
+    {
+        let node = storage.ingest(input).map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({
+            "success": true,
+            "nodeId": node.id,
+            "decision": "create",
+            "message": format!("Knowledge ingested successfully. Node ID: {}", node.id),
+            "hasEmbedding": node.has_embedding.unwrap_or(false),
+        }))
+    }
 }
 
 // ============================================================================
