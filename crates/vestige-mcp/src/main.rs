@@ -36,7 +36,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{error, info, Level};
+use tracing::{error, info, warn, Level};
 use tracing_subscriber::EnvFilter;
 
 // Use vestige-core for the cognitive science engine
@@ -155,6 +155,58 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // Spawn background auto-consolidation so FSRS-6 decay scores stay fresh.
+    // Runs only if the last consolidation was more than 6 hours ago.
+    {
+        let storage_clone = storage.clone();
+        tokio::spawn(async move {
+            // Small delay so we don't block server startup / stdio handshake
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+            let mut storage = storage_clone.lock().await;
+
+            // Check whether consolidation is actually needed
+            let should_run = match storage.get_last_consolidation() {
+                Ok(Some(last)) => {
+                    let elapsed = chrono::Utc::now() - last;
+                    let stale = elapsed > chrono::Duration::hours(6);
+                    if !stale {
+                        info!(
+                            last_consolidation = %last,
+                            "Skipping auto-consolidation (last run was < 6 hours ago)"
+                        );
+                    }
+                    stale
+                }
+                Ok(None) => {
+                    info!("No previous consolidation found — running first auto-consolidation");
+                    true
+                }
+                Err(e) => {
+                    warn!("Could not read consolidation history: {} — running anyway", e);
+                    true
+                }
+            };
+
+            if should_run {
+                match storage.run_consolidation() {
+                    Ok(result) => {
+                        info!(
+                            nodes_processed = result.nodes_processed,
+                            decay_applied = result.decay_applied,
+                            embeddings_generated = result.embeddings_generated,
+                            duration_ms = result.duration_ms,
+                            "Auto-consolidation complete"
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Auto-consolidation failed: {}", e);
+                    }
+                }
+            }
+        });
+    }
 
     // Create MCP server
     let server = McpServer::new(storage);

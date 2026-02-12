@@ -105,6 +105,16 @@ impl Storage {
 
         let conn = Connection::open(&path)?;
 
+        // Apply encryption key if SQLCipher is enabled and key is provided
+        #[cfg(feature = "encryption")]
+        {
+            if let Ok(key) = std::env::var("VESTIGE_ENCRYPTION_KEY") {
+                if !key.is_empty() {
+                    conn.pragma_update(None, "key", &key)?;
+                }
+            }
+        }
+
         // Configure SQLite for performance
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
@@ -1431,61 +1441,81 @@ impl Storage {
         Ok(result)
     }
 
-    /// Apply decay to all memories
+    /// Apply decay to all memories using batched pagination to avoid OOM.
+    ///
+    /// Instead of loading all knowledge_nodes into memory at once, this
+    /// processes rows in fixed-size batches (BATCH_SIZE = 500) using
+    /// LIMIT/OFFSET pagination. Each batch runs inside its own transaction
+    /// for atomicity without holding a giant write-lock.
     pub fn apply_decay(&mut self) -> Result<i32> {
         const FSRS_DECAY: f64 = 0.5;
         const FSRS_FACTOR: f64 = 9.0;
+        const BATCH_SIZE: i64 = 500;
 
         let now = Utc::now();
+        let mut count = 0i32;
+        let mut offset = 0i64;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT id, last_accessed, storage_strength, retrieval_strength,
-                    sentiment_magnitude, stability
-             FROM knowledge_nodes",
-        )?;
+        loop {
+            let batch: Vec<(String, String, f64, f64, f64, f64)> = self
+                .conn
+                .prepare(
+                    "SELECT id, last_accessed, storage_strength, retrieval_strength,
+                            sentiment_magnitude, stability
+                     FROM knowledge_nodes
+                     ORDER BY id
+                     LIMIT ?1 OFFSET ?2",
+                )?
+                .query_map(params![BATCH_SIZE, offset], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
 
-        let nodes: Vec<(String, String, f64, f64, f64, f64)> = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        let mut count = 0;
-
-        for (id, last_accessed, storage_strength, _, sentiment_mag, stability) in nodes {
-            let last = DateTime::parse_from_rfc3339(&last_accessed)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or(now);
-
-            let days_since = (now - last).num_seconds() as f64 / 86400.0;
-
-            if days_since > 0.0 {
-                let effective_stability = stability * (1.0 + sentiment_mag * 0.5);
-
-                let new_retrieval = (1.0 + days_since / (FSRS_FACTOR * effective_stability))
-                    .powf(-1.0 / FSRS_DECAY);
-
-                let new_retention =
-                    (new_retrieval * 0.7) + ((storage_strength / 10.0).min(1.0) * 0.3);
-
-                self.conn.execute(
-                    "UPDATE knowledge_nodes SET
-                        retrieval_strength = ?1,
-                        retention_strength = ?2
-                     WHERE id = ?3",
-                    params![new_retrieval, new_retention, id],
-                )?;
-
-                count += 1;
+            if batch.is_empty() {
+                break;
             }
+
+            let batch_len = batch.len() as i64;
+
+            // Use a transaction for the batch
+            let tx = self.conn.transaction()?;
+
+            for (id, last_accessed, storage_strength, _, sentiment_mag, stability) in &batch {
+                let last = DateTime::parse_from_rfc3339(last_accessed)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or(now);
+
+                let days_since = (now - last).num_seconds() as f64 / 86400.0;
+
+                if days_since > 0.0 {
+                    let effective_stability = stability * (1.0 + sentiment_mag * 0.5);
+
+                    let new_retrieval =
+                        (1.0 + days_since / (FSRS_FACTOR * effective_stability))
+                            .powf(-1.0 / FSRS_DECAY);
+
+                    let new_retention =
+                        (new_retrieval * 0.7) + ((storage_strength / 10.0).min(1.0) * 0.3);
+
+                    tx.execute(
+                        "UPDATE knowledge_nodes SET retrieval_strength = ?1, retention_strength = ?2 WHERE id = ?3",
+                        params![new_retrieval, new_retention, id],
+                    )?;
+
+                    count += 1;
+                }
+            }
+
+            tx.commit()?;
+            offset += batch_len;
         }
 
         Ok(count)

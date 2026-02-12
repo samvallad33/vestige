@@ -3522,6 +3522,7 @@ dependencies = [
  "colored",
  "directories",
  "rmcp",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

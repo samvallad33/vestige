@@ -2,10 +2,13 @@
 //!
 //! Command-line interface for managing cognitive memory system.
 
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
+use chrono::{NaiveDate, Utc};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use directories::ProjectDirs;
 use vestige_core::{IngestInput, Storage};
 
 /// Vestige - Cognitive Memory System CLI
@@ -44,6 +47,43 @@ enum Commands {
         /// Path to backup JSON file
         file: PathBuf,
     },
+
+    /// Create a full backup of the SQLite database
+    Backup {
+        /// Output file path for the backup
+        output: PathBuf,
+    },
+
+    /// Export memories in JSON or JSONL format
+    Export {
+        /// Output file path
+        output: PathBuf,
+        /// Export format: json or jsonl
+        #[arg(long, default_value = "json")]
+        format: String,
+        /// Filter by tags (comma-separated)
+        #[arg(long)]
+        tags: Option<String>,
+        /// Only export memories created after this date (YYYY-MM-DD)
+        #[arg(long)]
+        since: Option<String>,
+    },
+
+    /// Garbage collect stale memories below retention threshold
+    Gc {
+        /// Minimum retention strength to keep (delete below this)
+        #[arg(long, default_value = "0.1")]
+        min_retention: f64,
+        /// Maximum age in days (delete memories older than this AND below retention threshold)
+        #[arg(long)]
+        max_age_days: Option<u64>,
+        /// Dry run - show what would be deleted without actually deleting
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -54,6 +94,19 @@ fn main() -> anyhow::Result<()> {
         Commands::Health => run_health(),
         Commands::Consolidate => run_consolidate(),
         Commands::Restore { file } => run_restore(file),
+        Commands::Backup { output } => run_backup(output),
+        Commands::Export {
+            output,
+            format,
+            tags,
+            since,
+        } => run_export(output, format, tags, since),
+        Commands::Gc {
+            min_retention,
+            max_age_days,
+            dry_run,
+            yes,
+        } => run_gc(min_retention, max_age_days, dry_run, yes),
     }
 }
 
@@ -420,6 +473,360 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
     println!();
     println!("{}: {}", "Total Nodes".white(), stats.total_nodes);
     println!("{}: {}", "With Embeddings".white(), stats.nodes_with_embeddings);
+
+    Ok(())
+}
+
+/// Get the default database path
+fn get_default_db_path() -> anyhow::Result<PathBuf> {
+    let proj_dirs = ProjectDirs::from("com", "vestige", "core")
+        .ok_or_else(|| anyhow::anyhow!("Could not determine project directories"))?;
+    Ok(proj_dirs.data_dir().join("vestige.db"))
+}
+
+/// Fetch all nodes from storage using pagination
+fn fetch_all_nodes(storage: &Storage) -> anyhow::Result<Vec<vestige_core::KnowledgeNode>> {
+    let mut all_nodes = Vec::new();
+    let page_size = 500;
+    let mut offset = 0;
+
+    loop {
+        let batch = storage.get_all_nodes(page_size, offset)?;
+        let batch_len = batch.len();
+        all_nodes.extend(batch);
+        if batch_len < page_size as usize {
+            break;
+        }
+        offset += page_size;
+    }
+
+    Ok(all_nodes)
+}
+
+/// Run backup command - copies the SQLite database file
+fn run_backup(output: PathBuf) -> anyhow::Result<()> {
+    println!("{}", "=== Vestige Backup ===".cyan().bold());
+    println!();
+
+    let db_path = get_default_db_path()?;
+
+    if !db_path.exists() {
+        anyhow::bail!("Database not found at: {}", db_path.display());
+    }
+
+    // Open storage to flush WAL before copying
+    println!("Flushing WAL checkpoint...");
+    {
+        let storage = Storage::new(None)?;
+        // get_stats triggers a read so the connection is active, then drop flushes
+        let _ = storage.get_stats()?;
+    }
+
+    // Also flush WAL directly via a separate connection for safety
+    {
+        let conn = rusqlite::Connection::open(&db_path)?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    }
+
+    // Create parent directories if needed
+    if let Some(parent) = output.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    // Copy the database file
+    println!("Copying database...");
+    println!("  {} {}", "From:".dimmed(), db_path.display());
+    println!("  {}   {}", "To:".dimmed(), output.display());
+
+    std::fs::copy(&db_path, &output)?;
+
+    let file_size = std::fs::metadata(&output)?.len();
+    let size_display = if file_size >= 1024 * 1024 {
+        format!("{:.2} MB", file_size as f64 / (1024.0 * 1024.0))
+    } else if file_size >= 1024 {
+        format!("{:.1} KB", file_size as f64 / 1024.0)
+    } else {
+        format!("{} bytes", file_size)
+    };
+
+    println!();
+    println!(
+        "{}",
+        format!("Backup complete: {} ({})", output.display(), size_display)
+            .green()
+            .bold()
+    );
+
+    Ok(())
+}
+
+/// Run export command - exports memories in JSON or JSONL format
+fn run_export(
+    output: PathBuf,
+    format: String,
+    tags: Option<String>,
+    since: Option<String>,
+) -> anyhow::Result<()> {
+    println!("{}", "=== Vestige Export ===".cyan().bold());
+    println!();
+
+    // Validate format
+    if format != "json" && format != "jsonl" {
+        anyhow::bail!("Invalid format '{}'. Must be 'json' or 'jsonl'.", format);
+    }
+
+    // Parse since date if provided
+    let since_date = match &since {
+        Some(date_str) => {
+            let naive = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+                .map_err(|e| anyhow::anyhow!("Invalid date '{}': {}. Use YYYY-MM-DD format.", date_str, e))?;
+            Some(
+                naive
+                    .and_hms_opt(0, 0, 0)
+                    .expect("midnight is always valid")
+                    .and_utc(),
+            )
+        }
+        None => None,
+    };
+
+    // Parse tags filter
+    let tag_filter: Vec<String> = tags
+        .as_deref()
+        .map(|t| t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+
+    let storage = Storage::new(None)?;
+    let all_nodes = fetch_all_nodes(&storage)?;
+
+    // Apply filters
+    let filtered: Vec<&vestige_core::KnowledgeNode> = all_nodes
+        .iter()
+        .filter(|node| {
+            // Date filter
+            if let Some(ref since_dt) = since_date {
+                if node.created_at < *since_dt {
+                    return false;
+                }
+            }
+            // Tag filter: node must contain ALL specified tags
+            if !tag_filter.is_empty() {
+                for tag in &tag_filter {
+                    if !node.tags.iter().any(|t| t == tag) {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .collect();
+
+    println!("{}: {}", "Format".white().bold(), format);
+    if !tag_filter.is_empty() {
+        println!("{}: {}", "Tag filter".white().bold(), tag_filter.join(", "));
+    }
+    if let Some(ref date_str) = since {
+        println!("{}: {}", "Since".white().bold(), date_str);
+    }
+    println!(
+        "{}: {} / {} total",
+        "Matching".white().bold(),
+        filtered.len(),
+        all_nodes.len()
+    );
+    println!();
+
+    // Create parent directories if needed
+    if let Some(parent) = output.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    let file = std::fs::File::create(&output)?;
+    let mut writer = BufWriter::new(file);
+
+    match format.as_str() {
+        "json" => {
+            serde_json::to_writer_pretty(&mut writer, &filtered)?;
+            writer.write_all(b"\n")?;
+        }
+        "jsonl" => {
+            for node in &filtered {
+                serde_json::to_writer(&mut writer, node)?;
+                writer.write_all(b"\n")?;
+            }
+        }
+        _ => unreachable!(),
+    }
+
+    writer.flush()?;
+
+    let file_size = std::fs::metadata(&output)?.len();
+    let size_display = if file_size >= 1024 * 1024 {
+        format!("{:.2} MB", file_size as f64 / (1024.0 * 1024.0))
+    } else if file_size >= 1024 {
+        format!("{:.1} KB", file_size as f64 / 1024.0)
+    } else {
+        format!("{} bytes", file_size)
+    };
+
+    println!(
+        "{}",
+        format!(
+            "Exported {} memories to {} ({}, {})",
+            filtered.len(),
+            output.display(),
+            format,
+            size_display
+        )
+        .green()
+        .bold()
+    );
+
+    Ok(())
+}
+
+/// Run garbage collection command
+fn run_gc(
+    min_retention: f64,
+    max_age_days: Option<u64>,
+    dry_run: bool,
+    yes: bool,
+) -> anyhow::Result<()> {
+    println!("{}", "=== Vestige Garbage Collection ===".cyan().bold());
+    println!();
+
+    let mut storage = Storage::new(None)?;
+    let all_nodes = fetch_all_nodes(&storage)?;
+    let now = Utc::now();
+
+    // Find candidates for deletion
+    let candidates: Vec<&vestige_core::KnowledgeNode> = all_nodes
+        .iter()
+        .filter(|node| {
+            // Must be below retention threshold
+            if node.retention_strength >= min_retention {
+                return false;
+            }
+            // If max_age_days specified, must also be older than that
+            if let Some(max_days) = max_age_days {
+                let age_days = (now - node.created_at).num_days();
+                if age_days < 0 || (age_days as u64) < max_days {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    println!("{}: {}", "Min retention threshold".white().bold(), min_retention);
+    if let Some(max_days) = max_age_days {
+        println!("{}: {} days", "Max age".white().bold(), max_days);
+    }
+    println!(
+        "{}: {} / {} total",
+        "Candidates for deletion".white().bold(),
+        candidates.len(),
+        all_nodes.len()
+    );
+
+    if candidates.is_empty() {
+        println!();
+        println!("{}", "No memories match the garbage collection criteria.".green());
+        return Ok(());
+    }
+
+    // Show sample of what would be deleted
+    println!();
+    println!("{}", "Sample of memories to be removed:".yellow().bold());
+    let sample_count = candidates.len().min(10);
+    for node in candidates.iter().take(sample_count) {
+        let age_days = (now - node.created_at).num_days();
+        println!(
+            "  {} [ret={:.3}, age={}d] {}",
+            node.id[..8].dimmed(),
+            node.retention_strength,
+            age_days,
+            truncate(&node.content, 60).dimmed()
+        );
+    }
+    if candidates.len() > sample_count {
+        println!(
+            "  {} ... and {} more",
+            "".dimmed(),
+            candidates.len() - sample_count
+        );
+    }
+
+    if dry_run {
+        println!();
+        println!(
+            "{}",
+            format!(
+                "Dry run: {} memories would be deleted. Re-run without --dry-run to delete.",
+                candidates.len()
+            )
+            .yellow()
+            .bold()
+        );
+        return Ok(());
+    }
+
+    // Confirmation prompt (unless --yes)
+    if !yes {
+        println!();
+        print!(
+            "{} Delete {} memories? This cannot be undone. [y/N] ",
+            "WARNING:".red().bold(),
+            candidates.len()
+        );
+        std::io::stdout().flush()?;
+
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+
+        if input != "y" && input != "yes" {
+            println!("{}", "Aborted.".yellow());
+            return Ok(());
+        }
+    }
+
+    // Perform deletion
+    let mut deleted = 0;
+    let mut errors = 0;
+    let total_candidates = candidates.len();
+
+    for node in &candidates {
+        match storage.delete_node(&node.id) {
+            Ok(true) => deleted += 1,
+            Ok(false) => errors += 1, // node was already gone
+            Err(e) => {
+                eprintln!("  {} Failed to delete {}: {}", "ERR".red(), &node.id[..8], e);
+                errors += 1;
+            }
+        }
+    }
+
+    println!();
+    println!(
+        "{}",
+        format!(
+            "Garbage collection complete: {}/{} memories deleted{}",
+            deleted,
+            total_candidates,
+            if errors > 0 {
+                format!(" ({} errors)", errors)
+            } else {
+                String::new()
+            }
+        )
+        .green()
+        .bold()
+    );
 
     Ok(())
 }

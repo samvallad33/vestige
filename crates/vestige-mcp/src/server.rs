@@ -502,6 +502,19 @@ impl McpServer {
                 description: Some("Remembered architectural and design decisions".to_string()),
                 mime_type: Some("application/json".to_string()),
             },
+            // Consolidation resources
+            ResourceDescription {
+                uri: "memory://insights".to_string(),
+                name: "Consolidation Insights".to_string(),
+                description: Some("Insights generated during memory consolidation".to_string()),
+                mime_type: Some("application/json".to_string()),
+            },
+            ResourceDescription {
+                uri: "memory://consolidation-log".to_string(),
+                name: "Consolidation Log".to_string(),
+                description: Some("History of memory consolidation runs".to_string()),
+                mime_type: Some("application/json".to_string()),
+            },
             // Prospective memory resources
             ResourceDescription {
                 uri: "memory://intentions".to_string(),

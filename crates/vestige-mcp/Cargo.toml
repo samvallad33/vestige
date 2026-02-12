@@ -68,5 +68,8 @@ rmcp = "0.14"
 clap = { version = "4", features = ["derive"] }
 colored = "3"
 
+# SQLite (for backup WAL checkpoint)
+rusqlite = { version = "0.38", features = ["bundled"] }
+
 [dev-dependencies]
 tempfile = "3"

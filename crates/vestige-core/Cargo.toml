@@ -11,7 +11,15 @@ keywords = ["memory", "spaced-repetition", "fsrs", "embeddings", "knowledge-grap
 categories = ["science", "database"]
 
 [features]
-default = ["embeddings", "vector-search"]
+default = ["embeddings", "vector-search", "bundled-sqlite"]
+
+# SQLite backend (default, unencrypted)
+bundled-sqlite = ["rusqlite/bundled"]
+
+# Encrypted SQLite via SQLCipher (mutually exclusive with bundled-sqlite)
+# Use: --no-default-features --features encryption,embeddings,vector-search
+# Set VESTIGE_ENCRYPTION_KEY env var to enable encryption
+encryption = ["rusqlite/bundled-sqlcipher"]
 
 # Core embeddings with fastembed (ONNX-based, local inference)
 embeddings = ["dep:fastembed"]
@@ -40,7 +48,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "2"
 
 # Database - SQLite with FTS5 full-text search and JSON
-rusqlite = { version = "0.38", features = ["bundled", "chrono", "serde_json"] }
+# Note: "bundled" or "bundled-sqlcipher" added via feature flags above
+rusqlite = { version = "0.38", features = ["chrono", "serde_json"] }
 
 # Platform-specific directories
 directories = "6"
