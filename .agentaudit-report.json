@@ -1,0 +1,10 @@
+{
+  "skill_slug": "vestige",
+  "source_url": "https://github.com/samvallad33/vestige",
+  "commit_sha": "3fce1f0b70a5ad40b66a4af0fa4f55e15aa106e9",
+  "package_type": "mcp-server",
+  "risk_score": 0,
+  "result": "safe",
+  "findings_count": 0,
+  "findings": []
+}
