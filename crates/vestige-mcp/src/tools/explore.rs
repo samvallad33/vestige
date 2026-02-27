@@ -5,8 +5,8 @@
 //! never populated, causing all actions to return empty results. Now queries
 //! the same SQLite connection data that `memory_graph` uses successfully.
 
-use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::Arc;
 use vestige_core::Storage;
 
@@ -59,12 +59,16 @@ type AdjEdge = (String, f64, String);
 fn build_adjacency(edges: &[vestige_core::ConnectionRecord]) -> HashMap<String, Vec<AdjEdge>> {
     let mut adj: HashMap<String, Vec<AdjEdge>> = HashMap::new();
     for e in edges {
-        adj.entry(e.source_id.clone())
-            .or_default()
-            .push((e.target_id.clone(), e.strength, e.link_type.clone()));
-        adj.entry(e.target_id.clone())
-            .or_default()
-            .push((e.source_id.clone(), e.strength, e.link_type.clone()));
+        adj.entry(e.source_id.clone()).or_default().push((
+            e.target_id.clone(),
+            e.strength,
+            e.link_type.clone(),
+        ));
+        adj.entry(e.target_id.clone()).or_default().push((
+            e.source_id.clone(),
+            e.strength,
+            e.link_type.clone(),
+        ));
     }
     adj
 }
@@ -183,8 +187,14 @@ pub async fn execute(
     args: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let args = args.ok_or("Missing arguments")?;
-    let action = args.get("action").and_then(|v| v.as_str()).ok_or("Missing 'action'")?;
-    let from = args.get("from").and_then(|v| v.as_str()).ok_or("Missing 'from'")?;
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'action'")?;
+    let from = args
+        .get("from")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'from'")?;
     let to = args.get("to").and_then(|v| v.as_str());
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
@@ -240,7 +250,8 @@ pub async fn execute(
                 .map_err(|e| format!("Failed to get subgraph for 'from': {}", e))?;
 
             let mut all_edges = edges_from;
-            let mut all_node_ids: HashSet<String> = nodes_from.iter().map(|n| n.id.clone()).collect();
+            let mut all_node_ids: HashSet<String> =
+                nodes_from.iter().map(|n| n.id.clone()).collect();
 
             // If target isn't in the from-neighborhood, also pull its neighborhood
             if !all_node_ids.contains(to_id) {
@@ -269,14 +280,18 @@ pub async fn execute(
 
             if let Some(best) = paths.first() {
                 // Build steps from the best path's hops
-                let steps: Vec<serde_json::Value> = best.hops.iter().map(|(f, t, s, lt)| {
-                    serde_json::json!({
-                        "from": f,
-                        "to": t,
-                        "connection_strength": s,
-                        "link_type": lt,
+                let steps: Vec<serde_json::Value> = best
+                    .hops
+                    .iter()
+                    .map(|(f, t, s, lt)| {
+                        serde_json::json!({
+                            "from": f,
+                            "to": t,
+                            "connection_strength": s,
+                            "link_type": lt,
+                        })
                     })
-                }).collect();
+                    .collect();
 
                 // Confidence = geometric mean of hop strengths
                 let confidence = if best.hops.is_empty() {
@@ -355,13 +370,16 @@ pub async fn execute(
             bridge_list.sort_by(|a, b| b.1.cmp(&a.1));
             bridge_list.truncate(limit);
 
-            let bridges: Vec<serde_json::Value> = bridge_list.iter().map(|(id, count)| {
-                serde_json::json!({
-                    "memory_id": id,
-                    "frequency": count,
-                    "paths_total": paths.len(),
+            let bridges: Vec<serde_json::Value> = bridge_list
+                .iter()
+                .map(|(id, count)| {
+                    serde_json::json!({
+                        "memory_id": id,
+                        "frequency": count,
+                        "paths_total": paths.len(),
+                    })
                 })
-            }).collect();
+                .collect();
 
             Ok(serde_json::json!({
                 "action": "bridges",
@@ -372,7 +390,10 @@ pub async fn execute(
             }))
         }
 
-        _ => Err(format!("Unknown action: '{}'. Expected: chain, associations, bridges", action)),
+        _ => Err(format!(
+            "Unknown action: '{}'. Expected: chain, associations, bridges",
+            action
+        )),
     }
 }
 
@@ -389,31 +410,35 @@ mod tests {
 
     /// Helper: ingest a memory and return its ID.
     fn ingest_memory(storage: &Storage, content: &str) -> String {
-        let node = storage.ingest(vestige_core::IngestInput {
-            content: content.to_string(),
-            node_type: "fact".to_string(),
-            source: None,
-            sentiment_score: 0.0,
-            sentiment_magnitude: 0.0,
-            tags: vec!["test".to_string()],
-            valid_from: None,
-            valid_until: None,
-        }).unwrap();
+        let node = storage
+            .ingest(vestige_core::IngestInput {
+                content: content.to_string(),
+                node_type: "fact".to_string(),
+                source: None,
+                sentiment_score: 0.0,
+                sentiment_magnitude: 0.0,
+                tags: vec!["test".to_string()],
+                valid_from: None,
+                valid_until: None,
+            })
+            .unwrap();
         node.id
     }
 
     /// Helper: save a connection between two memories.
     fn connect(storage: &Storage, from: &str, to: &str, strength: f64, link_type: &str) {
         use chrono::Utc;
-        storage.save_connection(&vestige_core::ConnectionRecord {
-            source_id: from.to_string(),
-            target_id: to.to_string(),
-            strength,
-            link_type: link_type.to_string(),
-            created_at: Utc::now(),
-            last_activated: Utc::now(),
-            activation_count: 1,
-        }).unwrap();
+        storage
+            .save_connection(&vestige_core::ConnectionRecord {
+                source_id: from.to_string(),
+                target_id: to.to_string(),
+                strength,
+                link_type: link_type.to_string(),
+                created_at: Utc::now(),
+                last_activated: Utc::now(),
+                activation_count: 1,
+            })
+            .unwrap();
     }
 
     // ---- Schema tests ----
@@ -564,10 +589,15 @@ mod tests {
         let value = result.unwrap();
         assert_eq!(value["action"], "associations");
         let count = value["count"].as_u64().unwrap();
-        assert!(count >= 2, "Expected at least 2 associations, got {}", count);
+        assert!(
+            count >= 2,
+            "Expected at least 2 associations, got {}",
+            count
+        );
 
         let assocs = value["associations"].as_array().unwrap();
-        let neighbor_ids: Vec<&str> = assocs.iter()
+        let neighbor_ids: Vec<&str> = assocs
+            .iter()
             .map(|a| a["memory_id"].as_str().unwrap())
             .collect();
         assert!(neighbor_ids.contains(&id_b.as_str()));
@@ -627,7 +657,8 @@ mod tests {
         assert!(count >= 1, "Expected at least 1 bridge, got {}", count);
 
         let bridges = value["bridges"].as_array().unwrap();
-        let bridge_ids: Vec<&str> = bridges.iter()
+        let bridge_ids: Vec<&str> = bridges
+            .iter()
             .map(|b| b["memory_id"].as_str().unwrap())
             .collect();
         assert!(bridge_ids.contains(&id_bridge.as_str()));
@@ -640,7 +671,13 @@ mod tests {
         let id_center = ingest_memory(&storage, "Center node");
         for i in 0..10 {
             let neighbor = ingest_memory(&storage, &format!("Neighbor {}", i));
-            connect(&storage, &id_center, &neighbor, 0.5 + (i as f64 * 0.03), "semantic");
+            connect(
+                &storage,
+                &id_center,
+                &neighbor,
+                0.5 + (i as f64 * 0.03),
+                "semantic",
+            );
         }
 
         let args = serde_json::json!({
@@ -660,17 +697,15 @@ mod tests {
     #[test]
     fn test_build_adjacency_bidirectional() {
         use chrono::Utc;
-        let edges = vec![
-            vestige_core::ConnectionRecord {
-                source_id: "a".to_string(),
-                target_id: "b".to_string(),
-                strength: 0.8,
-                link_type: "semantic".to_string(),
-                created_at: Utc::now(),
-                last_activated: Utc::now(),
-                activation_count: 1,
-            },
-        ];
+        let edges = vec![vestige_core::ConnectionRecord {
+            source_id: "a".to_string(),
+            target_id: "b".to_string(),
+            strength: 0.8,
+            link_type: "semantic".to_string(),
+            created_at: Utc::now(),
+            last_activated: Utc::now(),
+            activation_count: 1,
+        }];
         let adj = build_adjacency(&edges);
         assert!(adj.contains_key("a"));
         assert!(adj.contains_key("b"));
@@ -683,17 +718,15 @@ mod tests {
     #[test]
     fn test_bfs_finds_direct_path() {
         use chrono::Utc;
-        let edges = vec![
-            vestige_core::ConnectionRecord {
-                source_id: "a".to_string(),
-                target_id: "b".to_string(),
-                strength: 0.9,
-                link_type: "test".to_string(),
-                created_at: Utc::now(),
-                last_activated: Utc::now(),
-                activation_count: 1,
-            },
-        ];
+        let edges = vec![vestige_core::ConnectionRecord {
+            source_id: "a".to_string(),
+            target_id: "b".to_string(),
+            strength: 0.9,
+            link_type: "test".to_string(),
+            created_at: Utc::now(),
+            last_activated: Utc::now(),
+            activation_count: 1,
+        }];
         let adj = build_adjacency(&edges);
         let paths = bfs_find_paths(&adj, "a", "b", 5);
         assert!(!paths.is_empty());
@@ -732,17 +765,15 @@ mod tests {
     #[test]
     fn test_bfs_skips_weak_connections() {
         use chrono::Utc;
-        let edges = vec![
-            vestige_core::ConnectionRecord {
-                source_id: "a".to_string(),
-                target_id: "b".to_string(),
-                strength: 0.1, // Below MIN_CONNECTION_STRENGTH
-                link_type: "test".to_string(),
-                created_at: Utc::now(),
-                last_activated: Utc::now(),
-                activation_count: 1,
-            },
-        ];
+        let edges = vec![vestige_core::ConnectionRecord {
+            source_id: "a".to_string(),
+            target_id: "b".to_string(),
+            strength: 0.1, // Below MIN_CONNECTION_STRENGTH
+            link_type: "test".to_string(),
+            created_at: Utc::now(),
+            last_activated: Utc::now(),
+            activation_count: 1,
+        }];
         let adj = build_adjacency(&edges);
         let paths = bfs_find_paths(&adj, "a", "b", 5);
         assert!(paths.is_empty(), "Should not traverse weak connections");
