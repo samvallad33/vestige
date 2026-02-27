@@ -630,7 +630,7 @@ impl McpServer {
                 });
                 tools::dream::execute(&self.storage, &self.cognitive, request.arguments).await
             }
-            "explore_connections" => tools::explore::execute(&self.storage, &self.cognitive, request.arguments).await,
+            "explore_connections" => tools::explore::execute(&self.storage, request.arguments).await,
             "predict" => tools::predict::execute(&self.storage, &self.cognitive, request.arguments).await,
             "restore" => tools::restore::execute(&self.storage, request.arguments).await,
 
