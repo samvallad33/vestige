@@ -10,7 +10,7 @@ import { NodeManager } from '../nodes';
 import { EdgeManager } from '../edges';
 import { EffectManager } from '../effects';
 import { ForceSimulation } from '../force-sim';
-import { Vector3, Scene } from './three-mock';
+import { Vector3, Scene, RingGeometry, Mesh, Points, Sprite } from './three-mock';
 import { makeNode, makeEdge, makeEvent, resetNodeCounter } from './helpers';
 import type { GraphNode, VestigeEvent } from '$types';
 
@@ -872,6 +872,272 @@ describe('Event-to-Mutation Pipeline', () => {
 
 			// Should have emitted edgeAdded
 			expect(mutations.some((m) => m.type === 'edgeAdded')).toBe(true);
+		});
+	});
+
+	describe('v2.3 Birth Ritual wiring', () => {
+		/** Count shockwave rings currently in the scene by their RingGeometry. */
+		function countRings(s: InstanceType<typeof Scene>): number {
+			let n = 0;
+			for (const child of s.children) {
+				if (child instanceof Mesh && child.geometry instanceof RingGeometry) n++;
+			}
+			return n;
+		}
+
+		/** Count Points children — rainbow bursts, spawn bursts, implosions. */
+		function countPoints(s: InstanceType<typeof Scene>): number {
+			let n = 0;
+			for (const child of s.children) if (child instanceof Points) n++;
+			return n;
+		}
+
+		/** Count Sprite children — birth orb adds a halo + core sprite. */
+		function countSprites(s: InstanceType<typeof Scene>): number {
+			let n = 0;
+			for (const child of s.children) if (child instanceof Sprite) n++;
+			return n;
+		}
+
+		it('node mesh is hidden immediately after MemoryCreated dispatch', () => {
+			mapEventToEffects(
+				makeEvent('MemoryCreated', {
+					id: 'ritual-create',
+					content: 'fresh memory',
+					node_type: 'fact',
+				}),
+				ctx,
+				allNodes
+			);
+
+			// Ritual path: mesh/glow/label are all .visible = false until
+			// igniteNode fires on orb arrival.
+			const mesh = nodeManager.meshMap.get('ritual-create')!;
+			const glow = nodeManager.glowMap.get('ritual-create')!;
+			const label = nodeManager.labelSprites.get('ritual-create')!;
+			expect(mesh.visible).toBe(false);
+			expect(glow.visible).toBe(false);
+			expect(label.visible).toBe(false);
+
+			// Pending sentinel is stamped on userData.
+			expect(mesh.userData.birthRitualPending).toBeDefined();
+		});
+
+		it('does NOT fire burst/ripple/shockwave at spawn (only the birth orb)', () => {
+			const ringsBefore = countRings(scene);
+			const pointsBefore = countPoints(scene);
+			const spritesBefore = countSprites(scene);
+
+			mapEventToEffects(
+				makeEvent('MemoryCreated', {
+					id: 'spawn-quiet',
+					content: 'test',
+					node_type: 'fact',
+				}),
+				ctx,
+				allNodes
+			);
+
+			// Birth orb adds exactly 2 sprites (halo + core). NodeManager's
+			// addNode also adds a glow Sprite + label Sprite to the NodeManager
+			// GROUP, not to the scene — so spritesBefore -> after delta is +2.
+			expect(countSprites(scene) - spritesBefore).toBe(2);
+
+			// No arrival-cascade effects yet: no shockwave rings, no rainbow
+			// burst/spawn burst/ripple particles.
+			expect(countRings(scene)).toBe(ringsBefore);
+			expect(countPoints(scene)).toBe(pointsBefore);
+		});
+
+		it('drives through the full ritual: onArrive fires, node becomes visible, scale grows', () => {
+			mapEventToEffects(
+				makeEvent('MemoryCreated', {
+					id: 'full-ritual',
+					content: 'visible after arrival',
+					node_type: 'fact',
+				}),
+				ctx,
+				allNodes
+			);
+
+			const mesh = nodeManager.meshMap.get('full-ritual')!;
+			expect(mesh.visible).toBe(false);
+
+			// Drive the effects update loop past the full ritual duration
+			// (gestation 48 + flight 90 = 138 frames). After frame 138 the
+			// orb fires onArrive which ignites the node and queues materialization.
+			for (let i = 0; i < 140; i++) {
+				effects.update(nodeManager.meshMap, camera, nodeManager.positions);
+			}
+
+			// Node is now visible and sentinel is cleared.
+			expect(mesh.visible).toBe(true);
+			expect(mesh.userData.birthRitualPending).toBeUndefined();
+
+			// Run node animation a few frames to let materialization scale grow.
+			// Note: onArrive bumped scale by 1.8x (from 0.001 -> 0.0018), then
+			// materialization easeOutElastic pulls it toward targetScale.
+			for (let f = 0; f < 10; f++) {
+				nodeManager.animate(f * 0.016, allNodes, camera);
+			}
+			expect(mesh.scale.x).toBeGreaterThan(0.001);
+		});
+
+		it("Newton's Cradle — target mesh scale is multiplied by 1.8x on arrival", () => {
+			mapEventToEffects(
+				makeEvent('MemoryCreated', {
+					id: 'newton-cradle',
+					content: 'recoil test',
+					node_type: 'fact',
+				}),
+				ctx,
+				allNodes
+			);
+
+			const mesh = nodeManager.meshMap.get('newton-cradle')!;
+			// Pre-arrival: scale is the addNode initial 0.001.
+			expect(mesh.scale.x).toBeCloseTo(0.001, 6);
+
+			// Drive just to the moment onArrive fires. Gestation (48) +
+			// flight (90) = 138 frames. Arrival bumps scale by 1.8x BEFORE
+			// materialization has run any ticks, so the scale should be
+			// exactly 0.001 * 1.8 = 0.0018 at that instant. We check right
+			// after onArrive (frame 139) — but effects.update progresses the
+			// orb's age counter by one each call, and on the tick where
+			// orb.age > totalFrames, onArrive fires. We then must NOT tick
+			// nodeManager.animate (or materialization would diverge the scale).
+			for (let i = 0; i < 140; i++) {
+				effects.update(nodeManager.meshMap, camera, nodeManager.positions);
+			}
+
+			// onArrive fired. Scale was 0.001, got multiplied by 1.8 -> 0.0018.
+			// Materialization is queued but hasn't run yet (no animate() calls).
+			expect(mesh.scale.x).toBeCloseTo(0.0018, 6);
+		});
+
+		it('dual shockwave — arrival cascade adds TWO RingGeometry meshes, not one', () => {
+			mapEventToEffects(
+				makeEvent('MemoryCreated', {
+					id: 'dual-shock',
+					content: 'layered crash',
+					node_type: 'fact',
+				}),
+				ctx,
+				allNodes
+			);
+
+			const ringsBefore = countRings(scene);
+
+			// Drive past full ritual so onArrive fires.
+			for (let i = 0; i < 140; i++) {
+				effects.update(nodeManager.meshMap, camera, nodeManager.positions);
+			}
+
+			// Both shockwaves fire synchronously in the onArrive callback
+			// (the previous setTimeout-delayed second shockwave was dropped
+			// because it could outlive the scene on route change).
+			const ringsAfter = countRings(scene);
+			expect(ringsAfter - ringsBefore).toBe(2);
+		});
+
+		it('re-reads position on arrival — fires cascade at force-sim-moved position', () => {
+			mapEventToEffects(
+				makeEvent('MemoryCreated', {
+					id: 'moving-target',
+					content: 'follow the node',
+					node_type: 'fact',
+				}),
+				ctx,
+				allNodes
+			);
+
+			// Grab the spawn position, then mutate it to simulate the force
+			// simulation pushing the node during the ritual.
+			const movedPos = new Vector3(123, 456, -789);
+			nodeManager.positions.set('moving-target', movedPos);
+
+			// Drive past full ritual.
+			for (let i = 0; i < 140; i++) {
+				effects.update(nodeManager.meshMap, camera, nodeManager.positions);
+			}
+
+			// The onArrive callback re-reads nodeManager.positions and fires
+			// the cascade at the LIVE position. The two shockwave Ring meshes
+			// should have been created at movedPos. Find them and check.
+			const rings = scene.children.filter(
+				(c) => c instanceof Mesh && c.geometry instanceof RingGeometry
+			);
+			expect(rings.length).toBeGreaterThanOrEqual(2);
+			// Rings for this node: their .position copies from arrivePos at
+			// spawn time inside createShockwave.
+			const atMovedPos = rings.filter(
+				(r) => r.position.x === 123 && r.position.y === 456 && r.position.z === -789
+			);
+			expect(atMovedPos.length).toBe(2);
+		});
+
+		it('Sanhedrin abort path — removeNode before arrival prevents the regular cascade', () => {
+			// Spy on the three arrival-cascade emitters so we can assert
+			// they were NEVER called when the target is vetoed mid-ritual.
+			const burstSpy = vi.spyOn(effects, 'createRainbowBurst');
+			const shockwaveSpy = vi.spyOn(effects, 'createShockwave');
+			const rippleSpy = vi.spyOn(effects, 'createRippleWave');
+
+			mapEventToEffects(
+				makeEvent('MemoryCreated', {
+					id: 'vetoed',
+					content: 'about to be shattered',
+					node_type: 'fact',
+				}),
+				ctx,
+				allNodes
+			);
+
+			// The orb's getTargetPos() closure reads
+			// nodeManager.positions.get('vetoed'). Dropping the position
+			// directly simulates the "target gone" state that the Sanhedrin
+			// veto produces after dissolution completes — without needing to
+			// drive the full 60-frame dissolution animation.
+			nodeManager.positions.delete('vetoed');
+			expect(nodeManager.positions.has('vetoed')).toBe(false);
+
+			// Snapshot the orb reference before the update loop disposes it.
+			// The abort branch flips `aborted` and tints the halo red; we
+			// assert on those fields after the ritual unwinds.
+			const orbs = (effects as any).birthOrbs as Array<{
+				sprite: { material: { color: any } };
+				core: { material: { color: any } };
+				aborted: boolean;
+			}>;
+			expect(orbs.length).toBe(1);
+			const orbRef = orbs[0];
+
+			// Drive effects past the full ritual. During flight the orb will
+			// see getTargetPos() === undefined, enter the Sanhedrin branch,
+			// call createImplosion (anti-birth visual) and SKIP onArrive —
+			// so the regular rainbow-burst + dual-shockwave + ripple cascade
+			// never fires.
+			for (let i = 0; i < 200; i++) {
+				effects.update(nodeManager.meshMap, camera, nodeManager.positions);
+			}
+
+			// Core assertion: the three regular-cascade emitters were never
+			// invoked for the vetoed node.
+			expect(burstSpy).not.toHaveBeenCalled();
+			expect(shockwaveSpy).not.toHaveBeenCalled();
+			expect(rippleSpy).not.toHaveBeenCalled();
+
+			// Also confirm the orb actually took the abort branch, not the
+			// gestation-only no-op path (otherwise this test would pass for
+			// the wrong reason). The aborted flag is set exactly once inside
+			// the Sanhedrin branch.
+			expect(orbRef.aborted).toBe(true);
+			expect(orbRef.sprite.material.color.r).toBeCloseTo(1.0, 3);
+			expect(orbRef.sprite.material.color.g).toBeCloseTo(0.15, 3);
+
+			burstSpy.mockRestore();
+			shockwaveSpy.mockRestore();
+			rippleSpy.mockRestore();
 		});
 	});
 });

@@ -210,6 +210,13 @@ export class Color {
 		this.b *= s;
 		return this;
 	}
+
+	setRGB(r: number, g: number, b: number) {
+		this.r = r;
+		this.g = g;
+		this.b = b;
+		return this;
+	}
 }
 
 export class BufferAttribute {

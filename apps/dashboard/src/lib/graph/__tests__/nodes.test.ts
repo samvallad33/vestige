@@ -453,4 +453,201 @@ describe('NodeManager', () => {
 			// The dispose method clears materializingNodes, dissolvingNodes, growingNodes
 		});
 	});
+
+	describe('Birth Ritual integration', () => {
+		it('addNode with isBirthRitual:true hides mesh, glow, and label immediately', () => {
+			const node = makeNode({ id: 'ritual-1' });
+			manager.addNode(node, new Vector3(5, 5, 5), { isBirthRitual: true });
+
+			const mesh = manager.meshMap.get('ritual-1')!;
+			const glow = manager.glowMap.get('ritual-1')!;
+			const label = manager.labelSprites.get('ritual-1')!;
+
+			expect(mesh.visible).toBe(false);
+			expect(glow.visible).toBe(false);
+			expect(label.visible).toBe(false);
+		});
+
+		it('addNode with isBirthRitual:true stores a pending sentinel on mesh.userData', () => {
+			const node = makeNode({ id: 'ritual-sentinel', retention: 0.75 });
+			manager.addNode(node, new Vector3(0, 0, 0), { isBirthRitual: true });
+
+			const mesh = manager.meshMap.get('ritual-sentinel')!;
+			const pending = mesh.userData.birthRitualPending as any;
+			expect(pending).toBeDefined();
+			expect(pending.totalFrames).toBe(30);
+			// targetScale = 0.5 + retention * 2 = 0.5 + 0.75 * 2 = 2.0
+			expect(pending.targetScale).toBeCloseTo(2.0, 3);
+		});
+
+		it('addNode with isBirthRitual:true does NOT enqueue materialization', () => {
+			const ritualNode = makeNode({ id: 'ritual-pending', retention: 0.8 });
+			manager.addNode(ritualNode, new Vector3(10, 10, 10), { isBirthRitual: true });
+
+			// In the real runtime the ritual-pending node is .visible=false
+			// AND is not yet in the GraphNode[] list — it only gets added to
+			// the visible node list once igniteNode flips its visibility and
+			// materialization kicks in. So we pass an empty `nodes` array to
+			// animate(), which also exercises that the breathing loop skips
+			// meshes absent from the nodes array.
+			const camera = { position: new Vector3(0, 30, 80) } as any;
+			for (let f = 0; f < 40; f++) {
+				manager.animate(f * 0.016, [], camera);
+			}
+
+			const mesh = manager.meshMap.get('ritual-pending')!;
+			// Materialization queue never pushed — a regular materializing
+			// node would be at scale ≈ targetScale = 2.1 by frame 40. The
+			// ritual-pending node stays at its addNode initial 0.001 because
+			// no animation loop is mutating its scale.
+			expect(mesh.scale.x).toBeCloseTo(0.001, 3);
+
+			// Stronger invariant — the sentinel is still there, confirming
+			// the node never got handed off to the materialization queue.
+			expect(mesh.userData.birthRitualPending).toBeDefined();
+		});
+
+		it('addNode without opts proceeds with normal materialization (old behavior)', () => {
+			const node = makeNode({ id: 'normal-spawn' });
+			manager.addNode(node, new Vector3(1, 2, 3));
+
+			const mesh = manager.meshMap.get('normal-spawn')!;
+			const glow = manager.glowMap.get('normal-spawn')!;
+			const label = manager.labelSprites.get('normal-spawn')!;
+
+			// Default mesh.visible is true in three-mock (Object3D has no explicit field).
+			// Key invariant: visible is NOT explicitly false like the ritual path.
+			expect(mesh.visible).not.toBe(false);
+			expect(glow.visible).not.toBe(false);
+			expect(label.visible).not.toBe(false);
+
+			// And no pending sentinel
+			expect(mesh.userData.birthRitualPending).toBeUndefined();
+
+			// Animation should proceed — scale grows via easeOutElastic
+			const camera = { position: new Vector3(0, 30, 80) } as any;
+			for (let f = 0; f < 20; f++) {
+				manager.animate(f * 0.016, [node], camera);
+			}
+			expect(mesh.scale.x).toBeGreaterThan(0.1);
+		});
+
+		it('igniteNode flips all three visibility flags and queues materialization', () => {
+			const node = makeNode({ id: 'to-ignite', retention: 0.6 });
+			manager.addNode(node, new Vector3(0, 0, 0), { isBirthRitual: true });
+
+			// Pre-ignite: hidden
+			const mesh = manager.meshMap.get('to-ignite')!;
+			const glow = manager.glowMap.get('to-ignite')!;
+			const label = manager.labelSprites.get('to-ignite')!;
+			expect(mesh.visible).toBe(false);
+
+			manager.igniteNode('to-ignite');
+
+			// Post-ignite: visible
+			expect(mesh.visible).toBe(true);
+			expect(glow.visible).toBe(true);
+			expect(label.visible).toBe(true);
+
+			// Sentinel is gone
+			expect(mesh.userData.birthRitualPending).toBeUndefined();
+
+			// Materialization was queued — drive animation and the scale
+			// should grow past the initial 0.001.
+			const camera = { position: new Vector3(0, 30, 80) } as any;
+			for (let f = 0; f < 15; f++) {
+				manager.animate(f * 0.016, [node], camera);
+			}
+			expect(mesh.scale.x).toBeGreaterThan(0.1);
+		});
+
+		it('igniteNode called twice is idempotent (second call is a no-op)', () => {
+			const node = makeNode({ id: 'double-ignite', retention: 0.5 });
+			manager.addNode(node, new Vector3(0, 0, 0), { isBirthRitual: true });
+
+			manager.igniteNode('double-ignite');
+			// Capture scale after one round of animation
+			const camera = { position: new Vector3(0, 30, 80) } as any;
+			for (let f = 0; f < 10; f++) {
+				manager.animate(f * 0.016, [node], camera);
+			}
+			const scaleAfterFirst = manager.meshMap.get('double-ignite')!.scale.x;
+
+			// Second ignite — should NOT push a duplicate materialization entry.
+			// If it did, the extra entry (starting at frame 0) would restart
+			// the scale back near 0.001 or at least visibly reset it.
+			manager.igniteNode('double-ignite');
+			for (let f = 0; f < 5; f++) {
+				manager.animate((f + 10) * 0.016, [node], camera);
+			}
+			const scaleAfterSecond = manager.meshMap.get('double-ignite')!.scale.x;
+
+			// Scale after second ignite should be greater than or roughly equal
+			// to scale after first, NOT reset toward 0.001. A duplicate entry
+			// starting at frame 0 would pull the mesh back near zero on the
+			// very first subsequent animate() tick via mn.mesh.scale.setScalar.
+			expect(scaleAfterSecond).toBeGreaterThanOrEqual(scaleAfterFirst * 0.5);
+		});
+
+		it('igniteNode on a regular (non-ritual) node is a no-op', () => {
+			const node = makeNode({ id: 'regular', retention: 0.5 });
+			manager.addNode(node, new Vector3(0, 0, 0));
+			// Regular addNode already queued materialization. Capture state.
+			const mesh = manager.meshMap.get('regular')!;
+			const visBefore = mesh.visible;
+
+			// Call igniteNode — there's no pending sentinel, should short-circuit.
+			expect(() => manager.igniteNode('regular')).not.toThrow();
+
+			// No pending sentinel means the function returns early after the
+			// sentinel check, so nothing about the mesh changes.
+			expect(mesh.visible).toBe(visBefore);
+			expect(mesh.userData.birthRitualPending).toBeUndefined();
+		});
+
+		it('igniteNode on unknown id is a no-op (no throw)', () => {
+			expect(() => manager.igniteNode('does-not-exist')).not.toThrow();
+			expect(manager.meshMap.has('does-not-exist')).toBe(false);
+		});
+
+		it('position is stored in positions map even when the node is invisible', () => {
+			const node = makeNode({ id: 'invisible-but-positioned' });
+			const spawnPos = new Vector3(42, -17, 8);
+			manager.addNode(node, spawnPos, { isBirthRitual: true });
+
+			// Force simulation + orb getTargetPos() both rely on positions
+			// being live immediately — the ritual only hides visuals, not
+			// physics state.
+			const stored = manager.positions.get('invisible-but-positioned');
+			expect(stored).toBeDefined();
+			expect(stored!.x).toBe(42);
+			expect(stored!.y).toBe(-17);
+			expect(stored!.z).toBe(8);
+
+			// And the mesh itself is still hidden
+			expect(manager.meshMap.get('invisible-but-positioned')!.visible).toBe(false);
+		});
+
+		it('removeNode during pending ritual cancels without materialization', () => {
+			// Sanhedrin abort path at the NodeManager level: a ritual-pending
+			// node gets removed before igniteNode fires. The remove path
+			// should still work (dissolution queue takes over) and igniteNode
+			// called later must not resurrect it.
+			const node = makeNode({ id: 'aborted-ritual' });
+			manager.addNode(node, new Vector3(0, 0, 0), { isBirthRitual: true });
+
+			manager.removeNode('aborted-ritual');
+
+			// Dissolution progresses past totalFrames = 60 and clears state.
+			const camera = { position: new Vector3(0, 30, 80) } as any;
+			for (let f = 0; f < 65; f++) {
+				manager.animate(f * 0.016, [node], camera);
+			}
+
+			expect(manager.meshMap.has('aborted-ritual')).toBe(false);
+
+			// And a late igniteNode call on the dead id is a safe no-op.
+			expect(() => manager.igniteNode('aborted-ritual')).not.toThrow();
+		});
+	});
 });
