@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getGlowTexture } from './nodes';
 
 export interface PulseEffect {
 	nodeId: string;
@@ -49,6 +50,28 @@ interface ConnectionFlash {
 	intensity: number;
 }
 
+// v2.3 Memory Birth Ritual. The orb gestates at a camera-relative "cosmic
+// center" point for `gestationFrames`, then flies along a dynamic quadratic
+// Bezier curve to the live position of its target node for `flightFrames`,
+// then calls `onArrive` and disposes itself. The target position is
+// resolved via `getTargetPos` on every frame so the force simulation can
+// move the node during the flight and the orb stays glued to it.
+interface BirthOrb {
+	sprite: THREE.Sprite;
+	core: THREE.Sprite;
+	startPos: THREE.Vector3;
+	getTargetPos: () => THREE.Vector3 | undefined;
+	color: THREE.Color;
+	age: number;
+	gestationFrames: number;
+	flightFrames: number;
+	arriveFired: boolean;
+	onArrive: () => void;
+	/** Last known target position. If the target disappears mid-flight we keep
+	 *  using this snapshot so the orb still lands somewhere sensible. */
+	lastTargetPos: THREE.Vector3;
+}
+
 export class EffectManager {
 	pulseEffects: PulseEffect[] = [];
 	private spawnBursts: SpawnBurst[] = [];
@@ -57,6 +80,7 @@ export class EffectManager {
 	private implosions: ImplosionEffect[] = [];
 	private shockwaves: Shockwave[] = [];
 	private connectionFlashes: ConnectionFlash[] = [];
+	private birthOrbs: BirthOrb[] = [];
 	private scene: THREE.Scene;
 
 	constructor(scene: THREE.Scene) {
@@ -229,6 +253,88 @@ export class EffectManager {
 		const line = new THREE.Line(geo, mat);
 		this.scene.add(line);
 		this.connectionFlashes.push({ line, intensity: 1.0 });
+	}
+
+	/**
+	 * v2.3 Memory Birth Ritual. Spawn a glowing orb at a point in front of the
+	 * camera ("cosmic center"), gestate for ~800ms, then arc along a quadratic
+	 * Bezier curve to the live position of the target node, which is resolved
+	 * on every frame via `getTargetPos`. On arrival, `onArrive` fires — caller
+	 * is responsible for adding the real node to the graph and triggering
+	 * arrival-time bursts.
+	 *
+	 * The target getter can return undefined if the node has been removed
+	 * mid-flight; the orb then flies to the last known target position so the
+	 * burst still fires somewhere coherent rather than snapping to origin.
+	 */
+	createBirthOrb(
+		camera: THREE.Camera,
+		color: THREE.Color,
+		getTargetPos: () => THREE.Vector3 | undefined,
+		onArrive: () => void,
+		opts: { gestationFrames?: number; flightFrames?: number; distanceFromCamera?: number } = {}
+	) {
+		const gestationFrames = opts.gestationFrames ?? 48; // ~800ms
+		const flightFrames = opts.flightFrames ?? 90; // ~1500ms
+		const distanceFromCamera = opts.distanceFromCamera ?? 40;
+
+		// Place the orb slightly in front of the camera, in view-space,
+		// projected back into world coordinates. This way the orb always
+		// appears "right in front of the user's face" regardless of where
+		// the camera has been orbited to.
+		const startPos = new THREE.Vector3(0, 0, -distanceFromCamera)
+			.applyQuaternion(camera.quaternion)
+			.add(camera.position);
+
+		// Outer glow halo
+		const haloMat = new THREE.SpriteMaterial({
+			map: getGlowTexture(),
+			color: color.clone(),
+			transparent: true,
+			opacity: 0.0,
+			blending: THREE.AdditiveBlending,
+			depthWrite: false,
+			depthTest: false, // always visible, even through other nodes
+		});
+		const sprite = new THREE.Sprite(haloMat);
+		sprite.position.copy(startPos);
+		sprite.scale.set(0.5, 0.5, 1);
+		sprite.renderOrder = 999;
+
+		// Inner bright core — stays hot white during gestation, tints at launch
+		const coreMat = new THREE.SpriteMaterial({
+			map: getGlowTexture(),
+			color: new THREE.Color(0xffffff),
+			transparent: true,
+			opacity: 0.0,
+			blending: THREE.AdditiveBlending,
+			depthWrite: false,
+			depthTest: false,
+		});
+		const core = new THREE.Sprite(coreMat);
+		core.position.copy(startPos);
+		core.scale.set(0.2, 0.2, 1);
+		core.renderOrder = 1000;
+
+		this.scene.add(sprite);
+		this.scene.add(core);
+
+		// Snapshot the current target so we have a fallback.
+		const initialTarget = getTargetPos()?.clone() ?? startPos.clone();
+
+		this.birthOrbs.push({
+			sprite,
+			core,
+			startPos,
+			getTargetPos,
+			color: color.clone(),
+			age: 0,
+			gestationFrames,
+			flightFrames,
+			arriveFired: false,
+			onArrive,
+			lastTargetPos: initialTarget,
+		});
 	}
 
 	update(
@@ -431,6 +537,97 @@ export class EffectManager {
 			}
 			(flash.line.material as THREE.LineBasicMaterial).opacity = flash.intensity;
 		}
+
+		// v2.3 Birth orbs — gestate at cosmic center, then arc to live node
+		// position along a quadratic Bezier curve. Target position is
+		// re-resolved every frame so the force simulation can move the
+		// destination during flight without the orb losing its mark.
+		for (let i = this.birthOrbs.length - 1; i >= 0; i--) {
+			const orb = this.birthOrbs[i];
+			orb.age++;
+			const totalFrames = orb.gestationFrames + orb.flightFrames;
+
+			// Refresh the live target snapshot — if the node still exists we
+			// track it, otherwise we fall back to the last known position.
+			const live = orb.getTargetPos();
+			if (live) orb.lastTargetPos.copy(live);
+
+			const haloMat = orb.sprite.material as THREE.SpriteMaterial;
+			const coreMat = orb.core.material as THREE.SpriteMaterial;
+
+			if (orb.age <= orb.gestationFrames) {
+				// Gestation phase — pulse brighter + grow from a tiny spark
+				// into a full orb. Sits still at the cosmic center.
+				const t = orb.age / orb.gestationFrames;
+				const ease = 1 - Math.pow(1 - t, 3); // easeOutCubic
+				const pulse = 0.85 + Math.sin(orb.age * 0.35) * 0.15;
+				const haloScale = 0.5 + ease * 4.5 * pulse;
+				const coreScale = 0.2 + ease * 1.8 * pulse;
+				orb.sprite.scale.set(haloScale, haloScale, 1);
+				orb.core.scale.set(coreScale, coreScale, 1);
+				haloMat.opacity = ease * 0.95;
+				coreMat.opacity = ease;
+				// Subtle warm-up — core white, halo tints toward the event
+				// color as gestation completes.
+				haloMat.color.copy(orb.color).multiplyScalar(0.7 + ease * 0.3);
+				orb.sprite.position.copy(orb.startPos);
+				orb.core.position.copy(orb.startPos);
+			} else if (orb.age <= totalFrames) {
+				// Flight phase — Bezier along a dynamic curve. Arc the
+				// control point upward for a shooting-star trajectory.
+				const t = (orb.age - orb.gestationFrames) / orb.flightFrames;
+				const ease = t < 0.5
+					? 2 * t * t
+					: 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad
+
+				const target = orb.lastTargetPos;
+				const control = new THREE.Vector3()
+					.addVectors(orb.startPos, target)
+					.multiplyScalar(0.5);
+				control.y += 30 + target.distanceTo(orb.startPos) * 0.15;
+
+				const curve = new THREE.QuadraticBezierCurve3(orb.startPos, control, target);
+				const p = curve.getPoint(ease);
+				orb.sprite.position.copy(p);
+				orb.core.position.copy(p);
+
+				// Trail effect — shrink + brighten as it approaches target
+				const flightProgress = ease;
+				const shrink = 1 - flightProgress * 0.35;
+				orb.sprite.scale.setScalar(5 * shrink);
+				orb.core.scale.setScalar(2 * shrink);
+				haloMat.opacity = 0.95;
+				coreMat.opacity = 1.0;
+				// Shift halo fully to the event color during flight
+				haloMat.color.copy(orb.color);
+			} else if (!orb.arriveFired) {
+				// Docking — fire the arrival callback once. Let the caller
+				// trigger burst/ripple effects at the exact target point.
+				orb.arriveFired = true;
+				try {
+					orb.onArrive();
+				} catch (e) {
+					// Effects must never take down the render loop.
+					// eslint-disable-next-line no-console
+					console.warn('[birth-orb] onArrive threw', e);
+				}
+				// Fade the orb out over a few more frames instead of popping.
+			} else {
+				// Post-arrival fade (8 frames ≈ 130ms)
+				const fadeAge = orb.age - totalFrames;
+				const fade = Math.max(0, 1 - fadeAge / 8);
+				haloMat.opacity = 0.95 * fade;
+				coreMat.opacity = 1.0 * fade;
+				orb.sprite.scale.setScalar(5 * (1 + (1 - fade) * 2));
+				if (fade <= 0) {
+					this.scene.remove(orb.sprite);
+					this.scene.remove(orb.core);
+					haloMat.dispose();
+					coreMat.dispose();
+					this.birthOrbs.splice(i, 1);
+				}
+			}
+		}
 	}
 
 	dispose() {
@@ -464,6 +661,12 @@ export class EffectManager {
 			flash.line.geometry.dispose();
 			(flash.line.material as THREE.Material).dispose();
 		}
+		for (const orb of this.birthOrbs) {
+			this.scene.remove(orb.sprite);
+			this.scene.remove(orb.core);
+			(orb.sprite.material as THREE.Material).dispose();
+			(orb.core.material as THREE.Material).dispose();
+		}
 		this.pulseEffects = [];
 		this.spawnBursts = [];
 		this.rainbowBursts = [];
@@ -471,5 +674,6 @@ export class EffectManager {
 		this.implosions = [];
 		this.shockwaves = [];
 		this.connectionFlashes = [];
+		this.birthOrbs = [];
 	}
 }

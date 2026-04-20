@@ -59,8 +59,13 @@
 	let nebulaMaterial: THREE.ShaderMaterial;
 	let postStack: PostProcessingStack;
 
-	// Event tracking
-	let processedEventCount = 0;
+	// Event tracking — we track the last-processed event by reference identity
+	// rather than by count, because the WebSocket store PREPENDS new events
+	// at index 0 and CAPS the array at MAX_EVENTS, so a numeric high-water
+	// mark would drift out of alignment (and did for ~3 versions — v2.3
+	// demo uncovered this while trying to fire multiple MemoryCreated events
+	// in sequence).
+	let lastProcessedEvent: VestigeEvent | null = null;
 
 	// Internal tracking: initial nodes + live-added nodes
 	let allNodes: GraphNode[] = [];
@@ -157,10 +162,19 @@
 	}
 
 	function processEvents() {
-		if (!events || events.length <= processedEventCount) return;
+		if (!events || events.length === 0) return;
 
-		const newEvents = events.slice(processedEventCount);
-		processedEventCount = events.length;
+		// Walk the feed from newest (index 0) backward until we hit the last
+		// event we already processed. Everything between is fresh. This is
+		// robust against both (a) prepend ordering and (b) the MAX_EVENTS cap
+		// dropping old entries off the tail.
+		const fresh: VestigeEvent[] = [];
+		for (const e of events) {
+			if (e === lastProcessedEvent) break;
+			fresh.push(e);
+		}
+		if (fresh.length === 0) return;
+		lastProcessedEvent = events[0];
 
 		const mutationCtx: GraphMutationContext = {
 			effects,
@@ -180,8 +194,11 @@
 			},
 		};
 
-		for (const event of newEvents) {
-			mapEventToEffects(event, mutationCtx, allNodes);
+		// Process oldest-first so cause precedes effect (e.g. MemoryCreated
+		// fires before a ConnectionDiscovered that references the new node).
+		// `fresh` is newest-first from the walk above, so iterate reversed.
+		for (let i = fresh.length - 1; i >= 0; i--) {
+			mapEventToEffects(fresh[i], mutationCtx, allNodes);
 		}
 	}
 

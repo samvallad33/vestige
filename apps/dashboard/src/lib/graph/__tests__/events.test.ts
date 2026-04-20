@@ -155,7 +155,7 @@ describe('Event-to-Mutation Pipeline', () => {
 			expect(distToN1).toBeLessThan(20);
 		});
 
-		it('triggers rainbow burst effect', () => {
+		it('spawns a v2.3 birth orb in the scene', () => {
 			const childrenBefore = scene.children.length;
 
 			mapEventToEffects(
@@ -168,16 +168,19 @@ describe('Event-to-Mutation Pipeline', () => {
 				allNodes
 			);
 
-			// Scene should have new particles (rainbow burst + shockwave + possibly more)
-			expect(scene.children.length).toBeGreaterThan(childrenBefore);
+			// Birth orb adds a halo sprite + bright core sprite to the scene
+			// immediately. The arrival-cascade effects (rainbow burst, shockwaves,
+			// ripple wave) are deferred to the orb's onArrive callback — covered
+			// by the "fires arrival cascade after ritual" test below.
+			expect(scene.children.length).toBeGreaterThanOrEqual(childrenBefore + 2);
 		});
 
-		it('triggers double shockwave (second delayed)', () => {
+		it('fires the arrival cascade after the birth ritual completes', () => {
 			vi.useFakeTimers();
 
 			mapEventToEffects(
 				makeEvent('MemoryCreated', {
-					id: 'double-shock',
+					id: 'cascade-check',
 					content: 'test',
 					node_type: 'fact',
 				}),
@@ -185,13 +188,23 @@ describe('Event-to-Mutation Pipeline', () => {
 				allNodes
 			);
 
-			const initialChildren = scene.children.length;
+			const afterSpawn = scene.children.length;
 
-			// Advance past the setTimeout
-			vi.advanceTimersByTime(200);
+			// Drive the effects update loop past the full ritual duration
+			// (gestation 48 + flight 90 = 138 frames). Each tick is one frame;
+			// we run 150 to give onArrive room to fire.
+			for (let i = 0; i < 150; i++) {
+				effects.update(nodeManager.meshMap, camera, nodeManager.positions);
+			}
 
-			// Second shockwave should have been added
-			expect(scene.children.length).toBeGreaterThan(initialChildren);
+			// Advance the setTimeout that schedules the delayed second shockwave.
+			vi.advanceTimersByTime(250);
+
+			// The arrival cascade should have added a rainbow burst, shockwave,
+			// ripple wave, and delayed second shockwave to the scene. Even after
+			// the orb fades out and is removed, the burst particles persist long
+			// enough that children.length should exceed the post-spawn count.
+			expect(scene.children.length).toBeGreaterThan(afterSpawn);
 
 			vi.useRealTimers();
 		});

@@ -93,6 +93,52 @@ export class Vector3 {
 		this.z = s;
 		return this;
 	}
+
+	addVectors(a: Vector3, b: Vector3) {
+		this.x = a.x + b.x;
+		this.y = a.y + b.y;
+		this.z = a.z + b.z;
+		return this;
+	}
+
+	applyQuaternion(_q: Quaternion) {
+		// Mock: identity transform. Tests don't care about actual
+		// camera-relative positioning; production uses real THREE math.
+		return this;
+	}
+}
+
+export class Quaternion {
+	x = 0;
+	y = 0;
+	z = 0;
+	w = 1;
+}
+
+export class QuadraticBezierCurve3 {
+	v0: Vector3;
+	v1: Vector3;
+	v2: Vector3;
+	constructor(v0: Vector3, v1: Vector3, v2: Vector3) {
+		this.v0 = v0;
+		this.v1 = v1;
+		this.v2 = v2;
+	}
+	getPoint(t: number): Vector3 {
+		// Standard quadratic Bezier evaluation, faithful enough for tests
+		// that only care that points land on the curve.
+		const one = 1 - t;
+		return new Vector3(
+			one * one * this.v0.x + 2 * one * t * this.v1.x + t * t * this.v2.x,
+			one * one * this.v0.y + 2 * one * t * this.v1.y + t * t * this.v2.y,
+			one * one * this.v0.z + 2 * one * t * this.v1.z + t * t * this.v2.z
+		);
+	}
+}
+
+export class Texture {
+	needsUpdate = false;
+	dispose() {}
 }
 
 export class Vector2 {
@@ -155,6 +201,13 @@ export class Color {
 	}
 
 	offsetHSL(_h: number, _s: number, _l: number) {
+		return this;
+	}
+
+	multiplyScalar(s: number) {
+		this.r *= s;
+		this.g *= s;
+		this.b *= s;
 		return this;
 	}
 }
@@ -329,6 +382,8 @@ export class SpriteMaterial extends BaseMaterial {
 export class Object3D {
 	position = new Vector3();
 	scale = new Vector3(1, 1, 1);
+	quaternion = new Quaternion();
+	renderOrder = 0;
 	userData: Record<string, unknown> = {};
 	children: Object3D[] = [];
 	parent: Object3D | null = null;
@@ -428,6 +483,9 @@ export function installThreeMock() {
 		Vector3,
 		Vector2,
 		Color,
+		Quaternion,
+		QuadraticBezierCurve3,
+		Texture,
 		BufferAttribute,
 		BufferGeometry,
 		SphereGeometry,

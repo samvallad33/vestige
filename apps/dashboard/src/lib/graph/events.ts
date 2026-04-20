@@ -125,7 +125,11 @@ export function mapEventToEffects(
 			// Find spawn position near related nodes
 			const spawnPos = findSpawnPosition(newNode, allNodes, nodePositions);
 
-			// Add to all managers
+			// Add to all managers NOW so the force simulation can start
+			// settling the target position during the birth orb's flight.
+			// NodeManager materialises from scale 0 via easeOutElastic, so the
+			// node grows in as the orb descends onto it — visually the orb
+			// looks like it pulls the memory into existence on contact.
 			const pos = nodeManager.addNode(newNode, spawnPos);
 			forceSim.addNode(data.id, pos);
 
@@ -133,17 +137,35 @@ export function mapEventToEffects(
 			liveSpawnedNodes.push(data.id);
 			evictOldestLiveNode(ctx, allNodes);
 
-			// Spectacular effects: rainbow burst + double shockwave + ripple wave
+			// v2.3 Memory Birth Ritual — cosmic-center orb, Bezier flight,
+			// arrival burst cascade. The old burst/ripple/shockwave cascade
+			// now fires on arrival at the docking target, not at spawn, so
+			// the camera's eye has time to track the orb in.
 			const color = new THREE.Color(NODE_TYPE_COLORS[newNode.type] || '#00ffd1');
-			effects.createRainbowBurst(spawnPos, color);
-			effects.createShockwave(spawnPos, color, camera);
-			// Second shockwave, hue-shifted, delayed via smaller initial scale
 			const hueShifted = color.clone();
 			hueShifted.offsetHSL(0.15, 0, 0);
-			setTimeout(() => {
-				effects.createShockwave(spawnPos, hueShifted, camera);
-			}, 166); // ~10 frames at 60fps
-			effects.createRippleWave(spawnPos);
+
+			effects.createBirthOrb(
+				camera,
+				color,
+				// Re-resolve the live target position every frame — the node
+				// is being pushed around by the force sim during flight.
+				() => nodeManager.positions.get(newNode.id),
+				() => {
+					// Dock. Fire the arrival cascade at the node's current
+					// position (not the original spawnPos — it has moved).
+					const arrivePos = nodeManager.positions.get(newNode.id) ?? spawnPos;
+					effects.createRainbowBurst(arrivePos, color);
+					effects.createShockwave(arrivePos, color, camera);
+					effects.createRippleWave(arrivePos);
+					// Second shockwave, hue-shifted, ~166ms delay for a layered
+					// crash feel rather than a single pop.
+					setTimeout(() => {
+						const delayedPos = nodeManager.positions.get(newNode.id) ?? arrivePos;
+						effects.createShockwave(delayedPos, hueShifted, camera);
+					}, 166);
+				}
+			);
 
 			onMutation({ type: 'nodeAdded', node: newNode });
 			break;

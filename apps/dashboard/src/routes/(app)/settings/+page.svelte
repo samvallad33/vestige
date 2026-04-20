@@ -1,8 +1,29 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$stores/api';
-	import { isConnected, memoryCount, avgRetention } from '$stores/websocket';
+	import { websocket, isConnected, memoryCount, avgRetention } from '$stores/websocket';
 	import { fireDemoSequence } from '$stores/toast';
+
+	// v2.3 Birth Ritual demo — injects a synthetic MemoryCreated event so
+	// Graph3D spawns a birth orb without needing a real ingest. Node types
+	// cycle so back-to-back clicks show different colors. Pure dev/demo
+	// affordance; production users see orbs fire on real ingests.
+	const DEMO_NODE_TYPES = ['fact', 'concept', 'pattern', 'decision', 'person', 'place'];
+	let birthCount = $state(0);
+	function fireBirthRitualDemo() {
+		const type = DEMO_NODE_TYPES[birthCount % DEMO_NODE_TYPES.length];
+		birthCount++;
+		websocket.injectEvent({
+			type: 'MemoryCreated',
+			data: {
+				id: `demo-birth-${Date.now()}`,
+				content: `Demo memory #${birthCount} — ${type}`,
+				node_type: type,
+				tags: ['demo', 'v2.3-birth-ritual'],
+				retention: 0.9,
+			},
+		});
+	}
 
 	// Operation states
 	let consolidating = $state(false);
@@ -104,6 +125,20 @@
 				<button onclick={fireDemoSequence}
 					class="px-4 py-2 bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm rounded-xl hover:bg-synapse/30 transition flex items-center gap-2">
 					<span>✦</span> Preview Pulse
+				</button>
+			</div>
+		</div>
+
+		<!-- v2.3 Terrarium — demo the Memory Birth Ritual on the Graph page -->
+		<div class="p-4 glass rounded-xl space-y-3">
+			<div class="flex items-center justify-between">
+				<div>
+					<div class="text-sm text-text font-medium">Birth Ritual Preview</div>
+					<div class="text-xs text-dim">Inject a synthetic memory — switch to Graph to watch the orb fly in</div>
+				</div>
+				<button onclick={fireBirthRitualDemo}
+					class="px-4 py-2 bg-dream/20 border border-dream/40 text-dream-glow text-sm rounded-xl hover:bg-dream/30 transition flex items-center gap-2">
+					<span>✺</span> Trigger Birth
 				</button>
 			</div>
 		</div>

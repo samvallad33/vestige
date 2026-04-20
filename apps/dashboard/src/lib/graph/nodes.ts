@@ -67,7 +67,7 @@ export function getNodeColor(node: GraphNode, mode: ColorMode): string {
 // hard-edged "glowing cubes" artefact reported in issue #31. Using a
 // soft radial gradient gives a real round halo and lets bloom do its job.
 let sharedGlowTexture: THREE.Texture | null = null;
-function getGlowTexture(): THREE.Texture {
+export function getGlowTexture(): THREE.Texture {
 	if (sharedGlowTexture) return sharedGlowTexture;
 	const size = 128;
 	const canvas = document.createElement('canvas');
