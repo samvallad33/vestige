@@ -14,6 +14,7 @@
 		formatUptime,
 	} from '$stores/websocket';
 	import ForgettingIndicator from '$lib/components/ForgettingIndicator.svelte';
+	import InsightToast from '$lib/components/InsightToast.svelte';
 
 	let { children } = $props();
 	let showCommandPalette = $state(false);
@@ -198,6 +199,9 @@
 		</div>
 	</nav>
 </div>
+
+<!-- v2.2 Pulse — InsightToast overlay (floating, fixed) -->
+<InsightToast />
 
 <!-- Command Palette overlay -->
 {#if showCommandPalette}

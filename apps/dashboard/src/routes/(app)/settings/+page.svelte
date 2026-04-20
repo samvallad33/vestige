@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$stores/api';
 	import { isConnected, memoryCount, avgRetention } from '$stores/websocket';
+	import { fireDemoSequence } from '$stores/toast';
 
 	// Operation states
 	let consolidating = $state(false);
@@ -92,6 +93,20 @@
 		<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
 			<span class="text-dream">◈</span> Cognitive Operations
 		</h2>
+
+		<!-- v2.2 Pulse — demo the InsightToast stream -->
+		<div class="p-4 glass rounded-xl space-y-3">
+			<div class="flex items-center justify-between">
+				<div>
+					<div class="text-sm text-text font-medium">Pulse Toast Preview</div>
+					<div class="text-xs text-dim">Fire a synthetic event sequence — useful for UI demos</div>
+				</div>
+				<button onclick={fireDemoSequence}
+					class="px-4 py-2 bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm rounded-xl hover:bg-synapse/30 transition flex items-center gap-2">
+					<span>✦</span> Preview Pulse
+				</button>
+			</div>
+		</div>
 
 		<!-- Consolidation -->
 		<div class="p-4 glass rounded-xl space-y-3">
