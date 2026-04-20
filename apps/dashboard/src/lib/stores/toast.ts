@@ -36,6 +36,24 @@ function createToastStore() {
 	let nextId = 1;
 	let lastConnectionAt = 0;
 
+	// Dwell-timer registry — exposed so the component can pause on hover
+	// (biological respect: don't auto-dismiss a toast the user is actively
+	// reading). Paused entries store remaining ms so resume can schedule a
+	// new timer for the correct duration.
+	const dwellTimers = new Map<number, ReturnType<typeof setTimeout>>();
+	const dwellPaused = new Map<number, { remaining: number }>();
+	const dwellStart = new Map<number, number>();
+
+	function scheduleDismiss(id: number, ms: number) {
+		dwellStart.set(id, Date.now());
+		const handle = setTimeout(() => {
+			dwellTimers.delete(id);
+			dwellStart.delete(id);
+			dismiss(id);
+		}, ms);
+		dwellTimers.set(id, handle);
+	}
+
 	function push(toast: Omit<Toast, 'id' | 'createdAt'>) {
 		const id = nextId++;
 		const createdAt = Date.now();
@@ -47,14 +65,43 @@ function createToastStore() {
 			}
 			return next;
 		});
-		setTimeout(() => dismiss(id), toast.dwellMs);
+		scheduleDismiss(id, toast.dwellMs);
 	}
 
 	function dismiss(id: number) {
+		const handle = dwellTimers.get(id);
+		if (handle) {
+			clearTimeout(handle);
+			dwellTimers.delete(id);
+		}
+		dwellPaused.delete(id);
+		dwellStart.delete(id);
 		update(list => list.filter(t => t.id !== id));
 	}
 
+	function pauseDwell(id: number, toastDwellMs: number) {
+		const handle = dwellTimers.get(id);
+		if (!handle) return;
+		clearTimeout(handle);
+		dwellTimers.delete(id);
+		const startedAt = dwellStart.get(id) ?? Date.now();
+		const elapsed = Date.now() - startedAt;
+		const remaining = Math.max(200, toastDwellMs - elapsed);
+		dwellPaused.set(id, { remaining });
+	}
+
+	function resumeDwell(id: number) {
+		const paused = dwellPaused.get(id);
+		if (!paused) return;
+		dwellPaused.delete(id);
+		scheduleDismiss(id, paused.remaining);
+	}
+
 	function clear() {
+		for (const handle of dwellTimers.values()) clearTimeout(handle);
+		dwellTimers.clear();
+		dwellPaused.clear();
+		dwellStart.clear();
 		update(() => []);
 	}
 
@@ -201,25 +248,37 @@ function createToastStore() {
 		}
 	}
 
-	// Track the latest processed event by object identity. The websocket store
-	// prepends new events to its array, so when a new message arrives, the
-	// first element becomes a new object reference — no IDs or timestamps
-	// required to detect novelty.
+	// Track the latest processed event by object identity. The websocket
+	// store prepends new events (index 0) and caps the array, so we walk
+	// from the head until we hit a previously-seen event rather than
+	// comparing only events[0] — which would drop mid-burst events when
+	// multiple messages arrive in the same Svelte update tick (e.g. a
+	// swarm epiphany firing DreamCompleted + ConnectionDiscovered within
+	// a single millisecond).
 	let lastSeen: VestigeEvent | null = null;
 
 	eventFeed.subscribe(events => {
 		if (events.length === 0) return;
-		const latest = events[0];
-		if (latest === lastSeen) return;
-		lastSeen = latest;
-		const translated = translate(latest);
-		if (translated) push(translated);
+		const fresh: VestigeEvent[] = [];
+		for (const e of events) {
+			if (e === lastSeen) break;
+			fresh.push(e);
+		}
+		if (fresh.length === 0) return;
+		lastSeen = events[0];
+		// Process oldest-first so narrative ordering is preserved.
+		for (let i = fresh.length - 1; i >= 0; i--) {
+			const translated = translate(fresh[i]);
+			if (translated) push(translated);
+		}
 	});
 
 	return {
 		subscribe,
 		dismiss,
 		clear,
+		pauseDwell,
+		resumeDwell,
 		/** Manually fire a toast (test mode / demo button). */
 		push,
 	};

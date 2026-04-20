@@ -271,7 +271,11 @@ export class NodeManager {
 		return { mesh, glow: sprite, label: labelSprite, size };
 	}
 
-	addNode(node: GraphNode, initialPosition?: THREE.Vector3): THREE.Vector3 {
+	addNode(
+		node: GraphNode,
+		initialPosition?: THREE.Vector3,
+		options: { isBirthRitual?: boolean } = {}
+	): THREE.Vector3 {
 		const pos =
 			initialPosition?.clone() ??
 			new THREE.Vector3(
@@ -289,17 +293,62 @@ export class NodeManager {
 		(glow.material as THREE.SpriteMaterial).opacity = 0;
 		(label.material as THREE.SpriteMaterial).opacity = 0;
 
+		if (options.isBirthRitual) {
+			// v2.3 Birth Ritual: reserve the physics slot but don't show
+			// anything until the orb docks. Hiding via .visible keeps the
+			// force simulation + positions map fully active, so getTargetPos()
+			// can still resolve the live destination for the orb. `igniteNode`
+			// below flips visibility and kicks off the materialization anim.
+			mesh.visible = false;
+			glow.visible = false;
+			label.visible = false;
+			mesh.userData.birthRitualPending = {
+				totalFrames: 30,
+				targetScale: 0.5 + node.retention * 2,
+			};
+		} else {
+			this.materializingNodes.push({
+				id: node.id,
+				frame: 0,
+				totalFrames: 30,
+				mesh,
+				glow,
+				label,
+				targetScale: 0.5 + node.retention * 2,
+			});
+		}
+
+		return pos;
+	}
+
+	/**
+	 * v2.3 Birth Ritual docking. Flip visibility and hand the node over to
+	 * the materialization queue so it springs up via easeOutElastic at the
+	 * exact moment the orb hits. No-op if the node wasn't created with
+	 * `isBirthRitual:true` or was already ignited.
+	 */
+	igniteNode(id: string) {
+		const mesh = this.meshMap.get(id);
+		const glow = this.glowMap.get(id);
+		const label = this.labelSprites.get(id);
+		if (!mesh || !glow || !label) return;
+		const pending = mesh.userData.birthRitualPending as
+			| { totalFrames: number; targetScale: number }
+			| undefined;
+		if (!pending) return;
+		mesh.visible = true;
+		glow.visible = true;
+		label.visible = true;
+		delete mesh.userData.birthRitualPending;
 		this.materializingNodes.push({
-			id: node.id,
+			id,
 			frame: 0,
-			totalFrames: 30,
+			totalFrames: pending.totalFrames,
 			mesh,
 			glow,
 			label,
-			targetScale: 0.5 + node.retention * 2,
+			targetScale: pending.targetScale,
 		});
-
-		return pos;
 	}
 
 	removeNode(id: string) {

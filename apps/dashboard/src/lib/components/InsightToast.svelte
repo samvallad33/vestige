@@ -50,6 +50,10 @@
 			aria-label="{t.title}: {t.body}. Click to dismiss."
 			onclick={() => handleClick(t)}
 			onkeydown={(e) => handleKey(e, t)}
+			onmouseenter={() => toasts.pauseDwell(t.id, t.dwellMs)}
+			onmouseleave={() => toasts.resumeDwell(t.id)}
+			onfocus={() => toasts.pauseDwell(t.id, t.dwellMs)}
+			onblur={() => toasts.resumeDwell(t.id)}
 			style="--toast-color: {t.color}; --toast-dwell: {t.dwellMs}ms;"
 		>
 			<div class="toast-accent" aria-hidden="true"></div>
@@ -194,6 +198,13 @@
 		opacity: 0.55;
 		transform-origin: left center;
 		animation: toast-progress var(--toast-dwell) linear forwards;
+	}
+
+	/* Hover Panic — freeze auto-dismiss while the user is engaged.
+	 * Pairs with toasts.pauseDwell/resumeDwell on the JS side. */
+	.toast-item:hover .toast-progress-fill,
+	.toast-item:focus-visible .toast-progress-fill {
+		animation-play-state: paused;
 	}
 
 	@keyframes toast-in {

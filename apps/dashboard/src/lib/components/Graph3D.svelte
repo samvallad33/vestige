@@ -121,9 +121,23 @@
 		if (ctx) disposeScene(ctx);
 	});
 
+	// 120Hz Governor. All physics and effect counters are frame-based
+	// (orb.age++, forceSim.tick, materialization frames). On a ProMotion
+	// display the browser drives rAF at 120 FPS, which would double-speed
+	// every ritual. Clamping to ~60 FPS keeps the visual timing identical
+	// across displays without rewriting every counter to use delta time.
+	// The `- (dt % 16)` carry avoids long-term drift.
+	let govLastTime = 0;
+
 	function animate() {
 		animationId = requestAnimationFrame(animate);
-		const time = performance.now() * 0.001;
+		const now = performance.now();
+		if (govLastTime === 0) govLastTime = now;
+		const dt = now - govLastTime;
+		if (dt < 16) return;
+		govLastTime = now - (dt % 16);
+
+		const time = now * 0.001;
 
 		// Force simulation
 		forceSim.tick(edges);
@@ -174,6 +188,20 @@
 			fresh.push(e);
 		}
 		if (fresh.length === 0) return;
+
+		// Event Horizon Guard. If the last-processed reference fell off the
+		// end of the capped array (burst of >MAX_EVENTS events in one tick),
+		// the walk above consumed the ENTIRE buffer — we'd try to animate
+		// 200 simultaneous births and melt the GPU. Detect the overflow and
+		// drop this batch on the floor; state is already current via
+		// lastProcessedEvent pointing forward.
+		if (fresh.length === events.length && events.length >= 200) {
+			// eslint-disable-next-line no-console
+			console.warn('[vestige] Event horizon overflow: dropping visuals for', fresh.length, 'events');
+			lastProcessedEvent = events[0];
+			return;
+		}
+
 		lastProcessedEvent = events[0];
 
 		const mutationCtx: GraphMutationContext = {

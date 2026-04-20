@@ -125,12 +125,12 @@ export function mapEventToEffects(
 			// Find spawn position near related nodes
 			const spawnPos = findSpawnPosition(newNode, allNodes, nodePositions);
 
-			// Add to all managers NOW so the force simulation can start
-			// settling the target position during the birth orb's flight.
-			// NodeManager materialises from scale 0 via easeOutElastic, so the
-			// node grows in as the orb descends onto it — visually the orb
-			// looks like it pulls the memory into existence on contact.
-			const pos = nodeManager.addNode(newNode, spawnPos);
+			// Reserve the physics slot but hide the node until the orb docks.
+			// `isBirthRitual:true` skips the 30-frame materialization push, so
+			// the mesh/glow/label stay invisible; `igniteNode` below flips
+			// visibility and kicks off the elastic scale-up AT the exact
+			// millisecond the orb lands — not 100 frames before.
+			const pos = nodeManager.addNode(newNode, spawnPos, { isBirthRitual: true });
 			forceSim.addNode(data.id, pos);
 
 			// FIFO eviction
@@ -138,9 +138,9 @@ export function mapEventToEffects(
 			evictOldestLiveNode(ctx, allNodes);
 
 			// v2.3 Memory Birth Ritual — cosmic-center orb, Bezier flight,
-			// arrival burst cascade. The old burst/ripple/shockwave cascade
-			// now fires on arrival at the docking target, not at spawn, so
-			// the camera's eye has time to track the orb in.
+			// arrival burst cascade. The burst/ripple/shockwave cascade
+			// fires on arrival at the docking target, not at spawn, so the
+			// eye tracks the orb in and the visuals peak on contact.
 			const color = new THREE.Color(NODE_TYPE_COLORS[newNode.type] || '#00ffd1');
 			const hueShifted = color.clone();
 			hueShifted.offsetHSL(0.15, 0, 0);
@@ -150,20 +150,32 @@ export function mapEventToEffects(
 				color,
 				// Re-resolve the live target position every frame — the node
 				// is being pushed around by the force sim during flight.
+				// Returning undefined here signals "node was aborted" and
+				// triggers the Sanhedrin-Shatter anti-birth in effects.ts.
 				() => nodeManager.positions.get(newNode.id),
 				() => {
-					// Dock. Fire the arrival cascade at the node's current
-					// position (not the original spawnPos — it has moved).
+					// Dock. Ignite the node (flips visibility + starts
+					// materialization) and fire the arrival cascade at the
+					// node's CURRENT position — the force sim may have moved
+					// the target during the ritual, so we re-read positions.
+					nodeManager.igniteNode(newNode.id);
 					const arrivePos = nodeManager.positions.get(newNode.id) ?? spawnPos;
+
+					// Newton's Cradle — kinetic transfer into the graph.
+					// Bump the mesh scale on impact so the easeOutElastic
+					// materialization + force-sim springs physically recoil
+					// instead of the orb docking silently.
+					const mesh = nodeManager.meshMap.get(newNode.id);
+					if (mesh) mesh.scale.multiplyScalar(1.8);
+
 					effects.createRainbowBurst(arrivePos, color);
 					effects.createShockwave(arrivePos, color, camera);
+					// Fire BOTH shockwaves immediately (different scales /
+					// colors for layered crash feel). The previous 166ms
+					// setTimeout could outlive the scene on route change
+					// and throw an unhandled rejection.
+					effects.createShockwave(arrivePos, hueShifted, camera);
 					effects.createRippleWave(arrivePos);
-					// Second shockwave, hue-shifted, ~166ms delay for a layered
-					// crash feel rather than a single pop.
-					setTimeout(() => {
-						const delayedPos = nodeManager.positions.get(newNode.id) ?? arrivePos;
-						effects.createShockwave(delayedPos, hueShifted, camera);
-					}, 166);
 				}
 			);
 

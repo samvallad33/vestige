@@ -70,6 +70,11 @@ interface BirthOrb {
 	/** Last known target position. If the target disappears mid-flight we keep
 	 *  using this snapshot so the orb still lands somewhere sensible. */
 	lastTargetPos: THREE.Vector3;
+	/** v2.3: Sanhedrin-Shatter state. Set true when getTargetPos returns
+	 *  undefined after gestation — the Stop hook deleted the target node
+	 *  mid-ritual, so we short-circuit the arrival cascade and implode
+	 *  the orb in place as the "cognitive immune system" visual. */
+	aborted: boolean;
 }
 
 export class EffectManager {
@@ -334,6 +339,7 @@ export class EffectManager {
 			arriveFired: false,
 			onArrive,
 			lastTargetPos: initialTarget,
+			aborted: false,
 		});
 	}
 
@@ -547,13 +553,28 @@ export class EffectManager {
 			orb.age++;
 			const totalFrames = orb.gestationFrames + orb.flightFrames;
 
-			// Refresh the live target snapshot — if the node still exists we
-			// track it, otherwise we fall back to the last known position.
-			const live = orb.getTargetPos();
-			if (live) orb.lastTargetPos.copy(live);
-
 			const haloMat = orb.sprite.material as THREE.SpriteMaterial;
 			const coreMat = orb.core.material as THREE.SpriteMaterial;
+
+			// Refresh the live target snapshot. If the target getter returns
+			// undefined DURING flight (not just at spawn), the node was
+			// aborted mid-ritual — typically a Sanhedrin veto deleting a
+			// hallucination node while the orb was still in transit. Trigger
+			// the anti-birth: turn red, implode in place, stop tracking.
+			const live = orb.getTargetPos();
+			if (live) {
+				orb.lastTargetPos.copy(live);
+			} else if (orb.age > orb.gestationFrames && !orb.aborted) {
+				orb.aborted = true;
+				// Fire an implosion where the orb currently is, then splice
+				// out on the next tick by jumping age to the end of life.
+				const pos = orb.sprite.position;
+				haloMat.color.setRGB(1.0, 0.15, 0.2); // blood red
+				coreMat.color.setRGB(1.0, 0.6, 0.6);
+				this.createImplosion(pos, new THREE.Color(0xff2533));
+				orb.arriveFired = true;
+				orb.age = totalFrames + 1;
+			}
 
 			if (orb.age <= orb.gestationFrames) {
 				// Gestation phase — pulse brighter + grow from a tiny spark
@@ -573,27 +594,37 @@ export class EffectManager {
 				orb.sprite.position.copy(orb.startPos);
 				orb.core.position.copy(orb.startPos);
 			} else if (orb.age <= totalFrames) {
-				// Flight phase — Bezier along a dynamic curve. Arc the
-				// control point upward for a shooting-star trajectory.
+				// Flight phase — inline quadratic Bezier eval. Zero-alloc:
+				// no new Vector3 or QuadraticBezierCurve3 per frame, which
+				// would flood the GC when several orbs are in flight.
 				const t = (orb.age - orb.gestationFrames) / orb.flightFrames;
 				const ease = t < 0.5
 					? 2 * t * t
 					: 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad
 
-				const target = orb.lastTargetPos;
-				const control = new THREE.Vector3()
-					.addVectors(orb.startPos, target)
-					.multiplyScalar(0.5);
-				control.y += 30 + target.distanceTo(orb.startPos) * 0.15;
+				const s = orb.startPos;
+				const tgt = orb.lastTargetPos;
+				const dx = tgt.x - s.x;
+				const dy = tgt.y - s.y;
+				const dz = tgt.z - s.z;
+				const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+				const cx = (s.x + tgt.x) * 0.5;
+				const cy = (s.y + tgt.y) * 0.5 + 30 + dist * 0.15;
+				const cz = (s.z + tgt.z) * 0.5;
 
-				const curve = new THREE.QuadraticBezierCurve3(orb.startPos, control, target);
-				const p = curve.getPoint(ease);
-				orb.sprite.position.copy(p);
-				orb.core.position.copy(p);
+				const oneMinusE = 1 - ease;
+				const w0 = oneMinusE * oneMinusE;
+				const w1 = 2 * oneMinusE * ease;
+				const w2 = ease * ease;
+				const px = w0 * s.x + w1 * cx + w2 * tgt.x;
+				const py = w0 * s.y + w1 * cy + w2 * tgt.y;
+				const pz = w0 * s.z + w1 * cz + w2 * tgt.z;
+
+				orb.sprite.position.set(px, py, pz);
+				orb.core.position.set(px, py, pz);
 
 				// Trail effect — shrink + brighten as it approaches target
-				const flightProgress = ease;
-				const shrink = 1 - flightProgress * 0.35;
+				const shrink = 1 - ease * 0.35;
 				orb.sprite.scale.setScalar(5 * shrink);
 				orb.core.scale.setScalar(2 * shrink);
 				haloMat.opacity = 0.95;
