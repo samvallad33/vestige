@@ -63,7 +63,21 @@ export const api = {
 		fetcher<TimelineResponse>(`/timeline?days=${days}&limit=${limit}`),
 
 	// Graph
-	graph: (params?: { query?: string; center_id?: string; depth?: number; max_nodes?: number }) => {
+	//
+	// `sort` controls the default center when no query/center_id is given:
+	//   - "recent" (default) — newest memory; matches user expectation of
+	//     "show me what I just added". Previously the backend defaulted to
+	//     "connected" which clustered on historical hotspots and hid
+	//     fresh memories that hadn't accumulated edges yet.
+	//   - "connected" — densest node; richer initial subgraph for a
+	//     well-aged corpus. Exposed for a future UI toggle.
+	graph: (params?: {
+		query?: string;
+		center_id?: string;
+		depth?: number;
+		max_nodes?: number;
+		sort?: 'recent' | 'connected';
+	}) => {
 		const qs = params ? '?' + new URLSearchParams(
 			Object.entries(params)
 				.filter(([, v]) => v !== undefined)

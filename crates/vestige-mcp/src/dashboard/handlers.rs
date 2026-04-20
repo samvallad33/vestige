@@ -468,6 +468,30 @@ pub struct GraphParams {
     pub center_id: Option<String>,
     pub depth: Option<u32>,
     pub max_nodes: Option<usize>,
+    /// How to choose the default center when neither `query` nor `center_id`
+    /// is provided. "recent" (default) uses the newest memory — matches
+    /// what users actually expect ("show me my recent stuff"). "connected"
+    /// uses the most-connected memory for a richer initial subgraph; used
+    /// to be the default but ended up clustering on historical hotspots
+    /// and hiding fresh memories that hadn't accumulated edges yet.
+    /// Unknown values fall back to "recent".
+    pub sort: Option<String>,
+}
+
+/// Which memory to center the default subgraph on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GraphSort {
+    Recent,
+    Connected,
+}
+
+impl GraphSort {
+    fn parse(raw: Option<&str>) -> Self {
+        match raw.map(str::to_ascii_lowercase).as_deref() {
+            Some("connected") => Self::Connected,
+            _ => Self::Recent,
+        }
+    }
 }
 
 /// Get memory graph data (nodes + edges with layout positions)
@@ -477,6 +501,7 @@ pub async fn get_graph(
 ) -> Result<Json<Value>, StatusCode> {
     let depth = params.depth.unwrap_or(2).clamp(1, 3);
     let max_nodes = params.max_nodes.unwrap_or(50).clamp(1, 200);
+    let sort = GraphSort::parse(params.sort.as_deref());
 
     // Determine center node
     let center_id = if let Some(ref id) = params.center_id {
@@ -491,24 +516,7 @@ pub async fn get_graph(
             .map(|n| n.id.clone())
             .ok_or(StatusCode::NOT_FOUND)?
     } else {
-        // Default: most connected memory (for a rich initial graph)
-        let most_connected = state
-            .storage
-            .get_most_connected_memory()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        if let Some(id) = most_connected {
-            id
-        } else {
-            // Fallback: most recent memory
-            let recent = state
-                .storage
-                .get_all_nodes(1, 0)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            recent
-                .first()
-                .map(|n| n.id.clone())
-                .ok_or(StatusCode::NOT_FOUND)?
-        }
+        default_center_id(&state.storage, sort)?
     };
 
     // Get subgraph
@@ -563,6 +571,46 @@ pub async fn get_graph(
         "nodeCount": nodes.len(),
         "edgeCount": edges.len(),
     })))
+}
+
+/// Pick the default subgraph center when neither `query` nor `center_id`
+/// was provided. Factored out so both the route handler and unit tests can
+/// exercise the same branching (recent vs connected + empty-db fallback)
+/// without spinning up a full axum server.
+fn default_center_id(
+    storage: &std::sync::Arc<vestige_core::Storage>,
+    sort: GraphSort,
+) -> Result<String, StatusCode> {
+    match sort {
+        GraphSort::Recent => {
+            let recent = storage
+                .get_all_nodes(1, 0)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            recent
+                .first()
+                .map(|n| n.id.clone())
+                .ok_or(StatusCode::NOT_FOUND)
+        }
+        GraphSort::Connected => {
+            let most_connected = storage
+                .get_most_connected_memory()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            if let Some(id) = most_connected {
+                Ok(id)
+            } else {
+                // Nothing connected yet (fresh DB, or every node is isolated) —
+                // fall through to the newest memory so the user still sees
+                // SOMETHING rather than a 404.
+                let recent = storage
+                    .get_all_nodes(1, 0)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                recent
+                    .first()
+                    .map(|n| n.id.clone())
+                    .ok_or(StatusCode::NOT_FOUND)
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -1087,4 +1135,123 @@ pub async fn list_intentions(
         "total": count,
         "filter": status_filter,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use vestige_core::memory::IngestInput;
+    use vestige_core::{ConnectionRecord, Storage};
+
+    #[test]
+    fn graph_sort_parse_defaults_to_recent() {
+        assert_eq!(GraphSort::parse(None), GraphSort::Recent);
+        assert_eq!(GraphSort::parse(Some("")), GraphSort::Recent);
+        assert_eq!(GraphSort::parse(Some("recent")), GraphSort::Recent);
+        assert_eq!(GraphSort::parse(Some("RECENT")), GraphSort::Recent);
+        assert_eq!(GraphSort::parse(Some("Recent")), GraphSort::Recent);
+        assert_eq!(GraphSort::parse(Some("garbage")), GraphSort::Recent);
+    }
+
+    #[test]
+    fn graph_sort_parse_accepts_connected_case_insensitive() {
+        assert_eq!(GraphSort::parse(Some("connected")), GraphSort::Connected);
+        assert_eq!(GraphSort::parse(Some("CONNECTED")), GraphSort::Connected);
+        assert_eq!(GraphSort::parse(Some("Connected")), GraphSort::Connected);
+    }
+
+    fn seed_storage() -> (tempfile::TempDir, Arc<Storage>) {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let storage = Arc::new(Storage::new(Some(db_path)).unwrap());
+        (dir, storage)
+    }
+
+    fn ingest(storage: &Storage, content: &str) -> String {
+        let node = storage
+            .ingest(IngestInput {
+                content: content.to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        node.id
+    }
+
+    #[test]
+    fn default_center_id_recent_returns_newest_node() {
+        let (_dir, storage) = seed_storage();
+        ingest(&storage, "first");
+        ingest(&storage, "second");
+        let newest = ingest(&storage, "third");
+
+        let center = default_center_id(&storage, GraphSort::Recent).unwrap();
+        assert_eq!(
+            center, newest,
+            "Recent mode should pick the newest ingested memory"
+        );
+    }
+
+    fn link(storage: &Storage, source: &str, target: &str) {
+        let now = Utc::now();
+        storage
+            .save_connection(&ConnectionRecord {
+                source_id: source.to_string(),
+                target_id: target.to_string(),
+                strength: 0.9,
+                link_type: "semantic".to_string(),
+                created_at: now,
+                last_activated: now,
+                activation_count: 0,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn default_center_id_connected_prefers_hub_over_newest() {
+        let (_dir, storage) = seed_storage();
+        let hub = ingest(&storage, "hub node");
+        let spoke_a = ingest(&storage, "spoke A");
+        let spoke_b = ingest(&storage, "spoke B");
+        let spoke_c = ingest(&storage, "spoke C");
+        // Wire the spokes into `hub` so it has the most connections. Leave
+        // the final `lonely` node unconnected — it's the newest by
+        // insertion order and would win in Recent mode.
+        for spoke in [&spoke_a, &spoke_b, &spoke_c] {
+            link(&storage, &hub, spoke);
+        }
+        let _lonely = ingest(&storage, "lonely newcomer");
+
+        let center = default_center_id(&storage, GraphSort::Connected).unwrap();
+        assert_eq!(
+            center, hub,
+            "Connected mode should pick the densest node, not the newest"
+        );
+    }
+
+    #[test]
+    fn default_center_id_connected_falls_back_to_recent_when_no_edges() {
+        let (_dir, storage) = seed_storage();
+        ingest(&storage, "alpha");
+        let newest = ingest(&storage, "beta");
+
+        // No connections exist — Connected mode should degrade to Recent
+        // rather than returning 404.
+        let center = default_center_id(&storage, GraphSort::Connected).unwrap();
+        assert_eq!(center, newest);
+    }
+
+    #[test]
+    fn default_center_id_returns_not_found_on_empty_db() {
+        let (_dir, storage) = seed_storage();
+
+        let recent_err = default_center_id(&storage, GraphSort::Recent).unwrap_err();
+        assert_eq!(recent_err, StatusCode::NOT_FOUND);
+
+        let connected_err = default_center_id(&storage, GraphSort::Connected).unwrap_err();
+        assert_eq!(connected_err, StatusCode::NOT_FOUND);
+    }
 }

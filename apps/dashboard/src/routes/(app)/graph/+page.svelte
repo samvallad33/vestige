@@ -87,7 +87,12 @@
 				max_nodes: maxNodes,
 				depth: 3,
 				query: query || undefined,
-				center_id: centerId || undefined
+				center_id: centerId || undefined,
+				// Center on the newest memory by default. Prevents the old
+				// "most-connected" behaviour from clustering on historical
+				// hotspots and hiding today's memories behind the 150-node
+				// cap. Future UI toggle can flip this to 'connected'.
+				sort: query || centerId ? undefined : 'recent'
 			});
 			if (graphData) {
 				liveNodeCount = graphData.nodeCount;
