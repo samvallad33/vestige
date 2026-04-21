@@ -3,6 +3,7 @@
 	import { api } from '$stores/api';
 	import type { Memory } from '$types';
 	import { NODE_TYPE_COLORS } from '$types';
+	import MemoryAuditTrail from '$lib/components/MemoryAuditTrail.svelte';
 
 	let memories: Memory[] = $state([]);
 	let searchQuery = $state('');
@@ -11,6 +12,9 @@
 	let minRetention = $state(0);
 	let loading = $state(true);
 	let selectedMemory: Memory | null = $state(null);
+	// Which inner tab of the expanded card is active. Keyed by memory id so
+	// switching between cards remembers each one's last view independently.
+	let expandedTab: Record<string, 'content' | 'audit'> = $state({});
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
 	onMount(() => loadMemories());
@@ -116,13 +120,45 @@
 					</div>
 
 					{#if selectedMemory?.id === memory.id}
+						{@const activeTab = expandedTab[memory.id] ?? 'content'}
 						<div class="mt-4 pt-4 border-t border-synapse/10 space-y-3">
-							<p class="text-sm text-text whitespace-pre-wrap">{memory.content}</p>
-							<div class="grid grid-cols-3 gap-3 text-xs text-dim">
-								<div>Storage: {(memory.storageStrength * 100).toFixed(1)}%</div>
-								<div>Retrieval: {(memory.retrievalStrength * 100).toFixed(1)}%</div>
-								<div>Created: {new Date(memory.createdAt).toLocaleDateString()}</div>
+							<!-- Inner tab switcher: Content (default) vs Audit Trail. -->
+							<div class="flex gap-1 text-[11px] uppercase tracking-wider">
+								<span
+									role="button"
+									tabindex="0"
+									onclick={(e) => { e.stopPropagation(); expandedTab[memory.id] = 'content'; }}
+									onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); expandedTab[memory.id] = 'content'; } }}
+									class="px-3 py-1.5 rounded-lg cursor-pointer select-none transition
+										{activeTab === 'content' ? 'bg-synapse/20 text-synapse-glow border border-synapse/40' : 'bg-white/[0.03] text-dim hover:text-text border border-transparent'}"
+								>Content</span>
+								<span
+									role="button"
+									tabindex="0"
+									onclick={(e) => { e.stopPropagation(); expandedTab[memory.id] = 'audit'; }}
+									onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); expandedTab[memory.id] = 'audit'; } }}
+									class="px-3 py-1.5 rounded-lg cursor-pointer select-none transition
+										{activeTab === 'audit' ? 'bg-synapse/20 text-synapse-glow border border-synapse/40' : 'bg-white/[0.03] text-dim hover:text-text border border-transparent'}"
+								>Audit Trail</span>
 							</div>
+
+							{#if activeTab === 'content'}
+								<p class="text-sm text-text whitespace-pre-wrap">{memory.content}</p>
+								<div class="grid grid-cols-3 gap-3 text-xs text-dim">
+									<div>Storage: {(memory.storageStrength * 100).toFixed(1)}%</div>
+									<div>Retrieval: {(memory.retrievalStrength * 100).toFixed(1)}%</div>
+									<div>Created: {new Date(memory.createdAt).toLocaleDateString()}</div>
+								</div>
+							{:else}
+								<div
+									role="presentation"
+									onclick={(e) => e.stopPropagation()}
+									onkeydown={(e) => e.stopPropagation()}
+								>
+									<MemoryAuditTrail memoryId={memory.id} />
+								</div>
+							{/if}
+
 							<div class="flex gap-2">
 								<span role="button" tabindex="0" onclick={(e) => { e.stopPropagation(); api.memories.promote(memory.id); }}
 									onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); api.memories.promote(memory.id); } }}

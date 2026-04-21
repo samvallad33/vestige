@@ -15,6 +15,9 @@
 	} from '$stores/websocket';
 	import ForgettingIndicator from '$lib/components/ForgettingIndicator.svelte';
 	import InsightToast from '$lib/components/InsightToast.svelte';
+	import AmbientAwarenessStrip from '$lib/components/AmbientAwarenessStrip.svelte';
+	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import { initTheme } from '$stores/theme';
 
 	let { children } = $props();
 	let showCommandPalette = $state(false);
@@ -23,6 +26,7 @@
 
 	onMount(() => {
 		websocket.connect();
+		const teardownTheme = initTheme();
 
 		function onKeyDown(e: KeyboardEvent) {
 			if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -49,6 +53,9 @@
 			const shortcutMap: Record<string, string> = {
 				g: '/graph', m: '/memories', t: '/timeline', f: '/feed',
 				e: '/explore', i: '/intentions', s: '/stats',
+				r: '/reasoning', a: '/activation', d: '/dreams',
+				c: '/schedule', p: '/importance', u: '/duplicates',
+				x: '/contradictions', n: '/patterns',
 			};
 			const target = shortcutMap[e.key.toLowerCase()];
 			if (target && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -61,15 +68,24 @@
 		return () => {
 			websocket.disconnect();
 			window.removeEventListener('keydown', onKeyDown);
+			teardownTheme();
 		};
 	});
 
 	const nav = [
 		{ href: '/graph', label: 'Graph', icon: '◎', shortcut: 'G' },
+		{ href: '/reasoning', label: 'Reasoning', icon: '✦', shortcut: 'R' },
 		{ href: '/memories', label: 'Memories', icon: '◈', shortcut: 'M' },
 		{ href: '/timeline', label: 'Timeline', icon: '◷', shortcut: 'T' },
 		{ href: '/feed', label: 'Feed', icon: '◉', shortcut: 'F' },
 		{ href: '/explore', label: 'Explore', icon: '◬', shortcut: 'E' },
+		{ href: '/activation', label: 'Activation', icon: '◈', shortcut: 'A' },
+		{ href: '/dreams', label: 'Dreams', icon: '✧', shortcut: 'D' },
+		{ href: '/schedule', label: 'Schedule', icon: '◷', shortcut: 'C' },
+		{ href: '/importance', label: 'Importance', icon: '◎', shortcut: 'P' },
+		{ href: '/duplicates', label: 'Duplicates', icon: '◉', shortcut: 'U' },
+		{ href: '/contradictions', label: 'Contradictions', icon: '⚠', shortcut: 'X' },
+		{ href: '/patterns', label: 'Patterns', icon: '▦', shortcut: 'N' },
 		{ href: '/intentions', label: 'Intentions', icon: '◇', shortcut: 'I' },
 		{ href: '/stats', label: 'Stats', icon: '◫', shortcut: 'S' },
 		{ href: '/settings', label: 'Settings', icon: '⚙', shortcut: ',' },
@@ -116,7 +132,7 @@
 		</a>
 
 		<!-- Nav items -->
-		<div class="flex-1 py-3 flex flex-col gap-1 px-2">
+		<div class="flex-1 min-h-0 overflow-y-auto py-3 flex flex-col gap-1 px-2">
 			{#each nav as item}
 				{@const active = isActive(item.href, $page.url.pathname)}
 				<a
@@ -149,6 +165,9 @@
 			<div class="flex items-center gap-2 text-xs">
 				<div class="w-2 h-2 rounded-full {$isConnected ? 'bg-recall animate-pulse-glow' : 'bg-decay'}"></div>
 				<span class="hidden lg:block text-dim">{$isConnected ? 'Connected' : 'Offline'}</span>
+				<div class="ml-auto">
+					<ThemeToggle />
+				</div>
 			</div>
 			<div class="hidden lg:block text-xs text-muted space-y-0.5">
 				<div>{$memoryCount} memories</div>
@@ -169,6 +188,7 @@
 
 	<!-- Main content -->
 	<main class="flex-1 flex flex-col min-h-0 pb-16 md:pb-0">
+		<AmbientAwarenessStrip />
 		<div class="animate-page-in flex-1 min-h-0 overflow-y-auto">
 			{@render children()}
 		</div>
