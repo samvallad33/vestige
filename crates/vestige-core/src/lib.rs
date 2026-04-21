@@ -81,6 +81,7 @@
 // ============================================================================
 
 pub mod consolidation;
+pub mod embedder;
 pub mod fsrs;
 pub mod fts;
 pub mod memory;
@@ -152,10 +153,18 @@ pub use fsrs::{
 
 // Storage layer
 pub use storage::{
-    ConnectionRecord, ConsolidationHistoryRecord, DreamHistoryRecord, InsightRecord,
-    IntentionRecord, PORTABLE_ARCHIVE_FORMAT, PortableArchive, PortableImportMode,
-    PortableImportReport, Result, SmartIngestResult, StateTransitionRecord, Storage, StorageError,
+    ClassificationResult, ConnectionRecord, ConsolidationHistoryRecord, Domain,
+    DreamHistoryRecord, HealthStatus, InsightRecord, IntentionRecord, LocalMemoryStore,
+    MemoryEdge, MemoryRecord, MemoryStore, MemoryStoreError, MemoryStoreResult, ModelSignature,
+    PORTABLE_ARCHIVE_FORMAT, PortableArchive, PortableImportMode, PortableImportReport, Result,
+    SchedulingState, SearchQuery, SmartIngestResult, SqliteMemoryStore, StateTransitionRecord,
+    Storage, StorageError, StoreStats,
+    // Note: storage::SearchResult is intentionally not re-exported here to avoid
+    // collision with memory::SearchResult. Use vestige_core::storage::SearchResult directly.
 };
+
+// Embedder trait and implementations
+pub use embedder::{Embedder, EmbedderError, EmbedderResult, FastembedEmbedder, LocalEmbedder};
 
 // Consolidation (sleep-inspired memory processing)
 pub use consolidation::SleepConsolidation;

@@ -1,0 +1,38 @@
+[package]
+name = "vestige-phase-1-tests"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[dependencies]
+vestige-core = { path = "../../crates/vestige-core" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+serde_json = "1"
+rusqlite = { version = "0.38", features = ["bundled"] }
+
+[[test]]
+name = "trait_round_trip"
+path = "trait_round_trip.rs"
+
+[[test]]
+name = "embedding_model_registry"
+path = "embedding_model_registry.rs"
+
+[[test]]
+name = "domain_column_migration"
+path = "domain_column_migration.rs"
+
+[[test]]
+name = "cognitive_module_isolation"
+path = "cognitive_module_isolation.rs"
+
+[[test]]
+name = "send_bound_variant"
+path = "send_bound_variant.rs"
+
+[[test]]
+name = "embedder_trait"
+path = "embedder_trait.rs"
