@@ -86,8 +86,8 @@ pub mod fts;
 pub mod memory;
 pub mod storage;
 
-#[cfg(feature = "embeddings")]
-#[cfg_attr(docsrs, doc(cfg(feature = "embeddings")))]
+#[cfg(any(feature = "embeddings", feature = "tract"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "embeddings", feature = "tract"))))]
 pub mod embeddings;
 
 #[cfg(feature = "vector-search")]
@@ -395,7 +395,7 @@ pub use neuroscience::{
 };
 
 // Embeddings (when feature enabled)
-#[cfg(feature = "embeddings")]
+#[cfg(any(feature = "embeddings", feature = "tract"))]
 pub use embeddings::{
     EMBEDDING_DIMENSIONS, Embedding, EmbeddingError, EmbeddingService, cosine_similarity,
     euclidean_distance,
@@ -447,7 +447,7 @@ pub mod prelude {
         NodeType, Rating, RecallInput, Result, SearchMode, Storage, StorageError,
     };
 
-    #[cfg(feature = "embeddings")]
+    #[cfg(any(feature = "embeddings", feature = "tract"))]
     pub use crate::{Embedding, EmbeddingService};
 
     #[cfg(feature = "vector-search")]

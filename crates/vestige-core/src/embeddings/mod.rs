@@ -13,6 +13,21 @@ mod code;
 mod hybrid;
 mod local;
 
+/// Register the tract backend exactly once before any fastembed session is created.
+/// Under `embeddings` or `ort-dynamic` this is a no-op; only active under `tract`.
+#[cfg(feature = "tract")]
+pub(crate) fn ensure_tract_backend() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        ort::set_api(ort_tract::api());
+    });
+}
+
+#[cfg(not(feature = "tract"))]
+#[inline(always)]
+pub(crate) fn ensure_tract_backend() {}
+
 pub(crate) use local::get_cache_dir;
 pub use local::{
     BATCH_SIZE, EMBEDDING_DIMENSIONS, Embedding, EmbeddingError, EmbeddingService, MAX_TEXT_LENGTH,

@@ -4,10 +4,10 @@
 
 use chrono::{DateTime, Duration, Utc};
 use directories::ProjectDirs;
-#[cfg(feature = "embeddings")]
+#[cfg(any(feature = "embeddings", feature = "tract"))]
 use lru::LruCache;
 use rusqlite::{Connection, OptionalExtension, params};
-#[cfg(feature = "embeddings")]
+#[cfg(any(feature = "embeddings", feature = "tract"))]
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -20,16 +20,16 @@ use crate::fts::sanitize_fts5_query;
 use crate::memory::{
     ConsolidationResult, IngestInput, KnowledgeNode, MemoryStats, RecallInput, SearchMode,
 };
-#[cfg(all(feature = "embeddings", feature = "vector-search"))]
+#[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
 use crate::memory::{EmbeddingResult, MatchType, SearchResult, SimilarityResult};
 
-#[cfg(feature = "embeddings")]
+#[cfg(any(feature = "embeddings", feature = "tract"))]
 use crate::embeddings::{EMBEDDING_DIMENSIONS, Embedding, EmbeddingService, matryoshka_truncate};
 
 #[cfg(feature = "vector-search")]
 use crate::search::{VectorIndex, linear_combination};
 
-#[cfg(all(feature = "embeddings", feature = "vector-search"))]
+#[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
 use crate::search::hyde;
 
 // ============================================================================
@@ -91,12 +91,12 @@ pub struct Storage {
     writer: Mutex<Connection>,
     reader: Mutex<Connection>,
     scheduler: Mutex<FSRSScheduler>,
-    #[cfg(feature = "embeddings")]
+    #[cfg(any(feature = "embeddings", feature = "tract"))]
     embedding_service: EmbeddingService,
     #[cfg(feature = "vector-search")]
     vector_index: Mutex<VectorIndex>,
     /// LRU cache for query embeddings to avoid re-embedding repeated queries
-    #[cfg(feature = "embeddings")]
+    #[cfg(any(feature = "embeddings", feature = "tract"))]
     query_cache: Mutex<LruCache<String, Vec<f32>>>,
 }
 
@@ -171,7 +171,7 @@ impl Storage {
         let reader_conn = Connection::open(&path)?;
         Self::configure_connection(&reader_conn)?;
 
-        #[cfg(feature = "embeddings")]
+        #[cfg(any(feature = "embeddings", feature = "tract"))]
         let embedding_service = EmbeddingService::new();
 
         #[cfg(feature = "vector-search")]
@@ -180,7 +180,7 @@ impl Storage {
 
         // Initialize LRU cache for query embeddings (capacity: 100 queries)
         // SAFETY: 100 is always non-zero, this cannot fail
-        #[cfg(feature = "embeddings")]
+        #[cfg(any(feature = "embeddings", feature = "tract"))]
         let query_cache = Mutex::new(LruCache::new(
             NonZeroUsize::new(100).expect("100 is non-zero"),
         ));
@@ -189,22 +189,22 @@ impl Storage {
             writer: Mutex::new(writer_conn),
             reader: Mutex::new(reader_conn),
             scheduler: Mutex::new(FSRSScheduler::default()),
-            #[cfg(feature = "embeddings")]
+            #[cfg(any(feature = "embeddings", feature = "tract"))]
             embedding_service,
             #[cfg(feature = "vector-search")]
             vector_index: Mutex::new(vector_index),
-            #[cfg(feature = "embeddings")]
+            #[cfg(any(feature = "embeddings", feature = "tract"))]
             query_cache,
         };
 
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
         storage.load_embeddings_into_index()?;
 
         Ok(storage)
     }
 
     /// Load existing embeddings into vector index
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     fn load_embeddings_into_index(&self) -> Result<()> {
         let reader = self
             .reader
@@ -324,7 +324,7 @@ impl Storage {
         }
 
         // Generate embedding if available
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
         if let Err(e) = self.generate_embedding_for_node(&id, &input.content) {
             tracing::warn!("Failed to generate embedding for {}: {}", id, e);
         }
@@ -341,7 +341,7 @@ impl Storage {
     /// - Supersede a demoted/outdated memory (correction)
     ///
     /// This solves the "bad vs good similar memory" problem.
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     pub fn smart_ingest(&self, input: IngestInput) -> Result<SmartIngestResult> {
         use crate::advanced::prediction_error::{
             CandidateMemory, GateDecision, PredictionErrorGate, UpdateType,
@@ -562,7 +562,7 @@ impl Storage {
     }
 
     /// Get the embedding vector for a node
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     pub fn get_node_embedding(&self, node_id: &str) -> Result<Option<Vec<f32>>> {
         let reader = self
             .reader
@@ -580,7 +580,7 @@ impl Storage {
     }
 
     /// Get all embedding vectors for duplicate detection
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     pub fn get_all_embeddings(&self) -> Result<Vec<(String, Vec<f32>)>> {
         let reader = self
             .reader
@@ -619,7 +619,7 @@ impl Storage {
         }
 
         // Regenerate embedding for updated content
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
         {
             // Remove old embedding from index
             if let Ok(mut index) = self.vector_index.lock() {
@@ -635,7 +635,7 @@ impl Storage {
     }
 
     /// Generate embedding for a node
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     fn generate_embedding_for_node(&self, node_id: &str, content: &str) -> Result<()> {
         if !self.embedding_service.is_ready() {
             return Ok(());
@@ -808,12 +808,12 @@ impl Storage {
             SearchMode::Keyword => {
                 self.keyword_search(&input.query, input.limit, input.min_retention)?
             }
-            #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+            #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
             SearchMode::Semantic => {
                 let results = self.semantic_search(&input.query, input.limit, 0.3)?;
                 results.into_iter().map(|r| r.node).collect()
             }
-            #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+            #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
             SearchMode::Hybrid => {
                 let results = self.hybrid_search(&input.query, input.limit, 0.3, 0.7)?;
                 results.into_iter().map(|r| r.node).collect()
@@ -988,7 +988,7 @@ impl Storage {
         let _ = self.log_access(id, "search_hit");
 
         // Content-aware cross-memory reinforcement: boost semantically similar neighbors
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
         {
             if let Ok(Some(embedding)) = self.get_node_embedding(id) {
                 let index = self
@@ -1485,7 +1485,7 @@ impl Storage {
         let rows = writer.execute("DELETE FROM knowledge_nodes WHERE id = ?1", params![id])?;
 
         // Clean up vector index to prevent stale search results
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
         if rows > 0
             && let Ok(mut index) = self.vector_index.lock()
         {
@@ -1595,32 +1595,32 @@ impl Storage {
     }
 
     /// Check if embedding service is ready
-    #[cfg(feature = "embeddings")]
+    #[cfg(any(feature = "embeddings", feature = "tract"))]
     pub fn is_embedding_ready(&self) -> bool {
         self.embedding_service.is_ready()
     }
 
-    #[cfg(not(feature = "embeddings"))]
+    #[cfg(not(any(feature = "embeddings", feature = "tract")))]
     pub fn is_embedding_ready(&self) -> bool {
         false
     }
 
     /// Initialize the embedding service explicitly
     /// Call this at startup to catch initialization errors early
-    #[cfg(feature = "embeddings")]
+    #[cfg(any(feature = "embeddings", feature = "tract"))]
     pub fn init_embeddings(&self) -> Result<()> {
         self.embedding_service.init().map_err(|e| {
             StorageError::Init(format!("Embedding service initialization failed: {}", e))
         })
     }
 
-    #[cfg(not(feature = "embeddings"))]
+    #[cfg(not(any(feature = "embeddings", feature = "tract")))]
     pub fn init_embeddings(&self) -> Result<()> {
         Ok(()) // No-op when embeddings feature is disabled
     }
 
     /// Get query embedding from cache or compute it
-    #[cfg(feature = "embeddings")]
+    #[cfg(any(feature = "embeddings", feature = "tract"))]
     fn get_query_embedding(&self, query: &str) -> Result<Vec<f32>> {
         // Check cache first
         {
@@ -1652,7 +1652,7 @@ impl Storage {
     }
 
     /// Semantic search
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     pub fn semantic_search(
         &self,
         query: &str,
@@ -1686,7 +1686,7 @@ impl Storage {
     }
 
     /// Hybrid search (delegates to hybrid_search_filtered with no type filters)
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     pub fn hybrid_search(
         &self,
         query: &str,
@@ -1704,7 +1704,7 @@ impl Storage {
     /// `node_type` matches are excluded. `include_types` takes precedence over
     /// `exclude_types`. Both are case-sensitive and compared against the stored
     /// `node_type` value.
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     pub fn hybrid_search_filtered(
         &self,
         query: &str,
@@ -1833,7 +1833,7 @@ impl Storage {
     }
 
     /// Keyword search returning scores, with optional type filtering in the SQL query.
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     fn keyword_search_with_scores(
         &self,
         query: &str,
@@ -1919,7 +1919,7 @@ impl Storage {
     }
 
     /// Semantic search returning scores
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     fn semantic_search_raw(&self, query: &str, limit: i32) -> Result<Vec<(String, f32)>> {
         if !self.embedding_service.is_ready() {
             return Ok(vec![]);
@@ -1958,7 +1958,7 @@ impl Storage {
     }
 
     /// Generate embeddings for nodes
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     pub fn generate_embeddings(
         &self,
         node_ids: Option<&[String]>,
@@ -2322,13 +2322,13 @@ impl Storage {
         }
 
         // 3. Generate missing embeddings
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
         let embeddings_generated = self.generate_missing_embeddings()?;
         #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
         let embeddings_generated = 0i64;
 
         // 4. Auto-dedup: merge similar memories (episodic → semantic consolidation)
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
         let duplicates_merged = self.auto_dedup_consolidation().unwrap_or(0);
         #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
         let duplicates_merged = 0i64;
@@ -2563,7 +2563,7 @@ impl Storage {
     ///
     /// Finds clusters with cosine similarity > 0.85, keeps the strongest node,
     /// appends unique content from weaker nodes, and deletes duplicates.
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     fn auto_dedup_consolidation(&self) -> Result<i64> {
         let all_embeddings = self.get_all_embeddings()?;
         let n = all_embeddings.len();
@@ -2876,7 +2876,7 @@ impl Storage {
     }
 
     /// Generate missing embeddings
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
     fn generate_missing_embeddings(&self) -> Result<i64> {
         if !self.embedding_service.is_ready()
             && let Err(e) = self.embedding_service.init()
@@ -4041,7 +4041,7 @@ impl Storage {
         let cutoff = (Utc::now() - Duration::days(min_age_days)).to_rfc3339();
 
         // Collect IDs first for vector index cleanup
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
         let doomed_ids: Vec<String> = {
             let reader = self
                 .reader
@@ -4066,7 +4066,7 @@ impl Storage {
         drop(writer);
 
         // Clean up vector index
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        #[cfg(all(any(feature = "embeddings", feature = "tract"), feature = "vector-search"))]
         if deleted > 0
             && let Ok(mut index) = self.vector_index.lock()
         {

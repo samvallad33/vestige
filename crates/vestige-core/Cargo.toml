@@ -45,6 +45,19 @@ qwen3-reranker = ["embeddings", "fastembed/qwen3"]
 # Metal GPU acceleration on Apple Silicon (significantly faster inference)
 metal = ["fastembed/metal"]
 
+# Pure-Rust ONNX backend via tract — no prebuilt ORT binary, no system ORT.
+# Compiles on every Rust target, including Intel Mac (x86_64-apple-darwin).
+# Mutually exclusive with `embeddings` (download) and `ort-dynamic` (system ORT).
+# Usage: --no-default-features --features tract,vector-search,bundled-sqlite
+tract = [
+    "dep:fastembed",
+    "dep:ort",
+    "dep:ort-tract",
+    "ort/alternative-backend",
+    "fastembed/hf-hub-native-tls",
+    "fastembed/image-models",
+]
+
 
 [dependencies]
 # Serialization
@@ -86,6 +99,8 @@ notify = "8"
 # nomic-embed-text-v1.5: 768 dimensions, 8192 token context, Matryoshka support
 # v5.11: Adds Nomic v2 MoE (nomic-v2-moe feature) + Qwen3 reranker (qwen3 feature)
 fastembed = { version = "5.11", default-features = false, features = ["hf-hub-native-tls", "image-models"], optional = true }
+ort       = { version = "2.0.0-rc", default-features = false, features = ["alternative-backend"], optional = true }
+ort-tract = { version = "0.3", optional = true }
 
 # ============================================================================
 # OPTIONAL: Vector Search (USearch - HNSW, 20x faster than FAISS)

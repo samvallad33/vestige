@@ -79,6 +79,8 @@ fn get_model() -> Result<std::sync::MutexGuard<'static, TextEmbedding>, Embeddin
 
         // nomic-embed-text-v1.5: 768 dimensions, 8192 token context
         // Matryoshka representation learning, fully open source
+        crate::embeddings::ensure_tract_backend();
+
         let options = InitOptions::new(EmbeddingModel::NomicEmbedTextV15)
             .with_show_download_progress(true)
             .with_cache_dir(cache_dir);

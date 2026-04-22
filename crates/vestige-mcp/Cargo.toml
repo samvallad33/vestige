@@ -16,6 +16,9 @@ vector-search = ["vestige-core/vector-search"]
 # For systems with glibc < 2.38 — use runtime-loaded ORT instead of the downloaded pre-built binary.
 # Usage: cargo install --path crates/vestige-mcp --no-default-features --features ort-dynamic,vector-search
 ort-dynamic = ["vestige-core/ort-dynamic"]
+# Pure-Rust ONNX backend — no prebuilt ORT binary. Works on Intel Mac (x86_64-apple-darwin).
+# Usage: cargo build --release -p vestige-mcp --no-default-features --features tract,vector-search,bundled-sqlite
+tract = ["vestige-core/tract"]
 
 [[bin]]
 name = "vestige-mcp"

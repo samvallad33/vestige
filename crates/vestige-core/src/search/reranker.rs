@@ -10,9 +10,9 @@
 //! Falls back to BM25-like term overlap scoring when the cross-encoder
 //! model is unavailable.
 
-#[cfg(feature = "embeddings")]
-use crate::embeddings::get_cache_dir;
-#[cfg(feature = "embeddings")]
+#[cfg(any(feature = "embeddings", feature = "tract"))]
+use crate::embeddings::{ensure_tract_backend, get_cache_dir};
+#[cfg(any(feature = "embeddings", feature = "tract"))]
 use fastembed::{RerankInitOptions, RerankerModel, TextRerank};
 
 // ============================================================================
@@ -95,7 +95,7 @@ impl Default for RerankerConfig {
 /// Falls back to BM25-like term overlap when the model is unavailable.
 pub struct Reranker {
     config: RerankerConfig,
-    #[cfg(feature = "embeddings")]
+    #[cfg(any(feature = "embeddings", feature = "tract"))]
     cross_encoder: Option<TextRerank>,
 }
 
@@ -113,7 +113,7 @@ impl Reranker {
     pub fn new(config: RerankerConfig) -> Self {
         Self {
             config,
-            #[cfg(feature = "embeddings")]
+            #[cfg(any(feature = "embeddings", feature = "tract"))]
             cross_encoder: None,
         }
     }
@@ -122,11 +122,13 @@ impl Reranker {
     ///
     /// Downloads the model on first call. Call this during server startup,
     /// NOT in tests or hot paths.
-    #[cfg(feature = "embeddings")]
+    #[cfg(any(feature = "embeddings", feature = "tract"))]
     pub fn init_cross_encoder(&mut self) {
         if self.cross_encoder.is_some() {
             return; // Already initialized
         }
+
+        ensure_tract_backend();
 
         let options = RerankInitOptions::new(RerankerModel::JINARerankerV1TurboEn)
             .with_cache_dir(get_cache_dir())
@@ -145,11 +147,11 @@ impl Reranker {
 
     /// Check if the cross-encoder model is available
     pub fn has_cross_encoder(&self) -> bool {
-        #[cfg(feature = "embeddings")]
+        #[cfg(any(feature = "embeddings", feature = "tract"))]
         {
             self.cross_encoder.is_some()
         }
-        #[cfg(not(feature = "embeddings"))]
+        #[cfg(not(any(feature = "embeddings", feature = "tract")))]
         {
             false
         }
@@ -178,7 +180,7 @@ impl Reranker {
         let limit = top_k.unwrap_or(self.config.result_count);
 
         // Try cross-encoder first
-        #[cfg(feature = "embeddings")]
+        #[cfg(any(feature = "embeddings", feature = "tract"))]
         if let Some(ref mut model) = self.cross_encoder {
             let documents: Vec<&str> = candidates.iter().map(|(_, text)| text.as_str()).collect();
 

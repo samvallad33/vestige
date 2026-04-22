@@ -80,7 +80,17 @@ curl -L https://github.com/samvallad33/vestige/releases/latest/download/vestige-
 sudo mv vestige-mcp vestige vestige-restore /usr/local/bin/
 ```
 
-**macOS (Intel) and Windows:** Prebuilt binaries aren't currently shipped for these targets because of upstream toolchain gaps (`ort-sys` lacks Intel Mac prebuilts in the 2.0.0-rc.11 release that `fastembed 5.13.2` is pinned to; `usearch 2.24.0` hit a Windows MSVC compile break tracked as [usearch#746](https://github.com/unum-cloud/usearch/issues/746)). Both build fine from source in the meantime:
+**macOS (Intel) and Windows:** Prebuilt binaries aren't currently shipped for these targets because of upstream toolchain gaps (`usearch 2.24.0` hit a Windows MSVC compile break tracked as [usearch#746](https://github.com/unum-cloud/usearch/issues/746)). Both build fine from source.
+
+**macOS Intel (`x86_64-apple-darwin`):** Use the `tract` feature, which swaps the ONNX Runtime backend for [tract](https://github.com/sonos/tract) — a pure-Rust inference engine with no prebuilt binary requirement:
+
+```bash
+git clone https://github.com/samvallad33/vestige && cd vestige
+cargo build --release -p vestige-mcp --no-default-features --features tract,vector-search
+# Binary lands at target/release/vestige-mcp
+```
+
+**Windows:** Build with default features from source:
 
 ```bash
 git clone https://github.com/samvallad33/vestige && cd vestige
