@@ -59,18 +59,15 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             cargo_flags: ""
-            needs_onnxruntime: false
           # Intel Mac builds against a system ONNX Runtime via ort-dynamic
-          # (ort-sys has no x86_64-apple-darwin prebuilts). Keeps the target
-          # green on CI so regressions surface before a release cut.
+          # (ort-sys has no x86_64-apple-darwin prebuilts). Compile-only here;
+          # runtime linking is a user concern documented in INSTALL-INTEL-MAC.md.
           - os: macos-latest
             target: x86_64-apple-darwin
             cargo_flags: "--no-default-features --features ort-dynamic,vector-search"
-            needs_onnxruntime: true
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             cargo_flags: ""
-            needs_onnxruntime: false
     steps:
       - uses: actions/checkout@v4
 
@@ -89,12 +86,6 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install ONNX Runtime (Intel Mac dynamic link)
-        if: matrix.needs_onnxruntime
-        run: |
-          brew install onnxruntime
-          echo "ORT_DYLIB_PATH=$(brew --prefix onnxruntime)/lib/libonnxruntime.dylib" >> $GITHUB_ENV
 
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }} -p vestige-mcp ${{ matrix.cargo_flags }}

@@ -42,12 +42,10 @@ jobs:
             os: macos-latest
             archive: tar.gz
             cargo_flags: "--no-default-features --features ort-dynamic,vector-search"
-            needs_onnxruntime: true
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
             cargo_flags: ""
-            needs_onnxruntime: false
 
     steps:
       - name: Checkout
@@ -57,12 +55,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install ONNX Runtime (Intel Mac dynamic link)
-        if: matrix.needs_onnxruntime
-        run: |
-          brew install onnxruntime
-          echo "ORT_DYLIB_PATH=$(brew --prefix onnxruntime)/lib/libonnxruntime.dylib" >> $GITHUB_ENV
 
       - name: Build
         run: cargo build --package vestige-mcp --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
