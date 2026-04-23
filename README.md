@@ -80,12 +80,24 @@ curl -L https://github.com/samvallad33/vestige/releases/latest/download/vestige-
 sudo mv vestige-mcp vestige vestige-restore /usr/local/bin/
 ```
 
-**macOS (Intel) and Windows:** Prebuilt binaries aren't currently shipped for these targets because of upstream toolchain gaps (`ort-sys` lacks Intel Mac prebuilts in the 2.0.0-rc.11 release that `fastembed 5.13.2` is pinned to; `usearch 2.24.0` hit a Windows MSVC compile break tracked as [usearch#746](https://github.com/unum-cloud/usearch/issues/746)). Both build fine from source in the meantime:
+**macOS (Intel):** Microsoft is discontinuing x86_64 macOS prebuilts after ONNX Runtime v1.23.0, so Vestige's Intel Mac build links dynamically against a Homebrew-installed ONNX Runtime via the `ort-dynamic` feature. Install with:
+
+```bash
+brew install onnxruntime
+curl -L https://github.com/samvallad33/vestige/releases/latest/download/vestige-mcp-x86_64-apple-darwin.tar.gz | tar -xz
+sudo mv vestige-mcp vestige vestige-restore /usr/local/bin/
+echo 'export ORT_DYLIB_PATH="'"$(brew --prefix onnxruntime)"'/lib/libonnxruntime.dylib"' >> ~/.zshrc
+source ~/.zshrc
+claude mcp add vestige vestige-mcp -s user
+```
+
+Full Intel Mac guide (build-from-source + troubleshooting): [`docs/INSTALL-INTEL-MAC.md`](docs/INSTALL-INTEL-MAC.md).
+
+**Windows:** Prebuilt binaries ship but `usearch 2.24.0` hit an MSVC compile break ([usearch#746](https://github.com/unum-cloud/usearch/issues/746)); we've pinned `=2.23.0` until upstream fixes it. Source builds work with:
 
 ```bash
 git clone https://github.com/samvallad33/vestige && cd vestige
 cargo build --release -p vestige-mcp
-# Binary lands at target/release/vestige-mcp
 ```
 
 **npm:**
@@ -315,7 +327,7 @@ At the start of every session:
 | **Transport** | MCP stdio (JSON-RPC 2.0) + WebSocket |
 | **Cognitive modules** | 30 stateful (17 neuroscience, 11 advanced, 2 search) |
 | **First run** | Downloads embedding model (~130MB), then fully offline |
-| **Platforms** | macOS ARM + Linux x86_64 (prebuilt). macOS Intel + Windows build from source (upstream toolchain gaps, see install notes). |
+| **Platforms** | macOS ARM + Intel + Linux x86_64 + Windows x86_64 (all prebuilt). Intel Mac needs `brew install onnxruntime` — see [install guide](docs/INSTALL-INTEL-MAC.md). |
 
 ### Optional Features
 

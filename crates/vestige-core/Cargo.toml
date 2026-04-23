@@ -11,29 +11,41 @@ keywords = ["memory", "spaced-repetition", "fsrs", "embeddings", "knowledge-grap
 categories = ["science", "database"]
 
 [features]
-default = ["embeddings", "vector-search", "bundled-sqlite"]
+default = ["embeddings", "ort-download", "vector-search", "bundled-sqlite"]
 
 # SQLite backend (default, unencrypted)
 bundled-sqlite = ["rusqlite/bundled"]
 
 # Encrypted SQLite via SQLCipher (mutually exclusive with bundled-sqlite)
-# Use: --no-default-features --features encryption,embeddings,vector-search
+# Use: --no-default-features --features encryption,embeddings,ort-download,vector-search
 # Set VESTIGE_ENCRYPTION_KEY env var to enable encryption
 encryption = ["rusqlite/bundled-sqlcipher"]
 
-# Core embeddings with fastembed (ONNX-based, local inference)
-# Downloads a pre-built ONNX Runtime binary at build time (requires glibc >= 2.38)
-embeddings = ["dep:fastembed", "fastembed/ort-download-binaries-native-tls"]
+# Embedding code paths (fastembed dep, hf-hub, image-models). This feature
+# enables the #[cfg(feature = "embeddings")] gates throughout the crate but
+# does NOT pick an ort backend. Pair with EXACTLY ONE of `ort-download`
+# (prebuilt ONNX Runtime, default) or `ort-dynamic` (runtime-linked system
+# libonnxruntime, required on targets without prebuilts).
+embeddings = ["dep:fastembed", "fastembed/hf-hub-native-tls", "fastembed/image-models"]
+
+# Default ort backend: ort-sys downloads prebuilt ONNX Runtime at build time.
+# Requires glibc >= 2.38. Fails on x86_64-apple-darwin (Microsoft is
+# discontinuing Intel Mac prebuilts after ONNX Runtime v1.23.0).
+ort-download = ["embeddings", "fastembed/ort-download-binaries-native-tls"]
 
 # HNSW vector search with USearch (20x faster than FAISS)
 vector-search = ["dep:usearch"]
 
-# Use runtime-loaded ORT instead of the downloaded pre-built binary.
-# Required on systems with glibc < 2.38 (Ubuntu 22.04, Debian 12, RHEL/Rocky 9).
-# Mutually exclusive with the default `embeddings` feature's download strategy.
-# Usage: --no-default-features --features ort-dynamic,vector-search,bundled-sqlite
-# Runtime requirement: libonnxruntime.so must be on LD_LIBRARY_PATH or ORT_DYLIB_PATH set.
-ort-dynamic = ["dep:fastembed", "fastembed/ort-load-dynamic", "fastembed/hf-hub-native-tls", "fastembed/image-models"]
+# Alternative ort backend: runtime-linked against a system libonnxruntime via
+# dlopen. Required on Intel Mac and on systems with glibc < 2.38 (Ubuntu
+# 22.04, Debian 12, RHEL/Rocky 9). Transitively enables `embeddings` so the
+# #[cfg] gates stay active.
+#
+# Usage:   cargo build --no-default-features \
+#              --features ort-dynamic,vector-search,bundled-sqlite
+# Runtime: export ORT_DYLIB_PATH=/path/to/libonnxruntime.{dylib,so}
+#          (e.g. $(brew --prefix onnxruntime)/lib/libonnxruntime.dylib)
+ort-dynamic = ["embeddings", "fastembed/ort-load-dynamic"]
 
 # Nomic Embed Text v2 MoE (475M params, 305M active, Candle backend)
 # Requires: fastembed with nomic-v2-moe feature
