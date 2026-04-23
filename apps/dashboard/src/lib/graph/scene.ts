@@ -90,8 +90,15 @@ export function createScene(container: HTMLDivElement): SceneContext {
 	controls.dampingFactor = 0.05;
 	controls.rotateSpeed = 0.5;
 	controls.zoomSpeed = 0.8;
-	controls.minDistance = 10;
-	controls.maxDistance = 500;
+	// Distance clamps — the camera starts at ~86 units from origin
+	// (position.set(0, 30, 80)). The graph's force-directed layout seats
+	// most nodes within a ~120-unit radius. 500 was dramatically out of
+	// scale — the user could zoom out until every node was one pixel on
+	// a black starfield (issue reported 2026-04-23). 180 keeps the full
+	// graph in frame with nodes still readable; 12 prevents zooming inside
+	// a node and losing orientation.
+	controls.minDistance = 12;
+	controls.maxDistance = 180;
 	controls.autoRotate = true;
 	controls.autoRotateSpeed = 0.3;
 

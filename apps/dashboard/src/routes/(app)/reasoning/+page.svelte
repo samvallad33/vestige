@@ -61,144 +61,99 @@
 		memoriesAnalyzed: number;
 	}
 
-	// ────────────────────────────────────────────────────────────────
-	// TODO: swap for api.deepReference when backend endpoint lands
-	// ────────────────────────────────────────────────────────────────
+	// Real backend call — wraps the 8-stage deep_reference cognitive pipeline
+	// via /api/deep_reference. The handler emits DeepReferenceCompleted on
+	// the WebSocket so Graph3D can glide + pulse + arc in the 3D scene.
 	async function deepReferenceFetch(query: string): Promise<DeepReferenceResponse> {
-		// Try real search to supply realistic previews from your actual corpus
-		let realEvidence: EvidenceEntry[] = [];
-		let memoriesAnalyzed = 24;
-		try {
-			const res = await api.search(query, 6);
-			memoriesAnalyzed = Math.max(memoriesAnalyzed, res.total);
-			realEvidence = res.results.map((m, i) => ({
-				id: m.id,
-				trust: Math.max(0.15, Math.min(0.98, m.retentionStrength * 0.95 + (i === 0 ? 0.05 : 0))),
-				date: m.updatedAt ?? m.createdAt,
-				role:
-					i === 0
-						? ('primary' as Role)
-						: i === 1 && Math.random() < 0.35
-							? ('contradicting' as Role)
-							: i > 4
-								? ('superseded' as Role)
-								: ('supporting' as Role),
-				preview: m.content.slice(0, 280),
-				nodeType: m.nodeType
-			}));
-		} catch {
-			// Fall through to synthetic
-		}
+		const raw = (await api.deepReference(query, 20)) as Record<string, unknown>;
 
-		// Stagger — feels like real work
-		await new Promise((r) => setTimeout(r, 380));
+		const evidenceRaw = Array.isArray(raw.evidence) ? (raw.evidence as Record<string, unknown>[]) : [];
+		const evidence: EvidenceEntry[] = evidenceRaw.map((e) => {
+			const trustNum = typeof e.trust === 'number' ? (e.trust as number) : 0;
+			// Backend trust is 0-1; if it came back > 1 treat as already-scaled percent.
+			const trust = trustNum > 1 ? trustNum / 100 : trustNum;
+			const role = (e.role as Role) || 'supporting';
+			return {
+				id: String(e.id ?? ''),
+				trust: Math.max(0, Math.min(1, trust)),
+				date: String(e.date ?? ''),
+				role,
+				preview: String(e.preview ?? ''),
+				nodeType: e.node_type ? String(e.node_type) : (e.nodeType ? String(e.nodeType) : undefined)
+			};
+		});
 
-		const evidence: EvidenceEntry[] =
-			realEvidence.length > 0
-				? realEvidence
-				: [
-						{
-							id: 'a1b2c3d4-0001',
-							trust: 0.91,
-							date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 12).toISOString(),
-							role: 'primary',
-							preview:
-								'Dev server runs on port 3002 after the March migration from 3000. vestige-mcp env var VESTIGE_DASHBOARD_PORT overrides the default.',
-							nodeType: 'fact'
-						},
-						{
-							id: 'a1b2c3d4-0002',
-							trust: 0.74,
-							date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 40).toISOString(),
-							role: 'supporting',
-							preview:
-								'Dashboard vite config proxies /api to 127.0.0.1:3928. The dashboard itself serves on VESTIGE_DASHBOARD_PORT which defaults to 3927.',
-							nodeType: 'pattern'
-						},
-						{
-							id: 'a1b2c3d4-0003',
-							trust: 0.42,
-							date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 120).toISOString(),
-							role: 'contradicting',
-							preview:
-								'Dev server on port 3000 — early January note before the cognitive sandwich architecture. Marked outdated by subsequent fix.',
-							nodeType: 'note'
-						},
-						{
-							id: 'a1b2c3d4-0004',
-							trust: 0.66,
-							date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 30).toISOString(),
-							role: 'supporting',
-							preview:
-								'SvelteKit base path set to /dashboard in svelte.config.js. All page routes live under that base.',
-							nodeType: 'decision'
-						},
-						{
-							id: 'a1b2c3d4-0005',
-							trust: 0.22,
-							date: new Date(Date.now() - 1000 * 60 * 60 * 24 * 200).toISOString(),
-							role: 'superseded',
-							preview: 'Legacy note: dashboard was a separate Next.js app on port 4000 (pre-monorepo).',
-							nodeType: 'note'
-						}
-					];
+		const rec = raw.recommended as Record<string, unknown> | undefined;
+		const recommended: RecommendedAnswer = {
+			answer_preview: String(rec?.answer_preview ?? evidence[0]?.preview ?? ''),
+			memory_id: String(rec?.memory_id ?? evidence[0]?.id ?? ''),
+			trust_score: (() => {
+				const t = rec?.trust_score;
+				if (typeof t === 'number') return t > 1 ? t / 100 : t;
+				return evidence[0]?.trust ?? 0;
+			})(),
+			date: String(rec?.date ?? evidence[0]?.date ?? '')
+		};
 
-		const contradictions: ContradictionPair[] =
-			evidence.filter((e) => e.role === 'contradicting').length > 0
-				? [
-						{
-							a_id: evidence[0].id,
-							b_id: evidence.find((e) => e.role === 'contradicting')!.id,
-							summary:
-								'Primary memory asserts the newer value; contradicting memory predates the change and has lower trust.'
-						}
-					]
-				: [];
+		const contradictionsRaw = Array.isArray(raw.contradictions)
+			? (raw.contradictions as Record<string, unknown>[])
+			: [];
+		const contradictions: ContradictionPair[] = contradictionsRaw.map((c) => ({
+			a_id: String(c.a_id ?? ''),
+			b_id: String(c.b_id ?? ''),
+			summary: String(c.summary ?? c.reason ?? 'Trust-weighted conflict between high-FSRS memories.')
+		}));
 
-		const superseded: SupersessionEntry[] = evidence
-			.filter((e) => e.role === 'superseded')
-			.map((e) => ({
-				old_id: e.id,
-				new_id: evidence[0].id,
-				reason: 'Superseded by newer memory with higher FSRS trust score.'
-			}));
+		const supersededRaw = Array.isArray(raw.superseded)
+			? (raw.superseded as Record<string, unknown>[])
+			: [];
+		const superseded: SupersessionEntry[] = supersededRaw.map((s) => ({
+			old_id: String(s.old_id ?? ''),
+			new_id: String(s.new_id ?? recommended.memory_id ?? ''),
+			reason: String(s.reason ?? 'Superseded by newer memory with higher FSRS trust.')
+		}));
 
-		const primary = evidence[0];
-		const confidence = Math.round(
-			Math.max(0, Math.min(100, primary.trust * 100 - contradictions.length * 6))
-		);
+		// Backend emits evolution with `preview`; UI type wants `summary`.
+		// Normalise so the component can stay agnostic.
+		const evolutionRaw = Array.isArray(raw.evolution)
+			? (raw.evolution as Record<string, unknown>[])
+			: [];
+		const evolution: EvolutionPoint[] = evolutionRaw.map((p) => ({
+			date: String(p.date ?? ''),
+			summary: String(p.summary ?? p.preview ?? ''),
+			trust: (() => {
+				const t = p.trust;
+				if (typeof t === 'number') return t > 1 ? t / 100 : t;
+				return 0;
+			})()
+		}));
 
-		const reasoning =
-			`PRIMARY FINDING (trust ${Math.round(primary.trust * 100)}%): ${primary.preview.slice(0, 140)}` +
-			(contradictions.length
-				? `\n\nCONTRADICTION DETECTED with memory ${contradictions[0].b_id.slice(0, 8)} — resolve by trusting the higher-FSRS source.`
-				: `\n\nSUPPORTED BY ${Math.max(0, evidence.length - 1 - contradictions.length)} additional memor${evidence.length - 1 - contradictions.length === 1 ? 'y' : 'ies'} with no contradictions.`) +
-			`\n\nOVERALL CONFIDENCE: ${confidence}%`;
+		const related_insights = Array.isArray(raw.related_insights)
+			? (raw.related_insights as string[])
+			: [];
+
+		const confidenceRaw = typeof raw.confidence === 'number' ? (raw.confidence as number) : 0;
+		// Backend already scales to 0-100 for dashboard consumers, but defend
+		// against a change: treat 0-1 values as fractions.
+		const confidence =
+			confidenceRaw > 1 ? Math.round(confidenceRaw) : Math.round(confidenceRaw * 100);
+
+		const intent = String(raw.intent ?? 'Synthesis');
+		const reasoning = String(raw.reasoning ?? raw.guidance ?? '');
+		const memoriesAnalyzed =
+			typeof raw.memoriesAnalyzed === 'number'
+				? (raw.memoriesAnalyzed as number)
+				: evidence.length;
 
 		return {
-			intent: 'FactCheck',
+			intent,
 			reasoning,
-			recommended: {
-				answer_preview: primary.preview,
-				memory_id: primary.id,
-				trust_score: primary.trust,
-				date: primary.date
-			},
+			recommended,
 			evidence,
 			contradictions,
 			superseded,
-			evolution: evidence
-				.slice()
-				.sort((a, b) => +new Date(a.date) - +new Date(b.date))
-				.map((e) => ({
-					date: e.date,
-					summary: e.preview.slice(0, 80),
-					trust: e.trust
-				})),
-			related_insights: [
-				'Port configuration is environment-driven — check VESTIGE_DASHBOARD_PORT before assuming.',
-				'Frontend and backend ports are decoupled (dashboard vs. HTTP API).'
-			],
+			evolution,
+			related_insights,
 			confidence,
 			memoriesAnalyzed
 		};
@@ -373,7 +328,30 @@
 		{@const conf = response.confidence}
 		{@const confColor = confidenceColor(conf)}
 
-		<!-- Confidence meter + recommended answer -->
+		<!-- REASONING CHAIN (hero — this IS the answer) -->
+		{#if response.reasoning}
+			<div class="space-y-3">
+				<div class="flex items-center justify-between">
+					<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
+						<span class="text-dream-glow">❖</span>
+						Reasoning
+					</h2>
+					<div class="flex items-center gap-3 text-[10px] text-muted font-mono">
+						<span>intent: <span class="text-dim">{response.intent}</span></span>
+						<span>·</span>
+						<span>{response.memoriesAnalyzed} analyzed</span>
+						<span>·</span>
+						<span style="color: {confColor}">{conf}% {confidenceLabel(conf)}</span>
+					</div>
+				</div>
+				<div
+					class="glass-panel rounded-2xl p-6 font-mono text-sm text-bright whitespace-pre-wrap leading-relaxed"
+					style="box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.03), 0 0 32px {confColor}20, 0 8px 32px rgba(0,0,0,0.4); border-color: {confColor}35;"
+				>{response.reasoning}</div>
+			</div>
+		{/if}
+
+		<!-- Confidence meter + recommended answer (citation footer below the chain) -->
 		<div class="grid md:grid-cols-[280px_1fr] gap-4">
 			<!-- Confidence meter -->
 			<div
@@ -417,10 +395,10 @@
 				</div>
 			</div>
 
-			<!-- Recommended answer -->
+			<!-- Recommended answer (primary source citation) -->
 			<div class="glass-panel rounded-2xl p-5 space-y-3 !border-synapse/25">
 				<div class="flex items-center justify-between">
-					<span class="text-[10px] uppercase tracking-wider text-synapse-glow">Recommended Answer</span>
+					<span class="text-[10px] uppercase tracking-wider text-synapse-glow">Primary Source</span>
 					<span class="text-[10px] font-mono text-muted" title={response.recommended.memory_id}>
 						#{response.recommended.memory_id.slice(0, 8)}
 					</span>
@@ -437,7 +415,7 @@
 			</div>
 		</div>
 
-		<!-- Reasoning Chain (8-stage pipeline) -->
+		<!-- Cognitive Pipeline visualization (how the engine got there) -->
 		<div class="space-y-3">
 			<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
 				<span class="text-dream-glow">⟿</span>
@@ -453,17 +431,6 @@
 				/>
 			</div>
 		</div>
-
-		<!-- Pre-built reasoning text -->
-		{#if response.reasoning}
-			<div class="space-y-3">
-				<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-					<span class="text-dream-glow">❖</span>
-					Template Reasoning
-				</h2>
-				<div class="glass rounded-2xl p-5 font-mono text-xs text-text whitespace-pre-wrap leading-relaxed">{response.reasoning}</div>
-			</div>
-		{/if}
 
 		<!-- Evidence grid -->
 		<div class="space-y-3">
@@ -631,8 +598,8 @@
 				Ask anything. Vestige will run the full reasoning pipeline and show you its work.
 			</p>
 			<p class="text-[10px] text-muted font-mono">
-				TODO: <span class="text-dim">/api/deep-reference</span> endpoint pending — currently
-				fetching real search results and synthesizing evidence scaffold.
+				8-stage pipeline: retrieval → rerank → activation → trust-score → supersession →
+				contradiction → relations → chain. Zero LLM calls, 100% local.
 			</p>
 		</div>
 	{/if}

@@ -166,6 +166,7 @@ export type VestigeEventType =
 	| 'ConnectionDiscovered'
 	| 'ActivationSpread'
 	| 'ImportanceScored'
+	| 'DeepReferenceCompleted'
 	| 'Heartbeat';
 
 export interface VestigeEvent {
@@ -236,6 +237,7 @@ export const EVENT_TYPE_COLORS: Record<string, string> = {
 	MemoryUnsuppressed: '#14E8C6',
 	Rac1CascadeSwept: '#6E3FFF',
 	SearchPerformed: '#818CF8',
+	DeepReferenceCompleted: '#C4B5FD',
 	DreamStarted: '#9D00FF',
 	DreamProgress: '#B44AFF',
 	DreamCompleted: '#C084FC',

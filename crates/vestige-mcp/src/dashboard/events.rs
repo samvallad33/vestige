@@ -66,6 +66,25 @@ pub enum VestigeEvent {
         timestamp: DateTime<Utc>,
     },
 
+    // -- Reasoning (v2.0.4+ Reasoning Theater) --
+    // Emitted after a dashboard /api/deep_reference call completes. Carries
+    // the memory IDs the 3D graph should light up: primary evidence (camera
+    // glide target + brightest pulse), supporting evidence (softer pulses),
+    // and contradiction pairs (render geodesic arcs between these pairs).
+    DeepReferenceCompleted {
+        query: String,
+        intent: String,
+        status: String,
+        confidence: f64,
+        primary_id: Option<String>,
+        supporting_ids: Vec<String>,
+        contradicting_ids: Vec<String>,
+        contradiction_pairs: Vec<(String, String)>,
+        memories_analyzed: usize,
+        duration_ms: u64,
+        timestamp: DateTime<Utc>,
+    },
+
     // -- Dream --
     DreamStarted {
         memory_count: usize,

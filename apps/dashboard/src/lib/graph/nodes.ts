@@ -495,7 +495,12 @@ export class NodeManager {
 		});
 	}
 
-	animate(time: number, nodes: GraphNode[], camera: THREE.PerspectiveCamera) {
+	animate(
+		time: number,
+		nodes: GraphNode[],
+		camera: THREE.PerspectiveCamera,
+		brightness: number = 1.0
+	) {
 		// Materialization animations — elastic scale-up from 0
 		for (let i = this.materializingNodes.length - 1; i >= 0; i--) {
 			const mn = this.materializingNodes[i];
@@ -601,16 +606,38 @@ export class NodeManager {
 				1 + Math.sin(time * 1.5 + nodes.indexOf(node) * 0.5) * 0.15 * node.retention;
 			mesh.scale.setScalar(breathe);
 
+			// Distance compensation: FogExp2 attenuates exponentially with camera
+			// distance, so nodes past ~80 units go nearly black unless we push
+			// emissive harder. Boost runs 1.0x at <60 units → ~2.4x at 200 units.
+			// Combined with the user brightness multiplier this gives a visible
+			// floor at every zoom level without blowing out close-up highlights.
+			const pos = this.positions.get(id);
+			const dist = pos ? camera.position.distanceTo(pos) : 0;
+			const distanceBoost = 1 + Math.min(1.4, Math.max(0, (dist - 60) / 100));
+
 			const mat = mesh.material as THREE.MeshStandardMaterial;
 			if (id === this.hoveredNode) {
-				mat.emissiveIntensity = 1.0;
+				mat.emissiveIntensity = 1.0 * brightness;
 			} else if (id === this.selectedNode) {
-				mat.emissiveIntensity = 0.8;
+				mat.emissiveIntensity = 0.8 * brightness;
 			} else {
 				const baseIntensity = 0.3 + node.retention * 0.5;
 				const breatheIntensity =
 					baseIntensity + Math.sin(time * (0.8 + node.retention * 0.7)) * 0.1 * node.retention;
-				mat.emissiveIntensity = breatheIntensity;
+				mat.emissiveIntensity = breatheIntensity * brightness * distanceBoost;
+			}
+
+			// Opacity also gets the distance boost (capped at 1.0) so the node
+			// body stays visible against the dark void at far zoom.
+			const baseOpacity = 0.3 + node.retention * 0.7;
+			mat.opacity = Math.min(1.0, baseOpacity * brightness * distanceBoost);
+
+			// Mirror the boost onto the glow sprite so the halo tracks the core.
+			const glow = this.glowMap.get(id);
+			if (glow) {
+				const glowMat = glow.material as THREE.SpriteMaterial;
+				const baseGlow = 0.3 + node.retention * 0.35;
+				glowMat.opacity = Math.min(0.95, baseGlow * brightness * distanceBoost);
 			}
 		});
 

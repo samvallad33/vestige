@@ -109,5 +109,15 @@ export const api = {
 
 	// Intentions
 	intentions: (status = 'active') =>
-		fetcher<{ intentions: IntentionItem[]; total: number; filter: string }>(`/intentions?status=${status}`)
+		fetcher<{ intentions: IntentionItem[]; total: number; filter: string }>(`/intentions?status=${status}`),
+
+	// Reasoning Theater (v2.0.8): the 8-stage deep_reference cognitive pipeline.
+	// Returns a reasoning chain + evidence + contradictions + supersession +
+	// evolution + confidence. Emits DeepReferenceCompleted on the WebSocket so
+	// the 3D graph can camera-glide + pulse + arc.
+	deepReference: (query: string, depth = 20) =>
+		fetcher<Record<string, unknown>>('/deep_reference', {
+			method: 'POST',
+			body: JSON.stringify({ query, depth })
+		})
 };

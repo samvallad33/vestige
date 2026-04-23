@@ -204,8 +204,13 @@ fn assess_relation(
         };
     }
 
-    // Contradiction: same topic + correction signals detected
-    if has_correction && topic_sim > 0.15 {
+    // Contradiction: same topic + correction signals detected.
+    // Require HIGH similarity (>= 0.55). Previous 0.15 threshold was a keyword-
+    // coincidence floor, not a shared-topic floor — it fired on any two memories
+    // sharing 2+ words where either one happened to contain "fix" / "updated".
+    // A real contradiction needs the two memories to be *about the same thing*,
+    // not merely in the same domain.
+    if has_correction && topic_sim > 0.55 {
         return RelationAssessment {
             relation: Relation::Contradicts,
             confidence: topic_sim as f64 * 0.8,
@@ -345,6 +350,11 @@ fn generate_reasoning_chain(
 // Contradiction Detection (enhanced with relation assessment)
 // ============================================================================
 
+// Each pair is ("negative form", "positive form"). A contradiction requires
+// one memory to contain the negative AND the other to contain the positive
+// (or vice versa). Previously we had wildcard entries like ("not ", "") that
+// fired on any asymmetric presence of "not " — matched millions of innocent
+// sentences ("FSRS-6 is not yet..." vs anything without the word "not").
 const NEGATION_PAIRS: &[(&str, &str)] = &[
     ("don't", "do"),
     ("never", "always"),
@@ -355,8 +365,6 @@ const NEGATION_PAIRS: &[(&str, &str)] = &[
     ("outdated", "current"),
     ("removed", "added"),
     ("disabled", "enabled"),
-    ("not ", ""),
-    ("no longer", ""),
 ];
 
 const CORRECTION_SIGNALS: &[&str] = &[
@@ -386,20 +394,42 @@ fn appears_contradictory(a: &str, b: &str) -> bool {
         b_lower.split_whitespace().filter(|w| w.len() > 3).collect();
     let shared_words = a_words.intersection(&b_words).count();
 
-    if shared_words < 2 {
+    // Require ≥4 substantive shared words — two memories must be about the
+    // same thing, not merely brushing the same domain. Previous floor of 2
+    // flagged "FSRS-6 upgrade research sources" and "ARC-AGI-3 FSRS-6 v11
+    // fixes" as contradictions of "Vestige uses FSRS-6 with 21 parameters"
+    // because they all mention "FSRS-6" — different applications, same word.
+    if shared_words < 4 {
         return false;
     }
 
-    for (neg, _) in NEGATION_PAIRS {
+    // Negation: one memory carries a negative stance ("don't", "never",
+    // "avoid", etc.) and the other doesn't. Combined with the shared_words
+    // ≥ 4 gate above, this means "same subject, opposite position." The
+    // wildcard `("not ", "")` and `("no longer", "")` entries were dropped
+    // from NEGATION_PAIRS specifically because "not" / "no longer" are too
+    // common in natural prose to indicate a stance flip without other
+    // signals.
+    for (neg, _opp) in NEGATION_PAIRS {
         if (a_lower.contains(neg) && !b_lower.contains(neg))
             || (b_lower.contains(neg) && !a_lower.contains(neg))
         {
             return true;
         }
     }
-    for signal in CORRECTION_SIGNALS {
-        if a_lower.contains(signal) || b_lower.contains(signal) {
-            return true;
+    // Correction signal: require ≥6 shared substantive words so we know the
+    // two memories are on the SAME subject, and require the signal to appear
+    // in exactly one of them (asymmetric — the memory with the correction
+    // marker is the one superseding the other). Previously fired on ANY
+    // signal in EITHER memory, which caught every bug-fix memory against
+    // every related memory as a pairwise contradiction.
+    if shared_words >= 6 {
+        for signal in CORRECTION_SIGNALS {
+            let in_a = a_lower.contains(signal);
+            let in_b = b_lower.contains(signal);
+            if in_a != in_b {
+                return true;
+            }
         }
     }
     false
@@ -590,7 +620,10 @@ pub async fn execute(
             let a = &scored[i];
             let b = &scored[j];
             let overlap = topic_overlap(&a.content, &b.content);
-            if overlap < 0.15 {
+            // Raised from 0.15 to 0.4: STAGE 5 contradiction penalties must
+            // reflect genuine same-topic conflicts. Domain-keyword overlap
+            // (e.g. two memories both mentioning "Vestige") shouldn't count.
+            if overlap < 0.4 {
                 continue;
             }
 
@@ -648,18 +681,102 @@ pub async fn execute(
     }
 
     // ====================================================================
+    // Primary Selection (shared by STAGE 7's chain + STAGE 8's recommended)
+    // ====================================================================
+    // Extract the substantive "topic terms" from the query — tokens ≥ 5 chars
+    // that aren't question words or filler. A memory cannot be primary unless
+    // it contains at least one of these terms. This catches the class of bug
+    // where a high-trust, semantically-adjacent memory from an unrelated
+    // domain beats the actual topic memory because the cross-encoder reranker
+    // over-weights token-level similarity (e.g. a Nightvision memory about
+    // "true positives + conservative thresholds" winning an "FSRS-6 trust
+    // scoring" query because "trust" + "scoring" + "threshold" cluster in
+    // embedding space — even though the winning memory contains neither
+    // "FSRS-6" nor anything about spaced repetition).
+    const TOPIC_STOPWORDS: &[&str] = &[
+        "how", "what", "when", "where", "why", "who", "which",
+        "does", "did", "is", "are", "was", "were", "will",
+        "the", "and", "for", "with", "this", "that",
+        "work", "works", "use", "uses", "used", "using",
+        "about", "from", "into", "than", "then",
+    ];
+    let topic_terms: Vec<String> = args
+        .query
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '-')
+        .filter(|w| w.len() >= 5 && !TOPIC_STOPWORDS.contains(w))
+        .map(|w| w.to_string())
+        .collect();
+    let has_topic_match = |s: &ScoredMemory| -> bool {
+        if topic_terms.is_empty() {
+            return true; // no substantive terms → can't filter, allow all
+        }
+        let content_lower = s.content.to_lowercase();
+        topic_terms.iter().any(|t| content_lower.contains(t))
+    };
+
+    // Composite score. 50% query relevance (combined_score from hybrid_search
+    // + reranker), 20% FSRS-6 trust, 30% topic-term match fraction (how many
+    // of the query's substantive terms appear in the memory). Term match is
+    // the tie-breaker that promotes on-topic memories within the same trust
+    // band — trust alone let high-trust off-topic memories win.
+    let term_presence = |s: &ScoredMemory| -> f64 {
+        if topic_terms.is_empty() {
+            return 0.0;
+        }
+        let content_lower = s.content.to_lowercase();
+        let matches = topic_terms
+            .iter()
+            .filter(|t| content_lower.contains(*t))
+            .count();
+        matches as f64 / topic_terms.len() as f64
+    };
+    let composite =
+        |s: &ScoredMemory| s.combined_score as f64 * 0.5 + s.trust * 0.2 + term_presence(s) * 0.3;
+
+    // Build candidate pools. Strictest wins:
+    //   1. Non-superseded AND has ≥1 query-topic term AND combined_score ≥ 0.25
+    //   2. Fall back to non-superseded + has ≥1 query-topic term
+    //   3. Fall back to all non-superseded (tiny corpus or weak query)
+    // This way on-topic memories always beat off-topic high-trust ones, and
+    // we never return "no primary" when evidence exists.
+    let non_superseded_all: Vec<&ScoredMemory> = scored
+        .iter()
+        .filter(|s| !superseded_ids.contains(&s.id))
+        .collect();
+    let on_topic_relevant: Vec<&ScoredMemory> = non_superseded_all
+        .iter()
+        .copied()
+        .filter(|s| has_topic_match(s) && s.combined_score as f64 >= 0.25)
+        .collect();
+    let on_topic_any: Vec<&ScoredMemory> = non_superseded_all
+        .iter()
+        .copied()
+        .filter(|s| has_topic_match(s))
+        .collect();
+    let primary_pool: &[&ScoredMemory] = if !on_topic_relevant.is_empty() {
+        &on_topic_relevant
+    } else if !on_topic_any.is_empty() {
+        &on_topic_any
+    } else {
+        &non_superseded_all
+    };
+
+    let recommended = primary_pool
+        .iter()
+        .copied()
+        .max_by(|a, b| {
+            composite(a)
+                .partial_cmp(&composite(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.updated_at.cmp(&b.updated_at))
+        });
+
+    // ====================================================================
     // STAGE 7: Relation Assessment (per-pair, using trust + temporal + similarity)
     // ====================================================================
     let mut pair_relations: Vec<(String, f64, RelationAssessment)> = Vec::new();
-    if let Some(primary) = scored
-        .iter()
-        .filter(|s| !superseded_ids.contains(&s.id))
-        .max_by(|a, b| {
-            a.trust
-                .partial_cmp(&b.trust)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    {
+    if let Some(primary) = recommended {
         for other in scored.iter().filter(|s| s.id != primary.id).take(15) {
             // Use combined_score as a proxy for semantic similarity (already reranked)
             // Fall back to topic_overlap for keyword-level comparison
@@ -687,28 +804,12 @@ pub async fn execute(
     // ====================================================================
     // STAGE 8: Synthesis + Reasoning Chain Generation
     // ====================================================================
-    // Composite score: half query relevance (combined_score from
-    // hybrid_search + reranker) and half FSRS-6 trust. Both signals belong
-    // in the recommended pick — relevance picks the right *topic*, trust
-    // picks the most reliable variant within that topic.
-    let composite = |s: &ScoredMemory| s.combined_score as f64 * 0.5 + s.trust * 0.5;
-
-    // Find the recommended answer: highest composite, not superseded, most recent
-    let recommended = scored
-        .iter()
-        .filter(|s| !superseded_ids.contains(&s.id))
-        .max_by(|a, b| {
-            composite(a)
-                .partial_cmp(&composite(b))
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.updated_at.cmp(&b.updated_at))
-        });
+    // `composite` and `recommended` were computed above (shared with STAGE 7
+    // so the chain's PRIMARY FINDING and the citation card's Primary Source
+    // are always the same memory).
 
     // Build evidence list (top memories by composite, not superseded)
-    let mut non_superseded: Vec<&ScoredMemory> = scored
-        .iter()
-        .filter(|s| !superseded_ids.contains(&s.id))
-        .collect();
+    let mut non_superseded: Vec<&ScoredMemory> = non_superseded_all.clone();
     non_superseded.sort_by(|a, b| {
         composite(b)
             .partial_cmp(&composite(a))

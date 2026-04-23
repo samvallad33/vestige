@@ -1,6 +1,6 @@
 [package]
 name = "vestige-mcp"
-version = "2.0.7"
+version = "2.0.8"
 edition = "2024"
 description = "Cognitive memory MCP server for Claude - FSRS-6, spreading activation, synaptic tagging, 3D dashboard, and 130 years of memory research"
 authors = ["samvallad33"]
@@ -44,7 +44,7 @@ path = "src/bin/cli.rs"
 # Only `bundled-sqlite` is always on. `embeddings` and `vector-search` are
 # toggled via vestige-mcp's own feature flags below so `--no-default-features`
 # actually works (previously hardcoded here, which silently defeated the flag).
-vestige-core = { version = "2.0.5", path = "../vestige-core", default-features = false, features = ["bundled-sqlite"] }
+vestige-core = { version = "2.0.8", path = "../vestige-core", default-features = false, features = ["bundled-sqlite"] }
 
 # ============================================================================
 # MCP Server Dependencies

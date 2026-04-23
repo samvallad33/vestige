@@ -7,6 +7,7 @@
 	import MemoryStateLegend from '$components/MemoryStateLegend.svelte';
 	import { api } from '$stores/api';
 	import { eventFeed } from '$stores/websocket';
+	import { graphState } from '$stores/graph-state.svelte';
 	import type { GraphResponse, GraphNode, GraphEdge, Memory } from '$types';
 	import type { GraphMutation } from '$lib/graph/events';
 	import type { ColorMode } from '$lib/graph/nodes';
@@ -83,6 +84,7 @@
 		loading = true;
 		error = '';
 		try {
+			const isDefault = !query && !centerId;
 			graphData = await api.graph({
 				max_nodes: maxNodes,
 				depth: 3,
@@ -92,33 +94,71 @@
 				// "most-connected" behaviour from clustering on historical
 				// hotspots and hiding today's memories behind the 150-node
 				// cap. Future UI toggle can flip this to 'connected'.
-				sort: query || centerId ? undefined : 'recent'
+				sort: isDefault ? 'recent' : undefined
 			});
+
+			// Fallback: if the newest memory is isolated (1 node, 0 edges),
+			// fall back to the connected hotspot so the user sees context
+			// instead of a lonely orb. Only applies to the default load —
+			// explicit queries/centerId honor the user's choice even if the
+			// subgraph is sparse.
+			if (
+				isDefault &&
+				graphData &&
+				graphData.nodeCount <= 1 &&
+				graphData.edgeCount === 0
+			) {
+				const connected = await api.graph({
+					max_nodes: maxNodes,
+					depth: 3,
+					sort: 'connected'
+				});
+				if (connected && connected.nodeCount > graphData.nodeCount) {
+					graphData = connected;
+				}
+			}
+
 			if (graphData) {
 				liveNodeCount = graphData.nodeCount;
 				liveEdgeCount = graphData.edgeCount;
 			}
 		} catch (e) {
-			// Distinguish "cold-start / empty database" from "actual API failure".
-			// Before v2.0.7 both surfaced as "No memories yet..." which masked
-			// real errors (network down, dashboard disabled, 500s) and looked
-			// identical to a first-run install. Split the two so debugging
-			// isn't a guessing game.
-			//
-			// Sanitize the error string before rendering: strip filesystem
-			// paths and crate-file references (the backend occasionally wraps
-			// raw rusqlite / fs errors) and cap length at 200 chars so a
-			// stack-trace-sized error doesn't dominate the page.
+			// Distinguish three failure modes so the error message is actually
+			// helpful. Before: all failures (backend offline, empty DB, real
+			// 500) rendered identical cryptic text. That made the dashboard
+			// look broken on first-run or on backend-down, when the root
+			// cause is ALWAYS "the MCP server isn't running."
+			//   (1) Backend offline — vite dev proxy returns 500 with no body
+			//       (upstream EHOSTUNREACH / ECONNREFUSED). Surface clearly:
+			//       tell the user to start vestige-mcp.
+			//   (2) Empty database — fresh install, no memories yet. Happy
+			//       first-run state, not an error.
+			//   (3) Real backend error — a genuine 500 with a response body,
+			//       or a 4xx with content. Show the sanitized upstream msg.
 			const rawMsg = e instanceof Error ? e.message : String(e);
 			const safeMsg = rawMsg
 				.replace(/\/[\w./-]+\.(sqlite|rs|db|toml|lock)\b/g, '[path]')
 				.slice(0, 200);
+
+			// Network-level failure: fetch itself rejects (TypeError) OR vite
+			// proxy passes back a body-less 500 when upstream :3927 is
+			// unreachable. Both mean "backend offline."
+			const isBackendOffline =
+				e instanceof TypeError ||
+				/failed to fetch|NetworkError|load failed/i.test(rawMsg) ||
+				/^API 500:?\s*(Internal Server Error)?\s*$/i.test(rawMsg.trim());
+
 			const isEmpty =
 				(graphData?.nodeCount ?? 0) === 0 &&
 				/not found|404|empty|no memor/i.test(rawMsg);
-			error = isEmpty
-				? 'No memories yet. Start using Vestige to populate your graph.'
-				: `Failed to load graph: ${safeMsg}`;
+
+			if (isBackendOffline) {
+				error = 'OFFLINE';
+			} else if (isEmpty) {
+				error = 'EMPTY';
+			} else {
+				error = `Failed to load graph: ${safeMsg}`;
+			}
 		} finally {
 			loading = false;
 		}
@@ -152,6 +192,40 @@
 			<div class="text-center space-y-4">
 				<div class="w-16 h-16 mx-auto rounded-full border-2 border-synapse/30 border-t-synapse animate-spin"></div>
 				<p class="text-dim text-sm">Loading memory graph...</p>
+			</div>
+		</div>
+	{:else if error === 'OFFLINE'}
+		<div class="h-full flex items-center justify-center">
+			<div class="text-center space-y-5 max-w-lg px-8">
+				<div class="text-5xl opacity-40">⚡</div>
+				<h2 class="text-xl text-bright">MCP Backend Offline</h2>
+				<p class="text-dim text-sm leading-relaxed">
+					The Vestige MCP server isn't reachable on <code class="font-mono text-muted">:3927</code>.
+					The dashboard is running but has nothing to query.
+				</p>
+				<div class="glass-subtle rounded-xl p-4 text-left text-xs font-mono text-dim space-y-2">
+					<div class="text-muted text-[10px] uppercase tracking-wider">Start the backend:</div>
+					<code class="block whitespace-pre-wrap break-all text-text">nohup bash -c 'tail -f /dev/null | VESTIGE_DASHBOARD_ENABLED=true ~/.local/bin/vestige-mcp' &gt; /tmp/vestige.log 2&gt;&amp;1 &amp;
+disown</code>
+				</div>
+				<div class="flex gap-2 justify-center">
+					<button onclick={() => loadGraph()}
+						class="px-4 py-2 bg-synapse/20 border border-synapse/40 text-synapse-glow text-xs rounded-xl hover:bg-synapse/30 transition">
+						Retry
+					</button>
+					<a href="{base}/settings"
+						class="px-4 py-2 bg-dream/20 border border-dream/40 text-dream-glow text-xs rounded-xl hover:bg-dream/30 transition">
+						Try demos (no backend needed)
+					</a>
+				</div>
+			</div>
+		</div>
+	{:else if error === 'EMPTY'}
+		<div class="h-full flex items-center justify-center">
+			<div class="text-center space-y-4 max-w-md px-8">
+				<div class="text-5xl opacity-30">◎</div>
+				<h2 class="text-xl text-bright">Your Mind Awaits</h2>
+				<p class="text-dim text-sm">No memories yet. Start using Vestige to populate your graph.</p>
 			</div>
 		</div>
 	{:else if error}
@@ -228,6 +302,27 @@
 				<option value={150}>150 nodes</option>
 				<option value={200}>200 nodes</option>
 			</select>
+
+			<!-- Brightness slider (persists in localStorage). Scales node emissive,
+				 glow, and distance-compensated fog falloff. Default 1.0, range 0.5-2.5. -->
+			<label
+				class="flex items-center gap-2 px-3 py-2 glass rounded-xl text-dim text-xs select-none"
+				title="Adjust graph brightness ({graphState.brightness.toFixed(1)}x). Combines with auto distance compensation."
+			>
+				<span class="text-synapse-glow">☀</span>
+				<input
+					type="range"
+					min={graphState.brightnessMin}
+					max={graphState.brightnessMax}
+					step="0.1"
+					bind:value={graphState.brightness}
+					class="w-20 accent-synapse cursor-pointer"
+					aria-label="Graph brightness"
+				/>
+				<span class="font-mono text-[10px] text-muted w-8 text-right">
+					{graphState.brightness.toFixed(1)}x
+				</span>
+			</label>
 
 			<!-- Dream button -->
 			<button

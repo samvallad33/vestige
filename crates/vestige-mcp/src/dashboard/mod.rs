@@ -168,6 +168,13 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
         )
         // Intentions (v2.0)
         .route("/api/intentions", get(handlers::list_intentions))
+        // Reasoning Theater (v2.0.8) — 8-stage cognitive pipeline surface.
+        // Wraps crate::tools::cross_reference::execute. Emits
+        // DeepReferenceCompleted so Graph3D can glide, pulse, and arc.
+        .route(
+            "/api/deep_reference",
+            post(handlers::deep_reference_query),
+        )
         .layer(
             ServiceBuilder::new()
                 .concurrency_limit(50)

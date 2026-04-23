@@ -5,6 +5,47 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.8] - 2026-04-23 — "Pulse"
+
+The Pulse release wires the dashboard through to the cognitive engine. Eight new dashboard surfaces expose `deep_reference`, `find_duplicates`, `dream`, FSRS scheduling, 4-channel importance, spreading activation, contradiction arcs, and cross-project pattern transfer — every one of them was MCP-only before. Intel Mac is back on the supported list (Microsoft deprecated x86_64 macOS ONNX Runtime prebuilts; we link dynamically against a Homebrew `onnxruntime` instead). Reasoning Theater, Pulse InsightToast, and the Memory Birth Ritual all ship. No schema migrations.
+
+### Added
+
+- **Reasoning Theater (`/reasoning`)** — Cmd+K Ask palette over the 8-stage `deep_reference` cognitive pipeline: hybrid retrieval → cross-encoder rerank → spreading activation → FSRS-6 trust scoring → temporal supersession → trust-weighted contradiction analysis → relation assessment → template reasoning chain. Every query returns a pre-built reasoning block with evidence cards, confidence meter, contradiction geodesic arcs, superseded-memory lineage, and an evolution timeline. **Zero LLM calls, 100% local.** New HTTP surface `POST /api/deep_reference` wraps `crate::tools::cross_reference::execute`; new WebSocket event `DeepReferenceCompleted` carries primary / supporting / contradicting memory IDs for downstream graph animation.
+- **Pulse InsightToast (v2.2 Pulse)** — real-time toast stack that surfaces `DreamCompleted`, `ConsolidationCompleted`, `ConnectionDiscovered`, `MemoryPromoted`/`Demoted`/`Suppressed`, `MemoryUnsuppressed`, `Rac1CascadeSwept` events the moment they fire. Rate-limited to 1 per 1500ms on connection-discovery cascades. Auto-dismiss after 5-6s, click-to-dismiss, progress bar. Bottom-right on desktop, top-center on mobile.
+- **Memory Birth Ritual (v2.3 Terrarium)** — new memories materialize in the 3D graph on every `MemoryCreated` event: elastic scale-in from a camera-relative cosmic center, quadratic Bezier flight path, glow sprite fades in frames 5-10, label fades in at frame 40, Newton's Cradle docking recoil. 60-frame sequence, zero-alloc math, camera-relative so the birth point stays visible at every zoom level.
+- **7 additional dashboard surfaces** exposing the cognitive engine (v2.4 UI expansion): `/duplicates` (find_duplicates cluster view), `/dreams` (5-stage replay + insight cards), `/schedule` (FSRS calendar + retention forecast), `/importance` (4-channel novelty/arousal/reward/attention radar), `/activation` (spreading-activation network viz), `/contradictions` (trust-weighted conflict arcs), `/patterns` (cross-project pattern-transfer heatmap). Left nav expanded from 8 → 16 entries with single-key shortcuts (R/A/D/C/P/U/X/N).
+- **3D Graph brightness system** — auto distance-compensated node brightness (1.0× at camera <60u, up to 2.4× at far zoom) so nodes don't disappear into exponential fog at zoom-out. User-facing brightness slider in the graph toolbar (☀ icon, range 0.5×-2.5×, localStorage-persisted under `vestige:graph:brightness`). Composes with the auto boost; opacity + glow halo + edge weight track the combined multiplier so nodes stay coherent.
+- **Intel Mac (`x86_64-apple-darwin`) support restored** via the `ort-dynamic` Cargo feature + Homebrew-installed ONNX Runtime. Microsoft is discontinuing x86_64 macOS prebuilts after ONNX Runtime v1.23.0 so `ort-sys` will never ship one for Intel; the dynamic-link path sidesteps that entirely. Install: `brew install onnxruntime` then `ORT_DYLIB_PATH=$(brew --prefix onnxruntime)/lib/libonnxruntime.dylib`. Full guide bundled in the Intel Mac tarball as `INSTALL-INTEL-MAC.md`. **Closes #41.**
+- **Graph default-load fallback** — when the newest memory has zero edges (freshly saved, hasn't accumulated connections yet), `GET /api/graph` silently retries with `sort=connected` so the landing view shows real context instead of a lonely orb. Applies only to default loads; explicit `query` / `center_id` requests are honored as-is. Fires on both backend and client.
+
+### Fixed
+
+- **Contradiction-detection false positives** — adjacent-domain memories are no longer flagged as conflicts just because both contain the word "trust" or "fixed." Four thresholds tightened: `NEGATION_PAIRS` drops the `("not ", "")` + `("no longer", "")` wildcard sentinels; `appears_contradictory` shared-words floor 2 → 4 and correction-signal gating now requires ≥6 shared words + asymmetric presence (one memory carries the signal, the other doesn't); `assess_relation` topic-similarity floor raised 0.15 → 0.55; Stage 5 pairwise contradiction overlap floor 0.15 → 0.4. On an FSRS-6 query this collapses false contradictions from 12 → 0 without regressing the two legitimate contradiction test cases.
+- **Primary-memory selection on `deep_reference`** — previously the reasoning chain picked via `max_by(trust)` and the recommended-answer card picked via `max_by(composite)`, so the chain and citation disagreed on the same query. Unified behind a shared composite (50% hybrid-search relevance + 20% FSRS-6 trust + 30% query-topic-term match fraction) with a hard topic-term filter: a memory cannot be primary unless its content contains at least one substantive query term. Three-tier fallback (on-topic + relevant → on-topic any → all non-superseded) so sparse corpora never starve. Closes the class of bug where high-trust off-topic memories won queries against the actual subject.
+- **Reasoning page information hierarchy** — reasoning chain renders first as the hero (confidence-tinted border glow, inline metadata), then confidence meter + Primary Source citation card, then Cognitive Pipeline visualization, then evidence grid. "Template Reasoning" relabelled "Reasoning"; "Recommended Answer" relabelled "Primary Source" (it's a cited memory, not the conclusion — the chain is the conclusion).
+
+### Changed
+
+- **CI + release workflows** — `release-build` now runs on pull requests too so Intel Mac / aarch64-darwin / Linux / Windows regressions surface before merge. `x86_64-apple-darwin` back in both `ci.yml` and `release.yml` matrices with `cargo_flags: "--no-default-features --features ort-dynamic,vector-search"`. Intel Mac tarball bundles `docs/INSTALL-INTEL-MAC.md` alongside the binaries.
+- **Cargo feature split** — `embeddings` is now code-only (fastembed dep + hf-hub + image-models). New `ort-download` feature carries the prebuilt backend (the historical default); `ort-dynamic` transitively enables `embeddings` so the 27 `#[cfg(feature = "embeddings")]` gates stay active when users swap backends. Default set `["embeddings", "ort-download", "vector-search", "bundled-sqlite"]` — identical behavior for every existing consumer.
+- **Platform availability in README** — macOS Apple Silicon + Intel + Linux x86_64 + Windows x86_64 all shipped as prebuilts. Intel Mac needs `brew install onnxruntime` as a one-time prereq.
+
+### Docs
+
+- New `docs/INSTALL-INTEL-MAC.md` with the Homebrew prereq, binary install, source build, troubleshooting, and the v2.1 `ort-candle` migration plan.
+- README Intel Mac section rewritten with the working install recipe + platform table updated.
+
+### Migration
+
+None. Additive features and bug fixes only. No schema changes, no breaking API changes, no config changes required.
+
+### Contributors
+
+- **danslapman** (#41, #42) — reported the Intel Mac build regression and investigated `ort-tract` as an alternative backend; closure documented that `ort-tract` returns `Unimplemented` when fastembed calls into it, confirming `ort-dynamic` as the correct path forward.
+
+---
+
 ## [2.0.7] - 2026-04-19 — "Visible"
 
 Hygiene release plus two UI gap closures. No breaking changes, no new major features, no schema migrations affecting user data beyond V11 dropping two verified-unused tables.

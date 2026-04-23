@@ -11,6 +11,7 @@
 	import { mapEventToEffects, type GraphMutationContext, type GraphMutation } from '$lib/graph/events';
 	import { createNebulaBackground, updateNebula } from '$lib/graph/shaders/nebula.frag';
 	import { createPostProcessing, updatePostProcessing, type PostProcessingStack } from '$lib/graph/shaders/post-processing';
+	import { graphState } from '$lib/stores/graph-state.svelte';
 	import type * as THREE from 'three';
 
 	interface Props {
@@ -151,7 +152,7 @@
 
 		// Animate
 		particles.animate(time);
-		nodeManager.animate(time, allNodes, ctx.camera);
+		nodeManager.animate(time, allNodes, ctx.camera, graphState.brightness);
 
 		// Dream mode
 		dreamMode.setActive(isDreaming);

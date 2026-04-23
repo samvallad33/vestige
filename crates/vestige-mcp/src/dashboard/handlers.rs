@@ -504,6 +504,7 @@ pub async fn get_graph(
     let sort = GraphSort::parse(params.sort.as_deref());
 
     // Determine center node
+    let explicit_center = params.center_id.is_some() || params.query.is_some();
     let center_id = if let Some(ref id) = params.center_id {
         id.clone()
     } else if let Some(ref query) = params.query {
@@ -520,10 +521,29 @@ pub async fn get_graph(
     };
 
     // Get subgraph
-    let (nodes, edges) = state
+    let (mut nodes, mut edges) = state
         .storage
         .get_memory_subgraph(&center_id, depth, max_nodes)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Default-load fallback: if the newest memory is isolated (1 node, 0 edges),
+    // silently re-resolve via Connected so the user sees the densest cluster
+    // instead of a lonely orb. Explicit query/center_id requests are honored
+    // as-is — the user asked for that specific subgraph.
+    let mut center_id = center_id;
+    if !explicit_center
+        && sort == GraphSort::Recent
+        && nodes.len() <= 1
+        && edges.is_empty()
+        && let Ok(fallback) = default_center_id(&state.storage, GraphSort::Connected)
+        && fallback != center_id
+        && let Ok((n2, e2)) = state.storage.get_memory_subgraph(&fallback, depth, max_nodes)
+        && n2.len() > nodes.len()
+    {
+        center_id = fallback;
+        nodes = n2;
+        edges = e2;
+    }
 
     if nodes.is_empty() {
         return Err(StatusCode::NOT_FOUND);
@@ -1135,6 +1155,144 @@ pub async fn list_intentions(
         "total": count,
         "filter": status_filter,
     })))
+}
+
+// ============================================================================
+// DEEP REFERENCE (Reasoning Theater, v2.0.8)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct DeepReferenceBody {
+    pub query: String,
+    pub depth: Option<i32>,
+}
+
+/// Run the 8-stage deep_reference cognitive pipeline over HTTP.
+///
+/// Wraps the existing `crate::tools::cross_reference::execute` tool so the
+/// dashboard can surface the same reasoning chain the MCP clients see. Emits
+/// a `DeepReferenceCompleted` event with primary + supporting + contradicting
+/// memory IDs so Graph3D can camera-glide, pulse evidence nodes, and draw
+/// contradiction arcs in the 3D scene.
+pub async fn deep_reference_query(
+    State(state): State<AppState>,
+    Json(body): Json<DeepReferenceBody>,
+) -> Result<Json<Value>, StatusCode> {
+    let cognitive = state
+        .cognitive
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    if body.query.trim().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let args = serde_json::json!({
+        "query": body.query.clone(),
+        "depth": body.depth.unwrap_or(20).clamp(5, 50),
+    });
+
+    let start = std::time::Instant::now();
+    let response = crate::tools::cross_reference::execute(&state.storage, cognitive, Some(args))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    // Pull evidence IDs out for the WebSocket event so Graph3D can glide,
+    // pulse, and arc. We intentionally read from the serialized JSON rather
+    // than re-running the pipeline — whatever the tool decided is what the
+    // Theater visualizes.
+    let primary_id = response
+        .get("recommended")
+        .and_then(|r| r.get("memory_id"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let supporting_ids: Vec<String> = response
+        .get("evidence")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| {
+                    let role = e.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                    if role == "supporting" || role == "primary" {
+                        e.get("id").and_then(|v| v.as_str()).map(String::from)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let contradicting_ids: Vec<String> = response
+        .get("evidence")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| {
+                    let role = e.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                    if role == "contradicting" {
+                        e.get("id").and_then(|v| v.as_str()).map(String::from)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let contradiction_pairs: Vec<(String, String)> = response
+        .get("contradictions")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| {
+                    let a = c.get("a_id").and_then(|v| v.as_str())?.to_string();
+                    let b = c.get("b_id").and_then(|v| v.as_str())?.to_string();
+                    Some((a, b))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let memories_analyzed = response
+        .get("memoriesAnalyzed")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+
+    let confidence = response
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let intent = response
+        .get("intent")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Synthesis")
+        .to_string();
+
+    let status = response
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    state.emit(VestigeEvent::DeepReferenceCompleted {
+        query: body.query,
+        intent,
+        status,
+        confidence,
+        primary_id,
+        supporting_ids,
+        contradicting_ids,
+        contradiction_pairs,
+        memories_analyzed,
+        duration_ms,
+        timestamp: Utc::now(),
+    });
+
+    Ok(Json(response))
 }
 
 #[cfg(test)]
