@@ -50,7 +50,12 @@ jobs:
   release-build:
     name: Release Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    if: github.ref == 'refs/heads/main'
+    # Run on main pushes AND on PRs that touch workflows, Cargo manifests, or
+    # crate sources — so Intel Mac / Linux release targets are validated
+    # before merge, not after.
+    if: |
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'pull_request'
     needs: [test]
     strategy:
       fail-fast: false
