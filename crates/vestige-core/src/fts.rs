@@ -7,6 +7,53 @@
 /// Dangerous FTS5 operators that could be used for injection or DoS
 const FTS5_OPERATORS: &[&str] = &["OR", "AND", "NOT", "NEAR"];
 
+/// Sanitize input for FTS5 MATCH queries using individual term matching.
+///
+/// Unlike `sanitize_fts5_query` which wraps in quotes for a phrase search,
+/// this function produces individual terms joined with implicit AND.
+/// This matches documents that contain ALL the query words in any order.
+///
+/// Use this when you want "find all records containing these words" rather
+/// than "find records with this exact phrase".
+pub fn sanitize_fts5_terms(query: &str) -> Option<String> {
+    let limited: String = query.chars().take(1000).collect();
+    let mut sanitized = limited;
+
+    sanitized = sanitized
+        .chars()
+        .map(|c| match c {
+            '*' | ':' | '^' | '-' | '"' | '(' | ')' | '{' | '}' | '[' | ']' => ' ',
+            _ => c,
+        })
+        .collect();
+
+    for op in FTS5_OPERATORS {
+        let pattern = format!(" {} ", op);
+        sanitized = sanitized.replace(&pattern, " ");
+        sanitized = sanitized.replace(&pattern.to_lowercase(), " ");
+        let upper = sanitized.to_uppercase();
+        let start_pattern = format!("{} ", op);
+        if upper.starts_with(&start_pattern) {
+            sanitized = sanitized.chars().skip(op.len()).collect();
+        }
+        let end_pattern = format!(" {}", op);
+        if upper.ends_with(&end_pattern) {
+            let char_count = sanitized.chars().count();
+            sanitized = sanitized
+                .chars()
+                .take(char_count.saturating_sub(op.len()))
+                .collect();
+        }
+    }
+
+    let terms: Vec<&str> = sanitized.split_whitespace().collect();
+    if terms.is_empty() {
+        return None;
+    }
+    // Join with space: FTS5 implicit AND — all terms must appear
+    Some(terms.join(" "))
+}
+
 /// Sanitize input for FTS5 MATCH queries
 ///
 /// Prevents:

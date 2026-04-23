@@ -10,12 +10,17 @@ categories = ["command-line-utilities", "database"]
 repository = "https://github.com/samvallad33/vestige"
 
 [features]
-default = ["embeddings", "vector-search"]
+default = ["embeddings", "ort-download", "vector-search"]
 embeddings = ["vestige-core/embeddings"]
 vector-search = ["vestige-core/vector-search"]
-# For systems with glibc < 2.38 — use runtime-loaded ORT instead of the downloaded pre-built binary.
-# Usage: cargo install --path crates/vestige-mcp --no-default-features --features ort-dynamic,vector-search
-ort-dynamic = ["vestige-core/ort-dynamic"]
+# Default ort backend: downloads prebuilt ONNX Runtime at build time.
+# Fails on targets without prebuilts (notably x86_64-apple-darwin).
+ort-download = ["embeddings", "vestige-core/ort-download"]
+# Alternative ort backend: runtime-linked system libonnxruntime via dlopen.
+# Required on Intel Mac and on systems with glibc < 2.38.
+# Usage:   cargo build --no-default-features --features ort-dynamic,vector-search
+# Runtime: export ORT_DYLIB_PATH=$(brew --prefix onnxruntime)/lib/libonnxruntime.dylib
+ort-dynamic = ["embeddings", "vestige-core/ort-dynamic"]
 
 [[bin]]
 name = "vestige-mcp"

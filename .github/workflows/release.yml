@@ -27,17 +27,21 @@ jobs:
             os: ubuntu-latest
             archive: tar.gz
             cargo_flags: ""
+            needs_onnxruntime: false
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: zip
             cargo_flags: ""
-          # Intel Mac (x86_64-apple-darwin) is explicitly unsupported: the
-          # upstream ort-sys 2.0.0-rc.11 pinned by fastembed 5.13.2 does not
-          # ship Intel Mac prebuilts, and the v2.0.5 + v2.0.6 release
-          # workflows both failed this job. Matches ci.yml which already
-          # dropped the target. README documents the build-from-source path
-          # for Intel Mac users. When ort-sys ships Intel Mac prebuilts
-          # again, restore the entry.
+            needs_onnxruntime: false
+          # Intel Mac uses the ort-dynamic feature to runtime-link against a
+          # system libonnxruntime (Homebrew), sidestepping the missing
+          # x86_64-apple-darwin prebuilts in ort-sys 2.0.0-rc.11. Binary
+          # consumers must `brew install onnxruntime` before running — see
+          # INSTALL-INTEL-MAC.md bundled in the tarball.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+            cargo_flags: "--no-default-features --features ort-dynamic,vector-search"
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
@@ -58,8 +62,13 @@ jobs:
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
         run: |
+          cp docs/INSTALL-INTEL-MAC.md target/${{ matrix.target }}/release/ 2>/dev/null || true
           cd target/${{ matrix.target }}/release
-          tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore
+          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
+            tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore INSTALL-INTEL-MAC.md
+          else
+            tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore
+          fi
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'

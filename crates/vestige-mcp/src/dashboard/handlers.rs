@@ -384,7 +384,7 @@ pub async fn get_timeline(
     let start = Utc::now() - Duration::days(days);
     let nodes = state
         .storage
-        .query_time_range(Some(start), Some(Utc::now()), limit)
+        .query_time_range(Some(start), Some(Utc::now()), limit, None, None)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Group by day

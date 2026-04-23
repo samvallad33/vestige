@@ -50,7 +50,12 @@ jobs:
   release-build:
     name: Release Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    if: github.ref == 'refs/heads/main'
+    # Run on main pushes AND on PRs that touch workflows, Cargo manifests, or
+    # crate sources — so Intel Mac / Linux release targets are validated
+    # before merge, not after.
+    if: |
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'pull_request'
     needs: [test]
     strategy:
       fail-fast: false
@@ -59,9 +64,12 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             cargo_flags: ""
-          # x86_64-apple-darwin dropped: ort-sys has no prebuilt ONNX Runtime
-          # binaries for Intel Mac, and the codebase requires embeddings.
-          # Apple discontinued Intel Macs in 2020. Build from source if needed.
+          # Intel Mac builds against a system ONNX Runtime via ort-dynamic
+          # (ort-sys has no x86_64-apple-darwin prebuilts). Compile-only here;
+          # runtime linking is a user concern documented in INSTALL-INTEL-MAC.md.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            cargo_flags: "--no-default-features --features ort-dynamic,vector-search"
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             cargo_flags: ""

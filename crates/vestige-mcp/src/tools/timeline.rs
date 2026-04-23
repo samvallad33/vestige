@@ -126,18 +126,19 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
 
     let limit = args.limit.unwrap_or(50).clamp(1, 200);
 
-    // Query memories in time range
-    let mut results = storage
-        .query_time_range(start, end, limit)
+    // Query memories in time range with filters pushed into SQL. Rust-side
+    // `retain` after `LIMIT` was unsafe for sparse types/tags — a dominant
+    // set could crowd the sparse matches out of the limit window and leave
+    // the retain with 0 rows to keep.
+    let results = storage
+        .query_time_range(
+            start,
+            end,
+            limit,
+            args.node_type.as_deref(),
+            args.tags.as_deref(),
+        )
         .map_err(|e| e.to_string())?;
-
-    // Post-query filters
-    if let Some(ref node_type) = args.node_type {
-        results.retain(|n| n.node_type == *node_type);
-    }
-    if let Some(tags) = args.tags.as_ref().filter(|t| !t.is_empty()) {
-        results.retain(|n| tags.iter().any(|t| n.tags.contains(t)));
-    }
 
     // Group by day
     let mut by_day: BTreeMap<NaiveDate, Vec<Value>> = BTreeMap::new();
@@ -198,6 +199,28 @@ mod tests {
                 sentiment_score: 0.0,
                 sentiment_magnitude: 0.0,
                 tags: vec!["timeline-test".to_string()],
+                valid_from: None,
+                valid_until: None,
+            })
+            .unwrap();
+    }
+
+    /// Ingest with explicit node_type and tags. Used by the sparse-filter
+    /// regression tests so the dominant and sparse sets can be told apart.
+    async fn ingest_typed(
+        storage: &Arc<Storage>,
+        content: &str,
+        node_type: &str,
+        tags: &[&str],
+    ) {
+        storage
+            .ingest(vestige_core::IngestInput {
+                content: content.to_string(),
+                node_type: node_type.to_string(),
+                source: None,
+                sentiment_score: 0.0,
+                sentiment_magnitude: 0.0,
+                tags: tags.iter().map(|t| t.to_string()).collect(),
                 valid_from: None,
                 valid_until: None,
             })
@@ -356,5 +379,91 @@ mod tests {
         let result = execute(&storage, Some(args)).await;
         let value = result.unwrap();
         assert_eq!(value["totalMemories"], 0);
+    }
+
+    /// Regression: `node_type` filter must work even when the sparse type is
+    /// crowded out by a dominant type within the SQL `LIMIT`. Before the fix,
+    /// `query_time_range` applied `LIMIT` before the Rust-side `retain`, so a
+    /// limit of 5 against 10 dominant + 2 sparse rows returned 5 dominant,
+    /// then filtered to 0 sparse.
+    #[tokio::test]
+    async fn test_timeline_node_type_filter_sparse() {
+        let (storage, _dir) = test_storage().await;
+
+        // Dominant set: 10 facts
+        for i in 0..10 {
+            ingest_typed(&storage, &format!("Dominant memory {}", i), "fact", &["alpha"]).await;
+        }
+        // Sparse set: 2 concepts
+        for i in 0..2 {
+            ingest_typed(&storage, &format!("Sparse memory {}", i), "concept", &["beta"]).await;
+        }
+
+        // Limit 5 against 12 total — before the fix, `retain` on `concept`
+        // would operate on the 5 most recent rows (all `fact`) and find 0.
+        let args = serde_json::json!({ "node_type": "concept", "limit": 5 });
+        let value = execute(&storage, Some(args)).await.unwrap();
+        assert_eq!(
+            value["totalMemories"], 2,
+            "Both sparse concepts should survive a limit smaller than the dominant set"
+        );
+
+        // Also verify the storage layer directly, so the contract is pinned
+        // at the API boundary even if the tool wrapper shifts.
+        let nodes = storage
+            .query_time_range(None, None, 5, Some("concept"), None)
+            .unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes.iter().all(|n| n.node_type == "concept"));
+    }
+
+    /// Regression: `tags` filter must work even when the sparse tag is
+    /// crowded out by a dominant tag within the SQL `LIMIT`. Parallel to
+    /// the node_type sparse case — same `retain`-after-`LIMIT` bug.
+    #[tokio::test]
+    async fn test_timeline_tag_filter_sparse() {
+        let (storage, _dir) = test_storage().await;
+
+        // Dominant set: 10 memories with tag "common"
+        for i in 0..10 {
+            ingest_typed(&storage, &format!("Common memory {}", i), "fact", &["common"]).await;
+        }
+        // Sparse set: 2 memories with tag "rare"
+        for i in 0..2 {
+            ingest_typed(&storage, &format!("Rare memory {}", i), "fact", &["rare"]).await;
+        }
+
+        let args = serde_json::json!({ "tags": ["rare"], "limit": 5 });
+        let value = execute(&storage, Some(args)).await.unwrap();
+        assert_eq!(
+            value["totalMemories"], 2,
+            "Both sparse-tag matches should survive a limit smaller than the dominant set"
+        );
+
+        let tag_slice = vec!["rare".to_string()];
+        let nodes = storage
+            .query_time_range(None, None, 5, None, Some(&tag_slice))
+            .unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes.iter().all(|n| n.tags.iter().any(|t| t == "rare")));
+    }
+
+    /// Regression: tag filter must match exact tags, not substrings. Without
+    /// the `"tag"`-wrapped `LIKE` pattern, a query for `alpha` would also
+    /// match rows tagged `alphabet`. The pattern `%"alpha"%` keys off the
+    /// JSON-array quote characters and rejects that.
+    #[tokio::test]
+    async fn test_timeline_tag_filter_exact_match() {
+        let (storage, _dir) = test_storage().await;
+
+        ingest_typed(&storage, "Exact tag hit", "fact", &["alpha"]).await;
+        ingest_typed(&storage, "Substring decoy", "fact", &["alphabet"]).await;
+
+        let tag_slice = vec!["alpha".to_string()];
+        let nodes = storage
+            .query_time_range(None, None, 50, None, Some(&tag_slice))
+            .unwrap();
+        assert_eq!(nodes.len(), 1, "Only the exact-tag match should return");
+        assert_eq!(nodes[0].content, "Exact tag hit");
     }
 }
