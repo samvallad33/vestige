@@ -5,6 +5,44 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.9] - 2026-04-24 — "Autopilot"
+
+Autopilot flips Vestige from passive memory library to self-managing cognitive surface. A single supervised backend task subscribes to the 20-event WebSocket bus and routes live events into the cognitive engine — 14 previously dormant primitives (synaptic tagging, predictive memory, activation spread, prospective polling, auto-consolidation, Rac1 cascade emission) now fire without any MCP tool call. Shipped alongside a 3,091-LOC orphan-code cleanup of the v1.0 tool surface. **No schema changes, tool surface unchanged (24 tools), fully backward compatible with v2.0.8 databases. Opt-out via `VESTIGE_AUTOPILOT_ENABLED=0`.**
+
+### Added
+
+- **Autopilot event subscriber** (`crates/vestige-mcp/src/autopilot.rs`) — two supervised tokio tasks spawned at startup. The event subscriber consumes a `broadcast::Receiver<VestigeEvent>` and routes six event classes:
+  - `MemoryCreated` → `synaptic_tagging.trigger_prp()` (9h retroactive PRP window, Frey & Morris 1997) + `predictive_memory.record_memory_access()`.
+  - `SearchPerformed` → `predictive_memory.record_query()` + top-10 access records. The speculative-retrieval model now warms without waiting for an explicit `predict` call.
+  - `MemoryPromoted` → `activation_network.activate(id, 0.3)` — a small reinforcement ripple through the graph.
+  - `MemorySuppressed` → re-emits the previously-declared-never-emitted `Rac1CascadeSwept` event so the dashboard's cascade wave actually renders.
+  - `ImportanceScored` with `composite_score > 0.85` AND a stored `memory_id` → auto-promote + re-emit `MemoryPromoted`.
+  - `Heartbeat` with `memory_count > 700` → rate-limited `find_duplicates` sweep (6h cooldown + in-flight `JoinHandle` guard against concurrent scans on large DBs).
+
+  The engine mutex is acquired only synchronously per handler and never held across `.await`, so MCP tool dispatch is never starved. A 60-second `tokio::interval` separately polls `prospective_memory.check_triggers(Context)` — matched intentions log at `info!` level today; v2.1 "Autonomic" will surface them mid-conversation.
+- **Panic-resilient supervisors** — both background tasks run inside an outer supervisor loop. If a cognitive hook panics on one bad memory, the supervisor catches `JoinError::is_panic()`, logs the panic, sleeps 5 s, and respawns the inner task. Turns a permanent silent-failure mode into a transient hiccup.
+- **`VESTIGE_AUTOPILOT_ENABLED=0` opt-out** — v2.0.8 users who want the passive-library contract can disable Autopilot entirely. Values `{0, false, no, off}` early-return before any task spawns; anything else (unset, `1`, `true`) enables the default v2.0.9 behavior.
+- **`ImportanceScored.memory_id: Option<String>`** — new optional field on the event variant (`#[serde(default)]`, backward-compatible) so Autopilot's auto-promote path can target a stored memory. Existing emit sites pass `None`.
+
+### Changed
+
+- **3,091 LOC of orphan tool code removed** from `crates/vestige-mcp/src/tools/` — nine v1.0 modules (`checkpoint`, `codebase`, `consolidate`, `ingest`, `intentions`, `knowledge`, `recall`, plus two internal helpers) superseded by the `*_unified` / `maintenance::*` replacements shipped in v2.0.5. Each module verified for zero non-test callers before removal. Tool surface unchanged — all 24 tools continue to work via the unified dispatchers.
+- **Ghost environment-variable documentation scrubbed** — three docs listed env vars (`VESTIGE_DATA_DIR`, `VESTIGE_LOG_LEVEL`, a `VESTIGE_API_KEY` typo) that never existed in any shipping Rust code. Replaced with the real variables the binary actually reads.
+
+### Fixed
+
+- **Dedup-sweep race on large databases** — the `Heartbeat`-triggered `find_duplicates` sweep previously set its cooldown timestamp BEFORE spawning the async scan, which on 100k+ memory DBs (where a sweep can exceed the 6h cooldown) allowed two concurrent scans. Rewritten to track the in-flight `JoinHandle` via `DedupSweepState::is_running()` — the next Heartbeat skips if the previous sweep is still live.
+
+### Verified
+
+- `cargo test --workspace --no-fail-fast`: **1,223 passing, 0 failed**.
+- `cargo clippy -p vestige-mcp --lib --bins -- -D warnings`: clean.
+- Five-agent parallel audit (security, dead-code, flow-trace, runtime-safety, release-prep): all GO.
+
+### Migration
+
+None. v2.0.9 is a pure backend upgrade — tool surface, JSON-RPC schema, storage schema, and CLI flags are bit-identical to v2.0.8. Existing databases open without any migration step. The only behavior change is the Autopilot task running in the background, which is `VESTIGE_AUTOPILOT_ENABLED=0`-gated if you want the old passive-library contract.
+
 ## [2.0.8] - 2026-04-23 — "Pulse"
 
 The Pulse release wires the dashboard through to the cognitive engine. Eight new dashboard surfaces expose `deep_reference`, `find_duplicates`, `dream`, FSRS scheduling, 4-channel importance, spreading activation, contradiction arcs, and cross-project pattern transfer — every one of them was MCP-only before. Intel Mac is back on the supported list (Microsoft deprecated x86_64 macOS ONNX Runtime prebuilts; we link dynamically against a Homebrew `onnxruntime` instead). Reasoning Theater, Pulse InsightToast, and the Memory Birth Ritual all ship. No schema migrations.

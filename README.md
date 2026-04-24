@@ -6,7 +6,7 @@
 
 [![GitHub stars](https://img.shields.io/github/stars/samvallad33/vestige?style=social)](https://github.com/samvallad33/vestige)
 [![Release](https://img.shields.io/github/v/release/samvallad33/vestige)](https://github.com/samvallad33/vestige/releases/latest)
-[![Tests](https://img.shields.io/badge/tests-1284%20passing-brightgreen)](https://github.com/samvallad33/vestige/actions)
+[![Tests](https://img.shields.io/badge/tests-1223%20passing-brightgreen)](https://github.com/samvallad33/vestige/actions)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![MCP Compatible](https://img.shields.io/badge/MCP-compatible-green)](https://modelcontextprotocol.io)
 
@@ -19,6 +19,15 @@ Built on 130 years of memory research — FSRS-6 spaced repetition, prediction e
 </div>
 
 ---
+
+## What's New in v2.0.9 "Autopilot"
+
+Autopilot flips Vestige from passive memory library to **self-managing cognitive surface**. Same 24 MCP tools, zero schema changes — but the moment you upgrade, 14 previously dormant cognitive primitives start firing on live events without any tool call from your client.
+
+- **One supervised backend task subscribes to the 20-event WebSocket bus** and routes six event classes into the cognitive engine: `MemoryCreated` triggers synaptic-tagging PRP + predictive-access records, `SearchPerformed` warms the speculative-retrieval model, `MemoryPromoted` fires activation spread, `MemorySuppressed` emits the Rac1 cascade wave, high-importance `ImportanceScored` (>0.85) auto-promotes, and `Heartbeat` rate-limit-fires `find_duplicates` on large DBs. **The engine mutex is never held across `.await`, so MCP dispatch is never starved.**
+- **Panic-resilient supervisors.** Both background tasks run inside an outer supervisor loop — if one handler panics on a bad memory, the supervisor respawns it in 5 s instead of losing every future event.
+- **Fully backward compatible.** No new MCP tools. No schema migration. Existing v2.0.8 databases open without a single step. Opt out with `VESTIGE_AUTOPILOT_ENABLED=0` if you want the passive-library contract back.
+- **3,091 LOC of orphan v1.0 tool code removed** — nine superseded modules (`checkpoint`, `codebase`, `consolidate`, `ingest`, `intentions`, `knowledge`, `recall`, plus helpers) verified zero non-test callers before deletion. Tool surface unchanged.
 
 ## What's New in v2.0.6 "Composer"
 
@@ -34,7 +43,7 @@ v2.0.6 is a polish release that makes the existing cognitive stack finally *feel
 
 Ebbinghaus 1885 models what happens to memories you don't touch. Anderson 2025 models what happens when you actively want to stop thinking about one. Every other AI memory system implements the first. Vestige is the first to ship the second.
 
-Based on [Anderson et al. 2025](https://www.nature.com/articles/s41583-025-00929-y) (Suppression-Induced Forgetting, *Nat Rev Neurosci*) and [Cervantes-Sandoval et al. 2020](https://pmc.ncbi.nlm.nih.gov/articles/PMC7477079/) (Rac1 synaptic cascade). **24 tools · 29 cognitive modules · 1,292 tests.**
+Based on [Anderson et al. 2025](https://www.nature.com/articles/s41583-025-00929-y) (Suppression-Induced Forgetting, *Nat Rev Neurosci*) and [Cervantes-Sandoval et al. 2020](https://pmc.ncbi.nlm.nih.gov/articles/PMC7477079/) (Rac1 synaptic cascade). **24 tools · 30 cognitive modules · 1,223 tests.**
 
 <details>
 <summary>Earlier releases (v2.0 "Cognitive Leap" → v2.0.4 "Deep Reference")</summary>
@@ -163,7 +172,7 @@ The dashboard runs automatically at `http://localhost:3927/dashboard` when the M
 │  15 REST endpoints · WS event broadcast              │
 ├─────────────────────────────────────────────────────┤
 │  MCP Server (stdio JSON-RPC)                         │
-│  24 tools · 29 cognitive modules                     │
+│  24 tools · 30 cognitive modules                     │
 ├─────────────────────────────────────────────────────┤
 │  Cognitive Engine                                    │
 │  ┌──────────┐ ┌──────────┐ ┌───────────────┐       │
@@ -425,5 +434,5 @@ AGPL-3.0 — free to use, modify, and self-host. If you offer Vestige as a netwo
 
 <p align="center">
   <i>Built by <a href="https://github.com/samvallad33">@samvallad33</a></i><br>
-  <sub>80,000+ lines of Rust · 29 cognitive modules · 130 years of memory research · one 22MB binary</sub>
+  <sub>80,000+ lines of Rust · 30 cognitive modules · 130 years of memory research · one 22MB binary</sub>
 </p>
