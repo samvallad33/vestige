@@ -1328,6 +1328,7 @@ impl McpServer {
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0);
                 self.emit(VestigeEvent::ImportanceScored {
+                    memory_id: None, // importance_score tool runs on arbitrary content
                     content_preview: preview,
                     composite_score: composite,
                     novelty,

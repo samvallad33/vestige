@@ -309,6 +309,20 @@ async fn main() {
     let (event_tx, _) =
         tokio::sync::broadcast::channel::<vestige_mcp::dashboard::events::VestigeEvent>(1024);
 
+    // v2.0.9 "Autopilot" — spawn the backend event-subscriber that routes
+    // every live WebSocket event into the cognitive modules that already
+    // have trigger methods implemented. Without this, the 20 event types
+    // terminate at the dashboard and the cognitive engine is a passive
+    // library that only responds to MCP tool queries.
+    //
+    // See `crates/vestige-mcp/src/autopilot.rs` for the routing table and
+    // `docs/VESTIGE_STATE_AND_PLAN.md` §15 for the architectural rationale.
+    vestige_mcp::autopilot::spawn(
+        Arc::clone(&cognitive),
+        Arc::clone(&storage),
+        event_tx.clone(),
+    );
+
     // Spawn dashboard HTTP server alongside MCP server (now with CognitiveEngine access)
     if config.dashboard_enabled {
         let dashboard_port = std::env::var("VESTIGE_DASHBOARD_PORT")

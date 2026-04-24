@@ -142,6 +142,12 @@ pub enum VestigeEvent {
 
     // -- Importance --
     ImportanceScored {
+        /// v2.0.9: memory the score refers to, if the score was computed for a
+        /// stored memory (None when scoring arbitrary content via importance tool).
+        /// Required so the Autopilot event-subscriber can auto-promote on
+        /// composite_score > 0.85 without having to re-query by content.
+        #[serde(default)]
+        memory_id: Option<String>,
         content_preview: String,
         composite_score: f64,
         novelty: f64,

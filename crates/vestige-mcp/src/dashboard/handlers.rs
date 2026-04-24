@@ -972,6 +972,7 @@ pub async fn score_importance(
         let attention = score.attention;
 
         state.emit(VestigeEvent::ImportanceScored {
+            memory_id: None, // /api/importance scores arbitrary content, not a stored memory
             content_preview: req.content.chars().take(80).collect(),
             composite_score: composite,
             novelty,

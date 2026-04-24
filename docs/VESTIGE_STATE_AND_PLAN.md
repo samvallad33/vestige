@@ -1131,4 +1131,143 @@ If this is the first time you're seeing Vestige:
 
 ---
 
-**End of document.** Length-check: ~16,500 words / ~110 KB markdown. This is the single-page briefing that lets any AI agent plan the next phase of Vestige without having to re-read the repository.
+## 15. POST-v2.0.8 ADDENDUM — The Autonomic Turn (added 2026-04-23)
+
+> This section supersedes portions of sections 9.1-9.8. The April 19 roadmap (v2.1 Decide → v2.2 Pulse → v2.3 Rewind → v2.4 Empathy → v2.5 Grip → v2.6 Remote → v3.0 Branch) remains the long-arc plan but has been RESEQUENCED post-v2.0.8 ship following a three-agent audit on 2026-04-23 (web research on 2026 SOTA, Vestige code audit for active-vs-passive paths, competitor landscape). Updated sequence reflects what got absorbed into v2.0.8 and the new v2.0.9 / v2.5 / v2.6 architecture tier that replaces the old placeholder numbering.
+
+### 15.1 What v2.0.8 "Pulse" absorbed
+
+v2.0.8 shipped (commit `6a80769`, tag `v2.0.8`, 2026-04-23 07:21Z) bundled:
+
+- **v2.2 "Pulse" InsightToast** (from April 19 roadmap) — real-time toast stack over the WebSocket event bus; DreamCompleted / ConsolidationCompleted / ConnectionDiscovered / MemoryPromoted/Demoted/Suppressed surface automatically.
+- **v2.3 "Terrarium" Memory Birth Ritual** — 60-frame elastic materialization on every `MemoryCreated` event.
+- **8 new dashboard surfaces** exposing the cognitive engine: `/reasoning`, `/duplicates`, `/dreams`, `/schedule`, `/importance`, `/activation`, `/contradictions`, `/patterns`.
+- **Reasoning Theater** wired to the 8-stage `deep_reference` cognitive pipeline with Cmd+K Ask palette.
+- **3D graph brightness** auto-compensation + user slider (0.5×–2.5×, localStorage-persisted).
+- **Intel Mac restored** via `ort-dynamic` + Homebrew onnxruntime (closes #41, sidesteps Microsoft's upstream deprecation of x86_64 macOS ONNX Runtime prebuilts).
+- **Cross-reference hardening** — contradiction-detection false positives from 12→0 on an FSRS-6 query; primary-selection topic-term filter (50% relevance + 20% trust + 30% term_presence) fixes off-topic-high-trust-wins-query bug.
+
+Post-v2.0.8 hygiene commit `0e9b260` removed 3,091 LOC of orphan code (9 superseded tool modules + ghost env-var docs + one dead fn).
+
+### 15.2 The audit finding — "decorative memory" at system scale
+
+Three agents ran in parallel on 2026-04-23. Core diagnosis: **Vestige has 30 cognitive modules but only 2 autonomic mechanisms** (6h auto-consolidation loop + per-tool-call scheduler at `server.rs:884`). The 20-event WebSocket bus at `dashboard/events.rs` has **zero backend subscribers** — all 14 live event types flow to the dashboard and terminate. Fully-built trigger methods exist but nothing calls them:
+
+- `ProspectiveMemory::check_triggers()` at `prospective_memory.rs:1260` — 9h intention window, never polled.
+- `SpeculativeRetriever::prefetch()` at `advanced/speculative.rs` (606 LOC) — never awaited.
+- `MemoryDreamer::run_consolidation_cycle()` — instantiated on CognitiveEngine but the 6h timer at `main.rs:258` calls only `storage.run_consolidation()` (FSRS decay), never the dreamer.
+
+Three completely dead modules: `MemoryCompressor`, `AdaptiveEmbedder`, `EmotionalMemory` (constructed in `CognitiveEngine::new()` at `cognitive.rs:145-160`, zero call sites in vestige-mcp). `Rac1CascadeSwept`, `ActivationSpread`, `RetentionDecayed` events declared but never emitted.
+
+**This is the ARC-AGI-3 pattern at system scale:** storage exists, retrieval exists, memory never self-triggers during the agent's decision path because no subscriber is listening. Sam's paraphrased thesis: *"the bottleneck won't be how much the agent knows — it will be how efficiently it MANAGES what it knows."*
+
+### 15.3 The 2026 SOTA convergence — "retrieval is solved, management is not"
+
+Web-research agent surfaced the consensus. Load-bearing papers + their unshipped primitives:
+
+- **Titans** (arXiv 2501.00663, Google NeurIPS 2025) — test-time weight updates via surprise gradient. Active IN-MODEL.
+- **A-Mem** (arXiv 2502.12110) — Zettelkasten dynamic re-linking on write.
+- **Memory-R1** (arXiv 2508.19828) — RL-trained Manager with ADD/UPDATE/DELETE/NOOP on 152 QA pairs; beats baselines on LoCoMo + MSC + LongMemEval.
+- **Mem-α** (arXiv 2509.25911) — RL over tripartite core/episodic/semantic memory, trained on 30k tokens, generalizes to 400k.
+- **MemR³** (arXiv 2512.20237) — closed-loop router with retrieve/reflect/answer decision + evidence-gap tracking.
+- **SleepGate** (arXiv 2603.14517) + **LightMem** (arXiv 2510.18866) — sleep-phase offline consolidation, timer-decoupled autonomous.
+- **StageMem** (arXiv 2604.16774) + **Evidence for Limited Metacognition in LLMs** (arXiv 2509.21545) — item-level confidence separated from retention, validity-screened selective abstention.
+- **Memory in the Age of AI Agents** survey (arXiv 2512.13564) — taxonomy (Forms/Functions/Dynamics); all open problems live in Dynamics.
+
+**Three unshipped-by-anyone concepts define the 2026 frontier:** meta-memory / confidence-gated generation (refuse to answer when load-bearing memory is cold), autonomous consolidation on surprise/drift (not on timer), write-time contradiction detection with agent-facing alerts.
+
+### 15.4 Competitive landscape — the white-space lanes
+
+Nobody ships: **confidence-gated generation, proactive contradiction flagging without query, predictive pre-warm at UserPromptSubmit, autonomic working-memory capacity enforcement.**
+
+- Mem0 v2 (Apr 16, 2026): auto-dedup (0.9 threshold), single-pass fact extraction. Retrieval still query-triggered.
+- Letta: sleep-time agents mutate shared memory blocks asynchronously (most actively-managing shipped product). Archival/recall still query-triggered.
+- Zep Graphiti: temporal invalidation via valid-until edges, community summarization. Retrieval still query-triggered.
+- Pieces LTM-2: OS-level auto-OCR capture (most aggressive autonomous capture). No autonomous management.
+- Anthropic Claude Code: 95%-context auto-compaction. No trust-scored memories, no scheduled dream, no confidence gating.
+- Google Titans: surprise-gated memory IN-MODEL; not a server-level primitive.
+
+Every one of those four white-space primitives has raw material **already built** in Vestige (FSRS-6 trust scores, `deep_reference`, `predict`, `SpeculativeRetriever`, WebSocket event bus, Sanhedrin POC from April 20). The bottleneck is wiring, not features.
+
+### 15.5 v2.0.9 "Autopilot" — Weekend Ship (2-3 days)
+
+**Single architectural change**: add a backend event-subscriber task in `main.rs` (~50-100 LOC `tokio::spawn`) that consumes the existing WebSocket bus and routes events into the cognitive modules that already have trigger methods. This one commit flips 14 dormant primitives into active ones simultaneously.
+
+**Concrete wiring:**
+
+| Event | Currently emits to | Add backend routing |
+|---|---|---|
+| `MemoryCreated` | dashboard only | `synaptic_tagging.trigger_prp()` + `predictive_memory.record_save()` + `cross_project.record_pattern()` |
+| `SearchPerformed` | dashboard only | `speculative.prefetch()` awaited in background task |
+| `MemoryPromoted` | dashboard only | `activation_network.cascade_reinforce(neighbors, 0.3)` |
+| `MemorySuppressed` | dashboard only | emit `Rac1CascadeSwept` (currently declared never-emitted) |
+| `ImportanceScored > 0.85` | dashboard only | auto-`promote` |
+| `DeepReferenceCompleted` with contradictions | dashboard only | queue a `dream()` cycle for contradiction-resolution |
+
+**Three additional changes:**
+
+1. New 60s `tokio::interval` in `main.rs` calls `cog.prospective_memory.check_triggers(current_session_context)`. On hit, emit new `IntentionFired` event + MCP sampling/createMessage notification to the client.
+2. Add `cognitive.dreamer.run_consolidation_cycle()` call inside the existing 6h auto-consolidation loop at `main.rs:258` (alongside, not replacing, `storage.run_consolidation()`).
+3. `find_duplicates` auto-runs when `Heartbeat.total_memories > 700`.
+
+**Launch narrative:** *"Vestige now acts on your memories while you sleep — 14 cognitive modules that used to wait for a query now fire autonomously on every memory event."*
+
+### 15.6 v2.5.0 "Autonomic" — 1 Week After v2.0.9
+
+Three unshipped-by-anyone primitives land in one release. This is the category-defining drop.
+
+**(A) Hallucination Guillotine — Confidence-Gated Veto**
+
+Stop hook runs `deep_reference` on the agent's draft response, checks FSRS retention on load-bearing claims. If any required fact has retention < 0.4, exits 2 with a `VESTIGE VETO: cold memory on claim X, retrieve fresh evidence or explicitly mark uncertain` block. The Sanhedrin POC from 2026-04-20 already proves the mechanism works in real dogfooding — three consecutive drafts were vetoed by the POC. Package as a formal `vestige-guillotine` Claude Code plugin.
+
+Files: new `crates/vestige-mcp/src/hooks/guillotine.rs`, plugin manifest in `packages/claude-plugin/`. Composes existing `deep_reference` trust-score pipeline + the Sanhedrin dogfooding script.
+
+**(B) Contradiction Daemon — Write-Time Alerting**
+
+On every `smart_ingest` write, a fast `deep_reference` runs against the existing graph. If the new memory contradicts an existing memory with trust > 0.6, the server fires an MCP sampling/createMessage notification to the agent *in the same conversation:* *"this contradicts memory Y from \[date\]. Supersede Y, discard X, or mark both as time-bounded?"* The agent resolves the conflict in real time instead of waking up to it three sessions later.
+
+Files: `crates/vestige-mcp/src/tools/smart_ingest.rs` (post-write hook), `crates/vestige-mcp/src/protocol/sampling.rs` (new — MCP sampling/createMessage support). Composes existing `deep_reference` + contradiction-detection hardening from v2.0.8.
+
+**(C) Pulse Prefetch — Predictive Pre-Warm at UserPromptSubmit**
+
+UserPromptSubmit hook fires `predict(query)`, top-k results injected into agent context before the first token. The agent never has to ask; the memory is already there. Nemori did predict-calibrate; Letta does sleep-time; nobody fires at query-arrival.
+
+Files: `crates/vestige-mcp/src/hooks/pulse_prefetch.rs` (new), extend `SpeculativeRetriever::prefetch()`. Composes existing `predict` tool + `speculative.rs` (606 LOC, never awaited until v2.0.9 wiring).
+
+**Launch narrative:** *"The first MCP memory that VETOes hallucinations before the user sees them, FLAGS contradictions at write-time, and PREDICTS what the agent will need before the agent knows it needs it. Zero-shot proactive memory management."*
+
+### 15.7 v2.6.0 "Sleepwalking" — 2 Weeks After v2.5.0
+
+Dream cycle detects high-value cross-project patterns → auto-generates and opens pull requests against the user's codebase. Zep writes text summaries; Vestige writes code. The `cross_project.find_universal_patterns()` fn already exists. Wire it via a new `sleepwalk` subcommand that invokes `gh pr create` with generated diffs.
+
+Files: new `crates/vestige-mcp/src/bin/sleepwalk.rs`, composes `CrossProjectLearner` + `MemoryDreamer` + existing gh CLI integration.
+
+**Launch narrative:** *"Your AI memory writes PRs while you sleep."*
+
+### 15.8 Post-v2.6 — Remaining April 19 roadmap
+
+After v2.6 "Sleepwalking," the April 19 placeholder roadmap reasserts with renumbered slots:
+
+| Slot | Codename | Scope |
+|---|---|---|
+| v2.7 | Decide | Qwen3 embeddings (absorbing the pre-existing `feat/v2.1.0-qwen3-embed` branch) once M3 Max Metal validates |
+| v2.8 | Rewind | Temporal slider + pin, state reconstruction over time |
+| v2.9 | Empathy | Apple Watch biometric flashbulb + frustration detection → arousal boost. First Pro-tier gate candidate. |
+| v2.10 | Grip | Cluster gestures + manual bridging |
+| v2.11 | Remote | `vestige-cloud` self-host upgrade (5→24 MCP tools + Streamable HTTP + Docker) |
+| v3.0 | Branch | CoW memory branching + multi-tenant SaaS (gated on v2.11 adoption + cashflow) |
+
+### 15.9 Expected 30-day outcome
+
+Target: v2.0.9 + v2.5.0 + v2.6.0 all ship within 30 days of v2.0.8.
+Stars trajectory: current 484 baseline at +12/day → +600 from v2.0.9 + +1,500 from v2.5.0 + +2,000 from v2.6.0 + 360 organic = **~5,000 stars by end of May 2026.** First paid commercial license lands during v2.5.0 launch week (the Hallucination Guillotine clip is exactly the artifact that makes enterprise DevRel reshare). MCP engineer role offer inbound during the same window.
+
+CCN 2027 poster abstract gets written on the v2.5 primitives; RustConf 2026 Sep 8-11 talk submission writes itself around the event-bus-subscriber architecture pattern.
+
+### 15.10 The one-line architectural thesis
+
+**Vestige's bottleneck is not feature count, not capacity, not module depth. It is one missing architectural pattern — a backend event-subscriber task that routes the 14 live WebSocket events into the cognitive modules that already have the trigger methods implemented.** Closing that single gap flips Vestige from "memory library" to "cognitive agent that acts on the host LLM." Every v2.5+ feature composes on top of that one change.
+
+---
+
+**End of document.** Length-check: ~19,000 words / ~130 KB markdown. This is the single-page briefing that lets any AI agent plan the next phase of Vestige without having to re-read the repository.
