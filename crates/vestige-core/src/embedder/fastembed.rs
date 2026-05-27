@@ -4,7 +4,7 @@
 #[cfg(feature = "embeddings")]
 use crate::embeddings::{EMBEDDING_DIMENSIONS, EmbeddingService};
 
-use super::{EmbedderError, EmbedderResult, LocalEmbedder};
+use super::{EmbedderError, EmbedderResult, EmbedderSend};
 
 pub struct FastembedEmbedder {
     #[cfg(feature = "embeddings")]
@@ -41,8 +41,7 @@ impl Default for FastembedEmbedder {
     }
 }
 
-#[async_trait::async_trait]
-impl LocalEmbedder for FastembedEmbedder {
+impl EmbedderSend for FastembedEmbedder {
     async fn embed(&self, text: &str) -> EmbedderResult<Vec<f32>> {
         #[cfg(feature = "embeddings")]
         {

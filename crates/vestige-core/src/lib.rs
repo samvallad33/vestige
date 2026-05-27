@@ -164,7 +164,9 @@ pub use storage::{
 };
 
 // Embedder trait and implementations
-pub use embedder::{Embedder, EmbedderError, EmbedderResult, FastembedEmbedder, LocalEmbedder};
+pub use embedder::{
+    Embedder, EmbedderError, EmbedderResult, EmbedderSend, FastembedEmbedder, LocalEmbedder,
+};
 
 // Consolidation (sleep-inspired memory processing)
 pub use consolidation::SleepConsolidation;
