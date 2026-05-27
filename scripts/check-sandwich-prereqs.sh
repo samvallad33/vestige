@@ -12,7 +12,7 @@ load_vestige_sanhedrin_env() {
   command -v python3 >/dev/null 2>&1 || return 0
   while IFS="$(printf '\t')" read -r key value; do
     case "$key" in
-      VESTIGE_SANHEDRIN_ENABLED|VESTIGE_SANHEDRIN_MODEL|VESTIGE_SANHEDRIN_ENDPOINT|VESTIGE_SANHEDRIN_CLAIM_MODE|VESTIGE_SANHEDRIN_OUTPUT|VESTIGE_SANHEDRIN_PYTHON|VESTIGE_DASHBOARD_PORT)
+      VESTIGE_SANHEDRIN_ENABLED|VESTIGE_SANHEDRIN_MODEL|VESTIGE_SANHEDRIN_ENDPOINT|VESTIGE_SANHEDRIN_BACKEND|VESTIGE_SANHEDRIN_CLAIM_MODE|VESTIGE_SANHEDRIN_OUTPUT|VESTIGE_SANHEDRIN_PYTHON|VESTIGE_DASHBOARD_PORT)
         export "$key=$value"
         ;;
     esac
@@ -24,6 +24,7 @@ allowed = {
     "VESTIGE_SANHEDRIN_ENABLED",
     "VESTIGE_SANHEDRIN_MODEL",
     "VESTIGE_SANHEDRIN_ENDPOINT",
+    "VESTIGE_SANHEDRIN_BACKEND",
     "VESTIGE_SANHEDRIN_CLAIM_MODE",
     "VESTIGE_SANHEDRIN_OUTPUT",
     "VESTIGE_SANHEDRIN_PYTHON",
@@ -79,9 +80,10 @@ if [ -f "$SANHEDRIN_ENV" ]; then
   load_vestige_sanhedrin_env "$SANHEDRIN_ENV" || true
 fi
 
-SANHEDRIN_ENDPOINT="${VESTIGE_SANHEDRIN_ENDPOINT:-${MLX_ENDPOINT:-http://127.0.0.1:8080/v1/chat/completions}}"
+SANHEDRIN_ENDPOINT="${VESTIGE_SANHEDRIN_ENDPOINT:-${MLX_ENDPOINT:-}}"
 SANHEDRIN_ENDPOINT="${SANHEDRIN_ENDPOINT%/}"
-SANHEDRIN_MODELS_URL="${SANHEDRIN_ENDPOINT%/chat/completions}/models"
+SANHEDRIN_MODELS_URL=""
+[ -n "$SANHEDRIN_ENDPOINT" ] && SANHEDRIN_MODELS_URL="${SANHEDRIN_ENDPOINT%/chat/completions}/models"
 SANHEDRIN_CLAIM_MODE="${VESTIGE_SANHEDRIN_CLAIM_MODE:-0}"
 SANHEDRIN_OUTPUT="${VESTIGE_SANHEDRIN_OUTPUT:-text}"
 
@@ -161,10 +163,12 @@ if [ "$CHECK_SANHEDRIN" -eq 1 ]; then
     command -v mlx_lm.server >/dev/null && ok "mlx-lm"        || warn "mlx-lm — uv tool install mlx-lm"
     command -v hf            >/dev/null && ok "huggingface_hub CLI" || warn "hf — uv tool install 'huggingface_hub[cli]'"
 
-    MODEL="${VESTIGE_SANHEDRIN_MODEL:-${VESTIGE_SANDWICH_MODEL:-mlx-community/Qwen3.6-35B-A3B-4bit}}"
+    MODEL="${VESTIGE_SANHEDRIN_MODEL:-${VESTIGE_SANDWICH_MODEL:-}}"
     HF_HOME_DEFAULT="${HF_HOME:-$HOME/.cache/huggingface}"
     ENC_MODEL="models--$(printf '%s' "$MODEL" | sed 's|/|--|g')"
-    if [ -d "$HF_HOME_DEFAULT/hub/$ENC_MODEL" ]; then
+    if [ -z "$MODEL" ]; then
+      info "No local MLX model configured; choose any OpenAI-compatible Sanhedrin model or preset."
+    elif [ -d "$HF_HOME_DEFAULT/hub/$ENC_MODEL" ]; then
       ok "Model cached: $MODEL"
     else
       info "Model not cached: $MODEL (local MLX path downloads ~19GB)"
@@ -179,7 +183,9 @@ if [ "$CHECK_SANHEDRIN" -eq 1 ]; then
     info "Skipping MLX/launchd checks on $OS_NAME $ARCH_NAME"
   fi
 
-  if curl -fsS -m 2 "$SANHEDRIN_MODELS_URL" >/dev/null 2>&1; then
+  if [ -z "$SANHEDRIN_MODELS_URL" ]; then
+    warn "Sanhedrin endpoint/model not configured yet; hook will fail open until configured"
+  elif curl -fsS -m 2 "$SANHEDRIN_MODELS_URL" >/dev/null 2>&1; then
     ok "Sanhedrin model endpoint responding at $SANHEDRIN_MODELS_URL"
   else
     warn "Sanhedrin endpoint not responding at $SANHEDRIN_MODELS_URL"

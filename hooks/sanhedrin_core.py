@@ -26,6 +26,8 @@ LATEST_JSON = STATE_DIR / "latest.json"
 LATEST_HTML = STATE_DIR / "latest.html"
 APPEALS_JSONL = STATE_DIR / "appeals.jsonl"
 COMMAND_RECEIPTS_JSONL = STATE_DIR / "command-receipts.jsonl"
+FAIL_OPEN_JSONL = STATE_DIR / "fail-open.jsonl"
+SUPPORTED_RECEIPT_SCHEMA = "vestige.sanhedrin.receipt.v1"
 
 VERIFICATION_RE = re.compile(
     r"\b("
@@ -34,6 +36,15 @@ VERIFICATION_RE = re.compile(
     r"(passed|passes|passing|green|succeeded|succeeds|clean)|"
     r"(verified|validated|confirmed)\s+(with|by|via)\s+[`']?([^`'\n]+)[`']?"
     r")\b",
+    re.IGNORECASE,
+)
+VERIFICATION_HEDGE_LEFT_RE = re.compile(
+    r"\b("
+    r"i\s+(think|believe|guess|suspect)|"
+    r"maybe|might|may\s+have|possibly|probably|apparently|"
+    r"let\s+me\s+verify|need\s+to\s+verify|will\s+verify|should\s+verify|"
+    r"not\s+sure|unverified|without\s+running"
+    r")\b[^.;:!?]{0,80}$",
     re.IGNORECASE,
 )
 COMMAND_FAMILY_PATTERNS = {
@@ -70,19 +81,44 @@ def claim_fingerprint(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
+def strip_non_assertive_regions(text: str) -> str:
+    """Remove quoted/code regions before looking for Receipt Lock assertions."""
+    text = text[:16_384]
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    text = re.sub(r"`[^`\n]+`", " ", text)
+    kept_lines = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(">"):
+            continue
+        kept_lines.append(line)
+    text = "\n".join(kept_lines)
+    text = re.sub(r'(^|[\s([{])"[^"\n]+"(?=([\s.,;:!?)}\]]|$))', r"\1 ", text)
+    return text
+
+
+def is_asserted_verification_claim(text: str) -> bool:
+    match = VERIFICATION_RE.search(text)
+    if not match:
+        return False
+    left_context = text[max(0, match.start() - 100) : match.start()]
+    return VERIFICATION_HEDGE_LEFT_RE.search(left_context) is None
+
+
 def split_claims(draft: str) -> list[str]:
-    chunks = re.split(r"(?<=[.!?])\s+|\n+", draft)
+    cleaned = strip_non_assertive_regions(draft)
+    chunks = re.split(r"(?<=[.!?])\s+|\n+", cleaned)
     claims: list[str] = []
     for chunk in chunks:
         text = chunk.strip(" -\t")
-        if len(text) >= 18 or VERIFICATION_RE.search(text) or is_hard_user_claim(text):
+        if len(text) >= 18 or is_asserted_verification_claim(text) or is_hard_user_claim(text):
             claims.append(text)
     return claims[:24]
 
 
 def detect_claim_type(text: str) -> str:
     low = text.lower()
-    if VERIFICATION_RE.search(text):
+    if is_asserted_verification_claim(text):
         return "receipt_lock"
     if is_hard_user_claim(text):
         return "hard_user_claim"
@@ -132,7 +168,7 @@ def new_manifest(draft: str) -> dict[str, Any]:
             }
         )
     return {
-        "schema": "vestige.sanhedrin.receipt.v1",
+        "schema": SUPPORTED_RECEIPT_SCHEMA,
         "id": stable_id(f"{draft_id}:{now_iso()}", "receipt"),
         "draftId": draft_id,
         "createdAt": now_iso(),
@@ -218,6 +254,8 @@ def extract_transcript_receipts(path: Path) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         receipts.extend(extract_structured_receipts(obj, pending_commands))
+        if os.environ.get("VESTIGE_SANHEDRIN_ALLOW_LOOSE_LEDGER") != "1":
+            continue
         blob = json.dumps(obj, ensure_ascii=False)
         command = extract_command(blob)
         if not command:
@@ -549,6 +587,23 @@ def save_manifest(manifest: dict[str, Any]) -> None:
     rendered = render_receipt_html(manifest)
     write_text_atomic(html_path, rendered)
     write_text_atomic(LATEST_HTML, rendered)
+
+
+def record_fail_open(reason: str, detail: str = "", transcript: str | None = None) -> None:
+    ensure_dirs()
+    run_id = os.environ.get("VESTIGE_SANHEDRIN_RUN_ID") or stable_id(f"{now_iso()}:{os.getpid()}", "run")
+    event = {
+        "timestamp": now_iso(),
+        "runId": run_id,
+        "reason": reason,
+        "detail": detail[:500],
+        "transcript": transcript or os.environ.get("VESTIGE_SANHEDRIN_TRANSCRIPT"),
+    }
+    try:
+        with FAIL_OPEN_JSONL.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event) + "\n")
+    except OSError:
+        pass
 
 
 def write_text_atomic(path: Path, content: str) -> None:

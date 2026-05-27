@@ -373,7 +373,7 @@ fn test_proof_hippocampal_indexing_efficiency() {
     bf_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     bf_results.truncate(10);
 
-    let bf_duration = bf_start.elapsed();
+    let _bf_duration = bf_start.elapsed();
 
     // === PROOF OF EFFICIENCY ===
 
@@ -566,7 +566,7 @@ fn test_proof_comprehensive_capability_summary() {
     // === CAPABILITY 4: Asymmetric Temporal Windows ===
     // Traditional: NO temporal reasoning | Vestige: Biologically-grounded windows
 
-    let window = CaptureWindow::new(9.0, 2.0);
+    let _window = CaptureWindow::new(9.0, 2.0);
     let asymmetric = 9.0 / 2.0;
     assert!(
         asymmetric > 4.0,

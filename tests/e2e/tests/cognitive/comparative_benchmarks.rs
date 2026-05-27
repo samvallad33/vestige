@@ -14,18 +14,18 @@
 //! - Synaptic Tagging: Frey & Morris (1997), Redondo & Morris (2011)
 //! - Hippocampal Indexing: Teyler & Rudy (2007)
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use std::collections::{HashMap, HashSet};
 
 use vestige_core::neuroscience::hippocampal_index::{
     BarcodeGenerator, ContentPointer, ContentType, HippocampalIndex, HippocampalIndexConfig,
-    INDEX_EMBEDDING_DIM, IndexQuery, MemoryBarcode, MemoryIndex,
+    INDEX_EMBEDDING_DIM, IndexQuery, MemoryBarcode,
 };
 use vestige_core::neuroscience::spreading_activation::{
-    ActivatedMemory, ActivationConfig, ActivationNetwork, LinkType,
+    ActivationConfig, ActivationNetwork, LinkType,
 };
 use vestige_core::neuroscience::synaptic_tagging::{
-    CaptureWindow, DecayFunction, ImportanceEvent, ImportanceEventType, SynapticTaggingConfig,
+    CaptureWindow, ImportanceEvent, ImportanceEventType, SynapticTaggingConfig,
     SynapticTaggingSystem,
 };
 
@@ -53,6 +53,7 @@ impl Default for SM2State {
 
 /// SM-2 grade (0-5)
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 enum SM2Grade {
     CompleteBlackout = 0,
     Incorrect = 1,
@@ -142,6 +143,7 @@ impl Default for FSRS6State {
 
 /// FSRS-6 grade (1-4)
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 enum FSRS6Grade {
     Again = 1,
     Hard = 2,
@@ -273,6 +275,7 @@ fn leitner_review(state: &LeitnerState, correct: bool) -> LeitnerState {
 // ============================================================================
 
 /// Fixed interval - always reviews at same interval
+#[allow(dead_code)]
 fn fixed_interval_schedule(_correct: bool) -> i32 {
     7 // Always 7 days
 }
@@ -409,7 +412,7 @@ fn test_fsrs6_vs_sm2_retention_same_reviews() {
     // FSRS-6: Same number of reviews
     let mut fsrs_state = FSRS6State::default();
     let mut total_elapsed = 0.0;
-    for i in 0..TOTAL_REVIEWS {
+    for _ in 0..TOTAL_REVIEWS {
         let interval = fsrs6_interval(fsrs_state.stability, 0.9, FSRS6_WEIGHTS[20]).max(1);
         total_elapsed += interval as f64;
         fsrs_state = fsrs6_review(&fsrs_state, FSRS6Grade::Good, interval as f64);
@@ -425,6 +428,11 @@ fn test_fsrs6_vs_sm2_retention_same_reviews() {
         fsrs_retention >= 0.85,
         "FSRS-6 should maintain high retention: {:.2}%",
         fsrs_retention * 100.0
+    );
+    assert!(sm2_retention > 0.0, "SM-2 retention should be positive");
+    assert!(
+        total_elapsed > 0.0,
+        "FSRS review elapsed time should accumulate"
     );
 }
 
@@ -442,7 +450,8 @@ fn test_fsrs6_vs_sm2_reviews_same_retention() {
 
     // SM-2: Interval growth is linear with EF
     // After n successful reviews: interval ≈ previous * 2.5
-    let sm2_intervals = vec![1, 6, 15, 38, 95]; // Approximate SM-2 progression
+    let sm2_intervals = [1, 6, 15, 38, 95]; // Approximate SM-2 progression
+    let sm2_final_interval = sm2_intervals[sm2_intervals.len() - 1];
 
     // FSRS-6: Stability grows based on forgetting curve parameters
     // This allows for more nuanced interval optimization
@@ -466,6 +475,10 @@ fn test_fsrs6_vs_sm2_reviews_same_retention() {
         fsrs_final_interval > 0,
         "FSRS-6 should produce positive intervals: {}",
         fsrs_final_interval
+    );
+    assert!(
+        sm2_final_interval > 0,
+        "SM-2 comparison interval should be positive"
     );
 
     // Test that stability has grown from initial value
@@ -545,6 +558,12 @@ fn test_fsrs6_vs_fixed_interval() {
         final_interval,
         FIXED_INTERVAL
     );
+    assert!(
+        fsrs_reviews <= fixed_reviews,
+        "FSRS-6 should need no more reviews than fixed interval: {} <= {}",
+        fsrs_reviews,
+        fixed_reviews
+    );
 }
 
 /// Test that FSRS-6 beats Leitner box system.
@@ -589,6 +608,12 @@ fn test_fsrs6_vs_leitner() {
         "FSRS-6 should achieve longer intervals: {} vs Leitner max {}",
         fsrs_final_interval,
         leitner_max_interval
+    );
+    assert!(
+        fsrs_reviews <= leitner_reviews,
+        "FSRS-6 should need no more reviews than Leitner: {} <= {}",
+        fsrs_reviews,
+        leitner_reviews
     );
 }
 

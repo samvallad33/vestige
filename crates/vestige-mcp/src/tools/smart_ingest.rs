@@ -57,9 +57,15 @@ pub fn schema() -> Value {
                 "description": "Force creation of a new memory even if similar content exists",
                 "default": false
             },
+            "batchMergePolicy": {
+                "type": "string",
+                "enum": ["force_create", "smart"],
+                "description": "Batch mode only. Defaults to 'force_create' so caller-separated items stay separate. Use 'smart' to allow Prediction Error Gating against existing memories.",
+                "default": "force_create"
+            },
             "items": {
                 "type": "array",
-                "description": "Batch mode: array of items to save (max 20). Each runs through full cognitive pipeline with Prediction Error Gating. Use at session end or before context compaction.",
+                "description": "Batch mode: array of items to save (max 20). Defaults to force-creating each caller-separated item; set batchMergePolicy='smart' to allow Prediction Error Gating against existing memories. Use at session end or before context compaction.",
                 "maxItems": 20,
                 "items": {
                     "type": "object",
@@ -104,6 +110,7 @@ struct SmartIngestArgs {
     tags: Option<Vec<String>>,
     source: Option<String>,
     force_create: Option<bool>,
+    batch_merge_policy: Option<String>,
     items: Option<Vec<BatchItem>>,
 }
 
@@ -131,8 +138,26 @@ pub async fn execute(
 
     // Detect mode: batch (items present) vs single (content present)
     if let Some(items) = args.items {
-        let global_force = args.force_create.unwrap_or(false);
-        return execute_batch(storage, cognitive, items, global_force).await;
+        let batch_merge_policy = args
+            .batch_merge_policy
+            .unwrap_or_else(|| "force_create".to_string());
+        let default_force_create = match batch_merge_policy.as_str() {
+            "force_create" => true,
+            "smart" => false,
+            other => {
+                return Err(format!(
+                    "Invalid batchMergePolicy '{}'. Must be 'force_create' or 'smart'.",
+                    other
+                ));
+            }
+        };
+        let global_force = match args.force_create {
+            Some(true) => true,
+            Some(false) if batch_merge_policy == "smart" => false,
+            Some(false) => default_force_create,
+            None => default_force_create,
+        };
+        return execute_batch(storage, cognitive, items, global_force, &batch_merge_policy).await;
     }
 
     // Single mode: content is required
@@ -252,6 +277,9 @@ pub async fn execute(
             "similarity": result.similarity,
             "predictionError": result.prediction_error,
             "supersededId": result.superseded_id,
+            "previousContent": result.previous_content,
+            "mergedFrom": result.merged_from,
+            "mergePreview": result.merge_preview,
             "importanceScore": importance_composite,
             "reason": result.reason,
             "explanation": match result.decision.as_str() {
@@ -305,6 +333,7 @@ async fn execute_batch(
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     items: Vec<BatchItem>,
     global_force_create: bool,
+    batch_merge_policy: &str,
 ) -> Result<Value, String> {
     if items.is_empty() {
         return Err("Items array cannot be empty".to_string());
@@ -321,6 +350,7 @@ async fn execute_batch(
     let updated = 0u32;
     let mut skipped = 0u32;
     let mut errors = 0u32;
+    let mut batch_created_node_ids: Vec<String> = Vec::new();
 
     for (i, item) in items.into_iter().enumerate() {
         // Skip empty content
@@ -400,6 +430,7 @@ async fn execute_batch(
                     let node_type = node.node_type.clone();
 
                     created += 1;
+                    batch_created_node_ids.push(node_id.clone());
                     run_post_ingest(
                         cognitive,
                         &node_id,
@@ -431,15 +462,18 @@ async fn execute_batch(
 
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         {
-            match storage.smart_ingest(input) {
+            match storage.smart_ingest_excluding(input, &batch_created_node_ids) {
                 Ok(result) => {
                     let node_id = result.node.id.clone();
                     let node_content = result.node.content.clone();
                     let node_type = result.node.node_type.clone();
 
                     match result.decision.as_str() {
-                        "create" | "supersede" | "replace" => created += 1,
-                        "update" | "reinforce" | "merge" | "add_context" => updated += 1,
+                        "create" | "supersede" | "merge" => {
+                            created += 1;
+                            batch_created_node_ids.push(node_id.clone());
+                        }
+                        "update" | "reinforce" | "replace" | "add_context" => updated += 1,
                         _ => created += 1,
                     }
 
@@ -458,6 +492,11 @@ async fn execute_batch(
                         "decision": result.decision,
                         "nodeId": node_id,
                         "similarity": result.similarity,
+                        "predictionError": result.prediction_error,
+                        "supersededId": result.superseded_id,
+                        "previousContent": result.previous_content,
+                        "mergedFrom": result.merged_from,
+                        "mergePreview": result.merge_preview,
                         "importanceScore": importance_composite,
                         "reason": result.reason
                     }));
@@ -482,6 +521,7 @@ async fn execute_batch(
                     let node_type = node.node_type.clone();
 
                     created += 1;
+                    batch_created_node_ids.push(node_id.clone());
                     run_post_ingest(
                         cognitive,
                         &node_id,
@@ -514,6 +554,7 @@ async fn execute_batch(
     Ok(serde_json::json!({
         "success": errors == 0,
         "mode": "batch",
+        "batchMergePolicy": batch_merge_policy,
         "summary": {
             "total": results.len(),
             "created": created,
@@ -637,6 +678,7 @@ mod tests {
         assert_eq!(schema_value["type"], "object");
         assert!(schema_value["properties"]["content"].is_object());
         assert!(schema_value["properties"]["forceCreate"].is_object());
+        assert!(schema_value["properties"]["batchMergePolicy"].is_object());
         assert!(schema_value["properties"]["items"].is_object());
         // v1.7: no top-level required — content for single mode, items for batch mode
         assert!(schema_value.get("required").is_none() || schema_value["required"].is_null());
@@ -807,7 +849,51 @@ mod tests {
         assert!(result.is_ok());
         let value = result.unwrap();
         assert_eq!(value["mode"], "batch");
+        assert_eq!(value["batchMergePolicy"], "force_create");
         assert_eq!(value["summary"]["total"], 2);
+    }
+
+    #[tokio::test]
+    async fn test_batch_defaults_to_force_create_for_caller_separated_items() {
+        let (storage, _dir) = test_storage().await;
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "forceCreate": false,
+                "items": [
+                    { "content": "Jira tickets should not auto-assign sprint fields." },
+                    { "content": "Sprint planning summaries should not append Jira status labels." }
+                ]
+            })),
+        )
+        .await;
+
+        let value = result.unwrap();
+        assert_eq!(value["batchMergePolicy"], "force_create");
+        assert_eq!(value["summary"]["created"], 2);
+        assert_eq!(value["summary"]["updated"], 0);
+        for item in value["results"].as_array().unwrap() {
+            assert_eq!(item["decision"], "create");
+            assert!(item["reason"].as_str().unwrap().contains("Forced creation"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_batch_rejects_invalid_merge_policy() {
+        let (storage, _dir) = test_storage().await;
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "batchMergePolicy": "merge_everything",
+                "items": [{ "content": "Invalid policy should fail." }]
+            })),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("batchMergePolicy"));
     }
 
     #[tokio::test]

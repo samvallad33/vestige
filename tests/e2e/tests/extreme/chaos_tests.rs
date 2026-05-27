@@ -144,6 +144,13 @@ fn test_chaos_add_remove_cycles() {
 
     // Stable structure should be preserved (edges reinforced)
     let stable_edge_count = network.edge_count();
+    let stable_node_count = network.node_count();
+    assert!(
+        stable_node_count >= initial_node_count,
+        "Stable nodes should be preserved: {} >= {}",
+        stable_node_count,
+        initial_node_count
+    );
     assert!(
         stable_edge_count >= initial_edge_count,
         "Stable edges should be preserved: {} >= {}",
@@ -450,8 +457,8 @@ fn test_chaos_ancient_memories() {
 
     // System should handle this gracefully
     assert!(
-        result.captured_count() >= 0,
-        "System should handle importance triggering"
+        result.captured_count() <= 3,
+        "Importance triggering should stay bounded by active memories"
     );
 
     // All memories should be accessible

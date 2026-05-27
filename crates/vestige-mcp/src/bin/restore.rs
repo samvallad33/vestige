@@ -26,7 +26,20 @@ fn main() -> anyhow::Result<()> {
     // Parse args
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: vestige-restore <backup.json>");
+        print_usage_stderr();
+        std::process::exit(1);
+    }
+    if matches!(args[1].as_str(), "-h" | "--help") {
+        print_usage_stdout();
+        return Ok(());
+    }
+    if matches!(args[1].as_str(), "-V" | "--version") {
+        println!("vestige-restore {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if args.len() > 2 {
+        eprintln!("Unexpected extra argument: {}", args[2]);
+        print_usage_stderr();
         std::process::exit(1);
     }
 
@@ -89,6 +102,18 @@ fn main() -> anyhow::Result<()> {
     println!("With embeddings: {}", stats.nodes_with_embeddings);
 
     Ok(())
+}
+
+fn print_usage_stdout() {
+    println!("{}", usage());
+}
+
+fn print_usage_stderr() {
+    eprintln!("{}", usage());
+}
+
+fn usage() -> &'static str {
+    "Vestige Restore\n\nUSAGE:\n    vestige-restore <backup.json>\n\nOPTIONS:\n    -h, --help       Print help information\n    -V, --version    Print version information"
 }
 
 /// Truncate a string for display (UTF-8 safe)

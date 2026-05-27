@@ -91,7 +91,7 @@ fn test_debugging_intent_detection() {
     match &result.primary_intent {
         DetectedIntent::Debugging {
             suspected_area,
-            symptoms,
+            symptoms: _,
         } => {
             assert!(!suspected_area.is_empty(), "Should identify suspected area");
             // Symptoms may or may not be captured depending on action order
@@ -125,7 +125,7 @@ fn test_learning_intent_detection() {
 
     // Should detect learning with high confidence
     match &result.primary_intent {
-        DetectedIntent::Learning { topic, level } => {
+        DetectedIntent::Learning { topic, level: _ } => {
             assert!(!topic.is_empty(), "Should identify learning topic");
             // Level may vary
         }
@@ -137,7 +137,7 @@ fn test_learning_intent_detection() {
     }
 
     // Verify relevant tags
-    let tags = result.primary_intent.relevant_tags();
+    let _tags = result.primary_intent.relevant_tags();
     // Tags depend on detected intent type
 }
 
@@ -173,9 +173,10 @@ fn test_refactoring_intent_detection() {
             related_components, ..
         } => {
             // Multiple edits could also suggest new feature
+            let _ = related_components;
             assert!(
-                related_components.len() >= 0,
-                "Should track related components"
+                result.confidence > 0.0,
+                "New feature intent should have positive confidence"
             );
         }
         _ => {

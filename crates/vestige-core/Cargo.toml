@@ -1,6 +1,6 @@
 [package]
 name = "vestige-core"
-version = "2.1.22"
+version = "2.1.23"
 edition = "2024"
 rust-version = "1.91"
 authors = ["Vestige Team"]
@@ -59,6 +59,17 @@ qwen3-reranker = ["qwen3-embeddings"]
 
 # Metal GPU acceleration on Apple Silicon (significantly faster inference)
 metal = ["fastembed/metal"]
+
+# CUDA GPU acceleration on NVIDIA hardware (Windows / Linux, x86_64 + aarch64).
+# Propagates to `candle-core/cuda`, which pulls in `cudarc` and `candle-kernels`
+# for a per-build nvcc compile pass. Pair with `qwen3-embeddings` so the Candle
+# backend is present in the build graph.
+#
+# Build: cargo build --release -p vestige-mcp --features qwen3-embeddings,cuda
+cuda = ["qwen3-embeddings", "candle-core/cuda"]
+
+# cuDNN on top of CUDA — additional fused kernels and faster inference paths.
+cudnn = ["cuda", "candle-core/cudnn"]
 
 
 [dependencies]

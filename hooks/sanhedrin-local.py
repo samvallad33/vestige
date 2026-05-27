@@ -23,6 +23,7 @@ import re
 import sys
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -50,7 +51,7 @@ VESTIGE_BASE_URL = (
 SANHEDRIN_ENDPOINT = (
     os.environ.get("VESTIGE_SANHEDRIN_ENDPOINT")
     or os.environ.get("MLX_ENDPOINT")
-    or "http://127.0.0.1:8080/v1/chat/completions"
+    or ""
 )
 VESTIGE_ENDPOINT = (
     os.environ.get("VESTIGE_DEEP_REFERENCE_ENDPOINT")
@@ -62,23 +63,80 @@ VESTIGE_HEALTH = (
 MODEL = (
     os.environ.get("VESTIGE_SANHEDRIN_MODEL")
     or os.environ.get("VESTIGE_SANDWICH_MODEL")
-    or "mlx-community/Qwen3.6-35B-A3B-4bit"
+    or ""
 )
 SANHEDRIN_TIMEOUT = env_int("VESTIGE_SANHEDRIN_TIMEOUT", env_int("MLX_TIMEOUT", 45))
 VESTIGE_TIMEOUT = env_int("VESTIGE_TIMEOUT", 5)
-THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+SANHEDRIN_BACKEND = (os.environ.get("VESTIGE_SANHEDRIN_BACKEND") or "").strip().lower()
+THINK_RE = re.compile(
+    r"<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 def post_json(url: str, body: dict, timeout: int):
+    if not url:
+        return None
     data = json.dumps(body).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    api_key = os.environ.get("VESTIGE_SANHEDRIN_API_KEY")
+    if api_key and same_endpoint_origin(url, SANHEDRIN_ENDPOINT):
+        headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}
+        url, data=data, headers=headers
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
         return None
+
+
+def same_endpoint_origin(url: str, endpoint: str) -> bool:
+    try:
+        target = urllib.parse.urlsplit(url)
+        expected = urllib.parse.urlsplit(endpoint)
+    except ValueError:
+        return False
+    return (
+        target.scheme == expected.scheme
+        and target.netloc == expected.netloc
+        and target.path == expected.path
+    )
+
+
+def use_backend_extensions() -> bool:
+    if SANHEDRIN_BACKEND in {"mlx", "vllm"}:
+        return True
+    if SANHEDRIN_BACKEND in {"openai", "ollama", "llama.cpp", "llamacpp", "litellm"}:
+        return False
+    return MODEL.startswith("mlx-community/")
+
+
+def sanhedrin_model_configured() -> bool:
+    return bool(SANHEDRIN_ENDPOINT and MODEL)
+
+
+def sanhedrin_body(
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    stop: list[str] | None = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "model": MODEL,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "stream": False,
+    }
+    if stop:
+        body["stop"] = stop
+    if use_backend_extensions():
+        body["top_k"] = 1
+        body["seed"] = 42
+        body["chat_template_kwargs"] = {"enable_thinking": False}
+    return body
 
 
 TRUST_FLOOR = 0.55  # filter out low-trust memories that drive false-positive vetoes
@@ -305,11 +363,15 @@ def fetch_evidence(draft: str) -> tuple[str, int]:
         with urllib.request.urlopen(VESTIGE_HEALTH, timeout=VESTIGE_TIMEOUT) as r:
             r.read()
     except Exception:
+        if sanhedrin_core is not None:
+            sanhedrin_core.record_fail_open("vestige_health_unavailable", VESTIGE_HEALTH)
         return "", 0
 
     query = draft[:1500]
     resp = post_json(VESTIGE_ENDPOINT, {"query": query, "depth": 12}, VESTIGE_TIMEOUT)
     if not isinstance(resp, dict):
+        if sanhedrin_core is not None:
+            sanhedrin_core.record_fail_open("deep_reference_unavailable", VESTIGE_ENDPOINT)
         return "", 0
 
     parts = []
@@ -361,15 +423,21 @@ def fetch_evidence(draft: str) -> tuple[str, int]:
 
 def split_candidate_claims(draft: str) -> list[str]:
     """Return sentence-ish draft fragments that can be classified as claims."""
-    without_fences = re.sub(r"```.*?```", " ", draft, flags=re.DOTALL)
+    without_fences = re.sub(r"```.*?```", " ", draft[:16_384], flags=re.DOTALL)
+    without_fences = re.sub(r"`[^`\n]+`", " ", without_fences)
+    without_fences = re.sub(r'(^|[\s([{])"[^"\n]+"(?=([\s.,;:!?)}\]]|$))', r"\1 ", without_fences)
     fragments: list[str] = []
     for line in without_fences.splitlines():
+        if line.lstrip().startswith(">"):
+            continue
         line = re.sub(r"^\s*[-*+]\s+", "", line).strip()
         line = re.sub(r"^\s*\d+[.)]\s+", "", line).strip()
         if not line:
             continue
         parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9`\"'])", line)
         fragments.extend(part.strip(" \t-") for part in parts if part.strip(" \t-"))
+        if len(fragments) >= 512:
+            return fragments[:512]
     if not fragments:
         compact = " ".join(without_fences.split())
         fragments = [
@@ -377,12 +445,21 @@ def split_candidate_claims(draft: str) -> list[str]:
             for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9`\"'])", compact)
             if part.strip()
         ]
-    return fragments
+    return fragments[:512]
 
 
 def normalize_asserted_fragment(text: str) -> str | None:
     text = " ".join(text.split()).strip()
     if not text:
+        return None
+    if re.search(r"\b(need|still need|let me|will|should)\s+to\s+verify\b", text, re.I):
+        return None
+    if re.fullmatch(
+        r"(the user|user|sam|you)\s+(said|told|asked|wrote|noted|mentioned)\s*"
+        r"(earlier|before|previously)?\.?",
+        text,
+        re.I,
+    ):
         return None
     text = TRAILING_MODAL_COMMENT_RE.sub("", text).strip(" ,;:-")
     if HYPOTHETICAL_PREFIX_RE.search(text) or SUBJECT_MODAL_PREFIX_RE.search(text):
@@ -473,9 +550,10 @@ def extract_check_worthy_claims(
                 sam_critical=is_sam_critical_claim(text, claim_class),
             )
         )
-        if len(claims) >= max_claims:
-            break
-    return claims
+    return sorted(
+        claims,
+        key=lambda claim: (SEVERITY_ORDER.get(claim.claim_class, 99), claim.source_index),
+    )[:max_claims]
 
 
 def normalize_evidence_item(raw: Any, source: str = "vestige") -> EvidenceItem | None:
@@ -823,29 +901,29 @@ def validate_verdict(verdict: str) -> str:
 
 
 def judge(draft: str, evidence: str) -> str:
+    if not sanhedrin_model_configured():
+        if sanhedrin_core is not None:
+            sanhedrin_core.record_fail_open(
+                "model_not_configured",
+                "Set VESTIGE_SANHEDRIN_ENDPOINT and VESTIGE_SANHEDRIN_MODEL, or choose a preset.",
+            )
+        return ""
     user_msg = (
         f"VESTIGE EVIDENCE (recommended + top trust-scored memories):\n"
         f"{evidence if evidence else '(no relevant evidence retrieved)'}\n\n"
         f"---\nDRAFT TO JUDGE:\n{draft}"
     )
-    body = {
-        "model": MODEL,
-        "messages": [
+    body = sanhedrin_body(
+        [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
         ],
-        "max_tokens": 2500,
-        "temperature": 0.0,
-        "top_p": 1.0,
-        "top_k": 1,
-        "seed": 42,
-        "stream": False,
-        "chat_template_kwargs": {"enable_thinking": False},
-        "stop": [
+        2500,
+        [
             "\n\nWait,", "\n\nActually,", "\n\nLet me", "\n\nHmm,",
             "\n\nOn second thought", "\n\nOh wait",
         ],
-    }
+    )
     resp = post_json(SANHEDRIN_ENDPOINT, body, SANHEDRIN_TIMEOUT)
     if not isinstance(resp, dict):
         return ""
@@ -970,6 +1048,8 @@ def validate_structured_verdict(
             return nei_verdict(claim, "Durable evidence exists; absence veto does not apply.", evidence)
     if status == "REFUTED" and not relevant_durable_high_trust(claim, evidence):
         return nei_verdict(claim, "Durable evidence required for refuted verdict.", evidence)
+    if status == "SUPPORTED" and high_trust(evidence) and not durable_high_trust(evidence):
+        return nei_verdict(claim, "Durable evidence required for supported verdict.", evidence)
     evidence_ids_raw = data.get("evidence_ids") or []
     evidence_ids = [
         str(eid) for eid in evidence_ids_raw[:5]
@@ -999,6 +1079,13 @@ def validate_structured_verdict(
 
 
 def judge_claim_with_model(claim: Claim, evidence: list[EvidenceItem]) -> ClaimVerdict:
+    if not sanhedrin_model_configured():
+        if sanhedrin_core is not None:
+            sanhedrin_core.record_fail_open(
+                "model_not_configured",
+                "Set VESTIGE_SANHEDRIN_ENDPOINT and VESTIGE_SANHEDRIN_MODEL, or choose a preset.",
+            )
+        return nei_verdict(claim, "Sanhedrin model not configured; fail-open for this claim.", evidence)
     user_msg = (
         f"CLAIM CLASS: {claim.claim_class}\n"
         f"SAM-CRITICAL: {'yes' if claim.sam_critical else 'no'}\n"
@@ -1008,27 +1095,24 @@ def judge_claim_with_model(claim: Claim, evidence: list[EvidenceItem]) -> ClaimV
         f"CLAIM:\n{claim.text}\n\n"
         f"EVIDENCE:\n{format_claim_evidence(evidence, claim)}"
     )
-    body = {
-        "model": MODEL,
-        "messages": [
+    body = sanhedrin_body(
+        [
             {"role": "system", "content": CLAIM_SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
         ],
-        "max_tokens": 700,
-        "temperature": 0.0,
-        "top_p": 1.0,
-        "top_k": 1,
-        "seed": 42,
-        "stream": False,
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
+        700,
+    )
     resp = post_json(SANHEDRIN_ENDPOINT, body, SANHEDRIN_TIMEOUT)
     if not isinstance(resp, dict):
+        if sanhedrin_core is not None:
+            sanhedrin_core.record_fail_open("model_unavailable", f"endpoint={SANHEDRIN_ENDPOINT}")
         return nei_verdict(claim, "Sanhedrin model unavailable; fail-open for this claim.", evidence)
     try:
         msg = resp["choices"][0]["message"]
         raw = msg.get("content") or msg.get("reasoning") or ""
     except (KeyError, IndexError, TypeError):
+        if sanhedrin_core is not None:
+            sanhedrin_core.record_fail_open("malformed_model_response", f"endpoint={SANHEDRIN_ENDPOINT}")
         return nei_verdict(claim, "Malformed Sanhedrin model response.", evidence)
     data = parse_json_object(raw)
     if data is not None:
@@ -1036,10 +1120,19 @@ def judge_claim_with_model(claim: Claim, evidence: list[EvidenceItem]) -> ClaimV
     legacy = verdict_from_legacy_line(claim, raw, evidence)
     if legacy is not None:
         return legacy
+    if sanhedrin_core is not None:
+        sanhedrin_core.record_fail_open("unstructured_model_response", raw[:500])
     return nei_verdict(claim, "Sanhedrin model did not return structured JSON.", evidence)
 
 
 def judge_claim(claim: Claim, evidence: list[EvidenceItem]) -> ClaimVerdict:
+    if not sanhedrin_model_configured():
+        if sanhedrin_core is not None:
+            sanhedrin_core.record_fail_open(
+                "model_not_configured",
+                "Set VESTIGE_SANHEDRIN_ENDPOINT and VESTIGE_SANHEDRIN_MODEL, or choose a preset.",
+            )
+        return nei_verdict(claim, "Sanhedrin model not configured; fail-open for this claim.", evidence)
     durable_count = len(relevant_durable_high_trust(claim, evidence))
     high_count = len(high_trust(evidence))
     if claim.sam_critical and claim.claim_class in CRITICAL_ABSENCE_CLASSES and durable_count == 0:
@@ -1206,6 +1299,8 @@ def claim_mode_result(draft: str) -> dict[str, Any]:
     for claim in claims:
         evidence, ok = fetch_claim_evidence(claim)
         if not ok:
+            if sanhedrin_core is not None:
+                sanhedrin_core.record_fail_open("retrieval_unavailable", claim.text)
             verdicts.append(
                 nei_verdict(
                     claim,
@@ -1273,6 +1368,8 @@ def main() -> None:
 
     if not verdict:
         # Fail-open: server unreachable, malformed response, etc.
+        if sanhedrin_core is not None:
+            sanhedrin_core.record_fail_open("legacy_model_unavailable", f"endpoint={SANHEDRIN_ENDPOINT}")
         save_legacy_receipt(manifest, "yes", evidence)
         print("yes")
         return

@@ -1,0 +1,103 @@
+{
+  "schema": "vestige.sanhedrin.presets.v2",
+  "defaultPreset": null,
+  "description": "Model-agnostic Sanhedrin backend recipes. Presets are suggestions only; users may set any OpenAI-compatible endpoint and model name.",
+  "presets": {
+    "custom-openai-compatible": {
+      "label": "Custom OpenAI-compatible endpoint",
+      "tier": "custom",
+      "bestFor": "Any model/server the user already trusts",
+      "requiresUserModel": true,
+      "endpointPlaceholder": "http://127.0.0.1:8000/v1/chat/completions",
+      "modelPlaceholder": "your-model-name",
+      "env": {
+        "VESTIGE_SANHEDRIN_ENDPOINT": "",
+        "VESTIGE_SANHEDRIN_MODEL": "",
+        "VESTIGE_SANHEDRIN_BACKEND": "openai-compatible",
+        "VESTIGE_SANHEDRIN_TIMEOUT": "45"
+      }
+    },
+    "small-laptop-ollama": {
+      "label": "Small laptop Ollama",
+      "tier": "small-local",
+      "bestFor": "8-16 GB RAM laptops that need a lightweight offline verifier",
+      "setup": "Install Ollama, then pull any small instruct model you trust, for example: ollama pull llama3.2:3b or ollama pull qwen2.5:7b",
+      "tradeoffs": ["fast and accessible", "weaker contradiction judgment than larger models"],
+      "env": {
+        "VESTIGE_SANHEDRIN_ENDPOINT": "http://127.0.0.1:11434/v1/chat/completions",
+        "VESTIGE_SANHEDRIN_MODEL": "your-ollama-model",
+        "VESTIGE_SANHEDRIN_BACKEND": "ollama",
+        "VESTIGE_SANHEDRIN_TIMEOUT": "60"
+      }
+    },
+    "balanced-local-ollama": {
+      "label": "Balanced local Ollama",
+      "tier": "balanced-local",
+      "bestFor": "16-32 GB RAM machines using 7B-14B local models",
+      "setup": "Install Ollama and pull a balanced verifier model such as qwen3:14b, llama3.1:8b, or another OpenAI-compatible local model.",
+      "tradeoffs": ["good first local choice", "model quality depends on the exact model selected"],
+      "env": {
+        "VESTIGE_SANHEDRIN_ENDPOINT": "http://127.0.0.1:11434/v1/chat/completions",
+        "VESTIGE_SANHEDRIN_MODEL": "your-ollama-model",
+        "VESTIGE_SANHEDRIN_BACKEND": "ollama",
+        "VESTIGE_SANHEDRIN_TIMEOUT": "60"
+      }
+    },
+    "mlx-qwen3.6-apple-silicon": {
+      "label": "MLX Qwen3.6 35B A3B, Apple Silicon local",
+      "tier": "strong-local",
+      "bestFor": "High-memory Apple Silicon users who explicitly choose the strong MLX path",
+      "env": {
+        "VESTIGE_SANHEDRIN_ENDPOINT": "http://127.0.0.1:8080/v1/chat/completions",
+        "VESTIGE_SANHEDRIN_MODEL": "mlx-community/Qwen3.6-35B-A3B-4bit",
+        "VESTIGE_SANHEDRIN_BACKEND": "mlx",
+        "VESTIGE_SANHEDRIN_TIMEOUT": "45"
+      }
+    },
+    "vllm-openai-compatible": {
+      "label": "vLLM OpenAI-compatible server",
+      "tier": "workstation",
+      "bestFor": "GPU workstations and team servers",
+      "env": {
+        "VESTIGE_SANHEDRIN_ENDPOINT": "http://127.0.0.1:8000/v1/chat/completions",
+        "VESTIGE_SANHEDRIN_MODEL": "your-vllm-model",
+        "VESTIGE_SANHEDRIN_BACKEND": "vllm",
+        "VESTIGE_SANHEDRIN_TIMEOUT": "45"
+      }
+    },
+    "llama-cpp-openai-compatible": {
+      "label": "llama.cpp server",
+      "tier": "small-local",
+      "bestFor": "CPU or small-GPU local deployments",
+      "env": {
+        "VESTIGE_SANHEDRIN_ENDPOINT": "http://127.0.0.1:8081/v1/chat/completions",
+        "VESTIGE_SANHEDRIN_MODEL": "your-gguf-model",
+        "VESTIGE_SANHEDRIN_BACKEND": "llama.cpp",
+        "VESTIGE_SANHEDRIN_TIMEOUT": "90"
+      }
+    },
+    "hosted-openai-compatible": {
+      "label": "Hosted OpenAI-compatible API",
+      "tier": "hosted",
+      "bestFor": "Users who want zero local model setup",
+      "requires": "VESTIGE_SANHEDRIN_API_KEY exported in the hook environment and a model chosen by the user/provider",
+      "env": {
+        "VESTIGE_SANHEDRIN_ENDPOINT": "https://api.openai.com/v1/chat/completions",
+        "VESTIGE_SANHEDRIN_MODEL": "your-hosted-model",
+        "VESTIGE_SANHEDRIN_BACKEND": "openai",
+        "VESTIGE_SANHEDRIN_TIMEOUT": "45"
+      }
+    },
+    "anthropic-via-litellm": {
+      "label": "Anthropic through LiteLLM OpenAI-compatible proxy",
+      "bestFor": "Claude users who already run LiteLLM",
+      "setup": "Run LiteLLM locally with an Anthropic model, then point Sanhedrin at the proxy.",
+      "env": {
+        "VESTIGE_SANHEDRIN_ENDPOINT": "http://127.0.0.1:4000/v1/chat/completions",
+        "VESTIGE_SANHEDRIN_MODEL": "anthropic/claude-3-5-haiku-latest",
+        "VESTIGE_SANHEDRIN_BACKEND": "litellm",
+        "VESTIGE_SANHEDRIN_TIMEOUT": "45"
+      }
+    }
+  }
+}

@@ -106,13 +106,10 @@ fn test_recall_finds_memories_by_content() {
     assert_eq!(recall.min_retention, 0.5);
 
     // Verify search mode
-    match recall.search_mode {
-        SearchMode::Keyword => {
-            // Keyword search uses FTS5
-            assert!(true, "Keyword mode should be supported");
-        }
-        _ => panic!("Expected Keyword search mode"),
-    }
+    assert!(
+        matches!(&recall.search_mode, SearchMode::Keyword),
+        "Expected Keyword search mode"
+    );
 }
 
 // ============================================================================
@@ -218,15 +215,10 @@ fn test_memory_lifecycle_follows_expected_pattern() {
     );
 
     // Verify state is Review (mature)
-    match state.state {
-        LearningState::Review => {
-            assert!(true, "Mature memory should be in Review state");
-        }
-        _ => {
-            // Also acceptable - depends on FSRS parameters
-            assert!(state.reps >= 10, "Should have processed all reviews");
-        }
-    }
+    assert!(
+        matches!(&state.state, LearningState::Review) || state.reps >= 10,
+        "Mature memory should be in Review or have processed all reviews"
+    );
 }
 
 // ============================================================================

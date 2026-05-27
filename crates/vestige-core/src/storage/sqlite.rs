@@ -86,6 +86,15 @@ pub struct SmartIngestResult {
     pub prediction_error: Option<f32>,
     /// Human-readable explanation of the decision
     pub reason: String,
+    /// Previous content when smart ingest mutated an existing memory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_content: Option<String>,
+    /// Existing memory id that received merged or appended content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged_from: Option<String>,
+    /// Full updated content after a merge/append/context write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_preview: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -637,6 +646,20 @@ impl Storage {
     /// This solves the "bad vs good similar memory" problem.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     pub fn smart_ingest(&self, input: IngestInput) -> Result<SmartIngestResult> {
+        self.smart_ingest_excluding(input, &[])
+    }
+
+    /// Smart ingest with caller-provided candidate exclusions.
+    ///
+    /// Batch callers use this to keep two new items from the same caller-curated
+    /// batch from merging into each other while still allowing smart updates
+    /// against memories that existed before the batch began.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest_excluding(
+        &self,
+        input: IngestInput,
+        excluded_node_ids: &[String],
+    ) -> Result<SmartIngestResult> {
         use crate::advanced::prediction_error::{
             CandidateMemory, GateDecision, PredictionErrorGate, UpdateType,
         };
@@ -652,6 +675,9 @@ impl Storage {
                 similarity: None,
                 prediction_error: Some(1.0),
                 reason: "Embeddings not available, falling back to regular ingest".to_string(),
+                previous_content: None,
+                merged_from: None,
+                merge_preview: None,
             });
         }
 
@@ -666,6 +692,9 @@ impl Storage {
         // Build candidate memories
         let mut candidates: Vec<CandidateMemory> = Vec::new();
         for (node_id, _similarity) in similar.iter() {
+            if excluded_node_ids.iter().any(|id| id == node_id) {
+                continue;
+            }
             if let Some(node) = self.get_node(node_id)? {
                 // Get embedding for this node
                 if let Some(emb) = self.get_node_embedding(node_id)? {
@@ -715,6 +744,9 @@ impl Storage {
                             reason, related_memory_ids
                         )
                     },
+                    previous_content: None,
+                    merged_from: None,
+                    merge_preview: None,
                 })
             }
             GateDecision::Update {
@@ -738,6 +770,9 @@ impl Storage {
                             prediction_error: Some(prediction_error),
                             reason: "Content nearly identical - reinforced existing memory"
                                 .to_string(),
+                            previous_content: None,
+                            merged_from: None,
+                            merge_preview: None,
                         })
                     }
                     UpdateType::Merge | UpdateType::Append => {
@@ -745,10 +780,11 @@ impl Storage {
                         let existing = self
                             .get_node(&target_id)?
                             .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
+                        let previous_content = existing.content.clone();
 
                         let merged_content = format!(
                             "{}\n\n[Updated {}]\n{}",
-                            existing.content,
+                            previous_content,
                             chrono::Utc::now().format("%Y-%m-%d"),
                             input.content
                         );
@@ -767,10 +803,18 @@ impl Storage {
                             similarity: Some(similarity),
                             prediction_error: Some(prediction_error),
                             reason: "Merged with existing similar memory".to_string(),
+                            previous_content: Some(previous_content),
+                            merged_from: Some(target_id),
+                            merge_preview: Some(merged_content),
                         })
                     }
                     UpdateType::Replace => {
                         // Replace content entirely
+                        let existing = self
+                            .get_node(&target_id)?
+                            .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
+                        let previous_content = existing.content;
+
                         self.update_node_content(&target_id, &input.content)?;
                         let node = self
                             .get_node(&target_id)?
@@ -783,6 +827,9 @@ impl Storage {
                             similarity: Some(similarity),
                             prediction_error: Some(prediction_error),
                             reason: "Replaced existing memory with new content".to_string(),
+                            previous_content: Some(previous_content),
+                            merged_from: Some(target_id),
+                            merge_preview: Some(input.content),
                         })
                     }
                     UpdateType::AddContext => {
@@ -790,9 +837,10 @@ impl Storage {
                         let existing = self
                             .get_node(&target_id)?
                             .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
+                        let previous_content = existing.content.clone();
 
                         let merged_content =
-                            format!("{}\n\n---\nContext: {}", existing.content, input.content);
+                            format!("{}\n\n---\nContext: {}", previous_content, input.content);
 
                         self.update_node_content(&target_id, &merged_content)?;
                         let node = self
@@ -806,6 +854,9 @@ impl Storage {
                             similarity: Some(similarity),
                             prediction_error: Some(prediction_error),
                             reason: "Added new content as context to existing memory".to_string(),
+                            previous_content: Some(previous_content),
+                            merged_from: Some(target_id),
+                            merge_preview: Some(merged_content),
                         })
                     }
                 }
@@ -829,6 +880,9 @@ impl Storage {
                     similarity: Some(similarity),
                     prediction_error: Some(prediction_error),
                     reason: format!("New memory supersedes old: {:?}", supersede_reason),
+                    previous_content: None,
+                    merged_from: None,
+                    merge_preview: None,
                 })
             }
             GateDecision::Merge {
@@ -850,6 +904,9 @@ impl Storage {
                         memory_ids.len(),
                         strategy
                     ),
+                    previous_content: None,
+                    merged_from: None,
+                    merge_preview: None,
                 })
             }
         }

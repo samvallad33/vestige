@@ -254,11 +254,36 @@ export interface SanhedrinLatestResponse {
 	stateDir: string;
 	receiptPath?: string;
 	htmlPath?: string;
+	schemaWarning?: string | null;
 }
 
 export interface SanhedrinAppealResponse {
 	appeal: Record<string, unknown>;
 	receipt: SanhedrinReceipt;
+}
+
+export interface SanhedrinDailyTelemetry {
+	date: string;
+	total: number;
+	pass: number;
+	note: number;
+	caution: number;
+	veto: number;
+	appealed: number;
+	failOpen: number;
+}
+
+export interface SanhedrinTelemetryResponse {
+	days: number;
+	stateDir: string;
+	totalRuns: number;
+	byVerdict: Partial<Record<VerdictLevel, number>>;
+	byClass: Record<string, number>;
+	appeals: number;
+	failOpen: number;
+	truncated?: boolean;
+	lastRunAt?: string | null;
+	daily: SanhedrinDailyTelemetry[];
 }
 
 // Intentions (prospective memory)

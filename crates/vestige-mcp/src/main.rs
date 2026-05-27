@@ -243,7 +243,22 @@ fn prepare_storage_path(data_dir: Option<PathBuf>) -> io::Result<Option<PathBuf>
     };
 
     let data_dir = expand_tilde(data_dir);
-    fs::create_dir_all(&data_dir)?;
+
+    // Check if path exists and is a file (not a directory)
+    if data_dir.exists() && !data_dir.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "Data directory path exists but is not a directory: {}",
+                data_dir.display()
+            ),
+        ));
+    }
+
+    // Only create if it doesn't exist (avoids "File exists" error on existing directories)
+    if !data_dir.exists() {
+        fs::create_dir_all(&data_dir)?;
+    }
 
     #[cfg(unix)]
     {

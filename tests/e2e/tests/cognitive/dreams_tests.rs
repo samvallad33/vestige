@@ -790,9 +790,9 @@ async fn test_consolidation_connection_strengthening() {
         let _ = conn_stats.total_memories;
     }
 
-    // Both cycles should complete successfully - verify duration is tracked
+    // Both cycles should complete successfully and record monotonically.
     assert!(
-        first_report.duration_ms > 0 || second_report.duration_ms > 0 || true,
+        second_report.completed_at >= first_report.completed_at,
         "Both consolidation cycles should complete"
     );
 }

@@ -15,7 +15,8 @@ import type {
 	UnsuppressResult,
 	SanhedrinAppealReason,
 	SanhedrinAppealResponse,
-	SanhedrinLatestResponse
+	SanhedrinLatestResponse,
+	SanhedrinTelemetryResponse
 } from '$types';
 
 const BASE = '/api';
@@ -126,6 +127,7 @@ export const api = {
 
 	sanhedrin: {
 		latest: () => fetcher<SanhedrinLatestResponse>('/sanhedrin/latest'),
+		telemetry: (days = 7) => fetcher<SanhedrinTelemetryResponse>(`/sanhedrin/telemetry?days=${days}`),
 		appeal: (reason: SanhedrinAppealReason, note?: string, claimId?: string, receiptId?: string) =>
 			fetcher<SanhedrinAppealResponse>('/sanhedrin/appeal', {
 				method: 'POST',

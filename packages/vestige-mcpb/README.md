@@ -4,7 +4,7 @@ One-click installation bundle for Claude Desktop.
 
 ## For Users
 
-1. Download `vestige-2.1.22.mcpb` from [GitHub Releases](https://github.com/samvallad33/vestige/releases)
+1. Download `vestige-2.1.23.mcpb` from [GitHub Releases](https://github.com/samvallad33/vestige/releases)
 2. Double-click to install
 3. Restart Claude Desktop
 
@@ -34,5 +34,5 @@ vestige-mcpb/
 │   ├── vestige-mcp-darwin-arm64
 │   ├── vestige-mcp-linux-x64
 │   └── vestige-mcp-win32-x64.exe
-└── vestige-2.1.22.mcpb  # Final bundle (generated)
+└── vestige-2.1.23.mcpb  # Final bundle (generated)
 ```

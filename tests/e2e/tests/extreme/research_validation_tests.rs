@@ -303,7 +303,7 @@ fn test_research_frey_morris_synaptic_tagging() {
 /// theory and episodic memory: updating the index. Hippocampus, 17(12), 1158-1169.
 #[test]
 fn test_research_teyler_rudy_hippocampal_indexing() {
-    let config = HippocampalIndexConfig::default();
+    let _config = HippocampalIndexConfig::default();
     let index = HippocampalIndex::new();
     let now = Utc::now();
 

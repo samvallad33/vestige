@@ -38,6 +38,7 @@ fn make_dream_memory(id: &str, content: &str, tags: Vec<&str>) -> DreamMemory {
 }
 
 /// Create a memory with specific age
+#[allow(dead_code)]
 fn make_aged_memory(id: &str, content: &str, tags: Vec<&str>, hours_ago: i64) -> DreamMemory {
     DreamMemory {
         id: id.to_string(),
@@ -50,6 +51,7 @@ fn make_aged_memory(id: &str, content: &str, tags: Vec<&str>, hours_ago: i64) ->
 }
 
 /// Create a memory with access count
+#[allow(dead_code)]
 fn make_accessed_memory(
     id: &str,
     content: &str,
@@ -391,14 +393,14 @@ fn test_connection_graph_decay_and_pruning() {
     graph.apply_decay(0.5);
 
     // Prune weak connections
-    let pruned = graph.prune_weak(0.2);
+    let _pruned = graph.prune_weak(0.2);
 
     // Weak connection (0.3 * 0.5 = 0.15) should be pruned
     // The pruned count depends on implementation details
     let stats = graph.get_stats();
     assert!(
-        stats.total_connections >= 0,
-        "Should have non-negative connections after pruning"
+        stats.total_connections <= 3,
+        "Pruning should not increase connection count"
     );
 }
 

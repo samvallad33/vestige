@@ -209,6 +209,12 @@ fn get_backend() -> Result<std::sync::MutexGuard<'static, EmbeddingBackend>, Emb
 
 #[cfg(feature = "qwen3-embeddings")]
 fn qwen3_device() -> Device {
+    #[cfg(feature = "cuda")]
+    {
+        if let Ok(device) = Device::new_cuda(0) {
+            return device;
+        }
+    }
     #[cfg(feature = "metal")]
     {
         if let Ok(device) = Device::new_metal(0) {

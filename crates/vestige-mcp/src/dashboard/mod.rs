@@ -176,8 +176,12 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
         // Wraps crate::tools::cross_reference::execute. Emits
         // DeepReferenceCompleted so Graph3D can glide, pulse, and arc.
         .route("/api/deep_reference", post(handlers::deep_reference_query))
-        // Sanhedrin receipts (v2.1.22): latest local hook verdict + appeal training.
+        // Sanhedrin receipts: latest local hook verdict + appeal training.
         .route("/api/sanhedrin/latest", get(handlers::get_sanhedrin_latest))
+        .route(
+            "/api/sanhedrin/telemetry",
+            get(handlers::get_sanhedrin_telemetry),
+        )
         .route("/api/sanhedrin/appeal", post(handlers::appeal_sanhedrin))
         .layer(
             ServiceBuilder::new()

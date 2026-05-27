@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.23] - 2026-05-27 — "Receipt Lock Hardening"
+
+v2.1.23 hardens the Sanhedrin launch path so Receipt Lock is portable,
+observable, and precise enough for broader use.
+
+### Added
+
+- **Model-agnostic Sanhedrin backend presets** for custom OpenAI-compatible
+  servers, small laptops, Ollama, MLX, vLLM, llama.cpp, hosted APIs, and
+  Anthropic via LiteLLM. Sanhedrin no longer guesses a large default verifier.
+- **Fail-open telemetry** in `fail-open.jsonl`, plus a dashboard telemetry API
+  and 7-day ambient dashboard counters for vetoes, appeals, and fail-open runs.
+- **Receipt schema documentation** covering receipt artifacts, appeals, command
+  ledgers, fail-open logs, compatibility rules, and staged-evidence trust
+  boundaries.
+- **Opt-in CUDA feature flags** for Qwen3 embedding builds on NVIDIA hardware.
+
+### Changed
+
+- Receipt Lock strips code fences, inline code, blockquotes, quoted regions, and
+  scoped epistemic hedges before matching verification claims.
+- Structured transcript tool-use receipts are the default evidence path; loose
+  JSON command scanning now requires `VESTIGE_SANHEDRIN_ALLOW_LOOSE_LEDGER=1`.
+- Claim-mode sampling now prioritizes higher-severity claims instead of taking
+  the first eight source-order claims.
+- Hosted Sanhedrin credentials now require `VESTIGE_SANHEDRIN_API_KEY` and are
+  only sent to the configured Sanhedrin endpoint, never to Vestige retrieval.
+- `smart_ingest` batch mode now defaults to `batchMergePolicy: "force_create"`
+  so caller-separated items stay separate unless callers opt into smart merging.
+- CUDA-enabled Qwen3 builds now try `Device::new_cuda(0)` before falling back to
+  Metal or CPU.
+
+### Fixed
+
+- Standalone dashboard mode now hydrates the cognitive engine for Dream and
+  Deep Reference instead of returning 503s.
+- `--data-dir` now rejects existing non-directory paths with a clear error.
+- `vestige-restore` now handles `--help` and `--version` instead of treating
+  them as backup file paths.
+- Smart ingest merge/update responses now include `previousContent`,
+  `mergedFrom`, and `mergePreview` so callers can inspect mutated memories.
+- Daily Sanhedrin telemetry now preserves NOTE and CAUTION buckets instead of
+  folding both into PASS.
+
 ## [2.1.22] - 2026-05-25 — "Sanhedrin Receipts"
 
 v2.1.22 makes the optional Sanhedrin hook quieter and more accountable by

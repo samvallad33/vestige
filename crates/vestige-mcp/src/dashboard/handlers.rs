@@ -3,8 +3,9 @@
 //! v2.0: Adds cognitive operation endpoints (dream, explore, predict, importance, consolidation)
 
 use std::cmp::Reverse;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path as FsPath, PathBuf};
 
 use axum::extract::{Path, Query, State};
@@ -355,6 +356,11 @@ pub struct SanhedrinAppealRequest {
     pub claim_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SanhedrinTelemetryParams {
+    pub days: Option<i64>,
+}
+
 /// Return the latest Sanhedrin receipt written by the Stop-hook bridge.
 pub async fn get_sanhedrin_latest() -> Result<Json<Value>, StatusCode> {
     let state_dir = sanhedrin_state_dir();
@@ -369,13 +375,122 @@ pub async fn get_sanhedrin_latest() -> Result<Json<Value>, StatusCode> {
     let raw = fs::read_to_string(&latest_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let receipt: Value =
         serde_json::from_str(&raw).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let schema_warning = sanhedrin_schema_warning(&receipt);
 
     Ok(Json(serde_json::json!({
         "receipt": receipt,
         "stateDir": state_dir,
         "receiptPath": latest_path,
         "htmlPath": state_dir.join("latest.html"),
+        "schemaWarning": schema_warning,
     })))
+}
+
+/// Return rolling Sanhedrin receipts, appeals, and fail-open counters.
+pub async fn get_sanhedrin_telemetry(
+    Query(params): Query<SanhedrinTelemetryParams>,
+) -> Result<Json<Value>, StatusCode> {
+    let state_dir = sanhedrin_state_dir();
+    let days = params.days.unwrap_or(7).clamp(1, 90);
+    let telemetry = tokio::task::spawn_blocking(move || build_sanhedrin_telemetry(state_dir, days))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
+    Ok(Json(telemetry))
+}
+
+fn build_sanhedrin_telemetry(state_dir: PathBuf, days: i64) -> Result<Value, StatusCode> {
+    let cutoff = Utc::now() - Duration::days(days);
+    let receipts_dir = state_dir.join("receipts");
+    let mut by_verdict = serde_json::Map::new();
+    for verdict in ["PASS", "NOTE", "CAUTION", "VETO", "APPEALED"] {
+        by_verdict.insert(verdict.to_string(), Value::from(0));
+    }
+    let mut by_class: BTreeMap<String, i64> = BTreeMap::new();
+    let mut daily: BTreeMap<String, serde_json::Map<String, Value>> = BTreeMap::new();
+    let mut total_runs = 0i64;
+    let mut last_run_at: Option<DateTime<Utc>> = None;
+    let mut truncated = false;
+
+    if let Ok(entries) = bounded_receipt_entries(&receipts_dir, cutoff) {
+        for path in entries {
+            let Ok(raw) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(receipt) = serde_json::from_str::<Value>(&raw) else {
+                continue;
+            };
+            let Some(created_at) = parse_sanhedrin_timestamp(&receipt["createdAt"]) else {
+                continue;
+            };
+            if created_at < cutoff {
+                continue;
+            }
+            total_runs += 1;
+            if last_run_at.map(|last| created_at > last).unwrap_or(true) {
+                last_run_at = Some(created_at);
+            }
+            let verdict = receipt
+                .get("verdictBar")
+                .and_then(Value::as_str)
+                .unwrap_or("NOTE")
+                .to_ascii_uppercase();
+            increment_json_counter(&mut by_verdict, &verdict);
+            let day = created_at.date_naive().to_string();
+            let bucket = daily.entry(day).or_insert_with(|| {
+                let mut map = serde_json::Map::new();
+                map.insert("date".to_string(), Value::String(String::new()));
+                map.insert("total".to_string(), Value::from(0));
+                map.insert("pass".to_string(), Value::from(0));
+                map.insert("note".to_string(), Value::from(0));
+                map.insert("caution".to_string(), Value::from(0));
+                map.insert("veto".to_string(), Value::from(0));
+                map.insert("appealed".to_string(), Value::from(0));
+                map.insert("failOpen".to_string(), Value::from(0));
+                map
+            });
+            increment_json_counter(bucket, "total");
+            match verdict.as_str() {
+                "PASS" => increment_json_counter(bucket, "pass"),
+                "NOTE" => increment_json_counter(bucket, "note"),
+                "CAUTION" => increment_json_counter(bucket, "caution"),
+                "VETO" => increment_json_counter(bucket, "veto"),
+                "APPEALED" => increment_json_counter(bucket, "appealed"),
+                _ => increment_json_counter(bucket, "note"),
+            }
+
+            if let Some(claims) = receipt.get("claims").and_then(Value::as_array) {
+                for claim in claims {
+                    let class = known_sanhedrin_class(
+                        claim
+                            .get("class")
+                            .and_then(Value::as_str)
+                            .unwrap_or("UNKNOWN"),
+                    );
+                    *by_class.entry(class).or_insert(0) += 1;
+                }
+            }
+        }
+        truncated = total_runs >= 5_000;
+    }
+
+    let appeals = count_jsonl_since(&state_dir.join("appeals.jsonl"), cutoff, false);
+    let fail_open = count_jsonl_since(&state_dir.join("fail-open.jsonl"), cutoff, true);
+    for (date, bucket) in daily.iter_mut() {
+        bucket.insert("date".to_string(), Value::String(date.clone()));
+    }
+
+    Ok(serde_json::json!({
+        "days": days,
+        "stateDir": state_dir,
+        "totalRuns": total_runs,
+        "byVerdict": by_verdict,
+        "byClass": by_class,
+        "appeals": appeals,
+        "failOpen": fail_open,
+        "truncated": truncated,
+        "lastRunAt": last_run_at.map(|dt| dt.to_rfc3339()),
+        "daily": daily.into_values().map(Value::Object).collect::<Vec<_>>(),
+    }))
 }
 
 /// Record feedback that a Sanhedrin veto was stale, wrong, or too strict.
@@ -466,6 +581,125 @@ fn sanhedrin_state_dir() -> PathBuf {
             std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".vestige/sanhedrin"))
         })
         .unwrap_or_else(|| PathBuf::from(".vestige/sanhedrin"))
+}
+
+fn sanhedrin_schema_warning(receipt: &Value) -> Option<String> {
+    let schema = receipt.get("schema").and_then(Value::as_str).unwrap_or("");
+    if schema.is_empty() || schema == "vestige.sanhedrin.receipt.v1" {
+        None
+    } else {
+        Some(format!(
+            "Unsupported Sanhedrin receipt schema '{}'; dashboard expects vestige.sanhedrin.receipt.v1",
+            schema
+        ))
+    }
+}
+
+fn parse_sanhedrin_timestamp(value: &Value) -> Option<DateTime<Utc>> {
+    let raw = value.as_str()?;
+    DateTime::parse_from_rfc3339(raw)
+        .map(|dt| dt.with_timezone(&Utc))
+        .ok()
+}
+
+fn bounded_receipt_entries(
+    receipts_dir: &FsPath,
+    cutoff: DateTime<Utc>,
+) -> Result<Vec<PathBuf>, StatusCode> {
+    const MAX_RECEIPTS: usize = 5_000;
+    const MAX_RECEIPT_BYTES: u64 = 256 * 1024;
+
+    let mut entries: Vec<(Option<DateTime<Utc>>, PathBuf)> = Vec::new();
+    let Ok(read_dir) = fs::read_dir(receipts_dir) else {
+        return Ok(Vec::new());
+    };
+
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() > MAX_RECEIPT_BYTES
+        {
+            continue;
+        }
+        let modified = metadata.modified().ok().map(DateTime::<Utc>::from);
+        if modified.map(|mtime| mtime < cutoff).unwrap_or(false) {
+            continue;
+        }
+        entries.push((modified, path));
+    }
+
+    entries.sort_by(|(left_time, _), (right_time, _)| right_time.cmp(left_time));
+    Ok(entries
+        .into_iter()
+        .take(MAX_RECEIPTS)
+        .map(|(_, path)| path)
+        .collect())
+}
+
+fn increment_json_counter(map: &mut serde_json::Map<String, Value>, key: &str) {
+    let current = map.get(key).and_then(Value::as_i64).unwrap_or(0);
+    map.insert(key.to_string(), Value::from(current + 1));
+}
+
+fn count_jsonl_since(path: &FsPath, cutoff: DateTime<Utc>, distinct_run: bool) -> i64 {
+    const MAX_LEDGER_BYTES: u64 = 2 * 1024 * 1024;
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > MAX_LEDGER_BYTES
+    {
+        return 0;
+    }
+    let Ok(file) = fs::File::open(path) else {
+        return 0;
+    };
+    let mut seen_runs = HashSet::new();
+    let mut count = 0i64;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(item) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(timestamp) = parse_sanhedrin_timestamp(&item["timestamp"]) else {
+            continue;
+        };
+        if timestamp < cutoff {
+            continue;
+        }
+        if distinct_run
+            && let Some(run_id) = item.get("runId").and_then(Value::as_str)
+            && !seen_runs.insert(run_id.to_string())
+        {
+            continue;
+        }
+        count += 1;
+    }
+    count
+}
+
+fn known_sanhedrin_class(class: &str) -> String {
+    match class {
+        "receipt_lock"
+        | "TECHNICAL"
+        | "BIOGRAPHICAL"
+        | "FINANCIAL"
+        | "ACHIEVEMENT"
+        | "TIMELINE"
+        | "QUANTITATIVE"
+        | "ATTRIBUTION"
+        | "CAUSAL"
+        | "COMPARATIVE"
+        | "EXISTENTIAL"
+        | "VAGUE-QUANTIFIER"
+        | "UNVERIFIED-POSITIVE" => class.to_string(),
+        _ => "OTHER".to_string(),
+    }
 }
 
 fn ensure_sanhedrin_dirs(state_dir: &FsPath) -> Result<(), StatusCode> {

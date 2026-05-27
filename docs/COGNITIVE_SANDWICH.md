@@ -21,7 +21,7 @@ The default Cognitive Sandwich installer only stages files and removes old v2.1.
 └────────────────────────────────────────────────┘
 ```
 
-Sanhedrin, preflight, and all Vestige Claude Code hooks are optional. The default installer wires none of them; it does not call Claude, start MLX, require a 19 GB model download, or require 20+ GB of RAM. Users who want preflight context can opt in with `--enable-preflight`. Users who want the post-response verifier can opt in with `--enable-sanhedrin` and point it at any OpenAI-compatible `/v1/chat/completions` endpoint. On Apple Silicon, an additional `--with-launchd` flag can auto-start the local MLX Qwen backend.
+Sanhedrin, preflight, and all Vestige Claude Code hooks are optional. The default installer wires none of them; it does not call Claude, start MLX, require a 19 GB model download, or require 20+ GB of RAM. Users who want preflight context can opt in with `--enable-preflight`. Users who want the post-response verifier can opt in with `--enable-sanhedrin` and point it at any OpenAI-compatible `/v1/chat/completions` endpoint and model name. Sanhedrin is model-agnostic: if no verifier model is configured, it fails open and records guidance instead of guessing a large model. On Apple Silicon, an additional `--with-launchd` flag can auto-start the local MLX Qwen backend.
 
 ---
 
@@ -80,7 +80,7 @@ The bridge still prints legacy one-line `yes` / `no - ...` by default for Stop-h
 
 - it never calls `smart_ingest`
 - it cannot promote, demote, merge, suppress, or supersede durable memories
-- it does not satisfy the durable-evidence requirement for `REFUTED_BY_ABSENCE`
+- it does not satisfy the durable-evidence requirement for `SUPPORTED`, `REFUTED`, or `REFUTED_BY_ABSENCE`
 - durable memory writes remain a separate commit-after-pass step
 
 False-positive guards (added v2.1.0 after dogfood):
@@ -130,7 +130,8 @@ scripts/check-sandwich-prereqs.sh --preflight
 Sanhedrin is a separate opt-in layer.
 
 ```bash
-# Wire the Sanhedrin Stop hook, using the default OpenAI-compatible endpoint.
+# Wire the Sanhedrin Stop hook without choosing a model yet.
+# It will fail open until endpoint/model are configured.
 vestige sandwich install --enable-sanhedrin
 
 # Apple Silicon only, and only if the machine has enough memory:
@@ -142,6 +143,16 @@ vestige sandwich install \
   --sanhedrin-endpoint=http://127.0.0.1:11434/v1/chat/completions \
   --sanhedrin-model=qwen2.5:14b
 ```
+
+Backend presets live at `hooks/sanhedrin-presets.json` and cover custom
+OpenAI-compatible servers, small local laptops, balanced local Ollama, MLX,
+vLLM, llama.cpp, hosted OpenAI-compatible APIs, and Anthropic via LiteLLM.
+Presets are recipes, not requirements. The hook itself only needs an
+OpenAI-compatible `/v1/chat/completions` endpoint and a model name chosen by the
+user. Backend-specific payload extensions are enabled only by
+`VESTIGE_SANHEDRIN_BACKEND=mlx` or `vllm`. For hosted APIs, use
+`VESTIGE_SANHEDRIN_API_KEY`; Sanhedrin intentionally does not forward a generic
+`OPENAI_API_KEY` to arbitrary configured endpoints.
 
 ### Prerequisites
 
@@ -202,8 +213,9 @@ On M3 Max 14-core or M2/M1 Max: closer to 3–7s prompt processing, ~50–60 tok
 | `VESTIGE_SANHEDRIN_ENABLED` | `0` | Set to `1` to enable the optional Sanhedrin Stop hook |
 | `VESTIGE_SWARM_ENABLED` | `1` | Set to `0` to disable preflight lateral-thinker swarm |
 | `VESTIGE_DASHBOARD_PORT` | `3927` | Vestige MCP HTTP API port used by hooks |
-| `VESTIGE_SANHEDRIN_ENDPOINT` | `http://127.0.0.1:8080/v1/chat/completions` | OpenAI-compatible chat completions endpoint for Sanhedrin |
-| `VESTIGE_SANHEDRIN_MODEL` | `mlx-community/Qwen3.6-35B-A3B-4bit` | Model name sent to the Sanhedrin endpoint |
+| `VESTIGE_SANHEDRIN_ENDPOINT` | unset | OpenAI-compatible chat completions endpoint for Sanhedrin |
+| `VESTIGE_SANHEDRIN_MODEL` | unset | Model name sent to the Sanhedrin endpoint; choose any compatible model |
+| `VESTIGE_SANHEDRIN_BACKEND` | unset | Optional backend hint (`ollama`, `llama.cpp`, `mlx`, `vllm`, `openai`, `litellm`) |
 | `VESTIGE_SANHEDRIN_CLAIM_MODE` | `1` when installed with `--enable-sanhedrin` | Enables per-claim retrieval and fail-closed user-critical lanes |
 | `VESTIGE_SANHEDRIN_OUTPUT` | `json` when installed with `--enable-sanhedrin` | Emits structured JSON from the bridge; shell hook also accepts legacy text |
 | `VESTIGE_SANHEDRIN_STAGE_FILE` | unset | Optional JSON-array staged evidence overlay, read-only and non-durable |

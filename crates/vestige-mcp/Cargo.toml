@@ -1,6 +1,6 @@
 [package]
 name = "vestige-mcp"
-version = "2.1.22"
+version = "2.1.23"
 edition = "2024"
 description = "Cognitive memory MCP server for AI agents - FSRS-6, spreading activation, synaptic tagging, 3D dashboard, and 130 years of memory research"
 authors = ["samvallad33"]
@@ -24,6 +24,10 @@ ort-dynamic = ["embeddings", "vestige-core/ort-dynamic"]
 qwen3-embeddings = ["embeddings", "vestige-core/qwen3-embeddings"]
 qwen3-reranker = ["qwen3-embeddings"]
 metal = ["embeddings", "vestige-core/metal"]
+# CUDA GPU acceleration on NVIDIA hardware (Windows / Linux, x86_64 + aarch64).
+# Pairs with `qwen3-embeddings`; see vestige-core Cargo.toml.
+cuda = ["qwen3-embeddings", "vestige-core/cuda"]
+cudnn = ["cuda", "vestige-core/cudnn"]
 
 [[bin]]
 name = "vestige-mcp"
@@ -47,7 +51,7 @@ path = "src/bin/cli.rs"
 # Only `bundled-sqlite` is always on. `embeddings` and `vector-search` are
 # toggled via vestige-mcp's own feature flags below so `--no-default-features`
 # actually works (previously hardcoded here, which silently defeated the flag).
-vestige-core = { version = "2.1.22", path = "../vestige-core", default-features = false, features = ["bundled-sqlite"] }
+vestige-core = { version = "2.1.23", path = "../vestige-core", default-features = false, features = ["bundled-sqlite"] }
 
 # ============================================================================
 # MCP Server Dependencies

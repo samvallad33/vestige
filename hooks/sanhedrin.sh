@@ -30,7 +30,7 @@ load_vestige_sanhedrin_env() {
   command -v python3 >/dev/null 2>&1 || return 0
   while IFS="$(printf '\t')" read -r key value; do
     case "$key" in
-      VESTIGE_SANHEDRIN_ENABLED|VESTIGE_SANHEDRIN_MODEL|VESTIGE_SANHEDRIN_ENDPOINT|VESTIGE_SANHEDRIN_CLAIM_MODE|VESTIGE_SANHEDRIN_OUTPUT|VESTIGE_SANHEDRIN_PYTHON|VESTIGE_SANHEDRIN_STATE_DIR|VESTIGE_SANHEDRIN_ALLOW_COMMAND_LEDGER|VESTIGE_DASHBOARD_PORT)
+      VESTIGE_SANHEDRIN_ENABLED|VESTIGE_SANHEDRIN_MODEL|VESTIGE_SANHEDRIN_ENDPOINT|VESTIGE_SANHEDRIN_API_KEY|VESTIGE_SANHEDRIN_BACKEND|VESTIGE_SANHEDRIN_CLAIM_MODE|VESTIGE_SANHEDRIN_OUTPUT|VESTIGE_SANHEDRIN_PYTHON|VESTIGE_SANHEDRIN_STATE_DIR|VESTIGE_SANHEDRIN_ALLOW_COMMAND_LEDGER|VESTIGE_SANHEDRIN_ALLOW_LOOSE_LEDGER|VESTIGE_DASHBOARD_PORT)
         export "$key=$value"
         ;;
     esac
@@ -42,11 +42,14 @@ allowed = {
     "VESTIGE_SANHEDRIN_ENABLED",
     "VESTIGE_SANHEDRIN_MODEL",
     "VESTIGE_SANHEDRIN_ENDPOINT",
+    "VESTIGE_SANHEDRIN_API_KEY",
+    "VESTIGE_SANHEDRIN_BACKEND",
     "VESTIGE_SANHEDRIN_CLAIM_MODE",
     "VESTIGE_SANHEDRIN_OUTPUT",
     "VESTIGE_SANHEDRIN_PYTHON",
     "VESTIGE_SANHEDRIN_STATE_DIR",
     "VESTIGE_SANHEDRIN_ALLOW_COMMAND_LEDGER",
+    "VESTIGE_SANHEDRIN_ALLOW_LOOSE_LEDGER",
     "VESTIGE_DASHBOARD_PORT",
 }
 
@@ -73,9 +76,9 @@ PY
 }
 
 # === OPT-IN GATE ===
-# Sanhedrin is heavyweight: the default local backend is a ~19 GB model and
-# needs roughly 20+ GB of free RAM. Keep it disabled unless the user explicitly
-# opts in. The installer writes this env file only for --enable-sanhedrin.
+# Sanhedrin is opt-in and model-agnostic. It never guesses a large verifier
+# model; if endpoint/model are unset, the bridge fails open with telemetry.
+# The installer writes this env file only for --enable-sanhedrin.
 SANHEDRIN_ENV="${VESTIGE_SANHEDRIN_ENV:-$HOME/.claude/hooks/vestige-sanhedrin.env}"
 if [ -f "$SANHEDRIN_ENV" ]; then
   load_vestige_sanhedrin_env "$SANHEDRIN_ENV" || exit 0
@@ -103,6 +106,34 @@ fi
 if ! "$PYTHON_BIN" -c 'import sys' >/dev/null 2>&1; then
   exit 0
 fi
+
+record_sanhedrin_fail_open() {
+  REASON="$1"
+  DETAIL="${2:-}"
+  "$PYTHON_BIN" - "$REASON" "$DETAIL" <<'PY' 2>/dev/null || true
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+reason = sys.argv[1] if len(sys.argv) > 1 else "unknown"
+detail = sys.argv[2] if len(sys.argv) > 2 else ""
+state_dir = Path(os.environ.get("VESTIGE_SANHEDRIN_STATE_DIR") or Path.home() / ".vestige" / "sanhedrin")
+try:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with (state_dir / "fail-open.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "runId": os.environ.get("VESTIGE_SANHEDRIN_RUN_ID"),
+            "reason": reason,
+            "detail": detail[:500],
+            "transcript": os.environ.get("TRANSCRIPT_PATH") or os.environ.get("VESTIGE_SANHEDRIN_TRANSCRIPT"),
+        }) + "\n")
+except OSError:
+    pass
+PY
+}
 
 # === READ STOP HOOK INPUT ===
 INPUT="$(cat)"
@@ -203,6 +234,8 @@ fi
 OUTPUT_FILE="$(mktemp -t vestige-sanhedrin-out.XXXXXX)"
 trap 'rm -f "$DRAFT_SCRIPT" "$OUTPUT_FILE"' EXIT
 export VESTIGE_SANHEDRIN_TRANSCRIPT="$TRANSCRIPT_PATH"
+export VESTIGE_SANHEDRIN_RUN_ID="${VESTIGE_SANHEDRIN_RUN_ID:-$(date +%s)-$$}"
+export VESTIGE_EXECUTIONER_ACTIVE=1
 
 (
   printf '%s\n' "$DRAFT" | "$PYTHON_BIN" "$BRIDGE" > "$OUTPUT_FILE" 2>/dev/null
@@ -227,6 +260,7 @@ done
 if /bin/kill -0 "$EXEC_PID" 2>/dev/null; then
   /bin/kill "$EXEC_PID" 2>/dev/null
   wait "$EXEC_PID" 2>/dev/null
+  record_sanhedrin_fail_open "timeout" "sanhedrin-local.py exceeded 60s"
   exit 0
 fi
 wait "$EXEC_PID" 2>/dev/null
@@ -344,6 +378,7 @@ fi
 TRIMMED="$(printf '%s' "$EXECUTIONER_OUTPUT" | /usr/bin/awk 'NF {print; exit}' | /usr/bin/awk '{$1=$1;print}')"
 
 if [ -z "$TRIMMED" ]; then
+  record_sanhedrin_fail_open "empty_verdict" "sanhedrin-local.py produced no parseable output"
   exit 0
 fi
 
@@ -372,4 +407,5 @@ case "$TRIMMED" in
 esac
 
 # Unparseable verdict — fail open (do not block on Executioner errors)
+record_sanhedrin_fail_open "unparseable_verdict" "$TRIMMED"
 exit 0

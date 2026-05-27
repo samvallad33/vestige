@@ -19,11 +19,12 @@ set -euo pipefail
 
 VERSION="${VESTIGE_SANDWICH_VERSION:-v2.1.1}"
 REPO="samvallad33/vestige"
-MODEL_ID="${VESTIGE_SANHEDRIN_MODEL:-${VESTIGE_SANDWICH_MODEL:-mlx-community/Qwen3.6-35B-A3B-4bit}}"
+MODEL_ID="${VESTIGE_SANHEDRIN_MODEL:-${VESTIGE_SANDWICH_MODEL:-}}"
 DASHBOARD_PORT="${VESTIGE_DASHBOARD_PORT:-3927}"
-SANHEDRIN_ENDPOINT="${VESTIGE_SANHEDRIN_ENDPOINT:-${MLX_ENDPOINT:-http://127.0.0.1:8080/v1/chat/completions}}"
+SANHEDRIN_ENDPOINT="${VESTIGE_SANHEDRIN_ENDPOINT:-${MLX_ENDPOINT:-}}"
 SANHEDRIN_ENDPOINT="${SANHEDRIN_ENDPOINT%/}"
-SANHEDRIN_MODELS_URL="${SANHEDRIN_ENDPOINT%/chat/completions}/models"
+SANHEDRIN_MODELS_URL=""
+[ -n "$SANHEDRIN_ENDPOINT" ] && SANHEDRIN_MODELS_URL="${SANHEDRIN_ENDPOINT%/chat/completions}/models"
 SANHEDRIN_CLAIM_MODE="${VESTIGE_SANHEDRIN_CLAIM_MODE:-1}"
 SANHEDRIN_OUTPUT="${VESTIGE_SANHEDRIN_OUTPUT:-json}"
 MODEL_ID_FROM_INSTALLER=0
@@ -88,13 +89,27 @@ die()  { printf '\033[1;31m[sandwich]\033[0m %s\n' "$*" >&2; exit 1; }
 OS_NAME="$(uname -s)"
 ARCH_NAME="$(uname -m)"
 say "platform: $OS_NAME $ARCH_NAME"
-if [ "$ENABLE_SANHEDRIN" -eq 1 ] && [ "$WITH_LAUNCHD" -eq 0 ]; then
-  say "Sanhedrin enabled without launchd; using OpenAI-compatible endpoint: $SANHEDRIN_ENDPOINT"
-fi
 if [ "$WITH_LAUNCHD" -eq 1 ] && { [ "$OS_NAME" != "Darwin" ] || [ "$ARCH_NAME" != "arm64" ]; }; then
   warn "--with-launchd is Apple Silicon only; skipping local MLX autostart on $OS_NAME $ARCH_NAME"
   warn "Sanhedrin can still run on x86 via --sanhedrin-endpoint or VESTIGE_SANHEDRIN_ENDPOINT."
   WITH_LAUNCHD=0
+fi
+if [ "$WITH_LAUNCHD" -eq 1 ]; then
+  if [ "$SANHEDRIN_ENDPOINT_FROM_INSTALLER" -eq 0 ]; then
+    SANHEDRIN_ENDPOINT="${SANHEDRIN_ENDPOINT:-http://127.0.0.1:8080/v1/chat/completions}"
+    SANHEDRIN_MODELS_URL=""
+    [ -n "$SANHEDRIN_ENDPOINT" ] && SANHEDRIN_MODELS_URL="${SANHEDRIN_ENDPOINT%/chat/completions}/models"
+  fi
+  if [ "$MODEL_ID_FROM_INSTALLER" -eq 0 ]; then
+    MODEL_ID="${MODEL_ID:-mlx-community/Qwen3.6-35B-A3B-4bit}"
+  fi
+fi
+if [ "$ENABLE_SANHEDRIN" -eq 1 ] && [ "$WITH_LAUNCHD" -eq 0 ]; then
+  if [ -n "$SANHEDRIN_ENDPOINT" ] && [ -n "$MODEL_ID" ]; then
+    say "Sanhedrin enabled with custom OpenAI-compatible model: $MODEL_ID"
+  else
+    warn "Sanhedrin enabled with no verifier model configured yet; it will fail open until VESTIGE_SANHEDRIN_ENDPOINT and VESTIGE_SANHEDRIN_MODEL are set."
+  fi
 fi
 
 # --- Prereqs (warnings only, install proceeds) ---
@@ -146,7 +161,7 @@ fi
 
 # --- Copy hooks ---
 copied=0; skipped=0
-for f in "$SCRIPT_DIR/hooks"/*.sh "$SCRIPT_DIR/hooks"/*.py; do
+for f in "$SCRIPT_DIR/hooks"/*.sh "$SCRIPT_DIR/hooks"/*.py "$SCRIPT_DIR/hooks"/sanhedrin-presets.json; do
   [ -f "$f" ] || continue
   base="$(basename "$f")"
   # load-all-memory.sh dumps every memory MD — opt-in only
@@ -158,7 +173,10 @@ for f in "$SCRIPT_DIR/hooks"/*.sh "$SCRIPT_DIR/hooks"/*.py; do
     skipped=$((skipped + 1))
     continue
   fi
-  install -m 0755 "$f" "$HOOKS_DIR/$base"
+  case "$base" in
+    *.json) install -m 0644 "$f" "$HOOKS_DIR/$base" ;;
+    *) install -m 0755 "$f" "$HOOKS_DIR/$base" ;;
+  esac
   copied=$((copied + 1))
 done
 say "hooks: $copied installed, $skipped skipped (use --force to overwrite)"
@@ -183,7 +201,7 @@ load_vestige_sanhedrin_env() {
   [ -f "$1" ] || return 0
   while IFS="$(printf '\t')" read -r key value; do
     case "$key" in
-      VESTIGE_SANHEDRIN_ENABLED|VESTIGE_SANHEDRIN_MODEL|VESTIGE_SANHEDRIN_ENDPOINT|VESTIGE_SANHEDRIN_CLAIM_MODE|VESTIGE_SANHEDRIN_OUTPUT|VESTIGE_SANHEDRIN_PYTHON|VESTIGE_DASHBOARD_PORT)
+      VESTIGE_SANHEDRIN_ENABLED|VESTIGE_SANHEDRIN_MODEL|VESTIGE_SANHEDRIN_ENDPOINT|VESTIGE_SANHEDRIN_API_KEY|VESTIGE_SANHEDRIN_BACKEND|VESTIGE_SANHEDRIN_CLAIM_MODE|VESTIGE_SANHEDRIN_OUTPUT|VESTIGE_SANHEDRIN_PYTHON|VESTIGE_SANHEDRIN_ALLOW_LOOSE_LEDGER|VESTIGE_DASHBOARD_PORT)
         export "$key=$value"
         ;;
     esac
@@ -195,9 +213,12 @@ allowed = {
     "VESTIGE_SANHEDRIN_ENABLED",
     "VESTIGE_SANHEDRIN_MODEL",
     "VESTIGE_SANHEDRIN_ENDPOINT",
+    "VESTIGE_SANHEDRIN_API_KEY",
+    "VESTIGE_SANHEDRIN_BACKEND",
     "VESTIGE_SANHEDRIN_CLAIM_MODE",
     "VESTIGE_SANHEDRIN_OUTPUT",
     "VESTIGE_SANHEDRIN_PYTHON",
+    "VESTIGE_SANHEDRIN_ALLOW_LOOSE_LEDGER",
     "VESTIGE_DASHBOARD_PORT",
 }
 
@@ -248,7 +269,8 @@ if [ "$ENABLE_SANHEDRIN" -eq 1 ]; then
       SANHEDRIN_ENDPOINT="${VESTIGE_SANHEDRIN_ENDPOINT:-$SANHEDRIN_ENDPOINT}"
       SANHEDRIN_ENDPOINT="${SANHEDRIN_ENDPOINT%/}"
     fi
-    SANHEDRIN_MODELS_URL="${SANHEDRIN_ENDPOINT%/chat/completions}/models"
+    SANHEDRIN_MODELS_URL=""
+    [ -n "$SANHEDRIN_ENDPOINT" ] && SANHEDRIN_MODELS_URL="${SANHEDRIN_ENDPOINT%/chat/completions}/models"
     if [ "$SANHEDRIN_CLAIM_MODE_FROM_INSTALLER" -eq 1 ]; then
       SANHEDRIN_CLAIM_MODE="$INSTALLER_SANHEDRIN_CLAIM_MODE"
     else
@@ -259,6 +281,16 @@ if [ "$ENABLE_SANHEDRIN" -eq 1 ]; then
     else
       SANHEDRIN_OUTPUT="${VESTIGE_SANHEDRIN_OUTPUT:-$SANHEDRIN_OUTPUT}"
     fi
+  fi
+  if [ "$WITH_LAUNCHD" -eq 0 ] \
+    && [ "$MODEL_ID_FROM_INSTALLER" -eq 0 ] \
+    && [ "$SANHEDRIN_ENDPOINT_FROM_INSTALLER" -eq 0 ] \
+    && [ "$MODEL_ID" = "mlx-community/Qwen3.6-35B-A3B-4bit" ] \
+    && [ "$SANHEDRIN_ENDPOINT" = "http://127.0.0.1:8080/v1/chat/completions" ]; then
+    MODEL_ID=""
+    SANHEDRIN_ENDPOINT=""
+    SANHEDRIN_MODELS_URL=""
+    warn "Cleared legacy implicit MLX/Qwen Sanhedrin default. Choose a preset or set VESTIGE_SANHEDRIN_ENDPOINT and VESTIGE_SANHEDRIN_MODEL."
   fi
   TMP_ENV="$(mktemp)"
   if [ -f "$SANHEDRIN_ENV" ]; then
@@ -365,7 +397,8 @@ cat <<EOF
          scripts/check-sandwich-prereqs.sh   # from a checkout
     3. Optional hook layers:
          ./scripts/install-sandwich.sh --enable-preflight
-         ./scripts/install-sandwich.sh --enable-sanhedrin --sanhedrin-endpoint=$SANHEDRIN_ENDPOINT --sanhedrin-model=$MODEL_ID
+         ./scripts/install-sandwich.sh --enable-sanhedrin --sanhedrin-endpoint=<url> --sanhedrin-model=<model>
+         ./scripts/install-sandwich.sh --enable-sanhedrin --with-launchd   # explicit MLX/Qwen path
        On Apple Silicon with >20 GB free RAM, add --with-launchd to auto-start
        the local MLX Qwen server. On x86, point --sanhedrin-endpoint at vLLM,
        Ollama, llama.cpp, or another OpenAI-compatible /v1/chat/completions URL.

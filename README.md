@@ -20,6 +20,19 @@ Built on proven memory and retrieval ideas — FSRS-6 spaced repetition, predict
 
 ---
 
+## What's New in v2.1.23 "Receipt Lock Hardening"
+
+v2.1.23 turns the Sanhedrin Receipt Lock launch into something more portable,
+observable, and harder to spoof.
+
+- **Model-agnostic Sanhedrin presets.** Sanhedrin no longer guesses a large default verifier. Users choose any OpenAI-compatible endpoint/model, or start from custom, small laptop, Ollama, MLX, vLLM, llama.cpp, hosted API, or LiteLLM presets.
+- **Sharper Receipt Lock.** Verification claims inside code fences, quotes, blockquotes, or explicitly hedged "let me verify" language no longer trigger false vetoes, while actual "tests passed" claims still require command receipts.
+- **Safer command receipts.** Transcript command evidence now prefers structured tool-use receipts; loose JSON scanning is opt-in only.
+- **Visible fail-open telemetry.** Timeouts, unavailable model endpoints, and malformed verdicts are logged locally and surfaced in the dashboard's 7-day Sanhedrin stats.
+- **Durable evidence boundary.** Staged evidence remains useful context, but it cannot satisfy durable support or contradiction requirements by itself.
+- **Safer batch writes.** `smart_ingest` batch mode now keeps caller-separated items separate by default and returns merge previews when an existing memory is mutated.
+- **Opt-in NVIDIA acceleration path.** Qwen3 embedding builds expose CUDA/cuDNN feature flags for contributors and users with CUDA-capable hosts.
+
 ## What's New in v2.1.22 "Sanhedrin Receipts"
 
 v2.1.22 makes the optional Sanhedrin hook accountable enough to trust in daily
@@ -443,6 +456,53 @@ to your client-specific instruction file.
 cargo build --release -p vestige-mcp --features qwen3-embeddings,metal
 VESTIGE_EMBEDDING_MODEL=qwen3-0.6b vestige consolidate
 ```
+
+### Building with CUDA support (NVIDIA hosts - Windows / Linux)
+
+The `cuda` feature routes Qwen3 embedding through NVIDIA GPUs via
+`candle-core/cuda`. On a host with the CUDA toolkit installed and a supported
+NVIDIA runtime, this drops Qwen3-Embedding inference from CPU-bound to GPU-bound
+for batched workloads.
+
+```bash
+# Linux / Windows + CUDA toolkit (12.x or 13.x)
+cargo build --release -p vestige-mcp --features qwen3-embeddings,cuda
+
+# Optional cuDNN acceleration on top of CUDA
+cargo build --release -p vestige-mcp --features qwen3-embeddings,cudnn
+
+VESTIGE_EMBEDDING_MODEL=qwen3-0.6b vestige consolidate
+```
+
+**Prerequisites:**
+
+- NVIDIA driver + CUDA toolkit (12.x or 13.x). Verify with `nvcc --version`.
+- A C++ host compiler that `nvcc` can drive (Linux: `gcc`; Windows: MSVC /
+  `cl.exe` from a recent Visual Studio Build Tools install).
+
+**Windows + MSVC + CUDA 13.x build note.** Recent CCCL headers shipped with
+CUDA 13.x require the modern preprocessor. Without it, the `candle-kernels`
+`.cu` compile pass can fail at `cuda/include/cuda/std/__cccl/compiler.h`. Set
+this env var before `cargo build` to pass `/Zc:preprocessor` through `nvcc`:
+
+```powershell
+# PowerShell
+$env:NVCC_PREPEND_FLAGS = '-Xcompiler="/Zc:preprocessor"'
+cargo build --release -p vestige-mcp --features qwen3-embeddings,cuda
+```
+
+```cmd
+:: cmd.exe
+set NVCC_PREPEND_FLAGS=-Xcompiler="/Zc:preprocessor"
+cargo build --release -p vestige-mcp --features qwen3-embeddings,cuda
+```
+
+Linux + CUDA 13.x builds with `gcc` do not need the equivalent flag.
+
+**Verifying GPU is actually used.** With CUDA-enabled builds, run
+`VESTIGE_EMBEDDING_MODEL=qwen3-0.6b vestige consolidate` on a corpus of 1000+
+memories and watch `nvidia-smi`; embedding passes should pin a single GPU while
+the run is active.
 
 ---
 

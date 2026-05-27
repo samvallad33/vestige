@@ -823,6 +823,13 @@ fn install_sandwich_from_source(
         0o755,
         options,
     )?;
+    let (json_copied, json_skipped) = copy_companion_files(
+        &source_root.join("hooks"),
+        &hooks_dir,
+        &["json"],
+        0o644,
+        options,
+    )?;
     let (agents_copied, agents_skipped) = copy_companion_files(
         &source_root.join("agents"),
         &agents_dir,
@@ -834,8 +841,8 @@ fn install_sandwich_from_source(
     println!(
         "{}: {} installed, {} skipped",
         "Hooks".white().bold(),
-        hooks_copied,
-        hooks_skipped
+        hooks_copied + json_copied,
+        hooks_skipped + json_skipped
     );
     println!(
         "{}: {} installed, {} skipped",
@@ -849,22 +856,37 @@ fn install_sandwich_from_source(
     }
 
     let dashboard_port = env::var("VESTIGE_DASHBOARD_PORT").unwrap_or_else(|_| "3927".to_string());
-    let endpoint = options
+    let mut endpoint = options
         .sanhedrin_endpoint
         .clone()
         .or_else(|| env::var("VESTIGE_SANHEDRIN_ENDPOINT").ok())
         .or_else(|| env::var("MLX_ENDPOINT").ok())
-        .unwrap_or_else(|| "http://127.0.0.1:8080/v1/chat/completions".to_string())
+        .unwrap_or_default()
         .trim_end_matches('/')
         .to_string();
-    let model = options
+    let mut model = options
         .sanhedrin_model
         .clone()
         .or_else(|| env::var("VESTIGE_SANHEDRIN_MODEL").ok())
         .or_else(|| env::var("VESTIGE_SANDWICH_MODEL").ok())
-        .unwrap_or_else(|| "mlx-community/Qwen3.6-35B-A3B-4bit".to_string());
+        .unwrap_or_default();
+    if with_launchd {
+        if endpoint.is_empty() {
+            endpoint = "http://127.0.0.1:8080/v1/chat/completions".to_string();
+        }
+        if model.is_empty() {
+            model = "mlx-community/Qwen3.6-35B-A3B-4bit".to_string();
+        }
+    }
 
     if enable_sanhedrin {
+        if endpoint.is_empty() || model.is_empty() {
+            println!(
+                "{}",
+                "Sanhedrin enabled without a verifier model; it will fail open until VESTIGE_SANHEDRIN_ENDPOINT and VESTIGE_SANHEDRIN_MODEL are set."
+                    .yellow()
+            );
+        }
         write_sanhedrin_env(&hooks_dir, &endpoint, &model, &dashboard_port)?;
     }
     if with_launchd {
@@ -2442,6 +2464,8 @@ fn run_ingest(
 
 /// Run the dashboard web server
 fn run_dashboard(port: u16, open_browser: bool) -> anyhow::Result<()> {
+    use vestige_mcp::cognitive::CognitiveEngine;
+
     println!("{}", "=== Vestige Dashboard ===".cyan().bold());
     println!();
     println!(
@@ -2467,7 +2491,14 @@ fn run_dashboard(port: u16, open_browser: bool) -> anyhow::Result<()> {
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
-        vestige_mcp::dashboard::start_dashboard(storage, None, port, open_browser)
+        // Initialize cognitive engine for dream and other cognitive features
+        let cognitive = Arc::new(tokio::sync::Mutex::new(CognitiveEngine::new()));
+        {
+            let mut cog = cognitive.lock().await;
+            cog.hydrate(&storage); // Load persisted connections
+        }
+
+        vestige_mcp::dashboard::start_dashboard(storage, Some(cognitive), port, open_browser)
             .await
             .map_err(|e| anyhow::anyhow!("Dashboard error: {}", e))
     })

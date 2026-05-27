@@ -67,7 +67,7 @@ fn test_adversarial_empty_inputs() {
     let _ = whitespace_results.len();
 
     // System should still work with normal nodes
-    let normal_results = network.activate("source", 1.0);
+    let _normal_results = network.activate("source", 1.0);
     assert!(
         network.node_count() >= 2,
         "Network should contain normal nodes"
@@ -323,7 +323,7 @@ fn test_adversarial_config_boundaries() {
     low_decay_net.add_edge("a".to_string(), "b".to_string(), LinkType::Semantic, 0.9);
     low_decay_net.add_edge("b".to_string(), "c".to_string(), LinkType::Semantic, 0.9);
 
-    let low_results = low_decay_net.activate("a", 1.0);
+    let _low_results = low_decay_net.activate("a", 1.0);
     // With 0.01 decay, activation drops to 0.9 * 0.01 = 0.009 after one hop
     // Then 0.009 * 0.9 * 0.01 = 0.000081 after two hops (below most thresholds)
 
@@ -411,7 +411,7 @@ fn test_adversarial_cyclic_graphs() {
     cycle_net.add_edge("c".to_string(), "a".to_string(), LinkType::Semantic, 0.9);
 
     let start = std::time::Instant::now();
-    let cycle_results = cycle_net.activate("a", 1.0);
+    let _cycle_results = cycle_net.activate("a", 1.0);
     let duration = start.elapsed();
 
     // Should still complete quickly
@@ -487,7 +487,7 @@ fn test_adversarial_special_numeric_values() {
     // (The implementation should clamp or validate these)
 
     // Test with 0.0 activation (should produce no results or minimal)
-    let zero_results = network.activate("normal", 0.0);
+    let _zero_results = network.activate("normal", 0.0);
     // Might be empty or have very low activation
 
     // Test with very small activation

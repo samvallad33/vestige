@@ -9,7 +9,8 @@
     4. Recent Dream       — last DreamCompleted within 24h summary
     5. Activity Pulse     — 10-bar sparkline of events/min over last 5 min
     6. Now Dreaming?      — violet pulsing dot while a Dream is in flight
-    7. Sanhedrin Watch    — subtle red flash on MemorySuppressed in last 10s
+    7. Sanhedrin Telemetry — rolling veto / appeal / fail-open counts
+    8. Sanhedrin Watch    — subtle red flash on MemorySuppressed in last 10s
 
   Design: full-width band, dark-glass backdrop, border-bottom synapse/15,
   height ≈36px, dim muted text with colored accents ONLY on pulsing/urgent
@@ -110,7 +111,23 @@
 	const sparkline = $derived(bucketizeActivity($eventFeed, nowTick));
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// 7. Sanhedrin watch — flash red on any MemorySuppressed in last 10s
+	// 7. Sanhedrin telemetry — 7-day receipt / appeal / fail-open counters
+	// ─────────────────────────────────────────────────────────────────────────
+	let sanhedrinTelemetry = $state<Awaited<ReturnType<typeof api.sanhedrin.telemetry>> | null>(null);
+	let sanhedrinTelemetryError = $state(false);
+
+	async function loadSanhedrinTelemetry(): Promise<void> {
+		try {
+			sanhedrinTelemetry = await api.sanhedrin.telemetry(7);
+			sanhedrinTelemetryError = false;
+		} catch {
+			sanhedrinTelemetry = null;
+			sanhedrinTelemetryError = true;
+		}
+	}
+
+	// ─────────────────────────────────────────────────────────────────────────
+	// 8. Sanhedrin watch — flash red on any MemorySuppressed in last 10s
 	// ─────────────────────────────────────────────────────────────────────────
 	const suppressionFlash = $derived(hasRecentSuppression($eventFeed, nowTick));
 
@@ -121,6 +138,7 @@
 	onMount(() => {
 		void loadAtRisk();
 		void loadIntentions();
+		void loadSanhedrinTelemetry();
 		const tickHandle = setInterval(() => {
 			nowTick = Date.now();
 		}, 1000);
@@ -128,6 +146,7 @@
 		const slowHandle = setInterval(() => {
 			void loadAtRisk();
 			void loadIntentions();
+			void loadSanhedrinTelemetry();
 		}, 60_000);
 		return () => {
 			clearInterval(tickHandle);
@@ -236,6 +255,29 @@
 				></div>
 			{/each}
 		</div>
+	</div>
+
+	<!-- 7. Sanhedrin telemetry — hidden on mobile -->
+	<div class="strip-divider hidden lg:block" aria-hidden="true"></div>
+	<div
+		class="strip-item hidden lg:inline-flex"
+		title="Sanhedrin receipts, appeals, and fail-open events over the last 7 days"
+	>
+		<span class="text-muted">Sanhedrin 7d</span>
+		{#if sanhedrinTelemetryError}
+			<span class="text-warning">telemetry unavailable</span>
+		{:else}
+			<span class="tabular-nums text-decay">{sanhedrinTelemetry?.byVerdict?.VETO ?? '—'}</span>
+			<span class="text-muted">vetoes</span>
+			<span class="text-muted/60">·</span>
+			<span class="tabular-nums text-synapse-glow">{sanhedrinTelemetry?.appeals ?? '—'}</span>
+			<span class="text-muted">appeals</span>
+			{#if sanhedrinTelemetry?.failOpen}
+				<span class="text-muted/60">·</span>
+				<span class="tabular-nums text-warning">{sanhedrinTelemetry.failOpen}</span>
+				<span class="text-muted">fail-open</span>
+			{/if}
+		{/if}
 	</div>
 
 	<!-- 6. Now dreaming? — always visible when active -->

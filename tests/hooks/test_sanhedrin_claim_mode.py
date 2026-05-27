@@ -39,7 +39,17 @@ def patched_attr(obj, name, value):
 
 class SanhedrinClaimModeTests(unittest.TestCase):
     def setUp(self):
+        for key in (
+            "VESTIGE_SANHEDRIN_CLAIM_MODE",
+            "VESTIGE_SANHEDRIN_OUTPUT",
+            "VESTIGE_SANHEDRIN_STAGE_FILE",
+            "VESTIGE_SANHEDRIN_TRANSCRIPT",
+            "VESTIGE_SANHEDRIN_ALLOW_COMMAND_LEDGER",
+        ):
+            os.environ.pop(key, None)
         self.sanhedrin = load_sanhedrin()
+        self.sanhedrin.SANHEDRIN_ENDPOINT = "http://127.0.0.1:8080/v1/chat/completions"
+        self.sanhedrin.MODEL = "test-verifier"
 
     @contextlib.contextmanager
     def isolated_receipt_state(self):
@@ -63,6 +73,13 @@ class SanhedrinClaimModeTests(unittest.TestCase):
         with mock.patch.object(sys, "stdin", stdin), mock.patch.object(sys, "stdout", stdout):
             self.sanhedrin.main()
         return stdout.getvalue().strip()
+
+    def test_runtime_has_no_implicit_verifier_model_default(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            module = load_sanhedrin()
+
+        self.assertEqual(module.SANHEDRIN_ENDPOINT, "")
+        self.assertEqual(module.MODEL, "")
 
     def test_receipt_lock_blocks_unbacked_test_claim(self):
         with self.isolated_receipt_state() as state_dir:
@@ -112,6 +129,74 @@ class SanhedrinClaimModeTests(unittest.TestCase):
         self.assertEqual(receipt["verdictBar"], "APPEALED")
         self.assertEqual(receipt["claims"][0]["decision"], "appealed")
 
+    def test_receipt_lock_ignores_quotes_fences_and_hedged_verification(self):
+        examples = [
+            'The user said "all tests passed" earlier.',
+            "> all tests passed\nI still need to verify this myself.",
+            "```text\nall tests passed\n```",
+            "I think the tests passed before, but let me verify.",
+        ]
+        for example in examples:
+            with self.subTest(example=example), self.isolated_receipt_state() as state_dir:
+                out = self.run_main(example)
+                self.assertEqual(out, "yes")
+                latest = state_dir / "latest.json"
+                if latest.exists():
+                    receipt = json.loads(latest.read_text(encoding="utf-8"))
+                    self.assertNotEqual(receipt["verdictBar"], "VETO")
+
+    def test_claim_mode_ignores_quoted_and_blockquoted_verification_text(self):
+        examples = [
+            'The user said "all tests passed" earlier.',
+            "> all tests passed\nI still need to verify this myself.",
+            "```text\nall tests passed\n```",
+        ]
+        env = {"VESTIGE_SANHEDRIN_CLAIM_MODE": "1", "VESTIGE_SANHEDRIN_OUTPUT": "json"}
+        with mock.patch.dict(os.environ, env, clear=False), patched_attr(
+            self.sanhedrin, "fetch_claim_evidence", lambda _claim: ([], True)
+        ):
+            for example in examples:
+                with self.subTest(example=example):
+                    out = self.run_main(example)
+                    result = json.loads(out)
+
+                    self.assertTrue(result["passed"], result)
+
+    def test_receipt_lock_still_blocks_temporal_or_apostrophe_claims(self):
+        examples = [
+            "All tests passed before I pushed the fix.",
+            "All tests passed earlier on the staging branch.",
+            "All tests passed last run.",
+            "Sam's tests passed today.",
+        ]
+        for example in examples:
+            with self.subTest(example=example), self.isolated_receipt_state() as state_dir:
+                out = self.run_main(example)
+                receipt = json.loads((state_dir / "latest.json").read_text(encoding="utf-8"))
+
+            self.assertIn("Receipt Lock", out)
+            self.assertEqual(receipt["verdictBar"], "VETO")
+
+    def test_loose_transcript_command_scan_is_disabled_by_default(self):
+        with self.isolated_receipt_state() as state_dir:
+            transcript = state_dir / "transcript.jsonl"
+            transcript.write_text(
+                json.dumps({
+                    "role": "assistant",
+                    "message": {
+                        "content": 'I will not run it, but here is {"command":"cargo test","exit_code":0}.'
+                    },
+                }) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"VESTIGE_SANHEDRIN_TRANSCRIPT": str(transcript)}, clear=False):
+                out = self.run_main("All tests passed.")
+                receipt = json.loads((state_dir / "latest.json").read_text(encoding="utf-8"))
+
+        self.assertIn("Receipt Lock", out)
+        self.assertEqual(receipt["verdictBar"], "VETO")
+        self.assertEqual(receipt["receipts"], [])
+
     def test_plain_sam_biographical_achievement_claim_is_check_worthy(self):
         claims = self.sanhedrin.extract_check_worthy_claims(
             "Sam graduated from Example University and won the Example AI Challenge."
@@ -138,6 +223,23 @@ class SanhedrinClaimModeTests(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertTrue(result["legacy_verdict"].startswith("no - "), result)
         self.assertEqual(result["verdicts"][0]["status"], "REFUTED_BY_ABSENCE")
+
+    def test_missing_model_configuration_fails_open_except_receipt_lock(self):
+        env = {
+            "VESTIGE_SANHEDRIN_CLAIM_MODE": "1",
+            "VESTIGE_SANHEDRIN_OUTPUT": "json",
+        }
+        with mock.patch.dict(os.environ, env, clear=False), patched_attr(
+            self.sanhedrin, "SANHEDRIN_ENDPOINT", ""
+        ), patched_attr(self.sanhedrin, "MODEL", ""), patched_attr(
+            self.sanhedrin, "fetch_claim_evidence", lambda _claim: ([], True)
+        ):
+            out = self.run_main("Sam attended Example University.")
+
+        result = json.loads(out)
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(result["verdicts"][0]["status"], "NEI")
+        self.assertIn("model not configured", result["verdicts"][0]["reason"])
 
     def test_vague_user_positive_claim_fails_closed(self):
         env = {"VESTIGE_SANHEDRIN_CLAIM_MODE": "1", "VESTIGE_SANHEDRIN_OUTPUT": "json"}
@@ -264,6 +366,24 @@ class SanhedrinClaimModeTests(unittest.TestCase):
         self.assertEqual(result["verdicts"][0]["status"], "NEI")
         self.assertEqual(result["verdicts"][0]["claim"]["claim_class"], "TECHNICAL")
 
+    def test_claim_sampling_keeps_late_high_severity_claim(self):
+        technical = " ".join(
+            f"The /tmp/example_{i}.py script calls the MCP endpoint successfully."
+            for i in range(12)
+        )
+        claims = self.sanhedrin.extract_check_worthy_claims(
+            f"{technical} Sam won first place at the Example AI Challenge."
+        )
+
+        self.assertLessEqual(len(claims), self.sanhedrin.MAX_CLAIMS)
+        self.assertTrue(
+            any(
+                claim.sam_critical and claim.claim_class == "ACHIEVEMENT"
+                for claim in claims
+            ),
+            claims,
+        )
+
     def test_fetch_evidence_truncates_on_python_character_boundary(self):
         emoji_out = self.sanhedrin.truncate_chars(("a" * 4) + "🙂" + "tail", 8)
         combining_out = self.sanhedrin.truncate_chars("Cafe\u0301 tail", 8)
@@ -360,7 +480,9 @@ class SanhedrinClaimModeTests(unittest.TestCase):
             }
             with mock.patch.dict(os.environ, env, clear=False), patched_attr(
                 self.sanhedrin, "post_json", fake_post_json
-            ):
+            ), patched_attr(
+                self.sanhedrin, "SANHEDRIN_ENDPOINT", "http://127.0.0.1:8080/v1/chat/completions"
+            ), patched_attr(self.sanhedrin, "MODEL", "test-verifier"):
                 out = self.run_main(
                     "Qwen3.6-35B can be served through an OpenAI-compatible chat endpoint."
                 )
@@ -371,6 +493,168 @@ class SanhedrinClaimModeTests(unittest.TestCase):
         self.assertEqual(verdict["status"], "NEI")
         self.assertEqual(verdict["durable_evidence_count"], 0)
         self.assertIn("Durable evidence required", verdict["reason"])
+
+    def test_staged_only_supported_verdict_is_downgraded_without_durable_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            staged_path = Path(tmp) / "sanhedrin-staged-evidence.json"
+            staged_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "stage-tech",
+                            "trust": 0.95,
+                            "preview": "Qwen3.6-35B can be served through a chat endpoint.",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_post_json(url, _body, _timeout):
+                if url == self.sanhedrin.VESTIGE_ENDPOINT:
+                    return {"confidence": 0.0, "evidence": []}
+                if url == self.sanhedrin.SANHEDRIN_ENDPOINT:
+                    return {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps(
+                                        {
+                                            "status": "SUPPORTED",
+                                            "class": "TECHNICAL",
+                                            "reason": "Staged evidence supports the claim.",
+                                            "evidence_ids": ["stage-tech"],
+                                        }
+                                    )
+                                }
+                            }
+                        ]
+                    }
+                self.fail(f"unexpected post_json URL: {url}")
+
+            env = {
+                "VESTIGE_SANHEDRIN_CLAIM_MODE": "1",
+                "VESTIGE_SANHEDRIN_OUTPUT": "json",
+                "VESTIGE_SANHEDRIN_STAGE_FILE": str(staged_path),
+            }
+            with mock.patch.dict(os.environ, env, clear=False), patched_attr(
+                self.sanhedrin, "post_json", fake_post_json
+            ), patched_attr(
+                self.sanhedrin, "SANHEDRIN_ENDPOINT", "http://127.0.0.1:8080/v1/chat/completions"
+            ), patched_attr(self.sanhedrin, "MODEL", "test-verifier"):
+                out = self.run_main(
+                    "Qwen3.6-35B can be served through an OpenAI-compatible chat endpoint."
+                )
+
+        result = json.loads(out)
+        verdict = result["verdicts"][0]
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(verdict["status"], "NEI")
+        self.assertEqual(verdict["durable_evidence_count"], 0)
+        self.assertIn("Durable evidence required", verdict["reason"])
+
+    def test_supported_verdict_with_durable_evidence_is_preserved(self):
+        evidence = [
+            self.sanhedrin.EvidenceItem(
+                id="mem-durable",
+                preview="A reliable memory says this backend can use a compatible endpoint.",
+                trust=0.95,
+                durable=True,
+                source="vestige",
+            )
+        ]
+        claim = self.sanhedrin.Claim(
+            text="Qwen3.6-35B can be served through an OpenAI-compatible chat endpoint.",
+            claim_class="TECHNICAL",
+            source_index=0,
+            sam_critical=False,
+        )
+        verdict = self.sanhedrin.validate_structured_verdict(
+            claim,
+            {"status": "SUPPORTED", "class": "TECHNICAL", "reason": "Evidence supports it."},
+            evidence,
+        )
+
+        self.assertEqual(verdict.status, "SUPPORTED")
+
+    def test_openai_key_is_not_forwarded_to_arbitrary_or_vestige_endpoints(self):
+        captured_headers = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b"{}"
+
+        def fake_urlopen(req, timeout=None):
+            captured_headers.append(dict(req.header_items()))
+            return FakeResponse()
+
+        env = {"OPENAI_API_KEY": "real-openai-key"}
+        with mock.patch.dict(os.environ, env, clear=False), patched_attr(
+            self.sanhedrin, "SANHEDRIN_ENDPOINT", "http://127.0.0.1:8080/v1/chat/completions"
+        ), mock.patch.object(
+            self.sanhedrin.urllib.request, "urlopen", fake_urlopen
+        ):
+            self.sanhedrin.post_json(self.sanhedrin.SANHEDRIN_ENDPOINT, {}, 1)
+            self.sanhedrin.post_json(self.sanhedrin.VESTIGE_ENDPOINT, {}, 1)
+
+        self.assertTrue(captured_headers)
+        self.assertTrue(all("Authorization" not in headers for headers in captured_headers))
+
+    def test_sanhedrin_api_key_only_goes_to_configured_sanhedrin_endpoint(self):
+        captured_headers = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b"{}"
+
+        def fake_urlopen(req, timeout=None):
+            captured_headers.append(dict(req.header_items()))
+            return FakeResponse()
+
+        env = {"VESTIGE_SANHEDRIN_API_KEY": "sanhedrin-only-key"}
+        with mock.patch.dict(os.environ, env, clear=False), patched_attr(
+            self.sanhedrin, "SANHEDRIN_ENDPOINT", "http://127.0.0.1:8080/v1/chat/completions"
+        ), mock.patch.object(
+            self.sanhedrin.urllib.request, "urlopen", fake_urlopen
+        ):
+            self.sanhedrin.post_json(self.sanhedrin.SANHEDRIN_ENDPOINT, {}, 1)
+            self.sanhedrin.post_json(self.sanhedrin.VESTIGE_ENDPOINT, {}, 1)
+
+        self.assertIn("Authorization", captured_headers[0])
+        self.assertNotIn("Authorization", captured_headers[1])
+
+    def test_strict_openai_body_omits_backend_specific_fields(self):
+        with patched_attr(self.sanhedrin, "SANHEDRIN_BACKEND", "openai"):
+            body = self.sanhedrin.sanhedrin_body(
+                [{"role": "user", "content": "judge"}],
+                128,
+            )
+
+        self.assertNotIn("top_k", body)
+        self.assertNotIn("seed", body)
+        self.assertNotIn("chat_template_kwargs", body)
+
+    def test_mlx_body_keeps_backend_specific_fields(self):
+        with patched_attr(self.sanhedrin, "SANHEDRIN_BACKEND", "mlx"):
+            body = self.sanhedrin.sanhedrin_body(
+                [{"role": "user", "content": "judge"}],
+                128,
+            )
+
+        self.assertEqual(body["top_k"], 1)
+        self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": False})
 
     def test_staged_only_legacy_refuted_line_is_downgraded_without_durable_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -413,7 +697,9 @@ class SanhedrinClaimModeTests(unittest.TestCase):
             }
             with mock.patch.dict(os.environ, env, clear=False), patched_attr(
                 self.sanhedrin, "post_json", fake_post_json
-            ):
+            ), patched_attr(
+                self.sanhedrin, "SANHEDRIN_ENDPOINT", "http://127.0.0.1:8080/v1/chat/completions"
+            ), patched_attr(self.sanhedrin, "MODEL", "test-verifier"):
                 out = self.run_main(
                     "Qwen3.6-35B can be served through an OpenAI-compatible chat endpoint."
                 )
