@@ -6271,8 +6271,7 @@ impl SqliteMemoryStore {
     }
 }
 
-#[async_trait::async_trait]
-impl crate::storage::memory_store::LocalMemoryStore for SqliteMemoryStore {
+impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
     async fn init(&self) -> crate::storage::memory_store::MemoryStoreResult<()> {
         // Migrations run in `new`; this is a no-op for the SQLite backend.
         Ok(())
@@ -6622,7 +6621,7 @@ impl crate::storage::memory_store::LocalMemoryStore for SqliteMemoryStore {
                     })
                 })
                 .collect();
-            return Ok(out);
+            Ok(out)
         }
         #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
         {
@@ -6927,11 +6926,12 @@ impl crate::storage::memory_store::LocalMemoryStore for SqliteMemoryStore {
         id: &str,
     ) -> crate::storage::memory_store::MemoryStoreResult<Option<crate::storage::memory_store::Domain>> {
         use crate::storage::memory_store::{Domain, MemoryStoreError};
+        type DomainRow = (String, String, Option<Vec<u8>>, String, i64, String);
         let reader = self
             .reader
             .lock()
             .map_err(|_| MemoryStoreError::Init("Reader lock poisoned".into()))?;
-        let result: Option<(String, String, Option<Vec<u8>>, String, i64, String)> = reader
+        let result: Option<DomainRow> = reader
             .query_row(
                 "SELECT id, label, centroid, top_terms, memory_count, created_at FROM domains WHERE id = ?1",
                 rusqlite::params![id],

@@ -9,8 +9,8 @@ mod sqlite;
 
 pub use memory_store::{
     ClassificationResult, Domain, HealthStatus, LocalMemoryStore, MemoryEdge, MemoryRecord,
-    MemoryStore, MemoryStoreError, MemoryStoreResult, ModelSignature, SchedulingState,
-    SearchQuery, SearchResult, StoreStats,
+    MemoryStore, MemoryStoreError, MemoryStoreResult, MemoryStoreSend, ModelSignature,
+    SchedulingState, SearchQuery, SearchResult, StoreStats,
 };
 pub use migrations::MIGRATIONS;
 pub use portable::{
