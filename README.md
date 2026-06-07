@@ -14,7 +14,7 @@
 
 Built on proven memory and retrieval ideas — FSRS-6 spaced repetition, prediction error gating, synaptic tagging, spreading activation, and memory consolidation — all running in a single Rust binary with a local dashboard. 100% local. Zero cloud.
 
-[Quick Start](#quick-start) | [Dashboard](#-3d-memory-dashboard) | [How It Works](#-the-cognitive-science-stack) | [Tools](#-25-mcp-tools) | [Docs](docs/)
+[Quick Start](#quick-start) | [Dashboard](#-3d-memory-dashboard) | [How It Works](#-the-cognitive-science-stack) | [Tools](#-25-mcp-tools) | [Docs](docs/) | [Roadmap](docs/ROADMAP.md)
 
 </div>
 

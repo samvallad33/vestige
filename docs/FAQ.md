@@ -782,22 +782,16 @@ This helps trace why you know something.
 <details>
 <summary><b>"What's planned for future versions?"</b></summary>
 
-Based on codebase exploration, these features exist in various stages:
+See the public [Vestige Roadmap](ROADMAP.md) for the current adoption plan. The
+near-term focus is reducing first-user confusion before expanding the feature
+surface:
 
-| Feature | Status | Description |
-|---------|--------|-------------|
-| Memory Dreams | Partial | Automated offline consolidation |
-| Reconsolidation | Planned | Update memories when accessed |
-| Memory Chains | Partial | Link related memories explicitly |
-| Adaptive Embedding | Planned | Re-embed old memories with better models |
-| Cross-Project Learning | Planned | Share patterns across codebases |
-
-**Community wishlist** (from Reddit):
-- Stream ingestion mode
-- GUI for memory browsing
-- Export/import formats
-- Sync between devices (encrypted)
-- Team collaboration features
+- first-time memory migration and atomic memory guidance
+- configurable MCP output fields and output profiles
+- clearer merge/supersede controls
+- code/docstring memory workflows
+- goals and milestones distinct from intentions
+- guided import dry runs and review queues
 
 Contributions welcome!
 </details>
