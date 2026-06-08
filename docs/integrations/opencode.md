@@ -8,6 +8,22 @@ Verified with OpenCode `1.16.2` on June 8, 2026.
 
 ---
 
+## Why OpenCode Users Add Vestige
+
+OpenCode is strong at driving real coding work from the terminal. The painful gap is continuity: the next session often has to rediscover what the previous session already learned. Vestige gives OpenCode a local memory layer through MCP, so the agent can reuse the project context that should not be trapped in one chat transcript.
+
+Useful memories include:
+
+- project decisions: "we use Axum handlers thinly and keep database logic in storage modules"
+- preferences: "prefer small focused PRs and explicit verification receipts"
+- architecture context: "the dashboard talks to the MCP server through the Axum backend and WebSocket events"
+- bug fixes: "OpenCode rejects `mcpServers`; use top-level `mcp.vestige` with a command array"
+- workflow state: "PR #67 was merged, but the config shape needed correction before promotion"
+
+Vestige is local-first. Memories are stored in SQLite on your machine, can be scoped globally or per project, and are retrieved with tools like `vestige_session_context`, `vestige_search`, `vestige_smart_ingest`, and `vestige_deep_reference`.
+
+---
+
 ## Setup
 
 ### 1. Install Vestige

@@ -2,6 +2,15 @@
 
 Status: Vestige was tested with OpenCode `1.16.2` on June 8, 2026. The working config uses OpenCode's top-level `mcp.vestige` schema, not `mcpServers`.
 
+Public promotion started:
+
+- Vestige PR #70: `https://github.com/samvallad33/vestige/pull/70`
+- OpenCode issue: `https://github.com/anomalyco/opencode/issues/31402`
+- OpenCode docs/ecosystem PR: `https://github.com/anomalyco/opencode/pull/31405`
+- awesome-opencode PR: `https://github.com/awesome-opencode/awesome-opencode/pull/418`
+- opencode.cafe listing request: `https://github.com/R44VC0RP/opencode.cafe/issues/6`
+- OpenCode persistent memory comment: `https://github.com/anomalyco/opencode/issues/16077#issuecomment-4652064625`
+
 ## Release Gate
 
 - PR #67 is merged upstream and should be treated as the contributor-driven starting point.
