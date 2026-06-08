@@ -135,6 +135,7 @@ Cursor does not surface MCP server errors in the UI. Test by running the command
 | Xcode 26.3 | [Setup](./xcode.md) |
 | Codex | [Setup](./codex.md) |
 | VS Code (Copilot) | [Setup](./vscode.md) |
+| OpenCode | [Setup](./opencode.md) |
 | JetBrains | [Setup](./jetbrains.md) |
 | Windsurf | [Setup](./windsurf.md) |
 | Claude Code | [Setup](../CONFIGURATION.md#claude-code-one-liner) |

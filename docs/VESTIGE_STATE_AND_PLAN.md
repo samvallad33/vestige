@@ -73,8 +73,8 @@ Vestige is organized as:
 
 HTTP MCP is disabled unless the user passes `--http`, passes `--http-port`, or
 sets `VESTIGE_HTTP_ENABLED=1`. The stdio MCP server remains the portable default
-for Claude Code, Codex, Cursor, VS Code, Xcode, JetBrains, Windsurf, and other
-clients.
+for Claude Code, Codex, Cursor, VS Code, Xcode, OpenCode, JetBrains, Windsurf,
+and other clients.
 
 Purge is implemented transactionally in storage and surfaced through the MCP
 `memory` tool. `memory(action="purge", confirm=true)` is the explicit hard

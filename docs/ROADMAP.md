@@ -45,7 +45,7 @@ Target: make the first 30 minutes with Vestige hard to mess up.
 | Atomic memory guide | Clear examples for one fact, one preference, one decision, one bug fix, one source note, and one code pattern per memory. |
 | Default tag vocabulary | Recommended tags for source quality, confidence, project, type, urgency, and lifecycle without overloading words like `verified`. |
 | Smart vs force-create guide | Agents know when to use `forceCreate`, `batchMergePolicy="force_create"`, or normal PE gating. |
-| Updated agent templates | Claude, Codex, Cursor, VS Code, Xcode, JetBrains, and Windsurf templates start with `session_context` and use the same memory vocabulary. |
+| Updated agent templates | Claude, Codex, Cursor, VS Code, Xcode, OpenCode, JetBrains, and Windsurf templates start with `session_context` and use the same memory vocabulary. |
 
 Planned docs:
 

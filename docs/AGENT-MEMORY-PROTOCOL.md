@@ -76,6 +76,6 @@ call `memory` with `action="purge"` and `confirm=true`.
 ## Portability Notes
 
 The same protocol applies to Claude Code, Codex, Cursor, VS Code, Xcode,
-JetBrains, Windsurf, and any other client that can run a stdio MCP server. Claude
+OpenCode, JetBrains, Windsurf, and any other client that can run a stdio MCP server. Claude
 Code's Cognitive Sandwich hooks are optional companion files; they are not
 required for normal Vestige memory.

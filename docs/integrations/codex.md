@@ -145,6 +145,7 @@ codex mcp add vestige -- /usr/local/bin/vestige-mcp
 | Xcode 26.3 | [Setup](./xcode.md) |
 | Cursor | [Setup](./cursor.md) |
 | VS Code (Copilot) | [Setup](./vscode.md) |
+| OpenCode | [Setup](./opencode.md) |
 | JetBrains | [Setup](./jetbrains.md) |
 | Windsurf | [Setup](./windsurf.md) |
 | Claude Code | [Setup](../CONFIGURATION.md#claude-code-one-liner) |

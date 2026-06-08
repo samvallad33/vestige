@@ -105,6 +105,21 @@ const IDE_CONFIGS = {
     note: 'Tip: For project-level config, create .vscode/mcp.json with {"servers": {"vestige": ...}}',
   },
 
+  'OpenCode': {
+    detect: () => {
+      try {
+        execSync(PLATFORM === 'win32' ? 'where opencode' : 'which opencode', { stdio: 'ignore' });
+        return true;
+      } catch {
+        return fs.existsSync(path.join(HOME, '.config', 'opencode'));
+      }
+    },
+    configPath: () => path.join(HOME, '.config', 'opencode', 'opencode.json'),
+    format: 'opencode',
+    key: 'mcp',
+    note: 'Tip: For project-level memory, add the same mcp.vestige block to an opencode.json in your repo root.',
+  },
+
   'Xcode 26.3': {
     detect: () => {
       if (PLATFORM !== 'darwin') return false;
@@ -152,7 +167,10 @@ function findBinary() {
     // npm global install location
     (() => {
       try {
-        const npmPrefix = execSync('npm prefix -g', { encoding: 'utf8' }).trim();
+        const npmPrefix = execSync('npm prefix -g', {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
         return path.join(npmPrefix, 'bin', 'vestige-mcp');
       } catch { return null; }
     })(),
@@ -164,7 +182,11 @@ function findBinary() {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'ignore'],
     }).trim();
-    if (result) candidates.unshift(result);
+    const firstMatch = result
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)[0];
+    if (firstMatch) candidates.unshift(firstMatch);
   } catch {}
 
   for (const candidate of candidates) {
@@ -272,6 +294,16 @@ function buildVestigeConfig(binaryPath) {
   };
 }
 
+function buildOpenCodeConfig(binaryPath) {
+  return {
+    type: 'local',
+    command: [binaryPath],
+    enabled: true,
+    timeout: 10000,
+    environment: {},
+  };
+}
+
 function buildXcodeConfig(binaryPath) {
   return {
     projects: {
@@ -324,6 +356,22 @@ function injectConfig(ide, ideName, binaryPath) {
       return false;
     }
     config.mcp.servers.vestige = buildVestigeConfig(binaryPath);
+  } else if (ide.format === 'opencode') {
+    // OpenCode uses top-level "mcp" entries with command arrays.
+    if (!config.$schema) config.$schema = 'https://opencode.ai/config.json';
+    if (!config.mcp) config.mcp = {};
+    if (config.mcp.vestige) {
+      console.log(`  [skip] ${ideName} — already configured`);
+      return false;
+    }
+    if (config.mcpServers && config.mcpServers.vestige) {
+      delete config.mcpServers.vestige;
+      if (Object.keys(config.mcpServers).length === 0) {
+        delete config.mcpServers;
+      }
+      console.log(`  [migrate] ${ideName} — moved vestige from mcpServers to mcp`);
+    }
+    config.mcp.vestige = buildOpenCodeConfig(binaryPath);
   } else {
     // Standard mcpServers format (Cursor, Claude Desktop, JetBrains, Windsurf)
     const key = ide.key || 'mcpServers';
@@ -383,7 +431,7 @@ function main() {
   if (detected.length === 0) {
     console.log('  No supported IDEs found.');
     console.log('');
-    console.log('Supported: Claude Code, Claude Desktop, Cursor, VS Code, Xcode, JetBrains, Windsurf');
+    console.log('Supported: Claude Code, Claude Desktop, Cursor, VS Code, OpenCode, Xcode, JetBrains, Windsurf');
     process.exit(1);
   }
 

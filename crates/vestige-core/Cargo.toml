@@ -121,7 +121,11 @@ candle-core = { version = "0.10.2", optional = true }
 # its memory_mapping_allocator_gt template references the POSIX MAP_FAILED
 # macro from <sys/mman.h>, which doesn't exist on MSVC. Tracked upstream in
 # unum-cloud/usearch#746. Unpin when the upstream fix lands.
-usearch = { version = "=2.23.0", optional = true }
+#
+# Disable default features so release binaries do not include SimSIMD's
+# Haswell+/AVX2/FMA dispatch targets. Those kernels can trigger illegal
+# instructions on older x86_64 CPUs that Vestige otherwise supports.
+usearch = { version = "=2.23.0", default-features = false, optional = true }
 
 # LRU cache for query embeddings
 lru = "0.16"

@@ -258,6 +258,7 @@ async function main() {
     console.log('  1. Add vestige-mcp to any MCP-compatible agent.');
     console.log('     Claude Code: claude mcp add vestige vestige-mcp -s user');
     console.log('     Codex:       codex mcp add vestige -- vestige-mcp');
+    console.log('     OpenCode:    npx @vestige/init, or add mcp.vestige to ~/.config/opencode/opencode.json');
     console.log('  2. Restart your MCP client.');
     console.log('  3. Test with: "remember that my preferred editor is VS Code"');
     console.log('');

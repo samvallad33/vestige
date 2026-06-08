@@ -54,6 +54,40 @@ codex mcp add vestige -- vestige-mcp
 
 Then restart your MCP client.
 
+**OpenCode**
+
+Add to `~/.config/opencode/opencode.json` or a project-local `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "vestige": {
+      "type": "local",
+      "command": ["vestige-mcp"],
+      "enabled": true,
+      "timeout": 10000
+    }
+  }
+}
+```
+
+Prefer the installed `vestige-mcp` command for OpenCode. If you run Vestige directly through `npx`, use a longer first-run timeout because npm may need to download the package before OpenCode can connect:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "vestige": {
+      "type": "local",
+      "command": ["npx", "-y", "-p", "vestige-mcp-server@latest", "vestige-mcp"],
+      "enabled": true,
+      "timeout": 60000
+    }
+  }
+}
+```
+
 ## Usage with Claude Desktop
 
 Add to your Claude Desktop configuration:

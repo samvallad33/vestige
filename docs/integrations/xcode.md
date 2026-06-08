@@ -252,6 +252,7 @@ Vestige uses the MCP standard — the same memory works across all your tools:
 | Claude Desktop | [Setup](../CONFIGURATION.md#claude-desktop-macos) |
 | Cursor | [Setup](./cursor.md) |
 | VS Code (Copilot) | [Setup](./vscode.md) |
+| OpenCode | [Setup](./opencode.md) |
 | JetBrains | [Setup](./jetbrains.md) |
 | Windsurf | [Setup](./windsurf.md) |
 

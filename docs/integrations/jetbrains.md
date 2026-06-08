@@ -123,6 +123,7 @@ In **Settings > Tools > MCP Server**, click the expansion arrow next to your cli
 | Cursor | [Setup](./cursor.md) |
 | VS Code (Copilot) | [Setup](./vscode.md) |
 | Codex | [Setup](./codex.md) |
+| OpenCode | [Setup](./opencode.md) |
 | Windsurf | [Setup](./windsurf.md) |
 | Claude Code | [Setup](../CONFIGURATION.md#claude-code-one-liner) |
 | Claude Desktop | [Setup](../CONFIGURATION.md#claude-desktop-macos) |
