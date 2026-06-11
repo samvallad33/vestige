@@ -50,6 +50,93 @@ Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the stand
 
 ---
 
+## Output Configuration (`vestige.toml`)
+
+> Added in **v2.1.24** (Roadmap Phase 2: Configurable Output).
+
+You can control the default shape and size of high-traffic MCP responses with an
+optional config file. It is **local-first** — no cloud service is involved — and
+**fully backward-compatible**: with no file present, Vestige behaves exactly as
+it did before.
+
+### Location
+
+The config file lives in the active Vestige data directory, alongside the
+database:
+
+```
+<data_dir>/vestige.toml      # e.g. ~/Library/Application Support/com.vestige.core/vestige.toml
+```
+
+The data directory is resolved with the same precedence as storage
+(`--data-dir` > `VESTIGE_DATA_DIR` > OS per-user data dir). A missing file, or a
+file with no recognized keys, falls back to built-in defaults. The parser is
+lenient: unknown keys and unknown sections are ignored, so the file can grow in
+future releases without breaking older binaries.
+
+### `[defaults]` table
+
+```toml
+[defaults]
+# Detail level for high-traffic tools: "brief" | "summary" | "full"
+detail_level = "summary"
+
+# Default result count for high-traffic tools (positive integer)
+limit = 10
+
+# Output profile: "lean" | "default" | "audit" | "research"
+profile = "default"
+```
+
+All three keys are optional. `detail_level` and `limit`, when set, override the
+selected profile's presets.
+
+### Output profiles
+
+A profile presets a coherent bundle of detail level, default limit, and whether
+scores and timestamps are included:
+
+| Profile | Detail | Default limit | Scores | Timestamps | Use when |
+|---------|--------|---------------|--------|------------|----------|
+| `lean` | `brief` | 5 | dropped | dropped | Context budget matters most |
+| `default` | `summary` | tool default | shown | shown | **Historical behavior (unchanged)** |
+| `audit` | `full` | tool default | shown | shown | Reviewing or debugging memory state |
+| `research` | `full` | 25 | shown | shown | Wide, detailed result sets |
+
+### Precedence
+
+Resolved per call, highest to lowest:
+
+1. **Explicit MCP parameter** (e.g. `detail_level` / `limit` on a `search`
+   call) — always wins.
+2. **`vestige.toml`** — the `[defaults]` keys and the selected profile.
+3. **Built-in default** — the `default` profile, identical to pre-v2.1.24
+   behavior.
+
+### Affected tools
+
+`search`, `memory_timeline`, `codebase` (`get_context`), and `session_context`
+resolve their default detail level and result limit through this config. Each of
+these tools also echoes the active `profile` in its response so you can confirm
+what was applied. Tools that take no `detail_level`/`limit` are unaffected.
+
+### Example: minimize context cost
+
+```toml
+[defaults]
+profile = "lean"
+```
+
+### Example: detailed audits without changing the profile
+
+```toml
+[defaults]
+detail_level = "full"
+limit = 50
+```
+
+---
+
 ## Command-Line Options
 
 ```bash

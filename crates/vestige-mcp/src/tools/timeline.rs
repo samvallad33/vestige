@@ -9,9 +9,9 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use vestige_core::Storage;
+use vestige_core::{OutputConfig, Storage};
 
-use super::search_unified::format_node;
+use super::search_unified::{apply_output_masks, format_node};
 
 /// Input schema for memory_timeline tool
 pub fn schema() -> Value {
@@ -87,7 +87,11 @@ fn parse_datetime(s: &str) -> Result<DateTime<Utc>, String> {
 }
 
 /// Execute memory_timeline tool
-pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
+pub async fn execute(
+    storage: &Arc<Storage>,
+    output_config: &OutputConfig,
+    args: Option<Value>,
+) -> Result<Value, String> {
     let args: TimelineArgs = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid arguments: {}", e))?,
         None => TimelineArgs {
@@ -100,12 +104,13 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         },
     };
 
-    // Validate detail_level
-    let detail_level = match args.detail_level.as_deref() {
-        Some("brief") => "brief",
-        Some("full") => "full",
-        Some("summary") | None => "summary",
-        Some(invalid) => {
+    // Validate detail_level. Precedence: explicit MCP param > config > default.
+    let detail_level_owned = output_config.resolve_detail_level(args.detail_level.as_deref());
+    let detail_level = match detail_level_owned.as_str() {
+        "brief" => "brief",
+        "full" => "full",
+        "summary" => "summary",
+        invalid => {
             return Err(format!(
                 "Invalid detail_level '{}'. Must be 'brief', 'summary', or 'full'.",
                 invalid
@@ -124,7 +129,8 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         None => Some(now),
     };
 
-    let limit = args.limit.unwrap_or(50).clamp(1, 200);
+    // Precedence: explicit MCP param > config limit > built-in default (50).
+    let limit = output_config.resolve_limit(args.limit, 50).clamp(1, 200);
 
     // Query memories in time range with filters pushed into SQL. Rust-side
     // `retain` after `LIMIT` was unsafe for sparse types/tags — a dominant
@@ -140,14 +146,15 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         )
         .map_err(|e| e.to_string())?;
 
-    // Group by day
+    // Group by day, applying the active profile's field masks (e.g. `lean`
+    // drops timestamps) to each formatted node.
     let mut by_day: BTreeMap<NaiveDate, Vec<Value>> = BTreeMap::new();
     for node in &results {
         let date = node.created_at.date_naive();
-        by_day
-            .entry(date)
-            .or_default()
-            .push(format_node(node, detail_level));
+        let mut formatted = [format_node(node, detail_level)];
+        apply_output_masks(&mut formatted, output_config);
+        let [formatted] = formatted;
+        by_day.entry(date).or_default().push(formatted);
     }
 
     // Build timeline (newest first)
@@ -173,6 +180,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             "end": end.map(|dt| dt.to_rfc3339()),
         },
         "detailLevel": detail_level,
+        "profile": output_config.profile.as_str(),
         "totalMemories": total,
         "days": days,
         "timeline": timeline,
@@ -262,7 +270,7 @@ mod tests {
     #[tokio::test]
     async fn test_timeline_no_args_defaults() {
         let (storage, _dir) = test_storage().await;
-        let result = execute(&storage, None).await;
+        let result = execute(&storage, &OutputConfig::default(), None).await;
         assert!(result.is_ok());
         let value = result.unwrap();
         assert_eq!(value["tool"], "memory_timeline");
@@ -274,7 +282,7 @@ mod tests {
     #[tokio::test]
     async fn test_timeline_empty_database() {
         let (storage, _dir) = test_storage().await;
-        let result = execute(&storage, None).await;
+        let result = execute(&storage, &OutputConfig::default(), None).await;
         let value = result.unwrap();
         assert_eq!(value["totalMemories"], 0);
         assert_eq!(value["days"], 0);
@@ -286,7 +294,7 @@ mod tests {
         let (storage, _dir) = test_storage().await;
         ingest_test_memory(&storage, "Timeline test memory 1").await;
         ingest_test_memory(&storage, "Timeline test memory 2").await;
-        let result = execute(&storage, None).await;
+        let result = execute(&storage, &OutputConfig::default(), None).await;
         let value = result.unwrap();
         assert_eq!(value["totalMemories"], 2);
         assert!(value["days"].as_u64().unwrap() >= 1);
@@ -296,7 +304,7 @@ mod tests {
     async fn test_timeline_invalid_detail_level() {
         let (storage, _dir) = test_storage().await;
         let args = serde_json::json!({ "detail_level": "invalid" });
-        let result = execute(&storage, Some(args)).await;
+        let result = execute(&storage, &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid detail_level"));
     }
@@ -306,7 +314,7 @@ mod tests {
         let (storage, _dir) = test_storage().await;
         ingest_test_memory(&storage, "Brief test memory").await;
         let args = serde_json::json!({ "detail_level": "brief" });
-        let result = execute(&storage, Some(args)).await;
+        let result = execute(&storage, &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
         let value = result.unwrap();
         assert_eq!(value["detailLevel"], "brief");
@@ -317,7 +325,7 @@ mod tests {
         let (storage, _dir) = test_storage().await;
         ingest_test_memory(&storage, "Full test memory").await;
         let args = serde_json::json!({ "detail_level": "full" });
-        let result = execute(&storage, Some(args)).await;
+        let result = execute(&storage, &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
         let value = result.unwrap();
         assert_eq!(value["detailLevel"], "full");
@@ -327,7 +335,7 @@ mod tests {
     async fn test_timeline_limit_clamped() {
         let (storage, _dir) = test_storage().await;
         let args = serde_json::json!({ "limit": 0 });
-        let result = execute(&storage, Some(args)).await;
+        let result = execute(&storage, &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok()); // limit clamped to 1, no error
     }
 
@@ -339,7 +347,7 @@ mod tests {
             "start": "2020-01-01",
             "end": "2030-12-31"
         });
-        let result = execute(&storage, Some(args)).await;
+        let result = execute(&storage, &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
         let value = result.unwrap();
         assert!(value["totalMemories"].as_u64().unwrap() >= 1);
@@ -350,7 +358,7 @@ mod tests {
         let (storage, _dir) = test_storage().await;
         ingest_test_memory(&storage, "A fact memory").await;
         let args = serde_json::json!({ "node_type": "concept" });
-        let result = execute(&storage, Some(args)).await;
+        let result = execute(&storage, &OutputConfig::default(), Some(args)).await;
         let value = result.unwrap();
         // Ingested as "fact", filtering for "concept" should yield 0
         assert_eq!(value["totalMemories"], 0);
@@ -361,7 +369,7 @@ mod tests {
         let (storage, _dir) = test_storage().await;
         ingest_test_memory(&storage, "Tagged memory").await;
         let args = serde_json::json!({ "tags": ["timeline-test"] });
-        let result = execute(&storage, Some(args)).await;
+        let result = execute(&storage, &OutputConfig::default(), Some(args)).await;
         let value = result.unwrap();
         assert!(value["totalMemories"].as_u64().unwrap() >= 1);
     }
@@ -371,7 +379,7 @@ mod tests {
         let (storage, _dir) = test_storage().await;
         ingest_test_memory(&storage, "Tagged memory").await;
         let args = serde_json::json!({ "tags": ["nonexistent-tag"] });
-        let result = execute(&storage, Some(args)).await;
+        let result = execute(&storage, &OutputConfig::default(), Some(args)).await;
         let value = result.unwrap();
         assert_eq!(value["totalMemories"], 0);
     }
@@ -409,7 +417,7 @@ mod tests {
         // Limit 5 against 12 total — before the fix, `retain` on `concept`
         // would operate on the 5 most recent rows (all `fact`) and find 0.
         let args = serde_json::json!({ "node_type": "concept", "limit": 5 });
-        let value = execute(&storage, Some(args)).await.unwrap();
+        let value = execute(&storage, &OutputConfig::default(), Some(args)).await.unwrap();
         assert_eq!(
             value["totalMemories"], 2,
             "Both sparse concepts should survive a limit smaller than the dominant set"
@@ -447,7 +455,7 @@ mod tests {
         }
 
         let args = serde_json::json!({ "tags": ["rare"], "limit": 5 });
-        let value = execute(&storage, Some(args)).await.unwrap();
+        let value = execute(&storage, &OutputConfig::default(), Some(args)).await.unwrap();
         assert_eq!(
             value["totalMemories"], 2,
             "Both sparse-tag matches should survive a limit smaller than the dominant set"
@@ -478,5 +486,24 @@ mod tests {
             .unwrap();
         assert_eq!(nodes.len(), 1, "Only the exact-tag match should return");
         assert_eq!(nodes[0].content, "Exact tag hit");
+    }
+
+    /// Phase 2: config-file detail_level applies when no explicit param is set,
+    /// and an explicit param overrides it.
+    #[tokio::test]
+    async fn test_timeline_config_detail_precedence() {
+        let (storage, _dir) = test_storage().await;
+        ingest_test_memory(&storage, "Timeline config precedence content.").await;
+
+        let cfg = vestige_core::VestigeConfig::parse("[defaults]\ndetail_level=\"full\"").output();
+
+        // No explicit param -> config wins.
+        let value = execute(&storage, &cfg, None).await.unwrap();
+        assert_eq!(value["detailLevel"], "full");
+
+        // Explicit param -> overrides config.
+        let args = serde_json::json!({ "detail_level": "brief" });
+        let value = execute(&storage, &cfg, Some(args)).await.unwrap();
+        assert_eq!(value["detailLevel"], "brief");
     }
 }

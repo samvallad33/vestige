@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.24] - 2026-06-11 — "Configurable Output"
+
+Roadmap **Phase 2: Configurable Output**. Users can now control the default
+shape and size of high-traffic MCP responses with an optional, local-first
+config file — without recompiling and without a cloud service. The default
+behavior is unchanged: a fresh install with no `vestige.toml` behaves exactly
+as before.
+
+### Added
+
+- **`vestige.toml` config file**, loaded from the active Vestige data directory
+  (`<data_dir>/vestige.toml`, alongside `vestige.db`). A missing or malformed
+  file falls back to built-in defaults, so existing installs are unaffected.
+- **`[defaults]` table** with three keys: `detail_level`
+  (`brief` | `summary` | `full`), `limit` (default result count for
+  high-traffic tools), and `profile`.
+- **Output profiles** — `lean`, `default`, `audit`, `research` — each presetting
+  a coherent bundle of detail level, result limit, and whether scores and
+  timestamps are included:
+  - `lean`: `brief` detail, limit 5, scores and timestamps dropped (smallest
+    context cost).
+  - `default`: historical behavior — `summary` detail, tool's own default
+    limit, scores and timestamps present. **Unchanged.**
+  - `audit`: `full` detail with every field, score, and timestamp.
+  - `research`: `full` detail with a larger default limit (25).
+- **Three-layer precedence**, applied per call: an explicit MCP parameter wins
+  over the config file, which wins over the built-in default.
+- **`profile` field** echoed in `search`, `memory_timeline`, `codebase`
+  (`get_context`), and `session_context` responses so the active profile is
+  observable.
+
+### Changed
+
+- `search`, `memory_timeline`, `codebase` (`get_context`), and
+  `session_context` now resolve their default detail level and result limit
+  through the config file when no explicit parameter is supplied. With no
+  `vestige.toml` present, their output is byte-for-byte identical to v2.1.23.
+
+### Documentation
+
+- `docs/CONFIGURATION.md` gains a **Output Configuration (`vestige.toml`)**
+  section documenting the file location, `[defaults]` keys, profile presets,
+  and precedence rules.
+
 ## [2.1.23] - 2026-05-27 — "Receipt Lock Hardening"
 
 v2.1.23 hardens the Sanhedrin launch path so Receipt Lock is portable,

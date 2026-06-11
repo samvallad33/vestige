@@ -9,7 +9,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::cognitive::CognitiveEngine;
-use vestige_core::{IngestInput, Storage};
+use vestige_core::{IngestInput, OutputConfig, Storage};
+
+use super::search_unified::apply_output_masks;
 
 /// Input schema for the unified codebase tool
 pub fn schema() -> Value {
@@ -87,6 +89,7 @@ struct CodebaseArgs {
 pub async fn execute(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
+    output_config: &OutputConfig,
     args: Option<Value>,
 ) -> Result<Value, String> {
     let args: CodebaseArgs = match args {
@@ -97,7 +100,7 @@ pub async fn execute(
     match args.action.as_str() {
         "remember_pattern" => execute_remember_pattern(storage, cognitive, &args).await,
         "remember_decision" => execute_remember_decision(storage, cognitive, &args).await,
-        "get_context" => execute_get_context(storage, cognitive, &args).await,
+        "get_context" => execute_get_context(storage, cognitive, output_config, &args).await,
         _ => Err(format!(
             "Invalid action '{}'. Must be one of: remember_pattern, remember_decision, get_context",
             args.action
@@ -282,9 +285,11 @@ async fn execute_remember_decision(
 async fn execute_get_context(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
+    output_config: &OutputConfig,
     args: &CodebaseArgs,
 ) -> Result<Value, String> {
-    let limit = args.limit.unwrap_or(10).clamp(1, 50);
+    // Precedence: explicit MCP param > config limit > built-in default (10).
+    let limit = output_config.resolve_limit(args.limit, 10).clamp(1, 50);
 
     // Build tag filter for codebase
     let tag_filter = args.codebase.as_ref().map(|cb| format!("codebase:{}", cb));
@@ -299,7 +304,7 @@ async fn execute_get_context(
         .get_nodes_by_type_and_tag("decision", tag_filter.as_deref(), limit)
         .unwrap_or_default();
 
-    let formatted_patterns: Vec<Value> = patterns
+    let mut formatted_patterns: Vec<Value> = patterns
         .iter()
         .map(|n| {
             serde_json::json!({
@@ -311,8 +316,9 @@ async fn execute_get_context(
             })
         })
         .collect();
+    apply_output_masks(&mut formatted_patterns, output_config);
 
-    let formatted_decisions: Vec<Value> = decisions
+    let mut formatted_decisions: Vec<Value> = decisions
         .iter()
         .map(|n| {
             serde_json::json!({
@@ -324,6 +330,7 @@ async fn execute_get_context(
             })
         })
         .collect();
+    apply_output_masks(&mut formatted_decisions, output_config);
 
     // ====================================================================
     // COGNITIVE: Cross-project knowledge discovery
@@ -352,6 +359,7 @@ async fn execute_get_context(
     Ok(serde_json::json!({
         "action": "get_context",
         "codebase": args.codebase,
+        "profile": output_config.profile.as_str(),
         "patterns": {
             "count": formatted_patterns.len(),
             "items": formatted_patterns,
@@ -411,7 +419,7 @@ mod tests {
     #[tokio::test]
     async fn test_missing_args_fails() {
         let (storage, _dir) = test_storage().await;
-        let result = execute(&storage, &test_cognitive(), None).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing arguments"));
     }
@@ -420,7 +428,7 @@ mod tests {
     async fn test_invalid_action_fails() {
         let (storage, _dir) = test_storage().await;
         let args = serde_json::json!({ "action": "invalid" });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid action"));
     }
@@ -435,7 +443,7 @@ mod tests {
             "files": ["src/lib.rs"],
             "codebase": "vestige"
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
         let value = result.unwrap();
         assert_eq!(value["action"], "remember_pattern");
@@ -451,7 +459,7 @@ mod tests {
             "action": "remember_pattern",
             "description": "Some description"
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("'name' is required"));
     }
@@ -463,7 +471,7 @@ mod tests {
             "action": "remember_pattern",
             "name": "Test Pattern"
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("'description' is required"));
     }
@@ -476,7 +484,7 @@ mod tests {
             "name": "   ",
             "description": "Some description"
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("empty"));
     }
@@ -492,7 +500,7 @@ mod tests {
             "files": ["src/storage.rs"],
             "codebase": "vestige"
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
         let value = result.unwrap();
         assert_eq!(value["action"], "remember_decision");
@@ -507,7 +515,7 @@ mod tests {
             "action": "remember_decision",
             "rationale": "Some rationale"
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("'decision' is required"));
     }
@@ -519,7 +527,7 @@ mod tests {
             "action": "remember_decision",
             "decision": "Use SQLite"
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("'rationale' is required"));
     }
@@ -532,7 +540,7 @@ mod tests {
             "decision": "  ",
             "rationale": "Something"
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("empty"));
     }
@@ -544,7 +552,7 @@ mod tests {
             "action": "get_context",
             "codebase": "nonexistent"
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
         let value = result.unwrap();
         assert_eq!(value["action"], "get_context");
@@ -563,14 +571,14 @@ mod tests {
             "description": "A test pattern",
             "codebase": "myproject"
         });
-        execute(&storage, &cog, Some(save_args)).await.unwrap();
+        execute(&storage, &cog, &OutputConfig::default(), Some(save_args)).await.unwrap();
 
         // Now retrieve
         let get_args = serde_json::json!({
             "action": "get_context",
             "codebase": "myproject"
         });
-        let result = execute(&storage, &cog, Some(get_args)).await;
+        let result = execute(&storage, &cog, &OutputConfig::default(), Some(get_args)).await;
         assert!(result.is_ok());
         let value = result.unwrap();
         assert!(value["patterns"]["count"].as_u64().unwrap() >= 1);
@@ -580,10 +588,35 @@ mod tests {
     async fn test_get_context_no_codebase() {
         let (storage, _dir) = test_storage().await;
         let args = serde_json::json!({ "action": "get_context" });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
         let value = result.unwrap();
         assert_eq!(value["action"], "get_context");
         assert!(value["codebase"].is_null());
+    }
+
+    /// Phase 2: the `lean` profile masks the `createdAt` timestamp from
+    /// get_context items, and the response echoes the active profile.
+    #[tokio::test]
+    async fn test_get_context_lean_profile_masks_timestamps() {
+        let (storage, _dir) = test_storage().await;
+        let cog = test_cognitive();
+        let save_args = serde_json::json!({
+            "action": "remember_pattern",
+            "name": "Lean Pattern",
+            "description": "A pattern for lean masking",
+            "codebase": "leanproj"
+        });
+        execute(&storage, &cog, &OutputConfig::default(), Some(save_args))
+            .await
+            .unwrap();
+
+        let cfg = vestige_core::VestigeConfig::parse("[defaults]\nprofile=lean").output();
+        let get_args = serde_json::json!({ "action": "get_context", "codebase": "leanproj" });
+        let value = execute(&storage, &cog, &cfg, Some(get_args)).await.unwrap();
+        assert_eq!(value["profile"], "lean");
+        let item = &value["patterns"]["items"][0];
+        assert!(item.get("createdAt").is_none(), "lean must drop createdAt");
+        assert!(item.get("content").is_some(), "content still present");
     }
 }

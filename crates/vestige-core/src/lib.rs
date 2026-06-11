@@ -80,6 +80,8 @@
 // MODULES
 // ============================================================================
 
+/// Optional `vestige.toml` configuration (Phase 2: Configurable Output).
+pub mod config;
 pub mod consolidation;
 pub mod fsrs;
 pub mod fts;
@@ -149,6 +151,9 @@ pub use fsrs::{
     retrievability,
     retrievability_with_decay,
 };
+
+// Configuration (vestige.toml output profiles / defaults)
+pub use config::{OutputConfig, OutputDefaults, OutputProfile, VestigeConfig, CONFIG_FILE};
 
 // Storage layer
 pub use storage::{

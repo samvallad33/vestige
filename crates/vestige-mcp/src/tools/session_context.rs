@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::cognitive::CognitiveEngine;
-use vestige_core::Storage;
+use vestige_core::{OutputConfig, Storage};
 
 /// Input schema for session_context tool
 pub fn schema() -> Value {
@@ -98,12 +98,21 @@ fn first_sentence(content: &str) -> String {
 pub async fn execute(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
+    output_config: &OutputConfig,
     args: Option<Value>,
 ) -> Result<Value, String> {
     let args: SessionContextArgs = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid arguments: {}", e))?,
         None => SessionContextArgs::default(),
     };
+
+    // Per-query search width honors the active profile (e.g. `research` widens
+    // it, `lean` narrows it). No explicit MCP param exists here, so the config
+    // limit (or built-in default of 5) applies. Capped to keep the budgeted
+    // session response compact.
+    let per_query_limit = output_config.resolve_limit(None, 5).clamp(1, 25);
+    // The `lean` profile suppresses the inline memory date to save tokens.
+    let show_dates = output_config.show_timestamps;
 
     let token_budget = args.token_budget.unwrap_or(1000).clamp(100, 100000) as usize;
     let budget_chars = token_budget * 4;
@@ -126,7 +135,7 @@ pub async fn execute(
 
     for query in &queries {
         let results = storage
-            .hybrid_search(query, 5, 0.3, 0.7)
+            .hybrid_search(query, per_query_limit, 0.3, 0.7)
             .map_err(|e| e.to_string())?;
 
         for r in results {
@@ -134,8 +143,12 @@ pub async fn execute(
                 continue;
             }
             let summary = first_sentence(&r.node.content);
-            let date_str = r.node.updated_at.format("%b %d, %Y").to_string();
-            let line = format!("- ({}) {}", date_str, summary);
+            let line = if show_dates {
+                let date_str = r.node.updated_at.format("%b %d, %Y").to_string();
+                format!("- ({}) {}", date_str, summary)
+            } else {
+                format!("- {}", summary)
+            };
             let line_len = line.len() + 1; // +1 for newline
 
             if char_count + line_len > budget_chars {
@@ -384,6 +397,7 @@ pub async fn execute(
 
     Ok(serde_json::json!({
         "context": context_text,
+        "profile": output_config.profile.as_str(),
         "tokensUsed": tokens_used,
         "tokenBudget": token_budget,
         "expandable": expandable_ids,
@@ -529,7 +543,7 @@ mod tests {
     #[tokio::test]
     async fn test_default_no_args() {
         let (storage, _dir) = test_storage().await;
-        let result = execute(&storage, &test_cognitive(), None).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), None).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -554,7 +568,7 @@ mod tests {
         let args = serde_json::json!({
             "queries": ["user preferences", "project context"]
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -582,7 +596,7 @@ mod tests {
             "queries": ["memory"],
             "token_budget": 200
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -618,7 +632,7 @@ mod tests {
             "queries": ["expandable test memory"],
             "token_budget": 150
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -629,7 +643,7 @@ mod tests {
     #[tokio::test]
     async fn test_automation_triggers_booleans() {
         let (storage, _dir) = test_storage().await;
-        let result = execute(&storage, &test_cognitive(), None).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), None).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -649,7 +663,7 @@ mod tests {
             "include_intentions": false,
             "include_predictions": false
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -683,13 +697,44 @@ mod tests {
                 "topics": ["performance"]
             }
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
         let ctx = value["context"].as_str().unwrap();
         // Should contain codebase section
         assert!(ctx.contains("vestige"));
+    }
+
+    /// Phase 2: the response echoes the active profile, and the `lean` profile
+    /// suppresses inline memory dates to save tokens.
+    #[tokio::test]
+    async fn test_session_context_profile_echo_and_lean_dates() {
+        let (storage, _dir) = test_storage().await;
+        ingest_test_content(&storage, "Session profile content sentence.", vec![]).await;
+
+        // Default profile -> profile echoed, dates present.
+        let args = serde_json::json!({ "queries": ["profile content"] });
+        let value = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args))
+            .await
+            .unwrap();
+        assert_eq!(value["profile"], "default");
+
+        // Lean profile -> profile echoed as lean. The memory line must not carry
+        // the "(Mon DD, YYYY)" inline date prefix.
+        let cfg = vestige_core::VestigeConfig::parse("[defaults]\nprofile=lean").output();
+        let args = serde_json::json!({ "queries": ["profile content"] });
+        let value = execute(&storage, &test_cognitive(), &cfg, Some(args))
+            .await
+            .unwrap();
+        assert_eq!(value["profile"], "lean");
+        let ctx = value["context"].as_str().unwrap();
+        if ctx.contains("**Memories:**") {
+            assert!(
+                !ctx.contains(", 20"),
+                "lean profile should omit the inline year in memory dates"
+            );
+        }
     }
 
     // ========================================================================

@@ -21,8 +21,8 @@ use tokio::sync::Mutex;
 
 use crate::cognitive::CognitiveEngine;
 use vestige_core::{
-    CompetitionCandidate, EncodingContext, MemoryLifecycle, MemorySnapshot, MemoryState, Storage,
-    TopicalContext,
+    CompetitionCandidate, EncodingContext, MemoryLifecycle, MemorySnapshot, MemoryState,
+    OutputConfig, Storage, TopicalContext,
 };
 
 /// Input schema for unified search tool
@@ -137,6 +137,7 @@ struct SearchArgs {
 pub async fn execute(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
+    output_config: &OutputConfig,
     args: Option<Value>,
 ) -> Result<Value, String> {
     let args: SearchArgs = match args {
@@ -148,12 +149,16 @@ pub async fn execute(
         return Err("Query cannot be empty".to_string());
     }
 
-    // Validate detail_level
-    let detail_level = match args.detail_level.as_deref() {
-        Some("brief") => "brief",
-        Some("full") => "full",
-        Some("summary") | None => "summary",
-        Some(invalid) => {
+    // Validate detail_level. Precedence: explicit MCP param > config file >
+    // built-in default. The explicit arg is validated; the config fallback is
+    // already validated at load time.
+    let detail_level_owned =
+        output_config.resolve_detail_level(args.detail_level.as_deref());
+    let detail_level = match detail_level_owned.as_str() {
+        "brief" => "brief",
+        "full" => "full",
+        "summary" => "summary",
+        invalid => {
             return Err(format!(
                 "Invalid detail_level '{}'. Must be 'brief', 'summary', or 'full'.",
                 invalid
@@ -161,8 +166,9 @@ pub async fn execute(
         }
     };
 
-    // Clamp all parameters to valid ranges
-    let limit = args.limit.unwrap_or(10).clamp(1, 100);
+    // Clamp all parameters to valid ranges. The default limit honors the
+    // config file (e.g. a `research` profile) when no explicit param is set.
+    let limit = output_config.resolve_limit(args.limit, 10).clamp(1, 100);
     let min_retention = args.min_retention.unwrap_or(0.0).clamp(0.0, 1.0);
     let min_similarity = args.min_similarity.unwrap_or(0.5).clamp(0.0, 1.0);
 
@@ -200,6 +206,7 @@ pub async fn execute(
             .filter(|r| r.node.retention_strength >= min_retention)
             .map(|r| format_search_result(r, detail_level))
             .collect();
+        apply_output_masks(&mut formatted, output_config);
 
         let mut budget_expandable: Vec<String> = Vec::new();
         let mut budget_tokens_used: Option<usize> = None;
@@ -231,6 +238,7 @@ pub async fn execute(
             "retrievalMode": retrieval_mode,
             "concrete": true,
             "detailLevel": detail_level,
+            "profile": output_config.profile.as_str(),
             "total": formatted.len(),
             "results": formatted,
         });
@@ -665,6 +673,7 @@ pub async fn execute(
         .iter()
         .map(|r| format_search_result(r, detail_level))
         .collect();
+    apply_output_masks(&mut formatted, output_config);
 
     // ====================================================================
     // Token budget enforcement (v1.8.0)
@@ -705,6 +714,7 @@ pub async fn execute(
         "method": "hybrid+cognitive",
         "retrievalMode": retrieval_mode,
         "detailLevel": detail_level,
+        "profile": output_config.profile.as_str(),
         "total": formatted.len(),
         "results": formatted,
     });
@@ -782,6 +792,42 @@ fn is_literal_query(query: &str) -> bool {
 }
 
 /// Format a search result based on the requested detail level.
+/// Score field keys dropped when an output profile suppresses scores.
+const SCORE_FIELDS: &[&str] = &["combinedScore", "keywordScore", "semanticScore"];
+/// Timestamp field keys dropped when an output profile suppresses timestamps.
+const TIMESTAMP_FIELDS: &[&str] = &[
+    "createdAt",
+    "updatedAt",
+    "lastAccessed",
+    "nextReview",
+    "validFrom",
+    "validUntil",
+];
+
+/// Strip score/timestamp fields from already-formatted result objects according
+/// to the active output profile (e.g. the `lean` profile drops both). Tools
+/// call this after formatting so the field-mask behavior is centralized and the
+/// per-detail-level formatters stay unchanged.
+pub fn apply_output_masks(results: &mut [Value], output_config: &OutputConfig) {
+    if output_config.show_scores && output_config.show_timestamps {
+        return;
+    }
+    for result in results.iter_mut() {
+        if let Some(obj) = result.as_object_mut() {
+            if !output_config.show_scores {
+                for key in SCORE_FIELDS {
+                    obj.remove(*key);
+                }
+            }
+            if !output_config.show_timestamps {
+                for key in TIMESTAMP_FIELDS {
+                    obj.remove(*key);
+                }
+            }
+        }
+    }
+}
+
 fn format_search_result(r: &vestige_core::SearchResult, detail_level: &str) -> Value {
     match detail_level {
         "brief" => serde_json::json!({
@@ -922,7 +968,7 @@ mod tests {
     async fn test_search_empty_query_fails() {
         let (storage, _dir) = test_storage().await;
         let args = serde_json::json!({ "query": "" });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("empty"));
     }
@@ -931,7 +977,7 @@ mod tests {
     async fn test_search_whitespace_only_query_fails() {
         let (storage, _dir) = test_storage().await;
         let args = serde_json::json!({ "query": "   \t\n  " });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("empty"));
     }
@@ -939,7 +985,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_missing_arguments_fails() {
         let (storage, _dir) = test_storage().await;
-        let result = execute(&storage, &test_cognitive(), None).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing arguments"));
     }
@@ -948,7 +994,7 @@ mod tests {
     async fn test_search_missing_query_field_fails() {
         let (storage, _dir) = test_storage().await;
         let args = serde_json::json!({ "limit": 10 });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid arguments"));
     }
@@ -986,7 +1032,7 @@ mod tests {
             "query": "OPENAI_API_KEY",
             "limit": 5
         });
-        let result = execute(&storage, &test_cognitive(), Some(args))
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args))
             .await
             .unwrap();
 
@@ -1010,7 +1056,7 @@ mod tests {
             "query": uuid,
             "limit": 5
         });
-        let result = execute(&storage, &test_cognitive(), Some(args))
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args))
             .await
             .unwrap();
 
@@ -1036,7 +1082,7 @@ mod tests {
             "query": "mlx_lm.server",
             "limit": 5
         });
-        let result = execute(&storage, &test_cognitive(), Some(args))
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args))
             .await
             .unwrap();
 
@@ -1058,7 +1104,7 @@ mod tests {
             "query": "test",
             "limit": 0
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
     }
 
@@ -1072,7 +1118,7 @@ mod tests {
             "query": "test",
             "limit": 1000
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
     }
 
@@ -1085,7 +1131,7 @@ mod tests {
             "query": "test",
             "limit": -5
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
     }
 
@@ -1102,7 +1148,7 @@ mod tests {
             "query": "test",
             "min_retention": -0.5
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
     }
 
@@ -1115,7 +1161,7 @@ mod tests {
             "query": "test",
             "min_retention": 1.5
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         // Should succeed but may return no results (retention > 1.0 clamped to 1.0)
         assert!(result.is_ok());
     }
@@ -1133,7 +1179,7 @@ mod tests {
             "query": "test",
             "min_similarity": -0.5
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
     }
 
@@ -1146,7 +1192,7 @@ mod tests {
             "query": "test",
             "min_similarity": 1.5
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         // Should succeed but may return no results
         assert!(result.is_ok());
     }
@@ -1161,7 +1207,7 @@ mod tests {
         ingest_test_content(&storage, "The Rust programming language is memory safe.").await;
 
         let args = serde_json::json!({ "query": "rust" });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1181,7 +1227,7 @@ mod tests {
             "query": "python",
             "min_similarity": 0.0
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1203,7 +1249,7 @@ mod tests {
             "limit": 2,
             "min_similarity": 0.0
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1217,7 +1263,7 @@ mod tests {
         // Don't ingest anything - database is empty
 
         let args = serde_json::json!({ "query": "anything" });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1234,7 +1280,7 @@ mod tests {
             "query": "testing",
             "min_similarity": 0.0
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1267,7 +1313,7 @@ mod tests {
             "query": "item",
             "min_similarity": 0.0
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1353,7 +1399,7 @@ mod tests {
             "detail_level": "brief",
             "min_similarity": 0.0
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1382,7 +1428,7 @@ mod tests {
             "detail_level": "full",
             "min_similarity": 0.0
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1409,7 +1455,7 @@ mod tests {
             "query": "default",
             "min_similarity": 0.0
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1438,7 +1484,7 @@ mod tests {
             "query": "test",
             "detail_level": "invalid_level"
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid detail_level"));
     }
@@ -1467,7 +1513,7 @@ mod tests {
             "token_budget": 200,
             "min_similarity": 0.0
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1494,7 +1540,7 @@ mod tests {
             "token_budget": 150,
             "min_similarity": 0.0
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1513,7 +1559,7 @@ mod tests {
             "query": "no budget",
             "min_similarity": 0.0
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args)).await;
         assert!(result.is_ok());
 
         let value = result.unwrap();
@@ -1530,5 +1576,79 @@ mod tests {
         assert!(tb.is_object());
         assert_eq!(tb["minimum"], 100);
         assert_eq!(tb["maximum"], 100000);
+    }
+
+    // ========================================================================
+    // Phase 2: Configurable Output — precedence tests
+    // ========================================================================
+
+    /// Config-file detail_level applies when no explicit MCP param is given.
+    #[tokio::test]
+    async fn test_config_detail_level_applies_without_param() {
+        let (storage, _dir) = test_storage().await;
+        ingest_test_content(&storage, "Config detail level fallback content.").await;
+
+        // Config selects `full`; the call passes no detail_level.
+        let cfg = vestige_core::VestigeConfig::parse("[defaults]\ndetail_level=\"full\"").output();
+        let args = serde_json::json!({ "query": "config detail", "min_similarity": 0.0 });
+        let value = execute(&storage, &test_cognitive(), &cfg, Some(args))
+            .await
+            .unwrap();
+        assert_eq!(value["detailLevel"], "full");
+    }
+
+    /// Explicit MCP param beats the config file (precedence layer 1 > 2).
+    #[tokio::test]
+    async fn test_explicit_param_overrides_config() {
+        let (storage, _dir) = test_storage().await;
+        ingest_test_content(&storage, "Explicit overrides config content.").await;
+
+        // Config says `full`, but the call explicitly requests `brief`.
+        let cfg = vestige_core::VestigeConfig::parse("[defaults]\ndetail_level=\"full\"").output();
+        let args = serde_json::json!({
+            "query": "explicit override",
+            "detail_level": "brief",
+            "min_similarity": 0.0
+        });
+        let value = execute(&storage, &test_cognitive(), &cfg, Some(args))
+            .await
+            .unwrap();
+        assert_eq!(value["detailLevel"], "brief");
+    }
+
+    /// The `lean` profile masks scores and timestamps from results.
+    #[tokio::test]
+    async fn test_lean_profile_masks_scores_and_timestamps() {
+        let (storage, _dir) = test_storage().await;
+        ingest_test_content(&storage, "Lean profile masking content.").await;
+
+        let cfg = vestige_core::VestigeConfig::parse("[defaults]\nprofile=lean").output();
+        let args = serde_json::json!({ "query": "lean masking", "min_similarity": 0.0 });
+        let value = execute(&storage, &test_cognitive(), &cfg, Some(args))
+            .await
+            .unwrap();
+        assert_eq!(value["profile"], "lean");
+        if let Some(first) = value["results"].as_array().and_then(|a| a.first()) {
+            assert!(first.get("combinedScore").is_none(), "lean must drop scores");
+            assert!(first.get("createdAt").is_none(), "lean must drop timestamps");
+        }
+    }
+
+    /// The default profile is byte-for-byte the historical behavior: summary
+    /// detail with scores and timestamps present.
+    #[tokio::test]
+    async fn test_default_profile_preserves_behavior() {
+        let (storage, _dir) = test_storage().await;
+        ingest_test_content(&storage, "Default profile preserved content.").await;
+
+        let args = serde_json::json!({ "query": "default preserved", "min_similarity": 0.0 });
+        let value = execute(&storage, &test_cognitive(), &OutputConfig::default(), Some(args))
+            .await
+            .unwrap();
+        assert_eq!(value["detailLevel"], "summary");
+        assert_eq!(value["profile"], "default");
+        if let Some(first) = value["results"].as_array().and_then(|a| a.first()) {
+            assert!(first.get("createdAt").is_some(), "default keeps timestamps");
+        }
     }
 }

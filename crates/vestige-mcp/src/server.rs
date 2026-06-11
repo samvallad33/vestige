@@ -20,7 +20,7 @@ use crate::protocol::messages::{
 use crate::protocol::types::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, MCP_VERSION};
 use crate::resources;
 use crate::tools;
-use vestige_core::Storage;
+use vestige_core::{OutputConfig, Storage, VestigeConfig};
 
 /// Build the MCP `instructions` string injected into every connecting client's
 /// system prompt.
@@ -77,17 +77,31 @@ pub struct McpServer {
     tool_call_count: AtomicU64,
     /// Optional event broadcast channel for dashboard real-time updates.
     event_tx: Option<broadcast::Sender<VestigeEvent>>,
+    /// Resolved output config from `<data_dir>/vestige.toml` (Phase 2). Tools
+    /// use it as the fallback for detail/limit when no explicit MCP param is
+    /// given; explicit params always win.
+    output_config: Arc<OutputConfig>,
+}
+
+/// Load `vestige.toml` from the storage's data directory and resolve it to an
+/// effective [`OutputConfig`]. A missing/malformed file yields the built-in
+/// default, which preserves historical behavior.
+fn load_output_config(storage: &Arc<Storage>) -> Arc<OutputConfig> {
+    let config = VestigeConfig::load_from_data_dir(storage.data_dir());
+    Arc::new(config.output())
 }
 
 impl McpServer {
     #[allow(dead_code)]
     pub fn new(storage: Arc<Storage>, cognitive: Arc<Mutex<CognitiveEngine>>) -> Self {
+        let output_config = load_output_config(&storage);
         Self {
             storage,
             cognitive,
             initialized: false,
             tool_call_count: AtomicU64::new(0),
             event_tx: None,
+            output_config,
         }
     }
 
@@ -97,12 +111,14 @@ impl McpServer {
         cognitive: Arc<Mutex<CognitiveEngine>>,
         event_tx: broadcast::Sender<VestigeEvent>,
     ) -> Self {
+        let output_config = load_output_config(&storage);
         Self {
             storage,
             cognitive,
             initialized: false,
             tool_call_count: AtomicU64::new(0),
             event_tx: Some(event_tx),
+            output_config,
         }
     }
 
@@ -491,16 +507,26 @@ impl McpServer {
             // UNIFIED TOOLS (v1.1+) - Preferred API
             // ================================================================
             "search" => {
-                tools::search_unified::execute(&self.storage, &self.cognitive, request.arguments)
-                    .await
+                tools::search_unified::execute(
+                    &self.storage,
+                    &self.cognitive,
+                    &self.output_config,
+                    request.arguments,
+                )
+                .await
             }
             "memory" => {
                 tools::memory_unified::execute(&self.storage, &self.cognitive, request.arguments)
                     .await
             }
             "codebase" => {
-                tools::codebase_unified::execute(&self.storage, &self.cognitive, request.arguments)
-                    .await
+                tools::codebase_unified::execute(
+                    &self.storage,
+                    &self.cognitive,
+                    &self.output_config,
+                    request.arguments,
+                )
+                .await
             }
             "intention" => {
                 tools::intention_unified::execute(&self.storage, &self.cognitive, request.arguments)
@@ -615,8 +641,13 @@ impl McpServer {
                     "Tool '{}' is deprecated. Use 'search' instead.",
                     request.name
                 );
-                tools::search_unified::execute(&self.storage, &self.cognitive, request.arguments)
-                    .await
+                tools::search_unified::execute(
+                    &self.storage,
+                    &self.cognitive,
+                    &self.output_config,
+                    request.arguments,
+                )
+                .await
             }
 
             // ================================================================
@@ -696,7 +727,13 @@ impl McpServer {
                     }
                     None => Some(serde_json::json!({"action": "remember_pattern"})),
                 };
-                tools::codebase_unified::execute(&self.storage, &self.cognitive, unified_args).await
+                tools::codebase_unified::execute(
+                    &self.storage,
+                    &self.cognitive,
+                    &self.output_config,
+                    unified_args,
+                )
+                .await
             }
             "remember_decision" => {
                 warn!(
@@ -715,7 +752,13 @@ impl McpServer {
                     }
                     None => Some(serde_json::json!({"action": "remember_decision"})),
                 };
-                tools::codebase_unified::execute(&self.storage, &self.cognitive, unified_args).await
+                tools::codebase_unified::execute(
+                    &self.storage,
+                    &self.cognitive,
+                    &self.output_config,
+                    unified_args,
+                )
+                .await
             }
             "get_codebase_context" => {
                 warn!(
@@ -731,7 +774,13 @@ impl McpServer {
                     }
                     None => Some(serde_json::json!({"action": "get_context"})),
                 };
-                tools::codebase_unified::execute(&self.storage, &self.cognitive, unified_args).await
+                tools::codebase_unified::execute(
+                    &self.storage,
+                    &self.cognitive,
+                    &self.output_config,
+                    unified_args,
+                )
+                .await
             }
 
             // ================================================================
@@ -863,7 +912,9 @@ impl McpServer {
             // ================================================================
             // TEMPORAL TOOLS (v1.2+)
             // ================================================================
-            "memory_timeline" => tools::timeline::execute(&self.storage, request.arguments).await,
+            "memory_timeline" => {
+                tools::timeline::execute(&self.storage, &self.output_config, request.arguments).await
+            }
             "memory_changelog" => tools::changelog::execute(&self.storage, request.arguments).await,
 
             // ================================================================
@@ -913,8 +964,13 @@ impl McpServer {
             // CONTEXT PACKETS (v1.8+)
             // ================================================================
             "session_context" => {
-                tools::session_context::execute(&self.storage, &self.cognitive, request.arguments)
-                    .await
+                tools::session_context::execute(
+                    &self.storage,
+                    &self.cognitive,
+                    &self.output_config,
+                    request.arguments,
+                )
+                .await
             }
 
             // ================================================================
