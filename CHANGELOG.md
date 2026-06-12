@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.25] - 2026-06-12 — "Merge / Supersede Controls"
+
+v2.1.25 ships Phase 3: diff-previewed, confidence-gated, reversible,
+self-explaining combine/dedupe/supersede on a never-delete (bitemporal) store.
+The default is always preview/review — these tools never silently mutate memory.
+The differentiator is the reversible operation log: every merge/supersede/undo is
+an auditable, reversible event with provenance ("why did these combine?") — a git
+reflog for your agent's memory.
+
+### Added
+
+- **Seven new MCP tools** for merge/supersede control:
+  - `merge_candidates` — surface likely duplicate/overlapping clusters with
+    confidence scores and the signals behind each (Fellegi-Sunter
+    match/possible/non-match). Read-only.
+  - `plan_merge` — produce a previewable merge PLAN (a diff of combined
+    content/tags/provenance) without applying it.
+  - `plan_supersede` — preview superseding A with B (bitemporal invalidation,
+    audit-preserving) without applying.
+  - `apply_plan` — execute a previously-generated plan id; recorded as a
+    reversible operation.
+  - `merge_undo` — reverse a prior merge/supersede operation, or list the
+    reversible operation log (the "memory reflog").
+  - `protect` — pin a memory so it can never be auto-merged, superseded, or
+    garbage-collected.
+  - `merge_policy` — get/set the per-project Fellegi-Sunter two thresholds
+    (`match_threshold`, `possible_threshold`) and `auto_apply`.
+- **Bitemporal "invalidate, don't delete" supersede** (Graphiti-style): a
+  superseded memory is kept and stays queryable for audit. It is stamped with
+  `valid_until = now` and a new `superseded_by` lineage pointer, instead of being
+  deleted or merely demoted.
+- **Reversible operation log** (`merge_operations` table) — every applied
+  merge/supersede records an undo payload and provenance signals so any operation
+  can be reversed, including restoring survivor content/tags and clearing the
+  bitemporal invalidation.
+- **Fellegi-Sunter two-threshold scoring** for dedup/merge candidates, combining
+  embedding cosine similarity with tag and content-token overlap. Borderline
+  "possible" matches are surfaced for review instead of force-merged.
+- **Memory protection / pinning** — `protected` column on `knowledge_nodes`;
+  protected memories are excluded from auto-merge/supersede/GC paths.
+- **Migration V14** adding the `merge_plans` and `merge_operations` tables, the
+  `protected` and `superseded_by` columns on `knowledge_nodes`, and their
+  indexes. Idempotent on replay.
+- **Docs**: `docs/MERGE_SUPERSEDE.md` describing the design, the bitemporal
+  model, the two-threshold policy, the reversible operation log, and the tool
+  surface.
+
+### Notes
+
+- All merge/supersede operations are **opt-in and preview-first**. `apply_plan`
+  requires `confirm=true` for `possible`/`non_match` plans, and only applies
+  `match` plans without confirmation when `merge_policy.auto_apply` is enabled
+  (default off). This deliberately avoids the silent-merge / auto-delete /
+  audit-trail-loss anti-patterns reported against other memory systems.
+- The merge policy persists per-project and is also overridable via
+  `VESTIGE_MERGE_MATCH_THRESHOLD`, `VESTIGE_MERGE_POSSIBLE_THRESHOLD`, and
+  `VESTIGE_MERGE_AUTO_APPLY` environment variables.
+
 ## [2.1.23] - 2026-05-27 — "Receipt Lock Hardening"
 
 v2.1.23 hardens the Sanhedrin launch path so Receipt Lock is portable,

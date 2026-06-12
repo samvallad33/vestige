@@ -69,6 +69,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "v2.1.2 Honest Memory: non-content purge tombstones",
         up: MIGRATION_V13_UP,
     },
+    Migration {
+        version: 14,
+        description: "v2.1.25 Merge/Supersede: reversible operation log, merge plans, bitemporal lineage, protected pins",
+        up: MIGRATION_V14_UP,
+    },
 ];
 
 /// A database migration
@@ -735,6 +740,79 @@ ON deletion_tombstones(deleted_at);
 UPDATE schema_version SET version = 13, applied_at = datetime('now');
 "#;
 
+/// V14: Merge / Supersede controls (Phase 3).
+///
+/// Adds the four pieces the merge/supersede feature needs on a never-delete
+/// (bitemporal) store:
+///
+/// 1. `merge_plans` — previewable, not-yet-applied plans. `plan_merge` and
+///    `plan_supersede` write a plan row containing a JSON diff; `apply_plan`
+///    consumes it by id. Plans are append-only; status moves
+///    pending -> applied / cancelled.
+/// 2. `merge_operations` — the reversible operation log (the "memory reflog").
+///    Every applied merge/supersede records one row with a JSON `undo_payload`
+///    capturing exactly what changed, so `merge_undo` can reverse it. The
+///    `signals` column records WHY the memories combined (provenance), which is
+///    the self-explaining differentiator.
+/// 3. `knowledge_nodes.protected` — pin flag. A protected memory can never be
+///    auto-merged, superseded, or forgotten.
+/// 4. `knowledge_nodes.superseded_by` — bitemporal lineage pointer. Superseding
+///    A with B does NOT delete A: it stamps A.valid_until = B.valid_from and
+///    sets A.superseded_by = B.id, leaving A fully queryable for audit
+///    (Graphiti-style invalidate-don't-delete).
+// The two `protected` / `superseded_by` ADD COLUMNs (and their indexes) are
+// applied separately in `apply_migrations` BEFORE this batch runs, guarded
+// against "duplicate column" on replay, since SQLite has no
+// `ADD COLUMN IF NOT EXISTS`. The rest of V14 is idempotent (CREATE ... IF NOT
+// EXISTS).
+const MIGRATION_V14_UP: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_nodes_protected ON knowledge_nodes(protected);
+CREATE INDEX IF NOT EXISTS idx_nodes_superseded_by ON knowledge_nodes(superseded_by);
+
+-- Previewable plans (a diff) produced by plan_merge / plan_supersede.
+-- `kind` is 'merge' | 'supersede'. `payload` is the full JSON plan/diff.
+CREATE TABLE IF NOT EXISTS merge_plans (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | applied | cancelled
+    created_at TEXT NOT NULL,
+    applied_at TEXT,
+    survivor_id TEXT,                          -- node kept after the op
+    member_ids TEXT NOT NULL DEFAULT '[]',     -- JSON array of all involved node ids
+    confidence REAL,                           -- Fellegi-Sunter match score (0-1)
+    classification TEXT,                       -- match | possible | non_match
+    payload TEXT NOT NULL                      -- full JSON plan/diff
+);
+
+CREATE INDEX IF NOT EXISTS idx_merge_plans_status ON merge_plans(status);
+CREATE INDEX IF NOT EXISTS idx_merge_plans_created_at ON merge_plans(created_at);
+
+-- Reversible operation log — the "git reflog for your agent's memory".
+-- One row per applied merge/supersede; `undo_payload` carries everything
+-- needed to reverse it, `signals` records why the memories combined.
+CREATE TABLE IF NOT EXISTS merge_operations (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT,                              -- merge_plans.id this came from
+    op_type TEXT NOT NULL,                     -- merge | supersede | undo
+    status TEXT NOT NULL DEFAULT 'applied',    -- applied | reverted
+    created_at TEXT NOT NULL,
+    reverted_at TEXT,
+    reverts_op_id TEXT,                        -- set when op_type = 'undo'
+    survivor_id TEXT,                          -- node kept
+    affected_ids TEXT NOT NULL DEFAULT '[]',   -- JSON array of node ids touched
+    confidence REAL,
+    signals TEXT,                              -- JSON: why they combined (provenance)
+    reason TEXT,                               -- human-readable explanation
+    undo_payload TEXT NOT NULL                 -- JSON snapshot to reverse the op
+);
+
+CREATE INDEX IF NOT EXISTS idx_merge_operations_status ON merge_operations(status);
+CREATE INDEX IF NOT EXISTS idx_merge_operations_created_at ON merge_operations(created_at);
+CREATE INDEX IF NOT EXISTS idx_merge_operations_survivor ON merge_operations(survivor_id);
+
+UPDATE schema_version SET version = 14, applied_at = datetime('now');
+"#;
+
 /// Get current schema version from database
 pub fn get_current_version(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
     conn.query_row(
@@ -743,6 +821,19 @@ pub fn get_current_version(conn: &rusqlite::Connection) -> rusqlite::Result<u32>
         |row| row.get(0),
     )
     .or(Ok(0))
+}
+
+/// Run an `ALTER TABLE ... ADD COLUMN` statement, treating a "duplicate column
+/// name" failure as success so migration replay stays idempotent (SQLite has no
+/// `ADD COLUMN IF NOT EXISTS`).
+fn add_column_if_missing(conn: &rusqlite::Connection, sql: &str) -> rusqlite::Result<()> {
+    match conn.execute(sql, []) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(msg))) if msg.contains("duplicate column name") => {
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Apply pending migrations
@@ -757,6 +848,21 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
                 migration.version,
                 migration.description
             );
+
+            // V14: add the two bitemporal/protect columns BEFORE the batch (the
+            // batch's indexes reference them). SQLite lacks
+            // `ADD COLUMN IF NOT EXISTS`, so swallow the "duplicate column"
+            // error to stay idempotent on replay.
+            if migration.version == 14 {
+                add_column_if_missing(
+                    conn,
+                    "ALTER TABLE knowledge_nodes ADD COLUMN protected INTEGER NOT NULL DEFAULT 0",
+                )?;
+                add_column_if_missing(
+                    conn,
+                    "ALTER TABLE knowledge_nodes ADD COLUMN superseded_by TEXT",
+                )?;
+            }
 
             // Use execute_batch to handle multi-statement SQL including triggers
             conn.execute_batch(migration.up)?;
@@ -784,17 +890,17 @@ mod tests {
     /// version after `apply_migrations` runs all migrations end-to-end, and
     /// neither of the dead tables V11 drops must exist afterwards.
     #[test]
-    fn test_apply_migrations_advances_to_v13_and_drops_dead_tables() {
+    fn test_apply_migrations_advances_to_v14_and_drops_dead_tables() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
 
         // Pre-requisite: schema_version must be bootstrapped by V1.
         apply_migrations(&conn).expect("apply_migrations succeeds");
 
-        // 1. schema_version advanced to V13
+        // 1. schema_version advanced to V14
         let version = get_current_version(&conn).expect("read schema_version");
         assert_eq!(
-            version, 13,
-            "schema_version must be 13 after all migrations"
+            version, 14,
+            "schema_version must be 14 after all migrations"
         );
 
         // 2. knowledge_edges is gone (V11 drops it)
@@ -848,6 +954,37 @@ mod tests {
             deletion_tombstone_rows, 1,
             "deletion_tombstones table must be created by V13"
         );
+
+        // 6. merge_plans + merge_operations exist (V14 creates them)
+        for table in ["merge_plans", "merge_operations"] {
+            let rows: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("query sqlite_master");
+            assert_eq!(rows, 1, "{table} table must be created by V14");
+        }
+
+        // 7. knowledge_nodes gains `protected` + `superseded_by` (V14)
+        let node_cols: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(knowledge_nodes)")
+                .expect("prepare table_info");
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .expect("query table_info")
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert!(
+            node_cols.iter().any(|c| c == "protected"),
+            "knowledge_nodes must have `protected` column after V14"
+        );
+        assert!(
+            node_cols.iter().any(|c| c == "superseded_by"),
+            "knowledge_nodes must have `superseded_by` column after V14"
+        );
     }
 
     /// V11 must be idempotent on replay — if the tables were already dropped
@@ -869,6 +1006,6 @@ mod tests {
         apply_migrations(&conn).expect("V11 replay must be idempotent");
 
         let version = get_current_version(&conn).expect("read schema_version");
-        assert_eq!(version, 13, "schema_version back at 13 after replay");
+        assert_eq!(version, 14, "schema_version back at 14 after replay");
     }
 }

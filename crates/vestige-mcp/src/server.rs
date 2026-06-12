@@ -328,6 +328,52 @@ impl McpServer {
                 ..Default::default()
             },
             // ================================================================
+            // MERGE / SUPERSEDE CONTROLS (v2.1.25 — Phase 3)
+            // Diff-previewed, confidence-gated, reversible, never silent.
+            // ================================================================
+            ToolDescription {
+                name: "merge_candidates".to_string(),
+                description: Some("Surface likely duplicate/overlapping memory clusters with confidence scores and the signals behind each (Fellegi-Sunter match/possible/non-match). Read-only — nothing is changed.".to_string()),
+                input_schema: tools::merge::merge_candidates_schema(),
+                ..Default::default()
+            },
+            ToolDescription {
+                name: "plan_merge".to_string(),
+                description: Some("Produce a previewable MERGE plan (a diff: combined content/tags/provenance) for 2+ memories WITHOUT applying it. Returns a plan_id for apply_plan. Protected members block the merge.".to_string()),
+                input_schema: tools::merge::plan_merge_schema(),
+                ..Default::default()
+            },
+            ToolDescription {
+                name: "plan_supersede".to_string(),
+                description: Some("Preview superseding memory A with B — bitemporal invalidation (stamps valid_until, keeps A queryable for audit) WITHOUT applying. Returns a plan_id for apply_plan.".to_string()),
+                input_schema: tools::merge::plan_supersede_schema(),
+                ..Default::default()
+            },
+            ToolDescription {
+                name: "apply_plan".to_string(),
+                description: Some("Execute a previously-generated merge/supersede plan by id. Recorded as a reversible operation. Old memories are invalidated (never deleted). 'possible'/'non_match' plans require confirm=true.".to_string()),
+                input_schema: tools::merge::apply_plan_schema(),
+                ..Default::default()
+            },
+            ToolDescription {
+                name: "merge_undo".to_string(),
+                description: Some("Reverse a prior merge/supersede operation (the 'git reflog for your agent's memory'). With no operation_id, lists the reversible operation log so you can pick one.".to_string()),
+                input_schema: tools::merge::merge_undo_schema(),
+                ..Default::default()
+            },
+            ToolDescription {
+                name: "protect".to_string(),
+                description: Some("Pin a memory so it can never be auto-merged, superseded, or garbage-collected. Pass protected=false to unpin.".to_string()),
+                input_schema: tools::merge::protect_schema(),
+                ..Default::default()
+            },
+            ToolDescription {
+                name: "merge_policy".to_string(),
+                description: Some("Get or set the per-project merge policy: the two Fellegi-Sunter thresholds (match_threshold, possible_threshold) and auto_apply. No args returns the current policy.".to_string()),
+                input_schema: tools::merge::merge_policy_schema(),
+                ..Default::default()
+            },
+            // ================================================================
             // COGNITIVE TOOLS (v1.5+)
             // ================================================================
             ToolDescription {
@@ -886,6 +932,14 @@ impl McpServer {
                 tools::importance::execute(&self.storage, &self.cognitive, request.arguments).await
             }
             "find_duplicates" => tools::dedup::execute(&self.storage, request.arguments).await,
+
+            // ================================================================
+            // MERGE / SUPERSEDE CONTROLS (v2.1.25 — Phase 3)
+            // ================================================================
+            "merge_candidates" | "plan_merge" | "plan_supersede" | "apply_plan" | "merge_undo"
+            | "protect" | "merge_policy" => {
+                tools::merge::execute(&self.storage, request.name.as_str(), request.arguments).await
+            }
 
             // ================================================================
             // COGNITIVE TOOLS (v1.5+)
@@ -1686,8 +1740,10 @@ mod tests {
         let result = response.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
 
-        // v2.1.21: 25 tools (includes first-class contradictions surface)
-        assert_eq!(tools.len(), 25, "Expected exactly 25 tools in v2.1.21");
+        // v2.1.25: 32 tools (25 from v2.1.21 + 7 Phase 3 merge/supersede tools:
+        // merge_candidates, plan_merge, plan_supersede, apply_plan, merge_undo,
+        // protect, merge_policy)
+        assert_eq!(tools.len(), 32, "Expected exactly 32 tools in v2.1.25");
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
 
@@ -1740,6 +1796,15 @@ mod tests {
         // Auto-save & dedup tools (v1.3)
         assert!(tool_names.contains(&"importance_score"));
         assert!(tool_names.contains(&"find_duplicates"));
+
+        // Merge / Supersede controls (v2.1.25 — Phase 3)
+        assert!(tool_names.contains(&"merge_candidates"));
+        assert!(tool_names.contains(&"plan_merge"));
+        assert!(tool_names.contains(&"plan_supersede"));
+        assert!(tool_names.contains(&"apply_plan"));
+        assert!(tool_names.contains(&"merge_undo"));
+        assert!(tool_names.contains(&"protect"));
+        assert!(tool_names.contains(&"merge_policy"));
 
         // Cognitive tools (v1.5)
         assert!(tool_names.contains(&"dream"));

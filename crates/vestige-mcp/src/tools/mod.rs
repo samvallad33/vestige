@@ -24,6 +24,9 @@ pub mod maintenance;
 pub mod dedup;
 pub mod importance;
 
+// v2.1.25: Merge / Supersede controls (Phase 3)
+pub mod merge;
+
 // v1.5: Cognitive tools
 pub mod dream;
 pub mod explore;

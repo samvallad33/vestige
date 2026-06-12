@@ -1,6 +1,6 @@
 {
   "name": "vestige",
-  "version": "2.1.23",
+  "version": "2.1.25",
   "private": true,
   "description": "Cognitive memory for AI - MCP server with FSRS-6 spaced repetition",
   "author": "Sam Valladares",
