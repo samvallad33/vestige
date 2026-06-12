@@ -2,7 +2,7 @@
 //!
 //! Core storage layer with integrated embeddings and vector search.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use directories::{BaseDirs, ProjectDirs};
 #[cfg(all(feature = "embeddings", feature = "vector-search"))]
 use lru::LruCache;
@@ -1060,20 +1060,41 @@ impl Storage {
         Ok(node)
     }
 
-    /// Parse RFC3339 timestamp
+    /// Parse a stored timestamp into a UTC `DateTime`.
+    ///
+    /// The canonical on-disk format is RFC 3339 (every Rust writer in this
+    /// crate uses `DateTime::to_rfc3339()`). However, timestamps can also be
+    /// written by external tooling that bypasses this storage layer — most
+    /// notably session hooks or manual maintenance that touch the DB with raw
+    /// `sqlite3`. SQLite's native `datetime('now')` / `CURRENT_TIMESTAMP`
+    /// emit a space-separated, timezone-less `YYYY-MM-DD HH:MM:SS[.fff]`
+    /// string that `parse_from_rfc3339` rejects, which would otherwise make
+    /// every affected row unreadable.
+    ///
+    /// We therefore parse RFC 3339 first and fall back to the SQLite-native
+    /// format (assumed UTC) so the store stays tolerant of either writer.
     fn parse_timestamp(value: &str, field_name: &str) -> rusqlite::Result<DateTime<Utc>> {
-        DateTime::parse_from_rfc3339(value)
-            .map(|dt| dt.with_timezone(&Utc))
-            .map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    0,
-                    rusqlite::types::Type::Text,
-                    Box::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("Invalid {} timestamp '{}': {}", field_name, value, e),
-                    )),
-                )
-            })
+        if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
+            return Ok(dt.with_timezone(&Utc));
+        }
+
+        // Fallback: SQLite-native "YYYY-MM-DD HH:MM:SS" (with optional
+        // fractional seconds), which has no timezone and is assumed UTC.
+        if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f") {
+            return Ok(naive.and_utc());
+        }
+
+        Err(rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Invalid {} timestamp '{}': not RFC 3339 or SQLite datetime format",
+                    field_name, value
+                ),
+            )),
+        ))
     }
 
     /// Convert a row to KnowledgeNode
@@ -6391,6 +6412,28 @@ mod tests {
         let storage = create_test_storage();
         let stats = storage.get_stats().unwrap();
         assert_eq!(stats.total_nodes, 0);
+    }
+
+    #[test]
+    fn test_parse_timestamp_accepts_rfc3339_and_sqlite_native() {
+        use chrono::TimeZone;
+
+        // Canonical writer: RFC 3339 with fractional seconds + offset.
+        let rfc = Storage::parse_timestamp("2026-06-12T15:07:59.730+00:00", "last_accessed").unwrap();
+        assert_eq!(rfc.to_rfc3339(), "2026-06-12T15:07:59.730+00:00");
+
+        // External writer: SQLite-native `datetime('now')` (space separator,
+        // no timezone, no fraction) — must be tolerated, assumed UTC.
+        let sqlite = Storage::parse_timestamp("2026-06-12 15:07:59", "last_accessed").unwrap();
+        assert_eq!(sqlite, Utc.with_ymd_and_hms(2026, 6, 12, 15, 7, 59).unwrap());
+
+        // SQLite-native with fractional seconds.
+        let sqlite_frac =
+            Storage::parse_timestamp("2026-06-12 15:07:59.730", "last_accessed").unwrap();
+        assert_eq!(sqlite_frac.timestamp_subsec_millis(), 730);
+
+        // Genuinely malformed input still errors.
+        assert!(Storage::parse_timestamp("not-a-timestamp", "last_accessed").is_err());
     }
 
     #[test]
