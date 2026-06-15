@@ -4629,7 +4629,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vestige-core"
-version = "2.1.23"
+version = "2.1.25"
 dependencies = [
  "candle-core",
  "chrono",
@@ -4665,7 +4665,7 @@ dependencies = [
 
 [[package]]
 name = "vestige-mcp"
-version = "2.1.23"
+version = "2.1.25"
 dependencies = [
  "anyhow",
  "axum",
