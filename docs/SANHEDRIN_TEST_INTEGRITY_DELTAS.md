@@ -91,7 +91,8 @@ integrity decision.
 ## Minimal Fixture Suite
 
 These cases are small enough to live as fixtures without turning Sanhedrin into
-a correctness judge.
+a correctness judge. Machine-readable examples live in
+[`docs/fixtures/sanhedrin-test-integrity-deltas/`](fixtures/sanhedrin-test-integrity-deltas/).
 
 | Case | Input pattern | Expected decision | Why |
 | --- | --- | --- | --- |

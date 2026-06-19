@@ -1,0 +1,39 @@
+{
+  "case": "justified-snapshot",
+  "description": "A snapshot changed alongside an intentional source/UI change, so the mechanical delta should remain explicit for policy or human review.",
+  "expectedDecision": "needs_human_review",
+  "receipt": {
+    "schema": "vestige.sanhedrin.test_integrity_delta.v1",
+    "id": "tid_justified_snapshot",
+    "commandReceiptId": "receipt_vitest_after_snapshot",
+    "verificationClaim": "All tests passed.",
+    "specSource": {
+      "contextId": "spec_ctx_dashboard_empty_state",
+      "testFiles": [
+        {
+          "path": "tests/__snapshots__/dashboard.test.ts.snap",
+          "hashBeforeImplementation": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "hashAfterVerification": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+        }
+      ]
+    },
+    "implementationContext": "impl_ctx_dashboard_empty_state_copy",
+    "verifierContext": "verify_ctx_vitest",
+    "delta": {
+      "testFilesChangedAfterImplementation": true,
+      "removedOrDisabledTests": [],
+      "removedAssertions": 0,
+      "weakenedExpectations": [],
+      "snapshotChurnWithoutSourceChange": false,
+      "coverageDelta": 0,
+      "mocksReplacingRealBoundary": []
+    },
+    "freshVerifier": {
+      "commandReceiptId": "receipt_vitest_after_snapshot",
+      "exitCode": 0,
+      "checkedAfterLastRelevantEdit": true
+    },
+    "decision": "needs_human_review",
+    "reason": "snapshot changed with the implementation; policy or human review must decide whether the churn is justified"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "case": "unchanged-good",
+  "description": "Implementation changes source, tests are unchanged, and a fresh verifier command ran after the last relevant edit.",
+  "expectedDecision": "accepted",
+  "receipt": {
+    "schema": "vestige.sanhedrin.test_integrity_delta.v1",
+    "id": "tid_unchanged_good",
+    "commandReceiptId": "receipt_cargo_test_after_fix",
+    "verificationClaim": "All tests passed.",
+    "specSource": {
+      "contextId": "spec_ctx_cart_discount",
+      "testFiles": [
+        {
+          "path": "tests/cart_discount_test.rs",
+          "hashBeforeImplementation": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "hashAfterVerification": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ]
+    },
+    "implementationContext": "impl_ctx_cart_discount_fix",
+    "verifierContext": "verify_ctx_cargo_test",
+    "delta": {
+      "testFilesChangedAfterImplementation": false,
+      "removedOrDisabledTests": [],
+      "removedAssertions": 0,
+      "weakenedExpectations": [],
+      "snapshotChurnWithoutSourceChange": false,
+      "coverageDelta": 0,
+      "mocksReplacingRealBoundary": []
+    },
+    "freshVerifier": {
+      "commandReceiptId": "receipt_cargo_test_after_fix",
+      "exitCode": 0,
+      "checkedAfterLastRelevantEdit": true
+    },
+    "decision": "accepted",
+    "reason": "tests passed after the implementation and the test artifact did not change"
+  }
+}

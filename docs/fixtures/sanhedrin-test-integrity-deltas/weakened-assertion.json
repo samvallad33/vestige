@@ -1,0 +1,45 @@
+{
+  "case": "weakened-assertion",
+  "description": "The test still ran, but an expectation was relaxed after implementation.",
+  "expectedDecision": "downgraded",
+  "receipt": {
+    "schema": "vestige.sanhedrin.test_integrity_delta.v1",
+    "id": "tid_weakened_assertion",
+    "commandReceiptId": "receipt_npm_test_after_weaken",
+    "verificationClaim": "All tests passed.",
+    "specSource": {
+      "contextId": "spec_ctx_login_errors",
+      "testFiles": [
+        {
+          "path": "tests/login.test.ts",
+          "hashBeforeImplementation": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+          "hashAfterVerification": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        }
+      ]
+    },
+    "implementationContext": "impl_ctx_login_errors",
+    "verifierContext": "verify_ctx_npm_test",
+    "delta": {
+      "testFilesChangedAfterImplementation": true,
+      "removedOrDisabledTests": [],
+      "removedAssertions": 0,
+      "weakenedExpectations": [
+        {
+          "path": "tests/login.test.ts",
+          "from": "rejects.toThrow(InvalidCredentialsError)",
+          "to": "resolves.not.toThrow()"
+        }
+      ],
+      "snapshotChurnWithoutSourceChange": false,
+      "coverageDelta": 0,
+      "mocksReplacingRealBoundary": []
+    },
+    "freshVerifier": {
+      "commandReceiptId": "receipt_npm_test_after_weaken",
+      "exitCode": 0,
+      "checkedAfterLastRelevantEdit": true
+    },
+    "decision": "downgraded",
+    "reason": "tests passed, but the asserted behavior was relaxed after implementation"
+  }
+}

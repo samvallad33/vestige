@@ -1,0 +1,45 @@
+{
+  "case": "skipped-test",
+  "description": "A verifier command passed after a test was disabled with a skip/ignore marker.",
+  "expectedDecision": "downgraded",
+  "receipt": {
+    "schema": "vestige.sanhedrin.test_integrity_delta.v1",
+    "id": "tid_skipped_test",
+    "commandReceiptId": "receipt_pytest_after_skip",
+    "verificationClaim": "All tests passed.",
+    "specSource": {
+      "contextId": "spec_ctx_coupon_validation",
+      "testFiles": [
+        {
+          "path": "tests/test_coupon.py",
+          "hashBeforeImplementation": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "hashAfterVerification": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        }
+      ]
+    },
+    "implementationContext": "impl_ctx_coupon_fix",
+    "verifierContext": "verify_ctx_pytest",
+    "delta": {
+      "testFilesChangedAfterImplementation": true,
+      "removedOrDisabledTests": [
+        {
+          "kind": "skip_or_only",
+          "path": "tests/test_coupon.py",
+          "line": 42
+        }
+      ],
+      "removedAssertions": 0,
+      "weakenedExpectations": [],
+      "snapshotChurnWithoutSourceChange": false,
+      "coverageDelta": -1.2,
+      "mocksReplacingRealBoundary": []
+    },
+    "freshVerifier": {
+      "commandReceiptId": "receipt_pytest_after_skip",
+      "exitCode": 0,
+      "checkedAfterLastRelevantEdit": true
+    },
+    "decision": "downgraded",
+    "reason": "tests passed, but a test was disabled after implementation"
+  }
+}
