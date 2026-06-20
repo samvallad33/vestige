@@ -63,6 +63,14 @@ qwen3-reranker = ["qwen3-embeddings"]
 # the default local-first build never links an HTTP client.
 connectors = ["dep:reqwest"]
 
+# Hosted managed-sync backend (Vestige Cloud). Adds the HTTP `PortableSyncBackend`
+# (`HttpPortableSyncBackend`) that pull-merge-pushes the portable archive to a
+# hosted blob endpoint over HTTPS with a per-user sync key. Like `connectors`,
+# this is the ONLY thing that links an HTTP client — the default local-first
+# build stays network-free. Uses `reqwest`'s blocking client because the
+# `PortableSyncBackend` trait methods are synchronous.
+cloud-sync = ["dep:reqwest", "reqwest/blocking"]
+
 # Metal GPU acceleration on Apple Silicon (significantly faster inference)
 metal = ["fastembed/metal"]
 

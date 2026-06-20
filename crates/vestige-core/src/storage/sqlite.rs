@@ -6332,6 +6332,20 @@ impl SqliteMemoryStore {
         self.sync_portable_archive(&backend)
     }
 
+    /// Synchronize this database with the hosted Vestige Cloud managed-sync
+    /// service. `endpoint` is the base URL (e.g. `https://sync.vestige.dev`) and
+    /// `sync_key` is the per-user key issued at purchase. Pull-merge-push is
+    /// identical to file sync — only the transport differs.
+    #[cfg(feature = "cloud-sync")]
+    pub fn sync_portable_archive_cloud(
+        &self,
+        endpoint: &str,
+        sync_key: &str,
+    ) -> Result<PortableSyncReport> {
+        let backend = super::cloud_sync::HttpPortableSyncBackend::new(endpoint, sync_key)?;
+        self.sync_portable_archive(&backend)
+    }
+
     fn merge_portable_table(
         tx: &rusqlite::Transaction<'_>,
         table_name: &str,

@@ -187,6 +187,7 @@ pub use storage::{
     PortableArchive,
     PortableImportMode,
     PortableImportReport,
+    PortableSyncReport,
     ReconcileReport,
     Result,
     SchedulingState,

@@ -182,10 +182,20 @@ enum Commands {
         merge: bool,
     },
 
-    /// Two-way sync with a file-backed portable archive
+    /// Two-way sync with a file-backed portable archive, or Vestige Cloud
     Sync {
-        /// Sync archive path, often in Dropbox/iCloud/Syncthing/Git
-        archive: PathBuf,
+        /// Sync archive path, often in Dropbox/iCloud/Syncthing/Git.
+        /// Omit when using --cloud.
+        archive: Option<PathBuf>,
+        /// Sync with the hosted Vestige Cloud managed-sync service instead of a
+        /// file. Requires a sync key (VESTIGE_CLOUD_SYNC_KEY) and endpoint
+        /// (--endpoint or VESTIGE_CLOUD_ENDPOINT).
+        #[arg(long)]
+        cloud: bool,
+        /// Vestige Cloud base endpoint (e.g. https://sync.vestige.dev).
+        /// Defaults to the VESTIGE_CLOUD_ENDPOINT env var.
+        #[arg(long)]
+        endpoint: Option<String>,
     },
 
     /// Garbage collect stale memories below retention threshold
@@ -287,7 +297,11 @@ fn main() -> anyhow::Result<()> {
         } => run_export(output, format, tags, since),
         Commands::PortableExport { output } => run_portable_export(output),
         Commands::PortableImport { input, merge } => run_portable_import(input, merge),
-        Commands::Sync { archive } => run_sync(archive),
+        Commands::Sync {
+            archive,
+            cloud,
+            endpoint,
+        } => run_sync(archive, cloud, endpoint),
         Commands::Gc {
             min_retention,
             max_age_days,
@@ -2193,14 +2207,74 @@ fn run_portable_import(input: PathBuf, merge: bool) -> anyhow::Result<()> {
 }
 
 /// Run file-backed two-way sync.
-fn run_sync(archive: PathBuf) -> anyhow::Result<()> {
+fn run_sync(
+    archive: Option<PathBuf>,
+    cloud: bool,
+    endpoint: Option<String>,
+) -> anyhow::Result<()> {
+    if cloud {
+        run_sync_cloud(endpoint)
+    } else {
+        let archive = archive.ok_or_else(|| {
+            anyhow::anyhow!(
+                "no sync target: pass an archive path for file sync, or --cloud for Vestige Cloud"
+            )
+        })?;
+        run_sync_file(archive)
+    }
+}
+
+fn run_sync_file(archive: PathBuf) -> anyhow::Result<()> {
     println!("{}", "=== Vestige File Sync ===".cyan().bold());
     println!();
     println!("{}: {}", "Archive".white().bold(), archive.display());
 
     let storage = open_storage()?;
     let report = storage.sync_portable_archive_file(&archive)?;
+    print_sync_report(&report);
+    Ok(())
+}
 
+#[cfg(feature = "cloud-sync")]
+fn run_sync_cloud(endpoint: Option<String>) -> anyhow::Result<()> {
+    let endpoint = endpoint
+        .or_else(|| std::env::var("VESTIGE_CLOUD_ENDPOINT").ok())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no cloud endpoint: pass --endpoint or set VESTIGE_CLOUD_ENDPOINT \
+                 (e.g. https://sync.vestige.dev)"
+            )
+        })?;
+    let sync_key = std::env::var("VESTIGE_CLOUD_SYNC_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no sync key: set VESTIGE_CLOUD_SYNC_KEY (issued when you subscribe to \
+                 Vestige Cloud)"
+            )
+        })?;
+
+    println!("{}", "=== Vestige Cloud Sync ===".cyan().bold());
+    println!();
+    println!("{}: {}", "Endpoint".white().bold(), endpoint);
+
+    let storage = open_storage()?;
+    let report = storage.sync_portable_archive_cloud(&endpoint, &sync_key)?;
+    print_sync_report(&report);
+    Ok(())
+}
+
+#[cfg(not(feature = "cloud-sync"))]
+fn run_sync_cloud(_endpoint: Option<String>) -> anyhow::Result<()> {
+    anyhow::bail!(
+        "this build was compiled without the `cloud-sync` feature; rebuild with \
+         --features cloud-sync to use Vestige Cloud"
+    )
+}
+
+fn print_sync_report(report: &vestige_core::PortableSyncReport) {
     if let Some(pull) = &report.pull {
         println!("{}", "Pull: merged remote archive".yellow());
         println!(
@@ -2228,8 +2302,6 @@ fn run_sync(archive: PathBuf) -> anyhow::Result<()> {
         .green()
         .bold()
     );
-
-    Ok(())
 }
 
 /// Run garbage collection command
