@@ -1,6 +1,6 @@
 {
   "name": "@vestige/dashboard",
-  "version": "2.1.26",
+  "version": "2.1.27",
   "private": true,
   "type": "module",
   "scripts": {

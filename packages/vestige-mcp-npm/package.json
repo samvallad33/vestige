@@ -1,6 +1,6 @@
 {
   "name": "vestige-mcp-server",
-  "version": "2.1.26",
+  "version": "2.1.27",
   "mcpName": "io.github.samvallad33/vestige",
   "description": "Vestige MCP Server — local cognitive memory for MCP-compatible AI agents",
   "bin": {

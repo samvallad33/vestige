@@ -5,10 +5,9 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — "External-Source Connectors"
+## [Unreleased]
 
-> Bump `version` in the workspace `Cargo.toml`, both crates, `server.json`, and
-> `package.json` to `2.1.27` at release/tag time, and date this heading.
+## [2.1.27] - 2026-06-19 — "External-Source Connectors"
 
 Roadmap [#57](https://github.com/samvallad33/vestige/issues/57), **Phases 1–4
 (complete)**: Vestige can now act as a durable, local, semantically-searchable
