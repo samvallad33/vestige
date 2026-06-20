@@ -69,7 +69,7 @@ connectors = ["dep:reqwest"]
 # this is the ONLY thing that links an HTTP client — the default local-first
 # build stays network-free. Uses `reqwest`'s blocking client because the
 # `PortableSyncBackend` trait methods are synchronous.
-cloud-sync = ["dep:reqwest", "reqwest/blocking"]
+cloud-sync = ["dep:reqwest", "reqwest/blocking", "dep:chacha20poly1305", "dep:argon2"]
 
 # Metal GPU acceleration on Apple Silicon (significantly faster inference)
 metal = ["fastembed/metal"]
@@ -153,6 +153,15 @@ blake3 = "1"
 # rustls so connectors build with no system OpenSSL dependency. Behind the
 # `connectors` feature — the default local-first build does not link reqwest.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+
+# ============================================================================
+# OPTIONAL: Zero-knowledge client-side encryption for Vestige Cloud sync
+# ============================================================================
+# XChaCha20-Poly1305 AEAD + Argon2id passphrase KDF. The archive is encrypted on
+# the client before upload, so the hosted service only ever stores ciphertext.
+# Behind the `cloud-sync` feature — the default local-first build links neither.
+chacha20poly1305 = { version = "0.10", optional = true }
+argon2 = { version = "0.5", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

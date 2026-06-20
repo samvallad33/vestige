@@ -6336,13 +6336,22 @@ impl SqliteMemoryStore {
     /// service. `endpoint` is the base URL (e.g. `https://sync.vestige.dev`) and
     /// `sync_key` is the per-user key issued at purchase. Pull-merge-push is
     /// identical to file sync — only the transport differs.
+    ///
+    /// When `encryption_key` is `Some`, the archive is encrypted client-side
+    /// (XChaCha20-Poly1305) before upload, so the server only stores ciphertext
+    /// (zero-knowledge). The passphrase never leaves this process.
     #[cfg(feature = "cloud-sync")]
     pub fn sync_portable_archive_cloud(
         &self,
         endpoint: &str,
         sync_key: &str,
+        encryption_key: Option<String>,
     ) -> Result<PortableSyncReport> {
-        let backend = super::cloud_sync::HttpPortableSyncBackend::new(endpoint, sync_key)?;
+        let backend = super::cloud_sync::HttpPortableSyncBackend::new_with_encryption(
+            endpoint,
+            sync_key,
+            encryption_key,
+        )?;
         self.sync_portable_archive(&backend)
     }
 

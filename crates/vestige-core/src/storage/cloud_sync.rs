@@ -49,6 +49,10 @@ pub struct HttpPortableSyncBackend {
     endpoint: String,
     /// Per-user sync key, presented as `Authorization: Bearer <key>`.
     sync_key: String,
+    /// Optional zero-knowledge passphrase. When set, the archive is encrypted
+    /// before upload and decrypted after download — the server never sees
+    /// plaintext, and this passphrase is never sent to the server.
+    encryption_key: Option<String>,
     /// Blocking HTTP client (the trait is synchronous).
     client: Client,
     /// ETag captured on the most recent successful read, used as the `If-Match`
@@ -58,10 +62,24 @@ pub struct HttpPortableSyncBackend {
 }
 
 impl HttpPortableSyncBackend {
-    /// Build a cloud sync backend for `endpoint` authenticated with `sync_key`.
+    /// Build a cloud sync backend for `endpoint` authenticated with `sync_key`,
+    /// with no client-side encryption (plaintext upload).
     ///
     /// A trailing slash on `endpoint` is trimmed so URL joining is predictable.
     pub fn new(endpoint: impl Into<String>, sync_key: impl Into<String>) -> Result<Self> {
+        Self::new_with_encryption(endpoint, sync_key, None)
+    }
+
+    /// Build a cloud sync backend with optional zero-knowledge encryption.
+    ///
+    /// When `encryption_key` is `Some`, the portable archive is encrypted with
+    /// XChaCha20-Poly1305 (Argon2id-derived key) before upload and decrypted on
+    /// download. The passphrase never leaves this process.
+    pub fn new_with_encryption(
+        endpoint: impl Into<String>,
+        sync_key: impl Into<String>,
+        encryption_key: Option<String>,
+    ) -> Result<Self> {
         let endpoint = endpoint.into().trim_end_matches('/').to_string();
         let sync_key = sync_key.into();
         if endpoint.is_empty() {
@@ -74,6 +92,7 @@ impl HttpPortableSyncBackend {
                 "cloud sync key is empty (set VESTIGE_CLOUD_SYNC_KEY)".to_string(),
             ));
         }
+        let encryption_key = encryption_key.filter(|k| !k.is_empty());
         let client = Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .user_agent(concat!("vestige-cloud-sync/", env!("CARGO_PKG_VERSION")))
@@ -82,9 +101,15 @@ impl HttpPortableSyncBackend {
         Ok(Self {
             endpoint,
             sync_key,
+            encryption_key,
             client,
             last_etag: RefCell::new(None),
         })
+    }
+
+    /// Whether this backend encrypts client-side (zero-knowledge).
+    pub fn is_encrypted(&self) -> bool {
+        self.encryption_key.is_some()
     }
 
     /// Full blob URL for this backend.
@@ -124,9 +149,28 @@ impl PortableSyncBackend for HttpPortableSyncBackend {
                 let bytes = resp
                     .bytes()
                     .map_err(|e| StorageError::Init(format!("cloud sync read body failed: {e}")))?;
-                let archive: PortableArchive = serde_json::from_slice(&bytes).map_err(|e| {
-                    StorageError::Init(format!("failed to parse cloud sync archive: {e}"))
-                })?;
+
+                // Decrypt if this is a zero-knowledge envelope. If a passphrase
+                // is configured but the remote is still plaintext (legacy), parse
+                // it directly — the next push will encrypt it (transparent upgrade).
+                let plaintext: std::borrow::Cow<'_, [u8]> =
+                    if super::cloud_crypto::is_encrypted(&bytes) {
+                        let pass = self.encryption_key.as_deref().ok_or_else(|| {
+                            StorageError::Init(
+                                "remote archive is encrypted but VESTIGE_CLOUD_ENCRYPTION_KEY is \
+                                 not set on this device"
+                                    .to_string(),
+                            )
+                        })?;
+                        std::borrow::Cow::Owned(super::cloud_crypto::decrypt(pass, &bytes)?)
+                    } else {
+                        std::borrow::Cow::Borrowed(&bytes)
+                    };
+
+                let archive: PortableArchive =
+                    serde_json::from_slice(&plaintext).map_err(|e| {
+                        StorageError::Init(format!("failed to parse cloud sync archive: {e}"))
+                    })?;
                 Ok(Some(archive))
             }
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(StorageError::Init(
@@ -141,14 +185,24 @@ impl PortableSyncBackend for HttpPortableSyncBackend {
     }
 
     fn write_archive(&self, archive: &PortableArchive) -> Result<()> {
-        let body = serde_json::to_vec(archive)
+        let plaintext = serde_json::to_vec(archive)
             .map_err(|e| StorageError::Init(format!("failed to serialize archive: {e}")))?;
+
+        // Zero-knowledge: encrypt before upload when a passphrase is set, so the
+        // server only ever stores ciphertext. Content type reflects the payload.
+        let (body, content_type) = match self.encryption_key.as_deref() {
+            Some(pass) => (
+                super::cloud_crypto::encrypt(pass, &plaintext)?,
+                "application/octet-stream",
+            ),
+            None => (plaintext, "application/json"),
+        };
 
         let mut req = self
             .client
             .put(self.blob_url())
             .header(AUTHORIZATION, format!("Bearer {}", self.sync_key))
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::CONTENT_TYPE, content_type)
             .body(body);
 
         // Optimistic concurrency: only overwrite the object we pulled. If the

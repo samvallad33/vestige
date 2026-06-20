@@ -2256,12 +2256,30 @@ fn run_sync_cloud(endpoint: Option<String>) -> anyhow::Result<()> {
             )
         })?;
 
+    // Optional zero-knowledge encryption passphrase. Never sent to the server.
+    let encryption_key = std::env::var("VESTIGE_CLOUD_ENCRYPTION_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+
     println!("{}", "=== Vestige Cloud Sync ===".cyan().bold());
     println!();
     println!("{}: {}", "Endpoint".white().bold(), endpoint);
+    if encryption_key.is_some() {
+        println!(
+            "{}: {}",
+            "Encryption".white().bold(),
+            "zero-knowledge (XChaCha20-Poly1305) — your data is encrypted before upload".green()
+        );
+    } else {
+        println!(
+            "{}: {}",
+            "Encryption".white().bold(),
+            "OFF — set VESTIGE_CLOUD_ENCRYPTION_KEY for zero-knowledge sync".yellow()
+        );
+    }
 
     let storage = open_storage()?;
-    let report = storage.sync_portable_archive_cloud(&endpoint, &sync_key)?;
+    let report = storage.sync_portable_archive_cloud(&endpoint, &sync_key, encryption_key)?;
     print_sync_report(&report);
     Ok(())
 }
