@@ -49,27 +49,13 @@ jobs:
 
       - name: Assemble site root
         run: |
+          # The Pages project site is already served from /vestige/, and the
+          # dashboard is built with base path /vestige (VESTIGE_BASE_PATH), so
+          # its files go directly at the artifact root — the base path already
+          # accounts for the subpath. No extra subdirectory or redirect needed.
           rm -rf _site
-          mkdir -p _site/vestige
-          # Publish the dashboard under /vestige/ (matches VESTIGE_BASE_PATH).
-          cp -r apps/dashboard/build/* _site/vestige/
-          # Root-level redirect so visitors hitting the bare Pages URL land
-          # on the dashboard instead of a 404.
-          cat > _site/index.html <<'HTML'
-          <!doctype html>
-          <html lang="en">
-          <head>
-            <meta charset="utf-8" />
-            <meta http-equiv="refresh" content="0; url=./vestige/" />
-            <link rel="canonical" href="./vestige/" />
-            <title>Vestige</title>
-            <script>location.replace('./vestige/' + location.search + location.hash);</script>
-          </head>
-          <body>
-            <p>Redirecting to <a href="./vestige/">the Vestige dashboard</a>&hellip;</p>
-          </body>
-          </html>
-          HTML
+          mkdir -p _site
+          cp -r apps/dashboard/build/* _site/
 
       - uses: actions/configure-pages@v5
 
