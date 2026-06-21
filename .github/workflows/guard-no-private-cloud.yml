@@ -1,0 +1,25 @@
+name: Guard — No Private Cloud Code
+
+# Fails if private Vestige Cloud *service* code (billing, sync-key/namespace
+# mapping, Lemon Squeezy webhooks, transactional email) ever lands in this
+# public repo. The public cloud *client* is allowed and does not trip this.
+on:
+  push:
+    branches: [main, feat/cloud-sync-mvp]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: No private cloud service code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Scan for private cloud service markers
+        run: ./scripts/check-no-private-cloud.sh
