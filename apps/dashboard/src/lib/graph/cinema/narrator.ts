@@ -35,6 +35,7 @@ const KIND_CHIP = {
 	contradiction: 'Tension',
 	recent: 'Now',
 	bridge: 'Jump',
+	surprise: 'Surprise',
 } satisfies Record<CinemaBeat['kind'], string>;
 
 function snippet(content: string, max = 90): string {

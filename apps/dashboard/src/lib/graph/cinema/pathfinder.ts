@@ -23,7 +23,7 @@ export interface CinemaBeat {
 	/** Edge traversed to arrive here (null for the opening beat). */
 	viaEdge: GraphEdge | null;
 	/** Why this beat exists — drives the deterministic caption + visual emphasis. */
-	kind: 'origin' | 'connection' | 'contradiction' | 'recent' | 'bridge';
+	kind: 'origin' | 'connection' | 'contradiction' | 'recent' | 'bridge' | 'surprise';
 	/** 0..1 emphasis used by the sandbox to spike emissive/bloom on arrival. */
 	intensity: number;
 }
@@ -40,11 +40,11 @@ export interface CinemaPath {
 	flowEdges: GraphEdge[];
 }
 
-interface Adjacency {
+export interface Adjacency {
 	[nodeId: string]: { edge: GraphEdge; otherId: string }[];
 }
 
-function buildAdjacency(edges: GraphEdge[]): Adjacency {
+export function buildAdjacency(edges: GraphEdge[]): Adjacency {
 	const adj: Adjacency = {};
 	for (const edge of edges) {
 		(adj[edge.source] ??= []).push({ edge, otherId: edge.target });
@@ -57,12 +57,12 @@ function buildAdjacency(edges: GraphEdge[]): Adjacency {
 	return adj;
 }
 
-function isContradictionEdge(edge: GraphEdge): boolean {
+export function isContradictionEdge(edge: GraphEdge): boolean {
 	const t = (edge.type ?? '').toLowerCase();
 	return t.includes('contradict') || t.includes('conflict') || t.includes('supersede');
 }
 
-function recencyOf(node: GraphNode): number {
+export function recencyOf(node: GraphNode): number {
 	// Larger = more recent. Tolerates missing/invalid timestamps.
 	const t = Date.parse(node.updatedAt || node.createdAt || '');
 	return Number.isFinite(t) ? t : 0;
