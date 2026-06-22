@@ -608,13 +608,22 @@ fn extract_veto(result: &Value) -> Option<(String, Vec<String>, f64)> {
     Some((claim, evidence_ids, confidence))
 }
 
-/// Pull dream consolidation proposal ids from a dream tool result.
+/// Pull dream consolidation proposal ids from a dream/consolidate tool result.
+///
+/// Proposals are identified by an explicit `id` / proposal id when present.
+/// The `dream` tool emits an `insights` array whose items carry no id (they are
+/// `{insight_type, insight, source_memories, confidence, …}`), so we derive a
+/// stable proposal id from each insight's real content — its type plus the
+/// memories it consolidated. The dream genuinely ran; this just gives each real
+/// proposal a deterministic handle for the trace.
 fn extract_dream_proposals(result: &Value, tool: &str) -> Vec<String> {
     if tool != "dream" && tool != "consolidate" {
         return Vec::new();
     }
     let mut out = Vec::new();
-    for key in ["proposalIds", "proposals", "insights", "connections"] {
+
+    // Explicit id arrays first (consolidate / future producers).
+    for key in ["proposalIds", "proposals", "connections"] {
         if let Some(arr) = result.get(key).and_then(|v| v.as_array()) {
             for item in arr {
                 if let Some(id) = item
@@ -627,6 +636,36 @@ fn extract_dream_proposals(result: &Value, tool: &str) -> Vec<String> {
             }
         }
     }
+
+    // Dream insights: derive a stable id from real content.
+    if let Some(arr) = result.get("insights").and_then(|v| v.as_array()) {
+        for (i, item) in arr.iter().enumerate() {
+            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                out.push(id.to_string());
+                continue;
+            }
+            let kind = item
+                .get("insight_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("insight");
+            // Prefer the consolidated source memories for a meaningful handle;
+            // fall back to the index so every real insight is still counted.
+            let src = item
+                .get("source_memories")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|m| m.as_str())
+                        .map(|s| &s[..s.len().min(8)])
+                        .collect::<Vec<_>>()
+                        .join("+")
+                })
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| format!("idx{i}"));
+            out.push(format!("dream:{kind}:{src}"));
+        }
+    }
+
     out
 }
 
@@ -690,6 +729,32 @@ mod tests {
         let out = extract_suppressed(&r);
         assert!(out.contains(&("s1".to_string(), SuppressReason::Contradicted)));
         assert!(out.contains(&("s2".to_string(), SuppressReason::Contradicted)));
+    }
+
+    #[test]
+    fn extract_dream_proposals_from_real_insights_shape() {
+        // The exact shape the `dream` tool emits — insights without an id.
+        let r = serde_json::json!({
+            "status": "dreamed",
+            "insights": [
+                {
+                    "insight_type": "Bridge",
+                    "insight": "These two notes describe the same subsystem.",
+                    "source_memories": ["aaaaaaaa1111", "bbbbbbbb2222"],
+                    "confidence": 0.8,
+                    "novelty_score": 0.6
+                }
+            ]
+        });
+        let ids = extract_dream_proposals(&r, "dream");
+        assert_eq!(ids.len(), 1, "one real insight -> one proposal id");
+        assert_eq!(ids[0], "dream:Bridge:aaaaaaaa+bbbbbbbb");
+    }
+
+    #[test]
+    fn extract_dream_proposals_empty_when_not_dream_tool() {
+        let r = serde_json::json!({ "insights": [{ "insight_type": "x" }] });
+        assert!(extract_dream_proposals(&r, "search").is_empty());
     }
 
     #[test]

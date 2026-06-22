@@ -52,12 +52,30 @@ deterministic regression test `test_full_spine_one_runid_crosses_every_hop`
 | WebSocket broadcast | **REAL** | proven by `websocket-events.jsonl` + a unit test |
 | `vestige://trace/{runId}` resource | **REAL** | proven by the full-spine test |
 | `sanhedrin.veto` trace | **CAVEAT** | extraction code is real + unit-tested, but the Sanhedrin verifier is an optional hook, **off by default** — no producer is connected, and the UI says exactly that |
-| `dream.patch` trace | **CAVEAT** | extraction is real; fires only when a dream run actually executes — the UI says "No dream run in this trace" otherwise |
+| `dream.patch` trace | **REAL** (proven 2026-06-22) | a real `dream` run over 6 memories produced one `dream.patch` event under `run_dream_proof` — see `dream-trace.json` (last event), `dream-websocket-events.jsonl`, and `screenshots/dream-producers.png` where the row flips to "fired this run". The UI still shows "No dream run in this trace" for runs where no dream executed. |
 | Graph-pulse "Open receipt in Cinema" | **REAL (deep-link)** | navigates the graph centered on the receipt's primary memory; MemoryCinema itself is unchanged |
 
 No feature is stubbed. The two CAVEATs are real plumbing whose upstream
 producer is intentionally off by default — surfaced as explicit UI states, not
 empty mystery.
+
+## dream.patch — proven with a real dream run (2026-06-22)
+
+Bounded follow-up: a single real `dream` consolidation flipped the `dream.patch`
+producer from "quiet" to a recorded live event, same runId, every hop.
+
+- 6 related memories seeded under `run_dream_proof`, then one `dream` call.
+- The dream produced one consolidation insight → one `dream.patch` event:
+  `dream:RecurringPattern:5d941c7f+a41aca72+b029fe53+6167f2c3+1117dd4e+e0782442`
+  (the real insight type + the six source memories it bridged).
+- SQLite: `dream-trace.json` (14 events, last is `dream.patch`).
+- API: `/api/traces/run_dream_proof/export` → `dream-trace.json`.
+- WebSocket: `dream-websocket-events.jsonl` (the `dream.patch` TraceEvent).
+- Dashboard: `screenshots/black-box-dream.png` + `screenshots/dream-producers.png`
+  (the producers row shows **dream.patch · fired this run**).
+
+`dream.patch` is real but not live-by-default: it fires only when a dream
+actually runs. The UI says so for runs where it didn't.
 
 ## Reproduce
 

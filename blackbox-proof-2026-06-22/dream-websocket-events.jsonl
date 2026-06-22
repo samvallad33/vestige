@@ -1,0 +1,5 @@
+{"data": {"timestamp": "2026-06-22T22:48:29.454773+00:00", "version": "2.1.27"}, "type": "Connected"}
+{"type": "TraceEvent", "data": {"run_id": "run_dream_proof", "seq": 12, "event": {"type": "mcp.call", "runId": "run_dream_proof", "tool": "dream", "argsHash": "1071da7bf3583db3", "at": 1782168511374}, "timestamp": "2026-06-22T22:48:31.374680Z"}}
+{"type": "DreamStarted", "data": {"memory_count": 6, "timestamp": "2026-06-22T22:48:31.374852Z"}}
+{"type": "DreamCompleted", "data": {"memories_replayed": 6, "connections_found": 0, "insights_generated": 1, "duration_ms": 0, "timestamp": "2026-06-22T22:48:31.375855Z"}}
+{"type": "TraceEvent", "data": {"run_id": "run_dream_proof", "seq": 13, "event": {"type": "dream.patch", "runId": "run_dream_proof", "proposalIds": ["dream:RecurringPattern:5d941c7f+a41aca72+b029fe53+6167f2c3+1117dd4e+e0782442"], "at": 1782168511375}, "timestamp": "2026-06-22T22:48:31.375973Z"}}
