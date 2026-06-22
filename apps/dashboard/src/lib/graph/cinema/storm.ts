@@ -145,6 +145,9 @@ export class SemanticComputeStorm {
 	// dream so every figure is wilder than the last.
 	private uMorphSeed = uniform(0);
 	private uChaos = uniform(0);
+	// JARRING CLASH PAIR — which opposing inner/outer duotone is live (0..4). Set
+	// per beat so every figure is a fresh ice-vs-fire / acid-vs-blood collision.
+	private uClash = uniform(0);
 	// JS-side dream state (not uniforms): which figure is live + how many fired.
 	private dreamCount = 0;
 
@@ -444,7 +447,7 @@ export class SemanticComputeStorm {
 				innerRaw.y,
 				innerRaw.x.mul(is).add(innerRaw.z.mul(ic))
 			);
-			const innerHome = innerRot.mul(0.45); // nested core at ~45% scale (less dense)
+			const innerHome = innerRot.mul(0.52); // nested core at ~52% scale (spread → less white)
 			// Each particle is permanently outer OR inner (no flicker): pick its home.
 			const home = mix(outerHome, innerHome, isInner.select(float(1), float(0)));
 
@@ -576,55 +579,66 @@ export class SemanticComputeStorm {
 			const ph = phaseStore.element(instanceIndex);
 			const radius = length(pos.sub(vec3(this.uTarget)));
 
-			// Recompute the inner/outer layer split (same formula as the compute
-			// kernel) so the NESTED CORE figure reads as a distinct object: shift its
-			// hue ~0.5 (complementary) so it glows a contrasting color inside the shell.
+			// Recompute the inner/outer layer split (same formula as the compute kernel).
 			const fiC = float(instanceIndex);
 			const isInnerC = fract(fiC.mul(0.001).add(0.5)).greaterThan(0.66);
-			const innerHueShift = isInnerC.select(float(0.5), float(0));
 
-			// Hue from many decorrelated terms so the whole spectrum is present at
-			// once and forever swirling: per-particle phase, concentric radial
-			// shells, a spatial XYZ band (gives morphing forms internal rainbow
-			// striping), time, and a global beat hue-shift.
+			// A flowing texture coordinate per particle — drives gradients WITHIN each
+			// layer's duotone so it shimmers, but stays inside that layer's color world.
 			const spatialBand = pos.x.mul(0.03).add(pos.y.mul(0.021)).add(pos.z.mul(0.027));
-			const hue = fract(
-				ph.mul(0.41)
-					.add(radius.mul(0.06))
-					.add(spatialBand)
-					.add(this.uTime.mul(0.10))
-					.add(this.uHueShift)
-					.add(innerHueShift)
+			const flow = fract(
+				ph.mul(0.41).add(radius.mul(0.06)).add(spatialBand).add(this.uTime.mul(0.10)).add(this.uHueShift)
 			);
-			// hue → RGB at FULL saturation (HSV S=1,V=1) hexagon ramps. Pure jewel
-			// tone per particle — the universal base spectrum.
-			const r0 = clamp(abs(hue.mul(6).sub(3)).sub(1), 0, 1);
-			const g0 = clamp(float(2).sub(abs(hue.mul(6).sub(2))), 0, 1);
-			const b0 = clamp(float(2).sub(abs(hue.mul(6).sub(4))), 0, 1);
-			const baseRainbow = vec3(r0, g0, b0);
 
-			// ── PER-WORLD PALETTE ── each world gets its own cosine-palette identity
-			// so the journey reads as distinct PLACES: nebula teal, anchor gold,
-			// crystal foil-blue, galaxy magenta→cyan, phyllo/attractor full rainbow.
-			const dWorld = select(this.uWorld.equal(0), vec3(0.55, 0.6, 0.7), // nebula teal/indigo
-				select(this.uWorld.equal(1), vec3(0.05, 0.12, 0.2), // anchor gold/amber
-				select(this.uWorld.equal(4), vec3(0.0, 0.25, 0.5), // crystal foil
-				select(this.uWorld.equal(5), vec3(0.8, 0.0, 0.33), // galaxy magenta→cyan
-				vec3(0.0, 0.33, 0.67))))); // attractor/void/phyllo → full spectrum
-			const cWorld = select(this.uWorld.equal(5), vec3(2.0), vec3(1.0)); // galaxy = tighter banding
-			const worldPal = palette(hue, vec3(0.5), vec3(0.5), cWorld, dWorld);
-			// Blend the world palette with the pure base rainbow so it's both vivid
-			// AND world-flavored (not a flat single hue).
-			const rainbow = mix(baseRainbow, worldPal, 0.6);
+			// ══════════════════════════════════════════════════════════════════
+			//  JARRING DUOTONE CLASH — the share hook.
+			//  The outer shell and the inner nested figure are painted from OPPOSING
+			//  color universes (ice vs fire, acid vs blood, gold vs violet…). Not a
+			//  hue shift in one rainbow — two palettes that FIGHT. uClash (set per
+			//  beat) picks which clashing pair is live, so it's a fresh jarring combo
+			//  every beat. Each layer is a 2-color gradient (cold→cold, hot→hot) so
+			//  the layer reads as ONE color world, and the two worlds collide at the
+			//  boundary. THIS is what makes someone stop scrolling and share.
+			// ══════════════════════════════════════════════════════════════════
+			// Five hand-picked clash pairs: [outerA, outerB, innerA, innerB].
+			const cl = this.uClash; // 0..4, set per beat
+			// outer gradient endpoints
+			const outA = select(cl.equal(0), vec3(0.0, 0.85, 1.0), // ICE: electric cyan
+				select(cl.equal(1), vec3(0.55, 1.0, 0.0), // ACID lime
+				select(cl.equal(2), vec3(1.0, 0.82, 0.0), // GOLD
+				select(cl.equal(3), vec3(0.0, 1.0, 0.6), // MINT/emerald
+				vec3(0.1, 0.5, 1.0))))); // ELECTRIC blue
+			const outB = select(cl.equal(0), vec3(0.3, 0.2, 1.0), // ICE→deep indigo
+				select(cl.equal(1), vec3(0.0, 0.7, 0.5), // ACID→teal
+				select(cl.equal(2), vec3(1.0, 0.4, 0.0), // GOLD→amber
+				select(cl.equal(3), vec3(0.0, 0.6, 1.0), // MINT→cyan
+				vec3(0.5, 0.0, 1.0))))); // ELECTRIC→violet
+			// inner gradient endpoints — the OPPOSING world
+			const inA = select(cl.equal(0), vec3(1.0, 0.25, 0.0), // FIRE: molten orange
+				select(cl.equal(1), vec3(1.0, 0.0, 0.55), // BLOOD: hot pink
+				select(cl.equal(2), vec3(0.6, 0.0, 1.0), // VIOLET
+				select(cl.equal(3), vec3(1.0, 0.1, 0.3), // CRIMSON
+				vec3(1.0, 0.7, 0.0))))); // GOLD
+			const inB = select(cl.equal(0), vec3(1.0, 0.0, 0.3), // FIRE→crimson
+				select(cl.equal(1), vec3(1.0, 0.45, 0.0), // BLOOD→orange
+				select(cl.equal(2), vec3(1.0, 0.0, 0.7), // VIOLET→magenta
+				select(cl.equal(3), vec3(1.0, 0.5, 0.0), // CRIMSON→amber
+				vec3(1.0, 0.2, 0.4))))); // GOLD→rose
 
-			// Beat mode tint (crimson contradiction / gold surprise / cyan default)
-			// blended by uModeTintAmt so dramatic beats read their color.
+			// Each layer = a 2-stop gradient driven by `flow` (stays in its world).
+			const grad = smoothstep(float(0.0), float(1.0), flow);
+			const outerColor = mix(outA, outB, grad);
+			const innerColor = mix(inA, inB, grad);
+			// Hard pick by layer → the clash is absolute at the boundary.
+			const rainbow = mix(outerColor, innerColor, isInnerC.select(float(1), float(0)));
+
+			// Beat mode tint kept very light so it never muddies the clash.
 			const modeTint = select(
 				this.uMode.equal(2),
 				vec3(1.0, 0.08, 0.32),
 				select(this.uMode.equal(3), vec3(1.0, 0.78, 0.1), vec3(0.1, 0.9, 1.0))
 			);
-			return mix(rainbow, modeTint, this.uModeTintAmt);
+			return mix(rainbow, modeTint, this.uModeTintAmt.mul(0.4));
 		});
 
 		// ── RIM GLOW ── THE look: bright glowing EDGES, dim center.
@@ -654,10 +668,11 @@ export class SemanticComputeStorm {
 			// glowing sculpted object floating inside the shell.
 			const fiC = float(instanceIndex);
 			const isInnerC = fract(fiC.mul(0.001).add(0.5)).greaterThan(0.66);
-			// Inner glow kept LOW so the nested figure reads as a crisp sculpted
-			// shape, not a bright blob (dense small-radius overlap blows white fast).
-			// The Fresnel silhouette carries it; a small floor keeps it visible.
-			const innerRim = float(0.14).add(fres.mul(0.42));
+			// Inner glow kept VERY low so the nested figure's CLASH COLOR survives as
+			// color, not white. Dense small-radius overlap blows to white fast and
+			// kills the contrast — so the inner sits dim and saturated, carried by its
+			// Fresnel silhouette. This is what makes the jarring inner/outer clash read.
+			const innerRim = float(0.07).add(fres.mul(0.3));
 			return isInnerC.select(innerRim, outerRim);
 		});
 
@@ -694,7 +709,10 @@ export class SemanticComputeStorm {
 		mat.colorNode = Fn(() => {
 			const glow = clamp(this.uIgnition.mul(0.05).add(0.5), 0, 1.0);
 			const world = rainbowColor().mul(glow).mul(rimFactor()).mul(this.uActDim);
-			const blastMix = smoothstep(float(0.0), float(0.85), clamp(this.uBlast, 0, 1));
+			// Blast is CAPPED at 0.6 so the inner/outer CLASH duotone always shows
+			// through even during a detonation — the clash is the star, the blast is
+			// an accent (was fully overriding, which washed the contrast to rainbow).
+			const blastMix = smoothstep(float(0.0), float(0.85), clamp(this.uBlast, 0, 1)).mul(0.6);
 			return mix(world, blastColor().mul(rimFactor()).mul(this.uActDim), blastMix);
 		})();
 
@@ -704,7 +722,9 @@ export class SemanticComputeStorm {
 		mat.emissiveNode = Fn(() => {
 			const emGain = clamp(this.uIgnition.mul(0.04).add(0.6), 0, 1.1);
 			const world = rainbowColor().mul(emGain).mul(rimFactor()).mul(this.uActDim);
-			const blastMix = smoothstep(float(0.0), float(0.85), clamp(this.uBlast, 0, 1));
+			// Same cap as colorNode so the bloom feeds on the CLASH colors, not a
+			// rainbow override.
+			const blastMix = smoothstep(float(0.0), float(0.85), clamp(this.uBlast, 0, 1)).mul(0.6);
 			return mix(world, blastColor().mul(0.85).mul(rimFactor()).mul(this.uActDim), blastMix);
 		})();
 
@@ -766,6 +786,9 @@ export class SemanticComputeStorm {
 		this.uPrevWorld.value = this.uWorld.value;
 		this.uWorld.value = beatIndex % this.worldCount;
 		this.uBlend.value = 1; // 1 = fully previous; update() eases it to 0
+		// Cycle the jarring inner/outer clash pair so each beat collides a fresh
+		// pair of opposing color worlds (ice↔fire, acid↔blood, …).
+		this.uClash.value = beatIndex % 5;
 
 		// Per-beat warm-up dim: beats 0/1 stay calm (dialed-in safety), then hands
 		// off to the act-based brightness. Acts II/III blaze.
@@ -773,8 +796,10 @@ export class SemanticComputeStorm {
 		const actDim = act === 'I' ? 0.26 : 1.0;
 		this.uActDim.value = warmup ?? actDim;
 		// Ignition flash: nearly none on beats 0/1, gentle for the rest of Act I,
-		// full blaze for Acts II/III.
-		this.uIgnition.value = beatIndex <= 1 ? 0.4 : act === 'I' ? 1.6 : 8.0;
+		// strong (but no longer white-blowing) for Acts II/III — lowered from 8.0 to
+		// 4.5 so the inner/outer CLASH colors survive the detonation instead of
+		// washing to white.
+		this.uIgnition.value = beatIndex <= 1 ? 0.4 : act === 'I' ? 1.6 : 4.5;
 		// PHYSICS BURST (fast) — contradiction + the DETONATION world (3) hit hardest.
 		const isDetonation = this.uWorld.value === 3;
 		this.uBurst.value = mode === 2 || isDetonation ? 1.0 : 0.8;
@@ -804,6 +829,8 @@ export class SemanticComputeStorm {
 		// Fresh random seed → the superformula/knot/lissajous/helix/foam params all
 		// change, so the same world index never looks the same twice.
 		this.uMorphSeed.value = Math.random() * 1000;
+		// Random opposing clash pair each dream figure → never the same collision.
+		this.uClash.value = Math.floor(Math.random() * 5);
 		// Chaos ramps up and saturates — figures get progressively crazier, then
 		// hold at max wildness. Eases in over the first ~8 dream beats.
 		this.uChaos.value = Math.min(1, 0.25 + this.dreamCount * 0.1);
