@@ -198,13 +198,17 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
         // MEMORY PRs (v2.2) — risk-gated brain-change review queue
         // ============================================================
         .route("/api/memory-prs", get(handlers::list_memory_prs))
+        // Static `/mode` routes declared BEFORE the dynamic `/{id}` route (B7
+        // hygiene). axum 0.8/matchit already prioritizes static segments, but
+        // declaring them first makes the intent unambiguous and guards against
+        // a future router that doesn't.
+        .route("/api/memory-prs/mode", get(handlers::get_review_mode))
+        .route("/api/memory-prs/mode", post(handlers::set_review_mode))
         .route("/api/memory-prs/{id}", get(handlers::get_memory_pr))
         .route(
             "/api/memory-prs/{id}/{action}",
             post(handlers::act_on_memory_pr),
         )
-        .route("/api/memory-prs/mode", get(handlers::get_review_mode))
-        .route("/api/memory-prs/mode", post(handlers::set_review_mode))
         .layer(
             ServiceBuilder::new()
                 .concurrency_limit(50)

@@ -146,6 +146,11 @@ export const api = {
 	// Memory Receipts (v2.2): the nutrition label for a retrieval.
 	receipts: {
 		list: (limit = 50) => fetcher<ReceiptListResponse>(`/receipts?limit=${limit}`),
+		// B5: scope to one run so the Black Box panel shows that run's receipts.
+		listForRun: (runId: string, limit = 50) =>
+			fetcher<ReceiptListResponse>(
+				`/receipts?run=${encodeURIComponent(runId)}&limit=${limit}`
+			),
 		get: (receiptId: string) => fetcher<Receipt>(`/receipts/${encodeURIComponent(receiptId)}`)
 	},
 

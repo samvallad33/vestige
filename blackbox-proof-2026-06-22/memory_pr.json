@@ -1,12 +1,12 @@
 {
-  "created_at": "2026-06-22T22:29:39.100921+00:00",
-  "decided_at": "2026-06-22T22:29:42.563122+00:00",
+  "created_at": "2026-06-22T23:39:30.596744+00:00",
+  "decided_at": "2026-06-22T23:39:44.258862+00:00",
   "decision": "promote",
   "diff": {
     "decision": "create",
     "node": {
       "content": "Store the production auth token and security credential for deploys.",
-      "id": "17b8c285-5418-4402-9e63-a92d4ae64eaf",
+      "id": "e22e83f3-2c18-4e33-93f4-558d91009505",
       "nodeType": "fact",
       "tags": [
         "security",
@@ -14,7 +14,7 @@
       ]
     }
   },
-  "id": "pr_bf0aec4483494713a01e4b0f5c15acb3",
+  "id": "pr_3c5b4b2852e74f1ab7c325a7e9cb6e1f",
   "kind": "new_fact",
   "run_id": "run_proof",
   "signals": [
@@ -24,6 +24,6 @@
     }
   ],
   "status": "promoted",
-  "subject_id": "17b8c285-5418-4402-9e63-a92d4ae64eaf",
+  "subject_id": "e22e83f3-2c18-4e33-93f4-558d91009505",
   "title": "New fact pending review: \"Store the production auth token and security credential for deploys.\""
 }

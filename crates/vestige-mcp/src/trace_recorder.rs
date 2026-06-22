@@ -29,10 +29,45 @@ use vestige_core::{
 };
 
 /// Tools that write to memory and are therefore subject to risk-gated review.
+///
+/// Includes `codebase` (its `remember_pattern` / `remember_decision` actions
+/// write durable architectural-decision memories) so those brain mutations are
+/// traced and gated like any other write (B2). Read-only actions on these tools
+/// are filtered out downstream by [`is_write_decision`].
 fn is_write_tool(tool: &str) -> bool {
     matches!(
         tool,
-        "smart_ingest" | "ingest" | "session_checkpoint" | "memory"
+        "smart_ingest" | "ingest" | "session_checkpoint" | "memory" | "codebase"
+    )
+}
+
+/// Whether a tool's `decision`/`action` label denotes an actual memory write
+/// (vs. a read like `get`/`state`). Used to keep reads out of the write trace.
+fn is_write_decision(label: &str) -> bool {
+    matches!(
+        label,
+        "create"
+            | "created"
+            | "update"
+            | "updated"
+            | "supersede"
+            | "superseded"
+            | "reinforce"
+            | "reinforced"
+            | "merge"
+            | "merged"
+            | "replace"
+            | "replaced"
+            | "add_context"
+            | "edit"
+            | "edited"
+            | "promote"
+            | "promoted"
+            | "demote"
+            | "demoted"
+            | "remember_pattern"
+            | "remember_decision"
+            | "remembered"
     )
 }
 
@@ -529,13 +564,21 @@ fn parse_suppress_reason(s: &str) -> SuppressReason {
 fn extract_writes(result: &Value) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let push = |out: &mut Vec<(String, String)>, item: &Value| {
-        let decision = item.get("decision").and_then(|v| v.as_str());
+        // B2: accept either `decision` (smart_ingest) or `action`
+        // (memory promote/demote/edit, codebase remember_*). Read-only labels
+        // (get/state/...) are filtered out so reads never trace as writes.
+        let label = item
+            .get("decision")
+            .or_else(|| item.get("action"))
+            .and_then(|v| v.as_str());
         let id = item
             .get("nodeId")
             .or_else(|| item.get("id"))
             .and_then(|v| v.as_str());
-        if let (Some(d), Some(id)) = (decision, id) {
-            out.push((id.to_string(), d.to_string()));
+        if let (Some(label), Some(id)) = (label, id)
+            && is_write_decision(label)
+        {
+            out.push((id.to_string(), label.to_string()));
         }
     };
     push(&mut out, result);
@@ -765,5 +808,37 @@ mod tests {
             "results": [ { "decision": "update", "id": "n2" } ]
         });
         assert_eq!(extract_writes(&batch), vec![("n2".into(), "update".into())]);
+    }
+
+    #[test]
+    fn extract_writes_recognizes_action_shape_b2() {
+        // B2: memory promote/demote return `action` + `nodeId`, not `decision`.
+        let promoted = serde_json::json!({ "action": "promoted", "nodeId": "m1" });
+        assert_eq!(extract_writes(&promoted), vec![("m1".into(), "promoted".into())]);
+        let demoted = serde_json::json!({ "action": "demoted", "nodeId": "m2" });
+        assert_eq!(extract_writes(&demoted), vec![("m2".into(), "demoted".into())]);
+        // codebase remember_decision returns action + nodeId.
+        let decision = serde_json::json!({ "action": "remember_decision", "nodeId": "c1" });
+        assert_eq!(
+            extract_writes(&decision),
+            vec![("c1".into(), "remember_decision".into())]
+        );
+    }
+
+    #[test]
+    fn extract_writes_ignores_read_actions_b2() {
+        // A read (memory get / get_batch / state) carries nodeId but is NOT a write.
+        let read = serde_json::json!({ "action": "get", "nodeId": "m1" });
+        assert!(extract_writes(&read).is_empty(), "get is not a write");
+        let state = serde_json::json!({ "action": "state", "nodeId": "m2" });
+        assert!(extract_writes(&state).is_empty(), "state is not a write");
+    }
+
+    #[test]
+    fn write_tool_set_includes_codebase_b2() {
+        assert!(is_write_tool("codebase"));
+        assert!(is_write_tool("memory"));
+        assert!(!is_write_tool("search"));
+        assert!(!is_write_tool("deep_reference"));
     }
 }

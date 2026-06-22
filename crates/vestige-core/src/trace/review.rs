@@ -183,6 +183,11 @@ const SENSITIVE_TOPICS: &[(&str, &str)] = &[
     ("api key", "credential / API key"),
     ("security", "security-relevant fact"),
     ("vuln", "security vulnerability"),
+    ("vulnerability", "security vulnerability"),
+    ("credential", "credential material"),
+    ("credentials", "credential material"),
+    ("api key", "credential / API key"),
+    ("apikey", "credential / API key"),
     // money / bounty / legal
     ("money", "financial fact"),
     ("payment", "financial fact"),
@@ -345,19 +350,48 @@ fn collect_signals(ctx: &WriteContext) -> Vec<RiskSignal> {
 }
 
 /// Return the human label of the first sensitive topic found in content/tags.
+///
+/// B6: matches on WORD BOUNDARIES, not substrings — so "tokenizer" no longer
+/// trips "token", "author" no longer trips "auth", "secretary" no longer trips
+/// "secret". Multi-word needles (e.g. "api key") match a consecutive run of
+/// words. The text is lowercased and split on any non-alphanumeric char.
 fn first_sensitive_topic(content: &str, tags: &[String]) -> Option<&'static str> {
-    let haystack = {
-        let mut s = content.to_ascii_lowercase();
-        for t in tags {
-            s.push(' ');
-            s.push_str(&t.to_ascii_lowercase());
+    // Tokenize content + tags into lowercased alphanumeric words.
+    let mut words: Vec<String> = Vec::new();
+    let mut push_words = |s: &str| {
+        for w in s
+            .to_ascii_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+        {
+            if !w.is_empty() {
+                words.push(w.to_string());
+            }
         }
-        s
     };
+    push_words(content);
+    for t in tags {
+        push_words(t);
+    }
+
     SENSITIVE_TOPICS
         .iter()
-        .find(|(needle, _)| haystack.contains(needle))
+        .find(|(needle, _)| matches_word_sequence(&words, needle))
         .map(|(_, label)| *label)
+}
+
+/// Whether `needle` (one or more space-separated words) appears as a consecutive
+/// whole-word run in `words`.
+fn matches_word_sequence(words: &[String], needle: &str) -> bool {
+    let needle_words: Vec<&str> = needle.split_whitespace().collect();
+    if needle_words.is_empty() {
+        return false;
+    }
+    if needle_words.len() == 1 {
+        return words.iter().any(|w| w == needle_words[0]);
+    }
+    words
+        .windows(needle_words.len())
+        .any(|win| win.iter().zip(&needle_words).all(|(w, n)| w == n))
 }
 
 // ============================================================================
@@ -490,6 +524,21 @@ impl MemoryPrAction {
             MemoryPrAction::AskAgentWhy => return None,
         })
     }
+
+    /// Whether deciding the PR with this action should **release** the subject
+    /// memory from quarantine (reverse the suppression that gate_writes applied).
+    ///
+    /// A risky write is committed-then-suppressed; approving it must restore its
+    /// retrieval influence, otherwise the UI says "promoted" while the memory
+    /// stays held out — the bug this guards against. Accept actions release;
+    /// `Quarantine` keeps it held; `Forget` rejects it (stays suppressed);
+    /// `AskAgentWhy` is read-only.
+    pub fn releases_memory(&self) -> bool {
+        matches!(
+            self,
+            MemoryPrAction::Promote | MemoryPrAction::Merge | MemoryPrAction::Supersede
+        )
+    }
 }
 
 /// A reviewable change to the agent's brain — the persisted Memory PR record.
@@ -610,6 +659,55 @@ mod tests {
     }
 
     #[test]
+    fn sensitive_topic_word_boundary_no_false_positives_b6() {
+        // B6: these ordinary technical writes must NOT gate — they only CONTAIN
+        // a sensitive substring, they don't USE the sensitive word.
+        // These each only CONTAIN a sensitive substring; the word-boundary fix
+        // means they no longer gate. (Note: bare "license"/"contract"/"legal"
+        // ARE kept as gating words — a license/contract fact is legitimately
+        // legal-relevant — so they're intentionally not in this benign set.)
+        for benign in [
+            "The tokenizer converts input strings to embeddings.",
+            "The author of this module is documented in the header.",
+            "The secretary pattern coordinates the worker pool.",
+            "Contraction of the array happens during compaction.",
+            "The authority record links to the canonical node.",
+            "The authentication-free endpoint is for health checks.", // "authentication" != "auth"
+        ] {
+            let mut ctx = ordinary();
+            ctx.content = benign.into();
+            ctx.node_type = "fact".into();
+            ctx.tags = vec![];
+            let (class, _) = classify_write(&ctx, ReviewMode::RiskGated);
+            assert_eq!(
+                class,
+                RiskClass::AutoCommit,
+                "must NOT gate ordinary write: {benign}"
+            );
+        }
+    }
+
+    #[test]
+    fn sensitive_topic_word_boundary_still_catches_real_b6() {
+        // The real sensitive phrasings must still gate.
+        for risky in [
+            "store the auth token for the deploy",
+            "this is a security vulnerability in the parser",
+            "the api key for the service",
+            "remember the user preference for dark mode",
+            "the bounty payout is configured",
+        ] {
+            let mut ctx = ordinary();
+            ctx.content = risky.into();
+            ctx.node_type = "fact".into();
+            ctx.tags = vec![];
+            let (class, signals) = classify_write(&ctx, ReviewMode::RiskGated);
+            assert_eq!(class, RiskClass::Review, "must gate: {risky}");
+            assert!(signals.iter().any(|s| s.code == "sensitive_topic"));
+        }
+    }
+
+    #[test]
     fn sensitive_node_type_gates() {
         let mut ctx = ordinary();
         ctx.node_type = "identity".into();
@@ -688,5 +786,17 @@ mod tests {
             Some(MemoryPrStatus::Promoted)
         );
         assert_eq!(MemoryPrAction::AskAgentWhy.resulting_status(), None);
+    }
+
+    #[test]
+    fn only_accept_actions_release_the_memory() {
+        // B1: accepting a risky write must release it from quarantine.
+        assert!(MemoryPrAction::Promote.releases_memory());
+        assert!(MemoryPrAction::Merge.releases_memory());
+        assert!(MemoryPrAction::Supersede.releases_memory());
+        // Rejecting / holding keeps it suppressed.
+        assert!(!MemoryPrAction::Forget.releases_memory());
+        assert!(!MemoryPrAction::Quarantine.releases_memory());
+        assert!(!MemoryPrAction::AskAgentWhy.releases_memory());
     }
 }

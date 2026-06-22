@@ -1,15 +1,19 @@
 # Agent Black Box — Review Bundle
 
-**Branch:** `feat/agent-black-box`
-**Head:** `140b15f59fd496988ade57792bfc8b9a6acba70c`
+**Branch:** `feat/agent-black-box` (head = branch tip)
 **Base (review against):** `9e92a5999ada37bed9b4820bb25b7748b417411c` (the
 `feat/dashboard-bleeding-edge` tip this branched from)
-**Packaged:** 2026-06-22T22:57:59Z
 **Status:** feature work **frozen**. No quarantine-constellation work has
-started. This branch is ready for a full review before anything else lands.
+started.
 
 Start here, then read `PROOF.md` (the per-feature real/caveat/stub ledger) and
 open the screenshots.
+
+> **Update — review findings addressed.** A full multi-agent review found 7
+> real issues (4 blockers). All are fixed and tested; this bundle was
+> **re-captured from a single run (`run_proof`)** so trace.json,
+> websocket-events.jsonl, and memory_pr.json now all carry the same runId. See
+> "Review findings addressed" below.
 
 ---
 
@@ -145,6 +149,28 @@ Key files to review:
       are unchanged; the graph page only gained an additive `?center=` param.
 
 ---
+
+## Review findings addressed (2026-06-22)
+
+A full read-only review (multiple parallel agents, both Rust and dashboard)
+found 7 real issues — 4 blockers. All fixed and tested:
+
+| # | Severity | Finding | Fix | Proof |
+|---|----------|---------|-----|-------|
+| B1 | blocker | Promoting a Memory PR didn't unsuppress the quarantined memory — UI said "promoted" while the memory stayed out of retrieval | `act_on_memory_pr` now calls `reverse_suppression(subject_id)` on accept actions (promote/merge/supersede); `MemoryPrAction::releases_memory()` encodes the rule | live: PR response `subjectReleased: true`, SQLite `suppression_count: 0`; tests `promote_releases_a_quarantined_memory_end_to_end`, `only_accept_actions_release_the_memory` |
+| B2 | blocker | memory promote/demote (returns `action`, not `decision`) and `codebase` writes bypassed the write-trace + gate | `extract_writes` reads `action` too, filtered by `is_write_decision`; `is_write_tool` includes `codebase` | tests `extract_writes_recognizes_action_shape_b2`, `extract_writes_ignores_read_actions_b2`, `write_tool_set_includes_codebase_b2` |
+| B3 | blocker | Receipt ids collided within a run (`r_<date>_<runId>` + `INSERT OR REPLACE`) — later receipt overwrote earlier | id is now `r_<date>_<runId8>_<unique6>` | live: two receipts in `run_proof` have distinct ids; test `receipt_ids_unique_within_a_run_b3` |
+| B4 | blocker | Proof bundle mis-assembled: `trace.json`=`run_proof` but `websocket-events.jsonl`=`run_proof2` | re-captured the whole bundle from one run | all artifacts now carry `run_proof` (verified) |
+| B5 | P2 | Black Box receipts panel showed global latest, not the selected run's | `list_receipts_for_run` + `/api/receipts?run=` + page uses `listForRun(runId)` | live: `?run=run_proof` returns only that run; test `receipts_are_listable_per_run_b5` |
+| B6 | P2 | `SENSITIVE_TOPICS` substring match false-fired ("tokenizer"→token, "author"→auth) | word-boundary matching | tests `sensitive_topic_word_boundary_no_false_positives_b6`, `..._still_catches_real_b6` |
+| B7 | P3 | `set_review_mode` non-atomic write; export filename used raw `run_id` | `write_atomic` (temp+rename); filename sanitized; static routes declared before dynamic | covered by build + the atomic-write helper's existing use |
+
+One earlier (self-)review claim was **withdrawn**: the `/api/memory-prs/mode`
+vs `/{id}` route order is *not* a functional bug — axum 0.8 / matchit gives
+static segments priority. Reordered for clarity only.
+
+Net after fixes: **999 lib tests pass, clippy `-D warnings` clean, dashboard
+check + build clean.**
 
 ## Reproduce (any reviewer, locally)
 

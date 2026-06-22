@@ -1990,6 +1990,8 @@ pub async fn deep_reference_query(
 #[derive(Debug, Deserialize)]
 pub struct TraceListParams {
     pub limit: Option<usize>,
+    /// Optional run filter — receipts/traces scoped to one run (B5).
+    pub run: Option<String>,
 }
 
 /// List recent agent runs (newest activity first) for the Black Box run picker.
@@ -2083,6 +2085,18 @@ pub async fn export_trace(
         })),
         "events": events,
     });
+    // B7: sanitize the run_id before putting it in the download filename so a
+    // crafted run_id (quotes, path separators, control chars) can't break the
+    // Content-Disposition header or the filename. Falls back to "trace".
+    let safe: String = run_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+    let safe = if safe.trim_matches('_').is_empty() {
+        "trace".to_string()
+    } else {
+        safe
+    };
     let headers = [
         (
             axum::http::header::CONTENT_TYPE,
@@ -2090,7 +2104,7 @@ pub async fn export_trace(
         ),
         (
             axum::http::header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{run_id}.vestige-trace.json\""),
+            format!("attachment; filename=\"{safe}.vestige-trace.json\""),
         ),
     ];
     Ok((headers, Json(body)))
@@ -2106,10 +2120,13 @@ pub async fn list_receipts(
     Query(params): Query<TraceListParams>,
 ) -> Result<Json<Value>, StatusCode> {
     let limit = params.limit.unwrap_or(50).clamp(1, 500);
-    let receipts = state
-        .storage
-        .list_receipts(limit)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // B5: when a run is given, scope to that run's receipts so the Black Box
+    // panel shows only receipts that actually belong to the selected run.
+    let receipts = match params.run.as_deref().filter(|r| !r.is_empty()) {
+        Some(run_id) => state.storage.list_receipts_for_run(run_id, limit),
+        None => state.storage.list_receipts(limit),
+    }
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(serde_json::json!({
         "total": receipts.len(),
         "receipts": receipts,
@@ -2207,6 +2224,39 @@ pub async fn act_on_memory_pr(
         .decide_memory_pr(&id, action)
         .map_err(|_| StatusCode::NOT_FOUND)?;
 
+    // B1: an accept action (promote/merge/supersede) must RELEASE the subject
+    // memory from quarantine — gate_writes suppressed it, so deciding the PR
+    // without un-suppressing would leave it "promoted" yet still held out of
+    // retrieval. Forget/Quarantine intentionally keep it suppressed.
+    let mut released = false;
+    if action.releases_memory()
+        && let Some(subject_id) = decided.subject_id.as_deref()
+    {
+        use vestige_core::neuroscience::active_forgetting::ActiveForgettingSystem;
+        let labile_hours = ActiveForgettingSystem::new().labile_hours;
+        match state.storage.reverse_suppression(subject_id, labile_hours) {
+            Ok(node) => {
+                released = true;
+                state.emit(VestigeEvent::MemoryUnsuppressed {
+                    id: node.id.clone(),
+                    remaining_count: node.suppression_count,
+                    timestamp: Utc::now(),
+                });
+            }
+            Err(e) => {
+                // Best-effort: the PR is decided regardless, but surface the
+                // failure so a stuck-suppressed memory isn't silent.
+                tracing::warn!(
+                    "memory PR {} {}d but failed to release subject {}: {}",
+                    id,
+                    action_label(action),
+                    subject_id,
+                    e
+                );
+            }
+        }
+    }
+
     state.emit(VestigeEvent::MemoryPrDecided {
         id: decided.id.clone(),
         decision: decided
@@ -2218,7 +2268,24 @@ pub async fn act_on_memory_pr(
         timestamp: Utc::now(),
     });
 
-    Ok(Json(serde_json::to_value(&decided).unwrap_or_default()))
+    let mut out = serde_json::to_value(&decided).unwrap_or_default();
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("subjectReleased".to_string(), serde_json::json!(released));
+    }
+    Ok(Json(out))
+}
+
+/// Short label for a Memory PR action, for log lines.
+fn action_label(action: vestige_core::MemoryPrAction) -> &'static str {
+    use vestige_core::MemoryPrAction::*;
+    match action {
+        Promote => "promote",
+        Merge => "merge",
+        Supersede => "supersede",
+        Quarantine => "quarantine",
+        Forget => "forget",
+        AskAgentWhy => "ask_agent_why",
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2244,8 +2311,10 @@ pub async fn set_review_mode(
     let mode = vestige_core::ReviewMode::from_label(&body.mode);
     let path = review_mode_path(&state);
     let payload = serde_json::json!({ "mode": mode.as_str() });
-    fs::write(&path, serde_json::to_vec_pretty(&payload).unwrap_or_default())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // B7: atomic write (temp + rename) so a concurrent read can never see a
+    // partially-written / corrupt review_mode.json, reusing the same helper the
+    // Sanhedrin receipt path uses.
+    write_atomic(&path, &serde_json::to_vec_pretty(&payload).unwrap_or_default())?;
     Ok(Json(serde_json::json!({ "mode": mode.as_str() })))
 }
 

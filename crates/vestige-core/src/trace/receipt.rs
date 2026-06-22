@@ -59,12 +59,42 @@ pub struct Receipt {
 impl Receipt {
     /// Build a receipt from already-computed retrieval signals.
     ///
-    /// `receipt_id` is derived from `now` + a short discriminator so it is both
-    /// human-legible and collision-resistant within a day. `trust_scores` is the
-    /// per-id FSRS retrievability/trust the pipeline already produced.
+    /// `receipt_id` is `r_<date>_<discriminator8>_<unique6>` — human-legible
+    /// and dated, with a short random suffix so that **multiple retrievals in
+    /// the same run never collide** (B3). The discriminator (usually the runId)
+    /// keeps receipts from one run visually grouped; the suffix guarantees
+    /// uniqueness so `INSERT OR REPLACE` can't overwrite an earlier receipt.
+    /// `trust_scores` is the per-id FSRS retrievability/trust the pipeline
+    /// already produced.
     pub fn build(
         now: chrono::DateTime<chrono::Utc>,
         discriminator: &str,
+        retrieved: Vec<String>,
+        suppressed: Vec<SuppressedReceiptEntry>,
+        activation_path: Vec<String>,
+        trust_scores: &[f64],
+        mutations: Vec<ReceiptMutation>,
+    ) -> Self {
+        Self::build_with_unique(
+            now,
+            discriminator,
+            &uuid::Uuid::new_v4().simple().to_string()[..6],
+            retrieved,
+            suppressed,
+            activation_path,
+            trust_scores,
+            mutations,
+        )
+    }
+
+    /// Like [`Receipt::build`] but with a caller-supplied uniqueness token,
+    /// so the id is fully deterministic for tests. Production uses
+    /// [`Receipt::build`] which mints a random token.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_with_unique(
+        now: chrono::DateTime<chrono::Utc>,
+        discriminator: &str,
+        unique: &str,
         retrieved: Vec<String>,
         suppressed: Vec<SuppressedReceiptEntry>,
         activation_path: Vec<String>,
@@ -87,7 +117,17 @@ impl Receipt {
             .filter(|c| c.is_ascii_alphanumeric())
             .take(8)
             .collect();
-        let receipt_id = format!("r_{}_{}", now.format("%Y_%m_%d"), short);
+        let unique_clean: String = unique
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(6)
+            .collect();
+        let receipt_id = format!(
+            "r_{}_{}_{}",
+            now.format("%Y_%m_%d"),
+            short,
+            unique_clean
+        );
 
         Self {
             receipt_id,
@@ -182,16 +222,31 @@ mod tests {
 
     #[test]
     fn receipt_id_is_human_legible_and_dated() {
-        let r = Receipt::build(
+        let r = Receipt::build_with_unique(
             fixed_now(),
             "abc123!!",
+            "u1u2u3",
             vec!["mem_1".into()],
             vec![],
             vec![],
             &[0.9],
             vec![],
         );
-        assert_eq!(r.receipt_id, "r_2026_06_22_abc123");
+        assert_eq!(r.receipt_id, "r_2026_06_22_abc123_u1u2u3");
+    }
+
+    #[test]
+    fn receipt_ids_unique_within_a_run_b3() {
+        // B3: two retrievals in the SAME run (same date + discriminator) must
+        // get DISTINCT ids so INSERT OR REPLACE can't overwrite the first.
+        let a = Receipt::build(fixed_now(), "run_x", vec![], vec![], vec![], &[], vec![]);
+        let b = Receipt::build(fixed_now(), "run_x", vec![], vec![], vec![], &[], vec![]);
+        assert_ne!(
+            a.receipt_id, b.receipt_id,
+            "same-run receipts must not collide"
+        );
+        assert!(a.receipt_id.starts_with("r_2026_06_22_runx_"));
+        assert!(b.receipt_id.starts_with("r_2026_06_22_runx_"));
     }
 
     #[test]

@@ -1,17 +1,11 @@
 {
-  "activation_path": [
-    "SYNTHESIS: \"trace spine\"\n\nPRIMARY FINDING (trust 62%, Jun 22, 2026): Proof sequence: ordinary memory about the trace spine.\nNO CONTRADICTIONS DETECTED. Evidence is consistent.\nOVERALL CONFIDENCE: 93%\n"
-  ],
-  "decay_risk": "medium",
+  "activation_path": [],
+  "decay_risk": "high",
   "mutations": [],
-  "receipt_id": "r_2026_06_22_runproof",
+  "receipt_id": "r_2026_06_22_runproof_7f144c",
   "retrieved": [
-    "be5c621b-526d-494b-a517-6977f5bf6044",
-    "03cf3f8a-19a4-4317-acd9-222083d5e5c7",
-    "bf444160-75e6-4d75-b351-c05d5cfd53fc",
-    "17b8c285-5418-4402-9e63-a92d4ae64eaf",
-    "f2548f78-a85b-44c4-9356-4b6d3c0b48f1"
+    "9d975b31-e4b2-425c-902a-c17fef9dd4cb"
   ],
   "suppressed": [],
-  "trust_floor": 0.53
+  "trust_floor": 0.0
 }

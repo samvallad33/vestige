@@ -282,6 +282,31 @@ impl SqliteMemoryStore {
         Ok(out)
     }
 
+    /// List the receipts belonging to one run, newest first (B5). The Black Box
+    /// receipts panel uses this so the receipts it shows actually belong to the
+    /// selected run, not the global latest.
+    pub fn list_receipts_for_run(&self, run_id: &str, limit: usize) -> Result<Vec<Receipt>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let mut stmt = reader.prepare(
+            "SELECT payload FROM memory_receipts WHERE run_id = ?1
+             ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![run_id, limit as i64], |row| {
+            let p: String = row.get(0)?;
+            Ok(p)
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            if let Ok(rc) = serde_json::from_str::<Receipt>(&r?) {
+                out.push(rc);
+            }
+        }
+        Ok(out)
+    }
+
     // ========================================================================
     // MEMORY PRs — the risk-gated review queue
     // ========================================================================
@@ -535,6 +560,37 @@ mod tests {
     }
 
     #[test]
+    fn receipts_are_listable_per_run_b5() {
+        let s = store();
+        let mk = |id: &str| Receipt {
+            receipt_id: id.into(),
+            retrieved: vec!["m1".into()],
+            suppressed: vec![],
+            activation_path: vec![],
+            trust_floor: 0.9,
+            decay_risk: DecayRisk::Low,
+            mutations: vec![],
+        };
+        s.save_receipt(&mk("r_a1"), Some("run_a"), Some("search"), None)
+            .unwrap();
+        s.save_receipt(&mk("r_a2"), Some("run_a"), Some("search"), None)
+            .unwrap();
+        s.save_receipt(&mk("r_b1"), Some("run_b"), Some("search"), None)
+            .unwrap();
+
+        let run_a = s.list_receipts_for_run("run_a", 10).unwrap();
+        assert_eq!(run_a.len(), 2, "run_a has exactly its 2 receipts");
+        assert!(run_a.iter().all(|r| r.receipt_id.starts_with("r_a")));
+
+        let run_b = s.list_receipts_for_run("run_b", 10).unwrap();
+        assert_eq!(run_b.len(), 1, "run_b has only its own receipt");
+        assert_eq!(run_b[0].receipt_id, "r_b1");
+
+        // Global list still sees all three.
+        assert_eq!(s.list_receipts(10).unwrap().len(), 3);
+    }
+
+    #[test]
     fn memory_pr_lifecycle() {
         let s = store();
         let pr = MemoryPr {
@@ -567,6 +623,39 @@ mod tests {
         assert_eq!(decided.decision, Some(MemoryPrAction::Promote));
         assert!(decided.decided_at.is_some());
         assert_eq!(s.count_pending_memory_prs().unwrap(), 0);
+    }
+
+    #[test]
+    fn promote_releases_a_quarantined_memory_end_to_end() {
+        // B1 regression: the full quarantine→release cycle at the storage layer.
+        // gate_writes suppresses a risky write; an accept action must reverse it.
+        let s = store();
+        let node = s
+            .ingest(crate::IngestInput {
+                content: "Risky write that got quarantined.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .expect("ingest");
+        assert_eq!(node.suppression_count, 0, "fresh node not suppressed");
+
+        // Quarantine it (what gate_writes does for a risky write).
+        let suppressed = s.suppress_memory(&node.id).expect("suppress");
+        assert_eq!(
+            suppressed.suppression_count, 1,
+            "quarantined write is suppressed (held out of retrieval)"
+        );
+
+        // Promote = release. (The action releases_memory() == true; the handler
+        // calls reverse_suppression on the subject.)
+        assert!(crate::MemoryPrAction::Promote.releases_memory());
+        let released = s
+            .reverse_suppression(&node.id, 24)
+            .expect("reverse suppression within labile window");
+        assert_eq!(
+            released.suppression_count, 0,
+            "promoting the PR must release the memory — not leave it suppressed"
+        );
     }
 
     #[test]

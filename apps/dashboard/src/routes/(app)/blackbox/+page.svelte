@@ -86,9 +86,9 @@
 		try {
 			detail = await api.traces.get(runId);
 			scrubIndex = Math.max(0, (detail.events.length || 1) - 1);
-			// Receipts are the proof behind a run's retrievals. The list is
-			// recent-first; the newest typically belong to the just-selected run.
-			receipts = (await api.receipts.list(8)).receipts;
+			// Receipts are the proof behind THIS run's retrievals — scoped to
+			// the selected run (B5), not the global latest.
+			receipts = (await api.receipts.listForRun(runId, 8)).receipts;
 		} catch (e) {
 			error = String(e);
 			detail = null;
