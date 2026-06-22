@@ -22,6 +22,14 @@
 		type CinemaNarration,
 		type BeatNarration,
 	} from '$lib/graph/cinema/narrator';
+	import { computeSignals } from '$lib/graph/cinema/topology';
+	import {
+		planShotsDeterministic,
+		resolveShots,
+		type DirectorPlan,
+		type ResolvedShot,
+		type StormMode,
+	} from '$lib/graph/cinema/auteur';
 	import type { SemanticRole } from '$lib/graph/cinema/storm';
 	import type { CinemaSandbox } from '$lib/graph/cinema/sandbox';
 
@@ -46,6 +54,12 @@
 	let voiceOn = $state(false);
 	let localAiOn = $state(false);
 	let statusLine = $state('');
+	// Auteur (director) state surfaced in the overlay.
+	let directorNote = $state(''); // the current shot's "why" (cites a real metric)
+	let act = $state<'I' | 'II' | 'III'>('I');
+	let tension = $state(0); // 0..1 for the tension sparkline
+	let logline = $state('');
+	let plan = $state<DirectorPlan | null>(null);
 
 	let canvasHost = $state<HTMLDivElement | undefined>(undefined);
 	let sandbox: CinemaSandbox | null = null;
@@ -82,11 +96,6 @@
 		return pos;
 	}
 
-	function roleFor(beat: CinemaBeat): SemanticRole {
-		if (beat.kind === 'origin') return 'anchor';
-		if (beat.kind === 'contradiction') return 'contradiction';
-		return 'connection';
-	}
 
 	function speak(text: string) {
 		if (!voiceOn || typeof speechSynthesis === 'undefined') return;
@@ -119,15 +128,30 @@
 		}, 18);
 	}
 
-	function onBeat(beat: CinemaBeat, index: number) {
+	// Map the director's StormMode to the storm runtime's SemanticRole. 'surprise'
+	// is a Phase-3 storm mode; until then it reads as 'connection'.
+	function stormRole(mode: StormMode): SemanticRole {
+		return mode === 'surprise' ? 'connection' : mode;
+	}
+
+	function onBeat(beat: CinemaBeat, index: number, shot: ResolvedShot | null) {
 		beatIndex = index + 1;
 		const text = narration?.beats[index]?.text ?? beat.node.label ?? '';
 		chip = narration?.beats[index]?.chip ?? '';
 		streamCaption(text);
 		speak(text);
+		// Surface the director's intent for this shot — the "why", act, tension.
+		if (shot) {
+			directorNote = shot.why;
+			act = shot.act;
+			tension = shot.tension;
+		}
 		if (sandbox && webgpuActive) {
 			const wp = currentPositions?.get(beat.nodeId);
-			if (wp) sandbox.transitionTo(roleFor(beat), wp);
+			if (wp) {
+				const mode: StormMode = shot?.stormMode ?? 'connection';
+				sandbox.transitionTo(stormRole(mode), wp);
+			}
 		}
 	}
 
@@ -143,6 +167,11 @@
 		director = null;
 		narration = null;
 		renderFailures = 0;
+		directorNote = '';
+		logline = '';
+		plan = null;
+		act = 'I';
+		tension = 0;
 
 		open = true;
 		stage = 'planning';
@@ -161,6 +190,15 @@
 			return;
 		}
 		currentPositions = layoutPositions(path);
+
+		// THE AUTEUR: read the graph's dramatic structure and direct the film.
+		// Tier 2 (deterministic) ships the hero; Tier 1 (LLM) lands in Phase 4.
+		const signals = computeSignals(nodes, edges);
+		plan = planShotsDeterministic(path, signals);
+		logline = plan.logline;
+		const shots = resolveShots(plan, path);
+		act = shots[0]?.act ?? 'I';
+		tension = shots[0]?.tension ?? 0;
 
 		// Tiers 1/2: resolve narration (backend LLM → local captions).
 		narration = await resolveNarration(path, localAiOn ? localAiFetcher() : fetchBackendNarration);
@@ -197,7 +235,7 @@
 				stage = 'done';
 				statusLine = 'End of tour.';
 			},
-		}, { reducedMotion });
+		}, { reducedMotion, shots });
 
 		stage = 'playing';
 		statusLine = webgpuActive
@@ -340,10 +378,16 @@
 			<div class="flex items-center gap-2 text-xs text-dim">
 				<span class="cinema-dot" class:active={stage === 'playing'}></span>
 				<span>{statusLine}</span>
+				{#if plan}
+					<span class="cinema-badge" title="Who directed this film">
+						{plan.source === 'deterministic' ? 'Auteur (local)' : 'Auteur (AI)'}
+					</span>
+				{/if}
 				{#if narrationSource}
 					<span class="cinema-badge">{narrationSource === 'backend-llm' ? 'AI narration' : 'Live captions'}</span>
 				{/if}
 				{#if webgpuActive}<span class="cinema-badge cinema-badge-gpu">WebGPU</span>{/if}
+				{#if stage === 'playing'}<span class="cinema-act">Act {act}</span>{/if}
 			</div>
 			<div class="flex items-center gap-2">
 				<label class="cinema-toggle" title="Speak narration aloud">
@@ -356,12 +400,26 @@
 			</div>
 		</div>
 
-		<!-- Bottom: narration captions + progress -->
+		<!-- Pre-roll DIRECTOR'S PLAN card: the AI states its film before rolling. -->
+		{#if stage === 'planning' && logline}
+			<div class="cinema-plan-card glass-panel">
+				<div class="cinema-plan-kicker">Director's plan</div>
+				<p class="cinema-plan-logline">{logline}</p>
+			</div>
+		{/if}
+
+		<!-- Bottom: narration captions + director's note + progress -->
 		<div class="cinema-caption-wrap">
 			{#if chip}<div class="cinema-chip">{chip}</div>{/if}
 			<p class="cinema-caption">{caption}</p>
+			{#if directorNote && stage === 'playing'}
+				<p class="cinema-note" title="Why the director chose this shot">▸ {directorNote}</p>
+			{/if}
 			<div class="cinema-progress" aria-hidden="true">
-				<div class="cinema-progress-fill" style="width:{progress * 100}%"></div>
+				<div
+					class="cinema-progress-fill"
+					style="width:{progress * 100}%; --tension:{tension}"
+				></div>
 			</div>
 			<div class="cinema-beatcount text-dim text-xs">
 				{#if totalBeats > 0}Beat {beatIndex} / {totalBeats}{/if}
@@ -405,6 +463,50 @@
 	.cinema-badge-gpu {
 		border-color: rgba(20, 232, 198, 0.5);
 		color: #14e8c6;
+	}
+	.cinema-act {
+		font-size: 0.6rem;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--color-dream-glow);
+		opacity: 0.85;
+	}
+	/* Pre-roll director's plan card — centered, the AI's statement of intent. */
+	.cinema-plan-card {
+		position: absolute;
+		z-index: 3;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		max-width: 520px;
+		padding: 1.5rem 1.75rem;
+		border-radius: 16px;
+		text-align: center;
+		animation: cinema-plan-in 0.5s ease both;
+	}
+	@keyframes cinema-plan-in {
+		from { opacity: 0; transform: translate(-50%, -46%); }
+		to { opacity: 1; transform: translate(-50%, -50%); }
+	}
+	.cinema-plan-kicker {
+		font-size: 0.65rem;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		color: var(--color-synapse-glow);
+		margin-bottom: 0.5rem;
+	}
+	.cinema-plan-logline {
+		font-size: clamp(1.05rem, 2.2vw, 1.4rem);
+		line-height: 1.5;
+		color: var(--color-bright);
+		margin: 0;
+	}
+	.cinema-note {
+		font-size: 0.78rem;
+		color: var(--color-synapse-glow);
+		opacity: 0.85;
+		margin: 0 0 0.6rem;
+		font-style: italic;
 	}
 	.cinema-dot {
 		width: 8px;
@@ -464,8 +566,13 @@
 	}
 	.cinema-progress-fill {
 		height: 100%;
-		background: linear-gradient(90deg, var(--color-synapse), var(--color-dream));
-		transition: width 0.2s linear;
+		/* Tint shifts toward crimson as the shot's tension rises (--tension 0..1). */
+		background: linear-gradient(
+			90deg,
+			var(--color-synapse),
+			color-mix(in oklch, var(--color-dream), #ff2d55 calc(var(--tension, 0) * 100%))
+		);
+		transition: width 0.2s linear, background 0.4s ease;
 	}
 	.cinema-beatcount {
 		margin-top: 0.4rem;
