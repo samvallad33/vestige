@@ -409,7 +409,7 @@ disown</code>
 	</div>
 
 	<!-- Bottom stats -->
-	<div class="absolute bottom-4 left-4 z-10 text-xs text-dim glass rounded-xl px-3 py-2">
+	<div class="graph-stats-pill absolute bottom-4 left-4 z-10 text-xs text-dim glass rounded-xl px-3 py-2">
 		{#if graphData}
 			<span>{liveNodeCount} nodes</span>
 			<span class="mx-2 text-subtle">·</span>

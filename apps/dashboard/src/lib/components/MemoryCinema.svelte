@@ -53,6 +53,10 @@
 	let webgpuActive = $state(false);
 	let voiceOn = $state(false);
 	let localAiOn = $state(false);
+	// Hide all UI chrome (top bar + captions) for a clean demo capture. Toggle
+	// with H. Default on; flip to off to record the pure storm with nothing
+	// blocking the visuals.
+	let cinemaChrome = $state(true);
 	let statusLine = $state('');
 	// Auteur (director) state surfaced in the overlay.
 	let directorNote = $state(''); // the current shot's "why" (cites a real metric)
@@ -349,10 +353,23 @@
 		if (e.key === 'Escape') {
 			e.preventDefault();
 			close();
+		} else if (e.key === 'h' || e.key === 'H') {
+			// Toggle UI chrome for a clean demo capture (hide top bar + captions).
+			e.preventDefault();
+			cinemaChrome = !cinemaChrome;
 		}
 	}
 	$effect(() => {
 		if (open && closeBtn) closeBtn.focus();
+	});
+
+	// Tag <body> while Cinema is open so the graph page can hide its bottom-stats
+	// pill (which lives behind us in a separate stacking context). Cleaned up when
+	// Cinema closes or the component unmounts.
+	$effect(() => {
+		if (typeof document === 'undefined') return;
+		document.body.classList.toggle('cinema-open', open);
+		return () => document.body.classList.remove('cinema-open');
 	});
 
 	// Opt-in on-device narration. Lazy-loads @huggingface/transformers ONLY when
@@ -427,6 +444,15 @@
 	>
 		<div class="cinema-canvas" bind:this={canvasHost}></div>
 
+		<!-- Press H to hide all chrome for a clean demo capture. A tiny restore hint
+		     shows while hidden so it's never a trap. -->
+		{#if !cinemaChrome}
+			<button class="cinema-restore" onclick={() => (cinemaChrome = true)} title="Show UI (H)">
+				press H to show UI
+			</button>
+		{/if}
+
+		{#if cinemaChrome}
 		<!-- Top bar: status + close -->
 		<div class="cinema-top glass-subtle">
 			<div class="flex items-center gap-2 text-xs text-dim">
@@ -481,6 +507,7 @@
 				{#if stage === 'done'}<button class="cinema-replay" onclick={launch}>↻ Replay</button>{/if}
 			</div>
 		</div>
+		{/if}
 	</div>
 {/if}
 
@@ -488,10 +515,17 @@
 	.cinema-overlay {
 		position: fixed;
 		inset: 0;
-		z-index: 90;
+		z-index: 200; /* above the graph page's bottom-stats pill + all nav chrome */
 		background: radial-gradient(circle at 50% 40%, #05050f 0%, #010108 100%);
 		display: flex;
 		flex-direction: column;
+	}
+	/* While Cinema is open, hide the graph page's bottom-stats pill (it lives in a
+	   separate stacking context on the page behind us and would otherwise bleed
+	   through into a demo capture). Toggled by the .cinema-open class we add to
+	   <body> on mount. */
+	:global(body.cinema-open .graph-stats-pill) {
+		display: none;
 	}
 	.cinema-canvas {
 		position: absolute;
@@ -648,6 +682,26 @@
 		color: var(--color-dream-glow);
 		letter-spacing: 0.08em;
 		animation: cinema-dream-pulse 3s ease-in-out infinite;
+	}
+	/* Tiny restore hint shown while chrome is hidden (demo-capture mode). */
+	.cinema-restore {
+		position: absolute;
+		bottom: 0.6rem;
+		right: 0.8rem;
+		z-index: 95;
+		background: rgba(10, 10, 26, 0.5);
+		border: 1px solid rgba(129, 140, 248, 0.25);
+		color: var(--color-muted);
+		border-radius: 999px;
+		padding: 0.2rem 0.7rem;
+		font-size: 0.7rem;
+		letter-spacing: 0.04em;
+		cursor: pointer;
+		opacity: 0.4;
+		transition: opacity 0.2s ease;
+	}
+	.cinema-restore:hover {
+		opacity: 1;
 	}
 	@keyframes cinema-dream-pulse {
 		0%, 100% { opacity: 0.55; }

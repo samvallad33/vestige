@@ -50,6 +50,8 @@ import {
 	sqrt,
 	pow,
 	mx_noise_vec3,
+	vec2,
+	atan,
 } from 'three/tsl';
 // note: .max()/.div()/.sub()/.cos()/.sin()/.log()/.lessThanEqual() etc. are
 // fluent methods on TSL nodes — no import needed.
@@ -274,6 +276,37 @@ export class SemanticComputeStorm {
 			const s2 = fract(seed.mul(1.323).add(0.51));
 			const s3 = fract(seed.mul(2.117).add(0.27));
 
+			// ── (u,v) MANIFOLD GRID ── THE spaghetti→skin fix. The hash-scatter
+			// basis (u,v,w2) is white noise → reads as gas/strings. A deterministic
+			// tensor grid over instanceIndex makes neighbors share rows/cols, so the
+			// procedural forms below render as a continuous SCULPTED SKIN, not lines.
+			// 387² = 149769 ≈ 150k. Pure arithmetic on fi — no buffers, no indexing.
+			const GW = float(387);
+			const ug = fract(fi.div(GW)); // grid u 0..1 (across a row)
+			const vg = floor(fi.div(GW)).div(GW); // grid v 0..1 (down columns)
+
+			// ── COMPLEX-MATH HELPERS (sinh/cosh/tanh are NOT in three@0.172 — expand
+			// via the confirmed .exp()). Used by the Calabi–Yau + Boy's surface forms. ──
+			type FNode = ReturnType<typeof float>;
+			type VNode = ReturnType<typeof vec2>;
+			const sinhT = (x: FNode) => x.exp().sub(x.mul(-1).exp()).mul(0.5);
+			const coshT = (x: FNode) => x.exp().add(x.mul(-1).exp()).mul(0.5);
+			const cMul = (a: VNode, b: VNode) =>
+				vec2(a.x.mul(b.x).sub(a.y.mul(b.y)), a.x.mul(b.y).add(a.y.mul(b.x)));
+			const cExp = (a: VNode) => {
+				const e = a.x.exp();
+				return vec2(e.mul(cos(a.y)), e.mul(sin(a.y)));
+			};
+			const cLog = (a: VNode) =>
+				vec2(a.x.mul(a.x).add(a.y.mul(a.y)).max(1e-12).log().mul(0.5), atan(a.y, a.x));
+			const cPow = (a: VNode, p: FNode) => cExp(cMul(vec2(p, float(0)), cLog(a)));
+			const cCosh = (z: VNode) => vec2(coshT(z.x).mul(cos(z.y)), sinhT(z.x).mul(sin(z.y)));
+			const cSinh = (z: VNode) => vec2(sinhT(z.x).mul(cos(z.y)), coshT(z.x).mul(sin(z.y)));
+			const cInv = (a: VNode) => {
+				const dd = a.x.mul(a.x).add(a.y.mul(a.y)).max(1e-6);
+				return vec2(a.x.div(dd), a.y.mul(-1).div(dd));
+			};
+
 			// world 7 · SUPERSHAPE (3D superformula — petals/stars/blobs, never same)
 			const m1 = float(2).add(floor(s1.mul(14))); // symmetry 2..15
 			const sfAng = theta;
@@ -292,41 +325,80 @@ export class SemanticComputeStorm {
 				sin(phi).mul(sin(theta)).mul(sfRad)
 			);
 
-			// world 8 · TORUS KNOT (p,q knot — randomized winding, hypnotic ribbons)
-			const pKnot = float(2).add(floor(s1.mul(5))); // 2..6
-			const qKnot = float(3).add(floor(s2.mul(5))); // 3..7
-			const kt = fi.mul(0.0006).add(this.uTime.mul(0.1));
-			const kr = cos(qKnot.mul(kt)).mul(0.4).add(1);
+			// ══════ IMPOSSIBLE-GEOMETRY FORM PACK (worlds 8..11) ══════
+			// Brand-new signature skins nobody ships as a living particle figure.
+
+			// world 8 · CALABI–YAU quintic cross-section (6D string-theory manifold,
+			// Hanson 4D→3D projection). 25 interlocking petals; α rotates it THROUGH
+			// the 4th dimension so petals pass through each other. The trophy.
+			const nCY = float(5);
+			const patch = floor(fract(seed.mul(0.013).add(fi.mul(0.00667))).mul(25));
+			const k1 = floor(patch.div(5)); // 0..4
+			const k2 = patch.sub(k1.mul(5)); // 0..4
+			const cyx = ug.mul(2).sub(1); // x ∈ [-1,1]
+			const cyy = vg.mul(1.5708); // y ∈ [0, π/2]
+			const zc = vec2(cyx, cyy);
+			const e1 = cExp(vec2(float(0), k1.mul(6.28318).div(nCY)));
+			const e2 = cExp(vec2(float(0), k2.mul(6.28318).div(nCY)));
+			const z1 = cMul(e1, cPow(cCosh(zc), float(0.4))); // 2/n = 0.4
+			const z2 = cMul(e2, cPow(cSinh(zc), float(0.4)));
+			const alpha = this.uTime.mul(0.25).add(seed).add(chaos.mul(1.5));
 			const wKnot = vec3(
-				kr.mul(cos(pKnot.mul(kt))),
-				kr.mul(sin(pKnot.mul(kt))),
-				sin(qKnot.mul(kt)).mul(0.55)
-			).mul(R.mul(0.6)).add(sphereShell.mul(R.mul(0.06))); // slight fuzz
+				z1.x,
+				z2.x,
+				cos(alpha).mul(z1.y).add(sin(alpha).mul(z2.y))
+			).mul(R.mul(0.55)); // ±1.6 → ~0.88R, centroid (0,0,0)
 
-			// world 9 · WARPED LISSAJOUS LATTICE (3D sine-wave interference web)
-			const fx = float(2).add(floor(s1.mul(5)));
-			const fy = float(2).add(floor(s2.mul(5)));
-			const fz = float(2).add(floor(s3.mul(5)));
-			const lt = fi.mul(0.0007);
-			const wLissa = vec3(
-				sin(fx.mul(lt).add(this.uTime.mul(0.3))),
-				sin(fy.mul(lt).add(1.7)),
-				sin(fz.mul(lt).add(this.uTime.mul(0.2)).add(3.1))
-			).mul(R.mul(0.82));
+			// world 9 · BOY'S SURFACE (Bryant–Kusner minimal immersion of RP²) — a
+			// CLOSED non-orientable surface with one triple point, no spikes. Pure
+			// rational complex arithmetic over the unit disk → a perfect 2-manifold.
+			const br = sqrt(ug); // sqrt → uniform area on the disk
+			const bth = vg.mul(6.28318);
+			const zb = vec2(br.mul(cos(bth)), br.mul(sin(bth)));
+			const zb2 = cMul(zb, zb);
+			const zb3 = cMul(zb2, zb);
+			const zi2 = cInv(zb2);
+			const zi3 = cInv(zb3);
+			const denom = vec2(zb3.x.sub(zi3.x).add(2.2360679), zb3.y.sub(zi3.y)); // +√5
+			const aZ = cInv(denom);
+			const V0 = cMul(vec2(float(0), float(1)), vec2(zb2.x.sub(zi2.x), zb2.y.sub(zi2.y)));
+			const V1 = vec2(zb2.x.add(zi2.x), zb2.y.add(zi2.y));
+			const V2 = cMul(vec2(float(0), float(0.6667)), vec2(zb3.x.add(zi3.x), zb3.y.add(zi3.y)));
+			const Mx = cMul(aZ, V0).x;
+			const My = cMul(aZ, V1).x;
+			const Mz = cMul(aZ, V2).x.add(0.5);
+			const m2 = Mx.mul(Mx).add(My.mul(My)).add(Mz.mul(Mz)).max(1e-4); // sphere inversion
+			const wLissa = vec3(Mx.div(m2), My.div(m2), Mz.div(m2).sub(0.86)) // sub centroid z
+				.mul(R.mul(0.5));
 
-			// world 10 · HELIX STORM (twisted DNA-ish double helix that writhes)
-			const hAng = fi.mul(0.0009).add(this.uTime.mul(0.4));
-			const hSide = select(fract(phase.mul(2)).greaterThan(0.5), float(1), float(-1));
-			const hRad = R.mul(0.55).mul(float(0.7).add(sin(hAng.mul(3)).mul(0.3).mul(chaos.add(0.3))));
+			// world 10 · AIZAWA attractor SHELL (capped spiral torus mapped over u,v;
+			// the Aizawa vector field added in the motion modifiers makes it breathe).
+			const az = vg.mul(2).sub(1); // -1..1 vertical
+			const ar = sqrt(float(1).sub(az.mul(az)).max(0)).mul(0.9).add(0.25); // radial profile
+			const aang = ug.mul(6.28318).add(az.mul(6).mul(chaos.add(0.4))); // spiral twist
 			const wHelix = vec3(
-				cos(hAng).mul(hRad).mul(hSide),
-				fi.mul(0.00026).sub(R.mul(0.9)).mul(0.5).add(sin(this.uTime).mul(R.mul(0.1))),
-				sin(hAng).mul(hRad).mul(hSide)
-			);
+				ar.mul(cos(aang)),
+				az.mul(1.4), // centered by construction
+				ar.mul(sin(aang))
+			).mul(R.mul(0.5));
 
-			// world 11 · QUANTUM FOAM (curl-warped noisy blob — pure chaos, max wild)
-			const foam = mx_noise_vec3(sphereShell.mul(float(1.5).add(chaos.mul(3))).add(seed)).mul(R.mul(0.5).mul(chaos.add(0.4)));
-			const wFoam = sphereShell.mul(R.mul(homeFrac)).add(foam);
+			// world 11 · GYROID↔SCHWARZ-D Bonnet morph (triply-periodic minimal
+			// surface — alien coral/bone lattice). The Bonnet angle θ continuously
+			// BENDS the gyroid into Schwarz-D. A woven solid skin, never seen living.
+			const period = float(2.2).add(chaos.mul(2.0));
+			const gx = ug.mul(6.28318).mul(period);
+			const gy = vg.mul(6.28318).mul(period);
+			const gz = this.uTime.mul(0.3).add(seed.mul(6.28318));
+			const gyroid = sin(gx).mul(cos(gy)).add(sin(gy).mul(cos(gz))).add(sin(gz).mul(cos(gx)));
+			const schwD = cos(gx).mul(cos(gy)).mul(cos(gz)).sub(sin(gx).mul(sin(gy)).mul(sin(gz)));
+			const bonnet = this.uTime.mul(0.15);
+			const fTPMS = cos(bonnet).mul(gyroid).add(sin(bonnet).mul(schwD));
+			const tpmsBase = vec3(
+				sin(vg.mul(3.14159)).mul(cos(ug.mul(6.28318))),
+				cos(vg.mul(3.14159)),
+				sin(vg.mul(3.14159)).mul(sin(ug.mul(6.28318)))
+			);
+			const wFoam = tpmsBase.mul(R.mul(0.5).add(fTPMS.mul(R.mul(0.12)))); // skin ± displacement
 
 			// select() chain — no dynamic indexing in this TSL build.
 			const homeFor = (idx: ReturnType<typeof float>) =>
@@ -345,7 +417,36 @@ export class SemanticComputeStorm {
 			const homePrev = homeFor(float(this.uPrevWorld));
 			// uBlend eases prev→cur (smoothstep) so the world morph is silky.
 			const blendE = smoothstep(float(0), float(1), oneMinus(this.uBlend));
-			const home = mix(homePrev, homeCur, blendE);
+			const outerHome = mix(homePrev, homeCur, blendE);
+
+			// ══════════════════════════════════════════════════════════════════
+			//  3D-WITHIN-3D — a NESTED INNER FIGURE at the core.
+			//  ~33% of particles (a deterministic slice of the index) form a
+			//  SECOND, smaller shape inside the outer shell — a different world,
+			//  counter-rotating, at ~38% scale. This fills the formerly-blank-bright
+			//  center with intentional structure (a figure inside a figure) and adds
+			//  depth nobody ships with particles. The inner world is offset from the
+			//  outer so the two layers never collapse into the same shape.
+			// ══════════════════════════════════════════════════════════════════
+			const isInner = fract(fi.mul(0.001).add(0.5)).greaterThan(0.66); // ~34% inner
+			// Inner world = outer + 5, wrapped into 0..11 (a clearly different shape).
+			// Done with select() (no .mod()) so it's valid in this TSL build.
+			const innerSum = float(this.uWorld).add(5);
+			const innerWorldIdx = select(innerSum.greaterThan(11), innerSum.sub(12), innerSum);
+			const innerRaw = homeFor(innerWorldIdx);
+			// Counter-rotate the inner figure about Y so it spins against the shell,
+			// and scale it down to sit inside. cos/sin build a Y-rotation matrix.
+			const ia = this.uTime.mul(0.4);
+			const ic = cos(ia);
+			const is = sin(ia);
+			const innerRot = vec3(
+				innerRaw.x.mul(ic).sub(innerRaw.z.mul(is)),
+				innerRaw.y,
+				innerRaw.x.mul(is).add(innerRaw.z.mul(ic))
+			);
+			const innerHome = innerRot.mul(0.45); // nested core at ~45% scale (less dense)
+			// Each particle is permanently outer OR inner (no flicker): pick its home.
+			const home = mix(outerHome, innerHome, isInner.select(float(1), float(0)));
 
 			// ── DETONATION: per-particle staggered radial blast so it blooms as a
 			// shockwave, not all-at-once. uBurst spikes on each beat, decays fast.
@@ -366,6 +467,17 @@ export class SemanticComputeStorm {
 			vel.addAssign(cross(vec3(0, 1, 0), pos).mul(0.0009).mul(select(this.uWorld.equal(1), float(1), float(0))));
 			// world 2: integrate the Thomas attractor (chaos lattice)
 			vel.addAssign(thomas.mul(0.012).mul(select(this.uWorld.equal(2), float(1), float(0))));
+			// world 10: integrate the AIZAWA vector field so the shell breathes/spirals
+			// along the real attractor flow (not a static torus).
+			const azx = pos.x.div(R.mul(0.5));
+			const azy = pos.y.div(R.mul(0.5));
+			const azz = pos.z.div(R.mul(0.5));
+			const aizawa = vec3(
+				azz.sub(0.7).mul(azx).sub(azy.mul(3.5)),
+				azx.mul(3.5).add(azz.sub(0.7).mul(azy)),
+				float(0.6).add(azz.mul(0.95)).sub(azz.mul(azz).mul(azz).div(3)).sub(azx.mul(azx).add(azy.mul(azy)))
+			);
+			vel.addAssign(aizawa.mul(0.008).mul(select(this.uWorld.equal(10), float(1), float(0))));
 			// world 5: tangential swirl for liquid galaxy arms
 			vel.addAssign(cross(vec3(0, 1, 0), pos).mul(0.0016).mul(select(this.uWorld.equal(5), float(1), float(0))));
 
@@ -464,6 +576,13 @@ export class SemanticComputeStorm {
 			const ph = phaseStore.element(instanceIndex);
 			const radius = length(pos.sub(vec3(this.uTarget)));
 
+			// Recompute the inner/outer layer split (same formula as the compute
+			// kernel) so the NESTED CORE figure reads as a distinct object: shift its
+			// hue ~0.5 (complementary) so it glows a contrasting color inside the shell.
+			const fiC = float(instanceIndex);
+			const isInnerC = fract(fiC.mul(0.001).add(0.5)).greaterThan(0.66);
+			const innerHueShift = isInnerC.select(float(0.5), float(0));
+
 			// Hue from many decorrelated terms so the whole spectrum is present at
 			// once and forever swirling: per-particle phase, concentric radial
 			// shells, a spatial XYZ band (gives morphing forms internal rainbow
@@ -475,6 +594,7 @@ export class SemanticComputeStorm {
 					.add(spatialBand)
 					.add(this.uTime.mul(0.10))
 					.add(this.uHueShift)
+					.add(innerHueShift)
 			);
 			// hue → RGB at FULL saturation (HSV S=1,V=1) hexagon ramps. Pure jewel
 			// tone per particle — the universal base spectrum.
@@ -518,11 +638,27 @@ export class SemanticComputeStorm {
 			const pos = instancePos;
 			// Normalized radial position 0 (center) .. 1 (contain radius).
 			const rNorm = clamp(length(pos).div(this.uContainRadius.max(0.0001)), 0, 1);
-			// Smooth ramp: dark core, bright rim. pow-like curve via rNorm² pushes
-			// the brightness toward the outer shell so the edge reads as a crisp
-			// glowing rind and the interior falls away into shadow.
+			// Smooth ramp: dark core, bright rim — the outer-shell glow that keeps the
+			// center from blooming white (preserved white-out protection).
 			const edge = rNorm.mul(rNorm);
-			return float(0.12).add(edge.mul(0.95)); // 0.12 core → ~1.07 rim
+			// FACING-RATIO FRESNEL — the "make it solid" amplifier. Approximate each
+			// particle's surface normal as its outward radial direction; view ≈ +Z.
+			// pow(1−|n·v|, 4) blazes the turning-away SILHOUETTE and quiets the front,
+			// which flips "glowing fog" into a lit, sculpted SKIN.
+			const nrm = pos.normalize();
+			const fres = pow(oneMinus(abs(nrm.z)), float(4.0));
+			const outerRim = float(0.12).add(edge.mul(0.6)).add(fres.mul(0.5));
+			// The NESTED inner figure lives at small radius where `edge` is ~0 → it
+			// would be invisible. Give inner particles their OWN brightness: a higher
+			// floor + the same Fresnel silhouette so the inner figure reads as its own
+			// glowing sculpted object floating inside the shell.
+			const fiC = float(instanceIndex);
+			const isInnerC = fract(fiC.mul(0.001).add(0.5)).greaterThan(0.66);
+			// Inner glow kept LOW so the nested figure reads as a crisp sculpted
+			// shape, not a bright blob (dense small-radius overlap blows white fast).
+			// The Fresnel silhouette carries it; a small floor keeps it visible.
+			const innerRim = float(0.14).add(fres.mul(0.42));
+			return isInnerC.select(innerRim, outerRim);
 		});
 
 		// ── THE COLOR BLAST ── the signature detonation chroma. Keyed on the LONG
