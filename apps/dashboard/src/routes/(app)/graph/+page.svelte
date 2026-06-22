@@ -102,11 +102,17 @@
 	}
 
 	onMount(() => {
-		const requestedMode = new URLSearchParams(window.location.search).get('colorMode');
+		const sp = new URLSearchParams(window.location.search);
+		const requestedMode = sp.get('colorMode');
 		if (isColorMode(requestedMode)) {
 			colorMode = requestedMode;
 		}
-		void loadGraph();
+		// "Open receipt in Cinema" deep-links here with ?center=<memoryId>, so
+		// the graph loads centered on the receipt's primary memory and the
+		// (protected) Cinema flythrough starts from that exact node. We do not
+		// touch MemoryCinema itself — only seed the graph it renders.
+		const center = sp.get('center');
+		void loadGraph(undefined, center || undefined);
 	});
 
 	function isColorMode(value: string | null): value is ColorMode {

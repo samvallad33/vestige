@@ -1983,6 +1983,288 @@ pub async fn deep_reference_query(
     Ok(Json(response))
 }
 
+// ============================================================================
+// AGENT BLACK BOX (v2.2) — replayable agent-run traces
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct TraceListParams {
+    pub limit: Option<usize>,
+}
+
+/// List recent agent runs (newest activity first) for the Black Box run picker.
+pub async fn list_traces(
+    State(state): State<AppState>,
+    Query(params): Query<TraceListParams>,
+) -> Result<Json<Value>, StatusCode> {
+    let limit = params.limit.unwrap_or(50).clamp(1, 500);
+    let runs = state
+        .storage
+        .list_agent_runs(limit)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let runs_json: Vec<Value> = runs
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "runId": r.run_id,
+                "firstTool": r.first_tool,
+                "eventCount": r.event_count,
+                "retrievedCount": r.retrieved_count,
+                "suppressedCount": r.suppressed_count,
+                "writeCount": r.write_count,
+                "vetoCount": r.veto_count,
+                "startedAt": r.started_at,
+                "lastAt": r.last_at,
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "total": runs_json.len(),
+        "runs": runs_json,
+    })))
+}
+
+/// Fetch the full event timeline for one run — the black-box replay payload.
+pub async fn get_trace(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    let events = state
+        .storage
+        .get_trace(&run_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if events.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let summary = state.storage.get_agent_run(&run_id).ok().flatten();
+    Ok(Json(serde_json::json!({
+        "runId": run_id,
+        "summary": summary.map(|s| serde_json::json!({
+            "firstTool": s.first_tool,
+            "eventCount": s.event_count,
+            "retrievedCount": s.retrieved_count,
+            "suppressedCount": s.suppressed_count,
+            "writeCount": s.write_count,
+            "vetoCount": s.veto_count,
+            "startedAt": s.started_at,
+            "lastAt": s.last_at,
+        })),
+        "events": events,
+    })))
+}
+
+/// Export a run as a downloadable `.vestige-trace.json` artifact.
+pub async fn export_trace(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Result<([(axum::http::HeaderName, String); 2], Json<Value>), StatusCode> {
+    let events = state
+        .storage
+        .get_trace(&run_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if events.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let summary = state.storage.get_agent_run(&run_id).ok().flatten();
+    let body = serde_json::json!({
+        "format": "vestige-trace",
+        "version": 1,
+        "runId": run_id,
+        "exportedAt": Utc::now().to_rfc3339(),
+        "summary": summary.map(|s| serde_json::json!({
+            "firstTool": s.first_tool,
+            "eventCount": s.event_count,
+            "retrievedCount": s.retrieved_count,
+            "suppressedCount": s.suppressed_count,
+            "writeCount": s.write_count,
+            "vetoCount": s.veto_count,
+            "startedAt": s.started_at,
+            "lastAt": s.last_at,
+        })),
+        "events": events,
+    });
+    let headers = [
+        (
+            axum::http::header::CONTENT_TYPE,
+            "application/json".to_string(),
+        ),
+        (
+            axum::http::header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{run_id}.vestige-trace.json\""),
+        ),
+    ];
+    Ok((headers, Json(body)))
+}
+
+// ============================================================================
+// MEMORY RECEIPTS (v2.2)
+// ============================================================================
+
+/// List recent retrieval receipts.
+pub async fn list_receipts(
+    State(state): State<AppState>,
+    Query(params): Query<TraceListParams>,
+) -> Result<Json<Value>, StatusCode> {
+    let limit = params.limit.unwrap_or(50).clamp(1, 500);
+    let receipts = state
+        .storage
+        .list_receipts(limit)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({
+        "total": receipts.len(),
+        "receipts": receipts,
+    })))
+}
+
+/// Fetch one receipt by id — the payload behind "Open receipt in Cinema".
+pub async fn get_receipt(
+    State(state): State<AppState>,
+    Path(receipt_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    let receipt = state
+        .storage
+        .get_receipt(&receipt_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(serde_json::to_value(receipt).unwrap_or_default()))
+}
+
+// ============================================================================
+// MEMORY PRs (v2.2) — risk-gated brain-change review queue
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct MemoryPrListParams {
+    pub status: Option<String>,
+    pub limit: Option<usize>,
+}
+
+/// List Memory PRs, optionally filtered by status.
+pub async fn list_memory_prs(
+    State(state): State<AppState>,
+    Query(params): Query<MemoryPrListParams>,
+) -> Result<Json<Value>, StatusCode> {
+    let limit = params.limit.unwrap_or(100).clamp(1, 500);
+    let status = params.status.as_deref().and_then(|s| {
+        serde_json::from_value::<vestige_core::MemoryPrStatus>(serde_json::Value::String(
+            s.to_string(),
+        ))
+        .ok()
+    });
+    let prs = state
+        .storage
+        .list_memory_prs(status, limit)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let pending = state.storage.count_pending_memory_prs().unwrap_or(0);
+    Ok(Json(serde_json::json!({
+        "total": prs.len(),
+        "pendingCount": pending,
+        "mode": read_review_mode(&state).as_str(),
+        "prs": prs,
+    })))
+}
+
+/// Fetch one Memory PR by id.
+pub async fn get_memory_pr(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    let pr = state
+        .storage
+        .get_memory_pr(&id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(serde_json::to_value(pr).unwrap_or_default()))
+}
+
+/// Act on a Memory PR: promote / merge / supersede / quarantine / forget /
+/// ask_agent_why. `ask_agent_why` is read-only and returns the risk signals.
+pub async fn act_on_memory_pr(
+    State(state): State<AppState>,
+    Path((id, action)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    let action = vestige_core::MemoryPrAction::from_label(&action)
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    // Ask Agent Why is read-only — return the self-explaining signals.
+    if matches!(action, vestige_core::MemoryPrAction::AskAgentWhy) {
+        let pr = state
+            .storage
+            .get_memory_pr(&id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        return Ok(Json(serde_json::json!({
+            "id": pr.id,
+            "kind": pr.kind.as_str(),
+            "title": pr.title,
+            "why": pr.signals,
+            "explanation": "These are the risk signals that opened this Memory PR.",
+        })));
+    }
+
+    let decided = state
+        .storage
+        .decide_memory_pr(&id, action)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    state.emit(VestigeEvent::MemoryPrDecided {
+        id: decided.id.clone(),
+        decision: decided
+            .decision
+            .and_then(|d| serde_json::to_value(d).ok())
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default(),
+        status: decided.status.as_str().to_string(),
+        timestamp: Utc::now(),
+    });
+
+    Ok(Json(serde_json::to_value(&decided).unwrap_or_default()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewModeBody {
+    pub mode: String,
+}
+
+/// Get the current review mode (fast / risk_gated / paranoid).
+pub async fn get_review_mode(State(state): State<AppState>) -> Json<Value> {
+    let mode = read_review_mode(&state);
+    Json(serde_json::json!({
+        "mode": mode.as_str(),
+        "pendingCount": state.storage.count_pending_memory_prs().unwrap_or(0),
+    }))
+}
+
+/// Set the review mode. Persisted to a small JSON file in the data dir so it
+/// survives restarts (local-first, no extra config service).
+pub async fn set_review_mode(
+    State(state): State<AppState>,
+    Json(body): Json<ReviewModeBody>,
+) -> Result<Json<Value>, StatusCode> {
+    let mode = vestige_core::ReviewMode::from_label(&body.mode);
+    let path = review_mode_path(&state);
+    let payload = serde_json::json!({ "mode": mode.as_str() });
+    fs::write(&path, serde_json::to_vec_pretty(&payload).unwrap_or_default())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "mode": mode.as_str() })))
+}
+
+/// Path to the persisted review-mode file.
+fn review_mode_path(state: &AppState) -> PathBuf {
+    state.storage.data_dir().join("review_mode.json")
+}
+
+/// Read the persisted review mode, defaulting to RiskGated.
+pub fn read_review_mode(state: &AppState) -> vestige_core::ReviewMode {
+    let path = review_mode_path(state);
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.get("mode").and_then(|m| m.as_str()).map(String::from))
+        .map(|s| vestige_core::ReviewMode::from_label(&s))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

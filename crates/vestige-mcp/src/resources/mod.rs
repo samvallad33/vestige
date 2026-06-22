@@ -4,3 +4,4 @@
 
 pub mod codebase;
 pub mod memory;
+pub mod trace;

@@ -168,6 +168,9 @@ export type VestigeEventType =
 	| 'ImportanceScored'
 	| 'DeepReferenceCompleted'
 	| 'HookVerdictRecorded'
+	| 'TraceEvent'
+	| 'MemoryPrOpened'
+	| 'MemoryPrDecided'
 	| 'Heartbeat';
 
 export interface VestigeEvent {

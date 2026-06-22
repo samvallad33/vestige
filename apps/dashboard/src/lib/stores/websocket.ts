@@ -132,6 +132,30 @@ export const uptimeSeconds = derived(websocket, $ws =>
 	($ws.lastHeartbeat?.data?.uptime_secs as number) ?? 0
 );
 
+// Agent Black Box (v2.2): the live stream of trace events, newest first. Each
+// is a real `VestigeEvent::TraceEvent` backed by a persisted `agent_traces`
+// row — the dashboard pulse is only ever driven by these, never by fakes.
+export const traceEvents = derived(websocket, $ws =>
+	$ws.events.filter((e) => e.type === 'TraceEvent')
+);
+
+// The most recent runId seen on the live feed — the "current run" indicator in
+// Proof Mode / the Black Box live header.
+export const liveRunId = derived(websocket, $ws => {
+	const latest = $ws.events.find((e) => e.type === 'TraceEvent');
+	return (latest?.data?.run_id as string) ?? null;
+});
+
+// The single most recent trace event (for the "last event" readout).
+export const lastTraceEvent = derived(websocket, $ws =>
+	$ws.events.find((e) => e.type === 'TraceEvent') ?? null
+);
+
+// Live Memory PR notifications (opened / decided) for the queue badge + toasts.
+export const memoryPrEvents = derived(websocket, $ws =>
+	$ws.events.filter((e) => e.type === 'MemoryPrOpened' || e.type === 'MemoryPrDecided')
+);
+
 export function formatUptime(secs: number): string {
 	if (!Number.isFinite(secs) || secs < 0) return '—';
 	const d = Math.floor(secs / 86_400);

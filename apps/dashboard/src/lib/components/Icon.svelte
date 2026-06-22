@@ -13,6 +13,8 @@
 	//  ◎ ◈ ◉ ◷ across multiple items; that bug is dead here).
 	// ═══════════════════════════════════════════════════════════════════
 	export type IconName =
+		| 'blackbox'
+		| 'memorypr'
 		| 'graph'
 		| 'reasoning'
 		| 'memories'
@@ -41,6 +43,10 @@
 	// Each entry is the inner markup of a 24×24 SVG. Strokes inherit
 	// currentColor; fills are explicit where a solid accent reads better.
 	export const ICON_PATHS: Record<IconName, string> = {
+		// Flight recorder — a radar-pulse sweep inside a recorder box.
+		blackbox: `<rect x="3.5" y="6" width="17" height="12" rx="2.2"/><circle cx="12" cy="12" r="3.4"/><path d="M12 12 14.6 9.4" /><circle cx="12" cy="12" r="0.9" fill="currentColor" stroke="none"/><path d="M7 19.5h10" opacity=".5"/>`,
+		// Git-branch with a review check — approve changes to the brain.
+		memorypr: `<circle cx="6.5" cy="6" r="2"/><circle cx="6.5" cy="18" r="2"/><circle cx="17" cy="9" r="2"/><path d="M6.5 8v8M6.5 12h6.2A2.3 2.3 0 0 0 15 9.7V11"/><path d="m14.8 17 1.5 1.6 3-3.4" fill="none"/>`,
 		// Connected nodes — a literal knowledge graph.
 		graph: `<circle cx="6" cy="7" r="2.1"/><circle cx="18" cy="6" r="2.1"/><circle cx="12" cy="17.5" r="2.3"/><path d="M7.7 8.4 10.6 15.5M16.4 7.6 13.2 15.6M8 7l8-1"/>`,
 		// Branching logic tree with a spark — deduction.

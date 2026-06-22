@@ -98,6 +98,8 @@
 	// set reused the same Unicode glyph across multiple items; every entry here
 	// now has a distinct silhouette that reads instantly.
 	const nav: { href: string; label: string; icon: IconName; shortcut: string }[] = [
+		{ href: '/blackbox', label: 'Black Box', icon: 'blackbox', shortcut: 'B' },
+		{ href: '/memory-prs', label: 'Memory PRs', icon: 'memorypr', shortcut: 'Q' },
 		{ href: '/graph', label: 'Graph', icon: 'graph', shortcut: 'G' },
 		{ href: '/reasoning', label: 'Reasoning', icon: 'reasoning', shortcut: 'R' },
 		{ href: '/memories', label: 'Memories', icon: 'memories', shortcut: 'M' },

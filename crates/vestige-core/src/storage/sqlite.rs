@@ -302,8 +302,11 @@ const VESTIGE_DISABLE_VECTOR_SEARCH: &str = "VESTIGE_DISABLE_VECTOR_SEARCH";
 /// so the MCP layer can use `Arc<Storage>` instead of `Arc<Mutex<Storage>>`.
 pub struct SqliteMemoryStore {
     db_path: PathBuf,
-    writer: Mutex<Connection>,
-    reader: Mutex<Connection>,
+    // `pub(crate)` so the sibling `trace_store` module (Black Box / Receipts /
+    // Memory PRs CRUD) can lock the same writer/reader connections and follow
+    // the established store idiom without duplicating connection management.
+    pub(crate) writer: Mutex<Connection>,
+    pub(crate) reader: Mutex<Connection>,
     scheduler: Mutex<FSRSScheduler>,
     #[cfg(feature = "embeddings")]
     embedding_service: EmbeddingService,

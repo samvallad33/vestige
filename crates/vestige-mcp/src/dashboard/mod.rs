@@ -183,6 +183,28 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
             get(handlers::get_sanhedrin_telemetry),
         )
         .route("/api/sanhedrin/appeal", post(handlers::appeal_sanhedrin))
+        // ============================================================
+        // AGENT BLACK BOX (v2.2) — replayable agent-run traces
+        // ============================================================
+        .route("/api/traces", get(handlers::list_traces))
+        .route("/api/traces/{run_id}", get(handlers::get_trace))
+        .route("/api/traces/{run_id}/export", get(handlers::export_trace))
+        // ============================================================
+        // MEMORY RECEIPTS (v2.2) — the nutrition label for a retrieval
+        // ============================================================
+        .route("/api/receipts", get(handlers::list_receipts))
+        .route("/api/receipts/{receipt_id}", get(handlers::get_receipt))
+        // ============================================================
+        // MEMORY PRs (v2.2) — risk-gated brain-change review queue
+        // ============================================================
+        .route("/api/memory-prs", get(handlers::list_memory_prs))
+        .route("/api/memory-prs/{id}", get(handlers::get_memory_pr))
+        .route(
+            "/api/memory-prs/{id}/{action}",
+            post(handlers::act_on_memory_pr),
+        )
+        .route("/api/memory-prs/mode", get(handlers::get_review_mode))
+        .route("/api/memory-prs/mode", post(handlers::set_review_mode))
         .layer(
             ServiceBuilder::new()
                 .concurrency_limit(50)

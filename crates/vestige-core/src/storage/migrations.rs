@@ -89,6 +89,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "#57 Source envelope: provenance columns + connector cursor checkpoints for idempotent external-source sync",
         up: MIGRATION_V17_UP,
     },
+    Migration {
+        version: 18,
+        description: "Agent Black Box + Memory Receipts + Memory PRs: replayable run traces, retrieval receipts, risk-gated brain-change review queue",
+        up: MIGRATION_V18_UP,
+    },
 ];
 
 /// A database migration
@@ -1029,6 +1034,105 @@ pub const MIGRATION_V17_ALTER_COLUMNS: &[&str] = &[
     "ALTER TABLE knowledge_nodes ADD COLUMN source_author TEXT",
 ];
 
+/// V18: Agent Black Box + Memory Receipts + Memory PRs.
+///
+/// Three append-only / review tables that turn Vestige into the *black box,
+/// immune system, and cinematic debugger for agent memory*:
+///
+/// - `agent_traces` — one row per [`crate::trace::MemoryTraceEvent`], ordered by
+///   `(run_id, seq)`. Append-only so a run replays exactly as the agent
+///   experienced it. `payload` is the full serialized event; `event_type` and
+///   `run_id` are denormalized for fast filtering and the `vestige://trace/{id}`
+///   resource. `args_hash` (for `mcp.call`) is stored, never the raw args, so
+///   traces can't leak prompt contents or secrets.
+///
+/// - `memory_receipts` — one row per retrieval receipt. `payload` holds the full
+///   [`crate::trace::Receipt`]; the scalar columns (`trust_floor`, `decay_risk`)
+///   are denormalized for list/sort without parsing JSON.
+///
+/// - `memory_prs` — the risk-gated review queue. A risky write (contradiction
+///   vs high-trust, supersede/forget/merge/protect, sensitive topic, dream
+///   consolidation, decay resurrection, low-confidence batch, weak-provenance
+///   connector) lands here as `pending` instead of auto-committing. `diff` is the
+///   structured before/after, `signals` is the self-explaining risk evidence,
+///   `run_id` links the PR back to the black-box trace that produced it.
+///
+/// `memory_id` / `run_id` references are intentionally *not* foreign keys to
+/// `knowledge_nodes`: forgetting or superseding a memory must never erase the
+/// audit trail of the trace, receipt, or PR that touched it (same
+/// audit-preserving stance as V15's composition tables).
+const MIGRATION_V18_UP: &str = r#"
+-- Black-box trace events: append-only, ordered by (run_id, seq).
+CREATE TABLE IF NOT EXISTS agent_traces (
+    id          TEXT PRIMARY KEY,
+    run_id      TEXT NOT NULL,
+    seq         INTEGER NOT NULL,
+    event_type  TEXT NOT NULL,          -- mcp.call | memory.retrieve | ...
+    tool        TEXT,                   -- denormalized for mcp.call rows
+    payload     TEXT NOT NULL,          -- full serialized MemoryTraceEvent (JSON)
+    at          INTEGER NOT NULL,       -- wall-clock millis
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_traces_run ON agent_traces(run_id, seq);
+CREATE INDEX IF NOT EXISTS idx_agent_traces_type ON agent_traces(event_type);
+CREATE INDEX IF NOT EXISTS idx_agent_traces_at ON agent_traces(at);
+
+-- One row per agent run, for the Black Box run list (denormalized roll-up).
+CREATE TABLE IF NOT EXISTS agent_runs (
+    run_id         TEXT PRIMARY KEY,
+    first_tool     TEXT,
+    event_count    INTEGER NOT NULL DEFAULT 0,
+    retrieved_count INTEGER NOT NULL DEFAULT 0,
+    suppressed_count INTEGER NOT NULL DEFAULT 0,
+    write_count    INTEGER NOT NULL DEFAULT 0,
+    veto_count     INTEGER NOT NULL DEFAULT 0,
+    started_at     INTEGER NOT NULL,    -- millis of first event
+    last_at        INTEGER NOT NULL,    -- millis of latest event
+    created_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_last_at ON agent_runs(last_at DESC);
+
+-- Retrieval receipts (the "nutrition label" for a piece of agent memory).
+CREATE TABLE IF NOT EXISTS memory_receipts (
+    receipt_id  TEXT PRIMARY KEY,
+    run_id      TEXT,                   -- links to the trace, if any
+    tool        TEXT,
+    query       TEXT,
+    retrieved_count  INTEGER NOT NULL DEFAULT 0,
+    suppressed_count INTEGER NOT NULL DEFAULT 0,
+    trust_floor REAL NOT NULL DEFAULT 0,
+    decay_risk  TEXT NOT NULL DEFAULT 'low',
+    payload     TEXT NOT NULL,          -- full serialized Receipt (JSON)
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_receipts_run ON memory_receipts(run_id);
+CREATE INDEX IF NOT EXISTS idx_memory_receipts_created_at ON memory_receipts(created_at DESC);
+
+-- Memory PRs: the risk-gated review queue for brain changes.
+CREATE TABLE IF NOT EXISTS memory_prs (
+    id          TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,          -- new_fact | contradiction_detected | ...
+    status      TEXT NOT NULL DEFAULT 'pending',
+    title       TEXT NOT NULL,
+    subject_id  TEXT,                   -- the memory this PR concerns, if any
+    run_id      TEXT,                   -- the run that produced it
+    diff        TEXT NOT NULL DEFAULT '{}',   -- structured before/after (JSON)
+    signals     TEXT NOT NULL DEFAULT '[]',   -- self-explaining RiskSignal[] (JSON)
+    decision    TEXT,                   -- promote | merge | supersede | ...
+    created_at  TEXT NOT NULL,
+    decided_at  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_prs_status ON memory_prs(status);
+CREATE INDEX IF NOT EXISTS idx_memory_prs_kind ON memory_prs(kind);
+CREATE INDEX IF NOT EXISTS idx_memory_prs_created_at ON memory_prs(created_at DESC);
+
+UPDATE schema_version SET version = 18, applied_at = datetime('now');
+"#;
+
 /// Apply pending migrations
 pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
     let current_version = get_current_version(conn)?;
@@ -1109,9 +1213,10 @@ mod tests {
 
         // 1. schema_version advanced to the latest migration
         let version = get_current_version(&conn).expect("read schema_version");
+        let latest = MIGRATIONS.last().unwrap().version;
         assert_eq!(
-            version, 17,
-            "schema_version must be 17 after all migrations"
+            version, latest,
+            "schema_version must be the latest migration after all migrations"
         );
 
         // 2. knowledge_edges is gone (V11 drops it)
@@ -1236,7 +1341,11 @@ mod tests {
 
         // After replaying from V10, the schema advances to the latest version.
         let version = get_current_version(&conn).expect("read schema_version");
-        assert_eq!(version, 17, "schema_version back at latest after replay");
+        assert_eq!(
+            version,
+            MIGRATIONS.last().unwrap().version,
+            "schema_version back at latest after replay"
+        );
     }
 
     #[test]
@@ -1310,7 +1419,11 @@ mod tests {
         // V16 uses CREATE TABLE IF NOT EXISTS and idempotent ALTER handling.
         apply_migrations(&conn).expect("V16 replay must be idempotent");
         let version = get_current_version(&conn).expect("read version");
-        assert_eq!(version, 17, "schema_version must be latest after replay");
+        assert_eq!(
+            version,
+            MIGRATIONS.last().unwrap().version,
+            "schema_version must be latest after replay"
+        );
     }
 
     #[test]
@@ -1400,7 +1513,11 @@ mod tests {
             .expect("rewind to 16");
         apply_migrations(&conn).expect("V17 replay must be idempotent");
         let version = get_current_version(&conn).expect("read version");
-        assert_eq!(version, 17, "schema_version must be 17 after replay");
+        assert_eq!(
+            version,
+            MIGRATIONS.last().unwrap().version,
+            "schema_version must be latest after replay"
+        );
     }
 
     #[test]

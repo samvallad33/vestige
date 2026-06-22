@@ -6,6 +6,7 @@ mod memory_store;
 mod migrations;
 mod portable;
 mod sqlite;
+mod trace_store;
 
 pub use memory_store::{
     ClassificationResult, Domain, HealthStatus, LocalMemoryStore, MemoryEdge, MemoryRecord,
@@ -25,6 +26,7 @@ pub use sqlite::{
     SmartIngestResult, SourceUpsertOutcome, SourceUpsertResult, SqliteMemoryStore,
     StateTransitionRecord, StorageError,
 };
+pub use trace_store::AgentRunSummary;
 
 /// Backwards-compatibility alias. Retained until Phase 4 completes so every
 /// existing `Arc<Storage>` call site keeps compiling. Scheduled for removal
