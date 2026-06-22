@@ -178,6 +178,13 @@ export class CinemaSandbox {
 		this.storm.transitionTo(role, ORIGIN, act, beatIndex);
 	}
 
+	/** Fire one endless-dream beat — a random crazier figure + color blast. Called
+	 * on a timer after the scripted tour ends so the storm never sits idle. */
+	dreamBeat(): void {
+		if (!this.booted) return;
+		this.storm.dreamBeat();
+	}
+
 	/** Render one frame. The storm is pinned to the origin and the camera always
 	 * looks at the origin, so the storm CANNOT leave the frame. The director
 	 * varies only the camera's orbital position/angle (set via cameraRef), and we

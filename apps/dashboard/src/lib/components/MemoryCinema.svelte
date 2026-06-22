@@ -70,6 +70,10 @@
 	let lastFrame = 0;
 	let typeTimer: ReturnType<typeof setInterval> | null = null;
 	let renderFailures = 0;
+	// ENDLESS DREAM MODE — after the tour ends, fire a new random crazier figure
+	// on this timer so the storm never sits idle. ($state so the template's
+	// "∞ dreaming" indicator reacts when it starts/stops.)
+	let dreamTimer = $state<ReturnType<typeof setInterval> | null>(null);
 
 	const reducedMotion =
 		typeof window !== 'undefined' &&
@@ -173,6 +177,7 @@
 	async function launch() {
 		// Tear down any prior run so Replay never inherits stale state.
 		cancelAnimationFrame(rafId);
+		stopDreamMode();
 		if (typeTimer) clearInterval(typeTimer);
 		director?.stop();
 		sandbox?.dispose();
@@ -246,7 +251,11 @@
 			onProgress: (t) => (progress = t),
 			onComplete: () => {
 				stage = 'done';
-				statusLine = 'End of tour.';
+				statusLine =
+					reducedMotion || !webgpuActive
+						? 'End of tour.'
+						: '∞ Dreaming — endless generative figures';
+				startDreamMode();
 			},
 		}, { reducedMotion, shots, centerOnOrigin: webgpuActive });
 
@@ -288,8 +297,40 @@
 		}
 	}
 
+	// ── ENDLESS DREAM MODE ──────────────────────────────────────────────────
+	// When the scripted tour ends, instead of freezing on the last figure, the
+	// storm enters an infinite generative loop: every few seconds it morphs into
+	// a fresh RANDOM procedural figure (supershape, torus-knot, lissajous, helix,
+	// quantum foam) and detonates a color blast — each one crazier than the last.
+	// The render loop() is already running, so we just fire dreamBeats on a timer.
+	function startDreamMode() {
+		if (reducedMotion || !sandbox || !webgpuActive) return; // honor reduced-motion
+		stopDreamMode();
+		// Fire the first wild figure immediately, then keep going forever.
+		sandbox?.dreamBeat();
+		caption = '';
+		chip = 'Dreaming';
+		dreamTimer = setInterval(() => {
+			// Sandbox may have been torn down (close / render-fail fallback).
+			if (!sandbox || !webgpuActive) {
+				stopDreamMode();
+				return;
+			}
+			sandbox.dreamBeat();
+		}, 5500); // a beat every ~5.5s — the blast flares then the figure settles
+		           // into its clean shape before the next detonation.
+	}
+
+	function stopDreamMode() {
+		if (dreamTimer) {
+			clearInterval(dreamTimer);
+			dreamTimer = null;
+		}
+	}
+
 	function close() {
 		cancelAnimationFrame(rafId);
+		stopDreamMode();
 		if (typeTimer) clearInterval(typeTimer);
 		if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
 		director?.stop();
@@ -435,7 +476,8 @@
 				></div>
 			</div>
 			<div class="cinema-beatcount text-dim text-xs">
-				{#if totalBeats > 0}Beat {beatIndex} / {totalBeats}{/if}
+				{#if stage === 'done' && dreamTimer}<span class="cinema-dream">∞ dreaming</span>
+				{:else if totalBeats > 0}Beat {beatIndex} / {totalBeats}{/if}
 				{#if stage === 'done'}<button class="cinema-replay" onclick={launch}>↻ Replay</button>{/if}
 			</div>
 		</div>
@@ -601,6 +643,15 @@
 		padding: 0.15rem 0.7rem;
 		cursor: pointer;
 		font-size: 0.75rem;
+	}
+	.cinema-dream {
+		color: var(--color-dream-glow);
+		letter-spacing: 0.08em;
+		animation: cinema-dream-pulse 3s ease-in-out infinite;
+	}
+	@keyframes cinema-dream-pulse {
+		0%, 100% { opacity: 0.55; }
+		50% { opacity: 1; }
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.cinema-progress-fill {

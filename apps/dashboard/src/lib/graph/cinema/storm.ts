@@ -137,6 +137,14 @@ export class SemanticComputeStorm {
 	// seconds since the last detonation and drives the outward spectral wave.
 	private uBlast = uniform(0);
 	private uBlastTime = uniform(0);
+	// ENDLESS DREAM MODE — after the scripted 7-beat tour, the storm keeps
+	// generating crazier figures forever instead of sitting idle. uMorphSeed
+	// randomizes each procedural figure (worlds 7..11); uChaos ramps 0→1 over the
+	// dream so every figure is wilder than the last.
+	private uMorphSeed = uniform(0);
+	private uChaos = uniform(0);
+	// JS-side dream state (not uniforms): which figure is live + how many fired.
+	private dreamCount = 0;
 
 	constructor(
 		renderer: { computeAsync: (node: ComputeDispatch) => Promise<void> },
@@ -252,6 +260,74 @@ export class SemanticComputeStorm {
 			const pRad = sqrt(fi).mul(R.mul(0.0042)); // ~R at 150k particles
 			const wPhyllo = vec3(pAng.cos().mul(pRad), R.mul(0.04).mul(sin(phase.mul(9))), pAng.sin().mul(pRad));
 
+			// ══════════════════════════════════════════════════════════════════
+			//  ENDLESS DREAM FIGURES (worlds 7..11) — the generative mode that
+			//  kicks in after the scripted 7-beat tour. These are PROCEDURAL and
+			//  RANDOMIZED: uMorphSeed (set per auto-beat) + uChaos (ramps up over
+			//  time → each figure crazier than the last) modulate the parameters,
+			//  so the same world index never looks the same twice.
+			// ══════════════════════════════════════════════════════════════════
+			const seed = this.uMorphSeed;
+			const chaos = this.uChaos;
+			// seeded per-figure scalars (deterministic hash of the seed)
+			const s1 = fract(seed.mul(0.731).add(0.13));
+			const s2 = fract(seed.mul(1.323).add(0.51));
+			const s3 = fract(seed.mul(2.117).add(0.27));
+
+			// world 7 · SUPERSHAPE (3D superformula — petals/stars/blobs, never same)
+			const m1 = float(2).add(floor(s1.mul(14))); // symmetry 2..15
+			const sfAng = theta;
+			const sfR1 = pow(abs(cos(m1.mul(sfAng).div(4))), float(2).add(s2.mul(8)))
+				.add(pow(abs(sin(m1.mul(sfAng).div(4))), float(2).add(s3.mul(8))))
+				.add(0.0001)
+				.pow(float(-0.5));
+			const sfR2 = pow(abs(cos(m1.mul(phi).div(4))), float(3))
+				.add(pow(abs(sin(m1.mul(phi).div(4))), float(3)))
+				.add(0.0001)
+				.pow(float(-0.5));
+			const sfRad = R.mul(0.85).mul(clamp(sfR1.mul(sfR2).mul(0.5), 0.1, 1.4));
+			const wSuper = vec3(
+				sin(phi).mul(cos(theta)).mul(sfRad),
+				cos(phi).mul(sfRad),
+				sin(phi).mul(sin(theta)).mul(sfRad)
+			);
+
+			// world 8 · TORUS KNOT (p,q knot — randomized winding, hypnotic ribbons)
+			const pKnot = float(2).add(floor(s1.mul(5))); // 2..6
+			const qKnot = float(3).add(floor(s2.mul(5))); // 3..7
+			const kt = fi.mul(0.0006).add(this.uTime.mul(0.1));
+			const kr = cos(qKnot.mul(kt)).mul(0.4).add(1);
+			const wKnot = vec3(
+				kr.mul(cos(pKnot.mul(kt))),
+				kr.mul(sin(pKnot.mul(kt))),
+				sin(qKnot.mul(kt)).mul(0.55)
+			).mul(R.mul(0.6)).add(sphereShell.mul(R.mul(0.06))); // slight fuzz
+
+			// world 9 · WARPED LISSAJOUS LATTICE (3D sine-wave interference web)
+			const fx = float(2).add(floor(s1.mul(5)));
+			const fy = float(2).add(floor(s2.mul(5)));
+			const fz = float(2).add(floor(s3.mul(5)));
+			const lt = fi.mul(0.0007);
+			const wLissa = vec3(
+				sin(fx.mul(lt).add(this.uTime.mul(0.3))),
+				sin(fy.mul(lt).add(1.7)),
+				sin(fz.mul(lt).add(this.uTime.mul(0.2)).add(3.1))
+			).mul(R.mul(0.82));
+
+			// world 10 · HELIX STORM (twisted DNA-ish double helix that writhes)
+			const hAng = fi.mul(0.0009).add(this.uTime.mul(0.4));
+			const hSide = select(fract(phase.mul(2)).greaterThan(0.5), float(1), float(-1));
+			const hRad = R.mul(0.55).mul(float(0.7).add(sin(hAng.mul(3)).mul(0.3).mul(chaos.add(0.3))));
+			const wHelix = vec3(
+				cos(hAng).mul(hRad).mul(hSide),
+				fi.mul(0.00026).sub(R.mul(0.9)).mul(0.5).add(sin(this.uTime).mul(R.mul(0.1))),
+				sin(hAng).mul(hRad).mul(hSide)
+			);
+
+			// world 11 · QUANTUM FOAM (curl-warped noisy blob — pure chaos, max wild)
+			const foam = mx_noise_vec3(sphereShell.mul(float(1.5).add(chaos.mul(3))).add(seed)).mul(R.mul(0.5).mul(chaos.add(0.4)));
+			const wFoam = sphereShell.mul(R.mul(homeFrac)).add(foam);
+
 			// select() chain — no dynamic indexing in this TSL build.
 			const homeFor = (idx: ReturnType<typeof float>) =>
 				select(idx.equal(0), wNebula,
@@ -259,7 +335,12 @@ export class SemanticComputeStorm {
 				select(idx.equal(2), wAttractor,
 				select(idx.equal(3), wVoid,
 				select(idx.equal(4), wCrystal,
-				select(idx.equal(5), wGalaxy, wPhyllo))))));
+				select(idx.equal(5), wGalaxy,
+				select(idx.equal(6), wPhyllo,
+				select(idx.equal(7), wSuper,
+				select(idx.equal(8), wKnot,
+				select(idx.equal(9), wLissa,
+				select(idx.equal(10), wHelix, wFoam)))))))))));
 			const homeCur = homeFor(float(this.uWorld));
 			const homePrev = homeFor(float(this.uPrevWorld));
 			// uBlend eases prev→cur (smoothstep) so the world morph is silky.
@@ -568,6 +649,40 @@ export class SemanticComputeStorm {
 		// Dramatic beats (contradiction=2, surprise=3) push their mode color over
 		// the rainbow so they read clearly; calm beats stay mostly iridescent.
 		this.uModeTintAmt.value = mode >= 2 ? 0.7 : 0.22;
+	}
+
+	/**
+	 * ENDLESS DREAM BEAT — fired on a timer AFTER the scripted tour ends, so the
+	 * storm never sits idle. Jumps to a RANDOM procedural figure (worlds 7..11),
+	 * reseeds it (so it's never the same shape twice), ramps uChaos up so each one
+	 * is wilder than the last, and detonates a full color blast. This is the
+	 * "random figure generator that makes even crazier beats."
+	 */
+	dreamBeat(): void {
+		this.dreamCount += 1;
+		// Pick a random wild figure (worlds 7..11 are the procedural generators).
+		const world = 7 + Math.floor(Math.random() * 5);
+		this.uPrevWorld.value = this.uWorld.value;
+		this.uWorld.value = world;
+		this.uBlend.value = 1;
+		// Fresh random seed → the superformula/knot/lissajous/helix/foam params all
+		// change, so the same world index never looks the same twice.
+		this.uMorphSeed.value = Math.random() * 1000;
+		// Chaos ramps up and saturates — figures get progressively crazier, then
+		// hold at max wildness. Eases in over the first ~8 dream beats.
+		this.uChaos.value = Math.min(1, 0.25 + this.dreamCount * 0.1);
+		// Detonation + long color blast every dream beat — but ignition kept
+		// MODERATE (not the tour's 8.0) so the random dense figures don't wash to
+		// white at the blast peak. The rim-gated spectral blast carries the color.
+		this.uActDim.value = 0.85;
+		this.uIgnition.value = 3.0;
+		this.uBurst.value = 1.0;
+		this.uBlast.value = 1.0;
+		this.uBlastTime.value = 0;
+		// Vary the mode tint randomly too so the palette keeps surprising.
+		const modes = [1, 2, 3];
+		this.uMode.value = modes[Math.floor(Math.random() * modes.length)];
+		this.uModeTintAmt.value = 0.3 + Math.random() * 0.5;
 	}
 
 	/** Size the containment sphere (world units) so the storm always stays in
