@@ -165,6 +165,16 @@ export class CinemaSandbox {
 	async render(deltaSeconds: number): Promise<void> {
 		if (!this.booted) return;
 		this.camera.lookAt(this.target);
+
+		// Keep the storm inside the frame: derive the largest world radius that
+		// fully fits the camera's vertical FOV at the current distance to target,
+		// minus a margin so the glow halo stays on-screen too. The storm clamps
+		// itself to this each frame, so it reframes as the camera flies.
+		const dist = this.camera.position.distanceTo(this.target);
+		const vfov = (this.camera.fov * Math.PI) / 180;
+		const fitRadius = Math.tan(vfov / 2) * dist * 0.62; // 0.62 = on-screen margin
+		this.storm.setContainRadius(fitRadius);
+
 		await this.storm.update(deltaSeconds);
 		if (this.post) await this.post.renderAsync();
 		else await this.renderer.renderAsync(this.scene, this.camera);

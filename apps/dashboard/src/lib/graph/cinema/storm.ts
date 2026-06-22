@@ -36,6 +36,10 @@ import {
 	float,
 	sin,
 	cos,
+	length,
+	clamp,
+	min,
+	mix,
 	positionLocal,
 } from 'three/tsl';
 
@@ -87,6 +91,10 @@ export class SemanticComputeStorm {
 	private uTime = uniform(0);
 	private uIgnition = uniform(0.6);
 	private uMode = uniform(0);
+	// World-space radius the storm is contained within. Particles past this get
+	// a spring force back so the storm NEVER flies off-screen. Sized to the
+	// camera framing by the sandbox via setContainRadius().
+	private uContainRadius = uniform(48);
 
 	constructor(
 		renderer: { computeAsync: (node: ComputeDispatch) => Promise<void> },
@@ -164,8 +172,35 @@ export class SemanticComputeStorm {
 			vel.addAssign(active);
 			// Ignition shockwave yanks particles toward the new node on each beat.
 			vel.addAssign(toTarget.normalize().mul(this.uIgnition.mul(0.02)));
+
+			// CONTAINMENT: soft spherical boundary around the focused target so the
+			// storm NEVER escapes the camera frame. Past uContainRadius a spring
+			// force pulls each particle back toward the target; the force ramps in
+			// smoothly (smoothstep-like) so the boundary reads as a glowing
+			// membrane, not a hard wall. The chaos attractor (Rössler) is
+			// unbounded by nature — this is what keeps mode 2 on-screen.
+			const distFromTarget = length(toTarget.negate()); // |pos - target|
+			const overflow = distFromTarget.sub(this.uContainRadius).max(0);
+			const pullBack = clamp(overflow.mul(0.012), 0, 0.6);
+			vel.addAssign(toTarget.normalize().mul(pullBack));
+
+			// Hard velocity clamp so no single step can shoot a particle across
+			// the frame even at peak ignition / chaos divergence.
+			const speed = length(vel);
+			const maxSpeed = float(1.2);
+			vel.assign(vel.mul(min(maxSpeed, speed).div(speed.max(0.0001))));
+
 			pos.addAssign(vel);
 			vel.mulAssign(0.95);
+
+			// Final safety net: if a particle still ends up beyond 1.35x the
+			// radius (extreme edge case), snap it onto the boundary shell so it
+			// can never be lost off-screen.
+			const finalToTarget = vec3(this.uTarget).sub(pos);
+			const finalDist = length(finalToTarget.negate());
+			const hardR = this.uContainRadius.mul(1.35);
+			const snapped = vec3(this.uTarget).sub(finalToTarget.normalize().mul(hardR));
+			pos.assign(mix(pos, snapped, finalDist.greaterThan(hardR).select(float(1), float(0))));
 		})().compute(this.count);
 	}
 
@@ -234,6 +269,12 @@ export class SemanticComputeStorm {
 		this.uTarget.value.copy(worldPos);
 		this.uMode.value = ROLE_MODE[role] ?? 1;
 		this.uIgnition.value = 8.0;
+	}
+
+	/** Size the containment sphere (world units) so the storm always stays in
+	 * frame. The sandbox derives this from the camera distance + fov. */
+	setContainRadius(radius: number): void {
+		this.uContainRadius.value = Math.max(8, radius);
 	}
 
 	dispose(): void {
