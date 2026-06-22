@@ -152,6 +152,9 @@ export class SemanticComputeStorm {
 	// (flythrough) so they never additive-pop. Distance band in world units.
 	private uFadeNear = uniform(2.0);
 	private uFadeBand = uniform(7.0);
+	// VOLUMETRIC FOG — distant particles dim toward the void with view depth (exp
+	// falloff) for atmospheric depth. Combined with near-fade in one depth read.
+	private uFogDensity = uniform(0.012);
 	// JS-side dream state (not uniforms): which figure is live + how many fired.
 	private dreamCount = 0;
 
@@ -680,14 +683,18 @@ export class SemanticComputeStorm {
 			return isInnerC.select(innerRim, outerRim);
 		});
 
-		// ── NEAR-PLANE FADE ── particles dissolve as they approach the camera so
-		// the flythrough never additive-pops a sprite right in your face. View-space
-		// forward distance = -positionView.z. smoothstep 0→1 across [near, near+band]:
-		// ~0 right at the camera, 1 by the time it's a few units out (≈1 at the
-		// default far camera, so no visual change until we fly inside).
-		const nearFade = Fn(() => {
-			const d = positionView.z.negate();
-			return smoothstep(this.uFadeNear, this.uFadeNear.add(this.uFadeBand), d);
+		// ── DEPTH FADE (near dissolve × volumetric fog) ── ONE Fn, ONE positionView
+		// read. Reading positionView from a SECOND Fn in the same material output
+		// triggers a cyclic type-resolution stack-overflow in three@0.172's node
+		// builder, so near-fade AND fog are combined here into a single depth read.
+		//   near: smoothstep 0→1 across [near, near+band] (≈1 at far camera → no
+		//         change until we fly inside; dissolves sprites at the camera).
+		//   fog:  exp falloff dims distant particles toward the void → 3D depth.
+		const depthFade = Fn(() => {
+			const d = positionView.z.negate(); // +forward view distance, read ONCE
+			const near = smoothstep(this.uFadeNear, this.uFadeNear.add(this.uFadeBand), d);
+			const fog = clamp(this.uFogDensity.mul(d).negate().exp(), 0.18, 1.0);
+			return near.mul(fog);
 		});
 
 		// ── THE COLOR BLAST ── the signature detonation chroma. Keyed on the LONG
@@ -727,7 +734,7 @@ export class SemanticComputeStorm {
 			// through even during a detonation — the clash is the star, the blast is
 			// an accent (was fully overriding, which washed the contrast to rainbow).
 			const blastMix = smoothstep(float(0.0), float(0.85), clamp(this.uBlast, 0, 1)).mul(0.6);
-			return mix(world, blastColor().mul(rimFactor()).mul(this.uActDim), blastMix).mul(nearFade());
+			return mix(world, blastColor().mul(rimFactor()).mul(this.uActDim), blastMix).mul(depthFade());
 		})();
 
 		// emissiveNode: what the selective bloom reads — THE glow channel. Rim-gated
@@ -740,7 +747,7 @@ export class SemanticComputeStorm {
 			// rainbow override.
 			const blastMix = smoothstep(float(0.0), float(0.85), clamp(this.uBlast, 0, 1)).mul(0.6);
 			// ×nearFade so the bloom ALSO dissolves near the camera (no near-plane flash).
-			return mix(world, blastColor().mul(0.85).mul(rimFactor()).mul(this.uActDim), blastMix).mul(nearFade());
+			return mix(world, blastColor().mul(0.85).mul(rimFactor()).mul(this.uActDim), blastMix).mul(depthFade());
 		})();
 
 		// One instanced sprite per particle. Small quads (0.1) keep individual
