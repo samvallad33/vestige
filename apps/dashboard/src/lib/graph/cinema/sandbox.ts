@@ -13,6 +13,12 @@
 import * as THREE from 'three';
 import type { SemanticRole, SemanticComputeStorm } from './storm';
 
+// The storm lives at the world origin, permanently. The camera always looks here
+// and is clamped to a safe distance band so the subject can never leave frame.
+const ORIGIN = new THREE.Vector3(0, 0, 0);
+const MIN_CAM_DIST = 18;
+const MAX_CAM_DIST = 46;
+
 export function isWebGPUSupported(): boolean {
 	return typeof navigator !== 'undefined' && 'gpu' in navigator;
 }
@@ -153,26 +159,37 @@ export class CinemaSandbox {
 		this.booted = true;
 	}
 
-	/** Retarget the storm + look the camera at the beat (called by the director). */
-	transitionTo(role: SemanticRole, worldPos: THREE.Vector3): void {
+	/** Retarget the storm's MODE/ignition for a beat. The storm is permanently
+	 * centered at the WORLD ORIGIN (see render) so it is always dead-center in
+	 * frame — worldPos here only conveys which node, not where the storm sits. */
+	transitionTo(role: SemanticRole, _worldPos: THREE.Vector3): void {
 		if (!this.booted) return;
-		this.storm.transitionTo(role, worldPos);
+		this.storm.transitionTo(role, ORIGIN);
 	}
 
-	/** Render one frame. Camera is driven externally (director mutates position/target).
-	 * A single frame's failure must not crash the tour — it's caught and surfaced
-	 * via a thrown error the caller already handles (drops to camera-only). */
+	/** Render one frame. The storm is pinned to the origin and the camera always
+	 * looks at the origin, so the storm CANNOT leave the frame. The director
+	 * varies only the camera's orbital position/angle (set via cameraRef), and we
+	 * clamp that to a safe distance band here as a final guarantee. */
 	async render(deltaSeconds: number): Promise<void> {
 		if (!this.booted) return;
-		this.camera.lookAt(this.target);
 
-		// Keep the storm inside the frame: derive the largest world radius that
-		// fully fits the camera's vertical FOV at the current distance to target,
-		// minus a margin so the glow halo stays on-screen too. The storm clamps
-		// itself to this each frame, so it reframes as the camera flies.
-		const dist = this.camera.position.distanceTo(this.target);
+		// Hard guarantee: clamp the camera into a distance band from origin so a
+		// runaway director move can never push the subject out of view, then look
+		// dead at the origin where the storm lives.
+		const distToOrigin = this.camera.position.length();
+		if (distToOrigin < MIN_CAM_DIST || distToOrigin > MAX_CAM_DIST || !Number.isFinite(distToOrigin)) {
+			const d = Math.min(MAX_CAM_DIST, Math.max(MIN_CAM_DIST, distToOrigin || MAX_CAM_DIST));
+			if (distToOrigin > 1e-3) this.camera.position.setLength(d);
+			else this.camera.position.set(0, 12, d);
+		}
+		this.camera.lookAt(ORIGIN);
+
+		// Size the containment sphere to the camera's FOV at the origin so the
+		// storm always fully fits the frame with margin.
+		const dist = this.camera.position.length();
 		const vfov = (this.camera.fov * Math.PI) / 180;
-		const fitRadius = Math.tan(vfov / 2) * dist * 0.62; // 0.62 = on-screen margin
+		const fitRadius = Math.tan(vfov / 2) * dist * 0.55;
 		this.storm.setContainRadius(fitRadius);
 
 		await this.storm.update(deltaSeconds);

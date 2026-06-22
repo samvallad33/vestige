@@ -78,18 +78,29 @@
 	// Deterministic layout: spread path nodes on a gentle spiral so the camera
 	// has distinct world positions to fly between (independent of the WebGL
 	// graph's internal coordinates — keeps the sandbox isolated).
+	// Lay the beat nodes out on a TIGHT, BOUNDED shell centered on the origin —
+	// fixed radius, no per-beat growth. Earlier this grew (22 + i*6) so each beat
+	// sat farther out and the camera+storm marched off into space ("flying off").
+	// A bounded shell keeps the whole composition centered; cinematic variety
+	// comes from the camera angle/move/standoff, not from translating across a
+	// huge volume. The focused node is always re-centered by recenterOn() below.
+	const SHELL_RADIUS = 14;
 	function layoutPositions(p: CinemaPath): Map<string, THREE.Vector3> {
 		const pos = new Map<string, THREE.Vector3>();
 		const n = p.beats.length;
 		for (let i = 0; i < n; i++) {
-			const angle = (i / Math.max(1, n)) * Math.PI * 2 * 1.4;
-			const radius = 22 + i * 6;
+			// Distribute beats evenly on a sphere (golden-angle spiral) so they
+			// never clump and never exceed SHELL_RADIUS from center.
+			const t = n > 1 ? i / (n - 1) : 0.5;
+			const y = 1 - t * 2; // 1..-1
+			const r = Math.sqrt(Math.max(0, 1 - y * y));
+			const theta = i * 2.399963; // golden angle
 			pos.set(
 				p.beats[i].nodeId,
 				new THREE.Vector3(
-					Math.cos(angle) * radius,
-					(i % 2 === 0 ? 1 : -1) * (4 + i * 2),
-					Math.sin(angle) * radius
+					Math.cos(theta) * r * SHELL_RADIUS,
+					y * SHELL_RADIUS * 0.5,
+					Math.sin(theta) * r * SHELL_RADIUS
 				)
 			);
 		}
@@ -235,7 +246,7 @@
 				stage = 'done';
 				statusLine = 'End of tour.';
 			},
-		}, { reducedMotion, shots });
+		}, { reducedMotion, shots, centerOnOrigin: webgpuActive });
 
 		stage = 'playing';
 		statusLine = webgpuActive

@@ -37,12 +37,18 @@ export interface DirectorOptions {
 	 * director — every value falls back to the constants above. When present,
 	 * each shot's move/angle/dutch/standoff/flight/dwell/cut directs that beat. */
 	shots?: ResolvedShot[];
+	/** When true, the camera frames the WORLD ORIGIN every shot (the WebGPU storm
+	 * is pinned there) instead of flying out to scattered node positions — so the
+	 * subject is ALWAYS centered and can never fly off-screen. Camera variety
+	 * comes purely from angle/standoff/orbit. Used by the WebGPU sandbox path. */
+	centerOnOrigin?: boolean;
 }
 
 type Phase = 'idle' | 'flying' | 'dwelling' | 'done';
 
 const _tmpDir = new THREE.Vector3();
 const _tmpUp = new THREE.Vector3(0, 1, 0);
+const _origin = new THREE.Vector3(0, 0, 0);
 
 export class CinemaDirector {
 	private camera: THREE.PerspectiveCamera;
@@ -81,6 +87,7 @@ export class CinemaDirector {
 			standoff: opts.standoff ?? 26,
 			reducedMotion: opts.reducedMotion ?? false,
 			shots: opts.shots ?? [],
+			centerOnOrigin: opts.centerOnOrigin ?? false,
 		};
 	}
 
@@ -122,11 +129,18 @@ export class CinemaDirector {
 		this.phase = 'done';
 	}
 
-	/** Compute the camera stand-off position for a beat's node, directed by its
-	 * shot (move / angle / standoff). With no shot, reproduces the original
+	/** The focal point a beat frames: the world ORIGIN in centered mode (storm is
+	 * pinned there), else the node's laid-out position. */
+	private focalPoint(beat: CinemaBeat): THREE.Vector3 | null {
+		if (this.opts.centerOnOrigin) return _origin;
+		return this.positions.get(beat.nodeId) ?? null;
+	}
+
+	/** Compute the camera stand-off position for a beat's focal point, directed by
+	 * its shot (move / angle / standoff). With no shot, reproduces the original
 	 * framing exactly: standoff = opts.standoff, +0.35 up-bias (filmic tilt). */
 	private framePosition(beat: CinemaBeat, index: number, out: THREE.Vector3): THREE.Vector3 {
-		const nodePos = this.positions.get(beat.nodeId);
+		const nodePos = this.focalPoint(beat);
 		if (!nodePos) {
 			// Node has no resolved position yet — keep current framing.
 			return out.copy(this.camera.position);
@@ -159,7 +173,7 @@ export class CinemaDirector {
 
 	private beginFlightTo(index: number): void {
 		const beat = this.path.beats[index];
-		const nodePos = this.positions.get(beat.nodeId);
+		const nodePos = this.focalPoint(beat);
 		const shot = this.shotAt(index);
 
 		this.fromPos.copy(this.camera.position);
@@ -205,7 +219,7 @@ export class CinemaDirector {
 			}
 		} else if (this.phase === 'dwelling') {
 			if (!this.opts.reducedMotion) {
-				const nodePos = this.positions.get(this.path.beats[this.beatIndex].nodeId);
+				const nodePos = this.focalPoint(this.path.beats[this.beatIndex]);
 				if (nodePos) {
 					this.target.lerp(nodePos, 0.02); // gentle settle keeps the shot alive
 					// An orbit shot slowly revolves the camera around the node
