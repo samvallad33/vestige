@@ -51,6 +51,7 @@ import {
 	mx_noise_vec3,
 	vec2,
 	atan,
+	positionView,
 } from 'three/tsl';
 // note: .max()/.div()/.sub()/.cos()/.sin()/.log()/.lessThanEqual() etc. are
 // fluent methods on TSL nodes — no import needed.
@@ -147,6 +148,10 @@ export class SemanticComputeStorm {
 	// JARRING CLASH PAIR — which opposing inner/outer duotone is live (0..4). Set
 	// per beat so every figure is a fresh ice-vs-fire / acid-vs-blood collision.
 	private uClash = uniform(0);
+	// NEAR-PLANE FADE — particles dissolve as they pass very close to the camera
+	// (flythrough) so they never additive-pop. Distance band in world units.
+	private uFadeNear = uniform(2.0);
+	private uFadeBand = uniform(7.0);
 	// JS-side dream state (not uniforms): which figure is live + how many fired.
 	private dreamCount = 0;
 
@@ -675,6 +680,16 @@ export class SemanticComputeStorm {
 			return isInnerC.select(innerRim, outerRim);
 		});
 
+		// ── NEAR-PLANE FADE ── particles dissolve as they approach the camera so
+		// the flythrough never additive-pops a sprite right in your face. View-space
+		// forward distance = -positionView.z. smoothstep 0→1 across [near, near+band]:
+		// ~0 right at the camera, 1 by the time it's a few units out (≈1 at the
+		// default far camera, so no visual change until we fly inside).
+		const nearFade = Fn(() => {
+			const d = positionView.z.negate();
+			return smoothstep(this.uFadeNear, this.uFadeNear.add(this.uFadeBand), d);
+		});
+
 		// ── THE COLOR BLAST ── the signature detonation chroma. Keyed on the LONG
 		// uBlast envelope (~2.8s) so the color OUTLIVES the physics burst (owner's
 		// "color too brief" fix). Two layers: a blackbody plasma core that cools as
@@ -712,7 +727,7 @@ export class SemanticComputeStorm {
 			// through even during a detonation — the clash is the star, the blast is
 			// an accent (was fully overriding, which washed the contrast to rainbow).
 			const blastMix = smoothstep(float(0.0), float(0.85), clamp(this.uBlast, 0, 1)).mul(0.6);
-			return mix(world, blastColor().mul(rimFactor()).mul(this.uActDim), blastMix);
+			return mix(world, blastColor().mul(rimFactor()).mul(this.uActDim), blastMix).mul(nearFade());
 		})();
 
 		// emissiveNode: what the selective bloom reads — THE glow channel. Rim-gated
@@ -724,7 +739,8 @@ export class SemanticComputeStorm {
 			// Same cap as colorNode so the bloom feeds on the CLASH colors, not a
 			// rainbow override.
 			const blastMix = smoothstep(float(0.0), float(0.85), clamp(this.uBlast, 0, 1)).mul(0.6);
-			return mix(world, blastColor().mul(0.85).mul(rimFactor()).mul(this.uActDim), blastMix);
+			// ×nearFade so the bloom ALSO dissolves near the camera (no near-plane flash).
+			return mix(world, blastColor().mul(0.85).mul(rimFactor()).mul(this.uActDim), blastMix).mul(nearFade());
 		})();
 
 		// One instanced sprite per particle. Small quads (0.1) keep individual
