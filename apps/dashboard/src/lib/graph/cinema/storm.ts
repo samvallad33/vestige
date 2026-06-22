@@ -169,6 +169,15 @@ export class SemanticComputeStorm {
 	private uZoomPeriod = uniform(9.0); // T: one promotion every 9s
 	private uLambda = uniform(1.923); // 1 / 0.52 self-similar ratio
 	private uZoomOn = uniform(0); // 0 = off (beats 0/1, reduced-motion), 1 = diving
+	// VELOCITY-STRETCH FLYTHROUGH STREAK — when the camera plunges through the
+	// shell, sprites elongate along the screen-space apparent motion vector (a
+	// motion-streak look). Pure scaleNode/rotationNode (a SEPARATE output graph
+	// from color/emissive) + camera-velocity uniforms → zero per-frame compute,
+	// no positionView read in color/emissive. Strength is gated to 0 from JS for
+	// reduced-motion, so this is a no-op until the director drives uStreak.
+	private uCamVelView = uniform(new THREE.Vector3(0, 0, 0)); // view-space apparent particle velocity
+	private uStreak = uniform(0); // 0..1 flythrough strength
+	private uMaxStretch = uniform(7.0);
 	// JS-side dream state (not uniforms): which figure is live + how many fired.
 	private dreamCount = 0;
 
@@ -568,6 +577,32 @@ export class SemanticComputeStorm {
 		const instancePos = storage(bufferPos, 'vec3', this.count).element(instanceIndex);
 		mat.positionNode = instancePos;
 
+		// ── VELOCITY-STRETCH STREAK (scaleNode + rotationNode) ── a SEPARATE output
+		// graph from color/emissive: it reads only camera-velocity uniforms +
+		// phaseStore, NEVER positionView (a 2nd positionView read in a material
+		// output would stack-overflow three@0.172's node builder). Zero per-frame
+		// compute — the camera velocity is one uniform pushed from the sandbox.
+		const matStretch = mat as typeof mat & { scaleNode: unknown; rotationNode: unknown };
+		{
+			// Screen-plane apparent particle velocity (view space x/y). speed≥ε so
+			// length()/atan() stay finite when the camera is still.
+			const velView = vec3(this.uCamVelView);
+			const vScreen = vec2(velView.x, velView.y);
+			const speed = length(vScreen).max(1e-4);
+			// Per-particle jitter (0.75..1.25) so streaks don't all stretch identically.
+			const jit = fract(phaseStore.element(instanceIndex).mul(13.17)).mul(0.5).add(0.75);
+			// Orient the quad's long axis along the motion vector. atan(y, x) is the
+			// 2-arg form (full -π..π range), NOT atan2.
+			matStretch.rotationNode = atan(vScreen.y, vScreen.x);
+			// X-stretch: 1 (no streak) → uMaxStretch, scaled by speed × strength × jitter.
+			const stretch = clamp(speed.mul(this.uStreak).mul(jit).mul(0.6).add(1.0), float(1.0), this.uMaxStretch);
+			// bloat = DOF circle-of-confusion base (DOF brightness is in depthFade;
+			// the sprite-scale bloat is the neutral 1.0 here). Streak elongates X only;
+			// bloat stays on both axes so the DOF circle is preserved.
+			const bloat = float(1.0);
+			matStretch.scaleNode = vec2(bloat.mul(stretch), bloat);
+		}
+
 		// ── SHARED RAINBOW COLOR ──
 		// One Fn produces the pure iridescent color for a particle; we feed it to
 		// BOTH colorNode (the lit/additive surface color) AND emissiveNode (the
@@ -936,6 +971,17 @@ export class SemanticComputeStorm {
 	 * reduced-motion; on for Act II+ and dream mode. */
 	setZoom(on: boolean): void {
 		this.uZoomOn.value = on ? 1 : 0;
+	}
+
+	/** View-space apparent particle velocity (the negated, view-transformed camera
+	 * velocity). Drives the streak orientation + length. */
+	setCameraVel(v: THREE.Vector3): void {
+		this.uCamVelView.value.copy(v);
+	}
+
+	/** Flythrough streak strength 0..1. Set to 0 for reduced-motion (no streak). */
+	setStreak(s: number): void {
+		this.uStreak.value = s;
 	}
 
 	dispose(): void {

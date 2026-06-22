@@ -83,6 +83,25 @@
 		typeof window !== 'undefined' &&
 		window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+	// ── INTERACTIVE PARALLAX ────────────────────────────────────────────────
+	// Pointer/scroll/touch nudge the camera around the storm so the overlay feels
+	// like a live toy, then converge back to 0 when idle so the scripted film is
+	// never broken. None of this state is read in the template, so plain let/const
+	// is correct (no $state needed). Frame-rate-independent easing via `damp`.
+	const damp = (cur: number, tgt: number, lambda: number, dt: number) =>
+		cur + (tgt - cur) * (1 - Math.exp(-lambda * dt));
+	const pointer = { x: 0, y: 0 };
+	const camOff = { yaw: 0, pitch: 0 };
+	let zoomTarget = 0,
+		zoomLive = 0;
+	let lastInputAt = 0; // performance.now() of the last pointer/scroll/touch input
+	const IDLE_MS = 2500,
+		MAX_YAW = 0.35,
+		MAX_PITCH = 0.22;
+	const markInput = () => {
+		lastInputAt = performance.now();
+	};
+
 	// Deterministic layout: spread path nodes on a gentle spiral so the camera
 	// has distinct world positions to fly between (independent of the WebGL
 	// graph's internal coordinates — keeps the sandbox isolated).
@@ -173,6 +192,10 @@
 				// fades in extra-soft on beats 0/1 (which otherwise wash to white).
 				sandbox.transitionTo(stormRole(mode), wp, shot?.act ?? 'I', index);
 			}
+			// Drive flythrough strength from beat energy: high-tension beats fly
+			// THROUGH the storm (relaxed clamp + streak); reduced-motion = no streak.
+			const energy = shot?.tension ?? 0;
+			sandbox.setFlythrough(reducedMotion ? 0 : energy * 0.8);
 		}
 	}
 
@@ -284,6 +307,30 @@
 		} catch (e) {
 			console.warn('[cinema] director error:', e);
 		}
+		// Compose interactive parallax ON TOP of the director's camera. The user
+		// nudges yaw/pitch/zoom; we ease toward 0 when idle so the scripted film is
+		// seamless. sandbox.render() re-clamps distance + lookAt(origin), so the
+		// user can never break the framing — this is purely additive sugar.
+		if (!reducedMotion && sandbox && webgpuActive) {
+			const cam = sandbox.cameraRef;
+			const idle = performance.now() - lastInputAt > IDLE_MS;
+			const yawT = idle ? 0 : pointer.x * MAX_YAW;
+			const pitchT = idle ? 0 : pointer.y * MAX_PITCH;
+			const lam = idle ? 1.5 : 3.5;
+			camOff.yaw = damp(camOff.yaw, yawT, lam, dt);
+			camOff.pitch = damp(camOff.pitch, pitchT, lam, dt);
+			if (idle) zoomTarget = damp(zoomTarget, 0, 1.2, dt);
+			zoomLive = damp(zoomLive, zoomTarget, 5.5, dt);
+			// Spherical offset around the director's current camera position
+			// (target = origin).
+			const dir = cam.position.clone();
+			const sph = new THREE.Spherical().setFromVector3(dir);
+			sph.theta += camOff.yaw;
+			sph.phi = THREE.MathUtils.clamp(sph.phi + camOff.pitch, 0.2, Math.PI - 0.2);
+			sph.radius *= 1 - zoomLive * 0.35;
+			dir.setFromSpherical(sph);
+			cam.position.copy(dir);
+		}
 		// Snapshot the sandbox so the async catch can't act on a sandbox that
 		// close() nulled out while the render promise was in flight.
 		const sb = sandbox;
@@ -310,6 +357,8 @@
 	function startDreamMode() {
 		if (reducedMotion || !sandbox || !webgpuActive) return; // honor reduced-motion
 		stopDreamMode();
+		// The endless dream gently flies THROUGH the procedural figures.
+		if (!reducedMotion) sandbox?.setFlythrough(0.6);
 		// Fire the first wild figure immediately, then keep going forever.
 		sandbox?.dreamBeat();
 		caption = '';
@@ -337,6 +386,10 @@
 		stopDreamMode();
 		if (typeTimer) clearInterval(typeTimer);
 		if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
+		// Reset flythrough + parallax so a Replay never inherits stale offsets.
+		if (sandbox) sandbox.setFlythrough?.(0);
+		camOff.yaw = camOff.pitch = 0;
+		zoomTarget = zoomLive = 0;
 		director?.stop();
 		sandbox?.dispose();
 		sandbox = null;
@@ -370,6 +423,55 @@
 		if (typeof document === 'undefined') return;
 		document.body.classList.toggle('cinema-open', open);
 		return () => document.body.classList.remove('cinema-open');
+	});
+
+	// Interactive parallax listeners — only while the overlay is open, motion is
+	// allowed, and the canvas host exists. Reduced-motion fully disables them
+	// (no listeners attached at all). Cleanup removes everything on close/unmount.
+	$effect(() => {
+		if (!open || reducedMotion || !canvasHost) return;
+		const host = canvasHost;
+		const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+		host.style.touchAction = 'none';
+
+		const onPointerMove = (e: PointerEvent) => {
+			pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+			pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+			markInput();
+		};
+		const onWheel = (e: WheelEvent) => {
+			e.preventDefault();
+			zoomTarget = clamp(zoomTarget + e.deltaY * 0.0008, -1, 1);
+			markInput();
+		};
+		let pinchPrev: number | null = null;
+		const onTouchMove = (e: TouchEvent) => {
+			if (e.touches.length === 2) {
+				const dx = e.touches[0].clientX - e.touches[1].clientX;
+				const dy = e.touches[0].clientY - e.touches[1].clientY;
+				const dist = Math.hypot(dx, dy);
+				if (pinchPrev !== null) {
+					zoomTarget = clamp(zoomTarget + (dist - pinchPrev) * 0.002, -1, 1);
+				}
+				pinchPrev = dist;
+				markInput();
+			}
+		};
+		const onTouchEnd = () => {
+			pinchPrev = null;
+		};
+
+		host.addEventListener('pointermove', onPointerMove, { passive: true });
+		host.addEventListener('wheel', onWheel, { passive: false });
+		host.addEventListener('touchmove', onTouchMove, { passive: true });
+		host.addEventListener('touchend', onTouchEnd);
+
+		return () => {
+			host.removeEventListener('pointermove', onPointerMove);
+			host.removeEventListener('wheel', onWheel);
+			host.removeEventListener('touchmove', onTouchMove);
+			host.removeEventListener('touchend', onTouchEnd);
+		};
 	});
 
 	// Opt-in on-device narration. Lazy-loads @huggingface/transformers ONLY when

@@ -60,6 +60,14 @@ export class CinemaSandbox {
 	/** Camera target the director drives; mirrored into camera.lookAt each frame. */
 	readonly target = new THREE.Vector3(0, 0, 0);
 
+	// FLYTHROUGH — when >0, relaxes the camera-distance clamp floor so the camera
+	// can plunge inside the shell, and the storm stretches sprites along the
+	// apparent motion vector. Camera velocity is derived per-frame from the
+	// position delta (one Vector3, no compute). 0 = no streak (reduced-motion).
+	private flythrough = 0;
+	private prevCamPos = new THREE.Vector3();
+	private camVel = new THREE.Vector3();
+
 	constructor(container: HTMLElement) {
 		this.container = container;
 	}
@@ -185,6 +193,24 @@ export class CinemaSandbox {
 		this.storm.dreamBeat();
 	}
 
+	/** Flythrough strength 0..1. Relaxes the clamp floor so the camera can dive
+	 * inside the shell, and drives the storm's velocity-stretch streak. Set to 0
+	 * for reduced-motion (no streak, normal clamp). */
+	setFlythrough(s: number): void {
+		this.flythrough = THREE.MathUtils.clamp(s, 0, 1);
+		if (this.booted) this.storm.setStreak(s);
+	}
+
+	/** Pass-through: set the storm streak strength directly. */
+	setStreak(s: number): void {
+		if (this.booted) this.storm.setStreak(s);
+	}
+
+	/** Pass-through: push view-space camera velocity to the storm. */
+	setCameraVel(v: THREE.Vector3): void {
+		if (this.booted) this.storm.setCameraVel(v);
+	}
+
 	/** Render one frame. The storm is pinned to the origin and the camera always
 	 * looks at the origin, so the storm CANNOT leave the frame. The director
 	 * varies only the camera's orbital position/angle (set via cameraRef), and we
@@ -192,16 +218,35 @@ export class CinemaSandbox {
 	async render(deltaSeconds: number): Promise<void> {
 		if (!this.booted) return;
 
+		// Camera velocity (world units / sec) from the position delta this frame —
+		// one Vector3 subtract, no compute. Captured BEFORE the clamp so it tracks
+		// the director's intended move (the clamp only rescues runaway distances).
+		this.camVel.copy(this.camera.position).sub(this.prevCamPos).divideScalar(Math.max(deltaSeconds, 1e-3));
+		this.prevCamPos.copy(this.camera.position);
+
 		// Hard guarantee: clamp the camera into a distance band from origin so a
 		// runaway director move can never push the subject out of view, then look
-		// dead at the origin where the storm lives.
+		// dead at the origin where the storm lives. Flythrough relaxes the floor
+		// toward 6 so the camera can plunge inside the shell; the MAX clamp stands.
+		const minDist = THREE.MathUtils.lerp(MIN_CAM_DIST, 6, this.flythrough);
 		const distToOrigin = this.camera.position.length();
-		if (distToOrigin < MIN_CAM_DIST || distToOrigin > MAX_CAM_DIST || !Number.isFinite(distToOrigin)) {
-			const d = Math.min(MAX_CAM_DIST, Math.max(MIN_CAM_DIST, distToOrigin || MAX_CAM_DIST));
+		if (distToOrigin < minDist || distToOrigin > MAX_CAM_DIST || !Number.isFinite(distToOrigin)) {
+			const d = Math.min(MAX_CAM_DIST, Math.max(minDist, distToOrigin || MAX_CAM_DIST));
 			if (distToOrigin > 1e-3) this.camera.position.setLength(d);
 			else this.camera.position.set(0, 12, d);
 		}
 		this.camera.lookAt(ORIGIN);
+
+		// Push view-space apparent particle velocity to the storm (negated world
+		// camera velocity transformed into view space → the direction sprites
+		// appear to streak). matrixWorldInverse is the previous frame's (the
+		// renderer refreshes it during renderAsync below) — a one-frame lag that is
+		// imperceptible for a streak direction.
+		const camVelView = this.camVel
+			.clone()
+			.applyMatrix3(new THREE.Matrix3().setFromMatrix4(this.camera.matrixWorldInverse))
+			.negate();
+		this.storm.setCameraVel(camVelView);
 
 		// Size the containment sphere to the camera's VERTICAL FOV at the origin
 		// (the limiting dimension on a landscape frame). 0.82 lets the storm fill
