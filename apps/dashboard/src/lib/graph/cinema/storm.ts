@@ -768,7 +768,9 @@ export class SemanticComputeStorm {
 		const depthFade = Fn(() => {
 			const d = positionView.z.negate(); // +forward view distance, read ONCE
 			const near = smoothstep(this.uFadeNear, this.uFadeNear.add(this.uFadeBand), d);
-			const fog = clamp(this.uFogDensity.mul(d).negate().exp(), 0.18, 1.0);
+			// Fog floor raised to 0.45 so the far field still READS — all four depth
+			// systems multiply, so each must dim gently or they stack to black.
+			const fog = clamp(this.uFogDensity.mul(d).negate().exp(), 0.45, 1.0);
 			// DOF: dim particles off the focus plane (defocus → bokeh under bloom).
 			// coc 0 at focus → 1 fully out of focus; brightness 1 → (1-uDofDim).
 			const coc = clamp(d.sub(this.uFocus).abs().div(this.uFocusRange), 0, 1);
@@ -807,7 +809,7 @@ export class SemanticComputeStorm {
 		// detonation chroma at the peak and lingers (the long uBlast tail) before
 		// melting back into the next world's palette.
 		mat.colorNode = Fn(() => {
-			const glow = clamp(this.uIgnition.mul(0.05).add(0.5), 0, 1.0);
+			const glow = clamp(this.uIgnition.mul(0.05).add(0.72), 0, 1.25); // lifted: 4 depth systems multiply-dim
 			const world = rainbowColor().mul(glow).mul(rimFactor()).mul(this.uActDim);
 			// Blast is CAPPED at 0.6 so the inner/outer CLASH duotone always shows
 			// through even during a detonation — the clash is the star, the blast is
@@ -820,7 +822,7 @@ export class SemanticComputeStorm {
 		// so ONLY the outer shell blooms (calm dark center, no white blob). The blast
 		// gain is held below the color path (×0.85) so the bloom never clips white.
 		mat.emissiveNode = Fn(() => {
-			const emGain = clamp(this.uIgnition.mul(0.04).add(0.6), 0, 1.1);
+			const emGain = clamp(this.uIgnition.mul(0.04).add(0.85), 0, 1.35); // lifted to feed the bloom through the depth dimming
 			const world = rainbowColor().mul(emGain).mul(rimFactor()).mul(this.uActDim);
 			// Same cap as colorNode so the bloom feeds on the CLASH colors, not a
 			// rainbow override.
