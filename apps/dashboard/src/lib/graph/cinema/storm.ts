@@ -42,6 +42,7 @@ import {
 	mix,
 	fract,
 	abs,
+	floor,
 	positionLocal,
 } from 'three/tsl';
 
@@ -101,6 +102,9 @@ export class SemanticComputeStorm {
 	// tint overrides the rainbow (0 = full rainbow, 1 = full mode color).
 	private uHueShift = uniform(0);
 	private uModeTintAmt = uniform(0.25);
+	// Detonation cycle: spikes to 1 on each beat (explosion), decays to 0
+	// (crystallize/reform). Drives the explode→pixelate→reform look.
+	private uBurst = uniform(0);
 
 	constructor(
 		renderer: { computeAsync: (node: ComputeDispatch) => Promise<void> },
@@ -148,74 +152,65 @@ export class SemanticComputeStorm {
 			const vel = velStore.element(instanceIndex);
 			const phase = phaseStore.element(instanceIndex);
 
-			const toTarget = vec3(this.uTarget).sub(pos);
+			// ── EACH PARTICLE'S "HOME" — a deterministic point on a volumetric
+			// spherical shell around the ORIGIN, derived purely from its phase.
+			// The cloud reforms to these homes between beats, so the centroid is
+			// ANCHORED to origin and CANNOT drift (the bug that pushed it off-frame).
+			// No swirl/orbital/attractor terms — those drew the ugly ribbons.
+			const a1 = phase.mul(12.9898).sin().mul(43758.5453);
+			const a2 = phase.mul(78.233).sin().mul(12543.531);
+			const u = fract(a1); // 0..1
+			const v = fract(a2); // 0..1
+			const theta = u.mul(6.28318); // azimuth
+			const phi = v.mul(3.14159); // polar
+			// Per-particle home radius fills the interior (0.30r..0.95r) for a
+			// dense volumetric orb rather than a hollow shell.
+			const homeFrac = float(0.3).add(fract(phase.mul(3.7)).mul(0.65));
+			const homeR = this.uContainRadius.mul(homeFrac);
+			const home = vec3(
+				sin(phi).mul(cos(theta)),
+				cos(phi),
+				sin(phi).mul(sin(theta))
+			).mul(homeR); // centered on origin (uTarget is always origin in sandbox)
 
-			// Mode 0 — Anchor: orbital swirl (tangential velocity around target).
-			// Gentler than before so particles revolve rather than fling outward.
-			const orbital = vec3(toTarget.z, float(0), toTarget.x.negate())
-				.normalize()
-				.mul(0.03);
+			// ── DETONATION: on each beat uBurst≈1 → blow particles radially OUT
+			// from origin (the explosion in photo 2). Strength scales with the
+			// particle's own radius so the burst is a full-volume shockwave.
+			const outDir = pos.normalize();
+			vel.addAssign(outDir.mul(this.uBurst.mul(0.9)));
 
-			// Mode 1 — Connection: stream toward target + per-particle wave.
-			const wave = vec3(
-				sin(this.uTime.add(phase)).mul(0.02),
-				cos(this.uTime.add(phase)).mul(0.02),
-				sin(this.uTime.mul(1.5).add(phase)).mul(0.02)
-			);
-			const stream = toTarget.normalize().mul(0.08).add(wave);
+			// ── REFORM: a spring pulling each particle back to its home. As uBurst
+			// decays the spring wins, crystallizing the explosion back into the orb.
+			const toHome = home.sub(pos);
+			vel.addAssign(toHome.mul(0.045));
 
-			// Mode 2 — Contradiction: Rössler strange-attractor chaos.
-			const dt = float(0.01);
-			const dx = vel.y.negate().sub(vel.z).mul(dt);
-			const dy = vel.x.add(vel.y.mul(0.2)).mul(dt);
-			const dz = float(0.2).add(vel.z.mul(vel.x.sub(5.7))).mul(dt);
-			const chaos = vec3(dx, dy, dz).mul(2.0);
+			// Subtle living shimmer so the reformed orb breathes (mean-zero, no net
+			// drift — uses the particle's own home direction, not a global bias).
+			const shimmer = home.normalize().mul(sin(this.uTime.mul(1.3).add(phase.mul(6.1))).mul(0.015));
+			vel.addAssign(shimmer);
 
-			// Runtime mode selection (select(), not cond()).
-			const active = select(
-				this.uMode.equal(0),
-				orbital,
-				select(this.uMode.equal(1), stream, chaos)
-			);
-
-			vel.addAssign(active);
-			// Ignition shockwave yanks particles toward the new node on each beat.
-			vel.addAssign(toTarget.normalize().mul(this.uIgnition.mul(0.02)));
-
-			// RADIAL CONTAINMENT SPRING — the real fix for the runaway ring.
-			// Every particle is pulled toward a TARGET SHELL radius (a fraction of
-			// the contain radius), so the cloud forms a contained, breathing sphere
-			// instead of spiraling outward into an ever-bigger ring that clips the
-			// frame. The spring is two-sided: pulls IN when too far, pushes OUT when
-			// collapsed to the center, giving the storm volume without escape.
-			const distFromTarget = length(toTarget.negate());
-			// Each particle targets its OWN radius spread across the whole interior
-			// (0.12r .. 0.92r), so the cloud is a FILLED VOLUMETRIC ORB filling the
-			// frame — not a thin ring. The per-particle preferred radius is a stable
-			// function of its phase, gently breathing over time.
-			const prefFrac = float(0.12).add(
-				abs(sin(phase.mul(1.7).add(this.uTime.mul(0.12)))).mul(0.8)
-			);
-			const shellR = this.uContainRadius.mul(prefFrac);
-			const radialErr = distFromTarget.sub(shellR); // + = outside, - = inside
-			const towardShell = toTarget.normalize().mul(radialErr.mul(0.05));
-			vel.addAssign(towardShell);
-
-			// Hard velocity clamp so no single step can shoot a particle far.
+			// Hard velocity clamp — nothing can ever fly off or blow up.
 			const speed = length(vel);
-			const maxSpeed = float(0.9);
+			const maxSpeed = float(1.3);
 			vel.assign(vel.mul(min(maxSpeed, speed).div(speed.max(0.0001))));
 
 			pos.addAssign(vel);
-			vel.mulAssign(0.94);
+			vel.mulAssign(0.9); // strong damping → crisp crystallization, no overshoot
 
-			// Final hard safety net: clamp any particle that still ends up past the
-			// contain radius back onto the boundary shell — guarantees nothing can
-			// ever be off-screen, even mid chaos divergence.
-			const finalToTarget = vec3(this.uTarget).sub(pos);
-			const finalDist = length(finalToTarget.negate());
+			// ── PIXELATION: as particles crystallize (low burst) snap positions to
+			// a 3D GRID so the cloud resolves into discrete colored voxels — the
+			// crystalline look of photo 3. The grid is finest when fully reformed
+			// (burst≈0) and dissolves during the explosion (burst≈1).
+			const cell = mix(float(0.55), float(6.0), clamp(this.uBurst, 0, 1)); // small cell = fine pixels
+			const quantized = floor(pos.div(cell)).add(0.5).mul(cell);
+			const pixelAmt = clamp(float(1).sub(this.uBurst.mul(1.4)), 0, 0.9);
+			pos.assign(mix(pos, quantized, pixelAmt));
+
+			// Final hard safety net: clamp anything past the contain radius back
+			// onto the boundary shell — guarantees nothing is ever off-screen.
+			const finalDist = length(pos);
 			const hardR = this.uContainRadius;
-			const snapped = vec3(this.uTarget).sub(finalToTarget.normalize().mul(hardR));
+			const snapped = pos.normalize().mul(hardR);
 			pos.assign(mix(pos, snapped, finalDist.greaterThan(hardR).select(float(1), float(0))));
 		})().compute(this.count);
 	}
@@ -302,6 +297,9 @@ export class SemanticComputeStorm {
 		// Ignition decays toward 0 between beats (the colorNode floor keeps the
 		// storm glowing); spikes back up on transitionTo().
 		this.uIgnition.value = Math.max(0, this.uIgnition.value - dt * 2.0);
+		// Burst decays fast so the explosion crystallizes back within ~1.2s,
+		// leaving the rest of the beat as a calm pixelated orb.
+		this.uBurst.value = Math.max(0, this.uBurst.value - dt * 0.85);
 
 		// Wait for any in-flight compute to finish before queuing the next.
 		if (this.computeInFlight) await this.computeInFlight;
@@ -317,6 +315,9 @@ export class SemanticComputeStorm {
 		const mode = ROLE_MODE[role] ?? 1;
 		this.uMode.value = mode;
 		this.uIgnition.value = 8.0;
+		// DETONATE: every beat explodes the orb, then it crystallizes/pixelates
+		// back. Contradictions detonate hardest.
+		this.uBurst.value = mode === 2 ? 1.0 : 0.8;
 		// Dramatic beats (contradiction=2, surprise=3) push their mode color over
 		// the rainbow so they read clearly; calm beats stay mostly iridescent.
 		this.uModeTintAmt.value = mode >= 2 ? 0.7 : 0.22;
