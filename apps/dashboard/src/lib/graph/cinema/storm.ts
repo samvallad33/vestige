@@ -161,6 +161,14 @@ export class SemanticComputeStorm {
 	private uFocus = uniform(28.0);
 	private uFocusRange = uniform(20.0); // wider in-focus band → most of figure crisp
 	private uDofDim = uniform(0.3); // subtle off-focus fade → depth without darkening
+	// INFINITE DROSTE ZOOM — the spine. The cloud endlessly dives inward: the
+	// nested inner figure grows by λ each period to become the new outer shell,
+	// while a fresh inner spawns inside, looping FOREVER with no seam. λ = 1/0.52
+	// (the inner scale) makes inner→outer EXACT so the snap is invisible. Pure
+	// fract(uTime/T) — no camera dolly (can't clip / fight the camera clamp).
+	private uZoomPeriod = uniform(9.0); // T: one promotion every 9s
+	private uLambda = uniform(1.923); // 1 / 0.52 self-similar ratio
+	private uZoomOn = uniform(0); // 0 = off (beats 0/1, reduced-motion), 1 = diving
 	// JS-side dream state (not uniforms): which figure is live + how many fired.
 	private dreamCount = 0;
 
@@ -461,8 +469,20 @@ export class SemanticComputeStorm {
 				innerRaw.x.mul(is).add(innerRaw.z.mul(ic))
 			);
 			const innerHome = innerRot.mul(0.52); // nested core at ~52% scale (spread → less white)
+
+			// ── INFINITE ZOOM DIVE ── two layers ride offset phases of fract(uTime/T):
+			// the outer grows pow(λ, phase) toward the camera then snaps back (invisible
+			// because inner@1/λ == outer@1); the inner (half-period offset) grows from
+			// its own base, promoted by λ so it becomes the next outer shell. uZoomOn
+			// gates it → beats 0/1 + reduced-motion stay perfectly still.
+			const zPhaseO = this.uTime.div(this.uZoomPeriod).fract();
+			const zPhaseI = this.uTime.div(this.uZoomPeriod).add(0.5).fract();
+			const zoomO = mix(float(1.0), this.uLambda.pow(zPhaseO), this.uZoomOn);
+			const zoomI = mix(float(1.0), this.uLambda.pow(zPhaseI), this.uZoomOn);
+			const outerDive = outerHome.mul(zoomO);
+			const innerDive = innerHome.mul(zoomI.mul(this.uLambda)); // inner promoted by λ each cycle
 			// Each particle is permanently outer OR inner (no flicker): pick its home.
-			const home = mix(outerHome, innerHome, isInner.select(float(1), float(0)));
+			const home = mix(outerDive, innerDive, isInner.select(float(1), float(0)));
 
 			// ── DETONATION: per-particle staggered radial blast so it blooms as a
 			// shockwave, not all-at-once. uBurst spikes on each beat, decays fast.
@@ -686,7 +706,21 @@ export class SemanticComputeStorm {
 			// kills the contrast — so the inner sits dim and saturated, carried by its
 			// Fresnel silhouette. This is what makes the jarring inner/outer clash read.
 			const innerRim = float(0.07).add(fres.mul(0.3));
-			return isInnerC.select(innerRim, outerRim);
+			const baseRim = isInnerC.select(innerRim, outerRim);
+
+			// ── ZOOM SEAM CROSS-FADE ── each dive layer must be fully transparent
+			// exactly when it snaps (phase 0/1), so the infinite loop has NO visible
+			// pop. sin(phase·π) = 0 at the snap, 1 mid-cycle. Normalize by the sum so
+			// total opacity stays ≈1. uZoomOn=0 forces weight to 1 (no fade when still).
+			const pO = this.uTime.div(this.uZoomPeriod).fract();
+			const pI = this.uTime.div(this.uZoomPeriod).add(0.5).fract();
+			const wO = sin(pO.mul(3.14159));
+			const wI = sin(pI.mul(3.14159));
+			const wSum = wO.add(wI).max(0.0001);
+			const seamO = mix(float(1.0), wO.div(wSum).mul(2.0).min(1.0), this.uZoomOn);
+			const seamI = mix(float(1.0), wI.div(wSum).mul(2.0).min(1.0), this.uZoomOn);
+			const seam = isInnerC.select(seamI, seamO);
+			return baseRim.mul(seam);
 		});
 
 		// ── DEPTH FADE (near dissolve × volumetric fog) ── ONE Fn, ONE positionView
@@ -789,10 +823,14 @@ export class SemanticComputeStorm {
 		// wave clock counts up so the spectral shockwave travels outward over time.
 		this.uBlast.value = Math.max(0, this.uBlast.value - dt * 0.35);
 		this.uBlastTime.value += dt;
-		// RACK FOCUS — slow breathing pull of the DOF focus plane so the cinematic
-		// focus is always alive (Step 4 will couple this to the infinite-zoom dive).
-		const focusTarget = 26 + Math.sin(this.uTime.value * 0.18) * 9; // 17..35
-		this.uFocus.value += (focusTarget - this.uFocus.value) * Math.min(1, dt * 2);
+		// RACK FOCUS — when diving, the focus plane tracks the descent (pulls inward
+		// over each zoom cycle so the new inner figure crisps up as it grows); when
+		// still, a gentle breathing pull keeps the DOF alive.
+		const zp = (this.uTime.value / this.uZoomPeriod.value) % 1;
+		const focusTarget = this.uZoomOn.value > 0.5
+			? 40 - zp * 16 // 40→24 over each dive cycle (keeps the grown figure in focus)
+			: 26 + Math.sin(this.uTime.value * 0.18) * 9; // 17..35 breathing
+		this.uFocus.value += (focusTarget - this.uFocus.value) * Math.min(1, dt * 3);
 
 		// Wait for any in-flight compute to finish before queuing the next.
 		if (this.computeInFlight) await this.computeInFlight;
@@ -825,6 +863,8 @@ export class SemanticComputeStorm {
 		// Cycle the jarring inner/outer clash pair so each beat collides a fresh
 		// pair of opposing color worlds (ice↔fire, acid↔blood, …).
 		this.uClash.value = beatIndex % 5;
+		// Engage the infinite dive from Act II onward (beats 0/1 stay calm + still).
+		this.uZoomOn.value = beatIndex >= 2 ? 1 : 0;
 
 		// Per-beat warm-up dim: beats 0/1 stay calm (dialed-in safety), then hands
 		// off to the act-based brightness. Acts II/III blaze.
@@ -870,6 +910,8 @@ export class SemanticComputeStorm {
 		// Chaos ramps up and saturates — figures get progressively crazier, then
 		// hold at max wildness. Eases in over the first ~8 dream beats.
 		this.uChaos.value = Math.min(1, 0.25 + this.dreamCount * 0.1);
+		// Dream mode dives endlessly — the infinite zoom is always on here.
+		this.uZoomOn.value = 1;
 		// Detonation + long color blast every dream beat — but ignition kept
 		// MODERATE (not the tour's 8.0) so the random dense figures don't wash to
 		// white at the blast peak. The rim-gated spectral blast carries the color.
@@ -888,6 +930,12 @@ export class SemanticComputeStorm {
 	 * frame. The sandbox derives this from the camera distance + fov. */
 	setContainRadius(radius: number): void {
 		this.uContainRadius.value = Math.max(8, radius);
+	}
+
+	/** Enable/disable the infinite Droste zoom dive. Off for beats 0/1 (calm) and
+	 * reduced-motion; on for Act II+ and dream mode. */
+	setZoom(on: boolean): void {
+		this.uZoomOn.value = on ? 1 : 0;
 	}
 
 	dispose(): void {
