@@ -130,8 +130,19 @@ candle-core = { version = "0.10.2", optional = true }
 #
 # Disable default features so release binaries do not include SimSIMD's
 # Haswell+/AVX2/FMA dispatch targets. Those kernels can trigger illegal
-# instructions on older x86_64 CPUs that Vestige otherwise supports.
-usearch = { version = "=2.23.0", default-features = false, optional = true }
+# instructions on older x86_64 CPUs that Vestige otherwise supports (#71).
+#
+# But re-enable `fp16lib` explicitly. usearch's defaults are
+# ["simsimd", "fp16lib"]; with BOTH off, build.rs sets USEARCH_USE_FP16LIB=0
+# and USEARCH_USE_SIMSIMD=0, which selects the bare half-precision `#else`
+# branch in include/usearch/index_plugins.hpp. That branch carries a
+# `#warning` directive, which MSVC's cl.exe treats as fatal error C1021,
+# breaking the Windows build (GCC/Clang only warn). `fp16lib` is a scalar,
+# self-contained fp16<->fp32 conversion library with NO SIMD intrinsics, so
+# re-enabling it sets USEARCH_USE_FP16LIB=1 (taking the non-warning branch)
+# WITHOUT reintroducing the SimSIMD illegal-instruction risk from #71. Do not
+# drop this feature.
+usearch = { version = "=2.23.0", default-features = false, features = ["fp16lib"], optional = true }
 
 # LRU cache for query embeddings
 lru = "0.16"
