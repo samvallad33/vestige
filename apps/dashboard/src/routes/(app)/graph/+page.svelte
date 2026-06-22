@@ -5,6 +5,7 @@
 	import RetentionCurve from '$components/RetentionCurve.svelte';
 	import TimeSlider from '$components/TimeSlider.svelte';
 	import MemoryStateLegend from '$components/MemoryStateLegend.svelte';
+	import MemoryCinema from '$components/MemoryCinema.svelte';
 	import { api } from '$stores/api';
 	import { eventFeed } from '$stores/websocket';
 	import { graphState } from '$stores/graph-state.svelte';
@@ -360,6 +361,15 @@ disown</code>
 			>
 				{isDreaming ? '◈ Dreaming...' : '◈ Dream'}
 			</button>
+
+			<!-- Memory Cinema — AI-narrated flythrough of the real graph -->
+			{#if displayNodes.length > 0}
+				<MemoryCinema
+					nodes={displayNodes}
+					edges={displayEdges}
+					centerId={graphData?.center_id ?? ''}
+				/>
+			{/if}
 
 			<!-- Reload -->
 			<button onclick={() => loadGraph()}

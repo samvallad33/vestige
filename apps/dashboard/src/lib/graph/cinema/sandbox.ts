@@ -37,8 +37,13 @@ export class CinemaSandbox {
 	private container: HTMLElement;
 	private deps!: SandboxDeps;
 	private renderer!: SandboxDeps['WebGPURenderer']['prototype'];
-	private scene = new THREE.Scene();
-	private camera: THREE.PerspectiveCamera;
+	// Scene/camera are created in boot() from the three/webgpu module so every
+	// object handed to the WebGPU renderer comes from the SAME Three.js instance
+	// (avoids the "multiple instances of Three.js" incompatibility — the base
+	// three import is used only for the shared Vector3 math type the director
+	// mutates, which is identical across instances).
+	private scene!: THREE.Scene;
+	private camera!: THREE.PerspectiveCamera;
 	private storm!: SemanticComputeStorm;
 	private post: { renderAsync: () => Promise<void> } | null = null;
 	private booted = false;
@@ -48,14 +53,6 @@ export class CinemaSandbox {
 
 	constructor(container: HTMLElement) {
 		this.container = container;
-		this.camera = new THREE.PerspectiveCamera(
-			60,
-			container.clientWidth / Math.max(1, container.clientHeight),
-			0.1,
-			2000
-		);
-		this.camera.position.set(0, 18, 60);
-		this.scene.background = new THREE.Color(0x02020a);
 	}
 
 	get cameraRef(): THREE.PerspectiveCamera {
@@ -74,6 +71,9 @@ export class CinemaSandbox {
 		const webgpu = (await import('three/webgpu')) as unknown as {
 			WebGPURenderer: SandboxDeps['WebGPURenderer'];
 			PostProcessing: SandboxDeps['PostProcessing'];
+			Scene: new () => THREE.Scene;
+			PerspectiveCamera: new (fov: number, aspect: number, near: number, far: number) => THREE.PerspectiveCamera;
+			Color: new (hex: number) => THREE.Color;
 		};
 		const tsl = (await import('three/tsl')) as typeof import('three/tsl');
 		// bloom() lives in the TSL display helpers; import the node module.
@@ -90,9 +90,18 @@ export class CinemaSandbox {
 			bloomMod,
 		};
 
+		// Build scene + camera from the SAME (webgpu) module instance the
+		// renderer + storm use, so all objects are instance-compatible.
+		const w = Math.max(1, this.container.clientWidth);
+		const h = Math.max(1, this.container.clientHeight);
+		this.scene = new webgpu.Scene();
+		this.scene.background = new webgpu.Color(0x02020a);
+		this.camera = new webgpu.PerspectiveCamera(60, w / h, 0.1, 2000);
+		this.camera.position.set(0, 18, 60);
+
 		const renderer = new this.deps.WebGPURenderer({ antialias: true, alpha: false });
 		renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-		renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+		renderer.setSize(w, h);
 		// CRITICAL FOOTGUN: WebGPU init is async. Must await before first render
 		// or the canvas silently draws nothing.
 		await renderer.init();
