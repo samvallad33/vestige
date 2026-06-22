@@ -43,6 +43,43 @@ html {
 	font-family: var(--font-mono);
 }
 
+/* ═══════════════════════════════════════════
+   OKLCH / DISPLAY-P3 ACCENT PALETTE (PROGRESSIVE ENHANCEMENT)
+   ═══════════════════════════════════════════
+   The @theme block above keeps the original sRGB hex values, which
+   Tailwind reads at build time and which serve as the fallback for
+   sRGB monitors and browsers without OKLCH support.
+
+   When the browser understands oklch(), we redefine the SAME vivid
+   accents + node-type colors using their OKLCH equivalents. These are
+   faithful conversions of the hex values (same hue/chroma identity);
+   on a wide-gamut display-p3 monitor they render more saturated while
+   reading as the same color. The void/abyss/surface neutrals are left
+   untouched — only the vivid accents benefit from the wider gamut. */
+@supports (color: oklch(0 0 0)) {
+	:root {
+		/* Accent colors */
+		--color-synapse: oklch(0.585 0.222 277);
+		--color-synapse-glow: oklch(0.685 0.169 277);
+		--color-dream: oklch(0.627 0.265 304);
+		--color-dream-glow: oklch(0.714 0.203 305);
+		--color-memory: oklch(0.623 0.214 259);
+		--color-recall: oklch(0.696 0.17 162);
+		--color-decay: oklch(0.637 0.237 25);
+		--color-warning: oklch(0.769 0.188 70);
+
+		/* Node type colors */
+		--color-node-fact: oklch(0.623 0.214 259);
+		--color-node-concept: oklch(0.606 0.25 292);
+		--color-node-event: oklch(0.769 0.188 70);
+		--color-node-person: oklch(0.696 0.17 162);
+		--color-node-place: oklch(0.715 0.143 215);
+		--color-node-note: oklch(0.551 0.027 264);
+		--color-node-pattern: oklch(0.656 0.241 354);
+		--color-node-decision: oklch(0.637 0.237 25);
+	}
+}
+
 body {
 	margin: 0;
 	min-height: 100vh;
@@ -234,3 +271,33 @@ body {
 .retention-low { color: var(--color-warning); }
 .retention-good { color: var(--color-recall); }
 .retention-strong { color: var(--color-synapse); }
+
+/* ═══════════════════════════════════════════
+   VIEW TRANSITIONS (CROSSFADE)
+   ═══════════════════════════════════════════
+   Native View Transitions API crossfade between routes. Pairs with the
+   onNavigate hook in +layout.svelte that calls document.startViewTransition.
+   Reduced-motion users get an instant cut (the @media guard disables the
+   animation entirely, so the default browser cross-fade does not run). */
+@media not (prefers-reduced-motion: reduce) {
+	::view-transition-old(root),
+	::view-transition-new(root) {
+		animation-duration: 180ms;
+		animation-timing-function: ease;
+	}
+	::view-transition-old(root) {
+		animation-name: vt-fade-out;
+	}
+	::view-transition-new(root) {
+		animation-name: vt-fade-in;
+	}
+
+	@keyframes vt-fade-out {
+		from { opacity: 1; }
+		to { opacity: 0; }
+	}
+	@keyframes vt-fade-in {
+		from { opacity: 0; }
+		to { opacity: 1; }
+	}
+}

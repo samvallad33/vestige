@@ -6,11 +6,13 @@ const MAX_EVENTS = 200;
 function createWebSocketStore() {
 	const { subscribe, set, update } = writable<{
 		connected: boolean;
+		reconnecting: boolean;
 		events: VestigeEvent[];
 		lastHeartbeat: VestigeEvent | null;
 		error: string | null;
 	}>({
 		connected: false,
+		reconnecting: false,
 		events: [],
 		lastHeartbeat: null,
 		error: null
@@ -32,7 +34,7 @@ function createWebSocketStore() {
 
 			ws.onopen = () => {
 				reconnectAttempts = 0;
-				update(s => ({ ...s, connected: true, error: null }));
+				update(s => ({ ...s, connected: true, reconnecting: false, error: null }));
 			};
 
 			ws.onmessage = (event) => {
@@ -65,6 +67,7 @@ function createWebSocketStore() {
 
 	function scheduleReconnect(url: string) {
 		if (reconnectTimer) clearTimeout(reconnectTimer);
+		update(s => ({ ...s, reconnecting: true }));
 		const delay = Math.min(1000 * 2 ** reconnectAttempts, 30000);
 		reconnectAttempts++;
 		reconnectTimer = setTimeout(() => connect(url), delay);
@@ -74,7 +77,7 @@ function createWebSocketStore() {
 		if (reconnectTimer) clearTimeout(reconnectTimer);
 		ws?.close();
 		ws = null;
-		set({ connected: false, events: [], lastHeartbeat: null, error: null });
+		set({ connected: false, reconnecting: false, events: [], lastHeartbeat: null, error: null });
 	}
 
 	function clearEvents() {
@@ -108,6 +111,7 @@ export const websocket = createWebSocketStore();
 
 // Derived stores for specific event types
 export const isConnected = derived(websocket, $ws => $ws.connected);
+export const isReconnecting = derived(websocket, $ws => $ws.reconnecting);
 export const eventFeed = derived(websocket, $ws => $ws.events);
 export const heartbeat = derived(websocket, $ws => $ws.lastHeartbeat);
 export const memoryCount = derived(websocket, $ws =>

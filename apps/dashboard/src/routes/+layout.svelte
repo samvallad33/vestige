@@ -2,7 +2,7 @@
 	import '../app.css';
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
+	import { goto, onNavigate } from '$app/navigation';
 	import { base } from '$app/paths';
 	import {
 		websocket,
@@ -78,6 +78,19 @@
 			window.removeEventListener('keydown', onKeyDown);
 			teardownTheme();
 		};
+	});
+
+	// Native View Transitions for client-side route navigation. Crossfades route
+	// changes when supported; respects prefers-reduced-motion. This replaces the
+	// old hand-rolled .animate-page-in keyframe on the route content wrapper.
+	onNavigate((navigation) => {
+		if (!document.startViewTransition || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+		return new Promise((resolve) => {
+			document.startViewTransition(async () => {
+				resolve();
+				await navigation.complete;
+			});
+		});
 	});
 
 	const nav = [
@@ -201,7 +214,7 @@
 		<main class="flex-1 flex flex-col min-h-0 pb-16 md:pb-0">
 			<AmbientAwarenessStrip />
 			<VerdictBar />
-			<div class="animate-page-in flex-1 min-h-0 overflow-y-auto">
+			<div class="flex-1 min-h-0 overflow-y-auto">
 				{@render children()}
 			</div>
 		</main>
@@ -283,12 +296,5 @@
 <style>
 	.safe-bottom {
 		padding-bottom: env(safe-area-inset-bottom, 0px);
-	}
-	@keyframes page-in {
-		from { opacity: 0; transform: translateY(4px); }
-		to { opacity: 1; transform: translateY(0); }
-	}
-	.animate-page-in {
-		animation: page-in 0.2s ease-out;
 	}
 </style>

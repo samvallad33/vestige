@@ -262,34 +262,38 @@ disown</code>
 	{/if}
 
 	<!-- Top controls bar -->
-	<div class="absolute top-4 left-4 right-4 z-10 flex items-center gap-3">
+	<div
+		class="absolute top-0 left-0 right-0 z-10 flex flex-wrap items-center gap-2 px-3 pt-3 sm:top-4 sm:left-4 sm:right-4 sm:gap-3 sm:p-0
+			[padding-top:max(0.75rem,env(safe-area-inset-top))] [padding-left:max(0.75rem,env(safe-area-inset-left))] [padding-right:max(0.75rem,env(safe-area-inset-right))]
+			sm:[padding-top:0] sm:[padding-left:0] sm:[padding-right:0]"
+	>
 		<!-- Search -->
-		<div class="flex gap-2 flex-1 max-w-md">
+		<div class="flex gap-2 w-full sm:flex-1 sm:w-auto sm:max-w-md">
 			<input
 				type="text"
 				placeholder="Center graph on..."
 				bind:value={searchQuery}
 				onkeydown={(e) => e.key === 'Enter' && searchGraph()}
-				class="flex-1 px-3 py-2 glass rounded-xl text-text text-sm
+				class="flex-1 min-w-0 px-3 py-2 glass rounded-xl text-text text-sm
 					placeholder:text-muted focus:outline-none focus:!border-synapse/40 transition"
 			/>
 			<button onclick={searchGraph}
-				class="px-3 py-2 bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm rounded-xl hover:bg-synapse/30 transition backdrop-blur-sm">
+				class="shrink-0 min-h-10 px-3 py-2 bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm rounded-xl hover:bg-synapse/30 transition backdrop-blur-sm">
 				Focus
 			</button>
 		</div>
 
-		<div class="flex gap-2 ml-auto">
+		<div class="flex flex-wrap gap-2 w-full sm:w-auto sm:ml-auto">
 			<!-- v2.0.8: colour mode toggle. Switches sphere tint between node type
 				 (fact / concept / event / …) and FSRS memory state (active / dormant /
 				 silent / unavailable). Legend auto-renders in state mode. -->
-			<div class="flex glass rounded-xl p-0.5 text-xs" role="radiogroup" aria-label="Colour mode">
+			<div class="flex shrink min-w-0 glass rounded-xl p-0.5 text-xs" role="radiogroup" aria-label="Colour mode">
 				<button
 					type="button"
 					role="radio"
 					aria-checked={colorMode === 'type'}
 					onclick={() => (colorMode = 'type')}
-					class="px-3 py-1.5 rounded-lg transition {colorMode === 'type' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
+					class="min-h-9 px-3 py-1.5 rounded-lg transition {colorMode === 'type' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
 					title="Colour by node type (fact, concept, event, …)"
 				>
 					Type
@@ -299,7 +303,7 @@ disown</code>
 					role="radio"
 					aria-checked={colorMode === 'state'}
 					onclick={() => (colorMode = 'state')}
-					class="px-3 py-1.5 rounded-lg transition {colorMode === 'state' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
+					class="min-h-9 px-3 py-1.5 rounded-lg transition {colorMode === 'state' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
 					title="Colour by FSRS memory state (active / dormant / silent / unavailable)"
 				>
 					State
@@ -309,7 +313,7 @@ disown</code>
 					role="radio"
 					aria-checked={colorMode === 'ahagraph'}
 					onclick={() => (colorMode = 'ahagraph')}
-					class="px-3 py-1.5 rounded-lg transition {colorMode === 'ahagraph' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
+					class="min-h-9 px-3 py-1.5 rounded-lg transition {colorMode === 'ahagraph' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
 					title="Colour by AhaGraph tags (aha / confusion / failure)"
 				>
 					AhaGraph
@@ -318,7 +322,7 @@ disown</code>
 
 			<!-- Node count -->
 			<select bind:value={maxNodes} onchange={() => loadGraph()}
-				class="px-2 py-2 glass rounded-xl text-dim text-xs">
+				class="shrink-0 min-h-10 px-2 py-2 glass rounded-xl text-dim text-xs">
 				<option value={50}>50 nodes</option>
 				<option value={100}>100 nodes</option>
 				<option value={150}>150 nodes</option>
@@ -328,7 +332,7 @@ disown</code>
 			<!-- Brightness slider (persists in localStorage). Scales node emissive,
 				 glow, and distance-compensated fog falloff. Default 1.0, range 0.5-2.5. -->
 			<label
-				class="flex items-center gap-2 px-3 py-2 glass rounded-xl text-dim text-xs select-none"
+				class="flex shrink-0 items-center gap-2 min-h-10 px-3 py-2 glass rounded-xl text-dim text-xs select-none"
 				title="Adjust graph brightness ({graphState.brightness.toFixed(1)}x). Combines with auto distance compensation."
 			>
 				<span class="text-synapse-glow">☀</span>
@@ -350,7 +354,7 @@ disown</code>
 			<button
 				onclick={triggerDream}
 				disabled={isDreaming}
-				class="px-4 py-2 rounded-xl bg-dream/20 border border-dream/40 text-dream-glow text-sm
+				class="shrink-0 min-h-10 px-4 py-2 rounded-xl bg-dream/20 border border-dream/40 text-dream-glow text-sm
 					hover:bg-dream/30 transition-all backdrop-blur-sm disabled:opacity-50
 					{isDreaming ? 'glow-dream animate-pulse-glow' : ''}"
 			>
@@ -359,7 +363,7 @@ disown</code>
 
 			<!-- Reload -->
 			<button onclick={() => loadGraph()}
-				class="px-3 py-2 glass rounded-xl text-dim text-sm hover:text-text transition">
+				class="shrink-0 min-h-10 min-w-10 px-3 py-2 glass rounded-xl text-dim text-sm hover:text-text transition">
 				↻
 			</button>
 		</div>
