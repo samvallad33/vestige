@@ -141,7 +141,7 @@ export class CinemaDirector {
 	update(deltaSeconds: number): void {
 		if (this.phase === 'idle' || this.phase === 'done') return;
 		// Clamp dt so a tab-switch stall doesn't teleport the camera.
-		const dt = Math.min(deltaSeconds, 0.05);
+		const dt = Math.max(0, Math.min(deltaSeconds, 0.05));
 		this.phaseElapsed += dt;
 
 		if (this.phase === 'flying') {
@@ -174,7 +174,8 @@ export class CinemaDirector {
 		}
 
 		// Overall progress across the whole tour (beat + intra-beat fraction).
-		const per = 1 / this.path.beats.length;
+		// Guard against an empty path (per = 0) so progress can never be NaN.
+		const per = this.path.beats.length > 0 ? 1 / this.path.beats.length : 0;
 		const intra =
 			this.phase === 'flying'
 				? Math.min(1, this.phaseElapsed / this.opts.flightSeconds) * 0.5

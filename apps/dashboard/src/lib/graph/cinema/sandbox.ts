@@ -90,6 +90,12 @@ export class CinemaSandbox {
 			bloomMod,
 		};
 
+		// Fail loud if the dynamic import didn't yield the expected constructors,
+		// instead of a cryptic "undefined is not a constructor" later.
+		if (!webgpu.WebGPURenderer || !webgpu.Scene || !webgpu.PerspectiveCamera || !webgpu.Color) {
+			throw new Error('[cinema] three/webgpu is missing expected exports');
+		}
+
 		// Build scene + camera from the SAME (webgpu) module instance the
 		// renderer + storm use, so all objects are instance-compatible.
 		const w = Math.max(1, this.container.clientWidth);
@@ -126,6 +132,9 @@ export class CinemaSandbox {
 				emissive: unknown;
 			};
 			const scenePass = pass(this.scene, this.camera);
+			if (typeof scenePass?.setMRT !== 'function' || typeof scenePass?.getTextureNode !== 'function') {
+				throw new Error('three/tsl pass() API mismatch — setMRT/getTextureNode missing');
+			}
 			scenePass.setMRT(mrt({ output, emissive }));
 			const outputTex = scenePass.getTextureNode('output');
 			const emissiveTex = scenePass.getTextureNode('emissive');
@@ -150,7 +159,9 @@ export class CinemaSandbox {
 		this.storm.transitionTo(role, worldPos);
 	}
 
-	/** Render one frame. Camera is driven externally (director mutates position/target). */
+	/** Render one frame. Camera is driven externally (director mutates position/target).
+	 * A single frame's failure must not crash the tour — it's caught and surfaced
+	 * via a thrown error the caller already handles (drops to camera-only). */
 	async render(deltaSeconds: number): Promise<void> {
 		if (!this.booted) return;
 		this.camera.lookAt(this.target);
@@ -161,9 +172,9 @@ export class CinemaSandbox {
 
 	resize(): void {
 		if (!this.booted) return;
-		const w = this.container.clientWidth;
-		const h = this.container.clientHeight;
-		this.camera.aspect = w / Math.max(1, h);
+		const w = Math.max(1, this.container.clientWidth);
+		const h = Math.max(1, this.container.clientHeight);
+		this.camera.aspect = w / h;
 		this.camera.updateProjectionMatrix();
 		this.renderer.setSize(w, h);
 	}

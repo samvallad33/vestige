@@ -30,7 +30,12 @@ export interface CinemaBeat {
 
 export interface CinemaPath {
 	beats: CinemaBeat[];
+	/** The node the requested centerId resolved to (which the tour actually
+	 * starts from). May differ from the requested centerId when it was missing,
+	 * in which case `pivoted` is true — callers can surface this if they care. */
 	centerId: string;
+	/** True when the requested centerId did not exist and we picked a start node. */
+	pivoted: boolean;
 	/** Edges that should visibly "flow" during the tour, in beat order. */
 	flowEdges: GraphEdge[];
 }
@@ -77,14 +82,16 @@ export function planCinemaPath(
 	maxBeats = 7
 ): CinemaPath {
 	const byId = new Map(nodes.map((n) => [n.id, n]));
-	const empty: CinemaPath = { beats: [], centerId, flowEdges: [] };
+	const empty: CinemaPath = { beats: [], centerId, pivoted: false, flowEdges: [] };
 	if (nodes.length === 0) return empty;
 
 	// Resolve a real starting node: prefer centerId, else the explicit center
-	// flag, else the most-connected node, else the first node.
+	// flag, else the most-connected node, else the first node. Track whether we
+	// had to pivot off the requested centerId so callers can surface it.
 	const adj = buildAdjacency(edges);
-	let startId = byId.has(centerId) ? centerId : '';
-	if (!startId) startId = nodes.find((n) => (n as { isCenter?: boolean }).isCenter)?.id ?? '';
+	const requestedExists = byId.has(centerId);
+	let startId = requestedExists ? centerId : '';
+	if (!startId) startId = nodes.find((n) => n.isCenter)?.id ?? '';
 	if (!startId) {
 		startId = nodes
 			.map((n) => ({ id: n.id, deg: adj[n.id]?.length ?? 0 }))
@@ -92,6 +99,7 @@ export function planCinemaPath(
 	}
 	const start = byId.get(startId);
 	if (!start) return empty;
+	const pivoted = !requestedExists;
 
 	const visited = new Set<string>([startId]);
 	const beats: CinemaBeat[] = [
@@ -159,5 +167,5 @@ export function planCinemaPath(
 		}
 	}
 
-	return { beats, centerId: startId, flowEdges };
+	return { beats, centerId: startId, pivoted, flowEdges };
 }

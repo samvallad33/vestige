@@ -27,13 +27,15 @@ export interface CinemaNarration {
 	beats: BeatNarration[];
 }
 
-const KIND_CHIP: Record<CinemaBeat['kind'], string> = {
+// `satisfies` makes the compiler error if a new CinemaBeat['kind'] is added
+// without a chip here — closes the silent "undefined chip → blank UI" gap.
+const KIND_CHIP = {
 	origin: 'Origin',
 	connection: 'Connection',
 	contradiction: 'Tension',
 	recent: 'Now',
 	bridge: 'Jump',
-};
+} satisfies Record<CinemaBeat['kind'], string>;
 
 function snippet(content: string, max = 90): string {
 	const s = (content ?? '').replace(/\s+/g, ' ').trim();
@@ -100,26 +102,46 @@ export async function resolveNarration(
 	const fallback = localCaptions(path);
 	if (!fetchBackend) return fallback;
 
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		const withTimeout = Promise.race([
+		const backend = await Promise.race([
 			fetchBackend(),
-			new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+			new Promise<null>((resolve) => {
+				timer = setTimeout(() => resolve(null), 6000);
+			}),
 		]);
-		const backend = await withTimeout;
-		if (!Array.isArray(backend) || backend.length === 0) return fallback;
 
-		// Align backend beats to the real path by nodeId; fill any gaps from
-		// local captions so every beat always has text (never a blank shot).
-		const byNode = new Map(backend.map((b) => [b.nodeId, b]));
+		// Keep only well-formed backend beats (guards against null/empty/garbage
+		// entries that would otherwise produce blank captions mid-tour).
+		const valid = Array.isArray(backend)
+			? backend.filter(
+					(b): b is BeatNarration =>
+						!!b && typeof b.nodeId === 'string' && typeof b.text === 'string' && b.text.trim().length > 0
+				)
+			: [];
+		if (valid.length === 0) return fallback;
+
+		// Align backend beats to the real path by nodeId; fill any gap from the
+		// bounds-safe local caption so every beat always has text (never blank).
+		const byNode = new Map(valid.map((b) => [b.nodeId, b]));
 		const beats: BeatNarration[] = path.beats.map((beat, i) => {
 			const hit = byNode.get(beat.nodeId);
-			if (hit && typeof hit.text === 'string' && hit.text.trim()) {
-				return { nodeId: beat.nodeId, text: hit.text, chip: hit.chip || KIND_CHIP[beat.kind] };
+			if (hit) {
+				const chip = typeof hit.chip === 'string' && hit.chip.trim() ? hit.chip : KIND_CHIP[beat.kind];
+				return { nodeId: beat.nodeId, text: hit.text, chip };
 			}
-			return fallback.beats[i];
+			return (
+				fallback.beats[i] ?? {
+					nodeId: beat.nodeId,
+					text: beat.node.label || '(unlabeled memory)',
+					chip: KIND_CHIP[beat.kind],
+				}
+			);
 		});
 		return { source: 'backend-llm', beats };
 	} catch {
 		return fallback;
+	} finally {
+		if (timer) clearTimeout(timer);
 	}
 }

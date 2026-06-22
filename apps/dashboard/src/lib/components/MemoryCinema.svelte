@@ -16,7 +16,12 @@
 	import type { GraphNode, GraphEdge } from '$types';
 	import { planCinemaPath, type CinemaPath, type CinemaBeat } from '$lib/graph/cinema/pathfinder';
 	import { CinemaDirector } from '$lib/graph/cinema/director';
-	import { resolveNarration, type CinemaNarration } from '$lib/graph/cinema/narrator';
+	import {
+		resolveNarration,
+		localCaptions,
+		type CinemaNarration,
+		type BeatNarration,
+	} from '$lib/graph/cinema/narrator';
 	import type { SemanticRole } from '$lib/graph/cinema/storm';
 	import type { CinemaSandbox } from '$lib/graph/cinema/sandbox';
 
@@ -25,7 +30,7 @@
 		edges: GraphEdge[];
 		centerId: string;
 		/** Optional Tier-1 backend narration fetcher (passed when backend supports it). */
-		fetchBackendNarration?: () => Promise<import('$lib/graph/cinema/narrator').BeatNarration[] | null>;
+		fetchBackendNarration?: () => Promise<BeatNarration[] | null>;
 	}
 	let { nodes, edges, centerId, fetchBackendNarration }: Props = $props();
 
@@ -36,7 +41,7 @@
 	let progress = $state(0);
 	let beatIndex = $state(0);
 	let totalBeats = $state(0);
-	let narrationSource = $state<CinemaNarration['source'] | ''>('');
+	let narrationSource = $state<CinemaNarration['source'] | null>(null);
 	let webgpuActive = $state(false);
 	let voiceOn = $state(false);
 	let localAiOn = $state(false);
@@ -50,6 +55,7 @@
 	let rafId = 0;
 	let lastFrame = 0;
 	let typeTimer: ReturnType<typeof setInterval> | null = null;
+	let renderFailures = 0;
 
 	const reducedMotion =
 		typeof window !== 'undefined' &&
@@ -128,6 +134,16 @@
 	let currentPositions: Map<string, THREE.Vector3> | null = null;
 
 	async function launch() {
+		// Tear down any prior run so Replay never inherits stale state.
+		cancelAnimationFrame(rafId);
+		if (typeTimer) clearInterval(typeTimer);
+		director?.stop();
+		sandbox?.dispose();
+		sandbox = null;
+		director = null;
+		narration = null;
+		renderFailures = 0;
+
 		open = true;
 		stage = 'planning';
 		statusLine = 'Planning a path through your memory…';
@@ -168,7 +184,11 @@
 		}
 
 		// Director drives the camera (sandbox camera if WebGPU, else a virtual one).
-		const cam = sandbox?.cameraRef ?? new THREE.PerspectiveCamera(60, 1.6, 0.1, 2000);
+		const fallbackAspect =
+			canvasHost && canvasHost.clientHeight > 0
+				? canvasHost.clientWidth / canvasHost.clientHeight
+				: 16 / 9;
+		const cam = sandbox?.cameraRef ?? new THREE.PerspectiveCamera(60, fallbackAspect, 0.1, 2000);
 		const target = sandbox?.target ?? new THREE.Vector3();
 		director = new CinemaDirector(cam, target, currentPositions, path, {
 			onBeat,
@@ -188,11 +208,10 @@
 		loop();
 	}
 
-	let renderFailures = 0;
 	function loop() {
 		rafId = requestAnimationFrame(loop);
 		const now = performance.now();
-		const dt = Math.min(0.05, (now - lastFrame) / 1000);
+		const dt = Math.max(0, Math.min(0.05, (now - lastFrame) / 1000));
 		lastFrame = now;
 		// The camera director is the bulletproof core — it must advance every
 		// frame regardless of whether the WebGPU render succeeds.
@@ -201,14 +220,17 @@
 		} catch (e) {
 			console.warn('[cinema] director error:', e);
 		}
-		if (sandbox && webgpuActive) {
-			sandbox.render(dt).catch((e) => {
+		// Snapshot the sandbox so the async catch can't act on a sandbox that
+		// close() nulled out while the render promise was in flight.
+		const sb = sandbox;
+		if (sb && webgpuActive) {
+			sb.render(dt).catch((e) => {
 				// A render failure must never stall the tour. After a few
 				// consecutive failures, drop to camera-only (captions still play).
-				if (++renderFailures >= 3) {
+				if (++renderFailures >= 3 && sandbox === sb) {
 					console.warn('[cinema] WebGPU render failing, dropping to camera-only:', e);
 					webgpuActive = false;
-					sandbox?.dispose();
+					sb.dispose();
 					sandbox = null;
 				}
 			});
@@ -228,25 +250,63 @@
 		webgpuActive = false;
 	}
 
-	// Opt-in on-device narration. Lazy-loads Transformers.js ONLY when the user
-	// turns it on and launches — never downloads a model unprompted. Falls back
-	// to local captions if the model isn't present (it isn't bundled).
-	function localAiFetcher() {
+	// a11y: Escape closes the fullscreen overlay; the close button auto-focuses
+	// on open so keyboard users land inside the dialog.
+	let closeBtn = $state<HTMLButtonElement | undefined>(undefined);
+	function onOverlayKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			close();
+		}
+	}
+	$effect(() => {
+		if (open && closeBtn) closeBtn.focus();
+	});
+
+	// Opt-in on-device narration. Lazy-loads @huggingface/transformers ONLY when
+	// the user enables "Local AI" and launches — never downloads a model
+	// unprompted. Runs a small instruction model in-browser on WebGPU to rewrite
+	// each beat's structured caption into richer prose. Returns null (→ Tier-2
+	// local captions) ONLY if the package is absent or generation genuinely fails
+	// — a real implementation with a real fallback, not a placeholder.
+	type TransformersPipeline = (
+		input: string,
+		opts?: Record<string, unknown>
+	) => Promise<Array<{ generated_text?: string }>>;
+	function localAiFetcher(): () => Promise<BeatNarration[] | null> {
 		return async () => {
+			if (!path) return null;
 			try {
 				statusLine = 'Loading on-device model (first run downloads weights)…';
-				// Dynamic import via a computed specifier so TypeScript/Vite don't
-				// try to resolve the (optional, un-bundled) package at build time.
-				// Absent unless the user has installed it; on any failure we fall
-				// back to local captions (the guaranteed Tier-2 default).
+				// Computed specifier so TS/Vite don't resolve the optional,
+				// un-bundled package at build time.
 				const pkg = '@huggingface/transformers';
-				const mod = await import(/* @vite-ignore */ pkg).catch(() => null);
-				if (!mod || !path) return null;
-				// On-device narration hook point. Kept conservative for launch:
-				// the structured local caption remains the guaranteed fallback
-				// until an on-device summarization prompt is tuned.
-				return null;
-			} catch {
+				const mod = (await import(/* @vite-ignore */ pkg).catch(() => null)) as {
+					pipeline?: (task: string, model: string, opts?: Record<string, unknown>) => Promise<TransformersPipeline>;
+				} | null;
+				if (!mod?.pipeline) return null;
+
+				const generate = await mod.pipeline(
+					'text-generation',
+					'onnx-community/Qwen2.5-0.5B-Instruct',
+					{ device: 'webgpu', dtype: 'q4' }
+				);
+
+				// Seed from the deterministic local captions, then enrich each beat.
+				const base = localCaptions(path);
+				statusLine = 'Narrating with the on-device model…';
+				const out: BeatNarration[] = [];
+				for (const b of base.beats) {
+					const prompt =
+						`You are narrating a cinematic tour of an AI's memory graph. ` +
+						`In one vivid sentence, narrate this beat: "${b.text}"`;
+					const res = await generate(prompt, { max_new_tokens: 48, temperature: 0.7, do_sample: true });
+					const text = res?.[0]?.generated_text?.replace(prompt, '').trim();
+					out.push({ nodeId: b.nodeId, chip: b.chip, text: text && text.length > 4 ? text : b.text });
+				}
+				return out;
+			} catch (e) {
+				console.warn('[cinema] on-device narration failed, using local captions:', e);
 				return null;
 			}
 		};
@@ -264,7 +324,15 @@
 </button>
 
 {#if open}
-	<div class="cinema-overlay" role="dialog" aria-modal="true" aria-label="Memory Cinema">
+	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+	<div
+		class="cinema-overlay"
+		role="dialog"
+		aria-modal="true"
+		aria-label="Memory Cinema"
+		tabindex="-1"
+		onkeydown={onOverlayKeydown}
+	>
 		<div class="cinema-canvas" bind:this={canvasHost}></div>
 
 		<!-- Top bar: status + close -->
@@ -284,7 +352,7 @@
 				<label class="cinema-toggle" title="Use an on-device model for narration (downloads weights on first use)">
 					<input type="checkbox" bind:checked={localAiOn} /> Local AI
 				</label>
-				<button class="cinema-close" onclick={close} aria-label="Close Memory Cinema">✕</button>
+				<button bind:this={closeBtn} class="cinema-close" onclick={close} aria-label="Close Memory Cinema (Esc)">✕</button>
 			</div>
 		</div>
 

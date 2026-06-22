@@ -36,6 +36,7 @@ import {
 	float,
 	sin,
 	cos,
+	positionLocal,
 } from 'three/tsl';
 
 export type SemanticRole = 'anchor' | 'connection' | 'contradiction';
@@ -57,28 +58,38 @@ export interface StormOptions {
  * update(dt) each frame, and transitionTo(role, worldPos) on each narrative
  * beat. dispose() releases all GPU resources.
  */
+/** The TSL compute node Fn(...)().compute(count) produces. three@0.172 does not
+ * export a public type for it; it is opaque and only handed to computeAsync(). */
+type ComputeDispatch = ReturnType<ReturnType<ReturnType<typeof Fn>>['compute']>;
+
 export class SemanticComputeStorm {
 	readonly count: number;
 	private scene: THREE.Scene;
 	// WebGPURenderer — runtime-only type (dynamic import); see file header.
-	private renderer: { computeAsync: (node: unknown) => Promise<void> };
+	private renderer: { computeAsync: (node: ComputeDispatch) => Promise<void> };
 
-	private bufferPos: StorageBufferAttribute;
-	private bufferVel: StorageBufferAttribute;
-	private bufferPhase: StorageBufferAttribute;
+	private bufferPos: StorageBufferAttribute | null;
+	private bufferVel: StorageBufferAttribute | null;
+	private bufferPhase: StorageBufferAttribute | null;
 
-	private computeNode: unknown;
-	private mesh!: THREE.Object3D;
-	private material!: THREE.Material;
+	// Definite-assigned in buildCompute() (called from the constructor).
+	private computeNode!: ComputeDispatch;
+	private mesh: THREE.InstancedMesh | null = null;
+	private material: THREE.Material | null = null;
 
-	// Uniforms driven from the camera/beat loop.
+	// Serialize GPU compute dispatches: never queue a new compute pass before the
+	// previous one resolves, or the WebGPU dispatch queue backs up and stalls.
+	private computeInFlight: Promise<void> | null = null;
+
+	// Uniforms driven from the camera/beat loop. uIgnition starts non-zero so
+	// the storm is visible on the very first frame (before any beat fires).
 	private uTarget = uniform(new THREE.Vector3(0, 0, 0));
 	private uTime = uniform(0);
-	private uIgnition = uniform(0);
+	private uIgnition = uniform(0.6);
 	private uMode = uniform(0);
 
 	constructor(
-		renderer: { computeAsync: (node: unknown) => Promise<void> },
+		renderer: { computeAsync: (node: ComputeDispatch) => Promise<void> },
 		scene: THREE.Scene,
 		opts: StormOptions = {}
 	) {
@@ -96,18 +107,25 @@ export class SemanticComputeStorm {
 			positions[i * 3 + 2] = (Math.random() - 0.5) * spawn;
 			phases[i] = Math.random() * Math.PI * 2;
 		}
-		this.bufferPos = new StorageBufferAttribute(positions, 3);
-		this.bufferVel = new StorageBufferAttribute(velocities, 3);
-		this.bufferPhase = new StorageBufferAttribute(phases, 1);
+		const bufferPos = new StorageBufferAttribute(positions, 3);
+		const bufferVel = new StorageBufferAttribute(velocities, 3);
+		const bufferPhase = new StorageBufferAttribute(phases, 1);
+		this.bufferPos = bufferPos;
+		this.bufferVel = bufferVel;
+		this.bufferPhase = bufferPhase;
 
-		this.buildCompute();
-		this.buildRender();
+		this.buildCompute(bufferPos, bufferVel, bufferPhase);
+		this.buildRender(bufferPos);
 	}
 
-	private buildCompute(): void {
-		const posStore = storage(this.bufferPos, 'vec3', this.count);
-		const velStore = storage(this.bufferVel, 'vec3', this.count);
-		const phaseStore = storage(this.bufferPhase, 'float', this.count);
+	private buildCompute(
+		bufferPos: StorageBufferAttribute,
+		bufferVel: StorageBufferAttribute,
+		bufferPhase: StorageBufferAttribute
+	): void {
+		const posStore = storage(bufferPos, 'vec3', this.count);
+		const velStore = storage(bufferVel, 'vec3', this.count);
+		const phaseStore = storage(bufferPhase, 'float', this.count);
 
 		this.computeNode = Fn(() => {
 			const pos = posStore.element(instanceIndex);
@@ -151,7 +169,7 @@ export class SemanticComputeStorm {
 		})().compute(this.count);
 	}
 
-	private buildRender(): void {
+	private buildRender(bufferPos: StorageBufferAttribute): void {
 		// SpriteNodeMaterial: emissive routed to bloom; additive against the void.
 		const mat = new SpriteNodeMaterial({
 			transparent: true,
@@ -159,7 +177,14 @@ export class SemanticComputeStorm {
 			depthWrite: false,
 		}) as SpriteNodeMaterial & { positionNode: unknown; colorNode: unknown };
 
-		mat.positionNode = storage(this.bufferPos, 'vec3', this.count).element(instanceIndex);
+		// CRITICAL: particle world position = per-instance GPU compute output
+		// (storage buffer, indexed by instanceIndex) PLUS the sprite's local quad
+		// vertex (positionLocal) so each billboard keeps its size while being
+		// translated to its computed position. Assigning the bare storage element
+		// to positionNode (without positionLocal) collapses every quad to a point
+		// at its instance origin — the bug the audit caught.
+		const instancePos = storage(bufferPos, 'vec3', this.count).element(instanceIndex);
+		mat.positionNode = instancePos.add(positionLocal);
 
 		mat.colorNode = Fn(() => {
 			const anchor = vec3(0.0, 1.0, 0.85); // luminescent cyan
@@ -171,7 +196,9 @@ export class SemanticComputeStorm {
 				select(this.uMode.equal(1), link, contradiction)
 			);
 			// Brighten on ignition so the beat blazes through the bloom pass.
-			return base.mul(this.uIgnition.mul(3.0).add(0.4));
+			// The +0.55 floor keeps particles visibly glowing between beats so the
+			// storm never fades to black once ignition decays.
+			return base.mul(this.uIgnition.mul(3.0).add(0.55));
 		})();
 
 		// One instanced sprite per particle; positions come from the GPU storage
@@ -185,13 +212,21 @@ export class SemanticComputeStorm {
 		this.scene.add(this.mesh);
 	}
 
-	/** Advance the GPU physics one frame. */
+	/** Advance the GPU physics one frame. Compute dispatches are serialized so
+	 * a slow GPU never lets passes pile up and stall the queue. */
 	async update(deltaSeconds: number): Promise<void> {
-		this.uTime.value += deltaSeconds;
-		if (this.uIgnition.value > 0) {
-			this.uIgnition.value = Math.max(0, this.uIgnition.value - deltaSeconds * 2.0);
-		}
-		await this.renderer.computeAsync(this.computeNode);
+		const dt = Math.max(0, Math.min(deltaSeconds, 0.05));
+		this.uTime.value += dt;
+		// Ignition decays toward 0 between beats (the colorNode floor keeps the
+		// storm glowing); spikes back up on transitionTo().
+		this.uIgnition.value = Math.max(0, this.uIgnition.value - dt * 2.0);
+
+		// Wait for any in-flight compute to finish before queuing the next.
+		if (this.computeInFlight) await this.computeInFlight;
+		this.computeInFlight = this.renderer.computeAsync(this.computeNode).finally(() => {
+			this.computeInFlight = null;
+		});
+		await this.computeInFlight;
 	}
 
 	/** Fired on each narrative beat: retarget the storm + spike ignition. */
@@ -202,8 +237,20 @@ export class SemanticComputeStorm {
 	}
 
 	dispose(): void {
-		this.scene.remove(this.mesh);
-		(this.mesh as THREE.InstancedMesh).geometry?.dispose();
+		if (this.mesh) {
+			this.scene.remove(this.mesh);
+			this.mesh.geometry?.dispose();
+			this.mesh.dispose?.();
+			this.mesh = null;
+		}
 		this.material?.dispose();
+		this.material = null;
+		// StorageBufferAttribute extends BufferAttribute, which has no dispose():
+		// its GPU buffer is released by the renderer when the owning geometry is
+		// disposed (done above). Drop our references so the ~2.1MB of backing
+		// Float32Arrays can be garbage-collected.
+		this.bufferPos = null;
+		this.bufferVel = null;
+		this.bufferPhase = null;
 	}
 }
