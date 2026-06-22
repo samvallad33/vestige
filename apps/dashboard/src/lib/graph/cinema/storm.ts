@@ -155,6 +155,12 @@ export class SemanticComputeStorm {
 	// VOLUMETRIC FOG — distant particles dim toward the void with view depth (exp
 	// falloff) for atmospheric depth. Combined with near-fade in one depth read.
 	private uFogDensity = uniform(0.012);
+	// DEPTH OF FIELD — off-focus particles dim (read as bokeh defocus under the
+	// bloom). Folded into the single depthFade depth read (no sprite-scale, which
+	// is finicky + collides with the streak). Focus tracks the dive.
+	private uFocus = uniform(28.0);
+	private uFocusRange = uniform(20.0); // wider in-focus band → most of figure crisp
+	private uDofDim = uniform(0.3); // subtle off-focus fade → depth without darkening
 	// JS-side dream state (not uniforms): which figure is live + how many fired.
 	private dreamCount = 0;
 
@@ -694,7 +700,11 @@ export class SemanticComputeStorm {
 			const d = positionView.z.negate(); // +forward view distance, read ONCE
 			const near = smoothstep(this.uFadeNear, this.uFadeNear.add(this.uFadeBand), d);
 			const fog = clamp(this.uFogDensity.mul(d).negate().exp(), 0.18, 1.0);
-			return near.mul(fog);
+			// DOF: dim particles off the focus plane (defocus → bokeh under bloom).
+			// coc 0 at focus → 1 fully out of focus; brightness 1 → (1-uDofDim).
+			const coc = clamp(d.sub(this.uFocus).abs().div(this.uFocusRange), 0, 1);
+			const focusBright = oneMinus(coc.mul(this.uDofDim));
+			return near.mul(fog).mul(focusBright);
 		});
 
 		// ── THE COLOR BLAST ── the signature detonation chroma. Keyed on the LONG
@@ -779,6 +789,10 @@ export class SemanticComputeStorm {
 		// wave clock counts up so the spectral shockwave travels outward over time.
 		this.uBlast.value = Math.max(0, this.uBlast.value - dt * 0.35);
 		this.uBlastTime.value += dt;
+		// RACK FOCUS — slow breathing pull of the DOF focus plane so the cinematic
+		// focus is always alive (Step 4 will couple this to the infinite-zoom dive).
+		const focusTarget = 26 + Math.sin(this.uTime.value * 0.18) * 9; // 17..35
+		this.uFocus.value += (focusTarget - this.uFocus.value) * Math.min(1, dt * 2);
 
 		// Wait for any in-flight compute to finish before queuing the next.
 		if (this.computeInFlight) await this.computeInFlight;
