@@ -161,7 +161,9 @@
 			const wp = currentPositions?.get(beat.nodeId);
 			if (wp) {
 				const mode: StormMode = shot?.stormMode ?? 'connection';
-				sandbox.transitionTo(stormRole(mode), wp);
+				// Pass act + 0-based beat index so the storm holds Act I dimmer AND
+				// fades in extra-soft on beats 0/1 (which otherwise wash to white).
+				sandbox.transitionTo(stormRole(mode), wp, shot?.act ?? 'I', index);
 			}
 		}
 	}

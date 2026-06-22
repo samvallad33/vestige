@@ -166,10 +166,16 @@ export class CinemaSandbox {
 
 	/** Retarget the storm's MODE/ignition for a beat. The storm is permanently
 	 * centered at the WORLD ORIGIN (see render) so it is always dead-center in
-	 * frame — worldPos here only conveys which node, not where the storm sits. */
-	transitionTo(role: SemanticRole, _worldPos: THREE.Vector3): void {
+	 * frame — worldPos here only conveys which node, not where the storm sits.
+	 * `act` lets the storm hold Act I dimmer (it opens too hot otherwise). */
+	transitionTo(
+		role: SemanticRole,
+		_worldPos: THREE.Vector3,
+		act: 'I' | 'II' | 'III' = 'II',
+		beatIndex = 99
+	): void {
 		if (!this.booted) return;
-		this.storm.transitionTo(role, ORIGIN);
+		this.storm.transitionTo(role, ORIGIN, act, beatIndex);
 	}
 
 	/** Render one frame. The storm is pinned to the origin and the camera always
