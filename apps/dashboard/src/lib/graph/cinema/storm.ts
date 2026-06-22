@@ -110,7 +110,9 @@ export class SemanticComputeStorm {
 		this.renderer = renderer;
 		this.scene = scene;
 		this.count = opts.count ?? 150_000;
-		const spawn = opts.spawnRadius ?? 15;
+		// Spawn inside the contained zone so particles don't start outside the
+		// shell and get yanked inward asymmetrically (which read as off-center).
+		const spawn = opts.spawnRadius ?? 8;
 
 		const positions = new Float32Array(this.count * 3);
 		const velocities = new Float32Array(this.count * 3);

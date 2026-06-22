@@ -16,8 +16,11 @@ import type { SemanticRole, SemanticComputeStorm } from './storm';
 // The storm lives at the world origin, permanently. The camera always looks here
 // and is clamped to a safe distance band so the subject can never leave frame.
 const ORIGIN = new THREE.Vector3(0, 0, 0);
-const MIN_CAM_DIST = 18;
-const MAX_CAM_DIST = 46;
+// Keep the camera in a narrow, fairly FAR band so the contained storm always
+// sits comfortably small and centered in frame (a closer camera makes the cloud
+// fill — and spill past — the edges once the bloom halo is added).
+const MIN_CAM_DIST = 30;
+const MAX_CAM_DIST = 44;
 
 export function isWebGPUSupported(): boolean {
 	return typeof navigator !== 'undefined' && 'gpu' in navigator;
@@ -185,11 +188,14 @@ export class CinemaSandbox {
 		}
 		this.camera.lookAt(ORIGIN);
 
-		// Size the containment sphere to the camera's FOV at the origin so the
-		// storm always fully fits the frame with margin.
+		// Size the containment sphere to the camera's VERTICAL FOV at the origin
+		// (the limiting dimension on a landscape frame). The 0.40 factor leaves
+		// generous room for the additive BLOOM HALO — each particle's glow spreads
+		// well beyond its geometric position, so the visible cloud is much larger
+		// than the radius; an aggressive margin is what actually stops the clip.
 		const dist = this.camera.position.length();
 		const vfov = (this.camera.fov * Math.PI) / 180;
-		const fitRadius = Math.tan(vfov / 2) * dist * 0.55;
+		const fitRadius = Math.tan(vfov / 2) * dist * 0.4;
 		this.storm.setContainRadius(fitRadius);
 
 		await this.storm.update(deltaSeconds);

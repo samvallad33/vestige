@@ -168,6 +168,11 @@ export class CinemaDirector {
 			else if (shot.move === 'pull_back') standoff *= 1.5;
 			else if (shot.move === 'crane') standoff *= 1.8;
 		}
+		// In centered (WebGPU storm) mode the subject is pinned to the origin and
+		// the sandbox clamps the camera to a far band. Keep the directed standoff
+		// INSIDE that band so the camera never fights the clamp (which read as an
+		// off-center jump) — variety here comes from angle + orbit, not distance.
+		if (this.opts.centerOnOrigin) standoff = Math.max(31, Math.min(43, standoff));
 		return out.copy(nodePos).addScaledVector(_tmpDir, standoff);
 	}
 
