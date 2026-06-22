@@ -295,8 +295,14 @@
 		loop();
 	}
 
-	function loop() {
-		rafId = requestAnimationFrame(loop);
+	// BACK-PRESSURED FRAME LOOP. The WebGPU render of 150k particles + compute +
+	// bloom can exceed a 16ms frame; the old loop fired requestAnimationFrame
+	// IMMEDIATELY and never awaited render(), so rAF callbacks queued faster than
+	// the GPU could drain them. Frames piled up → the camera (and the user's
+	// parallax) visibly lagged behind the input. The fix: AWAIT the render, THEN
+	// schedule the next frame. This caps the loop to the GPU's real throughput, so
+	// every frame reflects the latest pointer position with no backlog.
+	async function loop() {
 		const now = performance.now();
 		const dt = Math.max(0, Math.min(0.05, (now - lastFrame) / 1000));
 		lastFrame = now;
@@ -316,11 +322,14 @@
 			const idle = performance.now() - lastInputAt > IDLE_MS;
 			const yawT = idle ? 0 : pointer.x * MAX_YAW;
 			const pitchT = idle ? 0 : pointer.y * MAX_PITCH;
-			const lam = idle ? 1.5 : 3.5;
+			// Snappier response: faster damping while the user is actively steering
+			// (lam 9 ≈ ~110ms to converge → feels immediate), gentle glide home when
+			// idle (lam 1.5) so the handoff back to the film stays cinematic.
+			const lam = idle ? 1.5 : 9.0;
 			camOff.yaw = damp(camOff.yaw, yawT, lam, dt);
 			camOff.pitch = damp(camOff.pitch, pitchT, lam, dt);
 			if (idle) zoomTarget = damp(zoomTarget, 0, 1.2, dt);
-			zoomLive = damp(zoomLive, zoomTarget, 5.5, dt);
+			zoomLive = damp(zoomLive, zoomTarget, 8.0, dt);
 			// Spherical offset around the director's current camera position
 			// (target = origin).
 			const dir = cam.position.clone();
@@ -335,7 +344,10 @@
 		// close() nulled out while the render promise was in flight.
 		const sb = sandbox;
 		if (sb && webgpuActive) {
-			sb.render(dt).catch((e) => {
+			try {
+				await sb.render(dt); // ← AWAIT: back-pressure, no frame pile-up
+				renderFailures = 0;
+			} catch (e) {
 				// A render failure must never stall the tour. After a few
 				// consecutive failures, drop to camera-only (captions still play).
 				if (++renderFailures >= 3 && sandbox === sb) {
@@ -344,8 +356,10 @@
 					sb.dispose();
 					sandbox = null;
 				}
-			});
+			}
 		}
+		// Schedule the NEXT frame only after this one's render resolved.
+		rafId = requestAnimationFrame(loop);
 	}
 
 	// ── ENDLESS DREAM MODE ──────────────────────────────────────────────────
