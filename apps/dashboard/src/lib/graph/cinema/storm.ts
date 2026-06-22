@@ -43,7 +43,6 @@ import {
 	fract,
 	abs,
 	floor,
-	positionLocal,
 	smoothstep,
 	oneMinus,
 	cross,
@@ -525,15 +524,15 @@ export class SemanticComputeStorm {
 			emissiveNode: unknown;
 		};
 
-		// CRITICAL: particle world position = per-instance GPU compute output
-		// (storage buffer, indexed by instanceIndex) PLUS the sprite's local quad
-		// vertex (positionLocal) so each billboard keeps its size while being
-		// translated to its computed position. Assigning the bare storage element
-		// to positionNode (without positionLocal) collapses every quad to a point
-		// at its instance origin — the bug the audit caught.
+		// CANONICAL SPRITE CENTER: positionNode is the sprite's CENTER only.
+		// SpriteNodeMaterial.setupPositionView already builds the billboard quad
+		// from positionGeometry.xy (scaled by scaleNode, rotated by rotationNode),
+		// so the previous `.add(positionLocal)` double-counted the quad (harmless at
+		// the 0.1 size, sub-pixel). Using the bare center is required for the
+		// velocity-stretch streak (scaleNode/rotationNode now drive the quad shape).
 		const phaseStore = storage(bufferPhase, 'float', this.count);
 		const instancePos = storage(bufferPos, 'vec3', this.count).element(instanceIndex);
-		mat.positionNode = instancePos.add(positionLocal);
+		mat.positionNode = instancePos;
 
 		// ── SHARED RAINBOW COLOR ──
 		// One Fn produces the pure iridescent color for a particle; we feed it to
