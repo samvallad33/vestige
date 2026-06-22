@@ -18,6 +18,7 @@
 	import AmbientAwarenessStrip from '$lib/components/AmbientAwarenessStrip.svelte';
 	import VerdictBar from '$lib/components/VerdictBar.svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import Icon, { type IconName } from '$lib/components/Icon.svelte';
 	import { initTheme } from '$stores/theme';
 
 	let { children } = $props();
@@ -93,23 +94,26 @@
 		});
 	});
 
-	const nav = [
-		{ href: '/graph', label: 'Graph', icon: '◎', shortcut: 'G' },
-		{ href: '/reasoning', label: 'Reasoning', icon: '✦', shortcut: 'R' },
-		{ href: '/memories', label: 'Memories', icon: '◈', shortcut: 'M' },
-		{ href: '/timeline', label: 'Timeline', icon: '◷', shortcut: 'T' },
-		{ href: '/feed', label: 'Feed', icon: '◉', shortcut: 'F' },
-		{ href: '/explore', label: 'Explore', icon: '◬', shortcut: 'E' },
-		{ href: '/activation', label: 'Activation', icon: '◈', shortcut: 'A' },
-		{ href: '/dreams', label: 'Dreams', icon: '✧', shortcut: 'D' },
-		{ href: '/schedule', label: 'Schedule', icon: '◷', shortcut: 'C' },
-		{ href: '/importance', label: 'Importance', icon: '◎', shortcut: 'P' },
-		{ href: '/duplicates', label: 'Duplicates', icon: '◉', shortcut: 'U' },
-		{ href: '/contradictions', label: 'Contradictions', icon: '⚠', shortcut: 'X' },
-		{ href: '/patterns', label: 'Patterns', icon: '▦', shortcut: 'N' },
-		{ href: '/intentions', label: 'Intentions', icon: '◇', shortcut: 'I' },
-		{ href: '/stats', label: 'Stats', icon: '◫', shortcut: 'S' },
-		{ href: '/settings', label: 'Settings', icon: '⚙', shortcut: ',' },
+	// Each nav item carries a UNIQUE semantic icon (see Icon.svelte). The old
+	// set reused the same Unicode glyph across multiple items; every entry here
+	// now has a distinct silhouette that reads instantly.
+	const nav: { href: string; label: string; icon: IconName; shortcut: string }[] = [
+		{ href: '/graph', label: 'Graph', icon: 'graph', shortcut: 'G' },
+		{ href: '/reasoning', label: 'Reasoning', icon: 'reasoning', shortcut: 'R' },
+		{ href: '/memories', label: 'Memories', icon: 'memories', shortcut: 'M' },
+		{ href: '/timeline', label: 'Timeline', icon: 'timeline', shortcut: 'T' },
+		{ href: '/feed', label: 'Feed', icon: 'feed', shortcut: 'F' },
+		{ href: '/explore', label: 'Explore', icon: 'explore', shortcut: 'E' },
+		{ href: '/activation', label: 'Activation', icon: 'activation', shortcut: 'A' },
+		{ href: '/dreams', label: 'Dreams', icon: 'dreams', shortcut: 'D' },
+		{ href: '/schedule', label: 'Schedule', icon: 'schedule', shortcut: 'C' },
+		{ href: '/importance', label: 'Importance', icon: 'importance', shortcut: 'P' },
+		{ href: '/duplicates', label: 'Duplicates', icon: 'duplicates', shortcut: 'U' },
+		{ href: '/contradictions', label: 'Contradictions', icon: 'contradictions', shortcut: 'X' },
+		{ href: '/patterns', label: 'Patterns', icon: 'patterns', shortcut: 'N' },
+		{ href: '/intentions', label: 'Intentions', icon: 'intentions', shortcut: 'I' },
+		{ href: '/stats', label: 'Stats', icon: 'stats', shortcut: 'S' },
+		{ href: '/settings', label: 'Settings', icon: 'settings', shortcut: ',' },
 	];
 
 	// Mobile nav shows top 5 items
@@ -148,11 +152,11 @@
 		<!-- Desktop Sidebar (hidden on mobile) -->
 		<nav class="hidden md:flex w-16 lg:w-56 flex-shrink-0 glass-sidebar flex-col">
 			<!-- Logo -->
-			<a href="{base}/graph" class="flex items-center gap-3 px-4 py-5 border-b border-synapse/10">
-				<div class="w-8 h-8 rounded-lg bg-gradient-to-br from-dream to-synapse flex items-center justify-center text-bright text-sm font-bold shadow-lg shadow-synapse/20">
-					V
+			<a href="{base}/graph" class="logo-link flex items-center gap-3 px-4 py-5 border-b border-synapse/10">
+				<div class="logo-mark w-8 h-8 rounded-lg bg-gradient-to-br from-dream to-synapse flex items-center justify-center text-bright shadow-lg shadow-synapse/20">
+					<Icon name="logo" size={18} strokeWidth={1.8} />
 				</div>
-				<span class="hidden lg:block text-sm font-semibold text-bright tracking-wide">VESTIGE</span>
+				<span class="hidden lg:block text-sm font-semibold text-bright tracking-[0.18em]">VESTIGE</span>
 			</a>
 
 			<!-- Nav items -->
@@ -161,12 +165,14 @@
 					{@const active = isActive(item.href, $page.url.pathname)}
 					<a
 						href="{base}{item.href}"
-						class="flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 text-sm
+						class="nav-link group flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 text-sm
 							{active
 								? 'bg-synapse/15 text-synapse-glow border border-synapse/30 shadow-[0_0_12px_rgba(99,102,241,0.15)] nav-active-border'
 								: 'text-dim hover:text-text hover:bg-white/[0.03] border border-transparent'}"
 					>
-						<span class="text-base w-5 text-center">{item.icon}</span>
+						<span class="nav-icon w-5 flex justify-center transition-transform duration-200 group-hover:scale-110">
+							<Icon name={item.icon} size={18} />
+						</span>
 						<span class="hidden lg:block">{item.label}</span>
 						<span class="hidden lg:block ml-auto text-[10px] text-muted/50 font-mono">{item.shortcut}</span>
 					</a>
@@ -179,8 +185,9 @@
 					onclick={() => { showCommandPalette = true; cmdQuery = ''; requestAnimationFrame(() => cmdInput?.focus()); }}
 					class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-muted hover:text-dim hover:bg-white/[0.03] transition border border-subtle/15"
 				>
-					<span class="text-[10px] font-mono bg-white/[0.04] px-1.5 py-0.5 rounded">⌘K</span>
+					<Icon name="command" size={14} />
 					<span class="hidden lg:block">Command</span>
+					<span class="hidden lg:block ml-auto text-[10px] font-mono bg-white/[0.04] px-1.5 py-0.5 rounded">⌘K</span>
 				</button>
 			</div>
 
@@ -229,7 +236,7 @@
 						class="flex flex-col items-center gap-0.5 px-3 py-2 rounded-lg transition-all min-w-[3.5rem]
 							{active ? 'text-synapse-glow' : 'text-muted'}"
 					>
-						<span class="text-lg">{item.icon}</span>
+						<Icon name={item.icon} size={20} />
 						<span class="text-[9px]">{item.label}</span>
 					</a>
 				{/each}
@@ -259,7 +266,7 @@
 	>
 		<div class="w-full max-w-lg glass-panel rounded-xl shadow-2xl shadow-synapse/10 overflow-hidden">
 			<div class="flex items-center gap-3 px-4 py-3 border-b border-synapse/10">
-				<span class="text-synapse text-sm">◎</span>
+				<span class="text-synapse"><Icon name="search" size={16} /></span>
 				<input
 					bind:this={cmdInput}
 					bind:value={cmdQuery}
@@ -280,7 +287,7 @@
 						onclick={() => cmdNavigate(item.href)}
 						class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-dim hover:text-text hover:bg-white/[0.04] transition"
 					>
-						<span class="text-base w-5 text-center">{item.icon}</span>
+						<span class="w-5 flex justify-center"><Icon name={item.icon} size={17} /></span>
 						<span>{item.label}</span>
 						<span class="ml-auto text-[10px] text-muted/50 font-mono hidden md:block">{item.shortcut}</span>
 					</button>
@@ -296,5 +303,26 @@
 <style>
 	.safe-bottom {
 		padding-bottom: env(safe-area-inset-bottom, 0px);
+	}
+
+	/* Logo breathes a faint synapse glow on hover — the mark feels live. */
+	.logo-mark {
+		transition:
+			transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+			box-shadow 0.3s ease;
+	}
+	.logo-link:hover .logo-mark {
+		transform: rotate(-6deg) scale(1.08);
+		box-shadow:
+			0 0 0 1px rgba(129, 140, 248, 0.4),
+			0 0 22px rgba(99, 102, 241, 0.5);
+	}
+
+	/* The active nav item's icon picks up a soft drop-shadow glow so the
+	   current location reads at a glance even in the collapsed (icon-only)
+	   sidebar. */
+	.nav-link.text-synapse-glow .nav-icon :global(svg),
+	.nav-active-border .nav-icon :global(svg) {
+		filter: drop-shadow(0 0 6px rgba(129, 140, 248, 0.55));
 	}
 </style>

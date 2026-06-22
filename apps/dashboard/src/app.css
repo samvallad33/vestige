@@ -301,3 +301,274 @@ body {
 		to { opacity: 1; }
 	}
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   THE "ALIVE" LAYER  (bleeding-edge, progressively enhanced)
+   ───────────────────────────────────────────────────────────────────────
+   Shared primitives that make every page breathe, respond, and feel seen.
+   Everything here degrades gracefully and is disabled under reduced-motion.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Registered animatable custom props (@property) ──────────────────────
+   Registering a property as <angle>/<percentage> lets the browser TWEEN it,
+   which plain CSS vars can't do. Powers the rotating conic borders below. */
+@property --angle {
+	syntax: '<angle>';
+	initial-value: 0deg;
+	inherits: false;
+}
+@property --shine {
+	syntax: '<percentage>';
+	initial-value: 0%;
+	inherits: false;
+}
+
+/* ── Scroll-reveal (paired with use:reveal) ─────────────────────────────
+   Elements start translated + transparent; .reveal-in lands them. The
+   action toggles the class via IntersectionObserver, with per-item --reveal-delay
+   for staggered list entrances. */
+.reveal {
+	opacity: 0;
+	transform: translateY(var(--reveal-y, 16px));
+	transition:
+		opacity 0.55s cubic-bezier(0.22, 1, 0.36, 1),
+		transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+	transition-delay: var(--reveal-delay, 0ms);
+	will-change: opacity, transform;
+}
+.reveal-in {
+	opacity: 1;
+	transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+	.reveal {
+		opacity: 1;
+		transform: none;
+		transition: none;
+	}
+}
+
+/* ── @starting-style page/section entry ─────────────────────────────────
+   Native entry animation with zero JS: the element animates FROM the
+   starting-style the first time it's rendered. Used on route content. */
+@media not (prefers-reduced-motion: reduce) {
+	.enter {
+		transition:
+			opacity 0.4s ease,
+			transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+	}
+	@starting-style {
+		.enter {
+			opacity: 0;
+			transform: translateY(10px);
+		}
+	}
+}
+
+/* ── Conic-gradient animated border (premium "live" frame) ──────────────
+   A slowly rotating iridescent ring around a panel. The @property --angle
+   makes the conic gradient's start angle tweenable. Use class .live-border. */
+.live-border {
+	position: relative;
+	isolation: isolate;
+}
+.live-border::before {
+	content: '';
+	position: absolute;
+	inset: -1px;
+	border-radius: inherit;
+	padding: 1px;
+	background: conic-gradient(
+		from var(--angle),
+		transparent 0%,
+		var(--color-synapse) 18%,
+		var(--color-dream) 33%,
+		transparent 50%,
+		transparent 100%
+	);
+	-webkit-mask:
+		linear-gradient(#000 0 0) content-box,
+		linear-gradient(#000 0 0);
+	-webkit-mask-composite: xor;
+	mask-composite: exclude;
+	pointer-events: none;
+	opacity: 0.6;
+	z-index: -1;
+}
+@media not (prefers-reduced-motion: reduce) {
+	.live-border::before {
+		animation: border-rotate 6s linear infinite;
+	}
+	@keyframes border-rotate {
+		to {
+			--angle: 360deg;
+		}
+	}
+}
+
+/* ── Cursor spotlight surface (paired with use:spotlight) ────────────────
+   A soft radial glow follows the pointer across a panel. --spot-x/y/o are
+   set by the action; default opacity 0 so it's invisible until hovered. */
+.spotlight-surface {
+	position: relative;
+	overflow: hidden;
+}
+.spotlight-surface::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	background: radial-gradient(
+		340px circle at var(--spot-x, 50%) var(--spot-y, 50%),
+		rgba(129, 140, 248, 0.12),
+		transparent 60%
+	);
+	opacity: var(--spot-o, 0);
+	transition: opacity 0.3s ease;
+	z-index: 0;
+}
+
+/* ── Tilt glare (paired with use:tilt glare) ────────────────────────────── */
+.tilt-glare {
+	position: relative;
+	overflow: hidden;
+}
+.tilt-glare::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	background: radial-gradient(
+		circle at var(--glare-x, 50%) var(--glare-y, 50%),
+		rgba(255, 255, 255, 0.14),
+		transparent 45%
+	);
+	opacity: var(--glare-o, 0);
+	transition: opacity 0.3s ease;
+}
+
+/* ── Breathing live indicator (calmer than a hard blink) ────────────────
+   A dot that gently inhales/exhales scale + glow — reads as "alive,
+   listening" rather than "error blinking". */
+.breathe {
+	animation: breathe 3.2s ease-in-out infinite;
+}
+@keyframes breathe {
+	0%, 100% {
+		transform: scale(1);
+		filter: drop-shadow(0 0 2px currentColor);
+		opacity: 0.85;
+	}
+	50% {
+		transform: scale(1.18);
+		filter: drop-shadow(0 0 7px currentColor);
+		opacity: 1;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.breathe { animation: none; }
+}
+
+/* A live "radar ping" ring that expands and fades — wrap a dot in .ping-host. */
+.ping-host {
+	position: relative;
+}
+.ping-host::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	border-radius: 50%;
+	background: currentColor;
+	opacity: 0.6;
+	z-index: -1;
+}
+@media not (prefers-reduced-motion: reduce) {
+	.ping-host::before {
+		animation: ping 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+	}
+	@keyframes ping {
+		0% { transform: scale(1); opacity: 0.5; }
+		80%, 100% { transform: scale(2.6); opacity: 0; }
+	}
+}
+
+/* ── Shimmer skeleton (loading that feels intentional, not frozen) ───────
+   A diagonal light sweep over skeleton blocks. Use .shimmer on the
+   placeholder; it replaces a plain pulse with a directional sheen. */
+.shimmer {
+	position: relative;
+	overflow: hidden;
+	background: rgba(255, 255, 255, 0.03);
+}
+.shimmer::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	transform: translateX(-100%);
+	background: linear-gradient(
+		90deg,
+		transparent,
+		rgba(129, 140, 248, 0.12),
+		transparent
+	);
+}
+@media not (prefers-reduced-motion: reduce) {
+	.shimmer::after {
+		animation: shimmer 1.6s ease-in-out infinite;
+	}
+	@keyframes shimmer {
+		100% { transform: translateX(100%); }
+	}
+}
+
+/* ── Gradient text that slowly drifts (alive headings) ──────────────────── */
+.text-aurora {
+	background: linear-gradient(
+		100deg,
+		var(--color-synapse-glow),
+		var(--color-dream-glow),
+		var(--color-recall),
+		var(--color-synapse-glow)
+	);
+	background-size: 250% 100%;
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+@media not (prefers-reduced-motion: reduce) {
+	.text-aurora {
+		animation: aurora-drift 8s ease-in-out infinite;
+	}
+	@keyframes aurora-drift {
+		0%, 100% { background-position: 0% 50%; }
+		50% { background-position: 100% 50%; }
+	}
+}
+
+/* ── Hover lift utility — cards rise + glow when pointed at ───────────────*/
+.lift {
+	transition:
+		transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1),
+		box-shadow 0.28s ease,
+		border-color 0.28s ease;
+}
+.lift:hover {
+	transform: translateY(-3px);
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(99, 102, 241, 0.18);
+}
+@media (prefers-reduced-motion: reduce) {
+	.lift:hover { transform: none; }
+}
+
+/* ── Tabular numerals helper (count-ups don't jitter) ──────────────────── */
+.tabular-nums {
+	font-variant-numeric: tabular-nums;
+	font-feature-settings: 'tnum';
+}
+
+/* ── Focus ring consistency (accessible + on-brand) ─────────────────────── */
+:where(button, a, input, select, [role='button'], [tabindex]):focus-visible {
+	outline: 2px solid var(--color-synapse-glow);
+	outline-offset: 2px;
+	border-radius: 0.4rem;
+}

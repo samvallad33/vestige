@@ -5,7 +5,14 @@
 	import RetentionCurve from '$components/RetentionCurve.svelte';
 	import TimeSlider from '$components/TimeSlider.svelte';
 	import MemoryStateLegend from '$components/MemoryStateLegend.svelte';
+	// ⚠ MEMORY CINEMA — DO NOT MODIFY. This is the flawless, protected
+	//   AI-narrated flythrough experience. The graph-control overhaul below
+	//   (icons, dropdown, alive empty states) is a SEPARATE concern and must
+	//   never touch the Cinema import, element, or its props.
 	import MemoryCinema from '$components/MemoryCinema.svelte';
+	// Graph-control overhaul (2026 alive UI): unique icons + dropdown.
+	import Icon from '$components/Icon.svelte';
+	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
 	import { api } from '$stores/api';
 	import { eventFeed } from '$stores/websocket';
 	import { graphState } from '$stores/graph-state.svelte';
@@ -21,6 +28,19 @@
 	let isDreaming = $state(false);
 	let searchQuery = $state('');
 	let maxNodes = $state(150);
+	// Node-count choices for the clear Dropdown control (replaces a native
+	// <select>). Bound as a string; coerced back to a number on change.
+	const nodeCountOptions: DropdownOption[] = [
+		{ value: '50', label: '50 nodes' },
+		{ value: '100', label: '100 nodes' },
+		{ value: '150', label: '150 nodes' },
+		{ value: '200', label: '200 nodes' },
+	];
+	let maxNodesChoice = $state('150');
+	function onMaxNodesChange(v: string) {
+		maxNodes = parseInt(v, 10);
+		loadGraph();
+	}
 	let temporalEnabled = $state(false);
 	let temporalDate = $state(new Date());
 	// Colour spheres by node type, FSRS memory state, or AhaGraph learning tags.
@@ -204,14 +224,14 @@
 		<div class="h-full flex items-center justify-center">
 			<div class="text-center space-y-4">
 				<div class="w-16 h-16 mx-auto rounded-full border-2 border-synapse/30 border-t-synapse animate-spin"></div>
-				<p class="text-dim text-sm">Loading memory graph...</p>
+				<p class="text-dim text-sm">Weaving your memory graph…</p>
 			</div>
 		</div>
 	{:else if error === 'OFFLINE'}
 		<div class="h-full flex items-center justify-center">
-			<div class="text-center space-y-5 max-w-lg px-8">
-				<div class="text-5xl opacity-40">⚡</div>
-				<h2 class="text-xl text-bright">MCP Backend Offline</h2>
+			<div class="text-center space-y-5 max-w-lg px-8 enter">
+				<div class="mx-auto w-fit text-warning opacity-70 breathe"><Icon name="activation" size={52} strokeWidth={1.2} /></div>
+				<h2 class="text-xl text-bright text-aurora">MCP Backend Offline</h2>
 				<p class="text-dim text-sm leading-relaxed">
 					The Vestige MCP server isn't reachable on <code class="font-mono text-muted">:3927</code>.
 					The dashboard is running but has nothing to query.
@@ -235,17 +255,17 @@ disown</code>
 		</div>
 	{:else if error === 'EMPTY'}
 		<div class="h-full flex items-center justify-center">
-			<div class="text-center space-y-4 max-w-md px-8">
-				<div class="text-5xl opacity-30">◎</div>
-				<h2 class="text-xl text-bright">Your Mind Awaits</h2>
-				<p class="text-dim text-sm">No memories yet. Start using Vestige to populate your graph.</p>
+			<div class="text-center space-y-4 max-w-md px-8 enter">
+				<div class="mx-auto w-fit text-synapse-glow opacity-50 breathe"><Icon name="graph" size={52} strokeWidth={1.2} /></div>
+				<h2 class="text-xl text-bright text-aurora">Your Mind Awaits</h2>
+				<p class="text-dim text-sm">No memories yet — the moment Vestige starts remembering, your constellation will bloom here.</p>
 			</div>
 		</div>
 	{:else if error}
 		<div class="h-full flex items-center justify-center">
-			<div class="text-center space-y-4 max-w-md px-8">
-				<div class="text-5xl opacity-30">◎</div>
-				<h2 class="text-xl text-bright">Your Mind Awaits</h2>
+			<div class="text-center space-y-4 max-w-md px-8 enter">
+				<div class="mx-auto w-fit text-synapse-glow opacity-50 breathe"><Icon name="graph" size={52} strokeWidth={1.2} /></div>
+				<h2 class="text-xl text-bright text-aurora">Your Mind Awaits</h2>
 				<p class="text-dim text-sm">{error}</p>
 			</div>
 		</div>
@@ -321,14 +341,14 @@ disown</code>
 				</button>
 			</div>
 
-			<!-- Node count -->
-			<select bind:value={maxNodes} onchange={() => loadGraph()}
-				class="shrink-0 min-h-10 px-2 py-2 glass rounded-xl text-dim text-xs">
-				<option value={50}>50 nodes</option>
-				<option value={100}>100 nodes</option>
-				<option value={150}>150 nodes</option>
-				<option value={200}>200 nodes</option>
-			</select>
+			<!-- Node count — clear animated Dropdown (replaces native <select>) -->
+			<Dropdown
+				options={nodeCountOptions}
+				bind:value={maxNodesChoice}
+				icon="graph"
+				class="shrink-0"
+				onChange={onMaxNodesChange}
+			/>
 
 			<!-- Brightness slider (persists in localStorage). Scales node emissive,
 				 glow, and distance-compensated fog falloff. Default 1.0, range 0.5-2.5. -->
@@ -355,14 +375,19 @@ disown</code>
 			<button
 				onclick={triggerDream}
 				disabled={isDreaming}
-				class="shrink-0 min-h-10 px-4 py-2 rounded-xl bg-dream/20 border border-dream/40 text-dream-glow text-sm
+				class="shrink-0 inline-flex items-center gap-2 min-h-10 px-4 py-2 rounded-xl bg-dream/20 border border-dream/40 text-dream-glow text-sm
 					hover:bg-dream/30 transition-all backdrop-blur-sm disabled:opacity-50
 					{isDreaming ? 'glow-dream animate-pulse-glow' : ''}"
 			>
-				{isDreaming ? '◈ Dreaming...' : '◈ Dream'}
+				<span class={isDreaming ? 'breathe' : ''}><Icon name="dreams" size={16} /></span>
+				{isDreaming ? 'Dreaming…' : 'Dream'}
 			</button>
 
-			<!-- Memory Cinema — AI-narrated flythrough of the real graph -->
+			<!-- ═══════════════════════════════════════════════════════════
+			     MEMORY CINEMA — PROTECTED · DO NOT MODIFY
+			     The AI-narrated flythrough. Its trigger + props are flawless
+			     and intentionally untouched by the graph-control overhaul.
+			     ═══════════════════════════════════════════════════════════ -->
 			{#if displayNodes.length > 0}
 				<MemoryCinema
 					nodes={displayNodes}
@@ -370,11 +395,15 @@ disown</code>
 					centerId={graphData?.center_id ?? ''}
 				/>
 			{/if}
+			<!-- ═══════════ END PROTECTED MEMORY CINEMA ═══════════ -->
 
 			<!-- Reload -->
 			<button onclick={() => loadGraph()}
-				class="shrink-0 min-h-10 min-w-10 px-3 py-2 glass rounded-xl text-dim text-sm hover:text-text transition">
-				↻
+				class="shrink-0 min-h-10 min-w-10 inline-flex items-center justify-center px-3 py-2 glass rounded-xl text-dim hover:text-text hover:rotate-180 transition-all duration-500"
+				title="Reload graph"
+				aria-label="Reload graph"
+			>
+				<Icon name="pulse" size={16} />
 			</button>
 		</div>
 	</div>
@@ -501,9 +530,9 @@ disown</code>
 				<!-- Explore from this node -->
 				<a
 					href="{base}/explore"
-					class="block text-center px-3 py-2 rounded-xl bg-dream/10 text-dream-glow text-xs hover:bg-dream/20 transition border border-dream/20"
+					class="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-dream/10 text-dream-glow text-xs hover:bg-dream/20 transition border border-dream/20"
 				>
-					◬ Explore Connections
+					<Icon name="explore" size={14} /> Explore Connections
 				</a>
 			</div>
 		</div>

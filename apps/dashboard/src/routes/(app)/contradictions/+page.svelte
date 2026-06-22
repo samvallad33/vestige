@@ -1,5 +1,10 @@
 <script lang="ts">
 	import ContradictionArcs, { type Contradiction } from '$components/ContradictionArcs.svelte';
+	import PageHeader from '$components/PageHeader.svelte';
+	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
+	import Icon from '$components/Icon.svelte';
+	import AnimatedNumber from '$components/AnimatedNumber.svelte';
+	import { reveal } from '$lib/actions/reveal';
 	import {
 		severityColor,
 		severityLabel,
@@ -297,6 +302,33 @@
 		Array.from(new Set(MOCK_CONTRADICTIONS.map((c) => c.topic))).sort()
 	);
 
+	// --- Clear, labelled dropdown options replace the bare filter buttons +
+	// native <select>. These only drive the *control*, not the filter math:
+	// `filterOptions` writes into the same `filter` state, `topicOptions` into
+	// the same `topicFilter` state. ---
+	const filterOptions: DropdownOption[] = [
+		{ value: 'all', label: 'All contradictions', icon: 'contradictions' },
+		{ value: 'recent', label: 'Recent (last 7 days)', icon: 'timeline' },
+		{ value: 'high-trust', label: 'High trust (>60%)', icon: 'importance' },
+		{ value: 'topic', label: 'By topic', icon: 'filter' },
+	];
+	const topicOptions = $derived<DropdownOption[]>([
+		{ value: '', label: 'All topics' },
+		...uniqueTopics.map((t) => ({
+			value: t,
+			label: t,
+			badge: MOCK_CONTRADICTIONS.filter((c) => c.topic === t).length,
+		})),
+	]);
+
+	// The Dropdown emits string values; keep the filter-reset behaviour the
+	// old buttons had (clearing focus when the lens changes) without altering
+	// what each filter selects.
+	function onFilterChange(v: string) {
+		filter = v as Filter;
+		focusedPairIndex = null;
+	}
+
 	const filtered = $derived.by<Contradiction[]>(() => {
 		switch (filter) {
 			case 'recent':
@@ -361,71 +393,76 @@
 
 <div class="min-h-full p-6 space-y-6">
 	<!-- Header -->
-	<header class="space-y-1">
-		<h1 class="text-2xl text-bright font-semibold tracking-tight">
-			Contradiction Constellation
-		</h1>
-		<p class="text-sm text-dim">Where your memory disagrees with itself</p>
-	</header>
+	<PageHeader
+		icon="contradictions"
+		title="Contradiction Constellation"
+		subtitle="Where your memory disagrees with itself"
+		accent="warning"
+	>
+		<span class="text-dim text-sm tabular-nums inline-flex items-center gap-1.5">
+			<AnimatedNumber value={filtered.length} /> in view
+		</span>
+	</PageHeader>
 
 	<!-- Stats bar -->
 	<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-		<div class="p-4 glass rounded-xl">
-			<div class="text-2xl text-bright font-bold">{TOTAL_CONTRADICTIONS_DETECTED}</div>
+		<div use:reveal={{ delay: 0, y: 12 }} class="p-4 glass rounded-xl lift">
+			<div class="text-2xl text-bright font-bold tabular-nums">
+				<AnimatedNumber value={TOTAL_CONTRADICTIONS_DETECTED} />
+			</div>
 			<div class="text-xs text-dim mt-1">
 				contradictions across {totalMemoriesInvolved.toLocaleString()} memories
 			</div>
 		</div>
-		<div class="p-4 glass rounded-xl">
-			<div class="text-2xl font-bold" style="color: #f59e0b">
-				{avgTrustDelta.toFixed(2)}
+		<div use:reveal={{ delay: 60, y: 12 }} class="p-4 glass rounded-xl lift">
+			<div class="text-2xl font-bold tabular-nums" style="color: #f59e0b">
+				<AnimatedNumber value={avgTrustDelta} decimals={2} />
 			</div>
 			<div class="text-xs text-dim mt-1">average trust delta</div>
 		</div>
-		<div class="p-4 glass rounded-xl">
-			<div class="text-2xl text-bright font-bold">{filtered.length}</div>
+		<div use:reveal={{ delay: 120, y: 12 }} class="p-4 glass rounded-xl lift">
+			<div class="text-2xl text-bright font-bold tabular-nums">
+				<AnimatedNumber value={filtered.length} />
+			</div>
 			<div class="text-xs text-dim mt-1">visible in current filter</div>
 		</div>
-		<div class="p-4 glass rounded-xl">
-			<div class="text-2xl font-bold" style="color: #ef4444">
-				{filtered.filter((c) => c.similarity > 0.7).length}
+		<div use:reveal={{ delay: 180, y: 12 }} class="p-4 glass rounded-xl lift">
+			<div class="flex items-center gap-2">
+				<span class="ping-host inline-flex">
+					<span class="w-2 h-2 rounded-full" style="background: #ef4444"></span>
+				</span>
+				<div class="text-2xl font-bold tabular-nums" style="color: #ef4444">
+					<AnimatedNumber value={filtered.filter((c) => c.similarity > 0.7).length} />
+				</div>
 			</div>
 			<div class="text-xs text-dim mt-1">strong conflicts</div>
 		</div>
 	</div>
 
 	<!-- Filter bar -->
-	<div class="flex flex-wrap gap-2 items-center">
-		{#each [{ id: 'all', label: 'All' }, { id: 'recent', label: 'Recent (7d)' }, { id: 'high-trust', label: 'High trust (>60%)' }, { id: 'topic', label: 'By topic' }] as f (f.id)}
-			<button
-				onclick={() => {
-					filter = f.id as Filter;
-					focusedPairIndex = null;
-				}}
-				class="px-3 py-1.5 rounded-lg text-xs border transition
-					{filter === f.id
-						? 'bg-synapse/15 border-synapse/40 text-synapse-glow'
-						: 'border-subtle/30 text-dim hover:text-text hover:bg-white/[0.03]'}"
-			>
-				{f.label}
-			</button>
-		{/each}
+	<div class="flex flex-wrap gap-3 items-end enter">
+		<Dropdown
+			options={filterOptions}
+			value={filter}
+			label="Lens"
+			icon="filter"
+			onChange={onFilterChange}
+		/>
 		{#if filter === 'topic'}
-			<select
+			<Dropdown
+				options={topicOptions}
 				bind:value={topicFilter}
-				class="ml-2 px-3 py-1.5 rounded-lg text-xs glass-subtle border border-subtle/30 text-text"
-			>
-				<option value="">All topics</option>
-				{#each uniqueTopics as t}
-					<option value={t}>{t}</option>
-				{/each}
-			</select>
+				label="Topic"
+				icon="contradictions"
+				placeholder="All topics"
+			/>
 		{/if}
 		{#if focusedPairIndex !== null}
 			<button
 				onclick={() => (focusedPairIndex = null)}
-				class="ml-auto px-3 py-1.5 rounded-lg text-xs border border-subtle/30 text-dim hover:text-text"
+				class="ml-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs border border-subtle/30 text-dim hover:text-text hover:border-synapse/30 hover:bg-white/[0.03] transition lift"
 			>
+				<Icon name="close" size={13} />
 				Clear focus
 			</button>
 		{/if}
@@ -433,11 +470,16 @@
 
 	<!-- Main view: constellation + sidebar -->
 	<div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4">
-		<!-- Constellation -->
+		<!-- Constellation. NOTE: no `use:reveal` on this wrapper or the
+		     ContradictionArcs SVG container — a transform/opacity entrance here
+		     would interfere with the constellation's own layout. -->
 		<div class="glass-panel rounded-2xl p-3 min-h-[520px] relative">
 			{#if filtered.length === 0}
-				<div class="flex items-center justify-center h-full text-dim text-sm">
-					No contradictions match this filter.
+				<div class="flex flex-col items-center justify-center h-full gap-3 text-center">
+					<div class="text-dim opacity-50 breathe">
+						<Icon name="contradictions" size={44} strokeWidth={1.2} />
+					</div>
+					<p class="text-dim text-sm">No contradictions match this filter.</p>
 				</div>
 			{:else}
 				<ContradictionArcs
@@ -451,10 +493,10 @@
 		</div>
 
 		<!-- Sidebar: pair list -->
-		<aside class="glass rounded-2xl p-3 space-y-2 max-h-[620px] overflow-y-auto">
+		<aside use:reveal={{ delay: 120, y: 16 }} class="glass rounded-2xl p-3 space-y-2 max-h-[620px] overflow-y-auto">
 			<div class="flex items-center justify-between px-1 pb-2 sticky top-0 bg-deep/60 backdrop-blur-sm z-10">
 				<span class="text-xs text-dim uppercase tracking-wider">Pairs</span>
-				<span class="text-xs text-muted">{visibleList.length}</span>
+				<span class="text-xs text-muted tabular-nums"><AnimatedNumber value={visibleList.length} /></span>
 			</div>
 
 			{#if visibleList.length === 0}
@@ -465,8 +507,9 @@
 				{@const c = entry.c}
 				{@const isFocused = focusedPairIndex === localIndex}
 				<button
+					use:reveal={{ delay: Math.min(localIndex * 35, 350), y: 10 }}
 					onclick={() => sidebarClick(localIndex)}
-					class="w-full text-left p-3 rounded-xl border transition
+					class="w-full text-left p-3 rounded-xl border transition lift
 						{isFocused
 							? 'bg-synapse/10 border-synapse/40 shadow-[0_0_12px_rgba(99,102,241,0.18)]'
 							: 'border-subtle/20 hover:border-synapse/30 hover:bg-white/[0.02]'}"

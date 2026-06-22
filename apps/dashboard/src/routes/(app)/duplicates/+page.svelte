@@ -9,6 +9,11 @@
 	import { onMount, onDestroy } from 'svelte';
 	import DuplicateCluster from '$components/DuplicateCluster.svelte';
 	import { clusterKey, filterByThreshold } from '$components/duplicates-helpers';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
+	import { reveal } from '$lib/actions/reveal';
+	import { spotlight } from '$lib/actions/interactions';
 
 	interface ClusterMemory {
 		id: string;
@@ -255,15 +260,20 @@
 
 <div class="relative mx-auto max-w-5xl space-y-6 p-6">
 	<!-- Header -->
-	<header class="space-y-2">
-		<h1 class="text-xl font-semibold text-bright">
-			Memory Hygiene — Duplicate Detection
-		</h1>
-		<p class="text-sm text-dim">
-			Cosine-similarity clustering over embeddings. Merges reinforce the winner's FSRS state;
-			losers inherit into the merged node. Dismissed clusters are hidden for this session only.
-		</p>
-	</header>
+	<PageHeader
+		icon="duplicates"
+		title="Memory Hygiene — Duplicate Detection"
+		subtitle="Cosine-similarity clustering over embeddings. Merges reinforce the winner's FSRS state; losers inherit into the merged node. Dismissed clusters are hidden for this session only."
+		accent="synapse"
+	>
+		<span
+			class="ping-host flex h-2 w-2 items-center justify-center text-synapse-glow"
+			aria-hidden="true"
+		>
+			<span class="breathe h-2 w-2 rounded-full bg-synapse-glow"></span>
+		</span>
+		<span class="text-xs text-dim">Live</span>
+	</PageHeader>
 
 	<!-- Controls panel -->
 	<div class="glass-panel flex flex-wrap items-center gap-5 rounded-2xl p-4">
@@ -292,17 +302,19 @@
 			aria-live="polite"
 		>
 			{#if loading}
-				<span class="h-2 w-2 animate-pulse rounded-full bg-synapse-glow"></span>
+				<span class="breathe h-2 w-2 rounded-full bg-synapse-glow text-synapse-glow"></span>
 				<span>Detecting…</span>
 			{:else if error}
 				<span class="h-2 w-2 rounded-full bg-decay"></span>
 				<span class="text-decay">Error</span>
 			{:else}
-				<span class="h-2 w-2 rounded-full bg-synapse-glow"></span>
-				<span>
-					{visibleClusters.length}
+				<span class="breathe h-2 w-2 rounded-full bg-synapse-glow text-synapse-glow"></span>
+				<span class="tabular-nums">
+					<AnimatedNumber value={visibleClusters.length} />
 					{visibleClusters.length === 1 ? 'cluster' : 'clusters'},
-					{totalDuplicates} potential duplicate{totalDuplicates === 1 ? '' : 's'}
+					<AnimatedNumber value={totalDuplicates} /> potential duplicate{totalDuplicates === 1
+						? ''
+						: 's'}
 				</span>
 			{/if}
 		</div>
@@ -335,18 +347,25 @@
 	{:else if loading}
 		<div class="space-y-3">
 			{#each Array(3) as _}
-				<div class="glass-subtle h-40 animate-pulse rounded-2xl"></div>
+				<div class="glass-subtle shimmer h-40 rounded-2xl"></div>
 			{/each}
 		</div>
 	{:else if visibleClusters.length === 0}
 		<div
-			class="glass-panel flex flex-col items-center gap-2 rounded-2xl p-12 text-center"
+			class="glass-panel enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center"
 		>
-			<div class="text-3xl">·</div>
-			<div class="text-sm font-medium text-bright">
-				No duplicates found above threshold.
+			<div
+				class="flex h-14 w-14 items-center justify-center rounded-2xl border border-recall/25 bg-recall/10 text-recall"
+			>
+				<Icon name="sparkle" size={26} draw />
 			</div>
-			<div class="text-xs text-muted">Memory is clean.</div>
+			<div class="text-sm font-medium text-bright">
+				No duplicates found — your memory is clean.
+			</div>
+			<div class="max-w-sm text-xs text-muted">
+				Nothing clusters above {(threshold * 100).toFixed(0)}% similarity. Lower the threshold to
+				surface looser matches.
+			</div>
 		</div>
 	{:else}
 		<div class="space-y-4">
@@ -358,30 +377,23 @@
 					threshold to narrow results.
 				</div>
 			{/if}
-			{#each renderedClusters as { c, key } (key)}
-				<div class="animate-[fadeSlide_0.35s_ease-out_both]">
-					<DuplicateCluster
-						similarity={c.similarity}
-						memories={c.memories}
-						suggestedAction={c.suggestedAction}
-						onDismiss={() => dismissCluster(key)}
-						onMerge={(winnerId, loserIds) => mergeCluster(key, winnerId, loserIds)}
-					/>
+			{#each renderedClusters as { c, key }, i (key)}
+				<div
+					class="spotlight-surface lift rounded-2xl"
+					use:reveal={{ delay: Math.min(i * 40, 400), y: 14 }}
+					use:spotlight
+				>
+					<div class="relative z-[1]">
+						<DuplicateCluster
+							similarity={c.similarity}
+							memories={c.memories}
+							suggestedAction={c.suggestedAction}
+							onDismiss={() => dismissCluster(key)}
+							onMerge={(winnerId, loserIds) => mergeCluster(key, winnerId, loserIds)}
+						/>
+					</div>
 				</div>
 			{/each}
 		</div>
 	{/if}
 </div>
-
-<style>
-	@keyframes fadeSlide {
-		from {
-			opacity: 0;
-			transform: translateY(8px);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0);
-		}
-	}
-</style>

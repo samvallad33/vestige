@@ -3,6 +3,12 @@
 	import { api } from '$stores/api';
 	import type { Memory } from '$types';
 	import FSRSCalendar from '$components/FSRSCalendar.svelte';
+	import PageHeader from '$components/PageHeader.svelte';
+	import Icon from '$components/Icon.svelte';
+	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
+	import AnimatedNumber from '$components/AnimatedNumber.svelte';
+	import { reveal } from '$lib/actions/reveal';
+	import { spotlight, magnetic } from '$lib/actions/interactions';
 	import {
 		classifyUrgency,
 		computeScheduleStats,
@@ -80,36 +86,44 @@
 		}
 	}
 
-	// The filter buttons.
+	// The review windows.
 	const FILTERS: { key: WindowFilter; label: string }[] = [
 		{ key: 'today', label: 'Due today' },
 		{ key: 'week', label: 'This week' },
 		{ key: 'month', label: 'This month' },
 		{ key: 'all', label: 'All upcoming' }
 	];
+
+	// Live, badge-counted options for the window Dropdown. Each badge reflects
+	// the exact bucket size so the choice is CLEAR before the user even opens it.
+	let windowOptions = $derived<DropdownOption[]>([
+		{ value: 'today', label: 'Due today', icon: 'schedule', badge: stats.dueToday, color: '#fbbf24' },
+		{ value: 'week', label: 'This week', icon: 'schedule', badge: stats.dueThisWeek, color: '#818cf8' },
+		{ value: 'month', label: 'This month', icon: 'schedule', badge: stats.dueThisMonth, color: '#c084fc' },
+		{ value: 'all', label: 'All upcoming', icon: 'schedule', badge: scheduled.length, color: '#6ee7b7' }
+	]);
+
+	let activeFilterLabel = $derived(FILTERS.find((f) => f.key === windowFilter)?.label ?? '');
 </script>
 
 <div class="p-6 max-w-7xl mx-auto space-y-6">
-	<div class="flex items-center justify-between flex-wrap gap-3">
-		<div>
-			<h1 class="text-xl text-bright font-semibold">Review Schedule</h1>
-			<p class="text-xs text-dim mt-1">FSRS-6 next-review dates across your memory corpus</p>
-		</div>
-		<div class="flex gap-1 p-1 glass-subtle rounded-xl">
-			{#each FILTERS as f}
-				<button
-					type="button"
-					onclick={() => (windowFilter = f.key)}
-					class="px-3 py-1.5 text-xs rounded-lg transition-all
-						{windowFilter === f.key
-						? 'bg-synapse/20 text-synapse-glow border border-synapse/30'
-						: 'text-dim hover:text-text hover:bg-white/[0.03] border border-transparent'}"
-				>
-					{f.label}
-				</button>
-			{/each}
-		</div>
-	</div>
+	<PageHeader
+		icon="schedule"
+		title="Review Schedule"
+		subtitle="FSRS-6 next-review dates across your memory corpus"
+		accent="warning"
+	>
+		<!-- Badge-counted window Dropdown — each option shows its exact bucket
+		     size, so the choice is clear before the menu even opens. -->
+		<Dropdown
+			options={windowOptions}
+			bind:value={windowFilter}
+			label="Window"
+			icon="filter"
+		/>
+	</PageHeader>
+
+	{#if activeFilterLabel}<span class="sr-only">{activeFilterLabel}</span>{/if}
 
 	{#if !loading && !errored && truncated}
 		<div class="px-3 py-2 glass-subtle rounded-lg text-[11px] text-dim">
@@ -121,16 +135,16 @@
 	{#if loading}
 		<div class="grid lg:grid-cols-[1fr_280px] gap-6">
 			<div class="space-y-3">
-				<div class="h-14 glass-subtle rounded-xl animate-pulse"></div>
+				<div class="h-14 glass-subtle rounded-xl shimmer"></div>
 				<div class="grid grid-cols-7 gap-2">
 					{#each Array(42) as _}
-						<div class="aspect-square glass-subtle rounded-lg animate-pulse"></div>
+						<div class="aspect-square glass-subtle rounded-lg shimmer"></div>
 					{/each}
 				</div>
 			</div>
 			<div class="space-y-3">
 				{#each Array(5) as _}
-					<div class="h-20 glass-subtle rounded-xl animate-pulse"></div>
+					<div class="h-20 glass-subtle rounded-xl shimmer"></div>
 				{/each}
 			</div>
 		</div>
@@ -140,8 +154,8 @@
 			<p class="text-xs text-dim">Could not fetch memories from /api/memories.</p>
 		</div>
 	{:else if scheduled.length === 0}
-		<div class="p-10 glass rounded-xl text-center space-y-4">
-			<div class="text-4xl text-dream/40">◷</div>
+		<div class="p-10 glass rounded-xl text-center space-y-4 enter">
+			<div class="mx-auto w-fit text-dream/50 breathe"><Icon name="schedule" size={42} strokeWidth={1.2} /></div>
 			<p class="text-sm text-bright font-medium">FSRS review schedule not yet populated.</p>
 			<p class="text-xs text-dim max-w-md mx-auto">
 				None of your {memories.length} memor{memories.length === 1 ? 'y has' : 'ies have'} a
