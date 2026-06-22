@@ -40,6 +40,8 @@ import {
 	clamp,
 	min,
 	mix,
+	fract,
+	abs,
 	positionLocal,
 } from 'three/tsl';
 
@@ -95,6 +97,10 @@ export class SemanticComputeStorm {
 	// a spring force back so the storm NEVER flies off-screen. Sized to the
 	// camera framing by the sandbox via setContainRadius().
 	private uContainRadius = uniform(48);
+	// Global hue rotation (advances over time) + how strongly the beat's mode
+	// tint overrides the rainbow (0 = full rainbow, 1 = full mode color).
+	private uHueShift = uniform(0);
+	private uModeTintAmt = uniform(0.25);
 
 	constructor(
 		renderer: { computeAsync: (node: ComputeDispatch) => Promise<void> },
@@ -123,7 +129,7 @@ export class SemanticComputeStorm {
 		this.bufferPhase = bufferPhase;
 
 		this.buildCompute(bufferPos, bufferVel, bufferPhase);
-		this.buildRender(bufferPos);
+		this.buildRender(bufferPos, bufferPhase);
 	}
 
 	private buildCompute(
@@ -143,9 +149,10 @@ export class SemanticComputeStorm {
 			const toTarget = vec3(this.uTarget).sub(pos);
 
 			// Mode 0 — Anchor: orbital swirl (tangential velocity around target).
+			// Gentler than before so particles revolve rather than fling outward.
 			const orbital = vec3(toTarget.z, float(0), toTarget.x.negate())
 				.normalize()
-				.mul(0.05);
+				.mul(0.03);
 
 			// Mode 1 — Connection: stream toward target + per-particle wave.
 			const wave = vec3(
@@ -173,38 +180,41 @@ export class SemanticComputeStorm {
 			// Ignition shockwave yanks particles toward the new node on each beat.
 			vel.addAssign(toTarget.normalize().mul(this.uIgnition.mul(0.02)));
 
-			// CONTAINMENT: soft spherical boundary around the focused target so the
-			// storm NEVER escapes the camera frame. Past uContainRadius a spring
-			// force pulls each particle back toward the target; the force ramps in
-			// smoothly (smoothstep-like) so the boundary reads as a glowing
-			// membrane, not a hard wall. The chaos attractor (Rössler) is
-			// unbounded by nature — this is what keeps mode 2 on-screen.
-			const distFromTarget = length(toTarget.negate()); // |pos - target|
-			const overflow = distFromTarget.sub(this.uContainRadius).max(0);
-			const pullBack = clamp(overflow.mul(0.012), 0, 0.6);
-			vel.addAssign(toTarget.normalize().mul(pullBack));
+			// RADIAL CONTAINMENT SPRING — the real fix for the runaway ring.
+			// Every particle is pulled toward a TARGET SHELL radius (a fraction of
+			// the contain radius), so the cloud forms a contained, breathing sphere
+			// instead of spiraling outward into an ever-bigger ring that clips the
+			// frame. The spring is two-sided: pulls IN when too far, pushes OUT when
+			// collapsed to the center, giving the storm volume without escape.
+			const distFromTarget = length(toTarget.negate());
+			const shellR = this.uContainRadius.mul(0.62); // comfortable in-frame shell
+			const radialErr = distFromTarget.sub(shellR); // + = outside, - = inside
+			// Per-particle phase varies each particle's preferred shell a touch so
+			// they spread across a thick band, not a razor-thin ring.
+			const band = sin(phase.mul(3.0).add(this.uTime.mul(0.3))).mul(shellR.mul(0.18));
+			const towardShell = toTarget.normalize().mul(radialErr.sub(band).mul(0.06));
+			vel.addAssign(towardShell);
 
-			// Hard velocity clamp so no single step can shoot a particle across
-			// the frame even at peak ignition / chaos divergence.
+			// Hard velocity clamp so no single step can shoot a particle far.
 			const speed = length(vel);
-			const maxSpeed = float(1.2);
+			const maxSpeed = float(0.9);
 			vel.assign(vel.mul(min(maxSpeed, speed).div(speed.max(0.0001))));
 
 			pos.addAssign(vel);
-			vel.mulAssign(0.95);
+			vel.mulAssign(0.94);
 
-			// Final safety net: if a particle still ends up beyond 1.35x the
-			// radius (extreme edge case), snap it onto the boundary shell so it
-			// can never be lost off-screen.
+			// Final hard safety net: clamp any particle that still ends up past the
+			// contain radius back onto the boundary shell — guarantees nothing can
+			// ever be off-screen, even mid chaos divergence.
 			const finalToTarget = vec3(this.uTarget).sub(pos);
 			const finalDist = length(finalToTarget.negate());
-			const hardR = this.uContainRadius.mul(1.35);
+			const hardR = this.uContainRadius;
 			const snapped = vec3(this.uTarget).sub(finalToTarget.normalize().mul(hardR));
 			pos.assign(mix(pos, snapped, finalDist.greaterThan(hardR).select(float(1), float(0))));
 		})().compute(this.count);
 	}
 
-	private buildRender(bufferPos: StorageBufferAttribute): void {
+	private buildRender(bufferPos: StorageBufferAttribute, bufferPhase: StorageBufferAttribute): void {
 		// SpriteNodeMaterial: emissive routed to bloom; additive against the void.
 		const mat = new SpriteNodeMaterial({
 			transparent: true,
@@ -218,22 +228,45 @@ export class SemanticComputeStorm {
 		// translated to its computed position. Assigning the bare storage element
 		// to positionNode (without positionLocal) collapses every quad to a point
 		// at its instance origin — the bug the audit caught.
+		const phaseStore = storage(bufferPhase, 'float', this.count);
 		const instancePos = storage(bufferPos, 'vec3', this.count).element(instanceIndex);
 		mat.positionNode = instancePos.add(positionLocal);
 
 		mat.colorNode = Fn(() => {
-			const anchor = vec3(0.0, 1.0, 0.85); // luminescent cyan
-			const link = vec3(0.2, 0.4, 1.0); // electric royal blue
-			const contradiction = vec3(1.0, 0.1, 0.3); // crimson neon
-			const base = select(
-				this.uMode.equal(0),
-				anchor,
-				select(this.uMode.equal(1), link, contradiction)
+			const pos = instancePos;
+			const ph = phaseStore.element(instanceIndex);
+			const radius = length(pos.sub(vec3(this.uTarget)));
+
+			// ── INSANE IRIDESCENT RAINBOW ──
+			// Hue drifts across the spectrum by per-particle phase + radius shell +
+			// time, plus a global beat-driven hue shift (uHueShift). Each particle
+			// is a different color and the whole cloud slowly rotates through the
+			// rainbow — a living aurora, not a flat tint.
+			const hue = fract(
+				ph.mul(0.16)
+					.add(radius.mul(0.045))
+					.add(this.uTime.mul(0.08))
+					.add(this.uHueShift)
 			);
-			// Brighten on ignition so the beat blazes through the bloom pass.
-			// The +0.55 floor keeps particles visibly glowing between beats so the
-			// storm never fades to black once ignition decays.
-			return base.mul(this.uIgnition.mul(3.0).add(0.55));
+			// hue → RGB (classic fract/abs hexagon palette), high saturation.
+			const r = clamp(abs(hue.mul(6).sub(3)).sub(1), 0, 1);
+			const g = clamp(float(2).sub(abs(hue.mul(6).sub(2))), 0, 1);
+			const b = clamp(float(2).sub(abs(hue.mul(6).sub(4))), 0, 1);
+			const rainbow = vec3(r, g, b);
+
+			// The beat's mode tint (crimson at a contradiction, cyan anchor, etc.)
+			// is blended IN by uModeTintAmt so dramatic beats still read their color
+			// while keeping the iridescent shimmer underneath.
+			const modeTint = select(
+				this.uMode.equal(2),
+				vec3(1.0, 0.08, 0.32), // contradiction → crimson
+				select(this.uMode.equal(3), vec3(1.0, 0.78, 0.1), vec3(0.1, 0.9, 1.0)) // surprise → gold, else cyan
+			);
+			const tinted = mix(rainbow, modeTint, this.uModeTintAmt);
+
+			// Brighten on ignition so beats blaze through the bloom pass; the +0.6
+			// floor keeps the rainbow glowing between beats.
+			return tinted.mul(this.uIgnition.mul(2.4).add(0.6));
 		})();
 
 		// One instanced sprite per particle; positions come from the GPU storage
@@ -252,6 +285,8 @@ export class SemanticComputeStorm {
 	async update(deltaSeconds: number): Promise<void> {
 		const dt = Math.max(0, Math.min(deltaSeconds, 0.05));
 		this.uTime.value += dt;
+		// Slowly rotate the whole rainbow so the cloud is always shimmering.
+		this.uHueShift.value = (this.uHueShift.value + dt * 0.05) % 1;
 		// Ignition decays toward 0 between beats (the colorNode floor keeps the
 		// storm glowing); spikes back up on transitionTo().
 		this.uIgnition.value = Math.max(0, this.uIgnition.value - dt * 2.0);
@@ -267,8 +302,12 @@ export class SemanticComputeStorm {
 	/** Fired on each narrative beat: retarget the storm + spike ignition. */
 	transitionTo(role: SemanticRole, worldPos: THREE.Vector3): void {
 		this.uTarget.value.copy(worldPos);
-		this.uMode.value = ROLE_MODE[role] ?? 1;
+		const mode = ROLE_MODE[role] ?? 1;
+		this.uMode.value = mode;
 		this.uIgnition.value = 8.0;
+		// Dramatic beats (contradiction=2, surprise=3) push their mode color over
+		// the rainbow so they read clearly; calm beats stay mostly iridescent.
+		this.uModeTintAmt.value = mode >= 2 ? 0.7 : 0.22;
 	}
 
 	/** Size the containment sphere (world units) so the storm always stays in
