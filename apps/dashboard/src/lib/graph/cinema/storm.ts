@@ -44,8 +44,15 @@ import {
 	abs,
 	floor,
 	positionLocal,
+	smoothstep,
+	oneMinus,
+	cross,
+	sqrt,
+	pow,
+	mx_noise_vec3,
 } from 'three/tsl';
-// note: .max()/.div()/.sub() etc. are fluent methods on TSL nodes — no import needed.
+// note: .max()/.div()/.sub()/.cos()/.sin()/.log()/.lessThanEqual() etc. are
+// fluent methods on TSL nodes — no import needed.
 
 export type SemanticRole = 'anchor' | 'connection' | 'contradiction';
 
@@ -112,13 +119,24 @@ export class SemanticComputeStorm {
 	// Acts II/III blaze at full. 1.0 = full brightness. Starts very low so the
 	// pre-first-beat / beat-0 boot frames fade in soft instead of flashing white.
 	private uActDim = uniform(0.12);
-	// MORPH TARGET — which sculpted form the cloud reforms into. Advances slowly
-	// over time and snaps to the next form on each beat, so the storm is forever
-	// shape-shifting: sphere → torus → galaxy spiral → cube lattice → wave sheet →
-	// (loops). The integer part selects the current form, the fractional part
-	// cross-fades into the next, so morphs are fluid, never a hard pop.
-	private uShape = uniform(0);
-	private readonly shapeCount = 5;
+	// WORLD STATE MACHINE — each narrative beat (1..7) is a UNIQUE visual world:
+	//   0 nebula mist · 1 orbital anchor · 2 strange attractor · 3 detonation void
+	//   4 crystal lattice · 5 fluid galaxy · 6 phyllotaxis bloom
+	// Beats map 1:1 to worlds (beatIndex % 7). The compute kernel builds all 7
+	// home targets + forces and select()s the live one — particles are never
+	// swapped, only the forces acting on them, which IS the journey.
+	private uWorld = uniform(0);
+	private uPrevWorld = uniform(0);
+	// Crossfade prev→current world over ~1s after each beat (eased in update()).
+	// 1 = fully previous world, 0 = fully current.
+	private uBlend = uniform(0);
+	private readonly worldCount = 7;
+	// COLOR BLAST — a LONG-LIVED chroma envelope, decoupled from the fast physics
+	// burst so the detonation color OUTLIVES the shockwave (owner: "color too
+	// brief"). uBlast is the 0..1 magnitude (slow ~2.8s decay); uBlastTime counts
+	// seconds since the last detonation and drives the outward spectral wave.
+	private uBlast = uniform(0);
+	private uBlastTime = uniform(0);
 
 	constructor(
 		renderer: { computeAsync: (node: ComputeDispatch) => Promise<void> },
@@ -178,11 +196,7 @@ export class SemanticComputeStorm {
 			const vel = velStore.element(instanceIndex);
 			const phase = phaseStore.element(instanceIndex);
 
-			// ── EACH PARTICLE'S "HOME" — a deterministic point on a SCULPTED FORM
-			// around the ORIGIN, derived purely from its phase. The cloud reforms to
-			// these homes between beats, so the centroid is ANCHORED to origin and
-			// CANNOT drift. But instead of always a sphere, the home MORPHS through a
-			// gallery of trippy forms (uShape) — the storm is forever shape-shifting.
+			// ── DETERMINISTIC PER-PARTICLE BASIS (phase → stable spherical coords) ──
 			const a1 = phase.mul(12.9898).sin().mul(43758.5453);
 			const a2 = phase.mul(78.233).sin().mul(12543.531);
 			const a3 = phase.mul(39.346).sin().mul(24634.633);
@@ -192,92 +206,89 @@ export class SemanticComputeStorm {
 			const theta = u.mul(6.28318); // azimuth 0..2π
 			const phi = v.mul(3.14159); // polar 0..π
 			const R = this.uContainRadius;
-			// Per-particle radial fill biased to the OUTER shell (0.62..1.0) so
-			// particles spread across the surface of each form and read as distinct
-			// COLOR, instead of piling into a dense central core that additive-blooms
-			// to white. Squaring pushes even more mass outward. This is what finally
-			// kills the white center while keeping the volumetric feel.
+			// Outer-shell bias (0.62..1.0) keeps the core hollow → reads as color,
+			// not a white-blooming dense center. (The dialed-in anti-white-out.)
 			const shellT = fract(phase.mul(3.7));
 			const homeFrac = float(0.62).add(shellT.mul(shellT).mul(0.38));
+			const fi = float(instanceIndex); // particle index as float (phyllotaxis)
 
-			// ── FORM 0 · SPHERE (volumetric orb) ──
-			const sphere = vec3(
-				sin(phi).mul(cos(theta)),
-				cos(phi),
-				sin(phi).mul(sin(theta))
-			).mul(R.mul(homeFrac));
+			// ── CURL NOISE (divergence-free flow → worlds 0 nebula, 5 fluid) ──
+			// Never clumps, never stops; the signature "living smoke" motion.
+			const curl = Fn(([p]: [ReturnType<typeof vec3>]) => {
+				const e = float(0.6);
+				const dx = mx_noise_vec3(p.add(vec3(e, 0, 0))).sub(mx_noise_vec3(p.sub(vec3(e, 0, 0))));
+				const dy = mx_noise_vec3(p.add(vec3(0, e, 0))).sub(mx_noise_vec3(p.sub(vec3(0, e, 0))));
+				const dz = mx_noise_vec3(p.add(vec3(0, 0, e))).sub(mx_noise_vec3(p.sub(vec3(0, 0, e))));
+				return vec3(dy.z.sub(dz.y), dz.x.sub(dx.z), dx.y.sub(dy.x)).normalize();
+			});
 
-			// ── FORM 1 · TORUS (donut, ring radius 0.7R, tube 0.28R) ──
-			const tubeR = R.mul(0.28).mul(float(0.5).add(w2.mul(0.5)));
-			const ringR = R.mul(0.7);
-			const torus = vec3(
-				ringR.add(tubeR.mul(cos(phi.mul(2)))).mul(cos(theta)),
-				tubeR.mul(sin(phi.mul(2))),
-				ringR.add(tubeR.mul(cos(phi.mul(2)))).mul(sin(theta))
+			// ── 7 WORLD HOME TARGETS (all centered on origin → centroid can't drift) ──
+			const sphereShell = vec3(sin(phi).mul(cos(theta)), cos(phi), sin(phi).mul(sin(theta)));
+			const wNebula = sphereShell.mul(R.mul(homeFrac)); // world 0 (and 3 base)
+			const wAnchor = sphereShell.mul(R.mul(float(0.5).add(shellT.mul(0.3)))); // world 1
+			// world 2 attractor: home is "ahead" along the Thomas flow from current pos.
+			const bT = float(0.19);
+			const thomas = vec3(
+				sin(pos.y).sub(pos.x.mul(bT)),
+				sin(pos.z).sub(pos.y.mul(bT)),
+				sin(pos.x).sub(pos.z.mul(bT))
 			);
-
-			// ── FORM 2 · GALAXY SPIRAL (flat logarithmic spiral disc, 2 arms) ──
-			const arm = u.mul(6.28318).mul(3).add(w2.mul(0.6)); // winding
+			const wAttractor = pos.add(thomas.mul(R.mul(0.12)));
+			const wVoid = wNebula; // world 3 = sphere; the burst dominates this beat
+			const wCrystal = vec3( // world 4 cube lattice
+				u.sub(0.5).mul(2).mul(R.mul(0.8)),
+				v.sub(0.5).mul(2).mul(R.mul(0.8)),
+				w2.sub(0.5).mul(2).mul(R.mul(0.8))
+			);
+			const armAng = u.mul(6.28318).mul(3).add(w2.mul(0.6)); // world 5 galaxy spiral
 			const gr = R.mul(0.2).add(R.mul(0.8).mul(w2));
-			const galaxy = vec3(
-				gr.mul(cos(arm)),
-				R.mul(0.06).mul(sin(phase.mul(20))), // thin disc with slight z jitter
-				gr.mul(sin(arm))
+			const wGalaxy = vec3(
+				gr.mul(cos(armAng)),
+				R.mul(0.06).mul(sin(phase.mul(20))),
+				gr.mul(sin(armAng))
 			);
+			const golden = float(2.39996323); // world 6 phyllotaxis (Vogel sunflower)
+			const pAng = fi.mul(golden);
+			const pRad = sqrt(fi).mul(R.mul(0.0042)); // ~R at 150k particles
+			const wPhyllo = vec3(pAng.cos().mul(pRad), R.mul(0.04).mul(sin(phase.mul(9))), pAng.sin().mul(pRad));
 
-			// ── FORM 3 · CUBE LATTICE (particles snapped onto a glowing box grid) ──
-			const cube = vec3(
-				u.sub(0.5).mul(2).mul(R.mul(0.85)),
-				v.sub(0.5).mul(2).mul(R.mul(0.85)),
-				w2.sub(0.5).mul(2).mul(R.mul(0.85))
-			);
+			// select() chain — no dynamic indexing in this TSL build.
+			const homeFor = (idx: ReturnType<typeof float>) =>
+				select(idx.equal(0), wNebula,
+				select(idx.equal(1), wAnchor,
+				select(idx.equal(2), wAttractor,
+				select(idx.equal(3), wVoid,
+				select(idx.equal(4), wCrystal,
+				select(idx.equal(5), wGalaxy, wPhyllo))))));
+			const homeCur = homeFor(float(this.uWorld));
+			const homePrev = homeFor(float(this.uPrevWorld));
+			// uBlend eases prev→cur (smoothstep) so the world morph is silky.
+			const blendE = smoothstep(float(0), float(1), oneMinus(this.uBlend));
+			const home = mix(homePrev, homeCur, blendE);
 
-			// ── FORM 4 · WAVE SHEET (rippling plane, sinusoidal height field) ──
-			const sx = u.sub(0.5).mul(2).mul(R.mul(0.95));
-			const sz = v.sub(0.5).mul(2).mul(R.mul(0.95));
-			const wave = vec3(
-				sx,
-				sin(sx.mul(0.35).add(this.uTime.mul(1.2)))
-					.add(cos(sz.mul(0.35).sub(this.uTime)))
-					.mul(R.mul(0.22)),
-				sz
-			);
-
-			// ── MORPH BLEND ── integer part of uShape picks the current form, the
-			// fractional part cross-fades into the next, so the cloud fluidly melts
-			// from one sculpture to the next. select()-chain because the build has no
-			// dynamic array indexing in TSL.
-			const sIdx = floor(this.uShape);
-			const sFrac = fract(this.uShape);
-			const formA = select(
-				sIdx.equal(0), sphere,
-				select(sIdx.equal(1), torus,
-				select(sIdx.equal(2), galaxy,
-				select(sIdx.equal(3), cube, wave)))
-			);
-			const formB = select(
-				sIdx.equal(0), torus,
-				select(sIdx.equal(1), galaxy,
-				select(sIdx.equal(2), cube,
-				select(sIdx.equal(3), wave, sphere)))
-			);
-			// smoothstep-ish ease on the cross-fade for a silky morph.
-			const ease = sFrac.mul(sFrac).mul(float(3).sub(sFrac.mul(2)));
-			const home = mix(formA, formB, ease); // centered on origin
-
-			// ── DETONATION: on each beat uBurst≈1 → blow particles radially OUT
-			// from origin (the explosion in photo 2). Strength scales with the
-			// particle's own radius so the burst is a full-volume shockwave.
+			// ── DETONATION: per-particle staggered radial blast so it blooms as a
+			// shockwave, not all-at-once. uBurst spikes on each beat, decays fast.
 			const outDir = pos.normalize();
-			vel.addAssign(outDir.mul(this.uBurst.mul(0.9)));
+			const stagger = oneMinus(fract(phase.mul(7.3)).mul(0.4));
+			vel.addAssign(outDir.mul(this.uBurst.mul(0.95).mul(stagger)));
 
-			// ── REFORM: a spring pulling each particle back to its home. As uBurst
-			// decays the spring wins, crystallizing the explosion back into the orb.
-			const toHome = home.sub(pos);
-			vel.addAssign(toHome.mul(0.045));
+			// ── REFORM SPRING toward the (blended) world home ──
+			vel.addAssign(home.sub(pos).mul(0.045));
 
-			// Subtle living shimmer so the reformed orb breathes (mean-zero, no net
-			// drift — uses the particle's own home direction, not a global bias).
+			// ── PER-WORLD MOTION MODIFIERS (added to the spring) ──
+			// worlds 0 & 5: curl turbulence (living mist / liquid arms)
+			const curlV = curl(pos.mul(0.045).add(vec3(0, this.uTime.mul(0.2), 0)));
+			const curlAmt = select(this.uWorld.equal(0), float(0.05),
+				select(this.uWorld.equal(5), float(0.06), float(0.0)));
+			vel.addAssign(curlV.mul(curlAmt));
+			// world 1: orbital spin around Y (cross product → orbit, not collapse)
+			vel.addAssign(cross(vec3(0, 1, 0), pos).mul(0.0009).mul(select(this.uWorld.equal(1), float(1), float(0))));
+			// world 2: integrate the Thomas attractor (chaos lattice)
+			vel.addAssign(thomas.mul(0.012).mul(select(this.uWorld.equal(2), float(1), float(0))));
+			// world 5: tangential swirl for liquid galaxy arms
+			vel.addAssign(cross(vec3(0, 1, 0), pos).mul(0.0016).mul(select(this.uWorld.equal(5), float(1), float(0))));
+
+			// Subtle living shimmer (mean-zero, no net drift).
 			const shimmer = home.normalize().mul(sin(this.uTime.mul(1.3).add(phase.mul(6.1))).mul(0.015));
 			vel.addAssign(shimmer);
 
@@ -289,13 +300,12 @@ export class SemanticComputeStorm {
 			pos.addAssign(vel);
 			vel.mulAssign(0.9); // strong damping → crisp crystallization, no overshoot
 
-			// ── PIXELATION: as particles crystallize (low burst) snap positions to
-			// a 3D GRID so the cloud resolves into discrete colored voxels — the
-			// crystalline look of photo 3. The grid is finest when fully reformed
-			// (burst≈0) and dissolves during the explosion (burst≈1).
-			const cell = mix(float(0.55), float(6.0), clamp(this.uBurst, 0, 1)); // small cell = fine pixels
+			// ── PIXELATION: voxel snap as particles crystallize (low burst). World 4
+			// (crystal lattice) pushes it hardest for the holographic shard look.
+			const crystalBoost = select(this.uWorld.equal(4), float(1.6), float(1.0));
+			const cell = mix(float(0.55), float(6.0), clamp(this.uBurst, 0, 1));
 			const quantized = floor(pos.div(cell)).add(0.5).mul(cell);
-			const pixelAmt = clamp(float(1).sub(this.uBurst.mul(1.4)), 0, 0.9);
+			const pixelAmt = clamp(oneMinus(this.uBurst.mul(1.4)), 0, 0.9).mul(crystalBoost).min(0.9);
 			pos.assign(mix(pos, quantized, pixelAmt));
 
 			// Final hard safety net: clamp anything past the contain radius back
@@ -336,6 +346,38 @@ export class SemanticComputeStorm {
 		// colorNode, so the bloom had NO color to bloom — it washed the frame to
 		// white. Routing the SAME rainbow to emissive makes the bloom glow in full
 		// spectral color, which is the whole point.
+
+		// ── IQ COSINE PALETTE ── one scalar t → smooth, vivid, loopable color.
+		// color(t) = a + b·cos(2π·(c·t + d)). The workhorse for per-world palettes
+		// and the spectral dispersion wave.
+		const palette = Fn(
+			([t, a, b, c, d]: [
+				ReturnType<typeof float>,
+				ReturnType<typeof vec3>,
+				ReturnType<typeof vec3>,
+				ReturnType<typeof vec3>,
+				ReturnType<typeof vec3>,
+			]) => a.add(b.mul(cos(c.mul(t).add(d).mul(6.28318))))
+		);
+
+		// ── BLACKBODY K→RGB ── real plasma-cooling color (Tanner-Helland approx).
+		// Drives the detonation: blue-white core (hot) cooling to red embers as the
+		// blast decays. if/else collapsed to select() for this TSL build.
+		const blackbody = Fn(([kelvin]: [ReturnType<typeof float>]) => {
+			const k = kelvin.div(100.0);
+			const rHot = pow(k.sub(60.0).max(0.0001), float(-0.1332047592)).mul(329.698727446);
+			const r = k.lessThanEqual(66.0).select(float(255.0), rHot);
+			const gCool = k.max(0.0001).log().mul(99.4708025861).sub(161.1195681661);
+			const gHot = pow(k.sub(60.0).max(0.0001), float(-0.0755148492)).mul(288.1221695283);
+			const g = k.lessThanEqual(66.0).select(gCool, gHot);
+			const bMid = k.sub(10.0).max(0.0001).log().mul(138.5177312231).sub(305.0447927307);
+			const b = k.greaterThanEqual(66.0).select(
+				float(255.0),
+				k.lessThanEqual(19.0).select(float(0.0), bMid)
+			);
+			return clamp(vec3(r, g, b).div(255.0), 0, 1);
+		});
+
 		const rainbowColor = Fn(() => {
 			const pos = instancePos;
 			const ph = phaseStore.element(instanceIndex);
@@ -354,11 +396,25 @@ export class SemanticComputeStorm {
 					.add(this.uHueShift)
 			);
 			// hue → RGB at FULL saturation (HSV S=1,V=1) hexagon ramps. Pure jewel
-			// tone per particle, never desaturated toward luma.
+			// tone per particle — the universal base spectrum.
 			const r0 = clamp(abs(hue.mul(6).sub(3)).sub(1), 0, 1);
 			const g0 = clamp(float(2).sub(abs(hue.mul(6).sub(2))), 0, 1);
 			const b0 = clamp(float(2).sub(abs(hue.mul(6).sub(4))), 0, 1);
-			const rainbow = vec3(r0, g0, b0);
+			const baseRainbow = vec3(r0, g0, b0);
+
+			// ── PER-WORLD PALETTE ── each world gets its own cosine-palette identity
+			// so the journey reads as distinct PLACES: nebula teal, anchor gold,
+			// crystal foil-blue, galaxy magenta→cyan, phyllo/attractor full rainbow.
+			const dWorld = select(this.uWorld.equal(0), vec3(0.55, 0.6, 0.7), // nebula teal/indigo
+				select(this.uWorld.equal(1), vec3(0.05, 0.12, 0.2), // anchor gold/amber
+				select(this.uWorld.equal(4), vec3(0.0, 0.25, 0.5), // crystal foil
+				select(this.uWorld.equal(5), vec3(0.8, 0.0, 0.33), // galaxy magenta→cyan
+				vec3(0.0, 0.33, 0.67))))); // attractor/void/phyllo → full spectrum
+			const cWorld = select(this.uWorld.equal(5), vec3(2.0), vec3(1.0)); // galaxy = tighter banding
+			const worldPal = palette(hue, vec3(0.5), vec3(0.5), cWorld, dWorld);
+			// Blend the world palette with the pure base rainbow so it's both vivid
+			// AND world-flavored (not a flat single hue).
+			const rainbow = mix(baseRainbow, worldPal, 0.6);
 
 			// Beat mode tint (crimson contradiction / gold surprise / cyan default)
 			// blended by uModeTintAmt so dramatic beats read their color.
@@ -388,21 +444,51 @@ export class SemanticComputeStorm {
 			return float(0.12).add(edge.mul(0.95)); // 0.12 core → ~1.07 rim
 		});
 
-		// colorNode: surface color × rim falloff × act dimmer. Moderate base so
-		// additive overlap blends hues (kaleidoscope) rather than summing to white.
+		// ── THE COLOR BLAST ── the signature detonation chroma. Keyed on the LONG
+		// uBlast envelope (~2.8s) so the color OUTLIVES the physics burst (owner's
+		// "color too brief" fix). Two layers: a blackbody plasma core that cools as
+		// the blast ages, and an outward-traveling SPECTRAL DISPERSION WAVE — rainbow
+		// shockwave rings expanding through the radius over uBlastTime, like a prism
+		// shattering. The unexpected color blast nobody else ships.
+		const blastColor = Fn(() => {
+			const pos = instancePos;
+			const b = clamp(this.uBlast, 0, 1);
+			const bt = this.uBlastTime;
+			const rNorm = clamp(length(pos).div(this.uContainRadius.max(0.0001)), 0, 1);
+			// Blackbody embers: a WARM core (capped ~5200K so it's hot-orange, NOT
+			// blinding blue-white — the white-out the owner saw was a 13000K plasma
+			// flash). Gentle gain so it tints, never dominates.
+			const kelvin = mix(float(1600.0), float(5200.0), b);
+			const gain = clamp(b.mul(1.1).add(0.4), 0, 1.3);
+			const fire = blackbody(kelvin).mul(gain);
+			// THE STAR OF THE BLAST — an outward SPECTRAL DISPERSION shockwave:
+			// concentric rainbow rings travel out through the radius over time (red
+			// lags, blue leads — real prism order). This is the color, not the fire.
+			const specT = fract(rNorm.mul(1.6).sub(bt.mul(1.5)));
+			const spectrum = palette(specT, vec3(0.55), vec3(0.55), vec3(3.0), vec3(0.0, 0.33, 0.67));
+			// Spectrum DOMINATES (0.78); a touch of warm fire underneath for energy.
+			// The owner wants a COLOR blast, so the rainbow wins over the plasma.
+			return mix(fire, spectrum, float(0.78));
+		});
+
+		// colorNode: world color × rim × act dim, then the blast overrides toward
+		// detonation chroma at the peak and lingers (the long uBlast tail) before
+		// melting back into the next world's palette.
 		mat.colorNode = Fn(() => {
 			const glow = clamp(this.uIgnition.mul(0.05).add(0.5), 0, 1.0);
-			return rainbowColor().mul(glow).mul(rimFactor()).mul(this.uActDim);
+			const world = rainbowColor().mul(glow).mul(rimFactor()).mul(this.uActDim);
+			const blastMix = smoothstep(float(0.0), float(0.85), clamp(this.uBlast, 0, 1));
+			return mix(world, blastColor().mul(rimFactor()).mul(this.uActDim), blastMix);
 		})();
 
-		// emissiveNode: what the selective bloom reads — THE glow channel. The rim
-		// factor means ONLY the outer shell feeds the bloom hard, so the storm
-		// haloes as a luminous spectral RING/SHELL with a calm dark center, instead
-		// of a solid white blob. Modest base gain keeps overlapping hues blending
-		// to new colors, never clipping past white.
+		// emissiveNode: what the selective bloom reads — THE glow channel. Rim-gated
+		// so ONLY the outer shell blooms (calm dark center, no white blob). The blast
+		// gain is held below the color path (×0.85) so the bloom never clips white.
 		mat.emissiveNode = Fn(() => {
 			const emGain = clamp(this.uIgnition.mul(0.04).add(0.6), 0, 1.1);
-			return rainbowColor().mul(emGain).mul(rimFactor()).mul(this.uActDim);
+			const world = rainbowColor().mul(emGain).mul(rimFactor()).mul(this.uActDim);
+			const blastMix = smoothstep(float(0.0), float(0.85), clamp(this.uBlast, 0, 1));
+			return mix(world, blastColor().mul(0.85).mul(rimFactor()).mul(this.uActDim), blastMix);
 		})();
 
 		// One instanced sprite per particle. Small quads (0.1) keep individual
@@ -423,17 +509,17 @@ export class SemanticComputeStorm {
 		this.uTime.value += dt;
 		// Slowly rotate the whole rainbow so the cloud is always shimmering.
 		this.uHueShift.value = (this.uHueShift.value + dt * 0.06) % 1;
-		// Drift the morph target forward continuously so the cloud is ALWAYS
-		// melting toward the next sculpted form (even mid-beat). Beats snap it to
-		// the next whole form for a dramatic transform; this slow drift keeps it
-		// alive between beats. Wraps around the gallery.
-		this.uShape.value = (this.uShape.value + dt * 0.09) % this.shapeCount;
-		// Ignition decays toward 0 between beats (the colorNode floor keeps the
-		// storm glowing); spikes back up on transitionTo().
+		// World crossfade: ease uBlend 1→0 over ~1s after each beat so the cloud
+		// melts from the previous world's home/forces into the new one's.
+		this.uBlend.value = Math.max(0, this.uBlend.value - dt * 1.0);
+		// Ignition decays toward 0 between beats (spikes back up on transitionTo()).
 		this.uIgnition.value = Math.max(0, this.uIgnition.value - dt * 2.0);
-		// Burst decays fast so the explosion crystallizes back within ~1.2s,
-		// leaving the rest of the beat as a calm pixelated orb.
+		// Burst decays fast so the explosion crystallizes back within ~1.2s.
 		this.uBurst.value = Math.max(0, this.uBurst.value - dt * 0.85);
+		// COLOR BLAST: slow decay (~2.8s) so the detonation chroma LASTS, and the
+		// wave clock counts up so the spectral shockwave travels outward over time.
+		this.uBlast.value = Math.max(0, this.uBlast.value - dt * 0.35);
+		this.uBlastTime.value += dt;
 
 		// Wait for any in-flight compute to finish before queuing the next.
 		if (this.computeInFlight) await this.computeInFlight;
@@ -457,23 +543,28 @@ export class SemanticComputeStorm {
 		this.uTarget.value.copy(worldPos);
 		const mode = ROLE_MODE[role] ?? 1;
 		this.uMode.value = mode;
-		// Per-beat warm-up dim: beat 0 ≈0.12, beat 1 ≈0.22, beat 2 ≈0.45, then it
-		// hands off to the act-based brightness. This specifically tames beats 0/1
-		// (the only ones still washing out) without dimming the rest of Act I.
-		const warmup =
-			beatIndex === 0 ? 0.12 : beatIndex === 1 ? 0.2 : null;
+
+		// WORLD ADVANCE: beats map 1:1 to the 7 worlds. Record the outgoing world
+		// and reset the crossfade so the cloud melts prev→new over ~1s.
+		this.uPrevWorld.value = this.uWorld.value;
+		this.uWorld.value = beatIndex % this.worldCount;
+		this.uBlend.value = 1; // 1 = fully previous; update() eases it to 0
+
+		// Per-beat warm-up dim: beats 0/1 stay calm (dialed-in safety), then hands
+		// off to the act-based brightness. Acts II/III blaze.
+		const warmup = beatIndex === 0 ? 0.12 : beatIndex === 1 ? 0.2 : null;
 		const actDim = act === 'I' ? 0.26 : 1.0;
 		this.uActDim.value = warmup ?? actDim;
-		// Ignition flash: nearly none on beats 0/1 (no punch while bunched), gentle
-		// for the rest of Act I, full blaze for Acts II/III.
+		// Ignition flash: nearly none on beats 0/1, gentle for the rest of Act I,
+		// full blaze for Acts II/III.
 		this.uIgnition.value = beatIndex <= 1 ? 0.4 : act === 'I' ? 1.6 : 8.0;
-		// DETONATE: every beat explodes the orb, then it crystallizes/pixelates
-		// back. Contradictions detonate hardest.
-		this.uBurst.value = mode === 2 ? 1.0 : 0.8;
-		// MORPH: snap the cloud onward to the NEXT sculpted form on this beat, so
-		// every narrative beat transforms the geometry (sphere→torus→galaxy→cube→
-		// wave→…). Round up to the next whole index, then wrap.
-		this.uShape.value = (Math.floor(this.uShape.value) + 1) % this.shapeCount;
+		// PHYSICS BURST (fast) — contradiction + the DETONATION world (3) hit hardest.
+		const isDetonation = this.uWorld.value === 3;
+		this.uBurst.value = mode === 2 || isDetonation ? 1.0 : 0.8;
+		// COLOR BLAST (LONG) — fire the chroma envelope + reset its outward-wave
+		// clock. Beats 0/1 keep it very low so the calm opener never flashes.
+		this.uBlast.value = beatIndex <= 1 ? 0.25 : 1.0;
+		this.uBlastTime.value = 0;
 		// Dramatic beats (contradiction=2, surprise=3) push their mode color over
 		// the rainbow so they read clearly; calm beats stay mostly iridescent.
 		this.uModeTintAmt.value = mode >= 2 ? 0.7 : 0.22;
