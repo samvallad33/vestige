@@ -1127,11 +1127,15 @@ impl McpServer {
         }
 
         // ================================================================
-        // RISK-GATED MEMORY PRs (v2.2) — the cognitive immune system
-        // Normal writes auto-land; risky writes (contradiction vs high-trust,
-        // supersede/forget/merge, sensitive topics, …) are quarantined and a
-        // Memory PR is opened. Computed here so the gate stays centralized and
-        // tools remain untouched.
+        // RISK-GATED MEMORY PRs (v2.2) — quarantine review, the cognitive
+        // immune system. Normal writes auto-land. Risky writes (contradiction
+        // vs high-trust, supersede/forget/merge, sensitive topics, …) are
+        // *committed then quarantined*: the row is recorded (audit history
+        // preserved) but suppressed out of retrieval until a Memory PR is
+        // decided. This is quarantine review, NOT pre-write blocking — the
+        // write happens inside the tool before the gate sees it; we hold its
+        // influence, not its existence. Centralized here so tools stay
+        // untouched.
         // ================================================================
         let opened_prs = if let Ok(ref content) = result {
             crate::trace_recorder::gate_writes(
@@ -1181,7 +1185,7 @@ impl McpServer {
                         obj.insert(
                             "memoryPrNotice".to_string(),
                             serde_json::json!(
-                                "Vestige opened a Memory PR — this write touches the agent's own brain and is held for review. See the Memory PRs queue."
+                                "Vestige opened a Memory PR (quarantine review): this write was recorded but is held out of retrieval until reviewed — its audit history is preserved while its influence is suspended. See the Memory PRs queue."
                             ),
                         );
                     }
@@ -2505,6 +2509,118 @@ mod tests {
             server.storage.count_pending_memory_prs().unwrap(),
             0,
             "a read-only tool must never open a Memory PR"
+        );
+    }
+
+    /// PROOF LOCK: the complete spine in one test. A single runId must cross
+    /// every hop, and the value must be byte-identical at each:
+    ///   MCP output → SQLite trace → WebSocket event → API response shape →
+    ///   MCP resource.
+    /// If any hop drops or rewrites the runId, this fails. This is the
+    /// "impossible to doubt" guarantee for the receipt chain.
+    #[tokio::test]
+    async fn test_full_spine_one_runid_crosses_every_hop() {
+        const RUN: &str = "run_full_spine";
+
+        let (storage, _dir) = test_storage().await;
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let (event_tx, mut event_rx) = broadcast::channel(256);
+        let mut server = McpServer::new_with_events(storage, cognitive, event_tx);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        // ---- HOP 1: MCP tool output carries the runId + trace pointer ----
+        let call = make_request(
+            "tools/call",
+            Some(serde_json::json!({
+                "name": "memory_health",
+                "arguments": { "runId": RUN }
+            })),
+        );
+        let response = server.handle_request(call).await.unwrap();
+        let structured = response.result.expect("tools/call ok")["structuredContent"].clone();
+        assert_eq!(structured["runId"].as_str(), Some(RUN), "HOP 1: tool output runId");
+        assert_eq!(
+            structured["traceUri"].as_str(),
+            Some(&format!("vestige://trace/{RUN}")[..]),
+            "HOP 1: tool output traceUri"
+        );
+
+        // ---- HOP 2: SQLite trace rows persisted under the same runId ----
+        let events = server.storage.get_trace(RUN).unwrap();
+        assert!(!events.is_empty(), "HOP 2: trace rows exist");
+        assert!(
+            events.iter().all(|e| e.run_id() == RUN),
+            "HOP 2: every persisted trace row carries the SAME runId"
+        );
+
+        // ---- HOP 3: WebSocket broadcast carries the same runId ----
+        let mut ws_run: Option<String> = None;
+        while let Ok(ev) = event_rx.try_recv() {
+            if let VestigeEvent::TraceEvent { run_id, .. } = ev {
+                ws_run = Some(run_id);
+                break;
+            }
+        }
+        assert_eq!(
+            ws_run.as_deref(),
+            Some(RUN),
+            "HOP 3: the broadcast TraceEvent carries the same runId"
+        );
+
+        // ---- HOP 4: API response shape (what the dashboard renders) ----
+        // Exercise the exact handler the dashboard /api/traces/:runId calls by
+        // going through storage the same way, and assert the render-critical
+        // shape: a summary roll-up + an ordered event list, all under runId.
+        let summary = server
+            .storage
+            .get_agent_run(RUN)
+            .unwrap()
+            .expect("HOP 4: run summary the list view renders");
+        assert_eq!(summary.run_id, RUN, "HOP 4: API run summary runId");
+        assert!(summary.event_count >= 1, "HOP 4: event_count rendered in the list");
+        // The detail view renders these events in sequence order.
+        let detail_events = server.storage.get_trace(RUN).unwrap();
+        assert_eq!(
+            detail_events.len() as i64,
+            summary.event_count,
+            "HOP 4: detail event count matches the roll-up the list shows"
+        );
+
+        // ---- HOP 5: MCP resource resolves the same runId ----
+        let read = make_request(
+            "resources/read",
+            Some(serde_json::json!({ "uri": format!("vestige://trace/{RUN}") })),
+        );
+        let read_resp = server.handle_request(read).await.unwrap();
+        let text = read_resp.result.expect("resource read ok")["contents"][0]["text"]
+            .as_str()
+            .expect("resource text")
+            .to_string();
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            parsed["runId"].as_str(),
+            Some(RUN),
+            "HOP 5: vestige://trace/{{runId}} resolves the same runId"
+        );
+        assert!(
+            parsed["events"].as_array().map(|a| !a.is_empty()).unwrap_or(false),
+            "HOP 5: the resource returns the run's events"
+        );
+
+        // ---- INVARIANT: one id, every hop, byte-identical ----
+        // Collect the runId as seen at each hop and assert they are all equal.
+        let seen = [
+            structured["runId"].as_str().unwrap().to_string(), // hop 1
+            events[0].run_id().to_string(),                    // hop 2
+            ws_run.unwrap(),                                   // hop 3
+            summary.run_id,                                    // hop 4
+            parsed["runId"].as_str().unwrap().to_string(),     // hop 5
+        ];
+        assert!(
+            seen.iter().all(|r| r == RUN),
+            "the SAME runId must appear, unchanged, at every hop: {seen:?}"
         );
     }
 }

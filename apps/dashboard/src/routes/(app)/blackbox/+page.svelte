@@ -18,7 +18,14 @@
 	import Icon from '$components/Icon.svelte';
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
 	import { reveal } from '$lib/actions/reveal';
-	import { api, type TraceRunSummary, type TraceEvent, type TraceDetail } from '$lib/stores/api';
+	import ReceiptCard from '$components/ReceiptCard.svelte';
+	import {
+		api,
+		type TraceRunSummary,
+		type TraceEvent,
+		type TraceDetail,
+		type Receipt
+	} from '$lib/stores/api';
 	import { isConnected, liveRunId, lastTraceEvent, traceEvents } from '$lib/stores/websocket';
 	import {
 		eventColor,
@@ -38,6 +45,7 @@
 	let error = $state<string | null>(null);
 	let scrubIndex = $state(0); // index into detail.events
 	let proofMode = $state(false);
+	let receipts = $state<Receipt[]>([]);
 
 	// The events up to and including the scrubber position — what the agent had
 	// "experienced" at that moment in the run.
@@ -50,6 +58,15 @@
 	// Memory ids that have been touched up to the scrubber — the live pulse set.
 	const pulsedIds = $derived(
 		Array.from(new Set(visibleEvents.flatMap(eventMemoryIds)))
+	);
+
+	// Honest producer status for this run. Two event kinds depend on optional
+	// upstream producers that are off by default — we say so explicitly instead
+	// of rendering a confusing empty space.
+	const hasVeto = $derived(detail?.events.some((e) => e.type === 'sanhedrin.veto') ?? false);
+	const hasDream = $derived(detail?.events.some((e) => e.type === 'dream.patch') ?? false);
+	const hasContradiction = $derived(
+		detail?.events.some((e) => e.type === 'contradiction.detected') ?? false
 	);
 
 	async function loadRuns() {
@@ -69,6 +86,9 @@
 		try {
 			detail = await api.traces.get(runId);
 			scrubIndex = Math.max(0, (detail.events.length || 1) - 1);
+			// Receipts are the proof behind a run's retrievals. The list is
+			// recent-first; the newest typically belong to the just-selected run.
+			receipts = (await api.receipts.list(8)).receipts;
 		} catch (e) {
 			error = String(e);
 			detail = null;
@@ -290,6 +310,49 @@
 							</div>
 						{/if}
 					</div>
+
+					<!-- Producer status — honest about what's live vs. off-by-default -->
+					<div class="producers glass" use:reveal>
+						<h3 class="panel-title">Event producers <span class="text-dim">— this run</span></h3>
+						<ul class="producer-list">
+							<li class="producer ok">
+								<span class="p-dot"></span> mcp.call · memory.write · memory.retrieve · memory.suppress
+								<span class="p-state">live</span>
+							</li>
+							<li class="producer" class:ok={hasContradiction}>
+								<span class="p-dot"></span> contradiction.detected
+								<span class="p-state">
+									{hasContradiction ? 'fired this run' : 'no contradiction in this run'}
+								</span>
+							</li>
+							<li class="producer caveat" class:ok={hasDream}>
+								<span class="p-dot"></span> dream.patch
+								<span class="p-state">
+									{hasDream ? 'fired this run' : 'No dream run in this trace'}
+								</span>
+							</li>
+							<li class="producer caveat" class:ok={hasVeto}>
+								<span class="p-dot"></span> sanhedrin.veto
+								<span class="p-state">
+									{hasVeto ? 'fired this run' : 'No veto producer connected (optional Sanhedrin hook, off by default)'}
+								</span>
+							</li>
+						</ul>
+					</div>
+
+					<!-- Receipts — the nutrition label behind this run's retrievals -->
+					{#if receipts.length}
+						<div class="receipts-panel glass" use:reveal>
+							<h3 class="panel-title">
+								Receipts <span class="text-dim">— proof behind retrievals</span>
+							</h3>
+							<div class="receipts-grid">
+								{#each receipts.slice(0, 2) as r (r.receipt_id)}
+									<ReceiptCard receipt={r} />
+								{/each}
+							</div>
+						</div>
+					{/if}
 
 					<!-- Full event log -->
 					<div class="log glass" use:reveal>
@@ -708,6 +771,64 @@
 			transform: scale(1);
 			opacity: 1;
 		}
+	}
+
+	/* Receipts panel */
+	.receipts-panel {
+		padding: 16px 18px;
+	}
+	.receipts-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+		gap: 12px;
+	}
+
+	/* Producers — honest event-source status */
+	.producers {
+		padding: 16px 18px;
+	}
+	.producer-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 7px;
+	}
+	.producer {
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		font-size: 0.78rem;
+		color: var(--color-text-dim, #8b8ba7);
+	}
+	.producer .p-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: #475569;
+		flex-shrink: 0;
+	}
+	.producer.ok {
+		color: var(--color-text, #e2e2f0);
+	}
+	.producer.ok .p-dot {
+		background: var(--color-recall, #10b981);
+		box-shadow: 0 0 6px -1px var(--color-recall, #10b981);
+	}
+	.producer.caveat:not(.ok) .p-dot {
+		background: #f59e0b;
+		opacity: 0.6;
+	}
+	.p-state {
+		margin-left: auto;
+		font-size: 0.7rem;
+		font-style: italic;
+		text-align: right;
+		color: var(--color-text-dim, #8b8ba7);
+	}
+	.producer.caveat:not(.ok) .p-state {
+		color: #f59e0b;
 	}
 
 	/* Log */

@@ -181,6 +181,10 @@
 	<div class="manifesto" use:reveal>
 		Vestige <strong>auto-remembers ordinary context</strong>, but opens a
 		<strong>Memory PR</strong> when the agent tries to <strong>rewrite its own brain</strong>.
+		<span class="manifesto-note">
+			Risky writes are <strong>quarantine-reviewed</strong>: recorded for audit, but held
+			out of retrieval until you decide — influence suspended, history preserved.
+		</span>
 	</div>
 
 	<!-- ░░ MODE TOGGLE ░░ -->
@@ -373,6 +377,16 @@
 	}
 	.manifesto strong {
 		color: var(--color-synapse-glow, #818cf8);
+	}
+	.manifesto-note {
+		display: block;
+		margin-top: 8px;
+		font-size: 0.82rem;
+		line-height: 1.5;
+		color: var(--color-text-dim, #c0c0d8);
+	}
+	.manifesto-note strong {
+		color: #f59e0b;
 	}
 
 	.glass {
