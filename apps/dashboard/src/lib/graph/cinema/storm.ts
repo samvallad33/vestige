@@ -189,12 +189,16 @@ export class SemanticComputeStorm {
 			// frame. The spring is two-sided: pulls IN when too far, pushes OUT when
 			// collapsed to the center, giving the storm volume without escape.
 			const distFromTarget = length(toTarget.negate());
-			const shellR = this.uContainRadius.mul(0.62); // comfortable in-frame shell
+			// Each particle targets its OWN radius spread across the whole interior
+			// (0.12r .. 0.92r), so the cloud is a FILLED VOLUMETRIC ORB filling the
+			// frame — not a thin ring. The per-particle preferred radius is a stable
+			// function of its phase, gently breathing over time.
+			const prefFrac = float(0.12).add(
+				abs(sin(phase.mul(1.7).add(this.uTime.mul(0.12)))).mul(0.8)
+			);
+			const shellR = this.uContainRadius.mul(prefFrac);
 			const radialErr = distFromTarget.sub(shellR); // + = outside, - = inside
-			// Per-particle phase varies each particle's preferred shell a touch so
-			// they spread across a thick band, not a razor-thin ring.
-			const band = sin(phase.mul(3.0).add(this.uTime.mul(0.3))).mul(shellR.mul(0.18));
-			const towardShell = toTarget.normalize().mul(radialErr.sub(band).mul(0.06));
+			const towardShell = toTarget.normalize().mul(radialErr.mul(0.05));
 			vel.addAssign(towardShell);
 
 			// Hard velocity clamp so no single step can shoot a particle far.
@@ -250,15 +254,17 @@ export class SemanticComputeStorm {
 					.add(this.uTime.mul(0.08))
 					.add(this.uHueShift)
 			);
-			// hue → RGB (classic fract/abs hexagon palette), high saturation.
+			// hue → RGB (fract/abs hexagon palette). Pull the valleys UP slightly
+			// then re-saturate so the rainbow is vivid and FULLY saturated (not
+			// washed) — pure spectral color, never white.
 			const r = clamp(abs(hue.mul(6).sub(3)).sub(1), 0, 1);
 			const g = clamp(float(2).sub(abs(hue.mul(6).sub(2))), 0, 1);
 			const b = clamp(float(2).sub(abs(hue.mul(6).sub(4))), 0, 1);
 			const rainbow = vec3(r, g, b);
 
-			// The beat's mode tint (crimson at a contradiction, cyan anchor, etc.)
-			// is blended IN by uModeTintAmt so dramatic beats still read their color
-			// while keeping the iridescent shimmer underneath.
+			// The beat's mode tint (crimson at a contradiction, gold at surprise,
+			// cyan default) is blended in by uModeTintAmt so dramatic beats read
+			// their color while keeping the iridescent shimmer underneath.
 			const modeTint = select(
 				this.uMode.equal(2),
 				vec3(1.0, 0.08, 0.32), // contradiction → crimson
@@ -266,15 +272,19 @@ export class SemanticComputeStorm {
 			);
 			const tinted = mix(rainbow, modeTint, this.uModeTintAmt);
 
-			// Brighten on ignition so beats blaze through the bloom pass; the +0.6
-			// floor keeps the rainbow glowing between beats.
-			return tinted.mul(this.uIgnition.mul(2.4).add(0.6));
+			// Brightness is CLAMPED low so the rainbow shows as COLOR, not white.
+			// Additive blending across 150k overlapping sprites compounds fast — a
+			// high multiplier blows the core to pure white (the bug you saw). Keep
+			// the glow gentle (0.45 floor, +ignition up to ~1.1) and let the
+			// selective bloom pass do the blooming, not raw over-bright color.
+			const glow = clamp(this.uIgnition.mul(0.18).add(0.45), 0, 1.15);
+			return tinted.mul(glow);
 		})();
 
-		// One instanced sprite per particle; positions come from the GPU storage
-		// buffer via positionNode, so the geometry is a single unit quad and the
-		// instance count is the particle count.
-		const geometry = new THREE.PlaneGeometry(0.18, 0.18);
+		// One instanced sprite per particle. Small quads (0.1) keep individual
+		// particles as crisp colored points of light rather than overlapping into
+		// white mush across the now-larger volume.
+		const geometry = new THREE.PlaneGeometry(0.1, 0.1);
 		const mesh = new THREE.InstancedMesh(geometry, mat as unknown as THREE.Material, this.count);
 		mesh.frustumCulled = false;
 		this.material = mat;

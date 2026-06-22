@@ -147,7 +147,9 @@ export class CinemaSandbox {
 			scenePass.setMRT(mrt({ output, emissive }));
 			const outputTex = scenePass.getTextureNode('output');
 			const emissiveTex = scenePass.getTextureNode('emissive');
-			const bloomed = this.deps.bloomMod.bloom(emissiveTex, 1.1, 0.6, 0.0);
+			// Gentler bloom (strength 0.6, threshold 0.35) so it accents the bright
+			// cores instead of washing the whole colored cloud to white.
+			const bloomed = this.deps.bloomMod.bloom(emissiveTex, 0.6, 0.65, 0.35);
 			const post = new this.deps.PostProcessing(renderer);
 			(post as unknown as { outputNode: unknown }).outputNode = (
 				outputTex as { add: (n: unknown) => unknown }
@@ -189,13 +191,12 @@ export class CinemaSandbox {
 		this.camera.lookAt(ORIGIN);
 
 		// Size the containment sphere to the camera's VERTICAL FOV at the origin
-		// (the limiting dimension on a landscape frame). The 0.40 factor leaves
-		// generous room for the additive BLOOM HALO — each particle's glow spreads
-		// well beyond its geometric position, so the visible cloud is much larger
-		// than the radius; an aggressive margin is what actually stops the clip.
+		// (the limiting dimension on a landscape frame). 0.82 lets the storm fill
+		// most of the frame; the storm's internal shell sits well inside this and
+		// the hard boundary snap keeps the bloom halo from spilling past the edge.
 		const dist = this.camera.position.length();
 		const vfov = (this.camera.fov * Math.PI) / 180;
-		const fitRadius = Math.tan(vfov / 2) * dist * 0.4;
+		const fitRadius = Math.tan(vfov / 2) * dist * 0.82;
 		this.storm.setContainRadius(fitRadius);
 
 		await this.storm.update(deltaSeconds);
