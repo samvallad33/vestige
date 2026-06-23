@@ -109,61 +109,81 @@ pub fn gate_writes(
     // Collect each (id, decision) write the tool reported.
     let writes = extract_writes(result);
     for (id, decision) in writes {
+        let destructive = is_destructive_decision(&decision);
+
         // Pull the just-written node to inspect its real content/type/tags.
+        // C2: a destructive write (purge/delete/forget) has ALREADY removed the
+        // row, so get_node returns None — we must NOT skip it (that's how
+        // destructive removals were bypassing review). For those, build the
+        // context from the decision alone; for normal writes a missing node
+        // genuinely means nothing to gate, so skip.
         let node = match storage.get_node(&id) {
-            Ok(Some(n)) => n,
+            Ok(Some(n)) => Some(n),
+            _ if destructive => None,
             _ => continue,
         };
 
-        // A decision of supersede/replace/merge means the write overwrote an
-        // existing memory — the strongest risk signal. Look up the trust of the
-        // memory it superseded so the gate can weigh it.
         let (supersedes, merges) = match decision.as_str() {
-            "supersede" | "replace" => (true, false),
-            "merge" => (false, true),
+            "supersede" | "replace" | "superseded" => (true, false),
+            "merge" | "merged" => (false, true),
             _ => (false, false),
         };
         // If this superseded something, treat the contradiction as against a
         // high-trust memory when the *new* node's own retention is high (the
         // pipeline only supersedes when confident). This keeps the gate honest
         // without a second DB round-trip per write.
-        let contradicts_trust = if supersedes {
-            Some(node.retention_strength.max(0.7))
-        } else {
-            None
+        let contradicts_trust = match (&node, supersedes) {
+            (Some(n), true) => Some(n.retention_strength.max(0.7)),
+            _ => None,
         };
 
         let ctx = WriteContext {
             source: Some(WriteSource::Agent),
-            node_type: node.node_type.clone(),
-            content: node.content.clone(),
-            tags: node.tags.clone(),
+            node_type: node.as_ref().map(|n| n.node_type.clone()).unwrap_or_default(),
+            content: node.as_ref().map(|n| n.content.clone()).unwrap_or_default(),
+            tags: node.as_ref().map(|n| n.tags.clone()).unwrap_or_default(),
             contradicts_trust,
             supersedes,
             merges,
+            forgets: destructive,
             ..Default::default()
         };
 
+        // A destructive write ALWAYS warrants review (erasing brain state) even
+        // in Fast mode is debatable, but we respect the mode: the `forgets`
+        // signal in WriteContext makes classify_write gate it in Risk-Gated.
         let (class, signals) = classify_write(&ctx, mode);
         if class != RiskClass::Review {
             continue;
         }
 
-        // Quarantine the just-written node: suppress it so it is held out of
-        // retrieval until the PR is decided. Best-effort.
-        let _ = storage.suppress_memory(&id);
+        // Quarantine the just-written node so it's held out of retrieval until
+        // the PR is decided. For a destructive write there's no live node to
+        // suppress — the PR records the action for review/audit instead.
+        if node.is_some() {
+            let _ = storage.suppress_memory(&id);
+        }
 
         let kind = match decision.as_str() {
-            "supersede" | "replace" => MemoryPrKind::MemorySuperseded,
-            "merge" => MemoryPrKind::DreamConsolidation,
+            "supersede" | "replace" | "superseded" => MemoryPrKind::MemorySuperseded,
+            "merge" | "merged" => MemoryPrKind::DreamConsolidation,
+            _ if destructive => MemoryPrKind::NodeDecayed,
             _ if contradicts_trust.is_some() => MemoryPrKind::ContradictionDetected,
             _ => MemoryPrKind::NewFact,
         };
-        let title = format!(
-            "{}: \"{}\"",
-            pr_kind_phrase(kind),
-            node.content.chars().take(80).collect::<String>()
-        );
+
+        // PRIV: never copy full memory content into the PR (it can hold a
+        // secret, and the PR row is read by the dashboard and may be exported).
+        // Store a short, redacted preview + a content hash instead. The preview
+        // is dropped entirely when the write was gated for a sensitive topic.
+        let sensitive = signals.iter().any(|s| {
+            s.code == "sensitive_topic" || s.code == "sensitive_node_type"
+        });
+        let raw_content = node.as_ref().map(|n| n.content.as_str()).unwrap_or("");
+        let preview = content_preview(raw_content, sensitive);
+        let content_hash = hash_content(raw_content);
+
+        let title = format!("{}: {}", pr_kind_phrase(kind), preview);
         let pr = MemoryPr {
             id: format!("pr_{}", uuid::Uuid::new_v4().simple()),
             kind,
@@ -172,10 +192,14 @@ pub fn gate_writes(
             diff: serde_json::json!({
                 "decision": decision,
                 "node": {
-                    "id": node.id,
-                    "nodeType": node.node_type,
-                    "content": node.content,
-                    "tags": node.tags,
+                    "id": id,
+                    "nodeType": node.as_ref().map(|n| n.node_type.clone()).unwrap_or_default(),
+                    // Redacted: preview (or "[redacted — sensitive]") + hash,
+                    // never the full content.
+                    "contentPreview": preview,
+                    "contentHash": content_hash,
+                    "tags": node.as_ref().map(|n| n.tags.clone()).unwrap_or_default(),
+                    "deleted": node.is_none(),
                 },
             }),
             signals: signals.clone(),
@@ -212,6 +236,46 @@ pub fn gate_writes(
     }
 
     opened
+}
+
+/// Whether a write decision permanently removes / forgets memory (so the live
+/// row may already be gone when the gate runs).
+fn is_destructive_decision(label: &str) -> bool {
+    matches!(
+        label,
+        "purge" | "purged" | "delete" | "deleted" | "forget" | "forgotten"
+    )
+}
+
+/// A short, privacy-preserving preview of memory content for a Memory PR.
+/// When the write was flagged for a sensitive topic, the content is redacted
+/// entirely — the reviewer sees the risk signals + hash, never the secret.
+fn content_preview(content: &str, sensitive: bool) -> String {
+    if content.is_empty() {
+        return "(no content)".to_string();
+    }
+    if sensitive {
+        return "[redacted — sensitive content; review via risk signals]".to_string();
+    }
+    let trimmed: String = content.chars().take(80).collect();
+    if content.chars().count() > 80 {
+        format!("{trimmed}…")
+    } else {
+        trimmed
+    }
+}
+
+/// FNV-1a hex fingerprint of memory content — lets a reviewer correlate /
+/// dedupe without the PR row carrying the raw (possibly secret) text.
+fn hash_content(content: &str) -> String {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = FNV_OFFSET;
+    for b in content.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{:016x}", hash)
 }
 
 fn pr_kind_phrase(kind: vestige_core::MemoryPrKind) -> &'static str {
@@ -843,6 +907,40 @@ mod tests {
     }
 
     #[test]
+    fn destructive_decision_classification_c2() {
+        for d in ["purge", "delete", "forget", "purged", "deleted", "forgotten"] {
+            assert!(is_destructive_decision(d), "{d} is destructive");
+        }
+        for d in ["create", "update", "promote", "reinforce"] {
+            assert!(!is_destructive_decision(d), "{d} is not destructive");
+        }
+    }
+
+    #[test]
+    fn content_preview_redacts_sensitive_and_truncates() {
+        // PRIV: sensitive content is fully redacted, never previewed.
+        assert_eq!(
+            content_preview("the production auth token is sk-abc123", true),
+            "[redacted — sensitive content; review via risk signals]"
+        );
+        // Ordinary content is truncated, not redacted.
+        let long = "a".repeat(200);
+        let prev = content_preview(&long, false);
+        assert!(prev.ends_with('…'));
+        assert!(prev.chars().count() <= 81);
+        // Empty content.
+        assert_eq!(content_preview("", false), "(no content)");
+    }
+
+    #[test]
+    fn content_hash_is_stable_and_hides_text() {
+        let h = hash_content("my secret memory");
+        assert_eq!(h, hash_content("my secret memory"), "stable");
+        assert!(!h.contains("secret"));
+        assert_eq!(h.len(), 16);
+    }
+
+    #[test]
     fn extract_writes_recognizes_destructive_actions_c2() {
         // C2: purge/delete are brain mutations and must trace + be gateable.
         for act in ["purge", "delete"] {
@@ -853,6 +951,88 @@ mod tests {
                 "{act} must be traced as a write"
             );
         }
+    }
+
+    fn store() -> std::sync::Arc<vestige_core::Storage> {
+        let dir = tempfile::tempdir().unwrap();
+        std::sync::Arc::new(
+            vestige_core::Storage::new(Some(dir.path().join("gate_test.db"))).unwrap(),
+        )
+    }
+
+    #[test]
+    fn gate_opens_pr_for_destructive_write_after_node_deleted_c2() {
+        // C2-deep: the row is GONE by the time the gate runs (purge deleted it),
+        // but a destructive write must STILL open a Memory PR — not be skipped.
+        let s = store();
+        let node = s
+            .ingest(vestige_core::IngestInput {
+                content: "A memory the agent is about to purge.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        // Actually delete the row, like purge does.
+        let _ = s.delete_node(&node.id);
+        assert!(s.get_node(&node.id).unwrap().is_none(), "row is gone");
+
+        // The tool result the recorder sees for the purge.
+        let result = serde_json::json!({ "action": "purge", "nodeId": node.id, "success": true });
+        let opened = gate_writes(
+            &s,
+            None,
+            "run_c2",
+            "memory",
+            &result,
+            vestige_core::ReviewMode::RiskGated,
+        );
+
+        assert_eq!(opened.len(), 1, "destructive write must open a PR even with the node gone");
+        let pr = s.list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10).unwrap();
+        assert_eq!(pr.len(), 1);
+        assert_eq!(pr[0].subject_id.as_deref(), Some(node.id.as_str()));
+        // The diff marks the node as deleted and carries no resurrected content.
+        assert_eq!(pr[0].diff["node"]["deleted"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn gate_redacts_sensitive_content_in_pr_priv() {
+        // PRIV: a write gated for a sensitive topic must NOT carry the raw
+        // content into the PR diff/title — only a redaction + hash.
+        let s = store();
+        let secret = "the production auth token is sk-live-SECRET-XYZ";
+        let node = s
+            .ingest(vestige_core::IngestInput {
+                content: secret.to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let result = serde_json::json!({ "decision": "create", "nodeId": node.id });
+        let opened = gate_writes(
+            &s,
+            None,
+            "run_priv",
+            "smart_ingest",
+            &result,
+            vestige_core::ReviewMode::RiskGated,
+        );
+        assert_eq!(opened.len(), 1, "sensitive write opens a PR");
+
+        let pr = &s
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap()[0];
+        let serialized = serde_json::to_string(pr).unwrap();
+        assert!(
+            !serialized.contains("SECRET-XYZ") && !serialized.contains("sk-live"),
+            "PR must not contain the raw secret content; got: {serialized}"
+        );
+        assert!(
+            serialized.contains("redacted"),
+            "PR must mark the content redacted"
+        );
+        // A content hash is present so reviewers can still correlate.
+        assert!(pr.diff["node"]["contentHash"].as_str().is_some());
     }
 
     #[test]

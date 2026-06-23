@@ -42,12 +42,12 @@ deterministic regression test `test_full_spine_one_runid_crosses_every_hop`
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `mcp.call` trace | **REAL** | every tools/call records one; args **hashed**, never stored raw |
-| `memory.write` trace | **REAL** | fires on smart_ingest/ingest |
+| `memory.write` trace | **REAL** | fires on smart_ingest/ingest, memory promote/demote/edit, codebase remember_*, AND destructive purge/delete |
 | `memory.retrieve` trace | **REAL** | fires on deep_reference/search, with per-id activation |
 | `memory.suppress` trace | **REAL** | recorded path; fires when retrieval suppresses |
 | `contradiction.detected` trace | **REAL** | fires when deep_reference surfaces a contradiction pair; UI says "no contradiction in this run" when none |
 | Memory Receipts | **REAL** | built from real scored memories + trust, persisted, attached to output |
-| Risk-gated Memory PRs | **REAL** | quarantine review: commit-then-suppress, audit preserved, influence suspended. Promote verified end-to-end |
+| Risk-gated Memory PRs | **REAL** | quarantine review: commit-then-suppress, audit preserved, influence suspended. Promote verified end-to-end (releases the memory, even past the 24h window). Destructive purge/delete also open a PR. PR content is **redacted** for sensitive writes (preview + hash, never the raw secret) |
 | Fast / Risk-Gated / Paranoid modes | **REAL** | persisted to `<data_dir>/review_mode.json`; Risk-Gated is the default |
 | WebSocket broadcast | **REAL** | proven by `websocket-events.jsonl` + a unit test |
 | `vestige://trace/{runId}` resource | **REAL** | proven by the full-spine test |
