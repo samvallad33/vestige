@@ -68,6 +68,14 @@ fn is_write_decision(label: &str) -> bool {
             | "remember_pattern"
             | "remember_decision"
             | "remembered"
+            // C2: destructive removals are brain mutations too — they must
+            // trace as memory.write and be gateable, not bypass review.
+            | "purge"
+            | "purged"
+            | "delete"
+            | "deleted"
+            | "forget"
+            | "forgotten"
     )
 }
 
@@ -832,6 +840,19 @@ mod tests {
         assert!(extract_writes(&read).is_empty(), "get is not a write");
         let state = serde_json::json!({ "action": "state", "nodeId": "m2" });
         assert!(extract_writes(&state).is_empty(), "state is not a write");
+    }
+
+    #[test]
+    fn extract_writes_recognizes_destructive_actions_c2() {
+        // C2: purge/delete are brain mutations and must trace + be gateable.
+        for act in ["purge", "delete"] {
+            let r = serde_json::json!({ "action": act, "nodeId": "m1", "success": true });
+            assert_eq!(
+                extract_writes(&r),
+                vec![("m1".into(), act.to_string())],
+                "{act} must be traced as a write"
+            );
+        }
     }
 
     #[test]

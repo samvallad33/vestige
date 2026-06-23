@@ -1785,6 +1785,61 @@ impl SqliteMemoryStore {
             .ok_or_else(|| StorageError::NotFound(id.to_string()))
     }
 
+    /// Release a memory from quarantine **unconditionally** (no labile-window
+    /// limit), used when a Memory PR is approved.
+    ///
+    /// Unlike [`Self::reverse_suppression`] (which models a time-bounded "undo"
+    /// of an active-forgetting decision and refuses after the labile window),
+    /// approving a quarantined risky write is an explicit reviewer decision that
+    /// must always restore the memory's retrieval influence — even days later.
+    /// Fully clears the suppression (count → 0, `suppressed_at` → NULL) and
+    /// restores strengths. A no-op (returns the node) if it isn't suppressed.
+    pub fn release_quarantine(&self, id: &str) -> Result<KnowledgeNode> {
+        let node = self
+            .get_node(id)?
+            .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+
+        if node.suppression_count == 0 && node.suppressed_at.is_none() {
+            // Nothing to release — idempotent.
+            return Ok(node);
+        }
+
+        {
+            let writer = self
+                .writer
+                .lock()
+                .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            writer.execute(
+                "UPDATE knowledge_nodes SET
+                    suppression_count = 0,
+                    suppressed_at = NULL,
+                    retrieval_strength = MIN(1.0, retrieval_strength + 0.15),
+                    retention_strength = MIN(1.0, retention_strength + 0.10),
+                    stability = stability * 1.25
+                WHERE id = ?1",
+                params![id],
+            )?;
+        }
+
+        let _ = self.log_access(id, "release_quarantine");
+
+        self.get_node(id)?
+            .ok_or_else(|| StorageError::NotFound(id.to_string()))
+    }
+
+    /// Test-only: backdate a node's `suppressed_at` to simulate a suppression
+    /// that happened long ago (e.g. to verify release works past the labile
+    /// window). `pub(crate)` so sibling test modules can reach it.
+    #[cfg(test)]
+    pub(crate) fn set_suppressed_at_for_test(&self, id: &str, when: DateTime<Utc>) {
+        if let Ok(writer) = self.writer.lock() {
+            let _ = writer.execute(
+                "UPDATE knowledge_nodes SET suppressed_at = ?1 WHERE id = ?2",
+                params![when.to_rfc3339(), id],
+            );
+        }
+    }
+
     /// Count memories currently in a suppressed state (suppression_count > 0).
     pub fn count_suppressed(&self) -> Result<usize> {
         let reader = self

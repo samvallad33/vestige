@@ -105,18 +105,22 @@ Only statuses with a receipt above are credited. Nothing is claimed from memory.
 
 ## Review surface (what changed)
 
-3 commits on top of the base, **27 source files, +5830 / -18** (build artifacts
-and this proof bundle excluded):
+The Black Box work sits in a series of commits on top of the base. To see the
+exact, current diff (build artifacts + this proof bundle excluded):
 
 ```
-$ git diff --stat 9e92a59..140b15f -- ':!apps/dashboard/build' ':!blackbox-proof-2026-06-22'
-27 files changed, 5830 insertions(+), 18 deletions(-)
+$ git diff --stat 9e92a59..HEAD -- ':!apps/dashboard/build' ':!blackbox-proof-2026-06-22'
+# ~27 source files (Rust + SvelteKit). Run this against the branch tip for the
+# live count — it grows as review fixes land.
 ```
 
-Commits:
+Commits (oldest first):
 - `80c823a` feat: Agent Black Box + Receipts + risk-gated Memory PRs
 - `b89beee` proof: Proof Lock — full-spine test, honest UI states, proof pack
 - `140b15f` proof: dream.patch proven live with a real dream run
+- `cadffb4` docs: package the review bundle — REVIEW.md entry point
+- `8f7bed0` fix: address review blockers B1–B7 + re-capture proof bundle
+- (+ a follow-up fix commit for C1/C2 — see "Review findings addressed")
 
 Key files to review:
 - **Core (pure logic):** `crates/vestige-core/src/trace/{mod,receipt,review}.rs`
@@ -164,12 +168,14 @@ found 7 real issues — 4 blockers. All fixed and tested:
 | B5 | P2 | Black Box receipts panel showed global latest, not the selected run's | `list_receipts_for_run` + `/api/receipts?run=` + page uses `listForRun(runId)` | live: `?run=run_proof` returns only that run; test `receipts_are_listable_per_run_b5` |
 | B6 | P2 | `SENSITIVE_TOPICS` substring match false-fired ("tokenizer"→token, "author"→auth) | word-boundary matching | tests `sensitive_topic_word_boundary_no_false_positives_b6`, `..._still_catches_real_b6` |
 | B7 | P3 | `set_review_mode` non-atomic write; export filename used raw `run_id` | `write_atomic` (temp+rename); filename sanitized; static routes declared before dynamic | covered by build + the atomic-write helper's existing use |
+| C1 | blocker | B1's release used `reverse_suppression`, which **refuses past the 24h labile window** — a PR promoted late stayed suppressed | new `release_quarantine(id)`: unconditional release (no time limit), used by the PR handler instead | test `release_quarantine_works_past_the_labile_window_c1` (proves reverse_suppression refuses but release_quarantine succeeds at +100h) |
+| C2 | blocker | `memory` `purge`/`delete` (destructive removal) bypassed the write-trace + gate | added purge/purged/delete/deleted/forget/forgotten to `is_write_decision` | test `extract_writes_recognizes_destructive_actions_c2` |
 
 One earlier (self-)review claim was **withdrawn**: the `/api/memory-prs/mode`
 vs `/{id}` route order is *not* a functional bug — axum 0.8 / matchit gives
 static segments priority. Reordered for clarity only.
 
-Net after fixes: **999 lib tests pass, clippy `-D warnings` clean, dashboard
+Net after fixes (B1–B7 + C1/C2): **1002 lib tests pass, clippy `-D warnings` clean, dashboard
 check + build clean.**
 
 ## Reproduce (any reviewer, locally)

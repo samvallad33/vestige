@@ -647,15 +647,63 @@ mod tests {
         );
 
         // Promote = release. (The action releases_memory() == true; the handler
-        // calls reverse_suppression on the subject.)
+        // calls release_quarantine on the subject.)
         assert!(crate::MemoryPrAction::Promote.releases_memory());
         let released = s
-            .reverse_suppression(&node.id, 24)
-            .expect("reverse suppression within labile window");
+            .release_quarantine(&node.id)
+            .expect("release quarantine");
         assert_eq!(
             released.suppression_count, 0,
             "promoting the PR must release the memory — not leave it suppressed"
         );
+        assert!(
+            released.suppressed_at.is_none(),
+            "release must clear suppressed_at"
+        );
+    }
+
+    #[test]
+    fn release_quarantine_works_past_the_labile_window_c1() {
+        // C1: a PR reviewed LATE (past the 24h active-forgetting labile window)
+        // must still release the memory. reverse_suppression refuses after the
+        // window; release_quarantine must not.
+        let s = store();
+        let node = s
+            .ingest(crate::IngestInput {
+                content: "Risky write quarantined and reviewed days later.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .expect("ingest");
+        s.suppress_memory(&node.id).expect("suppress");
+
+        // Backdate suppressed_at to 100h ago — well past any labile window.
+        s.set_suppressed_at_for_test(&node.id, chrono::Utc::now() - chrono::Duration::hours(100));
+
+        // reverse_suppression refuses (window expired)...
+        assert!(
+            s.reverse_suppression(&node.id, 24).is_err(),
+            "reverse_suppression must refuse past the labile window"
+        );
+        // ...but release_quarantine still releases it.
+        let released = s.release_quarantine(&node.id).expect("release past window");
+        assert_eq!(released.suppression_count, 0);
+        assert!(released.suppressed_at.is_none());
+    }
+
+    #[test]
+    fn release_quarantine_is_idempotent_on_unsuppressed() {
+        let s = store();
+        let node = s
+            .ingest(crate::IngestInput {
+                content: "Never suppressed.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .expect("ingest");
+        // No-op when not suppressed — must not error.
+        let same = s.release_quarantine(&node.id).expect("idempotent release");
+        assert_eq!(same.suppression_count, 0);
     }
 
     #[test]

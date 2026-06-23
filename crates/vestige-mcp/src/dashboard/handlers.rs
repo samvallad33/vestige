@@ -2232,9 +2232,10 @@ pub async fn act_on_memory_pr(
     if action.releases_memory()
         && let Some(subject_id) = decided.subject_id.as_deref()
     {
-        use vestige_core::neuroscience::active_forgetting::ActiveForgettingSystem;
-        let labile_hours = ActiveForgettingSystem::new().labile_hours;
-        match state.storage.reverse_suppression(subject_id, labile_hours) {
+        // Use the UNCONDITIONAL quarantine release, not reverse_suppression:
+        // approving a PR must restore the memory even if reviewed days later,
+        // past the active-forgetting labile window (the C1 fix).
+        match state.storage.release_quarantine(subject_id) {
             Ok(node) => {
                 released = true;
                 state.emit(VestigeEvent::MemoryUnsuppressed {
