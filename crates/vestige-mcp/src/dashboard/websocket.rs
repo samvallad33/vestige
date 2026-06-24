@@ -3,35 +3,46 @@
 //! Clients connect to `/ws` and receive all VestigeEvents as JSON.
 //! Also sends heartbeats every 5 seconds with system stats.
 
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
 use super::events::VestigeEvent;
 use super::state::AppState;
 
+#[derive(Debug, Deserialize)]
+pub struct WsAuthQuery {
+    token: Option<String>,
+}
+
 /// WebSocket upgrade handler — GET /ws
-/// Validates Origin header to prevent cross-site WebSocket hijacking.
+/// Validates token + Origin header to prevent cross-site WebSocket hijacking.
 pub async fn ws_handler(
     headers: HeaderMap,
+    Query(query): Query<WsAuthQuery>,
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    let Some(token) = query.token.as_deref() else {
+        warn!("Rejected WebSocket connection without dashboard token");
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if !state.is_valid_dashboard_token(token) {
+        warn!("Rejected WebSocket connection with invalid dashboard token");
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
     // Validate Origin header (browsers always send it for WebSocket upgrades).
-    // Non-browser clients (curl, wscat) won't have Origin — allowed since localhost-only.
+    // Non-browser clients (curl, wscat) won't have Origin; they still need the token.
     match headers.get("origin").and_then(|v| v.to_str().ok()) {
         Some(origin) => {
-            let allowed =
-                origin.starts_with("http://127.0.0.1:") || origin.starts_with("http://localhost:");
-            #[cfg(debug_assertions)]
-            let allowed =
-                allowed || origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173";
-            if !allowed {
+            if !state.is_allowed_dashboard_origin(origin) {
                 warn!("Rejected WebSocket connection from origin: {}", origin);
                 return StatusCode::FORBIDDEN.into_response();
             }

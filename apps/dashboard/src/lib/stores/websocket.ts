@@ -1,5 +1,6 @@
 import { writable, derived } from 'svelte/store';
 import type { VestigeEvent } from '$types';
+import { getDashboardAuthToken } from './api';
 
 const MAX_EVENTS = 200;
 
@@ -23,9 +24,11 @@ function createWebSocketStore() {
 	let reconnectAttempts = 0;
 
 	function connect(url?: string) {
-		const wsUrl = url || (window.location.port === '5173'
+		const baseWsUrl = url || (window.location.port === '5173'
 			? `ws://${window.location.hostname}:3927/ws`
 			: `ws://${window.location.host}/ws`);
+		const token = getDashboardAuthToken();
+		const wsUrl = token ? withToken(baseWsUrl, token) : baseWsUrl;
 
 		if (ws?.readyState === WebSocket.OPEN) return;
 
@@ -93,7 +96,7 @@ function createWebSocketStore() {
 	 */
 	function injectEvent(event: VestigeEvent) {
 		update(s => {
-			const events = [event, ...s.events].slice(0, MAX_EVENTS);
+			const events = [{ ...event, source: 'synthetic' as const }, ...s.events].slice(0, MAX_EVENTS);
 			return { ...s, events };
 		});
 	}
@@ -105,6 +108,12 @@ function createWebSocketStore() {
 		clearEvents,
 		injectEvent
 	};
+}
+
+function withToken(url: string, token: string): string {
+	const next = new URL(url, window.location.href);
+	next.searchParams.set('token', token);
+	return next.toString();
 }
 
 export const websocket = createWebSocketStore();
@@ -136,19 +145,19 @@ export const uptimeSeconds = derived(websocket, $ws =>
 // is a real `VestigeEvent::TraceEvent` backed by a persisted `agent_traces`
 // row — the dashboard pulse is only ever driven by these, never by fakes.
 export const traceEvents = derived(websocket, $ws =>
-	$ws.events.filter((e) => e.type === 'TraceEvent')
+	$ws.events.filter((e) => e.type === 'TraceEvent' && e.source !== 'synthetic')
 );
 
 // The most recent runId seen on the live feed — the "current run" indicator in
 // Proof Mode / the Black Box live header.
 export const liveRunId = derived(websocket, $ws => {
-	const latest = $ws.events.find((e) => e.type === 'TraceEvent');
+	const latest = $ws.events.find((e) => e.type === 'TraceEvent' && e.source !== 'synthetic');
 	return (latest?.data?.run_id as string) ?? null;
 });
 
 // The single most recent trace event (for the "last event" readout).
 export const lastTraceEvent = derived(websocket, $ws =>
-	$ws.events.find((e) => e.type === 'TraceEvent') ?? null
+	$ws.events.find((e) => e.type === 'TraceEvent' && e.source !== 'synthetic') ?? null
 );
 
 // Live Memory PR notifications (opened / decided) for the queue badge + toasts.

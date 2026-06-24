@@ -20,6 +20,7 @@
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import Icon, { type IconName } from '$lib/components/Icon.svelte';
 	import { initTheme } from '$stores/theme';
+	import { installDashboardTokenFromLocation } from '$stores/api';
 
 	let { children } = $props();
 	let showCommandPalette = $state(false);
@@ -31,6 +32,11 @@
 	let isMarketingRoute = $derived(dashboardPath === '/waitlist' || dashboardPath.startsWith('/waitlist/'));
 
 	onMount(() => {
+		// Vestige opens the dashboard with the auth token in the URL fragment.
+		// Install it into localStorage (and scrub it from the address bar) BEFORE
+		// any API call or WebSocket connect, or the now-authenticated /api and /ws
+		// endpoints reject every request.
+		installDashboardTokenFromLocation();
 		if (!isMarketingRoute) {
 			websocket.connect();
 		}

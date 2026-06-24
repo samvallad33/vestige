@@ -595,517 +595,567 @@ impl McpServer {
             &request.arguments,
         );
 
-        let result = match request.name.as_str() {
-            // ================================================================
-            // UNIFIED TOOLS (v1.1+) - Preferred API
-            // ================================================================
-            "search" => {
-                tools::search_unified::execute(
-                    &self.storage,
-                    &self.cognitive,
-                    &self.output_config,
-                    request.arguments,
-                )
-                .await
-            }
-            "memory" => {
-                tools::memory_unified::execute(&self.storage, &self.cognitive, request.arguments)
+        let pre_gated = crate::trace_recorder::gate_pending_memory_mutation(
+            &self.storage,
+            self.event_tx.as_ref(),
+            &run_id,
+            &request.name,
+            &request.arguments,
+            self.review_mode(),
+        );
+
+        let result = if let Some(content) =
+            pre_gated.map_err(|e| JsonRpcError::internal_error(&e))?
+        {
+            Ok(content)
+        } else {
+            match request.name.as_str() {
+                // ================================================================
+                // UNIFIED TOOLS (v1.1+) - Preferred API
+                // ================================================================
+                "search" => {
+                    tools::search_unified::execute(
+                        &self.storage,
+                        &self.cognitive,
+                        &self.output_config,
+                        request.arguments,
+                    )
                     .await
-            }
-            "codebase" => {
-                tools::codebase_unified::execute(
-                    &self.storage,
-                    &self.cognitive,
-                    &self.output_config,
-                    request.arguments,
-                )
-                .await
-            }
-            "intention" => {
-                tools::intention_unified::execute(&self.storage, &self.cognitive, request.arguments)
+                }
+                "memory" => {
+                    tools::memory_unified::execute(
+                        &self.storage,
+                        &self.cognitive,
+                        request.arguments,
+                    )
                     .await
-            }
-
-            // ================================================================
-            // Core memory (v1.7: smart_ingest absorbs ingest + checkpoint)
-            // ================================================================
-            "smart_ingest" => {
-                tools::smart_ingest::execute(&self.storage, &self.cognitive, request.arguments)
+                }
+                "codebase" => {
+                    tools::codebase_unified::execute(
+                        &self.storage,
+                        &self.cognitive,
+                        &self.output_config,
+                        request.arguments,
+                    )
                     .await
-            }
-
-            // ================================================================
-            // External-source connectors (#57)
-            // ================================================================
-            "source_sync" => tools::source_sync::execute(&self.storage, request.arguments).await,
-
-            // ================================================================
-            // DEPRECATED (v1.7): ingest → smart_ingest
-            // ================================================================
-            "ingest" => {
-                warn!("Tool 'ingest' is deprecated in v1.7. Use 'smart_ingest' instead.");
-                tools::smart_ingest::execute(&self.storage, &self.cognitive, request.arguments)
+                }
+                "intention" => {
+                    tools::intention_unified::execute(
+                        &self.storage,
+                        &self.cognitive,
+                        request.arguments,
+                    )
                     .await
-            }
+                }
 
-            // ================================================================
-            // DEPRECATED (v1.7): session_checkpoint → smart_ingest (batch mode)
-            // ================================================================
-            "session_checkpoint" => {
-                warn!(
-                    "Tool 'session_checkpoint' is deprecated in v1.7. Use 'smart_ingest' with 'items' parameter instead."
-                );
-                tools::smart_ingest::execute(&self.storage, &self.cognitive, request.arguments)
-                    .await
-            }
+                // ================================================================
+                // Core memory (v1.7: smart_ingest absorbs ingest + checkpoint)
+                // ================================================================
+                "smart_ingest" => {
+                    tools::smart_ingest::execute(&self.storage, &self.cognitive, request.arguments)
+                        .await
+                }
 
-            // ================================================================
-            // DEPRECATED (v1.7): promote_memory → memory(action='promote')
-            // ================================================================
-            "promote_memory" => {
-                warn!(
-                    "Tool 'promote_memory' is deprecated in v1.7. Use 'memory' with action='promote' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let mut new_args = args.clone();
-                        if let Some(obj) = new_args.as_object_mut() {
-                            obj.insert("action".to_string(), serde_json::json!("promote"));
-                        }
-                        Some(new_args)
-                    }
-                    None => Some(serde_json::json!({"action": "promote"})),
-                };
-                tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args).await
-            }
-            "demote_memory" => {
-                warn!(
-                    "Tool 'demote_memory' is deprecated in v1.7. Use 'memory' with action='demote' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let mut new_args = args.clone();
-                        if let Some(obj) = new_args.as_object_mut() {
-                            obj.insert("action".to_string(), serde_json::json!("demote"));
-                        }
-                        Some(new_args)
-                    }
-                    None => Some(serde_json::json!({"action": "demote"})),
-                };
-                tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args).await
-            }
+                // ================================================================
+                // External-source connectors (#57)
+                // ================================================================
+                "source_sync" => {
+                    tools::source_sync::execute(&self.storage, request.arguments).await
+                }
 
-            // ================================================================
-            // DEPRECATED (v1.7): health_check, stats → system_status
-            // ================================================================
-            "health_check" => {
-                warn!("Tool 'health_check' is deprecated in v1.7. Use 'system_status' instead.");
-                tools::maintenance::execute_system_status(
-                    &self.storage,
-                    &self.cognitive,
-                    request.arguments,
-                )
-                .await
-            }
-            "stats" => {
-                warn!("Tool 'stats' is deprecated in v1.7. Use 'system_status' instead.");
-                tools::maintenance::execute_system_status(
-                    &self.storage,
-                    &self.cognitive,
-                    request.arguments,
-                )
-                .await
-            }
+                // ================================================================
+                // DEPRECATED (v1.7): ingest → smart_ingest
+                // ================================================================
+                "ingest" => {
+                    warn!("Tool 'ingest' is deprecated in v1.7. Use 'smart_ingest' instead.");
+                    tools::smart_ingest::execute(&self.storage, &self.cognitive, request.arguments)
+                        .await
+                }
 
-            // ================================================================
-            // SYSTEM STATUS (v1.7: replaces health_check + stats)
-            // ================================================================
-            "system_status" => {
-                tools::maintenance::execute_system_status(
-                    &self.storage,
-                    &self.cognitive,
-                    request.arguments,
-                )
-                .await
-            }
+                // ================================================================
+                // DEPRECATED (v1.7): session_checkpoint → smart_ingest (batch mode)
+                // ================================================================
+                "session_checkpoint" => {
+                    warn!(
+                        "Tool 'session_checkpoint' is deprecated in v1.7. Use 'smart_ingest' with 'items' parameter instead."
+                    );
+                    tools::smart_ingest::execute(&self.storage, &self.cognitive, request.arguments)
+                        .await
+                }
 
-            "mark_reviewed" => tools::review::execute(&self.storage, request.arguments).await,
-
-            // ================================================================
-            // DEPRECATED: Search tools - redirect to unified 'search'
-            // ================================================================
-            "recall" | "semantic_search" | "hybrid_search" => {
-                warn!(
-                    "Tool '{}' is deprecated. Use 'search' instead.",
-                    request.name
-                );
-                tools::search_unified::execute(
-                    &self.storage,
-                    &self.cognitive,
-                    &self.output_config,
-                    request.arguments,
-                )
-                .await
-            }
-
-            // ================================================================
-            // DEPRECATED: Memory tools - redirect to unified 'memory'
-            // ================================================================
-            "get_knowledge" => {
-                warn!(
-                    "Tool 'get_knowledge' is deprecated. Use 'memory' with action='get' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let id = args.get("id").cloned().unwrap_or(serde_json::Value::Null);
-                        Some(serde_json::json!({
-                            "action": "get",
-                            "id": id
-                        }))
-                    }
-                    None => None,
-                };
-                tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args).await
-            }
-            "delete_knowledge" => {
-                warn!(
-                    "Tool 'delete_knowledge' is deprecated. Use 'memory' with action='purge', confirm=true instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let id = args.get("id").cloned().unwrap_or(serde_json::Value::Null);
-                        let confirm = args
-                            .get("confirm")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Bool(false));
-                        Some(serde_json::json!({
-                            "action": "delete",
-                            "id": id,
-                            "confirm": confirm
-                        }))
-                    }
-                    None => None,
-                };
-                tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args).await
-            }
-            "get_memory_state" => {
-                warn!(
-                    "Tool 'get_memory_state' is deprecated. Use 'memory' with action='state' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let id = args
-                            .get("memory_id")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null);
-                        Some(serde_json::json!({
-                            "action": "state",
-                            "id": id
-                        }))
-                    }
-                    None => None,
-                };
-                tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args).await
-            }
-
-            // ================================================================
-            // DEPRECATED: Codebase tools - redirect to unified 'codebase'
-            // ================================================================
-            "remember_pattern" => {
-                warn!(
-                    "Tool 'remember_pattern' is deprecated. Use 'codebase' with action='remember_pattern' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let mut new_args = args.clone();
-                        if let Some(obj) = new_args.as_object_mut() {
-                            obj.insert("action".to_string(), serde_json::json!("remember_pattern"));
-                        }
-                        Some(new_args)
-                    }
-                    None => Some(serde_json::json!({"action": "remember_pattern"})),
-                };
-                tools::codebase_unified::execute(
-                    &self.storage,
-                    &self.cognitive,
-                    &self.output_config,
-                    unified_args,
-                )
-                .await
-            }
-            "remember_decision" => {
-                warn!(
-                    "Tool 'remember_decision' is deprecated. Use 'codebase' with action='remember_decision' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let mut new_args = args.clone();
-                        if let Some(obj) = new_args.as_object_mut() {
-                            obj.insert(
-                                "action".to_string(),
-                                serde_json::json!("remember_decision"),
-                            );
-                        }
-                        Some(new_args)
-                    }
-                    None => Some(serde_json::json!({"action": "remember_decision"})),
-                };
-                tools::codebase_unified::execute(
-                    &self.storage,
-                    &self.cognitive,
-                    &self.output_config,
-                    unified_args,
-                )
-                .await
-            }
-            "get_codebase_context" => {
-                warn!(
-                    "Tool 'get_codebase_context' is deprecated. Use 'codebase' with action='get_context' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let mut new_args = args.clone();
-                        if let Some(obj) = new_args.as_object_mut() {
-                            obj.insert("action".to_string(), serde_json::json!("get_context"));
-                        }
-                        Some(new_args)
-                    }
-                    None => Some(serde_json::json!({"action": "get_context"})),
-                };
-                tools::codebase_unified::execute(
-                    &self.storage,
-                    &self.cognitive,
-                    &self.output_config,
-                    unified_args,
-                )
-                .await
-            }
-
-            // ================================================================
-            // DEPRECATED: Intention tools - redirect to unified 'intention'
-            // ================================================================
-            "set_intention" => {
-                warn!(
-                    "Tool 'set_intention' is deprecated. Use 'intention' with action='set' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let mut new_args = args.clone();
-                        if let Some(obj) = new_args.as_object_mut() {
-                            obj.insert("action".to_string(), serde_json::json!("set"));
-                        }
-                        Some(new_args)
-                    }
-                    None => Some(serde_json::json!({"action": "set"})),
-                };
-                tools::intention_unified::execute(&self.storage, &self.cognitive, unified_args)
-                    .await
-            }
-            "check_intentions" => {
-                warn!(
-                    "Tool 'check_intentions' is deprecated. Use 'intention' with action='check' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let mut new_args = args.clone();
-                        if let Some(obj) = new_args.as_object_mut() {
-                            obj.insert("action".to_string(), serde_json::json!("check"));
-                        }
-                        Some(new_args)
-                    }
-                    None => Some(serde_json::json!({"action": "check"})),
-                };
-                tools::intention_unified::execute(&self.storage, &self.cognitive, unified_args)
-                    .await
-            }
-            "complete_intention" => {
-                warn!(
-                    "Tool 'complete_intention' is deprecated. Use 'intention' with action='update', status='complete' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let id = args
-                            .get("intentionId")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null);
-                        Some(serde_json::json!({
-                            "action": "update",
-                            "id": id,
-                            "status": "complete"
-                        }))
-                    }
-                    None => None,
-                };
-                tools::intention_unified::execute(&self.storage, &self.cognitive, unified_args)
-                    .await
-            }
-            "snooze_intention" => {
-                warn!(
-                    "Tool 'snooze_intention' is deprecated. Use 'intention' with action='update', status='snooze' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let id = args
-                            .get("intentionId")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null);
-                        let minutes = args
-                            .get("minutes")
-                            .cloned()
-                            .unwrap_or(serde_json::json!(30));
-                        Some(serde_json::json!({
-                            "action": "update",
-                            "id": id,
-                            "status": "snooze",
-                            "snooze_minutes": minutes
-                        }))
-                    }
-                    None => None,
-                };
-                tools::intention_unified::execute(&self.storage, &self.cognitive, unified_args)
-                    .await
-            }
-            "list_intentions" => {
-                warn!(
-                    "Tool 'list_intentions' is deprecated. Use 'intention' with action='list' instead."
-                );
-                let unified_args = match request.arguments {
-                    Some(ref args) => {
-                        let mut new_args = args.clone();
-                        if let Some(obj) = new_args.as_object_mut() {
-                            obj.insert("action".to_string(), serde_json::json!("list"));
-                            if let Some(status) = obj.remove("status") {
-                                obj.insert("filter_status".to_string(), status);
+                // ================================================================
+                // DEPRECATED (v1.7): promote_memory → memory(action='promote')
+                // ================================================================
+                "promote_memory" => {
+                    warn!(
+                        "Tool 'promote_memory' is deprecated in v1.7. Use 'memory' with action='promote' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let mut new_args = args.clone();
+                            if let Some(obj) = new_args.as_object_mut() {
+                                obj.insert("action".to_string(), serde_json::json!("promote"));
                             }
+                            Some(new_args)
                         }
-                        Some(new_args)
-                    }
-                    None => Some(serde_json::json!({"action": "list"})),
-                };
-                tools::intention_unified::execute(&self.storage, &self.cognitive, unified_args)
+                        None => Some(serde_json::json!({"action": "promote"})),
+                    };
+                    tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args)
+                        .await
+                }
+                "demote_memory" => {
+                    warn!(
+                        "Tool 'demote_memory' is deprecated in v1.7. Use 'memory' with action='demote' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let mut new_args = args.clone();
+                            if let Some(obj) = new_args.as_object_mut() {
+                                obj.insert("action".to_string(), serde_json::json!("demote"));
+                            }
+                            Some(new_args)
+                        }
+                        None => Some(serde_json::json!({"action": "demote"})),
+                    };
+                    tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args)
+                        .await
+                }
+
+                // ================================================================
+                // DEPRECATED (v1.7): health_check, stats → system_status
+                // ================================================================
+                "health_check" => {
+                    warn!(
+                        "Tool 'health_check' is deprecated in v1.7. Use 'system_status' instead."
+                    );
+                    tools::maintenance::execute_system_status(
+                        &self.storage,
+                        &self.cognitive,
+                        request.arguments,
+                    )
                     .await
-            }
-
-            // ================================================================
-            // Neuroscience tools (internal, not in tools/list)
-            // ================================================================
-            "list_by_state" => {
-                tools::memory_states::execute_list(&self.storage, request.arguments).await
-            }
-            "state_stats" => tools::memory_states::execute_stats(&self.storage).await,
-            "trigger_importance" => {
-                tools::tagging::execute_trigger(&self.storage, request.arguments).await
-            }
-            "find_tagged" => tools::tagging::execute_find(&self.storage, request.arguments).await,
-            "tagging_stats" => tools::tagging::execute_stats(&self.storage).await,
-            "match_context" => tools::context::execute(&self.storage, request.arguments).await,
-
-            // ================================================================
-            // Feedback (internal, still used by request_feedback)
-            // ================================================================
-            "request_feedback" => {
-                tools::feedback::execute_request_feedback(&self.storage, request.arguments).await
-            }
-
-            // ================================================================
-            // TEMPORAL TOOLS (v1.2+)
-            // ================================================================
-            "memory_timeline" => {
-                tools::timeline::execute(&self.storage, &self.output_config, request.arguments)
+                }
+                "stats" => {
+                    warn!("Tool 'stats' is deprecated in v1.7. Use 'system_status' instead.");
+                    tools::maintenance::execute_system_status(
+                        &self.storage,
+                        &self.cognitive,
+                        request.arguments,
+                    )
                     .await
-            }
-            "memory_changelog" => tools::changelog::execute(&self.storage, request.arguments).await,
+                }
 
-            // ================================================================
-            // MAINTENANCE TOOLS (v1.2+, non-deprecated)
-            // ================================================================
-            "consolidate" => {
-                self.emit(VestigeEvent::ConsolidationStarted {
-                    timestamp: chrono::Utc::now(),
-                });
-                tools::maintenance::execute_consolidate(&self.storage, request.arguments).await
-            }
-            "backup" => tools::maintenance::execute_backup(&self.storage, request.arguments).await,
-            "export" => tools::maintenance::execute_export(&self.storage, request.arguments).await,
-            "gc" => tools::maintenance::execute_gc(&self.storage, request.arguments).await,
-
-            // ================================================================
-            // AUTO-SAVE & DEDUP TOOLS (v1.3+)
-            // ================================================================
-            "importance_score" => {
-                tools::importance::execute(&self.storage, &self.cognitive, request.arguments).await
-            }
-            "find_duplicates" => tools::dedup::execute(&self.storage, request.arguments).await,
-
-            // ================================================================
-            // MERGE / SUPERSEDE CONTROLS (v2.1.25 — Phase 3)
-            // ================================================================
-            "merge_candidates" | "plan_merge" | "plan_supersede" | "apply_plan" | "merge_undo"
-            | "protect" | "merge_policy" => {
-                tools::merge::execute(&self.storage, request.name.as_str(), request.arguments).await
-            }
-
-            // ================================================================
-            // COGNITIVE TOOLS (v1.5+)
-            // ================================================================
-            "dream" => {
-                self.emit(VestigeEvent::DreamStarted {
-                    memory_count: self
-                        .storage
-                        .get_stats()
-                        .map(|s| s.total_nodes as usize)
-                        .unwrap_or(0),
-                    timestamp: chrono::Utc::now(),
-                });
-                tools::dream::execute(&self.storage, &self.cognitive, request.arguments).await
-            }
-            "explore_connections" => {
-                tools::explore::execute(&self.storage, &self.cognitive, request.arguments).await
-            }
-            "predict" => {
-                tools::predict::execute(&self.storage, &self.cognitive, request.arguments).await
-            }
-            "restore" => tools::restore::execute(&self.storage, request.arguments).await,
-
-            // ================================================================
-            // CONTEXT PACKETS (v1.8+)
-            // ================================================================
-            "session_context" => {
-                tools::session_context::execute(
-                    &self.storage,
-                    &self.cognitive,
-                    &self.output_config,
-                    request.arguments,
-                )
-                .await
-            }
-
-            // ================================================================
-            // AUTONOMIC TOOLS (v1.9+)
-            // ================================================================
-            "memory_health" => tools::health::execute(&self.storage, request.arguments).await,
-            "memory_graph" => tools::graph::execute(&self.storage, request.arguments).await,
-            "composed_graph" => {
-                tools::composed_graph::execute(&self.storage, request.arguments).await
-            }
-            "deep_reference" | "cross_reference" => {
-                tools::cross_reference::execute(&self.storage, &self.cognitive, request.arguments)
+                // ================================================================
+                // SYSTEM STATUS (v1.7: replaces health_check + stats)
+                // ================================================================
+                "system_status" => {
+                    tools::maintenance::execute_system_status(
+                        &self.storage,
+                        &self.cognitive,
+                        request.arguments,
+                    )
                     .await
-            }
-            "contradictions" => {
-                tools::contradictions::execute(&self.storage, request.arguments).await
-            }
+                }
 
-            // ================================================================
-            // ACTIVE FORGETTING (v2.0.5) — top-down suppression
-            // ================================================================
-            "suppress" => tools::suppress::execute(&self.storage, request.arguments).await,
+                "mark_reviewed" => tools::review::execute(&self.storage, request.arguments).await,
 
-            name => {
-                return Err(JsonRpcError::invalid_params(&format!(
-                    "Unknown tool: {}",
-                    name
-                )));
+                // ================================================================
+                // DEPRECATED: Search tools - redirect to unified 'search'
+                // ================================================================
+                "recall" | "semantic_search" | "hybrid_search" => {
+                    warn!(
+                        "Tool '{}' is deprecated. Use 'search' instead.",
+                        request.name
+                    );
+                    tools::search_unified::execute(
+                        &self.storage,
+                        &self.cognitive,
+                        &self.output_config,
+                        request.arguments,
+                    )
+                    .await
+                }
+
+                // ================================================================
+                // DEPRECATED: Memory tools - redirect to unified 'memory'
+                // ================================================================
+                "get_knowledge" => {
+                    warn!(
+                        "Tool 'get_knowledge' is deprecated. Use 'memory' with action='get' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let id = args.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                            Some(serde_json::json!({
+                                "action": "get",
+                                "id": id
+                            }))
+                        }
+                        None => None,
+                    };
+                    tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args)
+                        .await
+                }
+                "delete_knowledge" => {
+                    warn!(
+                        "Tool 'delete_knowledge' is deprecated. Use 'memory' with action='purge', confirm=true instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let id = args.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                            let confirm = args
+                                .get("confirm")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Bool(false));
+                            Some(serde_json::json!({
+                                "action": "delete",
+                                "id": id,
+                                "confirm": confirm
+                            }))
+                        }
+                        None => None,
+                    };
+                    tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args)
+                        .await
+                }
+                "get_memory_state" => {
+                    warn!(
+                        "Tool 'get_memory_state' is deprecated. Use 'memory' with action='state' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let id = args
+                                .get("memory_id")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
+                            Some(serde_json::json!({
+                                "action": "state",
+                                "id": id
+                            }))
+                        }
+                        None => None,
+                    };
+                    tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args)
+                        .await
+                }
+
+                // ================================================================
+                // DEPRECATED: Codebase tools - redirect to unified 'codebase'
+                // ================================================================
+                "remember_pattern" => {
+                    warn!(
+                        "Tool 'remember_pattern' is deprecated. Use 'codebase' with action='remember_pattern' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let mut new_args = args.clone();
+                            if let Some(obj) = new_args.as_object_mut() {
+                                obj.insert(
+                                    "action".to_string(),
+                                    serde_json::json!("remember_pattern"),
+                                );
+                            }
+                            Some(new_args)
+                        }
+                        None => Some(serde_json::json!({"action": "remember_pattern"})),
+                    };
+                    tools::codebase_unified::execute(
+                        &self.storage,
+                        &self.cognitive,
+                        &self.output_config,
+                        unified_args,
+                    )
+                    .await
+                }
+                "remember_decision" => {
+                    warn!(
+                        "Tool 'remember_decision' is deprecated. Use 'codebase' with action='remember_decision' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let mut new_args = args.clone();
+                            if let Some(obj) = new_args.as_object_mut() {
+                                obj.insert(
+                                    "action".to_string(),
+                                    serde_json::json!("remember_decision"),
+                                );
+                            }
+                            Some(new_args)
+                        }
+                        None => Some(serde_json::json!({"action": "remember_decision"})),
+                    };
+                    tools::codebase_unified::execute(
+                        &self.storage,
+                        &self.cognitive,
+                        &self.output_config,
+                        unified_args,
+                    )
+                    .await
+                }
+                "get_codebase_context" => {
+                    warn!(
+                        "Tool 'get_codebase_context' is deprecated. Use 'codebase' with action='get_context' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let mut new_args = args.clone();
+                            if let Some(obj) = new_args.as_object_mut() {
+                                obj.insert("action".to_string(), serde_json::json!("get_context"));
+                            }
+                            Some(new_args)
+                        }
+                        None => Some(serde_json::json!({"action": "get_context"})),
+                    };
+                    tools::codebase_unified::execute(
+                        &self.storage,
+                        &self.cognitive,
+                        &self.output_config,
+                        unified_args,
+                    )
+                    .await
+                }
+
+                // ================================================================
+                // DEPRECATED: Intention tools - redirect to unified 'intention'
+                // ================================================================
+                "set_intention" => {
+                    warn!(
+                        "Tool 'set_intention' is deprecated. Use 'intention' with action='set' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let mut new_args = args.clone();
+                            if let Some(obj) = new_args.as_object_mut() {
+                                obj.insert("action".to_string(), serde_json::json!("set"));
+                            }
+                            Some(new_args)
+                        }
+                        None => Some(serde_json::json!({"action": "set"})),
+                    };
+                    tools::intention_unified::execute(&self.storage, &self.cognitive, unified_args)
+                        .await
+                }
+                "check_intentions" => {
+                    warn!(
+                        "Tool 'check_intentions' is deprecated. Use 'intention' with action='check' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let mut new_args = args.clone();
+                            if let Some(obj) = new_args.as_object_mut() {
+                                obj.insert("action".to_string(), serde_json::json!("check"));
+                            }
+                            Some(new_args)
+                        }
+                        None => Some(serde_json::json!({"action": "check"})),
+                    };
+                    tools::intention_unified::execute(&self.storage, &self.cognitive, unified_args)
+                        .await
+                }
+                "complete_intention" => {
+                    warn!(
+                        "Tool 'complete_intention' is deprecated. Use 'intention' with action='update', status='complete' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let id = args
+                                .get("intentionId")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
+                            Some(serde_json::json!({
+                                "action": "update",
+                                "id": id,
+                                "status": "complete"
+                            }))
+                        }
+                        None => None,
+                    };
+                    tools::intention_unified::execute(&self.storage, &self.cognitive, unified_args)
+                        .await
+                }
+                "snooze_intention" => {
+                    warn!(
+                        "Tool 'snooze_intention' is deprecated. Use 'intention' with action='update', status='snooze' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let id = args
+                                .get("intentionId")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
+                            let minutes = args
+                                .get("minutes")
+                                .cloned()
+                                .unwrap_or(serde_json::json!(30));
+                            Some(serde_json::json!({
+                                "action": "update",
+                                "id": id,
+                                "status": "snooze",
+                                "snooze_minutes": minutes
+                            }))
+                        }
+                        None => None,
+                    };
+                    tools::intention_unified::execute(&self.storage, &self.cognitive, unified_args)
+                        .await
+                }
+                "list_intentions" => {
+                    warn!(
+                        "Tool 'list_intentions' is deprecated. Use 'intention' with action='list' instead."
+                    );
+                    let unified_args = match request.arguments {
+                        Some(ref args) => {
+                            let mut new_args = args.clone();
+                            if let Some(obj) = new_args.as_object_mut() {
+                                obj.insert("action".to_string(), serde_json::json!("list"));
+                                if let Some(status) = obj.remove("status") {
+                                    obj.insert("filter_status".to_string(), status);
+                                }
+                            }
+                            Some(new_args)
+                        }
+                        None => Some(serde_json::json!({"action": "list"})),
+                    };
+                    tools::intention_unified::execute(&self.storage, &self.cognitive, unified_args)
+                        .await
+                }
+
+                // ================================================================
+                // Neuroscience tools (internal, not in tools/list)
+                // ================================================================
+                "list_by_state" => {
+                    tools::memory_states::execute_list(&self.storage, request.arguments).await
+                }
+                "state_stats" => tools::memory_states::execute_stats(&self.storage).await,
+                "trigger_importance" => {
+                    tools::tagging::execute_trigger(&self.storage, request.arguments).await
+                }
+                "find_tagged" => {
+                    tools::tagging::execute_find(&self.storage, request.arguments).await
+                }
+                "tagging_stats" => tools::tagging::execute_stats(&self.storage).await,
+                "match_context" => tools::context::execute(&self.storage, request.arguments).await,
+
+                // ================================================================
+                // Feedback (internal, still used by request_feedback)
+                // ================================================================
+                "request_feedback" => {
+                    tools::feedback::execute_request_feedback(&self.storage, request.arguments)
+                        .await
+                }
+
+                // ================================================================
+                // TEMPORAL TOOLS (v1.2+)
+                // ================================================================
+                "memory_timeline" => {
+                    tools::timeline::execute(&self.storage, &self.output_config, request.arguments)
+                        .await
+                }
+                "memory_changelog" => {
+                    tools::changelog::execute(&self.storage, request.arguments).await
+                }
+
+                // ================================================================
+                // MAINTENANCE TOOLS (v1.2+, non-deprecated)
+                // ================================================================
+                "consolidate" => {
+                    self.emit(VestigeEvent::ConsolidationStarted {
+                        timestamp: chrono::Utc::now(),
+                    });
+                    tools::maintenance::execute_consolidate(&self.storage, request.arguments).await
+                }
+                "backup" => {
+                    tools::maintenance::execute_backup(&self.storage, request.arguments).await
+                }
+                "export" => {
+                    tools::maintenance::execute_export(&self.storage, request.arguments).await
+                }
+                "gc" => tools::maintenance::execute_gc(&self.storage, request.arguments).await,
+
+                // ================================================================
+                // AUTO-SAVE & DEDUP TOOLS (v1.3+)
+                // ================================================================
+                "importance_score" => {
+                    tools::importance::execute(&self.storage, &self.cognitive, request.arguments)
+                        .await
+                }
+                "find_duplicates" => tools::dedup::execute(&self.storage, request.arguments).await,
+
+                // ================================================================
+                // MERGE / SUPERSEDE CONTROLS (v2.1.25 — Phase 3)
+                // ================================================================
+                "merge_candidates" | "plan_merge" | "plan_supersede" | "apply_plan"
+                | "merge_undo" | "protect" | "merge_policy" => {
+                    tools::merge::execute(&self.storage, request.name.as_str(), request.arguments)
+                        .await
+                }
+
+                // ================================================================
+                // COGNITIVE TOOLS (v1.5+)
+                // ================================================================
+                "dream" => {
+                    self.emit(VestigeEvent::DreamStarted {
+                        memory_count: self
+                            .storage
+                            .get_stats()
+                            .map(|s| s.total_nodes as usize)
+                            .unwrap_or(0),
+                        timestamp: chrono::Utc::now(),
+                    });
+                    tools::dream::execute(&self.storage, &self.cognitive, request.arguments).await
+                }
+                "explore_connections" => {
+                    tools::explore::execute(&self.storage, &self.cognitive, request.arguments).await
+                }
+                "predict" => {
+                    tools::predict::execute(&self.storage, &self.cognitive, request.arguments).await
+                }
+                "restore" => tools::restore::execute(&self.storage, request.arguments).await,
+
+                // ================================================================
+                // CONTEXT PACKETS (v1.8+)
+                // ================================================================
+                "session_context" => {
+                    tools::session_context::execute(
+                        &self.storage,
+                        &self.cognitive,
+                        &self.output_config,
+                        request.arguments,
+                    )
+                    .await
+                }
+
+                // ================================================================
+                // AUTONOMIC TOOLS (v1.9+)
+                // ================================================================
+                "memory_health" => tools::health::execute(&self.storage, request.arguments).await,
+                "memory_graph" => tools::graph::execute(&self.storage, request.arguments).await,
+                "composed_graph" => {
+                    tools::composed_graph::execute(&self.storage, request.arguments).await
+                }
+                "deep_reference" | "cross_reference" => {
+                    tools::cross_reference::execute(
+                        &self.storage,
+                        &self.cognitive,
+                        request.arguments,
+                    )
+                    .await
+                }
+                "contradictions" => {
+                    tools::contradictions::execute(&self.storage, request.arguments).await
+                }
+
+                // ================================================================
+                // ACTIVE FORGETTING (v2.0.5) — top-down suppression
+                // ================================================================
+                "suppress" => tools::suppress::execute(&self.storage, request.arguments).await,
+
+                name => {
+                    return Err(JsonRpcError::invalid_params(&format!(
+                        "Unknown tool: {}",
+                        name
+                    )));
+                }
             }
         };
 
@@ -1164,8 +1214,12 @@ impl McpServer {
                 // receipt from what the tool already computed and attach it.
                 // Done before the runId stamp so the receipt's own suppressed
                 // list is part of the same payload the agent reads.
-                let receipt =
-                    crate::trace_recorder::build_and_save_receipt(&self.storage, &run_id, &request.name, &content);
+                let receipt = crate::trace_recorder::build_and_save_receipt(
+                    &self.storage,
+                    &run_id,
+                    &request.name,
+                    &content,
+                );
                 if let Some(obj) = content.as_object_mut() {
                     obj.insert("runId".to_string(), serde_json::json!(run_id));
                     obj.insert(
@@ -1178,10 +1232,7 @@ impl McpServer {
                     // Surface opened Memory PRs so the agent learns its risky
                     // write is held for review, not silently committed.
                     if !opened_prs.is_empty() {
-                        obj.insert(
-                            "memoryPrsOpened".to_string(),
-                            serde_json::json!(opened_prs),
-                        );
+                        obj.insert("memoryPrsOpened".to_string(), serde_json::json!(opened_prs));
                         obj.insert(
                             "memoryPrNotice".to_string(),
                             serde_json::json!(
@@ -2512,6 +2563,101 @@ mod tests {
         );
     }
 
+    /// Destructive memory operations must be blocked before execution in the
+    /// default Risk-Gated mode. This is the real C2 regression test: a purge
+    /// request opens a Memory PR, but the row is still present until review.
+    #[tokio::test]
+    async fn test_memory_purge_is_pre_gated_before_delete() {
+        let (mut server, _dir) = test_server().await;
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+        let node = server
+            .storage
+            .ingest(vestige_core::IngestInput {
+                content: "A purge target containing auth token sk-live-DO-NOT-LEAK-123".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let call = make_request(
+            "tools/call",
+            Some(serde_json::json!({
+                "name": "memory",
+                "arguments": {
+                    "action": "purge",
+                    "id": node.id,
+                    "confirm": true,
+                    "runId": "run_pre_gate_purge"
+                }
+            })),
+        );
+        let response = server.handle_request(call).await.unwrap();
+        let structured = response.result.unwrap()["structuredContent"].clone();
+
+        assert_eq!(structured["pendingReview"], serde_json::json!(true));
+        assert_eq!(structured["success"], serde_json::json!(false));
+        assert!(
+            server.storage.get_node(&node.id).unwrap().is_some(),
+            "purge must not delete before Memory PR review"
+        );
+        let prs = server
+            .storage
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].subject_id.as_deref(), Some(node.id.as_str()));
+        assert_eq!(prs[0].diff["pendingAction"], serde_json::json!("purge"));
+        let serialized = serde_json::to_string(&prs[0]).unwrap();
+        assert!(
+            !serialized.contains("DO-NOT-LEAK") && !serialized.contains("sk-live"),
+            "pending Memory PR must not expose raw sensitive content"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_direct_suppress_is_pre_gated_before_mutation() {
+        let (mut server, _dir) = test_server().await;
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+        let node = server
+            .storage
+            .ingest(vestige_core::IngestInput {
+                content: "A suppress target awaiting review.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let call = make_request(
+            "tools/call",
+            Some(serde_json::json!({
+                "name": "suppress",
+                "arguments": {
+                    "id": node.id,
+                    "reason": "test suppress",
+                    "runId": "run_pre_gate_suppress"
+                }
+            })),
+        );
+        let response = server.handle_request(call).await.unwrap();
+        let structured = response.result.unwrap()["structuredContent"].clone();
+
+        assert_eq!(structured["pendingReview"], serde_json::json!(true));
+        let current = server.storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(
+            current.suppression_count, 0,
+            "suppress must not mutate retrieval influence before review"
+        );
+        let prs = server
+            .storage
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(prs[0].diff["pendingAction"], serde_json::json!("suppress"));
+    }
+
     /// PROOF LOCK: the complete spine in one test. A single runId must cross
     /// every hop, and the value must be byte-identical at each:
     ///   MCP output → SQLite trace → WebSocket event → API response shape →
@@ -2540,7 +2686,11 @@ mod tests {
         );
         let response = server.handle_request(call).await.unwrap();
         let structured = response.result.expect("tools/call ok")["structuredContent"].clone();
-        assert_eq!(structured["runId"].as_str(), Some(RUN), "HOP 1: tool output runId");
+        assert_eq!(
+            structured["runId"].as_str(),
+            Some(RUN),
+            "HOP 1: tool output runId"
+        );
         assert_eq!(
             structured["traceUri"].as_str(),
             Some(&format!("vestige://trace/{RUN}")[..]),
@@ -2579,7 +2729,10 @@ mod tests {
             .unwrap()
             .expect("HOP 4: run summary the list view renders");
         assert_eq!(summary.run_id, RUN, "HOP 4: API run summary runId");
-        assert!(summary.event_count >= 1, "HOP 4: event_count rendered in the list");
+        assert!(
+            summary.event_count >= 1,
+            "HOP 4: event_count rendered in the list"
+        );
         // The detail view renders these events in sequence order.
         let detail_events = server.storage.get_trace(RUN).unwrap();
         assert_eq!(
@@ -2605,7 +2758,10 @@ mod tests {
             "HOP 5: vestige://trace/{{runId}} resolves the same runId"
         );
         assert!(
-            parsed["events"].as_array().map(|a| !a.is_empty()).unwrap_or(false),
+            parsed["events"]
+                .as_array()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false),
             "HOP 5: the resource returns the run's events"
         );
 

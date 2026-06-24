@@ -176,6 +176,7 @@ export type VestigeEventType =
 export interface VestigeEvent {
 	type: VestigeEventType;
 	data: Record<string, unknown>;
+	source?: 'socket' | 'synthetic';
 }
 
 // v2.0.7: active-forgetting response shapes. Each suppress call COMPOUNDS;
@@ -195,6 +196,27 @@ export interface SuppressResult {
 	labileWindowHours: number;
 	reason: string | null;
 }
+
+export interface MemoryPrOpenedSummary {
+	id: string;
+	kind: string;
+	title: string;
+	signals?: Array<Record<string, unknown>>;
+	subjectId?: string;
+}
+
+export interface PendingReviewResult {
+	action: string;
+	success: false;
+	pendingReview: true;
+	nodeId: string;
+	message: string;
+	memoryPrsOpened: MemoryPrOpenedSummary[];
+	memoryPrNotice?: string;
+}
+
+export type DeleteMemoryResult = { deleted: true; id: string } | PendingReviewResult;
+export type SuppressMemoryResult = SuppressResult | PendingReviewResult;
 
 export interface UnsuppressResult {
 	unsuppressed: true;
