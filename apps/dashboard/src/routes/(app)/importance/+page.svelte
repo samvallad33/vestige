@@ -6,6 +6,11 @@
 	import type { ImportanceScore, Memory } from '$types';
 	import { NODE_TYPE_COLORS } from '$types';
 	import ImportanceRadar from '$components/ImportanceRadar.svelte';
+	import PageHeader from '$components/PageHeader.svelte';
+	import AnimatedNumber from '$components/AnimatedNumber.svelte';
+	import Icon from '$components/Icon.svelte';
+	import { reveal } from '$lib/actions/reveal';
+	import { spotlight } from '$lib/actions/interactions';
 
 	// ── Section 1: Test Importance ───────────────────────────────────────────
 	let content = $state('');
@@ -145,17 +150,15 @@
 </script>
 
 <div class="p-6 max-w-5xl mx-auto space-y-8">
-	<div class="flex items-center justify-between">
-		<div>
-			<h1 class="text-xl text-bright font-semibold">Importance Radar</h1>
-			<p class="text-sm text-dim mt-1">
-				4-channel importance model: Novelty · Arousal · Reward · Attention
-			</p>
-		</div>
-	</div>
+	<PageHeader
+		icon="importance"
+		title="Importance Radar"
+		subtitle="4-channel importance model: Novelty · Arousal · Reward · Attention"
+		accent="warning"
+	/>
 
 	<!-- ── Section 1: Test Importance ─────────────────────────────────────── -->
-	<section class="glass-panel rounded-2xl p-6 space-y-5">
+	<section use:reveal class="glass-panel rounded-2xl p-6 space-y-5">
 		<div>
 			<h2 class="text-sm font-semibold text-bright uppercase tracking-wider">Test Importance</h2>
 			<p class="text-xs text-muted mt-1">
@@ -191,12 +194,15 @@
 			</div>
 
 			<!-- Radar + composite readout -->
-			<div class="flex flex-col items-center gap-4 md:min-w-[340px]">
+			<div
+				use:spotlight
+				class="spotlight-surface flex flex-col items-center gap-4 md:min-w-[340px] rounded-2xl"
+			>
 				{#if score}
-					<div class="text-center">
+					<div class="relative z-[1] text-center enter">
 						<div class="text-[10px] uppercase tracking-widest text-muted">Composite</div>
-						<div class="text-5xl font-semibold text-bright leading-none mt-1">
-							{(score.composite * 100).toFixed(0)}<span class="text-xl text-dim">%</span>
+						<div class="text-5xl font-semibold text-aurora leading-none mt-1 tabular-nums">
+							<AnimatedNumber value={score.composite} scale={100} decimals={0} suffix="%" />
 						</div>
 					</div>
 					{#key radarKey}
@@ -211,8 +217,11 @@
 
 					<!-- Recommendation -->
 					{#if score.composite > 0.6}
-						<div class="w-full text-center space-y-1">
-							<div class="text-lg font-semibold text-recall">✓ Save</div>
+						<div class="relative z-[1] w-full text-center space-y-1 enter">
+							<div class="flex items-center justify-center gap-1.5 text-lg font-semibold text-recall">
+								<Icon name="sparkle" size={18} />
+								<span>Save</span>
+							</div>
 							<p class="text-xs text-dim leading-relaxed">
 								Composite {(score.composite * 100).toFixed(0)}% &gt; 60% threshold.
 								{#if topChannel}
@@ -221,8 +230,11 @@
 							</p>
 						</div>
 					{:else}
-						<div class="w-full text-center space-y-1">
-							<div class="text-lg font-semibold text-decay">⨯ Skip</div>
+						<div class="relative z-[1] w-full text-center space-y-1 enter">
+							<div class="flex items-center justify-center gap-1.5 text-lg font-semibold text-decay">
+								<Icon name="close" size={18} />
+								<span>Skip</span>
+							</div>
 							<p class="text-xs text-dim leading-relaxed">
 								Composite {(score.composite * 100).toFixed(0)}% &lt; 60% threshold.
 								{#if weakestChannel}
@@ -232,8 +244,10 @@
 						</div>
 					{/if}
 				{:else}
-					<div class="flex flex-col items-center justify-center min-h-[320px] w-full text-center px-4">
-						<div class="text-3xl text-muted mb-3">◫</div>
+					<div class="relative z-[1] flex flex-col items-center justify-center min-h-[320px] w-full text-center px-4">
+						<div class="text-warning/70 mb-3 breathe">
+							<Icon name="importance" size={36} />
+						</div>
 						<p class="text-sm text-dim">Type some content above to score its importance.</p>
 						<p class="text-xs text-muted mt-2 max-w-xs">
 							Composite = 0.25·novelty + 0.30·arousal + 0.25·reward + 0.20·attention.
@@ -246,7 +260,7 @@
 	</section>
 
 	<!-- ── Section 2: Top Important Memories This Week ────────────────────── -->
-	<section class="space-y-4">
+	<section use:reveal class="space-y-4">
 		<div class="flex items-end justify-between">
 			<div>
 				<h2 class="text-sm font-semibold text-bright uppercase tracking-wider">
@@ -267,21 +281,29 @@
 		{#if loadingMemories}
 			<div class="grid gap-3 md:grid-cols-2">
 				{#each Array(6) as _}
-					<div class="h-28 glass-subtle rounded-xl animate-pulse"></div>
+					<div class="h-28 glass-subtle rounded-xl shimmer"></div>
 				{/each}
 			</div>
 		{:else if memories.length === 0}
-			<div class="text-center py-12 text-dim">
-				<p class="text-sm">No memories yet.</p>
+			<div class="flex flex-col items-center justify-center text-center py-16 px-6 glass-subtle rounded-2xl enter">
+				<div class="text-warning/60 mb-3 breathe">
+					<Icon name="importance" size={40} />
+				</div>
+				<p class="text-sm text-bright font-medium">No standout memories yet</p>
+				<p class="text-xs text-muted mt-1.5 max-w-sm">
+					As you capture decisions, wins, and discoveries, the most important ones
+					will rise to the top here — ranked by retention, reviews, and recency.
+				</p>
 			</div>
 		{:else}
 			<div class="grid gap-3 md:grid-cols-2">
-				{#each memories as memory (memory.id)}
+				{#each memories as memory, i (memory.id)}
 					{@const ch = perMemoryScores[memory.id]}
 					<button
 						type="button"
+						use:reveal={{ delay: i * 45 }}
 						onclick={() => openMemory(memory.id)}
-						class="text-left p-4 glass-subtle rounded-xl hover:bg-white/[0.04] hover:border-synapse/30
+						class="lift text-left p-4 glass-subtle rounded-xl hover:bg-white/[0.04] hover:border-synapse/30
 							transition-all duration-200 flex items-start gap-4"
 					>
 						<div class="flex-1 min-w-0 space-y-2">

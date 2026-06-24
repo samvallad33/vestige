@@ -3,6 +3,9 @@
 	import { api } from '$stores/api';
 	import { websocket, isConnected, memoryCount, avgRetention } from '$stores/websocket';
 	import { fireDemoSequence } from '$stores/toast';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { reveal } from '$lib/actions/reveal';
 
 	// v2.3 Birth Ritual demo — injects a synthetic MemoryCreated event so
 	// Graph3D spawns a birth orb without needing a real ingest. Node types
@@ -80,43 +83,64 @@
 	}
 </script>
 
-<div class="p-6 max-w-4xl mx-auto space-y-8">
-	<div class="flex items-center justify-between">
-		<h1 class="text-xl text-bright font-semibold">Settings & System</h1>
-		<button onclick={loadAllData} class="text-xs text-dim hover:text-text transition">Refresh</button>
-	</div>
+<div class="p-6 max-w-4xl mx-auto space-y-8 enter">
+	<PageHeader
+		icon="settings"
+		title="Settings & System"
+		subtitle="Tune the cognitive engine, watch the system breathe, and run the rituals that keep memory alive."
+		accent="synapse"
+	>
+		<span class="conn-pill" class:idle={!$isConnected}>
+			<span
+				class="conn-dot w-2 h-2 rounded-full"
+				class:ping-host={$isConnected}
+				class:breathe={!$isConnected}
+				style="color:{$isConnected ? 'var(--color-recall)' : 'var(--color-decay)'};background:{$isConnected ? 'var(--color-recall)' : 'var(--color-decay)'}"
+			></span>
+			<span>{$isConnected ? 'Connected' : 'Offline'}</span>
+		</span>
+		<button onclick={loadAllData} class="refresh-btn">
+			<Icon name="activation" size={13} />
+			<span>Refresh</span>
+		</button>
+	</PageHeader>
 
 	<!-- System Health Overview -->
 	<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-		<div class="p-4 glass rounded-xl text-center">
-			<div class="text-2xl text-bright font-bold">{$memoryCount}</div>
+		<div class="p-4 glass rounded-xl text-center lift" use:reveal={{ delay: 0 }}>
+			<div class="text-2xl text-bright font-bold tabular-nums">{$memoryCount}</div>
 			<div class="text-xs text-dim mt-1">Memories</div>
 		</div>
-		<div class="p-4 glass rounded-xl text-center">
-			<div class="text-2xl font-bold" style="color: {$avgRetention > 0.7 ? '#10b981' : $avgRetention > 0.4 ? '#f59e0b' : '#ef4444'}">{($avgRetention * 100).toFixed(1)}%</div>
+		<div class="p-4 glass rounded-xl text-center lift" use:reveal={{ delay: 60 }}>
+			<div class="text-2xl font-bold tabular-nums" style="color: {$avgRetention > 0.7 ? '#10b981' : $avgRetention > 0.4 ? '#f59e0b' : '#ef4444'}">{($avgRetention * 100).toFixed(1)}%</div>
 			<div class="text-xs text-dim mt-1">Avg Retention</div>
 		</div>
-		<div class="p-4 glass rounded-xl text-center">
+		<div class="p-4 glass rounded-xl text-center lift" use:reveal={{ delay: 120 }}>
 			<div class="text-2xl text-bright font-bold flex items-center justify-center gap-2">
-				<div class="w-2.5 h-2.5 rounded-full {$isConnected ? 'bg-recall animate-pulse-glow' : 'bg-decay'}"></div>
+				<span
+					class="w-2.5 h-2.5 rounded-full"
+					class:ping-host={$isConnected}
+					class:breathe={!$isConnected}
+					style="color:{$isConnected ? 'var(--color-recall)' : 'var(--color-decay)'};background:{$isConnected ? 'var(--color-recall)' : 'var(--color-decay)'}"
+				></span>
 				<span class="text-sm">{$isConnected ? 'Online' : 'Offline'}</span>
 			</div>
 			<div class="text-xs text-dim mt-1">WebSocket</div>
 		</div>
-		<div class="p-4 glass rounded-xl text-center">
+		<div class="p-4 glass rounded-xl text-center lift" use:reveal={{ delay: 180 }}>
 			<div class="text-2xl text-synapse-glow font-bold">v2.1</div>
 			<div class="text-xs text-dim mt-1">Vestige</div>
 		</div>
 	</div>
 
 	<!-- Cognitive Operations -->
-	<section class="space-y-4">
+	<section class="space-y-4" use:reveal={{ delay: 60 }}>
 		<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-			<span class="text-dream">◈</span> Cognitive Operations
+			<Icon name="dreams" size={16} class="text-dream" /> Cognitive Operations
 		</h2>
 
 		<!-- v2.2 Pulse — demo the InsightToast stream -->
-		<div class="p-4 glass rounded-xl space-y-3">
+		<div class="p-4 glass rounded-xl space-y-3 lift">
 			<div class="flex items-center justify-between">
 				<div>
 					<div class="text-sm text-text font-medium">Pulse Toast Preview</div>
@@ -124,13 +148,13 @@
 				</div>
 				<button onclick={fireDemoSequence}
 					class="px-4 py-2 bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm rounded-xl hover:bg-synapse/30 transition flex items-center gap-2">
-					<span>✦</span> Preview Pulse
+					<Icon name="sparkle" size={14} /> Preview Pulse
 				</button>
 			</div>
 		</div>
 
 		<!-- v2.3 Terrarium — demo the Memory Birth Ritual on the Graph page -->
-		<div class="p-4 glass rounded-xl space-y-3">
+		<div class="p-4 glass rounded-xl space-y-3 lift">
 			<div class="flex items-center justify-between">
 				<div>
 					<div class="text-sm text-text font-medium">Birth Ritual Preview</div>
@@ -138,13 +162,13 @@
 				</div>
 				<button onclick={fireBirthRitualDemo}
 					class="px-4 py-2 bg-dream/20 border border-dream/40 text-dream-glow text-sm rounded-xl hover:bg-dream/30 transition flex items-center gap-2">
-					<span>✺</span> Trigger Birth
+					<Icon name="memories" size={14} /> Trigger Birth
 				</button>
 			</div>
 		</div>
 
 		<!-- Consolidation -->
-		<div class="p-4 glass rounded-xl space-y-3">
+		<div class="p-4 glass rounded-xl space-y-3 lift">
 			<div class="flex items-center justify-between">
 				<div>
 					<div class="text-sm text-text font-medium">FSRS-6 Consolidation</div>
@@ -165,19 +189,19 @@
 					<div class="grid grid-cols-3 gap-3 text-center">
 						{#if consolidationResult.nodesProcessed !== undefined}
 							<div>
-								<div class="text-lg text-text font-semibold">{consolidationResult.nodesProcessed}</div>
+								<div class="text-lg text-text font-semibold tabular-nums">{consolidationResult.nodesProcessed}</div>
 								<div class="text-[10px] text-muted">Processed</div>
 							</div>
 						{/if}
 						{#if consolidationResult.decayApplied !== undefined}
 							<div>
-								<div class="text-lg text-decay font-semibold">{consolidationResult.decayApplied}</div>
+								<div class="text-lg text-decay font-semibold tabular-nums">{consolidationResult.decayApplied}</div>
 								<div class="text-[10px] text-muted">Decayed</div>
 							</div>
 						{/if}
 						{#if consolidationResult.embeddingsGenerated !== undefined}
 							<div>
-								<div class="text-lg text-synapse-glow font-semibold">{consolidationResult.embeddingsGenerated}</div>
+								<div class="text-lg text-synapse-glow font-semibold tabular-nums">{consolidationResult.embeddingsGenerated}</div>
 								<div class="text-[10px] text-muted">Embedded</div>
 							</div>
 						{/if}
@@ -187,7 +211,7 @@
 		</div>
 
 		<!-- Dream -->
-		<div class="p-4 glass rounded-xl space-y-3">
+		<div class="p-4 glass rounded-xl space-y-3 lift">
 			<div class="flex items-center justify-between">
 				<div>
 					<div class="text-sm text-text font-medium">Memory Dream Cycle</div>
@@ -227,9 +251,9 @@
 
 	<!-- Retention Distribution -->
 	{#if retentionDist}
-		<section class="space-y-4">
+		<section class="space-y-4" use:reveal={{ delay: 120 }}>
 			<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-				<span class="text-recall">◫</span> Retention Distribution
+				<Icon name="importance" size={16} class="text-recall" /> Retention Distribution
 			</h2>
 			<div class="p-4 glass rounded-xl">
 				{#if retentionDist.distribution && Array.isArray(retentionDist.distribution)}
@@ -254,9 +278,9 @@
 	{/if}
 
 	<!-- Keyboard Shortcuts -->
-	<section class="space-y-4">
+	<section class="space-y-4" use:reveal={{ delay: 160 }}>
 		<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-			<span class="text-synapse">⌨</span> Keyboard Shortcuts
+			<Icon name="command" size={16} class="text-synapse" /> Keyboard Shortcuts
 		</h2>
 		<div class="p-4 glass-subtle rounded-xl">
 			<div class="grid grid-cols-2 gap-2 text-xs">
@@ -280,14 +304,14 @@
 	</section>
 
 	<!-- About -->
-	<section class="space-y-4">
+	<section class="space-y-4" use:reveal={{ delay: 200 }}>
 		<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-			<span class="text-memory">◎</span> About
+			<Icon name="logo" size={16} class="text-memory" /> About
 		</h2>
-		<div class="p-4 glass rounded-xl space-y-3">
+		<div class="p-4 glass rounded-xl space-y-3 lift">
 			<div class="flex items-center gap-4">
-				<div class="w-12 h-12 rounded-xl bg-gradient-to-br from-dream to-synapse flex items-center justify-center text-bright text-xl font-bold shadow-lg shadow-synapse/20">
-					V
+				<div class="logo-tile w-12 h-12 rounded-xl bg-gradient-to-br from-dream to-synapse flex items-center justify-center text-bright shadow-lg shadow-synapse/20">
+					<Icon name="logo" size={20} strokeWidth={1.8} />
 				</div>
 				<div>
 					<div class="text-sm text-bright font-semibold">Vestige v2.1 "Nuclear Dashboard"</div>
@@ -308,3 +332,71 @@
 		</div>
 	</section>
 </div>
+
+<style>
+	/* ── Live connection pill in the header right-slot ──────────────────────── */
+	.conn-pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.3rem 0.7rem;
+		border-radius: 999px;
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: var(--color-recall, #34d399);
+		background: color-mix(in srgb, var(--color-recall, #34d399) 12%, transparent);
+		border: 1px solid color-mix(in srgb, var(--color-recall, #34d399) 28%, transparent);
+		white-space: nowrap;
+	}
+	.conn-pill.idle {
+		color: var(--color-dim, #8b95a5);
+		background: rgba(255, 255, 255, 0.04);
+		border-color: rgba(255, 255, 255, 0.08);
+	}
+	.conn-dot {
+		display: inline-block;
+		flex-shrink: 0;
+	}
+
+	/* ── Refresh button ─────────────────────────────────────────────────────── */
+	.refresh-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		padding: 0.3rem 0.65rem;
+		border-radius: 999px;
+		font-size: 0.75rem;
+		color: var(--color-muted, #6b7280);
+		background: rgba(255, 255, 255, 0.02);
+		border: 1px solid rgba(255, 255, 255, 0.06);
+		transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+	}
+	.refresh-btn:hover {
+		color: var(--color-text, #e5e7eb);
+		background: rgba(255, 255, 255, 0.05);
+		border-color: rgba(255, 255, 255, 0.12);
+	}
+
+	/* ── About logo tile — a soft synapse glow so the masthead reads alive ──── */
+	.logo-tile {
+		position: relative;
+	}
+	.logo-tile::after {
+		content: '';
+		position: absolute;
+		inset: -1px;
+		border-radius: inherit;
+		box-shadow: 0 0 18px -2px var(--color-synapse-glow, #818cf8);
+		opacity: 0.4;
+		pointer-events: none;
+	}
+	@media not (prefers-reduced-motion: reduce) {
+		.logo-tile::after {
+			animation: logo-glow 4s ease-in-out infinite;
+		}
+		@keyframes logo-glow {
+			0%, 100% { opacity: 0.25; }
+			50% { opacity: 0.55; }
+		}
+	}
+</style>

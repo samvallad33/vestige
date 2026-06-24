@@ -2,6 +2,12 @@
 	import { onMount } from 'svelte';
 	import { api } from '$stores/api';
 	import type { IntentionItem } from '$types';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Dropdown, { type DropdownOption } from '$lib/components/Dropdown.svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
+	import { reveal } from '$lib/actions/reveal';
+	import { spotlight } from '$lib/actions/interactions';
 
 	let intentions: IntentionItem[] = $state([]);
 	let predictions: Record<string, unknown>[] = $state([]);
@@ -29,12 +35,24 @@
 		1: 'text-muted',
 	};
 
-	const TRIGGER_ICONS: Record<string, string> = {
-		time: '⏰',
-		context: '◎',
-		event: '⚡',
-		manual: '◇',
+	// Each trigger kind gets a drawn-on Icon instead of a Unicode glyph, so the
+	// list reads as part of the same premium icon system as the rest of the app.
+	const TRIGGER_ICONS: Record<string, 'schedule' | 'graph' | 'pulse' | 'intentions'> = {
+		time: 'schedule',
+		context: 'graph',
+		event: 'pulse',
+		manual: 'intentions',
 	};
+
+	// Clear, labelled dropdown options replace the row of status tabs. Same values,
+	// same filtering behavior — just clearer at a glance.
+	const statusOptions: DropdownOption[] = [
+		{ value: 'active', label: 'Active', color: '#6366f1' },
+		{ value: 'fulfilled', label: 'Fulfilled', color: '#10b981' },
+		{ value: 'snoozed', label: 'Snoozed', color: '#a78bfa' },
+		{ value: 'cancelled', label: 'Cancelled', color: '#8B95A5' },
+		{ value: 'all', label: 'All', color: '#00D4FF' },
+	];
 
 	function summarizeTrigger(intention: IntentionItem): string {
 		// The API returns trigger_data as a JSON-encoded string. Parse it, pick the
@@ -99,56 +117,64 @@
 </script>
 
 <div class="p-6 max-w-5xl mx-auto space-y-8">
-	<div class="flex items-center justify-between">
-		<h1 class="text-xl text-bright font-semibold">Intentions & Predictions</h1>
-		<span class="text-xs text-muted">{intentions.length} intentions</span>
-	</div>
+	<PageHeader
+		icon="intentions"
+		title="Intentions & Predictions"
+		subtitle="Prospective memory and the needs Vestige sees coming"
+		accent="memory"
+	>
+		<span class="text-dim text-sm tabular-nums">
+			<AnimatedNumber value={intentions.length} /> intentions
+		</span>
+	</PageHeader>
 
 	<!-- Intentions Section -->
-	<div class="space-y-4">
-		<div class="flex items-center gap-2">
-			<h2 class="text-sm text-bright font-semibold">Prospective Memory</h2>
-			<span class="text-xs text-muted">"Remember to do X when Y happens"</span>
-		</div>
+	<div class="space-y-4 enter">
+		<div class="flex flex-wrap items-center justify-between gap-3">
+			<div class="flex items-center gap-2 min-w-0">
+				<h2 class="text-sm text-bright font-semibold">Prospective Memory</h2>
+				<span class="text-xs text-muted">"Remember to do X when Y happens"</span>
+			</div>
 
-		<!-- Status filter tabs -->
-		<div class="flex gap-1.5">
-			{#each ['active', 'fulfilled', 'snoozed', 'cancelled', 'all'] as status}
-				<button
-					onclick={() => changeFilter(status)}
-					class="px-3 py-1.5 rounded-xl text-xs transition {statusFilter === status
-						? 'bg-synapse/20 text-synapse-glow border border-synapse/40'
-						: 'glass-subtle text-dim hover:bg-white/[0.03]'}"
-				>
-					{status.charAt(0).toUpperCase() + status.slice(1)}
-				</button>
-			{/each}
+			<!-- Status filter dropdown (same values & logic as the old tabs) -->
+			<Dropdown
+				options={statusOptions}
+				value={statusFilter}
+				label="Status"
+				icon="filter"
+				onChange={changeFilter}
+			/>
 		</div>
 
 		{#if loading}
 			<div class="space-y-2">
 				{#each Array(4) as _}
-					<div class="h-16 glass-subtle rounded-xl animate-pulse"></div>
+					<div class="h-16 glass-subtle rounded-xl shimmer"></div>
 				{/each}
 			</div>
 		{:else if intentions.length === 0}
-			<div class="text-center py-12 text-dim">
-				<div class="text-4xl mb-3 opacity-20">◇</div>
-				<p>No {statusFilter === 'all' ? '' : statusFilter + ' '}intentions.</p>
-				<p class="text-xs text-muted mt-1">Use "Remind me..." in conversation to create intentions.</p>
+			<div class="enter flex flex-col items-center justify-center text-center py-14 gap-4">
+				<div class="text-dim opacity-60 breathe"><Icon name="intentions" size={44} strokeWidth={1.2} /></div>
+				<p class="text-dim text-sm max-w-sm">
+					No {statusFilter === 'all' ? '' : statusFilter + ' '}intentions yet — say "Remind me…" in conversation and Vestige will hold the thought for you.
+				</p>
 			</div>
 		{:else}
 			<div class="space-y-2">
-				{#each intentions as intention}
-					<div class="p-4 glass-subtle rounded-xl">
-						<div class="flex items-start gap-3">
+				{#each intentions as intention, i (intention.id)}
+					<div
+						use:reveal={{ delay: Math.min(i * 35, 350), y: 12 }}
+						use:spotlight
+						class="spotlight-surface p-4 glass-subtle rounded-xl lift transition-all duration-200"
+					>
+						<div class="relative z-[1] flex items-start gap-3">
 							<!-- Trigger icon -->
-							<div class="w-8 h-8 rounded-lg bg-white/[0.04] flex items-center justify-center text-lg flex-shrink-0">
-								{TRIGGER_ICONS[intention.trigger_type] || '◇'}
+							<div class="w-9 h-9 rounded-lg bg-white/[0.04] border border-synapse/10 flex items-center justify-center text-synapse-glow flex-shrink-0">
+								<Icon name={TRIGGER_ICONS[intention.trigger_type] || 'intentions'} size={18} />
 							</div>
 
 							<div class="flex-1 min-w-0">
-								<p class="text-sm text-text">{intention.content}</p>
+								<p class="text-sm text-text leading-relaxed">{intention.content}</p>
 								<div class="flex flex-wrap gap-2 mt-2">
 									<!-- Status badge -->
 									<span class="px-2 py-0.5 text-[10px] rounded-lg border {STATUS_COLORS[intention.status] || 'text-dim bg-white/[0.03] border-subtle/20'}">
@@ -175,7 +201,7 @@
 								</div>
 							</div>
 
-							<span class="text-[10px] text-muted flex-shrink-0">{formatDate(intention.created_at)}</span>
+							<span class="text-[10px] text-muted tabular-nums flex-shrink-0">{formatDate(intention.created_at)}</span>
 						</div>
 					</div>
 				{/each}
@@ -184,34 +210,49 @@
 	</div>
 
 	<!-- Predictions Section -->
-	<div class="pt-6 border-t border-synapse/10 space-y-4">
+	<div class="pt-6 border-t border-synapse/10 space-y-4 enter">
 		<div class="flex items-center gap-2">
+			<span class="text-dream-glow"><Icon name="sparkle" size={16} /></span>
 			<h2 class="text-sm text-bright font-semibold">Predicted Needs</h2>
 			<span class="text-xs text-muted">What you might need next</span>
 		</div>
 
-		{#if predictions.length === 0}
-			<div class="text-center py-8 text-dim">
-				<div class="text-3xl mb-3 opacity-20">◬</div>
-				<p class="text-sm">No predictions yet. Use Vestige more to train the predictive model.</p>
+		{#if loading}
+			<div class="space-y-2">
+				{#each Array(3) as _}
+					<div class="h-14 glass-subtle rounded-xl shimmer"></div>
+				{/each}
+			</div>
+		{:else if predictions.length === 0}
+			<div class="enter flex flex-col items-center justify-center text-center py-10 gap-4">
+				<div class="text-dim opacity-60 breathe"><Icon name="sparkle" size={40} strokeWidth={1.2} /></div>
+				<p class="text-dim text-sm max-w-sm">
+					No predictions yet — keep using Vestige and the predictive model will start surfacing what you'll reach for next.
+				</p>
 			</div>
 		{:else}
 			<div class="space-y-2">
 				{#each predictions as pred, i}
-					<div class="p-3 glass-subtle rounded-xl flex items-start gap-3">
-						<div class="w-6 h-6 rounded-full bg-dream/20 text-dream-glow text-xs flex items-center justify-center flex-shrink-0 mt-0.5">
-							{i + 1}
-						</div>
-						<div class="flex-1 min-w-0">
-							<p class="text-sm text-text line-clamp-2">{pred.content}</p>
-							<div class="flex gap-3 mt-1 text-xs text-muted">
-								<span>{pred.nodeType}</span>
-								{#if pred.retention}
-									<span>{(Number(pred.retention) * 100).toFixed(0)}% retention</span>
-								{/if}
-								{#if pred.predictedNeed}
-									<span class="text-dream-glow">{pred.predictedNeed} need</span>
-								{/if}
+					<div
+						use:reveal={{ delay: Math.min(i * 35, 350), y: 12 }}
+						use:spotlight
+						class="spotlight-surface p-3 glass-subtle rounded-xl lift transition-all duration-200"
+					>
+						<div class="relative z-[1] flex items-start gap-3">
+							<div class="w-6 h-6 rounded-full bg-dream/20 text-dream-glow text-xs tabular-nums flex items-center justify-center flex-shrink-0 mt-0.5">
+								{i + 1}
+							</div>
+							<div class="flex-1 min-w-0">
+								<p class="text-sm text-text line-clamp-2">{pred.content}</p>
+								<div class="flex gap-3 mt-1 text-xs text-muted">
+									<span>{pred.nodeType}</span>
+									{#if pred.retention}
+										<span class="tabular-nums">{(Number(pred.retention) * 100).toFixed(0)}% retention</span>
+									{/if}
+									{#if pred.predictedNeed}
+										<span class="text-dream-glow">{pred.predictedNeed} need</span>
+									{/if}
+								</div>
 							</div>
 						</div>
 					</div>

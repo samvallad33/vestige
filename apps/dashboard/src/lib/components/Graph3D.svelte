@@ -50,6 +50,20 @@
 	let ctx: SceneContext;
 	let animationId: number;
 
+	// Accessibility: honour the OS "reduce motion" setting. The dominant
+	// continuous motion in the graph is the camera auto-rotate; disabling it
+	// removes the vestibular-trigger while keeping the graph fully usable
+	// (manual orbit, hover, selection, live events all still work). Tracked
+	// reactively so a mid-session OS toggle is respected.
+	let prefersReducedMotion =
+		typeof window !== 'undefined' &&
+		window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+	let reducedMotionMq: MediaQueryList | null = null;
+	function onReducedMotionChange(e: MediaQueryListEvent) {
+		prefersReducedMotion = e.matches;
+		if (ctx?.controls) ctx.controls.autoRotate = !prefersReducedMotion;
+	}
+
 	// Modules
 	let nodeManager: NodeManager;
 	let edgeManager: EdgeManager;
@@ -73,6 +87,15 @@
 
 	onMount(() => {
 		ctx = createScene(container);
+
+		// Respect reduced-motion: the scene defaults to auto-rotate on; turn it
+		// off up front for users who asked for less motion, and listen for live
+		// OS-setting changes.
+		if (prefersReducedMotion) ctx.controls.autoRotate = false;
+		if (typeof window !== 'undefined' && window.matchMedia) {
+			reducedMotionMq = window.matchMedia('(prefers-reduced-motion: reduce)');
+			reducedMotionMq.addEventListener?.('change', onReducedMotionChange);
+		}
 
 		// Nebula background
 		const nebula = createNebulaBackground(ctx.scene);
@@ -113,6 +136,7 @@
 	onDestroy(() => {
 		cancelAnimationFrame(animationId);
 		window.removeEventListener('resize', onResize);
+		reducedMotionMq?.removeEventListener?.('change', onReducedMotionChange);
 		container?.removeEventListener('pointermove', onPointerMove);
 		container?.removeEventListener('click', onClick);
 		effects?.dispose();

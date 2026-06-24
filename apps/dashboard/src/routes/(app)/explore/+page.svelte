@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { api } from '$stores/api';
 	import type { Memory } from '$types';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Icon, { type IconName } from '$lib/components/Icon.svelte';
+	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
+	import { reveal } from '$lib/actions/reveal';
+	import { spotlight } from '$lib/actions/interactions';
 
 	let searchQuery = $state('');
 	let targetQuery = $state('');
@@ -12,10 +17,10 @@
 	let importanceText = $state('');
 	let importanceResult: Record<string, unknown> | null = $state(null);
 
-	const MODE_INFO: Record<string, { icon: string; desc: string }> = {
-		associations: { icon: '◎', desc: 'Spreading activation — find related memories via graph traversal' },
-		chains: { icon: '⟿', desc: 'Build reasoning path from source to target memory' },
-		bridges: { icon: '⬡', desc: 'Find connecting memories between two concepts' },
+	const MODE_INFO: Record<string, { icon: IconName; desc: string }> = {
+		associations: { icon: 'activation', desc: 'Spreading activation — find related memories via graph traversal' },
+		chains: { icon: 'reasoning', desc: 'Build reasoning path from source to target memory' },
+		bridges: { icon: 'explore', desc: 'Find connecting memories between two concepts' },
 	};
 
 	async function findSource() {
@@ -68,17 +73,22 @@
 </script>
 
 <div class="p-6 max-w-5xl mx-auto space-y-8">
-	<h1 class="text-xl text-bright font-semibold">Explore Connections</h1>
+	<PageHeader
+		icon="explore"
+		title="Explore Connections"
+		subtitle="Traverse the memory graph — spreading activation, reasoning chains, and conceptual bridges."
+		accent="synapse"
+	/>
 
 	<!-- Mode selector -->
 	<div class="grid grid-cols-3 gap-2">
 		{#each (['associations', 'chains', 'bridges'] as const) as m}
 			<button onclick={() => switchMode(m)}
-				class="flex flex-col items-center gap-1 p-3 rounded-xl text-sm transition
+				class="lift flex flex-col items-center gap-1 p-3 rounded-xl text-sm transition
 					{mode === m
 						? 'glass !border-synapse/30 text-synapse-glow'
 						: 'glass-subtle text-dim hover:bg-white/[0.03]'}">
-				<span class="text-xl">{MODE_INFO[m].icon}</span>
+				<span class="{mode === m ? 'breathe' : ''}"><Icon name={MODE_INFO[m].icon} size={22} /></span>
 				<span class="font-medium">{m.charAt(0).toUpperCase() + m.slice(1)}</span>
 				<span class="text-[10px] text-muted text-center">{MODE_INFO[m].desc}</span>
 			</button>
@@ -144,29 +154,51 @@
 	<!-- Results -->
 	{#if sourceMemory}
 		{#if loading}
-			<div class="text-center py-8 text-dim">
-				<div class="text-lg animate-pulse mb-2">◎</div>
-				<p>Exploring {mode}...</p>
+			<div class="space-y-3" aria-busy="true">
+				<div class="flex items-center gap-2.5 text-dim">
+					<Icon name="activation" size={18} class="breathe text-synapse-glow" />
+					<span class="text-sm">Exploring {mode}…</span>
+				</div>
+				<div class="space-y-2">
+					{#each Array(4) as _, i}
+						<div class="shimmer p-3 glass-subtle rounded-xl flex items-start gap-3">
+							<div class="shimmer w-6 h-6 rounded-full bg-white/[0.05] flex-shrink-0 mt-0.5"></div>
+							<div class="flex-1 min-w-0 space-y-2">
+								<div class="shimmer h-3.5 rounded bg-white/[0.05]" style="width: {88 - i * 9}%"></div>
+								<div class="shimmer h-3 rounded bg-white/[0.04]" style="width: {52 - i * 6}%"></div>
+							</div>
+						</div>
+					{/each}
+				</div>
 			</div>
 		{:else if associations.length > 0}
 			<div class="space-y-4">
 				<div class="flex items-center justify-between">
-					<h2 class="text-sm text-bright font-semibold">{associations.length} Connections Found</h2>
+					<h2 class="text-sm text-bright font-semibold flex items-baseline gap-1.5">
+						<AnimatedNumber value={associations.length} class="text-aurora font-bold" />
+						<span>Connections Found</span>
+					</h2>
 				</div>
 				<div class="space-y-2">
-					{#each associations as assoc, i}
-						<div class="p-3 glass-subtle rounded-xl flex items-start gap-3 hover:bg-white/[0.03] transition">
-							<div class="w-6 h-6 rounded-full bg-synapse/15 text-synapse-glow text-xs flex items-center justify-center flex-shrink-0 mt-0.5">
-								{i + 1}
-							</div>
-							<div class="flex-1 min-w-0">
-								<p class="text-sm text-text line-clamp-2">{assoc.content}</p>
-								<div class="flex flex-wrap gap-3 mt-1.5 text-xs text-muted">
-									{#if assoc.nodeType}<span class="px-1.5 py-0.5 bg-white/[0.04] rounded">{assoc.nodeType}</span>{/if}
-									{#if assoc.score}<span>Score: {Number(assoc.score).toFixed(3)}</span>{/if}
-									{#if assoc.similarity}<span>Similarity: {Number(assoc.similarity).toFixed(3)}</span>{/if}
-									{#if assoc.retention}<span>{(Number(assoc.retention) * 100).toFixed(0)}% retention</span>{/if}
-									{#if assoc.connectionType}<span class="text-synapse-glow">{assoc.connectionType}</span>{/if}
+					{#each associations as assoc, i (i)}
+						<div
+							use:reveal={{ delay: Math.min(i * 35, 350), y: 12 }}
+							use:spotlight
+							class="spotlight-surface lift p-3 glass-subtle rounded-xl hover:bg-white/[0.03] transition"
+						>
+							<div class="relative z-[1] flex items-start gap-3">
+								<div class="w-6 h-6 rounded-full bg-synapse/15 text-synapse-glow text-xs flex items-center justify-center flex-shrink-0 mt-0.5 tabular-nums">
+									{i + 1}
+								</div>
+								<div class="flex-1 min-w-0">
+									<p class="text-sm text-text line-clamp-2">{assoc.content}</p>
+									<div class="flex flex-wrap gap-3 mt-1.5 text-xs text-muted">
+										{#if assoc.nodeType}<span class="px-1.5 py-0.5 bg-white/[0.04] rounded">{assoc.nodeType}</span>{/if}
+										{#if assoc.score}<span class="tabular-nums">Score: {Number(assoc.score).toFixed(3)}</span>{/if}
+										{#if assoc.similarity}<span class="tabular-nums">Similarity: {Number(assoc.similarity).toFixed(3)}</span>{/if}
+										{#if assoc.retention}<span class="tabular-nums">{(Number(assoc.retention) * 100).toFixed(0)}% retention</span>{/if}
+										{#if assoc.connectionType}<span class="text-synapse-glow">{assoc.connectionType}</span>{/if}
+									</div>
 								</div>
 							</div>
 						</div>
@@ -174,16 +206,26 @@
 				</div>
 			</div>
 		{:else}
-			<div class="text-center py-8 text-dim">
-				<div class="text-3xl mb-3 opacity-20">◬</div>
-				<p>No connections found for this query.</p>
+			<div class="enter text-center py-12 px-6 glass-subtle rounded-2xl">
+				<Icon name="explore" size={40} class="breathe text-synapse-glow mx-auto mb-4 opacity-80" />
+				<p class="text-sm text-bright font-medium">No connections surfaced yet</p>
+				<p class="text-xs text-muted mt-1.5 max-w-sm mx-auto">
+					{#if mode === 'associations'}
+						This memory hasn't formed strong links here. Try a broader source query — the graph rewards more general seeds.
+					{:else}
+						No {mode} found between these two memories. Pick a different source or target and the path may light up.
+					{/if}
+				</p>
 			</div>
 		{/if}
 	{/if}
 
 	<!-- Importance Scorer -->
 	<div class="pt-8 border-t border-synapse/10">
-		<h2 class="text-lg text-bright font-semibold mb-4">Importance Scorer</h2>
+		<h2 class="text-lg text-bright font-semibold mb-4 flex items-center gap-2">
+			<Icon name="importance" size={20} class="text-recall" />
+			Importance Scorer
+		</h2>
 		<p class="text-xs text-muted mb-3">4-channel neuroscience scoring: novelty, arousal, reward, attention</p>
 		<textarea
 			bind:value={importanceText}
@@ -199,9 +241,9 @@
 		{#if importanceResult}
 			{@const channels = importanceResult.channels as Record<string, number> | undefined}
 			{@const composite = Number(importanceResult.composite || importanceResult.compositeScore || 0)}
-			<div class="mt-4 p-4 glass rounded-xl">
+			<div class="enter mt-4 p-4 glass rounded-xl">
 				<div class="flex items-center gap-3 mb-4">
-					<span class="text-3xl text-bright font-bold">{composite.toFixed(2)}</span>
+					<AnimatedNumber value={composite} decimals={2} class="text-3xl text-aurora font-bold" />
 					<span class="px-2 py-1 rounded-lg text-xs {composite > 0.6
 						? 'bg-recall/20 text-recall border border-recall/30'
 						: 'bg-white/[0.04] text-dim border border-subtle/20'}">

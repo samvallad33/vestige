@@ -11,6 +11,11 @@
 	import type { DreamResult } from '$types';
 	import DreamStageReplay from '$components/DreamStageReplay.svelte';
 	import DreamInsightCard from '$components/DreamInsightCard.svelte';
+	import PageHeader from '$components/PageHeader.svelte';
+	import Icon from '$components/Icon.svelte';
+	import AnimatedNumber from '$components/AnimatedNumber.svelte';
+	import { reveal } from '$lib/actions/reveal';
+	import { spotlight, magnetic } from '$lib/actions/interactions';
 	import {
 		STAGE_NAMES,
 		clampStage,
@@ -59,49 +64,73 @@
 	<title>Dream Cinema · Vestige</title>
 </svelte:head>
 
-<div class="p-6 max-w-7xl mx-auto space-y-6">
+<div class="p-6 max-w-7xl mx-auto space-y-6 enter">
 	<!-- Header -->
-	<header class="flex items-start justify-between flex-wrap gap-4">
-		<div>
-			<h1 class="text-2xl text-bright font-semibold tracking-tight flex items-center gap-3">
-				<span class="header-glyph">✦</span>
-				Dream Cinema
-			</h1>
-			<p class="text-sm text-dim mt-1 max-w-xl leading-snug">
-				Scrub through Vestige's 5-stage consolidation cycle. Replay, cross-reference,
-				strengthen, prune, transfer. Watch episodic become semantic.
-			</p>
-		</div>
-
-		<button
-			type="button"
-			onclick={runDream}
-			disabled={dreaming}
-			class="dream-button"
-			class:is-dreaming={dreaming}
-		>
+	<PageHeader
+		icon="dreams"
+		title="Dream Cinema"
+		subtitle="Scrub through Vestige's 5-stage consolidation cycle. Replay, cross-reference, strengthen, prune, transfer. Watch episodic become semantic."
+		accent="dream"
+	>
+		<div class="flex items-center gap-3">
 			{#if dreaming}
-				<span class="spinner" aria-hidden="true"></span>
-				<span>Dreaming...</span>
-			{:else}
-				<span class="dream-icon" aria-hidden="true">✦</span>
-				<span>Dream Now</span>
+				<span class="live-status">
+					<span class="ping-host live-dot" style="color: var(--color-dream-glow); background: var(--color-dream-glow);"></span>
+					<span>Consolidating</span>
+				</span>
+			{:else if hasDream}
+				<span class="live-status idle">
+					<span class="live-dot breathe" style="background: var(--color-synapse-glow);"></span>
+					<span>Cycle complete</span>
+				</span>
 			{/if}
-		</button>
-	</header>
+
+			<button
+				type="button"
+				onclick={runDream}
+				disabled={dreaming}
+				class="dream-button"
+				class:is-dreaming={dreaming}
+				use:magnetic
+			>
+				{#if dreaming}
+					<span class="spinner" aria-hidden="true"></span>
+					<span>Dreaming...</span>
+				{:else}
+					<span class="dream-icon" aria-hidden="true"><Icon name="sparkle" size={16} /></span>
+					<span>Dream Now</span>
+				{/if}
+			</button>
+		</div>
+	</PageHeader>
 
 	{#if error}
-		<div class="glass-subtle rounded-xl px-4 py-3 text-sm border !border-decay/40 text-decay">
-			{error}
+		<div class="glass-subtle rounded-xl px-4 py-3 text-sm border !border-decay/40 text-decay flex items-center gap-2" use:reveal>
+			<Icon name="contradictions" size={16} />
+			<span>{error}</span>
 		</div>
 	{/if}
 
 	{#if !hasDream && !dreaming}
 		<!-- Empty state -->
-		<div class="empty-state glass-panel rounded-2xl p-12 text-center space-y-3">
-			<div class="empty-glyph">✦</div>
-			<p class="text-bright font-semibold">No dream yet.</p>
-			<p class="text-dim text-sm">Click Dream Now to begin.</p>
+		<div class="empty-state glass-panel rounded-2xl p-12 text-center space-y-4" use:reveal>
+			<div class="empty-glyph" aria-hidden="true">
+				<Icon name="dreams" size={52} draw />
+			</div>
+			<p class="text-bright font-semibold text-lg">Nothing's been dreamt yet.</p>
+			<p class="text-dim text-sm max-w-sm mx-auto leading-relaxed">
+				Run a consolidation cycle and watch your episodic memories replay,
+				cross-reference, and crystallize into lasting semantic knowledge.
+			</p>
+			<button
+				type="button"
+				onclick={runDream}
+				class="dream-button mx-auto"
+				use:magnetic
+			>
+				<span class="dream-icon" aria-hidden="true"><Icon name="sparkle" size={16} /></span>
+				<span>Start the first dream</span>
+			</button>
 		</div>
 	{:else}
 		<!-- Scrubber + stage markers -->
@@ -218,20 +247,6 @@
 </div>
 
 <style>
-	.header-glyph {
-		display: inline-block;
-		color: var(--color-dream-glow);
-		text-shadow:
-			0 0 12px var(--color-dream),
-			0 0 24px color-mix(in srgb, var(--color-dream) 50%, transparent);
-		animation: twinkle 4s ease-in-out infinite;
-	}
-
-	@keyframes twinkle {
-		0%, 100% { opacity: 1; transform: rotate(0deg); }
-		50% { opacity: 0.75; transform: rotate(10deg); }
-	}
-
 	.dream-button {
 		display: inline-flex;
 		align-items: center;

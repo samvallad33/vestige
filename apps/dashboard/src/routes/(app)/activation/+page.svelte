@@ -24,6 +24,11 @@
 	} from '$components/ActivationNetwork.svelte';
 	import { filterNewSpreadEvents } from '$components/activation-helpers';
 	import type { Memory, VestigeEvent } from '$types';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
+	import { reveal } from '$lib/actions/reveal';
+	import { spotlight, magnetic } from '$lib/actions/interactions';
 
 	let searchQuery = $state('');
 	let loading = $state(false);
@@ -180,19 +185,30 @@
 	});
 </script>
 
-<div class="p-6 max-w-6xl mx-auto space-y-6">
-	<header class="space-y-2">
-		<h1 class="text-xl text-bright font-semibold">Spreading Activation</h1>
-		<p class="text-xs text-muted">
-			Collins &amp; Loftus 1975 — activation spreads from a seed memory to
-			neighbours along semantic edges, decaying by 0.93 per animation frame
-			until it drops below 0.05. Search seeds a focused burst; live mode
-			overlays every spread event fired by the cognitive engine in real time.
-		</p>
-	</header>
+<div class="p-6 max-w-6xl mx-auto space-y-6 enter">
+	<PageHeader
+		icon="activation"
+		title="Spreading Activation"
+		subtitle="Collins & Loftus 1975 — activation spreads from a seed memory to neighbours along semantic edges, decaying 0.93 per frame until it drops below 0.05. Search seeds a focused burst; live mode overlays every engine spread in real time."
+		accent="synapse"
+	>
+		<div
+			class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-synapse/10 border border-synapse/25 text-xs"
+		>
+			<span
+				class="ping-host inline-flex h-2 w-2 rounded-full"
+				style="color: var(--synapse-glow, #8b9dff); background: currentColor;"
+				class:breathe={liveEnabled}
+			></span>
+			<span class="text-dim">{liveEnabled ? 'Live' : 'Paused'}</span>
+			<span class="text-muted">·</span>
+			<AnimatedNumber value={liveBurstsFired} class="text-synapse-glow font-semibold" />
+			<span class="text-muted">bursts</span>
+		</div>
+	</PageHeader>
 
 	<!-- Search -->
-	<div class="space-y-3">
+	<div class="space-y-3" use:reveal={{ delay: 60 }}>
 		<span class="text-xs text-dim font-medium">Seed Memory</span>
 		<div class="flex gap-2">
 			<input
@@ -204,10 +220,12 @@
 					placeholder:text-muted focus:outline-none focus:border-synapse/40 transition backdrop-blur-sm"
 			/>
 			<button
+				use:magnetic
 				onclick={runSearch}
 				disabled={loading}
-				class="px-4 py-2.5 bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm rounded-xl hover:bg-synapse/30 transition disabled:opacity-50"
+				class="inline-flex items-center gap-1.5 px-4 py-2.5 bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm rounded-xl hover:bg-synapse/30 transition disabled:opacity-50"
 			>
+				<Icon name="activation" size={15} />
 				{loading ? 'Activating…' : 'Activate'}
 			</button>
 		</div>
@@ -236,8 +254,8 @@
 		{#if loading}
 			<div class="flex items-center justify-center h-[560px] text-dim">
 				<div class="text-center">
-					<div class="text-2xl animate-pulse mb-2">◎</div>
-					<p class="text-sm">Computing activation...</p>
+					<div class="mx-auto w-fit text-synapse-glow mb-2 breathe"><Icon name="activation" size={32} /></div>
+					<p class="text-sm">Computing activation…</p>
 				</div>
 			</div>
 		{:else if errorMessage}
@@ -250,8 +268,8 @@
 			</div>
 		{:else if !focusedSource && searched}
 			<div class="flex items-center justify-center h-[560px] text-dim">
-				<div class="text-center max-w-md px-6">
-					<div class="text-3xl opacity-20 mb-3">◬</div>
+				<div class="text-center max-w-md px-6 enter">
+					<div class="mx-auto w-fit text-dim opacity-40 mb-3"><Icon name="search" size={30} /></div>
 					<p class="text-sm text-bright mb-1">No matching memory</p>
 					<p class="text-xs text-muted">
 						Nothing in the graph matches
@@ -263,8 +281,8 @@
 			</div>
 		{:else if !focusedSource}
 			<div class="flex items-center justify-center h-[560px] text-dim">
-				<div class="text-center max-w-md px-6">
-					<div class="text-3xl opacity-20 mb-3">◎</div>
+				<div class="text-center max-w-md px-6 enter">
+					<div class="mx-auto w-fit text-synapse-glow opacity-40 mb-3 breathe"><Icon name="activation" size={32} /></div>
 					<p class="text-sm text-bright mb-1">Waiting for activation</p>
 					<p class="text-xs text-muted">
 						Seed a burst with the search bar above, or enable live mode to

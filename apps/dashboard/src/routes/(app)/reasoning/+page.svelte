@@ -3,6 +3,11 @@
 	import { api } from '$stores/api';
 	import ReasoningChain from '$components/ReasoningChain.svelte';
 	import EvidenceCard from '$components/EvidenceCard.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
+	import { reveal } from '$lib/actions/reveal';
+	import { spotlight, magnetic } from '$lib/actions/interactions';
 	import {
 		confidenceColor,
 		confidenceLabel,
@@ -244,40 +249,39 @@
 	<title>Reasoning Theater · Vestige</title>
 </svelte:head>
 
-<div class="p-6 max-w-6xl mx-auto space-y-8">
+<div class="p-6 max-w-6xl mx-auto space-y-8 enter">
 	<!-- Header -->
-	<div class="space-y-2">
-		<div class="flex items-center gap-3">
-			<span class="text-2xl text-dream-glow">❖</span>
-			<h1 class="text-xl text-bright font-semibold">Reasoning Theater</h1>
-			<span class="px-2 py-0.5 rounded bg-dream/15 border border-dream/30 text-[10px] text-dream-glow uppercase tracking-wider">
-				deep_reference
-			</span>
-		</div>
-		<p class="text-xs text-dim max-w-2xl">
-			Watch Vestige reason. Your query runs the 8-stage cognitive pipeline — broad retrieval,
-			spreading activation, FSRS trust scoring, intent classification, supersession, contradiction
-			analysis, relation assessment, template reasoning — and returns a pre-built answer with
-			trust-scored evidence.
-		</p>
-	</div>
+	<PageHeader
+		icon="reasoning"
+		title="Reasoning Theater"
+		subtitle="Watch Vestige reason — the 8-stage cognitive pipeline runs locally and returns a pre-built answer with trust-scored evidence."
+		accent="dream"
+	>
+		<span
+			class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-dream/15 border border-dream/30 text-[10px] text-dream-glow uppercase tracking-wider font-mono"
+		>
+			<span class="ping-host w-1.5 h-1.5 rounded-full" style="color: var(--color-dream); background: var(--color-dream)"></span>
+			deep_reference
+		</span>
+	</PageHeader>
 
 	<!-- Cmd+K Ask Palette -->
 	<div class="glass-panel rounded-2xl p-5 space-y-4">
 		<div class="flex items-center gap-3">
-			<span class="text-lg text-synapse-glow">◎</span>
+			<span class="text-synapse-glow {loading ? 'breathe' : ''}"><Icon name="reasoning" size={20} /></span>
 			<input
 				bind:this={askInputEl}
 				type="text"
 				bind:value={query}
 				onkeydown={(e) => e.key === 'Enter' && ask()}
-				placeholder="Ask your memory anything..."
+				placeholder="Ask your memory anything…"
 				class="flex-1 bg-transparent text-bright text-lg placeholder:text-muted focus:outline-none font-mono"
 			/>
 			<kbd class="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded bg-white/[0.04] border border-synapse/15 text-[10px] text-dim font-mono">
 				<span>⌘</span>K
 			</kbd>
 			<button
+				use:magnetic
 				onclick={ask}
 				disabled={!query.trim() || loading}
 				class="px-4 py-2 rounded-xl bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm hover:bg-synapse/30 transition disabled:opacity-40 disabled:cursor-not-allowed"
@@ -330,24 +334,25 @@
 
 		<!-- REASONING CHAIN (hero — this IS the answer) -->
 		{#if response.reasoning}
-			<div class="space-y-3">
+			<div class="space-y-3" use:reveal>
 				<div class="flex items-center justify-between">
 					<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-						<span class="text-dream-glow">❖</span>
+						<span class="text-dream-glow"><Icon name="reasoning" size={16} /></span>
 						Reasoning
 					</h2>
 					<div class="flex items-center gap-3 text-[10px] text-muted font-mono">
 						<span>intent: <span class="text-dim">{response.intent}</span></span>
 						<span>·</span>
-						<span>{response.memoriesAnalyzed} analyzed</span>
+						<span><AnimatedNumber value={response.memoriesAnalyzed} /> analyzed</span>
 						<span>·</span>
 						<span style="color: {confColor}">{conf}% {confidenceLabel(conf)}</span>
 					</div>
 				</div>
 				<div
-					class="glass-panel rounded-2xl p-6 font-mono text-sm text-bright whitespace-pre-wrap leading-relaxed"
+					use:spotlight
+					class="spotlight-surface glass-panel rounded-2xl p-6 font-mono text-sm text-bright whitespace-pre-wrap leading-relaxed"
 					style="box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.03), 0 0 32px {confColor}20, 0 8px 32px rgba(0,0,0,0.4); border-color: {confColor}35;"
-				>{response.reasoning}</div>
+				><span class="relative z-[1]">{response.reasoning}</span></div>
 			</div>
 		{/if}
 
@@ -364,7 +369,7 @@
 						class="block text-6xl font-bold font-mono conf-number"
 						style="color: {confColor}; text-shadow: 0 0 24px {confColor}80;"
 					>
-						{conf}<span class="text-2xl align-top opacity-60">%</span>
+						<AnimatedNumber value={conf} /><span class="text-2xl align-top opacity-60">%</span>
 					</span>
 				</div>
 				<span
@@ -418,7 +423,7 @@
 		<!-- Cognitive Pipeline visualization (how the engine got there) -->
 		<div class="space-y-3">
 			<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-				<span class="text-dream-glow">⟿</span>
+				<span class="text-dream-glow"><Icon name="activation" size={15} /></span>
 				Cognitive Pipeline
 			</h2>
 			<div class="glass-panel rounded-2xl p-5">
@@ -436,7 +441,7 @@
 		<div class="space-y-3">
 			<div class="flex items-center justify-between">
 				<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-					<span class="text-synapse-glow">◈</span>
+					<span class="text-synapse-glow"><Icon name="memories" size={15} /></span>
 					Evidence
 					<span class="text-muted font-normal">({response.evidence.length})</span>
 				</h2>
@@ -503,9 +508,9 @@
 		{#if response.contradictions.length > 0}
 			<div class="space-y-3">
 				<h2 class="text-sm font-semibold flex items-center gap-2" style="color: #fca5a5;">
-					<span>⚡</span>
+					<span><Icon name="contradictions" size={15} /></span>
 					Contradictions Detected
-					<span class="font-normal text-muted">({response.contradictions.length})</span>
+					<span class="font-normal text-muted">(<AnimatedNumber value={response.contradictions.length} />)</span>
 				</h2>
 				<div class="glass rounded-2xl p-4 space-y-3 !border-decay/30">
 					{#each response.contradictions as c, i}
@@ -575,7 +580,7 @@
 			{#if response.related_insights.length > 0}
 				<div class="space-y-3">
 					<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-						<span class="text-dream-glow">◇</span>
+						<span class="text-dream-glow"><Icon name="sparkle" size={15} /></span>
 						Related Insights
 					</h2>
 					<div class="glass rounded-2xl p-4 space-y-2">
@@ -592,8 +597,8 @@
 
 	<!-- Empty state -->
 	{#if !response && !loading && !error}
-		<div class="glass-subtle rounded-2xl p-12 text-center space-y-3">
-			<div class="text-5xl opacity-20">❖</div>
+		<div class="glass-subtle rounded-2xl p-12 text-center space-y-3 enter">
+			<div class="mx-auto w-fit text-dream-glow opacity-40 breathe"><Icon name="reasoning" size={44} strokeWidth={1.2} /></div>
 			<p class="text-sm text-dim">
 				Ask anything. Vestige will run the full reasoning pipeline and show you its work.
 			</p>
