@@ -12,6 +12,11 @@ pub mod static_files;
 pub mod websocket;
 
 use axum::Router;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -24,6 +29,8 @@ use tracing::{info, warn};
 use crate::cognitive::CognitiveEngine;
 use state::AppState;
 use vestige_core::Storage;
+
+const DASHBOARD_TOKEN_HEADER: &str = "x-vestige-dashboard-token";
 
 /// Build the axum router with all dashboard routes
 pub fn build_router(
@@ -47,30 +54,12 @@ pub fn build_router_with_event_tx(
 }
 
 fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
-    #[allow(unused_mut)]
-    let mut origins = vec![
-        format!("http://127.0.0.1:{}", port)
-            .parse::<axum::http::HeaderValue>()
-            .expect("valid origin"),
-        format!("http://localhost:{}", port)
-            .parse::<axum::http::HeaderValue>()
-            .expect("valid origin"),
-    ];
-
-    // SvelteKit dev server — only in debug builds
-    #[cfg(debug_assertions)]
-    {
-        origins.push(
-            "http://localhost:5173"
-                .parse::<axum::http::HeaderValue>()
-                .expect("valid origin"),
-        );
-        origins.push(
-            "http://127.0.0.1:5173"
-                .parse::<axum::http::HeaderValue>()
-                .expect("valid origin"),
-        );
-    }
+    let origin_strings = dashboard_allowed_origins(port);
+    let origins: Vec<HeaderValue> = origin_strings
+        .iter()
+        .map(|origin| origin.parse::<HeaderValue>().expect("valid origin"))
+        .collect();
+    let state = state.with_dashboard_allowed_origins(origin_strings);
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
@@ -83,6 +72,7 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
         .allow_headers([
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
+            axum::http::HeaderName::from_static(DASHBOARD_TOKEN_HEADER),
         ]);
 
     // Security: restrict WebSocket connections to localhost only (prevents cross-site WS hijacking)
@@ -212,6 +202,10 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
         .layer(
             ServiceBuilder::new()
                 .concurrency_limit(50)
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    require_dashboard_auth,
+                ))
                 .layer(cors)
                 .layer(csp)
                 .layer(x_frame_options)
@@ -222,6 +216,92 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
         .with_state(state.clone());
 
     (router, state)
+}
+
+fn dashboard_allowed_origins(port: u16) -> Vec<String> {
+    #[allow(unused_mut)]
+    let mut origins = vec![
+        format!("http://127.0.0.1:{}", port),
+        format!("http://localhost:{}", port),
+    ];
+
+    // SvelteKit dev server — only in debug builds.
+    #[cfg(debug_assertions)]
+    {
+        origins.push("http://localhost:5173".to_string());
+        origins.push("http://127.0.0.1:5173".to_string());
+    }
+
+    origins
+}
+
+async fn require_dashboard_auth(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    if !path.starts_with("/api/") || request.method() == Method::OPTIONS {
+        return next.run(request).await;
+    }
+
+    let headers = request.headers();
+    if let Err((status, message)) = validate_dashboard_origin(headers, &state) {
+        return (status, message).into_response();
+    }
+    if let Err((status, message)) = validate_dashboard_token(headers, &state) {
+        return (status, message).into_response();
+    }
+
+    next.run(request).await
+}
+
+fn validate_dashboard_origin(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<(), (StatusCode, &'static str)> {
+    if let Some(fetch_site) = headers
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+        && fetch_site == "cross-site"
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Cross-site dashboard request rejected",
+        ));
+    }
+
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
+        return Ok(());
+    };
+
+    if state.is_allowed_dashboard_origin(origin) {
+        Ok(())
+    } else {
+        Err((StatusCode::FORBIDDEN, "Dashboard origin not allowed"))
+    }
+}
+
+fn validate_dashboard_token(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<(), (StatusCode, &'static str)> {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .or_else(|| {
+            headers
+                .get(DASHBOARD_TOKEN_HEADER)
+                .and_then(|value| value.to_str().ok())
+        })
+        .ok_or((StatusCode::UNAUTHORIZED, "Missing dashboard auth token"))?;
+
+    if state.is_valid_dashboard_token(token) {
+        Ok(())
+    } else {
+        Err((StatusCode::FORBIDDEN, "Invalid dashboard auth token"))
+    }
 }
 
 /// Start the dashboard HTTP server (blocking — use in CLI mode)
@@ -237,7 +317,11 @@ pub async fn start_dashboard(
     info!("Dashboard starting at http://127.0.0.1:{}", port);
 
     if open_browser {
-        let url = format!("http://127.0.0.1:{}", port);
+        let url = format!(
+            "http://127.0.0.1:{}/dashboard#vestige_token={}",
+            port,
+            _state.dashboard_token_fragment_value()
+        );
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             let _ = open::that(&url);

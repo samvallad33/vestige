@@ -152,8 +152,8 @@
 
 	// Diff rendering helpers
 	function diffContent(pr: MemoryPr): string {
-		const node = pr.diff?.node as { content?: string } | undefined;
-		return node?.content ?? '';
+		const node = pr.diff?.node as { content?: string; contentPreview?: string } | undefined;
+		return node?.contentPreview ?? '';
 	}
 	function diffNodeType(pr: MemoryPr): string {
 		const node = pr.diff?.node as { nodeType?: string } | undefined;
@@ -162,6 +162,10 @@
 	function diffTags(pr: MemoryPr): string[] {
 		const node = pr.diff?.node as { tags?: string[] } | undefined;
 		return node?.tags ?? [];
+	}
+	function diffHash(pr: MemoryPr): string {
+		const node = pr.diff?.node as { contentHash?: string } | undefined;
+		return node?.contentHash ?? '';
 	}
 </script>
 
@@ -270,11 +274,15 @@
 					<div class="diff-head">
 						<span class="pr-kind kind-{selected.kind}">{kindLabel[selected.kind] ?? selected.kind}</span>
 						<span class="pr-status st-{selected.status}">{selected.status}</span>
-						{#if selected.run_id}
-							<a class="run-link" href={`/blackbox`} title="View the run that produced this">
-								<Icon name="blackbox" size={13} /> {selected.run_id.replace('run_', '').slice(0, 8)}
-							</a>
-						{/if}
+							{#if selected.run_id}
+								<a
+									class="run-link"
+									href={`/blackbox?run=${encodeURIComponent(selected.run_id)}`}
+									title="View the run that produced this"
+								>
+									<Icon name="blackbox" size={13} /> {selected.run_id.replace('run_', '').slice(0, 8)}
+								</a>
+							{/if}
 					</div>
 					<h2 class="diff-title">{selected.title}</h2>
 
@@ -284,10 +292,13 @@
 							{#if diffNodeType(selected)}
 								<span class="meta-pill">type: {diffNodeType(selected)}</span>
 							{/if}
-							{#each diffTags(selected) as t (t)}
-								<span class="meta-pill tag">#{t}</span>
-							{/each}
-						</div>
+								{#each diffTags(selected) as t (t)}
+									<span class="meta-pill tag">#{t}</span>
+								{/each}
+								{#if diffHash(selected)}
+									<span class="meta-pill">hash: {diffHash(selected)}</span>
+								{/if}
+							</div>
 						{#if diffContent(selected)}
 							<pre class="diff-add"><span class="gutter">+</span>{diffContent(selected)}</pre>
 						{/if}

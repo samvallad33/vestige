@@ -13,7 +13,7 @@
 	//  Live events are real — they arrive over the WebSocket backed by trace
 	//  rows. No fake demo events.
 	// ═══════════════════════════════════════════════════════════════════════
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import PageHeader from '$components/PageHeader.svelte';
 	import Icon from '$components/Icon.svelte';
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
@@ -46,6 +46,8 @@
 	let scrubIndex = $state(0); // index into detail.events
 	let proofMode = $state(false);
 	let receipts = $state<Receipt[]>([]);
+	let liveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+	let receiptRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// The events up to and including the scrubber position — what the agent had
 	// "experienced" at that moment in the run.
@@ -69,11 +71,15 @@
 		detail?.events.some((e) => e.type === 'contradiction.detected') ?? false
 	);
 
-	async function loadRuns() {
+	async function loadRuns(preferredRunId?: string | null) {
 		try {
 			const res = await api.traces.list(100);
 			runs = res.runs;
-			if (!selectedRunId && runs.length) selectRun(runs[0].runId);
+			if (preferredRunId) {
+				await selectRun(preferredRunId);
+			} else if (!selectedRunId && runs.length) {
+				await selectRun(runs[0].runId);
+			}
 		} catch (e) {
 			error = String(e);
 		}
@@ -84,11 +90,11 @@
 		loading = true;
 		error = null;
 		try {
-			detail = await api.traces.get(runId);
-			scrubIndex = Math.max(0, (detail.events.length || 1) - 1);
-			// Receipts are the proof behind THIS run's retrievals — scoped to
-			// the selected run (B5), not the global latest.
-			receipts = (await api.receipts.listForRun(runId, 8)).receipts;
+			const next = await api.traces.get(runId);
+			if (selectedRunId !== runId) return;
+			detail = next;
+			scrubIndex = Math.max(0, (next.events.length || 1) - 1);
+			await loadReceiptsForRun(runId);
 		} catch (e) {
 			error = String(e);
 			detail = null;
@@ -97,30 +103,77 @@
 		}
 	}
 
+	async function refreshSelectedRun(runId: string, pinToLatest = false) {
+		const wasPinnedToLatest = !detail || scrubIndex >= detail.events.length - 1;
+		const next = await api.traces.get(runId);
+		if (selectedRunId !== runId) return;
+		detail = next;
+		if (pinToLatest || wasPinnedToLatest) {
+			scrubIndex = Math.max(0, next.events.length - 1);
+		}
+	}
+
+	async function loadReceiptsForRun(runId: string) {
+		const next = (await api.receipts.listForRun(runId, 8)).receipts;
+		if (selectedRunId === runId) {
+			receipts = next;
+		}
+	}
+
+	function scheduleReceiptRetry(runId: string) {
+		if (receiptRetryTimer) clearTimeout(receiptRetryTimer);
+		receiptRetryTimer = setTimeout(() => {
+			if (selectedRunId === runId) {
+				void loadReceiptsForRun(runId);
+			}
+		}, 300);
+	}
+
+	function scheduleLiveRefresh(runId: string, eventType?: TraceEvent['type']) {
+		if (liveRefreshTimer) clearTimeout(liveRefreshTimer);
+		liveRefreshTimer = setTimeout(async () => {
+			await loadRuns();
+			if (!selectedRunId) {
+				await selectRun(runId);
+				return;
+			}
+			if (selectedRunId !== runId) return;
+			await refreshSelectedRun(runId, true);
+			await loadReceiptsForRun(runId);
+			if (eventType === 'memory.retrieve') {
+				scheduleReceiptRetry(runId);
+			}
+		}, 75);
+	}
+
 	function exportTrace() {
 		if (!selectedRunId) return;
 		// Direct browser download of the .vestige-trace.json artifact.
 		window.location.href = api.traces.exportUrl(selectedRunId);
 	}
 
-	// Live: when a trace event for the *currently open* run arrives, refresh it
-	// so the timeline grows in real time. Also refresh the run list so new runs
-	// appear at the top.
+	// Live: when a real trace event arrives, refresh the run picker and the open
+	// trace. Receipts can be saved just after the TraceEvent broadcast, so
+	// retrieval events get one delayed retry to avoid a stale proof panel.
 	$effect(() => {
 		const last = $lastTraceEvent;
 		if (!last) return;
-		const evRunId = last.data?.run_id as string | undefined;
-		if (evRunId && evRunId === selectedRunId) {
-			// Re-fetch the open run (cheap; trace rows are local SQLite).
-			api.traces.get(selectedRunId).then((d) => {
-				detail = d;
-				// Keep the scrubber pinned to the newest event in live mode.
-				scrubIndex = Math.max(0, d.events.length - 1);
-			});
+		const event = last.data?.event as TraceEvent | undefined;
+		const evRunId = (last.data?.run_id as string | undefined) ?? event?.runId;
+		if (evRunId) {
+			scheduleLiveRefresh(evRunId, event?.type);
 		}
 	});
 
-	onMount(loadRuns);
+	onMount(() => {
+		const preferredRunId = new URLSearchParams(window.location.search).get('run');
+		loadRuns(preferredRunId);
+	});
+
+	onDestroy(() => {
+		if (liveRefreshTimer) clearTimeout(liveRefreshTimer);
+		if (receiptRetryTimer) clearTimeout(receiptRetryTimer);
+	});
 </script>
 
 <div class="mx-auto max-w-6xl px-5 py-6">

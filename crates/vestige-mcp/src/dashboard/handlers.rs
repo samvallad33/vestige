@@ -161,6 +161,19 @@ pub async fn delete_memory(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
+    if let Some(gated) = gate_dashboard_pending_memory_mutation(
+        &state,
+        "memory",
+        serde_json::json!({
+            "action": "delete",
+            "id": id.clone(),
+            "confirm": true,
+            "reason": "Dashboard delete requested",
+        }),
+    )? {
+        return Ok(Json(gated));
+    }
+
     let deleted = state
         .storage
         .delete_node(&id)
@@ -250,6 +263,17 @@ pub async fn suppress_memory(
         .and_then(|r| r.as_str())
         .map(String::from);
 
+    if let Some(gated) = gate_dashboard_pending_memory_mutation(
+        &state,
+        "suppress",
+        serde_json::json!({
+            "id": id.clone(),
+            "reason": reason.clone(),
+        }),
+    )? {
+        return Ok(Json(gated));
+    }
+
     let sys = ActiveForgettingSystem::new();
 
     // Pre-count to surface in the response + for the event payload.
@@ -308,6 +332,26 @@ pub async fn suppress_memory(
         "labileWindowHours": DEFAULT_LABILE_HOURS,
         "reason": reason,
     })))
+}
+
+fn gate_dashboard_pending_memory_mutation(
+    state: &AppState,
+    tool: &str,
+    args: Value,
+) -> Result<Option<Value>, StatusCode> {
+    let run_id = format!("dashboard_{}", uuid::Uuid::new_v4().simple());
+    crate::trace_recorder::gate_pending_memory_mutation(
+        &state.storage,
+        Some(&state.event_tx),
+        &run_id,
+        tool,
+        &Some(args),
+        read_review_mode(state),
+    )
+    .map_err(|e| {
+        tracing::warn!("dashboard memory mutation review gate failed closed: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
 }
 
 /// Reverse a prior suppression, if still inside the 24-hour labile
@@ -2000,10 +2044,18 @@ pub async fn list_traces(
     Query(params): Query<TraceListParams>,
 ) -> Result<Json<Value>, StatusCode> {
     let limit = params.limit.unwrap_or(50).clamp(1, 500);
-    let runs = state
-        .storage
-        .list_agent_runs(limit)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let runs = match params.run.as_deref().filter(|r| !r.is_empty()) {
+        Some(run_id) => state
+            .storage
+            .get_agent_run(run_id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .into_iter()
+            .collect(),
+        None => state
+            .storage
+            .list_agent_runs(limit)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    };
     let runs_json: Vec<Value> = runs
         .into_iter()
         .map(|r| {
@@ -2090,7 +2142,13 @@ pub async fn export_trace(
     // Content-Disposition header or the filename. Falls back to "trace".
     let safe: String = run_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let safe = if safe.trim_matches('_').is_empty() {
         "trace".to_string()
@@ -2172,6 +2230,10 @@ pub async fn list_memory_prs(
         .storage
         .list_memory_prs(status, limit)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let prs: Vec<Value> = prs
+        .into_iter()
+        .map(|pr| sanitize_memory_pr_json(serde_json::to_value(pr).unwrap_or_default()))
+        .collect();
     let pending = state.storage.count_pending_memory_prs().unwrap_or(0);
     Ok(Json(serde_json::json!({
         "total": prs.len(),
@@ -2191,7 +2253,25 @@ pub async fn get_memory_pr(
         .get_memory_pr(&id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(serde_json::to_value(pr).unwrap_or_default()))
+    Ok(Json(sanitize_memory_pr_json(
+        serde_json::to_value(pr).unwrap_or_default(),
+    )))
+}
+
+fn sanitize_memory_pr_json(mut value: Value) -> Value {
+    if let Some(node) = value
+        .get_mut("diff")
+        .and_then(|diff| diff.get_mut("node"))
+        .and_then(|node| node.as_object_mut())
+        && node.remove("content").is_some()
+        && !node.contains_key("contentPreview")
+    {
+        node.insert(
+            "contentPreview".to_string(),
+            serde_json::json!("[redacted legacy content]"),
+        );
+    }
+    value
 }
 
 /// Act on a Memory PR: promote / merge / supersede / quarantine / forget /
@@ -2200,23 +2280,139 @@ pub async fn act_on_memory_pr(
     State(state): State<AppState>,
     Path((id, action)): Path<(String, String)>,
 ) -> Result<Json<Value>, StatusCode> {
-    let action = vestige_core::MemoryPrAction::from_label(&action)
-        .ok_or(StatusCode::BAD_REQUEST)?;
+    let action =
+        vestige_core::MemoryPrAction::from_label(&action).ok_or(StatusCode::BAD_REQUEST)?;
+
+    let current_pr = state
+        .storage
+        .get_memory_pr(&id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     // Ask Agent Why is read-only — return the self-explaining signals.
     if matches!(action, vestige_core::MemoryPrAction::AskAgentWhy) {
-        let pr = state
-            .storage
-            .get_memory_pr(&id)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .ok_or(StatusCode::NOT_FOUND)?;
         return Ok(Json(serde_json::json!({
-            "id": pr.id,
-            "kind": pr.kind.as_str(),
-            "title": pr.title,
-            "why": pr.signals,
+            "id": current_pr.id,
+            "kind": current_pr.kind.as_str(),
+            "title": current_pr.title,
+            "why": current_pr.signals,
             "explanation": "These are the risk signals that opened this Memory PR.",
         })));
+    }
+
+    if current_pr.status != vestige_core::MemoryPrStatus::Pending {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let pending_action = current_pr
+        .diff
+        .get("pendingAction")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    let mut mutation_applied = false;
+    let mut mutation_report = serde_json::Value::Null;
+
+    // Pending destructive/suppressive PRs are opened before the mutation runs.
+    // Deciding them is therefore the place where the requested operation is
+    // either applied (`forget`/`quarantine`) or kept (`promote`/accept actions).
+    if let Some(pending) = pending_action.as_deref()
+        && let Some(subject_id) = current_pr.subject_id.as_deref()
+    {
+        match (pending, action) {
+            ("purge" | "delete", vestige_core::MemoryPrAction::Forget) => {
+                let reason = current_pr
+                    .diff
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("approved destructive Memory PR");
+                let report = state
+                    .storage
+                    .purge_node(subject_id, Some(reason))
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                if report.deleted {
+                    state.emit(VestigeEvent::MemoryDeleted {
+                        id: subject_id.to_string(),
+                        timestamp: Utc::now(),
+                    });
+                }
+                mutation_applied = report.deleted;
+                mutation_report = serde_json::json!({
+                    "action": pending,
+                    "deleted": report.deleted,
+                    "deletedAt": report.deleted_at.to_rfc3339(),
+                    "edgesPruned": report.edges_pruned,
+                    "insightsRewritten": report.insights_rewritten,
+                    "insightsDeleted": report.insights_deleted,
+                    "childrenOrphaned": report.children_orphaned,
+                });
+                if let Some(run_id) = current_pr.run_id.as_deref() {
+                    crate::trace_recorder::record_result(
+                        &state.storage,
+                        Some(&state.event_tx),
+                        run_id,
+                        "memory",
+                        &serde_json::json!({
+                            "action": pending,
+                            "nodeId": subject_id,
+                            "success": report.deleted
+                        }),
+                    );
+                }
+            }
+            (
+                "purge" | "delete" | "suppress",
+                vestige_core::MemoryPrAction::Quarantine | vestige_core::MemoryPrAction::Forget,
+            ) => {
+                let node = state
+                    .storage
+                    .suppress_memory(subject_id)
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                let estimated_cascade = state
+                    .storage
+                    .get_connections_for_memory(subject_id)
+                    .map(|edges| edges.len().min(100))
+                    .unwrap_or(0);
+                let sys =
+                    vestige_core::neuroscience::active_forgetting::ActiveForgettingSystem::new();
+                let reversible_until = node
+                    .suppressed_at
+                    .map(|t| sys.reversible_until(t))
+                    .unwrap_or_else(Utc::now);
+                state.emit(VestigeEvent::MemorySuppressed {
+                    id: node.id.clone(),
+                    suppression_count: node.suppression_count,
+                    estimated_cascade,
+                    reversible_until,
+                    timestamp: Utc::now(),
+                });
+                mutation_applied = true;
+                mutation_report = serde_json::json!({
+                    "action": "suppress",
+                    "suppressionCount": node.suppression_count,
+                    "reversibleUntil": reversible_until.to_rfc3339(),
+                });
+                if let Some(run_id) = current_pr.run_id.as_deref() {
+                    crate::trace_recorder::record_result(
+                        &state.storage,
+                        Some(&state.event_tx),
+                        run_id,
+                        "suppress",
+                        &serde_json::json!({
+                            "receipt": {
+                                "suppressed": [
+                                    {
+                                        "id": subject_id,
+                                        "reason": "low_trust"
+                                    }
+                                ]
+                            }
+                        }),
+                    );
+                }
+            }
+            _ => {}
+        }
     }
 
     let decided = state
@@ -2230,6 +2426,7 @@ pub async fn act_on_memory_pr(
     // retrieval. Forget/Quarantine intentionally keep it suppressed.
     let mut released = false;
     if action.releases_memory()
+        && pending_action.is_none()
         && let Some(subject_id) = decided.subject_id.as_deref()
     {
         // Use the UNCONDITIONAL quarantine release, not reverse_suppression:
@@ -2272,6 +2469,13 @@ pub async fn act_on_memory_pr(
     let mut out = serde_json::to_value(&decided).unwrap_or_default();
     if let Some(obj) = out.as_object_mut() {
         obj.insert("subjectReleased".to_string(), serde_json::json!(released));
+        obj.insert(
+            "pendingMutationApplied".to_string(),
+            serde_json::json!(mutation_applied),
+        );
+        if !mutation_report.is_null() {
+            obj.insert("mutationReport".to_string(), mutation_report);
+        }
     }
     Ok(Json(out))
 }
@@ -2315,7 +2519,10 @@ pub async fn set_review_mode(
     // B7: atomic write (temp + rename) so a concurrent read can never see a
     // partially-written / corrupt review_mode.json, reusing the same helper the
     // Sanhedrin receipt path uses.
-    write_atomic(&path, &serde_json::to_vec_pretty(&payload).unwrap_or_default())?;
+    write_atomic(
+        &path,
+        &serde_json::to_vec_pretty(&payload).unwrap_or_default(),
+    )?;
     Ok(Json(serde_json::json!({ "mode": mode.as_str() })))
 }
 
@@ -2422,6 +2629,349 @@ mod tests {
             })
             .unwrap();
         node.id
+    }
+
+    fn pending_mutation_pr(id: &str, pr_id: &str, pending_action: &str) -> vestige_core::MemoryPr {
+        vestige_core::MemoryPr {
+            id: pr_id.to_string(),
+            kind: vestige_core::MemoryPrKind::NodeDecayed,
+            status: vestige_core::MemoryPrStatus::Pending,
+            title: format!("Pending {pending_action}"),
+            diff: serde_json::json!({
+                "pendingAction": pending_action,
+                "reason": format!("test approved {pending_action}"),
+                "node": {
+                    "id": id,
+                    "deleted": false
+                }
+            }),
+            signals: vec![vestige_core::RiskSignal {
+                code: "forgets_memory".to_string(),
+                detail: "Forgets / suppresses an existing memory.".to_string(),
+            }],
+            subject_id: Some(id.to_string()),
+            run_id: Some(format!("run_{pr_id}")),
+            created_at: Utc::now().to_rfc3339(),
+            decided_at: None,
+            decision: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn dashboard_delete_is_pre_gated_before_mutation() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "dashboard delete target");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(out) = delete_memory(State(state), Path(id.clone()))
+            .await
+            .expect("dashboard delete should open review");
+
+        assert_eq!(out["pendingReview"], serde_json::json!(true));
+        assert_eq!(out["action"], serde_json::json!("delete_pending_review"));
+        assert!(
+            storage.get_node(&id).unwrap().is_some(),
+            "dashboard delete must not mutate before review in risk-gated mode"
+        );
+        let prs = storage
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].diff["pendingAction"], serde_json::json!("delete"));
+    }
+
+    #[tokio::test]
+    async fn dashboard_delete_fast_mode_preserves_direct_mutation() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "dashboard fast delete target");
+        let state = AppState::new(storage.clone(), None);
+        write_atomic(&review_mode_path(&state), br#"{"mode":"fast"}"#).unwrap();
+
+        let Json(out) = delete_memory(State(state), Path(id.clone()))
+            .await
+            .expect("fast mode delete should execute directly");
+
+        assert_eq!(out["deleted"], serde_json::json!(true));
+        assert!(storage.get_node(&id).unwrap().is_none());
+        assert_eq!(storage.count_pending_memory_prs().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn dashboard_suppress_is_pre_gated_before_mutation() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "dashboard suppress target");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(out) = suppress_memory(State(state), Path(id.clone()), None)
+            .await
+            .expect("dashboard suppress should open review");
+
+        assert_eq!(out["pendingReview"], serde_json::json!(true));
+        assert_eq!(out["action"], serde_json::json!("suppress_pending_review"));
+        let node = storage.get_node(&id).unwrap().unwrap();
+        assert_eq!(
+            node.suppression_count, 0,
+            "dashboard suppress must not change retrieval influence before review"
+        );
+        let prs = storage
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].diff["pendingAction"], serde_json::json!("suppress"));
+    }
+
+    #[tokio::test]
+    async fn dashboard_suppress_fast_mode_preserves_direct_mutation() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "dashboard fast suppress target");
+        let state = AppState::new(storage.clone(), None);
+        write_atomic(&review_mode_path(&state), br#"{"mode":"fast"}"#).unwrap();
+
+        let Json(out) = suppress_memory(State(state), Path(id.clone()), None)
+            .await
+            .expect("fast mode suppress should execute directly");
+
+        assert_eq!(out["suppressed"], serde_json::json!(true));
+        assert_eq!(storage.get_node(&id).unwrap().unwrap().suppression_count, 1);
+        assert_eq!(storage.count_pending_memory_prs().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn list_traces_run_filter_returns_only_requested_run() {
+        let (_dir, storage) = seed_storage();
+        storage
+            .append_trace_event(&vestige_core::MemoryTraceEvent::McpCall {
+                run_id: "run_a".to_string(),
+                tool: "search".to_string(),
+                args_hash: "ha".to_string(),
+                at: 100,
+            })
+            .unwrap();
+        storage
+            .append_trace_event(&vestige_core::MemoryTraceEvent::McpCall {
+                run_id: "run_b".to_string(),
+                tool: "deep_reference".to_string(),
+                args_hash: "hb".to_string(),
+                at: 200,
+            })
+            .unwrap();
+        let state = AppState::new(storage, None);
+
+        let Json(out) = list_traces(
+            State(state),
+            Query(TraceListParams {
+                limit: Some(100),
+                run: Some("run_b".to_string()),
+            }),
+        )
+        .await
+        .expect("trace list should load");
+
+        assert_eq!(out["total"], serde_json::json!(1));
+        assert_eq!(out["runs"][0]["runId"], serde_json::json!("run_b"));
+    }
+
+    #[tokio::test]
+    async fn pending_purge_pr_forget_applies_delete() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "pending purge target");
+        let pr = vestige_core::MemoryPr {
+            id: "pr_pending_purge".to_string(),
+            kind: vestige_core::MemoryPrKind::NodeDecayed,
+            status: vestige_core::MemoryPrStatus::Pending,
+            title: "Pending purge".to_string(),
+            diff: serde_json::json!({
+                "pendingAction": "purge",
+                "reason": "test approved purge",
+                "node": {
+                    "id": id,
+                    "deleted": false
+                }
+            }),
+            signals: vec![vestige_core::RiskSignal {
+                code: "forgets_memory".to_string(),
+                detail: "Forgets / suppresses an existing memory.".to_string(),
+            }],
+            subject_id: Some(id.clone()),
+            run_id: Some("run_pending_purge".to_string()),
+            created_at: Utc::now().to_rfc3339(),
+            decided_at: None,
+            decision: None,
+        };
+        storage.save_memory_pr(&pr).unwrap();
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(out) = act_on_memory_pr(
+            State(state),
+            Path(("pr_pending_purge".to_string(), "forget".to_string())),
+        )
+        .await
+        .expect("decision should succeed");
+
+        assert_eq!(out["pendingMutationApplied"], serde_json::json!(true));
+        assert_eq!(out["mutationReport"]["deleted"], serde_json::json!(true));
+        assert!(
+            storage.get_node(&id).unwrap().is_none(),
+            "forget on pending purge PR must perform the irreversible purge"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_purge_pr_promote_keeps_memory() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "pending purge keep target");
+        let pr = vestige_core::MemoryPr {
+            id: "pr_keep_purge".to_string(),
+            kind: vestige_core::MemoryPrKind::NodeDecayed,
+            status: vestige_core::MemoryPrStatus::Pending,
+            title: "Pending purge".to_string(),
+            diff: serde_json::json!({
+                "pendingAction": "purge",
+                "node": {
+                    "id": id,
+                    "deleted": false
+                }
+            }),
+            signals: vec![vestige_core::RiskSignal {
+                code: "forgets_memory".to_string(),
+                detail: "Forgets / suppresses an existing memory.".to_string(),
+            }],
+            subject_id: Some(id.clone()),
+            run_id: Some("run_keep_purge".to_string()),
+            created_at: Utc::now().to_rfc3339(),
+            decided_at: None,
+            decision: None,
+        };
+        storage.save_memory_pr(&pr).unwrap();
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(out) = act_on_memory_pr(
+            State(state),
+            Path(("pr_keep_purge".to_string(), "promote".to_string())),
+        )
+        .await
+        .expect("decision should succeed");
+
+        assert_eq!(out["pendingMutationApplied"], serde_json::json!(false));
+        assert!(
+            storage.get_node(&id).unwrap().is_some(),
+            "promote on pending purge PR must keep the memory"
+        );
+    }
+
+    #[tokio::test]
+    async fn decided_pending_purge_pr_cannot_be_replayed() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "pending purge replay target");
+        storage
+            .save_memory_pr(&pending_mutation_pr(&id, "pr_replay_purge", "purge"))
+            .unwrap();
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(first) = act_on_memory_pr(
+            State(state.clone()),
+            Path(("pr_replay_purge".to_string(), "promote".to_string())),
+        )
+        .await
+        .expect("first decision should succeed");
+        assert_eq!(first["status"], serde_json::json!("promoted"));
+
+        let err = match act_on_memory_pr(
+            State(state),
+            Path(("pr_replay_purge".to_string(), "forget".to_string())),
+        )
+        .await
+        {
+            Ok(_) => panic!("decided PR must not accept a second destructive decision"),
+            Err(status) => status,
+        };
+
+        assert_eq!(err, StatusCode::CONFLICT);
+        assert!(
+            storage.get_node(&id).unwrap().is_some(),
+            "replaying forget after promote must not delete the memory"
+        );
+    }
+
+    #[tokio::test]
+    async fn decided_pending_suppress_pr_cannot_be_replayed_or_released() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "pending suppress replay target");
+        storage
+            .save_memory_pr(&pending_mutation_pr(&id, "pr_replay_suppress", "suppress"))
+            .unwrap();
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(first) = act_on_memory_pr(
+            State(state.clone()),
+            Path(("pr_replay_suppress".to_string(), "forget".to_string())),
+        )
+        .await
+        .expect("first decision should apply suppression");
+        assert_eq!(first["status"], serde_json::json!("forgotten"));
+        assert_eq!(storage.get_node(&id).unwrap().unwrap().suppression_count, 1);
+
+        let err = match act_on_memory_pr(
+            State(state),
+            Path(("pr_replay_suppress".to_string(), "promote".to_string())),
+        )
+        .await
+        {
+            Ok(_) => panic!("decided PR must not accept a second release decision"),
+            Err(status) => status,
+        };
+
+        assert_eq!(err, StatusCode::CONFLICT);
+        assert_eq!(
+            storage.get_node(&id).unwrap().unwrap().suppression_count,
+            1,
+            "replaying promote after forget must not release the approved suppression"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_suppress_pr_forget_applies_suppression() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "pending suppress target");
+        let pr = vestige_core::MemoryPr {
+            id: "pr_pending_suppress".to_string(),
+            kind: vestige_core::MemoryPrKind::NodeDecayed,
+            status: vestige_core::MemoryPrStatus::Pending,
+            title: "Pending suppress".to_string(),
+            diff: serde_json::json!({
+                "pendingAction": "suppress",
+                "reason": "test approved suppress",
+                "node": {
+                    "id": id,
+                    "deleted": false
+                }
+            }),
+            signals: vec![vestige_core::RiskSignal {
+                code: "forgets_memory".to_string(),
+                detail: "Forgets / suppresses an existing memory.".to_string(),
+            }],
+            subject_id: Some(id.clone()),
+            run_id: Some("run_pending_suppress".to_string()),
+            created_at: Utc::now().to_rfc3339(),
+            decided_at: None,
+            decision: None,
+        };
+        storage.save_memory_pr(&pr).unwrap();
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(out) = act_on_memory_pr(
+            State(state),
+            Path(("pr_pending_suppress".to_string(), "forget".to_string())),
+        )
+        .await
+        .expect("decision should succeed");
+
+        assert_eq!(out["pendingMutationApplied"], serde_json::json!(true));
+        let node = storage.get_node(&id).unwrap().unwrap();
+        assert_eq!(
+            node.suppression_count, 1,
+            "forget on pending suppress PR must apply suppression"
+        );
     }
 
     #[test]

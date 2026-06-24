@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$stores/api';
-	import type { Memory } from '$types';
+	import type { Memory, PendingReviewResult } from '$types';
 	import { NODE_TYPE_COLORS } from '$types';
 	import MemoryAuditTrail from '$lib/components/MemoryAuditTrail.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -18,6 +18,9 @@
 	let minRetention = $state(0);
 	let loading = $state(true);
 	let selectedMemory: Memory | null = $state(null);
+	let reviewNotices: Record<string, { action: string; prId?: string; title?: string; message: string }> = $state({});
+	let actionErrors: Record<string, string> = $state({});
+	let actionBusy: Record<string, string> = $state({});
 	// Which inner tab of the expanded card is active. Keyed by memory id so
 	// switching between cards remembers each one's last view independently.
 	let expandedTab: Record<string, 'content' | 'audit'> = $state({});
@@ -51,6 +54,75 @@
 		if (r > 0.7) return '#10b981';
 		if (r > 0.4) return '#f59e0b';
 		return '#ef4444';
+	}
+
+	function isPendingReview(result: unknown): result is PendingReviewResult {
+		return Boolean(result && typeof result === 'object' && (result as PendingReviewResult).pendingReview);
+	}
+
+	function setBusy(id: string, action: string | null) {
+		if (action) {
+			actionBusy = { ...actionBusy, [id]: action };
+			return;
+		}
+		const { [id]: _removed, ...rest } = actionBusy;
+		actionBusy = rest;
+	}
+
+	function setError(id: string, message: string | null) {
+		if (message) {
+			actionErrors = { ...actionErrors, [id]: message };
+			return;
+		}
+		const { [id]: _removed, ...rest } = actionErrors;
+		actionErrors = rest;
+	}
+
+	function setReviewNotice(id: string, result: PendingReviewResult) {
+		const firstPr = result.memoryPrsOpened?.[0];
+		reviewNotices = {
+			...reviewNotices,
+			[id]: {
+				action: result.action,
+				prId: firstPr?.id,
+				title: firstPr?.title,
+				message: result.message
+			}
+		};
+	}
+
+	async function requestSuppress(memory: Memory) {
+		setBusy(memory.id, 'suppress');
+		setError(memory.id, null);
+		try {
+			const result = await api.memories.suppress(memory.id, 'dashboard trigger');
+			if (isPendingReview(result)) {
+				setReviewNotice(memory.id, result);
+				return;
+			}
+			await loadMemories();
+		} catch (e) {
+			setError(memory.id, e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(memory.id, null);
+		}
+	}
+
+	async function requestDelete(memory: Memory) {
+		setBusy(memory.id, 'delete');
+		setError(memory.id, null);
+		try {
+			const result = await api.memories.delete(memory.id);
+			if (isPendingReview(result)) {
+				setReviewNotice(memory.id, result);
+				return;
+			}
+			await loadMemories();
+		} catch (e) {
+			setError(memory.id, e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(memory.id, null);
+		}
 	}
 
 	// Clear, labelled dropdown options replace the dead native <select>.
@@ -171,9 +243,12 @@
 						</div>
 					</div>
 
-					{#if selectedMemory?.id === memory.id}
-						{@const activeTab = expandedTab[memory.id] ?? 'content'}
-						<div class="relative z-[1] mt-4 pt-4 border-t border-synapse/10 space-y-3">
+						{#if selectedMemory?.id === memory.id}
+							{@const activeTab = expandedTab[memory.id] ?? 'content'}
+							{@const reviewNotice = reviewNotices[memory.id]}
+							{@const actionError = actionErrors[memory.id]}
+							{@const busyAction = actionBusy[memory.id]}
+							<div class="relative z-[1] mt-4 pt-4 border-t border-synapse/10 space-y-3">
 							<!-- Inner tab switcher: Content (default) vs Audit Trail. -->
 							<div class="flex gap-1 text-[11px] uppercase tracking-wider">
 								<span
@@ -209,39 +284,124 @@
 								>
 									<MemoryAuditTrail memoryId={memory.id} />
 								</div>
-							{/if}
+								{/if}
 
-							<div class="flex gap-2">
-								<span role="button" tabindex="0" onclick={(e) => { e.stopPropagation(); api.memories.promote(memory.id); }}
-									onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); api.memories.promote(memory.id); } }}
+								{#if reviewNotice}
+									<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+									<!-- Handlers only stop propagation so a click on this status
+									     notice doesn't trigger the parent card; not interactive. -->
+									<div
+										class="review-notice"
+										role="status"
+										onclick={(e) => e.stopPropagation()}
+										onkeydown={(e) => e.stopPropagation()}
+									>
+										<div class="review-copy">
+											<span class="review-kicker"><Icon name="memorypr" size={14} /> Review pending</span>
+											<strong>{reviewNotice.title ?? 'Memory mutation held for review'}</strong>
+											<small>{reviewNotice.message}</small>
+										</div>
+										<a class="review-link" href="/memory-prs" onclick={(e) => e.stopPropagation()}>
+											Open queue
+										</a>
+									</div>
+								{/if}
+
+								{#if actionError}
+									<div class="action-error" role="alert">{actionError}</div>
+								{/if}
+
+								<div class="flex gap-2">
+									<span role="button" tabindex="0" onclick={(e) => { e.stopPropagation(); api.memories.promote(memory.id); }}
+										onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); api.memories.promote(memory.id); } }}
 									class="px-3 py-1.5 bg-recall/20 text-recall text-xs rounded-lg hover:bg-recall/30 cursor-pointer select-none">Promote</span>
 								<span role="button" tabindex="0" onclick={(e) => { e.stopPropagation(); api.memories.demote(memory.id); }}
 									onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); api.memories.demote(memory.id); } }}
 									class="px-3 py-1.5 bg-decay/20 text-decay text-xs rounded-lg hover:bg-decay/30 cursor-pointer select-none">Demote</span>
-								<!-- v2.0.7: suppress (active forgetting). Distinct from delete: the memory
-									 persists but is inhibited from retrieval and actively decays. Each click
-									 compounds. Graph plays the violet implosion via MemorySuppressed event. -->
-								<span role="button" tabindex="0"
-									onclick={async (e) => {
-										e.stopPropagation();
-										await api.memories.suppress(memory.id, 'dashboard trigger');
-									}}
-									onkeydown={async (e) => {
-										if (e.key === 'Enter') {
+									<!-- v2.0.7: suppress (active forgetting). Distinct from delete: the memory
+										 persists but is inhibited from retrieval and actively decays. Each click
+										 compounds. Graph plays the violet implosion via MemorySuppressed event. -->
+									<span role="button" tabindex="0"
+										onclick={async (e) => {
 											e.stopPropagation();
-											await api.memories.suppress(memory.id, 'dashboard trigger');
-										}
-									}}
-									title="Top-down inhibition (Anderson 2025). Compounds. Reversible for 24h."
-									class="px-3 py-1.5 bg-purple-500/20 text-purple-400 text-xs rounded-lg hover:bg-purple-500/30 cursor-pointer select-none">Suppress</span>
-								<span role="button" tabindex="0" onclick={async (e) => { e.stopPropagation(); await api.memories.delete(memory.id); loadMemories(); }}
-									onkeydown={async (e) => { if (e.key === 'Enter') { e.stopPropagation(); await api.memories.delete(memory.id); loadMemories(); } }}
-									class="px-3 py-1.5 bg-decay/10 text-decay/60 text-xs rounded-lg hover:bg-decay/20 ml-auto cursor-pointer select-none">Delete</span>
+											await requestSuppress(memory);
+										}}
+										onkeydown={async (e) => {
+											if (e.key === 'Enter') {
+												e.stopPropagation();
+												await requestSuppress(memory);
+											}
+										}}
+										title="Top-down inhibition (Anderson 2025). Compounds. Reversible for 24h."
+										class="px-3 py-1.5 bg-purple-500/20 text-purple-400 text-xs rounded-lg hover:bg-purple-500/30 cursor-pointer select-none {busyAction === 'suppress' ? 'opacity-60 pointer-events-none' : ''}">
+										{busyAction === 'suppress' ? 'Holding…' : 'Suppress'}
+									</span>
+									<span role="button" tabindex="0" onclick={async (e) => { e.stopPropagation(); await requestDelete(memory); }}
+										onkeydown={async (e) => { if (e.key === 'Enter') { e.stopPropagation(); await requestDelete(memory); } }}
+										class="px-3 py-1.5 bg-decay/10 text-decay/60 text-xs rounded-lg hover:bg-decay/20 ml-auto cursor-pointer select-none {busyAction === 'delete' ? 'opacity-60 pointer-events-none' : ''}">
+										{busyAction === 'delete' ? 'Holding…' : 'Delete'}
+									</span>
+								</div>
 							</div>
-						</div>
-					{/if}
+						{/if}
 				</button>
 			{/each}
 		</div>
-	{/if}
-</div>
+		{/if}
+	</div>
+
+	<style>
+		.review-notice {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+			padding: 11px 12px;
+			border-radius: 10px;
+			border: 1px solid color-mix(in oklab, var(--color-synapse) 32%, transparent);
+			background: color-mix(in oklab, var(--color-synapse) 10%, transparent);
+		}
+		.review-copy {
+			display: flex;
+			flex-direction: column;
+			gap: 3px;
+			min-width: 0;
+		}
+		.review-kicker {
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			font-size: 0.68rem;
+			font-weight: 700;
+			text-transform: uppercase;
+			color: var(--color-synapse-glow);
+		}
+		.review-copy strong {
+			font-size: 0.82rem;
+			color: var(--color-text);
+			overflow-wrap: anywhere;
+		}
+		.review-copy small {
+			font-size: 0.74rem;
+			color: var(--color-text-dim);
+			line-height: 1.35;
+		}
+		.review-link {
+			flex-shrink: 0;
+			padding: 6px 9px;
+			border-radius: 8px;
+			font-size: 0.74rem;
+			font-weight: 700;
+			color: var(--color-synapse-glow);
+			background: color-mix(in oklab, var(--color-synapse) 14%, transparent);
+			border: 1px solid color-mix(in oklab, var(--color-synapse) 30%, transparent);
+		}
+		.action-error {
+			padding: 8px 10px;
+			border-radius: 9px;
+			font-size: 0.78rem;
+			color: #fecaca;
+			background: color-mix(in oklab, #ef4444 14%, transparent);
+			border: 1px solid color-mix(in oklab, #ef4444 30%, transparent);
+		}
+	</style>

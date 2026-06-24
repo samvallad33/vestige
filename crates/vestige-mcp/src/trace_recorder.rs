@@ -97,7 +97,7 @@ pub fn gate_writes(
     mode: vestige_core::ReviewMode,
 ) -> Vec<serde_json::Value> {
     use vestige_core::{
-        classify_write, MemoryPr, MemoryPrKind, MemoryPrStatus, RiskClass, WriteContext,
+        MemoryPr, MemoryPrKind, MemoryPrStatus, RiskClass, WriteContext, classify_write,
     };
 
     if !is_write_tool(tool) {
@@ -139,7 +139,10 @@ pub fn gate_writes(
 
         let ctx = WriteContext {
             source: Some(WriteSource::Agent),
-            node_type: node.as_ref().map(|n| n.node_type.clone()).unwrap_or_default(),
+            node_type: node
+                .as_ref()
+                .map(|n| n.node_type.clone())
+                .unwrap_or_default(),
             content: node.as_ref().map(|n| n.content.clone()).unwrap_or_default(),
             tags: node.as_ref().map(|n| n.tags.clone()).unwrap_or_default(),
             contradicts_trust,
@@ -176,9 +179,9 @@ pub fn gate_writes(
         // secret, and the PR row is read by the dashboard and may be exported).
         // Store a short, redacted preview + a content hash instead. The preview
         // is dropped entirely when the write was gated for a sensitive topic.
-        let sensitive = signals.iter().any(|s| {
-            s.code == "sensitive_topic" || s.code == "sensitive_node_type"
-        });
+        let sensitive = signals
+            .iter()
+            .any(|s| s.code == "sensitive_topic" || s.code == "sensitive_node_type");
         let raw_content = node.as_ref().map(|n| n.content.as_str()).unwrap_or("");
         let preview = content_preview(raw_content, sensitive);
         let content_hash = hash_content(raw_content);
@@ -236,6 +239,232 @@ pub fn gate_writes(
     }
 
     opened
+}
+
+struct PendingMemoryMutation {
+    action: String,
+    id: String,
+    reason: Option<String>,
+}
+
+/// Pre-gate memory mutations that would otherwise be irreversible or directly
+/// inhibitory before the reviewer sees them.
+///
+/// Normal risky writes are still handled post-commit by [`gate_writes`]. Purge,
+/// delete, and suppress are different: executing the tool first either removes
+/// the row or mutates retrieval influence before review. Under Risk-Gated and
+/// Paranoid modes this function opens a pending Memory PR and returns a tool
+/// response without performing the mutation. Fast mode keeps the historical
+/// direct-execution behavior.
+pub fn gate_pending_memory_mutation(
+    storage: &Arc<Storage>,
+    event_tx: Option<&broadcast::Sender<VestigeEvent>>,
+    run_id: &str,
+    tool: &str,
+    args: &Option<serde_json::Value>,
+    mode: vestige_core::ReviewMode,
+) -> Result<Option<serde_json::Value>, String> {
+    use vestige_core::{
+        MemoryPr, MemoryPrKind, MemoryPrStatus, RiskClass, WriteContext, classify_write,
+    };
+
+    if matches!(mode, vestige_core::ReviewMode::Fast) {
+        return Ok(None);
+    }
+
+    let Some(pending) = pending_memory_mutation(tool, args) else {
+        return Ok(None);
+    };
+    let node = match storage.get_node(&pending.id) {
+        Ok(Some(node)) => node,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(format!("failed to inspect memory before review gate: {e}")),
+    };
+
+    let ctx = WriteContext {
+        source: Some(WriteSource::Agent),
+        node_type: node.node_type.clone(),
+        content: node.content.clone(),
+        tags: node.tags.clone(),
+        forgets: true,
+        ..Default::default()
+    };
+    let (class, signals) = classify_write(&ctx, mode);
+    if class != RiskClass::Review {
+        return Ok(None);
+    }
+
+    if let Some(existing) = find_pending_mutation_pr(storage, &pending.id, &pending.action) {
+        if let Some(tx) = event_tx {
+            let _ = tx.send(VestigeEvent::MemoryPrOpened {
+                id: existing.id.clone(),
+                kind: existing.kind.as_str().to_string(),
+                title: existing.title.clone(),
+                signal_count: existing.signals.len(),
+                run_id: existing.run_id.clone().or_else(|| Some(run_id.to_string())),
+                timestamp: Utc::now(),
+            });
+        }
+        return Ok(Some(pending_review_response(&pending, &existing)));
+    }
+
+    let sensitive = signals
+        .iter()
+        .any(|s| s.code == "sensitive_topic" || s.code == "sensitive_node_type");
+    let preview = content_preview(&node.content, sensitive);
+    let content_hash = hash_content(&node.content);
+    let kind = MemoryPrKind::NodeDecayed;
+    let title = format!("{}: {}", pr_kind_phrase(kind), preview);
+    let pr = MemoryPr {
+        id: format!("pr_{}", uuid::Uuid::new_v4().simple()),
+        kind,
+        status: MemoryPrStatus::Pending,
+        title: title.clone(),
+        diff: serde_json::json!({
+            "decision": pending.action,
+            "pendingAction": pending.action,
+            "requiresApproval": true,
+            "reason": pending.reason,
+            "node": {
+                "id": pending.id,
+                "nodeType": node.node_type,
+                "contentPreview": preview,
+                "contentHash": content_hash,
+                "tags": node.tags,
+                "deleted": false,
+            },
+        }),
+        signals: signals.clone(),
+        subject_id: Some(pending.id.clone()),
+        run_id: Some(run_id.to_string()),
+        created_at: Utc::now().to_rfc3339(),
+        decided_at: None,
+        decision: None,
+    };
+
+    if let Err(e) = storage.save_memory_pr(&pr) {
+        tracing::warn!("pending destructive Memory PR save failed: {e}");
+        return Err(format!(
+            "review gate failed closed: could not open Memory PR for pending mutation: {e}"
+        ));
+    }
+
+    if let Some(tx) = event_tx {
+        let _ = tx.send(VestigeEvent::MemoryPrOpened {
+            id: pr.id.clone(),
+            kind: kind.as_str().to_string(),
+            title: title.clone(),
+            signal_count: signals.len(),
+            run_id: Some(run_id.to_string()),
+            timestamp: Utc::now(),
+        });
+    }
+
+    Ok(Some(pending_review_response(&pending, &pr)))
+}
+
+fn find_pending_mutation_pr(
+    storage: &Arc<Storage>,
+    subject_id: &str,
+    pending_action: &str,
+) -> Option<vestige_core::MemoryPr> {
+    storage
+        .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 500)
+        .ok()?
+        .into_iter()
+        .find(|pr| {
+            pr.subject_id.as_deref() == Some(subject_id)
+                && pr.diff.get("pendingAction").and_then(|v| v.as_str()) == Some(pending_action)
+        })
+}
+
+fn pending_review_response(
+    pending: &PendingMemoryMutation,
+    pr: &vestige_core::MemoryPr,
+) -> serde_json::Value {
+    let opened = serde_json::json!({
+        "id": pr.id.clone(),
+        "kind": pr.kind.as_str(),
+        "title": pr.title.clone(),
+        "signals": pr.signals.clone(),
+        "subjectId": pending.id.clone(),
+    });
+
+    serde_json::json!({
+        "action": format!("{}_pending_review", pending.action),
+        "success": false,
+        "pendingReview": true,
+        "nodeId": pending.id,
+        "message": "Mutation was not executed. Vestige opened a Memory PR and is waiting for review.",
+        "memoryPrsOpened": [opened],
+        "memoryPrNotice": "Vestige opened a Memory PR before applying this destructive or suppressive memory mutation. Approve with `forget`; keep the memory with `promote`; hold it suppressed with `quarantine`.",
+    })
+}
+
+fn pending_memory_mutation(
+    tool: &str,
+    args: &Option<serde_json::Value>,
+) -> Option<PendingMemoryMutation> {
+    let args = args.as_ref()?;
+    match tool {
+        "memory" => {
+            let action = args.get("action")?.as_str()?.to_ascii_lowercase();
+            if !matches!(action.as_str(), "purge" | "delete") {
+                return None;
+            }
+            if !args
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            Some(PendingMemoryMutation {
+                action,
+                id: args.get("id")?.as_str()?.to_string(),
+                reason: args
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            })
+        }
+        "delete_knowledge" => {
+            if !args
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            Some(PendingMemoryMutation {
+                action: "delete".to_string(),
+                id: args.get("id")?.as_str()?.to_string(),
+                reason: args
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            })
+        }
+        "suppress" => {
+            if args
+                .get("reverse")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            Some(PendingMemoryMutation {
+                action: "suppress".to_string(),
+                id: args.get("id")?.as_str()?.to_string(),
+                reason: args
+                    .get("reason")
+                    .or_else(|| args.get("note"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Whether a write decision permanently removes / forgets memory (so the live
@@ -719,7 +948,10 @@ fn extract_veto(result: &Value) -> Option<(String, Vec<String>, f64)> {
                 .collect()
         })
         .unwrap_or_default();
-    let confidence = veto.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let confidence = veto
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
     Some((claim, evidence_ids, confidence))
 }
 
@@ -875,7 +1107,10 @@ mod tests {
     #[test]
     fn extract_writes_single_and_batch() {
         let single = serde_json::json!({ "decision": "create", "nodeId": "n1" });
-        assert_eq!(extract_writes(&single), vec![("n1".into(), "create".into())]);
+        assert_eq!(
+            extract_writes(&single),
+            vec![("n1".into(), "create".into())]
+        );
         let batch = serde_json::json!({
             "results": [ { "decision": "update", "id": "n2" } ]
         });
@@ -886,9 +1121,15 @@ mod tests {
     fn extract_writes_recognizes_action_shape_b2() {
         // B2: memory promote/demote return `action` + `nodeId`, not `decision`.
         let promoted = serde_json::json!({ "action": "promoted", "nodeId": "m1" });
-        assert_eq!(extract_writes(&promoted), vec![("m1".into(), "promoted".into())]);
+        assert_eq!(
+            extract_writes(&promoted),
+            vec![("m1".into(), "promoted".into())]
+        );
         let demoted = serde_json::json!({ "action": "demoted", "nodeId": "m2" });
-        assert_eq!(extract_writes(&demoted), vec![("m2".into(), "demoted".into())]);
+        assert_eq!(
+            extract_writes(&demoted),
+            vec![("m2".into(), "demoted".into())]
+        );
         // codebase remember_decision returns action + nodeId.
         let decision = serde_json::json!({ "action": "remember_decision", "nodeId": "c1" });
         assert_eq!(
@@ -908,7 +1149,14 @@ mod tests {
 
     #[test]
     fn destructive_decision_classification_c2() {
-        for d in ["purge", "delete", "forget", "purged", "deleted", "forgotten"] {
+        for d in [
+            "purge",
+            "delete",
+            "forget",
+            "purged",
+            "deleted",
+            "forgotten",
+        ] {
             assert!(is_destructive_decision(d), "{d} is destructive");
         }
         for d in ["create", "update", "promote", "reinforce"] {
@@ -987,8 +1235,14 @@ mod tests {
             vestige_core::ReviewMode::RiskGated,
         );
 
-        assert_eq!(opened.len(), 1, "destructive write must open a PR even with the node gone");
-        let pr = s.list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10).unwrap();
+        assert_eq!(
+            opened.len(),
+            1,
+            "destructive write must open a PR even with the node gone"
+        );
+        let pr = s
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap();
         assert_eq!(pr.len(), 1);
         assert_eq!(pr[0].subject_id.as_deref(), Some(node.id.as_str()));
         // The diff marks the node as deleted and carries no resurrected content.
@@ -1033,6 +1287,157 @@ mod tests {
         );
         // A content hash is present so reviewers can still correlate.
         assert!(pr.diff["node"]["contentHash"].as_str().is_some());
+    }
+
+    #[test]
+    fn pre_gate_blocks_purge_before_deleting_c2() {
+        let s = store();
+        let node = s
+            .ingest(vestige_core::IngestInput {
+                content: "A memory awaiting destructive review.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let args = Some(serde_json::json!({
+            "action": "purge",
+            "id": node.id,
+            "confirm": true,
+            "reason": "test purge"
+        }));
+
+        let response = gate_pending_memory_mutation(
+            &s,
+            None,
+            "run_pre_gate",
+            "memory",
+            &args,
+            vestige_core::ReviewMode::RiskGated,
+        )
+        .unwrap()
+        .expect("purge should be pre-gated");
+
+        assert_eq!(response["pendingReview"], serde_json::json!(true));
+        assert!(
+            s.get_node(&node.id).unwrap().is_some(),
+            "pre-gating must not delete before review"
+        );
+        let pr = s
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(pr.len(), 1);
+        assert_eq!(pr[0].diff["pendingAction"], serde_json::json!("purge"));
+        assert_eq!(pr[0].diff["node"]["deleted"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn pre_gate_leaves_fast_mode_direct() {
+        let s = store();
+        let node = s
+            .ingest(vestige_core::IngestInput {
+                content: "Fast mode purge target.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let args = Some(serde_json::json!({
+            "action": "purge",
+            "id": node.id,
+            "confirm": true
+        }));
+
+        assert!(
+            gate_pending_memory_mutation(
+                &s,
+                None,
+                "run_fast",
+                "memory",
+                &args,
+                vestige_core::ReviewMode::Fast,
+            )
+            .unwrap()
+            .is_none(),
+            "Fast mode should preserve direct execution"
+        );
+    }
+
+    #[test]
+    fn pre_gate_blocks_direct_suppress_before_mutating() {
+        let s = store();
+        let node = s
+            .ingest(vestige_core::IngestInput {
+                content: "A memory awaiting suppress review.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let args = Some(serde_json::json!({ "id": node.id, "reason": "test suppress" }));
+
+        let response = gate_pending_memory_mutation(
+            &s,
+            None,
+            "run_suppress",
+            "suppress",
+            &args,
+            vestige_core::ReviewMode::RiskGated,
+        )
+        .unwrap()
+        .expect("suppress should be pre-gated");
+
+        assert_eq!(response["pendingReview"], serde_json::json!(true));
+        let kept = s.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(kept.suppression_count, 0, "pre-gate must not suppress yet");
+        let pr = s
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(pr[0].diff["pendingAction"], serde_json::json!("suppress"));
+    }
+
+    #[test]
+    fn pre_gate_reuses_existing_pending_mutation_pr() {
+        let s = store();
+        let node = s
+            .ingest(vestige_core::IngestInput {
+                content: "Do not open duplicate destructive PRs.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let args = Some(serde_json::json!({
+            "action": "delete",
+            "id": node.id,
+            "confirm": true
+        }));
+
+        let first = gate_pending_memory_mutation(
+            &s,
+            None,
+            "run_repeat_1",
+            "memory",
+            &args,
+            vestige_core::ReviewMode::RiskGated,
+        )
+        .unwrap()
+        .expect("first delete should open PR");
+        let second = gate_pending_memory_mutation(
+            &s,
+            None,
+            "run_repeat_2",
+            "memory",
+            &args,
+            vestige_core::ReviewMode::RiskGated,
+        )
+        .unwrap()
+        .expect("second delete should reuse PR");
+
+        assert_eq!(
+            first["memoryPrsOpened"][0]["id"], second["memoryPrsOpened"][0]["id"],
+            "repeated pending mutation returns the existing PR"
+        );
+        let prs = s
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(prs.len(), 1, "only one pending PR is stored");
     }
 
     #[test]
