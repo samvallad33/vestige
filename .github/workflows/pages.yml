@@ -1,0 +1,67 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main, feat/cloud-sync-mvp]
+    paths:
+      - 'apps/dashboard/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; let an in-progress run finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      # GitHub Pages serves this project repo from the /vestige/ subpath.
+      # The dashboard must be built with a matching base so every _app/ asset
+      # resolves instead of 404ing.
+      VESTIGE_BASE_PATH: /vestige
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build dashboard
+        run: pnpm --filter @vestige/dashboard build
+
+      - name: Assemble site root
+        run: |
+          # The Pages project site is already served from /vestige/, and the
+          # dashboard is built with base path /vestige (VESTIGE_BASE_PATH), so
+          # its files go directly at the artifact root — the base path already
+          # accounts for the subpath. No extra subdirectory or redirect needed.
+          rm -rf _site
+          mkdir -p _site
+          cp -r apps/dashboard/build/* _site/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
