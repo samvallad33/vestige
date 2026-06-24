@@ -167,6 +167,39 @@ pub enum VestigeEvent {
         timestamp: DateTime<Utc>,
     },
 
+    // -- Agent Black Box (v2.2) --
+    // One replayable trace event from an agent run. The dashboard Black Box tab
+    // appends these to the live timeline and pulses the graph exactly as the
+    // agent experienced it. The inner event is the canonical
+    // `vestige_core::MemoryTraceEvent`, serialized with its own `type` tag, so
+    // the wire shape is `{ "type": "TraceEvent", "data": { "runId": ..., "event": { "type": "mcp.call", ... } } }`.
+    TraceEvent {
+        run_id: String,
+        seq: i64,
+        event: vestige_core::MemoryTraceEvent,
+        timestamp: DateTime<Utc>,
+    },
+
+    // -- Memory PRs (v2.2) — the cognitive immune system --
+    // A risky write opened a Memory PR. The dashboard raises the PR-queue badge
+    // and can surface a toast: "Vestige opened a Memory PR — the agent tried to
+    // rewrite its own brain."
+    MemoryPrOpened {
+        id: String,
+        kind: String,
+        title: String,
+        signal_count: usize,
+        run_id: Option<String>,
+        timestamp: DateTime<Utc>,
+    },
+    // A Memory PR was decided (promote / merge / supersede / quarantine / forget).
+    MemoryPrDecided {
+        id: String,
+        decision: String,
+        status: String,
+        timestamp: DateTime<Utc>,
+    },
+
     // -- System --
     Heartbeat {
         uptime_secs: u64,

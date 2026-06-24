@@ -443,7 +443,10 @@ async fn handle_event(
         | VestigeEvent::ConsolidationCompleted { .. }
         | VestigeEvent::RetentionDecayed { .. }
         | VestigeEvent::ConnectionDiscovered { .. }
-        | VestigeEvent::ActivationSpread { .. } => {}
+        | VestigeEvent::ActivationSpread { .. }
+        | VestigeEvent::TraceEvent { .. }
+        | VestigeEvent::MemoryPrOpened { .. }
+        | VestigeEvent::MemoryPrDecided { .. } => {}
     }
 }
 

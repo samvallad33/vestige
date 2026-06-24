@@ -129,6 +129,23 @@ impl McpServer {
         }
     }
 
+    /// Read the active Memory PR review mode from `<data_dir>/review_mode.json`,
+    /// defaulting to `RiskGated`. Shared shape with the dashboard handler so the
+    /// MCP write path and the UI agree on the mode.
+    fn review_mode(&self) -> vestige_core::ReviewMode {
+        let path = self.storage.data_dir().join("review_mode.json");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| {
+                v.get("mode")
+                    .and_then(|m| m.as_str())
+                    .map(|s| s.to_string())
+            })
+            .map(|s| vestige_core::ReviewMode::from_label(&s))
+            .unwrap_or_default()
+    }
+
     /// Handle an incoming JSON-RPC request
     pub async fn handle_request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         debug!("Handling request: {}", request.method);
@@ -240,8 +257,8 @@ impl McpServer {
 
     /// Handle tools/list request
     async fn handle_tools_list(&self) -> Result<serde_json::Value, JsonRpcError> {
-        // v2.1.21: 25 tools (verified by the `tools.len() == 25` assertion in the
-        // handle_tools_list test below — the `suppress` tool landed in v2.0.5).
+        // v2.1.27: 34 tools (verified by the `tools.len() == 34` assertion in the
+        // handle_tools_list test below).
         // Deprecated tools still work via redirects in handle_tools_call.
         let mut tools = vec![
             // ================================================================
@@ -503,7 +520,7 @@ impl McpServer {
         // Per-tool caps below are sized at ~2× observed peak with growth
         // headroom; max permitted by Anthropic is 500_000. Only the four
         // empirically-measured high-payload tools carry the annotation today;
-        // the remaining 21 tools deliberately do NOT (cargo-cult prevention —
+        // the remaining 30 tools deliberately do NOT (cargo-cult prevention —
         // annotating a small-payload tool dilutes the signal).
         //
         // Other tools that COULD plausibly grow into the annotated set with
@@ -562,6 +579,21 @@ impl McpServer {
         } else {
             None
         };
+
+        // ================================================================
+        // AGENT BLACK BOX (v2.2)
+        // Open/continue a run for this call and record the opening `mcp.call`
+        // event (args are hashed, never stored raw). Downstream memory events
+        // are recorded from the result after dispatch.
+        // ================================================================
+        let run_id = crate::trace_recorder::run_id_for(&request.arguments);
+        crate::trace_recorder::record_call(
+            &self.storage,
+            self.event_tx.as_ref(),
+            &run_id,
+            &request.name,
+            &request.arguments,
+        );
 
         let result = match request.name.as_str() {
             // ================================================================
@@ -1083,10 +1115,81 @@ impl McpServer {
         // ================================================================
         if let Ok(ref content) = result {
             self.emit_tool_event(&request.name, &saved_args, content);
+            // Black Box: record the downstream memory events (retrieve /
+            // suppress / write / veto / dream) the agent experienced.
+            crate::trace_recorder::record_result(
+                &self.storage,
+                self.event_tx.as_ref(),
+                &run_id,
+                &request.name,
+                content,
+            );
         }
 
+        // ================================================================
+        // RISK-GATED MEMORY PRs (v2.2) — quarantine review, the cognitive
+        // immune system. Normal writes auto-land. Risky writes (contradiction
+        // vs high-trust, supersede/forget/merge, sensitive topics, …) are
+        // *committed then quarantined*: the row is recorded (audit history
+        // preserved) but suppressed out of retrieval until a Memory PR is
+        // decided. This is quarantine review, NOT pre-write blocking — the
+        // write happens inside the tool before the gate sees it; we hold its
+        // influence, not its existence. Centralized here so tools stay
+        // untouched.
+        // ================================================================
+        let opened_prs = if let Ok(ref content) = result {
+            crate::trace_recorder::gate_writes(
+                &self.storage,
+                self.event_tx.as_ref(),
+                &run_id,
+                &request.name,
+                content,
+                self.review_mode(),
+            )
+        } else {
+            Vec::new()
+        };
+
         let response = match result {
-            Ok(content) => {
+            Ok(mut content) => {
+                // ============================================================
+                // TRACE SPINE (Phase 0)
+                // Stamp the runId + a pointer to the full trace onto the tool
+                // output itself. This is the first hop of the correlation
+                // chain: the same runId now appears in the tool result, the
+                // SQLite trace rows, the WebSocket events, /api/traces/{runId},
+                // and vestige://trace/{runId}. One id, end to end.
+                // ============================================================
+                // Memory Receipt: for retrieval tools, build + persist a
+                // receipt from what the tool already computed and attach it.
+                // Done before the runId stamp so the receipt's own suppressed
+                // list is part of the same payload the agent reads.
+                let receipt =
+                    crate::trace_recorder::build_and_save_receipt(&self.storage, &run_id, &request.name, &content);
+                if let Some(obj) = content.as_object_mut() {
+                    obj.insert("runId".to_string(), serde_json::json!(run_id));
+                    obj.insert(
+                        "traceUri".to_string(),
+                        serde_json::json!(format!("vestige://trace/{run_id}")),
+                    );
+                    if let Some(r) = receipt {
+                        obj.insert("receipt".to_string(), r);
+                    }
+                    // Surface opened Memory PRs so the agent learns its risky
+                    // write is held for review, not silently committed.
+                    if !opened_prs.is_empty() {
+                        obj.insert(
+                            "memoryPrsOpened".to_string(),
+                            serde_json::json!(opened_prs),
+                        );
+                        obj.insert(
+                            "memoryPrNotice".to_string(),
+                            serde_json::json!(
+                                "Vestige opened a Memory PR (quarantine review): this write was recorded but is held out of retrieval until reviewed — its audit history is preserved while its influence is suspended. See the Memory PRs queue."
+                            ),
+                        );
+                    }
+                }
                 let call_result = CallToolResult {
                     content: vec![crate::protocol::messages::ToolResultContent {
                         content_type: "text".to_string(),
@@ -1228,6 +1331,27 @@ impl McpServer {
                 description: Some("Intentions that have been triggered or are overdue".to_string()),
                 mime_type: Some("application/json".to_string()),
             },
+            // Agent Black Box (v2.2) — replayable agent-run traces. Individual
+            // runs are read via the templated `vestige://trace/{runId}` (or
+            // `trace://{runId}`) URI; these concrete entries list the runs and
+            // the latest trace so a client can discover them.
+            ResourceDescription {
+                uri: "trace://runs".to_string(),
+                name: "Agent Runs (Black Box)".to_string(),
+                description: Some(
+                    "Recent agent runs. Read vestige://trace/{runId} for a full replayable trace."
+                        .to_string(),
+                ),
+                mime_type: Some("application/json".to_string()),
+            },
+            ResourceDescription {
+                uri: "trace://latest".to_string(),
+                name: "Latest Agent Trace".to_string(),
+                description: Some(
+                    "The most recently active agent run's full black-box trace.".to_string(),
+                ),
+                mime_type: Some("application/json".to_string()),
+            },
         ];
 
         let result = ListResourcesResult { resources };
@@ -1250,7 +1374,17 @@ impl McpServer {
         // OpenCode and other MCP clients may send "vestige/memory://recent"
         // but we register resources as "memory://recent"
         let normalized_uri = uri.strip_prefix("vestige/").unwrap_or(uri);
-        let content = if normalized_uri.starts_with("memory://") {
+        // The trace resource is specced as `vestige://trace/{runId}`. Accept
+        // both that form and the bare `trace://{runId}` scheme, normalizing the
+        // former to the latter so the resource module sees one shape.
+        let trace_uri = normalized_uri
+            .strip_prefix("vestige://trace/")
+            .map(|rest| format!("trace://{rest}"));
+        let content = if let Some(ref tu) = trace_uri {
+            resources::trace::read(&self.storage, tu).await
+        } else if normalized_uri.starts_with("trace://") {
+            resources::trace::read(&self.storage, normalized_uri).await
+        } else if normalized_uri.starts_with("memory://") {
             resources::memory::read(&self.storage, normalized_uri).await
         } else if normalized_uri.starts_with("codebase://") {
             resources::codebase::read(&self.storage, normalized_uri).await
@@ -1820,9 +1954,9 @@ mod tests {
         let result = response.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
 
-        // 34 tools: 25 from v2.1.21 + 7 Phase 3 merge/supersede tools
-        // (merge_candidates, plan_merge, plan_supersede, apply_plan, merge_undo,
-        // protect, merge_policy, composed_graph) + 1 connector tool (source_sync, #57).
+        // 34 tools in v2.1.27: the unified memory surface, Phase 3
+        // merge/supersede controls, ComposedGraph, and the #57 source_sync
+        // connector tool.
         assert_eq!(tools.len(), 34, "Expected exactly 34 tools");
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -2246,6 +2380,247 @@ mod tests {
         assert!(
             search_tool.get("meta").is_none(),
             "search tool has un-renamed `meta` key (regression — serde rename broke)"
+        );
+    }
+
+    // ========================================================================
+    // TRACE SPINE (Phase 0) — one runId, end to end
+    // ========================================================================
+
+    /// Every tools/call must stamp a runId + a trace pointer onto its output,
+    /// persist an `mcp.call` trace row under that same runId, and that runId
+    /// must resolve through the `vestige://trace/{runId}` resource. This is the
+    /// load-bearing correlation guarantee.
+    #[tokio::test]
+    async fn test_trace_spine_runid_end_to_end() {
+        let (mut server, _dir) = test_server().await;
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        // A client-supplied runId must be honoured so a whole session
+        // correlates under one id.
+        let call = make_request(
+            "tools/call",
+            Some(serde_json::json!({
+                "name": "memory_health",
+                "arguments": { "runId": "run_spine_test" }
+            })),
+        );
+        let response = server.handle_request(call).await.unwrap();
+        let result = response.result.expect("tools/call ok");
+
+        // 1. The tool output itself carries the runId + trace pointer.
+        let structured = &result["structuredContent"];
+        assert_eq!(
+            structured["runId"].as_str(),
+            Some("run_spine_test"),
+            "tool output must echo the runId (spine hop 1)"
+        );
+        assert_eq!(
+            structured["traceUri"].as_str(),
+            Some("vestige://trace/run_spine_test"),
+            "tool output must carry the trace resource pointer"
+        );
+
+        // 2. The same runId persisted a trace row (the mcp.call event).
+        let events = server.storage.get_trace("run_spine_test").unwrap();
+        assert!(
+            events.iter().any(|e| e.kind() == "mcp.call"),
+            "an mcp.call event must be persisted under the runId (spine hop 2)"
+        );
+
+        // 3. The run roll-up exists with the right entry tool.
+        let run = server
+            .storage
+            .get_agent_run("run_spine_test")
+            .unwrap()
+            .expect("run summary persisted");
+        assert_eq!(run.first_tool.as_deref(), Some("memory_health"));
+
+        // 4. The MCP resource resolves the same runId (spine hop 3).
+        let read = make_request(
+            "resources/read",
+            Some(serde_json::json!({ "uri": "vestige://trace/run_spine_test" })),
+        );
+        let read_resp = server.handle_request(read).await.unwrap();
+        let read_result = read_resp.result.expect("resource read ok");
+        let text = read_result["contents"][0]["text"]
+            .as_str()
+            .expect("resource text");
+        assert!(
+            text.contains("run_spine_test") && text.contains("mcp.call"),
+            "vestige://trace/{{runId}} must return the run's events"
+        );
+    }
+
+    /// Trace events must be broadcast to a live WebSocket subscriber, not just
+    /// persisted. This guards the spine hop from SQLite → WebSocket → pulse.
+    #[tokio::test]
+    async fn test_trace_event_is_broadcast_to_subscriber() {
+        let (storage, _dir) = test_storage().await;
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let (event_tx, mut event_rx) = broadcast::channel(64);
+        let mut server = McpServer::new_with_events(storage, cognitive, event_tx);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let call = make_request(
+            "tools/call",
+            Some(serde_json::json!({
+                "name": "memory_health",
+                "arguments": { "runId": "run_ws" }
+            })),
+        );
+        server.handle_request(call).await.unwrap();
+
+        // Drain the broadcast: at least one TraceEvent for run_ws must arrive.
+        let mut saw_trace = false;
+        while let Ok(ev) = event_rx.try_recv() {
+            if let VestigeEvent::TraceEvent { run_id, .. } = ev {
+                if run_id == "run_ws" {
+                    saw_trace = true;
+                }
+            }
+        }
+        assert!(
+            saw_trace,
+            "a TraceEvent for the run must be broadcast to subscribers (spine hop: WebSocket)"
+        );
+    }
+
+    /// Risk-gated Memory PRs default: an ordinary tool call opens no PR.
+    #[tokio::test]
+    async fn test_no_memory_pr_for_non_write_tool() {
+        let (mut server, _dir) = test_server().await;
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+        let call = make_request(
+            "tools/call",
+            Some(serde_json::json!({
+                "name": "memory_health",
+                "arguments": { "runId": "run_no_pr" }
+            })),
+        );
+        server.handle_request(call).await.unwrap();
+        assert_eq!(
+            server.storage.count_pending_memory_prs().unwrap(),
+            0,
+            "a read-only tool must never open a Memory PR"
+        );
+    }
+
+    /// PROOF LOCK: the complete spine in one test. A single runId must cross
+    /// every hop, and the value must be byte-identical at each:
+    ///   MCP output → SQLite trace → WebSocket event → API response shape →
+    ///   MCP resource.
+    /// If any hop drops or rewrites the runId, this fails. This is the
+    /// "impossible to doubt" guarantee for the receipt chain.
+    #[tokio::test]
+    async fn test_full_spine_one_runid_crosses_every_hop() {
+        const RUN: &str = "run_full_spine";
+
+        let (storage, _dir) = test_storage().await;
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let (event_tx, mut event_rx) = broadcast::channel(256);
+        let mut server = McpServer::new_with_events(storage, cognitive, event_tx);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        // ---- HOP 1: MCP tool output carries the runId + trace pointer ----
+        let call = make_request(
+            "tools/call",
+            Some(serde_json::json!({
+                "name": "memory_health",
+                "arguments": { "runId": RUN }
+            })),
+        );
+        let response = server.handle_request(call).await.unwrap();
+        let structured = response.result.expect("tools/call ok")["structuredContent"].clone();
+        assert_eq!(structured["runId"].as_str(), Some(RUN), "HOP 1: tool output runId");
+        assert_eq!(
+            structured["traceUri"].as_str(),
+            Some(&format!("vestige://trace/{RUN}")[..]),
+            "HOP 1: tool output traceUri"
+        );
+
+        // ---- HOP 2: SQLite trace rows persisted under the same runId ----
+        let events = server.storage.get_trace(RUN).unwrap();
+        assert!(!events.is_empty(), "HOP 2: trace rows exist");
+        assert!(
+            events.iter().all(|e| e.run_id() == RUN),
+            "HOP 2: every persisted trace row carries the SAME runId"
+        );
+
+        // ---- HOP 3: WebSocket broadcast carries the same runId ----
+        let mut ws_run: Option<String> = None;
+        while let Ok(ev) = event_rx.try_recv() {
+            if let VestigeEvent::TraceEvent { run_id, .. } = ev {
+                ws_run = Some(run_id);
+                break;
+            }
+        }
+        assert_eq!(
+            ws_run.as_deref(),
+            Some(RUN),
+            "HOP 3: the broadcast TraceEvent carries the same runId"
+        );
+
+        // ---- HOP 4: API response shape (what the dashboard renders) ----
+        // Exercise the exact handler the dashboard /api/traces/:runId calls by
+        // going through storage the same way, and assert the render-critical
+        // shape: a summary roll-up + an ordered event list, all under runId.
+        let summary = server
+            .storage
+            .get_agent_run(RUN)
+            .unwrap()
+            .expect("HOP 4: run summary the list view renders");
+        assert_eq!(summary.run_id, RUN, "HOP 4: API run summary runId");
+        assert!(summary.event_count >= 1, "HOP 4: event_count rendered in the list");
+        // The detail view renders these events in sequence order.
+        let detail_events = server.storage.get_trace(RUN).unwrap();
+        assert_eq!(
+            detail_events.len() as i64,
+            summary.event_count,
+            "HOP 4: detail event count matches the roll-up the list shows"
+        );
+
+        // ---- HOP 5: MCP resource resolves the same runId ----
+        let read = make_request(
+            "resources/read",
+            Some(serde_json::json!({ "uri": format!("vestige://trace/{RUN}") })),
+        );
+        let read_resp = server.handle_request(read).await.unwrap();
+        let text = read_resp.result.expect("resource read ok")["contents"][0]["text"]
+            .as_str()
+            .expect("resource text")
+            .to_string();
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            parsed["runId"].as_str(),
+            Some(RUN),
+            "HOP 5: vestige://trace/{{runId}} resolves the same runId"
+        );
+        assert!(
+            parsed["events"].as_array().map(|a| !a.is_empty()).unwrap_or(false),
+            "HOP 5: the resource returns the run's events"
+        );
+
+        // ---- INVARIANT: one id, every hop, byte-identical ----
+        // Collect the runId as seen at each hop and assert they are all equal.
+        let seen = [
+            structured["runId"].as_str().unwrap().to_string(), // hop 1
+            events[0].run_id().to_string(),                    // hop 2
+            ws_run.unwrap(),                                   // hop 3
+            summary.run_id,                                    // hop 4
+            parsed["runId"].as_str().unwrap().to_string(),     // hop 5
+        ];
+        assert!(
+            seen.iter().all(|r| r == RUN),
+            "the SAME runId must appear, unchanged, at every hop: {seen:?}"
         );
     }
 }

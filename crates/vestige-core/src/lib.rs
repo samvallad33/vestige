@@ -90,6 +90,10 @@ pub mod fts;
 pub mod memory;
 pub mod storage;
 
+/// Agent Black Box, Memory Receipts & Memory PRs — the cognitive flight
+/// recorder, immune system, and reviewable-diff model for agent memory.
+pub mod trace;
+
 #[cfg(feature = "embeddings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "embeddings")))]
 pub mod embeddings;
@@ -160,6 +164,13 @@ pub use fsrs::{
 // Configuration (vestige.toml output profiles / defaults)
 pub use config::{CONFIG_FILE, OutputConfig, OutputDefaults, OutputProfile, VestigeConfig};
 
+// Agent Black Box / Receipts / Memory PRs (the cognitive flight recorder)
+pub use trace::{
+    classify_write, DecayRisk, MemoryPr, MemoryPrAction, MemoryPrKind, MemoryPrStatus,
+    MemoryTraceEvent, Receipt, ReceiptMutation, ReviewMode, RiskClass, RiskSignal, SuppressReason,
+    SuppressedReceiptEntry, WriteContext, WriteSource, HIGH_TRUST_FLOOR, LOW_CONFIDENCE_FLOOR,
+};
+
 // Storage layer
 pub use storage::{
     ClassificationResult,
@@ -191,6 +202,7 @@ pub use storage::{
     Result,
     SchedulingState,
     SearchQuery,
+    AgentRunSummary,
     SmartIngestResult,
     SourceUpsertOutcome,
     SourceUpsertResult,
