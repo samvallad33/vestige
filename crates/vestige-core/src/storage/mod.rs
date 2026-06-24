@@ -2,11 +2,18 @@
 //!
 //! Backend-agnostic memory store abstraction plus SQLite reference impl.
 
+#[cfg(feature = "cloud-sync")]
+mod cloud_crypto;
+#[cfg(feature = "cloud-sync")]
+mod cloud_sync;
 mod memory_store;
 mod migrations;
 mod portable;
 mod sqlite;
 mod trace_store;
+
+#[cfg(feature = "cloud-sync")]
+pub use cloud_sync::HttpPortableSyncBackend;
 
 pub use memory_store::{
     ClassificationResult, Domain, HealthStatus, LocalMemoryStore, MemoryEdge, MemoryRecord,

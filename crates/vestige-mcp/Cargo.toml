@@ -10,13 +10,18 @@ categories = ["command-line-utilities", "database"]
 repository = "https://github.com/samvallad33/vestige"
 
 [features]
-default = ["embeddings", "ort-download", "vector-search", "connectors"]
+default = ["embeddings", "ort-download", "vector-search", "connectors", "cloud-sync"]
 embeddings = ["vestige-core/embeddings"]
 vector-search = ["vestige-core/vector-search"]
 # External-source connectors (#57): GitHub Issues / Redmine indexing via the
 # `source_sync` MCP tool. On by default so the tool works out of the box; turn
 # off for a build with no HTTP client.
 connectors = ["vestige-core/connectors"]
+# Hosted managed-sync (Vestige Cloud): `vestige sync --cloud` pushes/pulls the
+# portable archive to the hosted blob service. On by default so the command
+# works out of the box; the binary already links an HTTP client via
+# `connectors`, so this adds no new dependency cost.
+cloud-sync = ["vestige-core/cloud-sync"]
 # Default ort backend: downloads prebuilt ONNX Runtime at build time.
 # Fails on targets without prebuilts (notably x86_64-apple-darwin).
 ort-download = ["embeddings", "vestige-core/ort-download"]
