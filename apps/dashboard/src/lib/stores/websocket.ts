@@ -1,6 +1,5 @@
 import { writable, derived } from 'svelte/store';
 import type { VestigeEvent } from '$types';
-import { getDashboardAuthToken } from './api';
 
 const MAX_EVENTS = 200;
 
@@ -24,11 +23,9 @@ function createWebSocketStore() {
 	let reconnectAttempts = 0;
 
 	function connect(url?: string) {
-		const baseWsUrl = url || (window.location.port === '5173'
+		const wsUrl = url || (window.location.port === '5173'
 			? `ws://${window.location.hostname}:3927/ws`
 			: `ws://${window.location.host}/ws`);
-		const token = getDashboardAuthToken();
-		const wsUrl = token ? withToken(baseWsUrl, token) : baseWsUrl;
 
 		if (ws?.readyState === WebSocket.OPEN) return;
 
@@ -108,12 +105,6 @@ function createWebSocketStore() {
 		clearEvents,
 		injectEvent
 	};
-}
-
-function withToken(url: string, token: string): string {
-	const next = new URL(url, window.location.href);
-	next.searchParams.set('token', token);
-	return next.toString();
 }
 
 export const websocket = createWebSocketStore();

@@ -1,0 +1,10 @@
+# Supabase project config for the Vestige Pro waitlist capture.
+# Link to a real project with:  supabase link --project-ref <your-ref>
+# Then deploy:                  supabase db push && supabase functions deploy waitlist-join
+
+project_id = "vestige-waitlist"
+
+[functions.waitlist-join]
+# Public form posts here; no Supabase JWT required (we gate with the honeypot,
+# email validation, and the service-role insert inside the function).
+verify_jwt = false

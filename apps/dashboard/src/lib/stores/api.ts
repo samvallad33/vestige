@@ -21,71 +21,18 @@ import type {
 } from '$types';
 
 const BASE = '/api';
-const DASHBOARD_TOKEN_STORAGE_KEY = 'vestige.dashboard.token';
-const DASHBOARD_TOKEN_HEADER = 'X-Vestige-Dashboard-Token';
 
 async function fetcher<T>(path: string, options?: RequestInit): Promise<T> {
-	const headers = withDashboardAuthHeaders(options?.headers);
 	const res = await fetch(`${BASE}${path}`, {
-		...options,
-		headers
+		headers: { 'Content-Type': 'application/json' },
+		...options
 	});
-	if (!res.ok) {
-		if (res.status === 401 || res.status === 403) {
-			throw new Error(
-				`API ${res.status}: dashboard auth failed. Open Vestige from the CLI or set VESTIGE_AUTH_TOKEN.`
-			);
-		}
-		throw new Error(`API ${res.status}: ${res.statusText}`);
-	}
+	if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
 	return res.json();
 }
 
-function withDashboardAuthHeaders(headers?: HeadersInit): Headers {
-	const next = new Headers(headers);
-	if (!next.has('Content-Type')) {
-		next.set('Content-Type', 'application/json');
-	}
-	const token = getDashboardAuthToken();
-	if (token) {
-		next.set(DASHBOARD_TOKEN_HEADER, token);
-		next.set('Authorization', `Bearer ${token}`);
-	}
-	return next;
-}
-
-export function getDashboardAuthToken(): string | null {
-	if (typeof window === 'undefined') return null;
-	return window.localStorage.getItem(DASHBOARD_TOKEN_STORAGE_KEY);
-}
-
-export function installDashboardTokenFromLocation(): boolean {
-	if (typeof window === 'undefined') return false;
-	const hash = window.location.hash.startsWith('#')
-		? window.location.hash.slice(1)
-		: window.location.hash;
-	if (!hash) return false;
-
-	const params = new URLSearchParams(hash);
-	const token = params.get('vestige_token') ?? params.get('token');
-	if (!token) return false;
-
-	window.localStorage.setItem(DASHBOARD_TOKEN_STORAGE_KEY, token);
-	params.delete('vestige_token');
-	params.delete('token');
-
-	const remainingHash = params.toString();
-	const nextUrl = `${window.location.pathname}${window.location.search}${
-		remainingHash ? `#${remainingHash}` : ''
-	}`;
-	window.history.replaceState(null, document.title, nextUrl);
-	return true;
-}
-
 async function downloadJson(path: string, filename: string): Promise<void> {
-	const res = await fetch(`${BASE}${path}`, {
-		headers: withDashboardAuthHeaders()
-	});
+	const res = await fetch(`${BASE}${path}`);
 	if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
 	const blob = await res.blob();
 	const url = URL.createObjectURL(blob);
