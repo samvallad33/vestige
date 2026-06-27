@@ -20,6 +20,7 @@
 	import { reveal } from '$lib/actions/reveal';
 	import ReceiptCard from '$components/ReceiptCard.svelte';
 	import LifeState from '$components/LifeState.svelte';
+	import { emitFieldEvent } from '$lib/core/fieldEvents';
 	import {
 		api,
 		type TraceRunSummary,
@@ -218,6 +219,8 @@
 		];
 		loading = false;
 		error = null;
+		// flash the living field crimson — the firewall catch, made visible
+		emitFieldEvent({ kind: 'firewall', intensity: 1 });
 	}
 
 	onMount(() => {

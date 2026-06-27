@@ -14,6 +14,25 @@
 		webgpuAvailable,
 		type VestigeGpuHandle
 	} from './vestigeGpu';
+	import { onFieldEvent, fieldEventCode, type FieldEvent } from './fieldEvents';
+
+	// The active reactive effect (a firewall catch / decay / birth). `code` is the
+	// shader uniform; `age` counts up in seconds and the effect fades out by
+	// EVENT_DURATION, after which code resets to 0. Pointer/origin in clip space.
+	const EVENT_DURATION = 1.6;
+	let evtCode = 0;
+	let evtAge = 0;
+	let evtX = 0;
+	let evtY = 0;
+	let evtIntensity = 1;
+	function triggerFieldEvent(e: FieldEvent) {
+		evtCode = fieldEventCode(e.kind);
+		evtAge = 0;
+		// map [0,1] origin to clip space [-1,1]; default center
+		evtX = (e.x ?? 0.5) * 2 - 1;
+		evtY = -((e.y ?? 0.5) * 2 - 1);
+		evtIntensity = e.intensity ?? 1;
+	}
 
 	interface Props {
 		/** particle budget at full tier; auto-scaled down for weak GPUs / mobile */
@@ -43,6 +62,7 @@ struct Particle { pos: vec4f, vel: vec4f };
 struct U {
 	viewport: vec4f,   // w, h, dpr, reducedMotion
 	params: vec4f,     // time, dt, intensity, count
+	event: vec4f,      // code (0 none,1 firewall,2 decay,3 birth), fade(1->0), ox, oy
 };
 @group(0) @binding(0) var<storage, read_write> parts: array<Particle>;
 @group(0) @binding(1) var<uniform> u: U;
@@ -94,6 +114,31 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 	let speed = mix(1.0, 0.18, rm) * u.params.z;
 	let flow = curlFlow(pr.pos.xyz * 1.1);
 	pr.vel = vec4f(mix(pr.vel.xyz, flow * 0.6, 0.06), pr.vel.w);
+
+	// --- reactive event impulse (scoped to the event origin) -----------------
+	let ecode = u.event.x;
+	let efade = u.event.y; // 1 at trigger -> 0 at end
+	if (ecode > 0.5 && efade > 0.001) {
+		let origin = vec3f(u.event.z, u.event.w, 0.0);
+		let d = pr.pos.xyz - origin;
+		let dist = length(d) + 0.0001;
+		let dir = d / dist;
+		let reach = exp(-dist * 1.4) * efade; // local falloff
+		if (ecode < 1.5) {
+			// FIREWALL: a hard outward shockwave + energy spike (the "block")
+			pr.vel = vec4f(pr.vel.xyz + dir * reach * 0.9, pr.vel.w);
+			pr.pos = vec4f(pr.pos.xyz, min(pr.pos.w + reach * 0.6, 1.0));
+		} else if (ecode < 2.5) {
+			// DECAY: pull inward + damp (a cold collapse, the Rac1 cascade fade)
+			pr.vel = vec4f(pr.vel.xyz - dir * reach * 0.5, pr.vel.w * (1.0 - reach * 0.5));
+			pr.pos = vec4f(pr.pos.xyz, max(pr.pos.w - reach * 0.4, 0.0));
+		} else {
+			// BIRTH: a gentle bright bloom outward
+			pr.vel = vec4f(pr.vel.xyz + dir * reach * 0.4, pr.vel.w);
+			pr.pos = vec4f(pr.pos.xyz, min(pr.pos.w + reach * 0.5, 1.0));
+		}
+	}
+
 	pr.pos = vec4f(pr.pos.xyz + pr.vel.xyz * u.params.y * speed, pr.pos.w);
 	// soft-wrap inside a unit box so the field is endless
 	pr.pos = vec4f(fract(pr.pos.xyz * 0.5 + 0.5) * 2.0 - 1.0, pr.pos.w);
@@ -104,7 +149,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 	// ---- WGSL: additive point render with violet palette ---------------------
 	const RENDER_WGSL = /* wgsl */ `
 struct Particle { pos: vec4f, vel: vec4f };
-struct U { viewport: vec4f, params: vec4f };
+struct U { viewport: vec4f, params: vec4f, event: vec4f };
 @group(0) @binding(0) var<storage, read> parts: array<Particle>;
 @group(0) @binding(1) var<uniform> u: U;
 
@@ -113,6 +158,7 @@ struct VsOut {
 	@location(0) quad: vec2f,
 	@location(1) glow: f32,
 	@location(2) seed: f32,
+	@location(3) crimson: f32, // 0 normal violet .. 1 firewall crimson
 };
 
 @vertex
@@ -135,6 +181,14 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut
 	out.quad = c;
 	out.glow = clamp(0.35 + speed * 1.4 + p.pos.w * 0.4, 0.2, 1.6);
 	out.seed = p.pos.w;
+	// FIREWALL (event code 1): particles near the origin flare crimson — the
+	// "angry" block. Crimson is reserved ONLY for this; nothing else turns red.
+	var crimson = 0.0;
+	if (u.event.x > 0.5 && u.event.x < 1.5) {
+		let d = length(p.pos.xy - vec2f(u.event.z, u.event.w));
+		crimson = exp(-d * 1.6) * u.event.y;
+	}
+	out.crimson = clamp(crimson, 0.0, 1.0);
 	return out;
 }
 
@@ -160,7 +214,10 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 	let energy = clamp(in.glow * (0.55 + in.seed * 0.6), 0.0, 1.0);
 	// brightness floor so the field is visible even where the flow is slow
 	let lum = 0.55 + in.glow * 0.9;
-	let col = palette(energy) * lum * falloff;
+	var col = palette(energy) * lum * falloff;
+	// firewall flare: blend toward an angry crimson + extra glow at the catch
+	let crimsonCol = vec3f(1.0, 0.12, 0.22) * (lum + in.crimson * 1.4) * falloff;
+	col = mix(col, crimsonCol, in.crimson);
 	return vec4f(col, falloff); // premultiplied additive
 }
 `;
@@ -224,7 +281,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 			new Float32Array(partBuf.getMappedRange()).set(partData);
 			partBuf.unmap();
 
-			const uBuf = device.createBuffer({ size: 32, usage: 0x40 | 0x8 }); // UNIFORM | COPY_DST
+			const uBuf = device.createBuffer({ size: 48, usage: 0x40 | 0x8 }); // UNIFORM | COPY_DST (3x vec4)
 
 			const computeMod = device.createShaderModule({ code: COMPUTE_WGSL });
 			const renderMod = device.createShaderModule({ code: RENDER_WGSL });
@@ -302,9 +359,18 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		const t = (now - startedAt) / 1000;
 		const { device, context } = handle.gpu;
 
-		const u = new Float32Array(8);
+		// advance any active reactive effect; clear it once it has faded out
+		if (evtCode !== 0) {
+			evtAge += dt;
+			if (evtAge > EVENT_DURATION) evtCode = 0;
+		}
+		const evtNorm = evtCode === 0 ? 0 : Math.max(0, 1 - evtAge / EVENT_DURATION);
+
+		const u = new Float32Array(12);
 		u[0] = gpuCanvas!.width; u[1] = gpuCanvas!.height; u[2] = clampDpr(1.5); u[3] = reduced ? 1 : 0;
 		u[4] = t; u[5] = dt; u[6] = intensity; u[7] = handle.particleCount;
+		// event vec4: code, fade(1->0), origin handled below via x/y, intensity
+		u[8] = evtCode; u[9] = evtNorm * evtIntensity; u[10] = evtX; u[11] = evtY;
 		device.queue.writeBuffer(handle.uBuf, 0, u);
 
 		const enc = device.createCommandEncoder();
@@ -386,10 +452,13 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		}
 	}
 
+	let unsubFieldEvents: (() => void) | null = null;
+
 	onMount(() => {
 		disposed = false;
 		window.addEventListener('resize', onResize);
 		document.addEventListener('visibilitychange', onVisibility);
+		unsubFieldEvents = onFieldEvent(triggerFieldEvent);
 		if (webgpuAvailable()) {
 			// defer one frame so the route paints before GPU boot work
 			requestAnimationFrame(() => { if (!disposed) tryBootWebgpu(); });
@@ -401,6 +470,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 
 	onDestroy(() => {
 		disposed = true;
+		unsubFieldEvents?.();
 		if (!browser) return; // onDestroy also fires during SSR — no DOM there
 		cancelAnimationFrame(raf);
 		window.removeEventListener('resize', onResize);
