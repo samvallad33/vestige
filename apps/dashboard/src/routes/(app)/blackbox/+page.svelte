@@ -219,14 +219,23 @@
 		];
 		loading = false;
 		error = null;
-		// flash the living field crimson — the firewall catch, made visible
-		emitFieldEvent({ kind: 'firewall', intensity: 1 });
+	}
+
+	// Flash the living field crimson — the firewall catch, made visible. Delayed
+	// so the field has booted (a flash fired mid-boot would be missed), and
+	// re-armed on a loop in demo mode so it's reliably capturable for footage.
+	let demoFlashTimer: ReturnType<typeof setInterval> | null = null;
+	function startFirewallFlash(loop: boolean) {
+		const fire = () => emitFieldEvent({ kind: 'firewall', intensity: 1 });
+		setTimeout(fire, 1200);
+		if (loop) demoFlashTimer = setInterval(fire, 3200);
 	}
 
 	onMount(() => {
 		const params = new URLSearchParams(window.location.search);
 		if (params.get('demo') === 'firewall') {
 			loadFirewallDemo();
+			startFirewallFlash(params.get('loop') === '1');
 			return;
 		}
 		const preferredRunId = params.get('run');
@@ -236,6 +245,7 @@
 	onDestroy(() => {
 		if (liveRefreshTimer) clearTimeout(liveRefreshTimer);
 		if (receiptRetryTimer) clearTimeout(receiptRetryTimer);
+		if (demoFlashTimer) clearInterval(demoFlashTimer);
 	});
 </script>
 

@@ -331,6 +331,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 			});
 
 			mode = 'webgpu';
+			if (bootWatchdog) { clearTimeout(bootWatchdog); bootWatchdog = null; }
 			resize();
 			startedAt = performance.now();
 			lastT = startedAt;
@@ -398,6 +399,9 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 	let fbParts: { x: number; y: number; vx: number; vy: number; e: number }[] = [];
 	function bootFallback() {
 		if (disposed || !fallbackCanvas) return;
+		if (mode === 'fallback' && fbParts.length) return; // idempotent: don't double-start
+		if (bootWatchdog) { clearTimeout(bootWatchdog); bootWatchdog = null; }
+		cancelAnimationFrame(raf); // stop any in-flight loop before switching
 		mode = 'fallback';
 		resize();
 		const n = (globalThis as any).innerWidth < 760 ? 520 : 1400;
@@ -406,6 +410,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 			vx: 0, vy: 0, e: Math.random()
 		}));
 		startedAt = performance.now();
+		fbLastT = 0;
 		raf = requestAnimationFrame(drawFallback);
 	}
 	function fbField(x: number, y: number, t: number): [number, number] {
@@ -413,12 +418,21 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		const a = Math.sin(x * 6.2 + t * 0.3) + Math.cos(y * 5.1 - t * 0.2);
 		return [Math.cos(a * 2.0) * 0.0009, Math.sin(a * 2.0) * 0.0009];
 	}
+	let fbLastT = 0;
 	function drawFallback() {
 		if (disposed || !fallbackCanvas || mode !== 'fallback') return;
 		const ctx = fallbackCanvas.getContext('2d');
 		if (!ctx) return;
 		const w = fallbackCanvas.width, h = fallbackCanvas.height;
-		const t = (performance.now() - startedAt) / 1000;
+		const nowMs = performance.now();
+		const t = (nowMs - startedAt) / 1000;
+		const dt = fbLastT ? Math.min((nowMs - fbLastT) / 1000, 0.05) : 0.016;
+		fbLastT = nowMs;
+		// advance any active reactive event (firewall flash also works here so
+		// pre-iOS-26 / no-WebGPU users still see the catch)
+		if (evtCode !== 0) { evtAge += dt; if (evtAge > EVENT_DURATION) evtCode = 0; }
+		const fwFade = evtCode === 1 ? Math.max(0, 1 - evtAge / EVENT_DURATION) * evtIntensity : 0;
+		const ox = (evtX + 1) * 0.5, oy = (1 - evtY) * 0.5; // back to [0,1]
 		ctx.fillStyle = 'rgba(5,3,13,0.18)'; // trail fade on void
 		ctx.fillRect(0, 0, w, h);
 		ctx.globalCompositeOperation = 'lighter';
@@ -426,17 +440,28 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 			const [fx, fy] = fbField(p.x, p.y, t);
 			p.vx = p.vx * 0.92 + fx * (reduced ? 0.3 : 1);
 			p.vy = p.vy * 0.92 + fy * (reduced ? 0.3 : 1);
+			// firewall shockwave: push outward from the origin
+			let crimson = 0;
+			if (fwFade > 0) {
+				const dx = p.x - ox, dy = p.y - oy;
+				const dist = Math.hypot(dx, dy) + 1e-4;
+				const reach = Math.exp(-dist * 2.2) * fwFade;
+				p.vx += (dx / dist) * reach * 0.01;
+				p.vy += (dy / dist) * reach * 0.01;
+				crimson = Math.min(reach * 1.6, 1);
+			}
 			p.x += p.vx; p.y += p.vy;
 			if (p.x < 0) p.x += 1; if (p.x > 1) p.x -= 1;
 			if (p.y < 0) p.y += 1; if (p.y > 1) p.y -= 1;
 			const sp = Math.hypot(p.vx, p.vy) * 220;
 			const energy = Math.min(0.3 + sp + p.e * 0.4, 1);
-			// violet ramp matching the WGSL palette
-			const r = Math.floor(26 + energy * 209);
-			const g = Math.floor(13 + energy * 70);
-			const b = Math.floor(71 + energy * 146);
-			ctx.fillStyle = `rgba(${r},${g},${b},${0.5 * energy})`;
-			ctx.fillRect(p.x * w, p.y * h, 2.2, 2.2);
+			// violet ramp matching the WGSL palette, blended toward crimson on a catch
+			const vr = 26 + energy * 209, vg = 13 + energy * 70, vb = 71 + energy * 146;
+			const r = Math.floor(vr + (255 - vr) * crimson);
+			const g = Math.floor(vg + (30 - vg) * crimson);
+			const b = Math.floor(vb + (56 - vb) * crimson);
+			ctx.fillStyle = `rgba(${r},${g},${b},${(0.5 + crimson * 0.4) * energy})`;
+			ctx.fillRect(p.x * w, p.y * h, 2.2 + crimson * 1.5, 2.2 + crimson * 1.5);
 		}
 		ctx.globalCompositeOperation = 'source-over';
 		raf = requestAnimationFrame(drawFallback);
@@ -453,6 +478,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 	}
 
 	let unsubFieldEvents: (() => void) | null = null;
+	let bootWatchdog: ReturnType<typeof setTimeout> | null = null;
 
 	onMount(() => {
 		disposed = false;
@@ -462,6 +488,12 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		if (webgpuAvailable()) {
 			// defer one frame so the route paints before GPU boot work
 			requestAnimationFrame(() => { if (!disposed) tryBootWebgpu(); });
+			// Watchdog: if WebGPU hasn't actually started rendering within 6s (a
+			// slow/contended GPU or a hung device request), fall back to Canvas2D
+			// so the field is never stuck on the static gradient.
+			bootWatchdog = setTimeout(() => {
+				if (!disposed && mode === 'booting') bootFallback();
+			}, 6000);
 		} else {
 			bootFallback();
 		}
@@ -471,6 +503,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 	onDestroy(() => {
 		disposed = true;
 		unsubFieldEvents?.();
+		if (bootWatchdog) { clearTimeout(bootWatchdog); bootWatchdog = null; }
 		if (!browser) return; // onDestroy also fires during SSR — no DOM there
 		cancelAnimationFrame(raf);
 		window.removeEventListener('resize', onResize);
