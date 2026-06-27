@@ -19,6 +19,9 @@
 	// The active reactive effect (a firewall catch / decay / birth). `code` is the
 	// shader uniform; `age` counts up in seconds and the effect fades out by
 	// EVENT_DURATION, after which code resets to 0. Pointer/origin in clip space.
+	// These animation/event vars are intentionally plain `let`, NOT $state: they're
+	// read only from imperative rAF callbacks (never a reactive/template context),
+	// so reactivity would be pure overhead. Don't bind them in markup (L1).
 	const EVENT_DURATION = 1.6;
 	let evtCode = 0;
 	let evtAge = 0;
@@ -35,9 +38,13 @@
 	}
 
 	interface Props {
-		/** particle budget at full tier; auto-scaled down for weak GPUs / mobile */
+		/**
+		 * Particle budget at full tier; auto-scaled down for weak GPUs / mobile.
+		 * NOTE: read ONCE at GPU boot (sizes the buffer) — changing it at runtime
+		 * has no effect until remount. `intensity` is the live, per-frame knob (H4).
+		 */
 		count?: number;
-		/** 0..1 ambient intensity — higher = brighter, faster drift */
+		/** 0..1 ambient intensity — live per-frame: higher = brighter, faster drift */
 		intensity?: number;
 		class?: string;
 	}
@@ -50,7 +57,10 @@
 	const WORKGROUP = 64;
 	// Guard every browser-global behind `browser`: this component server-side
 	// renders, and prefersReducedMotion / matchMedia don't exist on the server.
-	const reduced = browser ? prefersReducedMotion() : false;
+	// Reactive ($state) + a media-query listener so toggling the OS reduced-motion
+	// setting mid-session takes effect on the next frame (was a const snapshot at
+	// init that never updated). Read live in the draw loops + pickCount.
+	let reduced = $state(browser ? prefersReducedMotion() : false);
 
 	// ---- WGSL: curl-noise particle field -------------------------------------
 	// Particles advect through a divergence-free (curl-of-noise) flow so the field
@@ -256,6 +266,11 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 	let disposed = false;
 	let startedAt = 0;
 	let lastT = 0;
+	// Active-seconds clock for the shader noise time: accumulated by dt ONLY while
+	// drawing, so a backgrounded tab doesn't fast-forward the curl flow and make it
+	// snap to a new direction on resume (H2 — wall-clock t had this bug). evtAge
+	// already uses per-frame accumulation; this gives the noise potential the same.
+	let activeT = 0;
 
 	// Tracks whether the tick() chain is currently live, so any caller can ask to
 	// (re)start the loop without risking a second parallel chain. `tick` clears it
@@ -332,6 +347,18 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		// no longer 'booting' (or we were disposed) abort so we don't start a 2nd loop.
 		if (disposed || mode !== 'booting') { releaseBuffers(partBuf, uBuf); return; }
 		if (!gpu) { bootFallback(); return; }
+		// Register device-loss BEFORE pipeline creation so a loss during the async
+		// pipeline build still triggers the fallback (M7 — was registered after the
+		// handle, leaving a race window). Guard with a flag so we don't double-fall.
+		let lostHandled = false;
+		const onDeviceLost = () => {
+			if (disposed || lostHandled) return;
+			lostHandled = true;
+			releaseBuffers(partBuf, uBuf);
+			handle = null;
+			bootFallback();
+		};
+		gpu.device.lost?.then?.(onDeviceLost);
 		try {
 			const device = gpu.device;
 			const particleCount = pickCount();
@@ -387,13 +414,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 				]
 			});
 			handle = { gpu, partBuf, uBuf, computePipe, renderPipe, computeBind, renderBind, particleCount };
-
-			gpu.device.lost?.then?.(() => {
-				if (disposed) return;
-				releaseBuffers(); // destroy this handle's buffers before dropping it
-				handle = null;
-				bootFallback();
-			});
+			// device.lost handler already registered above (M7), before pipeline build.
 
 			mode = 'webgpu';
 			if (bootWatchdog) { clearTimeout(bootWatchdog); bootWatchdog = null; }
@@ -436,7 +457,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 			const now = performance.now();
 			const dt = Math.min((now - lastT) / 1000, 0.05);
 			lastT = now;
-			const t = (now - startedAt) / 1000;
+			activeT += dt; // monotonic active-time (no tab-hidden jump) for the noise clock
 			const { device, context } = handle.gpu;
 
 			// advance any active reactive effect; clear it once it has faded out
@@ -448,7 +469,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 
 			const u = new Float32Array(12);
 			u[0] = gpuCanvas!.width; u[1] = gpuCanvas!.height; u[2] = clampDpr(1.5); u[3] = reduced ? 1 : 0;
-			u[4] = t; u[5] = dt; u[6] = intensity; u[7] = handle.particleCount;
+			u[4] = activeT; u[5] = dt; u[6] = intensity; u[7] = handle.particleCount;
 			// event vec4: code, fade(1->0), origin handled below via x/y, intensity
 			u[8] = evtCode; u[9] = evtNorm * evtIntensity; u[10] = evtX; u[11] = evtY;
 			device.queue.writeBuffer(handle.uBuf, 0, u);
@@ -482,12 +503,14 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 
 	// ---- Canvas2D fallback (no WebGPU: pre-iOS-26 iPhones, old GPUs) ----------
 	let fbParts: { x: number; y: number; vx: number; vy: number; e: number }[] = [];
+	let fbCtx: CanvasRenderingContext2D | null = null; // cached once (M3 — was per-frame)
 	function bootFallback() {
 		if (disposed || !fallbackCanvas) return;
 		if (mode === 'fallback' && fbParts.length) return; // idempotent: don't double-start
 		if (bootWatchdog) { clearTimeout(bootWatchdog); bootWatchdog = null; }
 		mode = 'fallback';
 		resize();
+		fbCtx = fallbackCanvas.getContext('2d');
 		const n = (globalThis as any).innerWidth < 760 ? 520 : 1400;
 		fbParts = Array.from({ length: n }, () => ({
 			x: Math.random(), y: Math.random(),
@@ -495,6 +518,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		}));
 		startedAt = performance.now();
 		fbLastT = 0;
+		lastT = performance.now(); // defensive: if WebGPU later recovers, no giant dt (L4)
 		// startLoop() is a no-op if the chain is already live (e.g. called from
 		// drawWebgpu's catch inside tick) — tick simply routes to drawFallback
 		// next frame. When called cold (watchdog / no-WebGPU) it starts the chain.
@@ -508,17 +532,22 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 	let fbLastT = 0;
 	function drawFallback() {
 		if (disposed || !fallbackCanvas || mode !== 'fallback') return;
-		const ctx = fallbackCanvas.getContext('2d');
+		const ctx = fbCtx ?? (fbCtx = fallbackCanvas.getContext('2d')); // cached (M3)
 		if (!ctx) return;
 		const w = fallbackCanvas.width, h = fallbackCanvas.height;
 		const nowMs = performance.now();
-		const t = (nowMs - startedAt) / 1000;
 		const dt = fbLastT ? Math.min((nowMs - fbLastT) / 1000, 0.05) : 0.016;
 		fbLastT = nowMs;
-		// advance any active reactive event (firewall flash also works here so
-		// pre-iOS-26 / no-WebGPU users still see the catch)
+		activeT += dt; // shared active-time clock (no tab-hidden jump)
+		const t = activeT;
+		// advance any active reactive event. ALL three kinds (firewall/decay/birth)
+		// are honored here so pre-iOS-26 / no-WebGPU users get full event parity
+		// with the WGSL path (H1 — only firewall used to fire).
 		if (evtCode !== 0) { evtAge += dt; if (evtAge > EVENT_DURATION) evtCode = 0; }
-		const fwFade = evtCode === 1 ? Math.max(0, 1 - evtAge / EVENT_DURATION) * evtIntensity : 0;
+		const evtFade = evtCode !== 0 ? Math.max(0, 1 - evtAge / EVENT_DURATION) * evtIntensity : 0;
+		const fwFade = evtCode === 1 ? evtFade : 0;   // firewall: crimson + outward shock
+		const decayFade = evtCode === 2 ? evtFade : 0; // decay: inward pull + damp
+		const birthFade = evtCode === 3 ? evtFade : 0; // birth: gentle outward bloom
 		const ox = (evtX + 1) * 0.5, oy = (1 - evtY) * 0.5; // back to [0,1]
 		ctx.fillStyle = 'rgba(5,3,13,0.18)'; // trail fade on void
 		ctx.fillRect(0, 0, w, h);
@@ -531,15 +560,31 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 			// scale the flow force by the ambient `intensity` prop (was ignored)
 			p.vx = p.vx * 0.92 + fx * (reduced ? 0.3 : 1) * intensity;
 			p.vy = p.vy * 0.92 + fy * (reduced ? 0.3 : 1) * intensity;
-			// firewall shockwave: push outward from the origin
+			// scoped event impulses from the origin (mirror the WGSL compute branches)
 			let crimson = 0;
-			if (fwFade > 0) {
+			if (evtFade > 0) {
 				const dx = p.x - ox, dy = p.y - oy;
 				const dist = Math.hypot(dx, dy) + 1e-4;
-				const reach = Math.exp(-dist * 2.2) * fwFade;
-				p.vx += (dx / dist) * reach * 0.01 * fstep;
-				p.vy += (dy / dist) * reach * 0.01 * fstep;
-				crimson = Math.min(reach * 1.6, 1);
+				const ux = dx / dist, uy = dy / dist;
+				if (fwFade > 0) {
+					// firewall: hard outward shockwave + crimson flare at the catch
+					const reach = Math.exp(-dist * 2.2) * fwFade;
+					p.vx += ux * reach * 0.01 * fstep;
+					p.vy += uy * reach * 0.01 * fstep;
+					crimson = Math.min(reach * 1.6, 1);
+				} else if (decayFade > 0) {
+					// decay: pull inward + damp (cold collapse)
+					const reach = Math.exp(-dist * 2.2) * decayFade;
+					p.vx -= ux * reach * 0.006 * fstep;
+					p.vy -= uy * reach * 0.006 * fstep;
+					p.vx *= 1 - reach * 0.5 * Math.min(fstep, 2);
+					p.vy *= 1 - reach * 0.5 * Math.min(fstep, 2);
+				} else if (birthFade > 0) {
+					// birth: gentle outward bloom
+					const reach = Math.exp(-dist * 2.2) * birthFade;
+					p.vx += ux * reach * 0.005 * fstep;
+					p.vy += uy * reach * 0.005 * fstep;
+				}
 			}
 			p.x += p.vx * fstep; p.y += p.vy * fstep;
 			if (p.x < 0) p.x += 1; if (p.x > 1) p.x -= 1;
@@ -558,7 +603,13 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		// NOTE: no rAF here — tick() owns scheduling.
 	}
 
-	function onResize() { resize(); }
+	// Coalesce resize bursts (window drags fire dozens/sec) to one resize per frame
+	// so we don't thrash the swapchain config + Canvas2D backing store (M4).
+	let resizeRaf = 0;
+	function onResize() {
+		if (resizeRaf) return;
+		resizeRaf = requestAnimationFrame(() => { resizeRaf = 0; if (!disposed) resize(); });
+	}
 	function onVisibility() {
 		if (document.hidden) {
 			stopLoop();
@@ -573,11 +624,17 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 
 	let unsubFieldEvents: (() => void) | null = null;
 	let bootWatchdog: ReturnType<typeof setTimeout> | null = null;
+	let reducedMq: MediaQueryList | null = null;
+	function onReducedChange() { reduced = !!reducedMq?.matches; }
 
 	onMount(() => {
 		disposed = false;
 		window.addEventListener('resize', onResize);
 		document.addEventListener('visibilitychange', onVisibility);
+		// Live-track the reduced-motion preference so a mid-session OS toggle is
+		// honored on the next frame (H3).
+		reducedMq = window.matchMedia('(prefers-reduced-motion: reduce)');
+		reducedMq.addEventListener('change', onReducedChange);
 		unsubFieldEvents = onFieldEvent(triggerFieldEvent);
 		if (webgpuAvailable()) {
 			// defer one frame so the route paints before GPU boot work
@@ -591,7 +648,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		} else {
 			bootFallback();
 		}
-		return () => {};
+		// teardown lives in onDestroy (single cleanup path) — no return here (L2).
 	});
 
 	onDestroy(() => {
@@ -600,8 +657,11 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		if (bootWatchdog) { clearTimeout(bootWatchdog); bootWatchdog = null; }
 		if (!browser) return; // onDestroy also fires during SSR — no DOM there
 		stopLoop();
+		if (resizeRaf) { cancelAnimationFrame(resizeRaf); resizeRaf = 0; }
 		window.removeEventListener('resize', onResize);
 		document.removeEventListener('visibilitychange', onVisibility);
+		reducedMq?.removeEventListener('change', onReducedChange);
+		fbCtx = null;
 		releaseBuffers(); // destroy GPU buffers so they don't outlive the component
 		handle = null;
 	});
