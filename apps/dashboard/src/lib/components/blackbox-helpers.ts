@@ -26,6 +26,10 @@ export function eventColor(kind: TraceKind): string {
 			return '#f43f5e'; // red — a block
 		case 'dream.patch':
 			return '#c084fc'; // purple — dream
+		case 'memory.quarantine':
+			return '#ef4444'; // danger red — the Microglial Firewall caught a threat
+		case 'episode.boundary':
+			return 'var(--color-text-dim, #8b8ba7)'; // muted — a phase divider, not an action
 		default:
 			return 'var(--color-synapse, #6366f1)';
 	}
@@ -48,6 +52,10 @@ export function eventLabel(kind: TraceKind): string {
 			return 'Veto';
 		case 'dream.patch':
 			return 'Dream Patch';
+		case 'memory.quarantine':
+			return 'Microglial Firewall';
+		case 'episode.boundary':
+			return 'Episode';
 		default:
 			return kind;
 	}
@@ -70,6 +78,10 @@ export function eventGlyph(kind: TraceKind): string {
 			return '⛔';
 		case 'dream.patch':
 			return '☾';
+		case 'memory.quarantine':
+			return '🛡'; // shield — the firewall held
+		case 'episode.boundary':
+			return '⚑'; // flag — a phase marker
 		default:
 			return '•';
 	}
@@ -92,6 +104,10 @@ export function eventSummary(ev: TraceEvent): string {
 			return `"${ev.claim}" (conf ${(ev.confidence * 100).toFixed(0)}%)`;
 		case 'dream.patch':
 			return `${ev.proposalIds.length} consolidation proposal(s)`;
+		case 'memory.quarantine':
+			return `${ev.threat} (${ev.reason.replace(/_/g, ' ')})`;
+		case 'episode.boundary':
+			return ev.label;
 		default:
 			return '';
 	}
@@ -111,7 +127,10 @@ export function eventMemoryIds(ev: TraceEvent): string[] {
 			return ev.evidenceIds;
 		case 'dream.patch':
 			return ev.proposalIds;
+		case 'memory.quarantine':
+			return [ev.id];
 		default:
+			// episode.boundary touches no memory — it is a pure phase marker.
 			return [];
 	}
 }

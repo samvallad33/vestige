@@ -227,7 +227,14 @@ export type TraceEvent =
 	| { type: 'memory.write'; runId: string; id: string; diff: unknown; source: string; at: number }
 	| { type: 'contradiction.detected'; runId: string; ids: string[]; winnerId?: string; detail: string; at: number }
 	| { type: 'sanhedrin.veto'; runId: string; claim: string; evidenceIds: string[]; confidence: number; at: number }
-	| { type: 'dream.patch'; runId: string; proposalIds: string[]; at: number };
+	| { type: 'dream.patch'; runId: string; proposalIds: string[]; at: number }
+	// NeuroRuntime v0 — the Microglial Firewall caught a poisoned write. `reason`
+	// is a machine code (prompt_injection, exfiltration, …); `threat` is human
+	// prose; `influenceAllowed` is ALWAYS false (a quarantine means zero reach).
+	| { type: 'memory.quarantine'; runId: string; id: string; reason: string; threat: string; influenceAllowed: boolean; at: number }
+	// A readable phase divider in the run. `episode` is a stable id
+	// (ep_install, ep_debug); `label` is human ("Installing", "Debugging").
+	| { type: 'episode.boundary'; runId: string; episode: string; label: string; at: number };
 
 export type TraceDetail = {
 	runId: string;
@@ -243,6 +250,13 @@ export type Receipt = {
 	trust_floor: number;
 	decay_risk: 'low' | 'medium' | 'high';
 	mutations: { id: string; kind: string; note?: string }[];
+	// NeuroRuntime v0 — additive, optional fields. Mirror the Rust serde output:
+	// `quarantined` and `engram_phases` are skipped when empty; `influence_allowed`
+	// defaults to `true` and is omitted by old receipts, so treat `undefined` as
+	// "clean / nothing blocked".
+	quarantined?: { id: string; reason: string; threat: string }[];
+	influence_allowed?: boolean;
+	engram_phases?: Record<string, string>;
 };
 
 export type ReceiptListResponse = { total: number; receipts: Receipt[] };
