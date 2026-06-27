@@ -77,9 +77,18 @@ function buildEmail(link: string, xIntent: string) {
 }
 
 Deno.serve(async (req) => {
-  // optional shared-secret check
+  // Mandatory shared-secret check (fail closed). If WAITLIST_WEBHOOK_SECRET is
+  // not configured, refuse to serve — an unauthenticated, internet-reachable
+  // function that sends Resend email is an open relay / abuse vector.
   const expected = Deno.env.get("WAITLIST_WEBHOOK_SECRET");
-  if (expected && req.headers.get("x-webhook-secret") !== expected) {
+  if (!expected) {
+    console.error("WAITLIST_WEBHOOK_SECRET not set; refusing to serve");
+    return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (req.headers.get("x-webhook-secret") !== expected) {
     return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
@@ -101,6 +110,25 @@ Deno.serve(async (req) => {
   if (!email || !code) {
     // Nothing to send; ack so the webhook doesn't retry forever.
     return new Response(JSON.stringify({ ok: true, skipped: "no email/code" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  // Validate inputs before they reach the email HTML / Resend. The referral
+  // code is interpolated into HTML and a share URL, so constrain it to the
+  // generator's charset (gen_referral_code: [a-z2-9], 7 chars). Cap the email
+  // length so an oversized address can't be passed to Resend. Both fields are
+  // already validated upstream by join_waitlist; this is defense in depth in
+  // case the webhook payload is spoofed or the schema drifts.
+  if (!/^[a-z2-9]{7}$/.test(code)) {
+    return new Response(JSON.stringify({ ok: true, skipped: "bad code" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (email.length > 254) {
+    return new Response(JSON.stringify({ ok: true, skipped: "bad email" }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

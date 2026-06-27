@@ -31,12 +31,14 @@ create index if not exists waitlist_referred_by_idx
 
 alter table public.waitlist enable row level security;
 
+-- SECURITY: no direct anon INSERT policy. A `with check (true)` policy would
+-- let the anon key write ARBITRARY rows straight into the table, bypassing all
+-- of join_waitlist's validation (email shape, length caps, control-char
+-- rejection, referral-code generation, dedupe). The ONLY anon write path is the
+-- `security definer` join_waitlist RPC (granted to anon below), which enforces
+-- every invariant. RLS is enabled with no permissive INSERT policy, so direct
+-- INSERTs from the anon role are denied by default.
 drop policy if exists "anon can insert" on public.waitlist;
-create policy "anon can insert"
-  on public.waitlist
-  for insert
-  to anon
-  with check (true);
 
 create or replace function public.gen_referral_code()
 returns text
@@ -74,8 +76,21 @@ declare
   v_ref   text := nullif(trim(coalesce(p_referred_by, '')), '');
   v_dup   boolean := false;
 begin
+  -- Abuse / length guards. Per-IP rate limiting needs Supabase edge config
+  -- (e.g. a gateway rule or pg_net-based throttle) and is tracked separately;
+  -- at the DB layer we cap field lengths and reject control characters so a
+  -- single request can't store oversized or malformed payloads.
+  if length(v_email) > 254 then
+    raise exception 'invalid email';
+  end if;
+  if v_email ~ '[\x00-\x1f\x7f]' then
+    raise exception 'invalid email';
+  end if;
   if v_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then
     raise exception 'invalid email';
+  end if;
+  if p_referrer is not null and length(p_referrer) > 2048 then
+    p_referrer := left(p_referrer, 2048);
   end if;
 
   select w.referral_code into v_code

@@ -24,8 +24,34 @@
 					"value": "public, max-age=0, must-revalidate"
 				}
 			]
+		},
+		{
+			"source": "/(.*)",
+			"headers": [
+				{
+					"key": "X-Content-Type-Options",
+					"value": "nosniff"
+				},
+				{
+					"key": "Referrer-Policy",
+					"value": "strict-origin-when-cross-origin"
+				},
+				{
+					"key": "X-Frame-Options",
+					"value": "DENY"
+				},
+				{
+					"key": "Strict-Transport-Security",
+					"value": "max-age=63072000; includeSubDomains"
+				},
+				{
+					"key": "Permissions-Policy",
+					"value": "camera=(), microphone=(), geolocation=()"
+				}
+			]
 		}
 	],
+	"_csp_note": "CSP TODO: the WebGPU launch page uses SvelteKit inline bootstrap scripts (and likely inline styles); a strict Content-Security-Policy needs nonces/hashes wired through the SvelteKit adapter or it will break the page. Omitting CSP intentionally rather than shipping one that blocks the launch hero. Add later via svelte.config kit.csp once script/style sources are enumerated.",
 	"redirects": [
 		{
 			"source": "/dashboard/launch",
