@@ -113,7 +113,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 	let rm = u.viewport.w;
 	let speed = mix(1.0, 0.18, rm) * u.params.z;
 	let flow = curlFlow(pr.pos.xyz * 1.1);
-	pr.vel = vec4f(mix(pr.vel.xyz, flow * 0.6, 0.06), pr.vel.w);
+	// Frame-rate-independent absorption toward the flow. 0.06/frame at 60fps =>
+	// rate 3.7/s; exp form keeps the feel identical at 60fps but correct on
+	// 120Hz ProMotion / 30fps throttle (was a fixed per-frame lerp -> 2x snappier
+	// at 120Hz). u.params.y is dt.
+	let absorb = 1.0 - exp(-u.params.y * 3.7);
+	pr.vel = vec4f(mix(pr.vel.xyz, flow * 0.6, absorb), pr.vel.w);
 
 	// --- reactive event impulse (scoped to the event origin) -----------------
 	let ecode = u.event.x;
@@ -169,12 +174,17 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut
 	);
 	let c = corners[vi];
 	let p = parts[ii];
-	let aspect = u.viewport.x / max(u.viewport.y, 1.0);
 	// gentle parallax depth so the cloud reads volumetric
 	let depth = 1.7 + p.pos.z * 0.5;
 	let sizePx = (2.6 + p.pos.w * 3.4) / depth;
-	var ndc = vec2f(p.pos.x / aspect, p.pos.y);
-	ndc = ndc + c * vec2f(sizePx * 0.01 / aspect, sizePx * 0.01);
+	// Position fills the FULL clip box [-1,1]^2 — do NOT divide x by aspect
+	// (that squashed the field into the center ~56% on 16:9). Roundness comes
+	// from the corner offset instead: convert sizePx (device px) to NDC per
+	// axis via px2ndc = 2/viewport, so the quad is sizePx x sizePx px and round
+	// on any aspect ratio.
+	var ndc = vec2f(p.pos.x, p.pos.y);
+	let px2ndc = vec2f(2.0 / max(u.viewport.x, 1.0), 2.0 / max(u.viewport.y, 1.0));
+	ndc = ndc + c * (px2ndc * sizePx);
 	let speed = length(p.vel.xyz);
 	var out: VsOut;
 	out.clip = vec4f(ndc, 0.0, 1.0);
@@ -185,7 +195,12 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut
 	// "angry" block. Crimson is reserved ONLY for this; nothing else turns red.
 	var crimson = 0.0;
 	if (u.event.x > 0.5 && u.event.x < 1.5) {
-		let d = length(p.pos.xy - vec2f(u.event.z, u.event.w));
+		// p.pos.xy and the event origin (u.event.zw) are now in the SAME clip
+		// space (no aspect divide on position), so the flare lands exactly on
+		// the catch origin. Aspect-correct the distance so the halo is circular
+		// on wide screens rather than an x-stretched ellipse.
+		let aspect = u.viewport.x / max(u.viewport.y, 1.0);
+		let d = length((p.pos.xy - vec2f(u.event.z, u.event.w)) * vec2f(aspect, 1.0));
 		crimson = exp(-d * 1.6) * u.event.y;
 	}
 	out.crimson = clamp(crimson, 0.0, 1.0);
