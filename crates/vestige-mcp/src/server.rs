@@ -2529,10 +2529,10 @@ mod tests {
         // Drain the broadcast: at least one TraceEvent for run_ws must arrive.
         let mut saw_trace = false;
         while let Ok(ev) = event_rx.try_recv() {
-            if let VestigeEvent::TraceEvent { run_id, .. } = ev {
-                if run_id == "run_ws" {
-                    saw_trace = true;
-                }
+            if let VestigeEvent::TraceEvent { run_id, .. } = ev
+                && run_id == "run_ws"
+            {
+                saw_trace = true;
             }
         }
         assert!(

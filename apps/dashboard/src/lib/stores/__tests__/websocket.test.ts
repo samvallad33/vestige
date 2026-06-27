@@ -106,7 +106,8 @@ describe('injectEvent', () => {
 		websocket.injectEvent(evt);
 		const feed = get(eventFeed);
 		expect(feed.length).toBe(1);
-		expect(feed[0]).toEqual(evt);
+		// injectEvent tags injected events with source:'synthetic' (websocket.ts).
+		expect(feed[0]).toEqual({ ...evt, source: 'synthetic' });
 	});
 
 	it('prepends: newest injected ends up at index 0', () => {
@@ -118,9 +119,10 @@ describe('injectEvent', () => {
 		websocket.injectEvent(third);
 		const feed = get(eventFeed);
 		expect(feed.length).toBe(3);
-		expect(feed[0]).toEqual(third);
-		expect(feed[1]).toEqual(second);
-		expect(feed[2]).toEqual(first);
+		// injectEvent tags injected events with source:'synthetic' (websocket.ts).
+		expect(feed[0]).toEqual({ ...third, source: 'synthetic' });
+		expect(feed[1]).toEqual({ ...second, source: 'synthetic' });
+		expect(feed[2]).toEqual({ ...first, source: 'synthetic' });
 	});
 
 	it('caps the events array at MAX_EVENTS (200)', () => {
@@ -171,7 +173,8 @@ describe('injectEvent', () => {
 		websocket.injectEvent(hb);
 		const feed = get(eventFeed);
 		expect(feed.length).toBe(1);
-		expect(feed[0]).toEqual(hb);
+		// injectEvent tags injected events with source:'synthetic' (websocket.ts).
+		expect(feed[0]).toEqual({ ...hb, source: 'synthetic' });
 		// memoryCount still 0 because lastHeartbeat was never written.
 		expect(get(memoryCount)).toBe(0);
 		expect(get(heartbeat)).toBeNull();
