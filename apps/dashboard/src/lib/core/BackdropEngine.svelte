@@ -238,6 +238,42 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 	let startedAt = 0;
 	let lastT = 0;
 
+	// Tracks whether the tick() chain is currently live, so any caller can ask to
+	// (re)start the loop without risking a second parallel chain. `tick` clears it
+	// only when it actually stops (disposed); otherwise it keeps re-scheduling.
+	let running = false;
+
+	// Single rAF dispatcher: the ONLY place the draw loop is scheduled. Routing
+	// through one tick() means a mode switch, a mid-frame fallback, or a
+	// visibility change can never leave two self-scheduling chains racing.
+	function tick() {
+		if (disposed) { running = false; return; }
+		if (mode === 'webgpu') drawWebgpu();
+		else if (mode === 'fallback') drawFallback();
+		raf = requestAnimationFrame(tick);
+	}
+	// Idempotent loop starter: starts the chain only if it isn't already running,
+	// so a mid-frame bootFallback() (from drawWebgpu's catch) does NOT stack a
+	// second chain on top of the one tick() is about to schedule itself.
+	function startLoop() {
+		if (disposed || running) return;
+		running = true;
+		cancelAnimationFrame(raf);
+		raf = requestAnimationFrame(tick);
+	}
+	function stopLoop() {
+		running = false;
+		cancelAnimationFrame(raf);
+	}
+
+	// Destroy any GPU buffers we may have created. Safe to call with either the
+	// committed `handle` or the in-flight boot locals — every early return,
+	// catch, and device-loss path funnels through here so a buffer can never leak.
+	function releaseBuffers(partBuf?: any, uBuf?: any) {
+		try { (partBuf ?? handle?.partBuf)?.destroy?.(); } catch {}
+		try { (uBuf ?? handle?.uBuf)?.destroy?.(); } catch {}
+	}
+
 	function pickCount(): number {
 		const small = (globalThis as any).innerWidth < 760;
 		let n = small ? Math.min(count, 12000) : count;
@@ -265,15 +301,23 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 	}
 
 	async function tryBootWebgpu() {
-		if (disposed || !gpuCanvas) return;
+		// Bail if the watchdog already handed control to Canvas2D (or we were
+		// disposed) before we even started — a late boot must never re-take over.
+		if (mode !== 'booting' || disposed || !gpuCanvas) return;
+		// Buffers tracked in locals so any early exit can release them before they
+		// ever reach `handle` (otherwise they leak on every late-return path).
+		let partBuf: any;
+		let uBuf: any;
 		const gpu = await bootVestigeGpu(gpuCanvas);
-		if (disposed) return;
+		// A 6s boot can resolve after the watchdog fired bootFallback(): if mode is
+		// no longer 'booting' (or we were disposed) abort so we don't start a 2nd loop.
+		if (disposed || mode !== 'booting') { releaseBuffers(partBuf, uBuf); return; }
 		if (!gpu) { bootFallback(); return; }
 		try {
 			const device = gpu.device;
 			const particleCount = pickCount();
 			const partData = buildParticles(particleCount);
-			const partBuf = device.createBuffer({
+			partBuf = device.createBuffer({
 				size: partData.byteLength,
 				usage: 0x80 | 0x8, // STORAGE | COPY_DST
 				mappedAtCreation: true
@@ -281,7 +325,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 			new Float32Array(partBuf.getMappedRange()).set(partData);
 			partBuf.unmap();
 
-			const uBuf = device.createBuffer({ size: 48, usage: 0x40 | 0x8 }); // UNIFORM | COPY_DST (3x vec4)
+			uBuf = device.createBuffer({ size: 48, usage: 0x40 | 0x8 }); // UNIFORM | COPY_DST (3x vec4)
 
 			const computeMod = device.createShaderModule({ code: COMPUTE_WGSL });
 			const renderMod = device.createShaderModule({ code: RENDER_WGSL });
@@ -289,6 +333,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 				layout: 'auto',
 				compute: { module: computeMod, entryPoint: 'main' }
 			});
+			if (disposed || mode !== 'booting') { releaseBuffers(partBuf, uBuf); return; }
 			const renderPipe = await device.createRenderPipelineAsync({
 				layout: 'auto',
 				vertex: { module: renderMod, entryPoint: 'vs' },
@@ -307,7 +352,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 				},
 				primitive: { topology: 'triangle-list' }
 			});
-			if (disposed) return;
+			if (disposed || mode !== 'booting') { releaseBuffers(partBuf, uBuf); return; }
 			const computeBind = device.createBindGroup({
 				layout: computePipe.getBindGroupLayout(0),
 				entries: [
@@ -326,6 +371,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 
 			gpu.device.lost?.then?.(() => {
 				if (disposed) return;
+				releaseBuffers(); // destroy this handle's buffers before dropping it
 				handle = null;
 				bootFallback();
 			});
@@ -335,8 +381,9 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 			resize();
 			startedAt = performance.now();
 			lastT = startedAt;
-			raf = requestAnimationFrame(drawWebgpu);
+			startLoop();
 		} catch {
+			releaseBuffers(partBuf, uBuf); // pipelines/binds may have failed mid-build
 			bootFallback();
 		}
 	}
@@ -346,6 +393,18 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		if (mode === 'webgpu' && gpuCanvas) {
 			gpuCanvas.width = Math.floor(gpuCanvas.clientWidth * dpr);
 			gpuCanvas.height = Math.floor(gpuCanvas.clientHeight * dpr);
+			// Resizing the canvas drops the swapchain's configuration; re-apply it
+			// (same premultiplied alpha bootVestigeGpu used) or the next frame
+			// renders against a stale-sized / unconfigured context.
+			if (handle) {
+				try {
+					handle.gpu.context.configure({
+						device: handle.gpu.device,
+						format: handle.gpu.format,
+						alphaMode: 'premultiplied'
+					});
+				} catch {}
+			}
 		} else if (fallbackCanvas) {
 			fallbackCanvas.width = Math.floor(fallbackCanvas.clientWidth * Math.min(dpr, 1.25));
 			fallbackCanvas.height = Math.floor(fallbackCanvas.clientHeight * Math.min(dpr, 1.25));
@@ -354,45 +413,52 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 
 	function drawWebgpu() {
 		if (disposed || !handle || mode !== 'webgpu') return;
-		const now = performance.now();
-		const dt = Math.min((now - lastT) / 1000, 0.05);
-		lastT = now;
-		const t = (now - startedAt) / 1000;
-		const { device, context } = handle.gpu;
+		try {
+			const now = performance.now();
+			const dt = Math.min((now - lastT) / 1000, 0.05);
+			lastT = now;
+			const t = (now - startedAt) / 1000;
+			const { device, context } = handle.gpu;
 
-		// advance any active reactive effect; clear it once it has faded out
-		if (evtCode !== 0) {
-			evtAge += dt;
-			if (evtAge > EVENT_DURATION) evtCode = 0;
+			// advance any active reactive effect; clear it once it has faded out
+			if (evtCode !== 0) {
+				evtAge += dt;
+				if (evtAge > EVENT_DURATION) evtCode = 0;
+			}
+			const evtNorm = evtCode === 0 ? 0 : Math.max(0, 1 - evtAge / EVENT_DURATION);
+
+			const u = new Float32Array(12);
+			u[0] = gpuCanvas!.width; u[1] = gpuCanvas!.height; u[2] = clampDpr(1.5); u[3] = reduced ? 1 : 0;
+			u[4] = t; u[5] = dt; u[6] = intensity; u[7] = handle.particleCount;
+			// event vec4: code, fade(1->0), origin handled below via x/y, intensity
+			u[8] = evtCode; u[9] = evtNorm * evtIntensity; u[10] = evtX; u[11] = evtY;
+			device.queue.writeBuffer(handle.uBuf, 0, u);
+
+			const enc = device.createCommandEncoder();
+			const cp = enc.beginComputePass();
+			cp.setPipeline(handle.computePipe);
+			cp.setBindGroup(0, handle.computeBind);
+			cp.dispatchWorkgroups(Math.ceil(handle.particleCount / WORKGROUP));
+			cp.end();
+
+			const view = context.getCurrentTexture().createView();
+			const rp = enc.beginRenderPass({
+				colorAttachments: [
+					{ view, clearValue: { r: 0.02, g: 0.012, b: 0.05, a: 1 }, loadOp: 'clear', storeOp: 'store' }
+				]
+			});
+			rp.setPipeline(handle.renderPipe);
+			rp.setBindGroup(0, handle.renderBind);
+			rp.draw(6, handle.particleCount);
+			rp.end();
+			device.queue.submit([enc.finish()]);
+		} catch (err) {
+			// A single bad frame (e.g. device loss mid-submit) must not kill the
+			// loop forever — drop to the resilient Canvas2D field instead.
+			console.error('[BackdropEngine] WebGPU frame failed, falling back', err);
+			bootFallback();
 		}
-		const evtNorm = evtCode === 0 ? 0 : Math.max(0, 1 - evtAge / EVENT_DURATION);
-
-		const u = new Float32Array(12);
-		u[0] = gpuCanvas!.width; u[1] = gpuCanvas!.height; u[2] = clampDpr(1.5); u[3] = reduced ? 1 : 0;
-		u[4] = t; u[5] = dt; u[6] = intensity; u[7] = handle.particleCount;
-		// event vec4: code, fade(1->0), origin handled below via x/y, intensity
-		u[8] = evtCode; u[9] = evtNorm * evtIntensity; u[10] = evtX; u[11] = evtY;
-		device.queue.writeBuffer(handle.uBuf, 0, u);
-
-		const enc = device.createCommandEncoder();
-		const cp = enc.beginComputePass();
-		cp.setPipeline(handle.computePipe);
-		cp.setBindGroup(0, handle.computeBind);
-		cp.dispatchWorkgroups(Math.ceil(handle.particleCount / WORKGROUP));
-		cp.end();
-
-		const view = context.getCurrentTexture().createView();
-		const rp = enc.beginRenderPass({
-			colorAttachments: [
-				{ view, clearValue: { r: 0.02, g: 0.012, b: 0.05, a: 1 }, loadOp: 'clear', storeOp: 'store' }
-			]
-		});
-		rp.setPipeline(handle.renderPipe);
-		rp.setBindGroup(0, handle.renderBind);
-		rp.draw(6, handle.particleCount);
-		rp.end();
-		device.queue.submit([enc.finish()]);
-		raf = requestAnimationFrame(drawWebgpu);
+		// NOTE: no rAF here — tick() owns scheduling.
 	}
 
 	// ---- Canvas2D fallback (no WebGPU: pre-iOS-26 iPhones, old GPUs) ----------
@@ -401,7 +467,6 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		if (disposed || !fallbackCanvas) return;
 		if (mode === 'fallback' && fbParts.length) return; // idempotent: don't double-start
 		if (bootWatchdog) { clearTimeout(bootWatchdog); bootWatchdog = null; }
-		cancelAnimationFrame(raf); // stop any in-flight loop before switching
 		mode = 'fallback';
 		resize();
 		const n = (globalThis as any).innerWidth < 760 ? 520 : 1400;
@@ -411,7 +476,10 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		}));
 		startedAt = performance.now();
 		fbLastT = 0;
-		raf = requestAnimationFrame(drawFallback);
+		// startLoop() is a no-op if the chain is already live (e.g. called from
+		// drawWebgpu's catch inside tick) — tick simply routes to drawFallback
+		// next frame. When called cold (watchdog / no-WebGPU) it starts the chain.
+		startLoop();
 	}
 	function fbField(x: number, y: number, t: number): [number, number] {
 		// cheap pseudo-curl: orthogonal gradient of a sine field
@@ -436,21 +504,25 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		ctx.fillStyle = 'rgba(5,3,13,0.18)'; // trail fade on void
 		ctx.fillRect(0, 0, w, h);
 		ctx.globalCompositeOperation = 'lighter';
+		// Normalise motion to a 60fps reference so the field drifts at the same
+		// speed regardless of refresh rate (WebGPU advects by *dt; match it here).
+		const fstep = dt * 60;
 		for (const p of fbParts) {
 			const [fx, fy] = fbField(p.x, p.y, t);
-			p.vx = p.vx * 0.92 + fx * (reduced ? 0.3 : 1);
-			p.vy = p.vy * 0.92 + fy * (reduced ? 0.3 : 1);
+			// scale the flow force by the ambient `intensity` prop (was ignored)
+			p.vx = p.vx * 0.92 + fx * (reduced ? 0.3 : 1) * intensity;
+			p.vy = p.vy * 0.92 + fy * (reduced ? 0.3 : 1) * intensity;
 			// firewall shockwave: push outward from the origin
 			let crimson = 0;
 			if (fwFade > 0) {
 				const dx = p.x - ox, dy = p.y - oy;
 				const dist = Math.hypot(dx, dy) + 1e-4;
 				const reach = Math.exp(-dist * 2.2) * fwFade;
-				p.vx += (dx / dist) * reach * 0.01;
-				p.vy += (dy / dist) * reach * 0.01;
+				p.vx += (dx / dist) * reach * 0.01 * fstep;
+				p.vy += (dy / dist) * reach * 0.01 * fstep;
 				crimson = Math.min(reach * 1.6, 1);
 			}
-			p.x += p.vx; p.y += p.vy;
+			p.x += p.vx * fstep; p.y += p.vy * fstep;
 			if (p.x < 0) p.x += 1; if (p.x > 1) p.x -= 1;
 			if (p.y < 0) p.y += 1; if (p.y > 1) p.y -= 1;
 			const sp = Math.hypot(p.vx, p.vy) * 220;
@@ -464,16 +536,19 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 			ctx.fillRect(p.x * w, p.y * h, 2.2 + crimson * 1.5, 2.2 + crimson * 1.5);
 		}
 		ctx.globalCompositeOperation = 'source-over';
-		raf = requestAnimationFrame(drawFallback);
+		// NOTE: no rAF here — tick() owns scheduling.
 	}
 
 	function onResize() { resize(); }
 	function onVisibility() {
 		if (document.hidden) {
-			cancelAnimationFrame(raf);
+			stopLoop();
 		} else if (!disposed) {
+			// Reset BOTH clocks so neither loop sees a huge dt jump after the tab
+			// was backgrounded (fallback uses fbLastT, webgpu uses lastT).
 			lastT = performance.now();
-			raf = requestAnimationFrame(mode === 'webgpu' ? drawWebgpu : drawFallback);
+			fbLastT = performance.now();
+			startLoop(); // idempotent — never stacks a second chain
 		}
 	}
 
@@ -505,10 +580,10 @@ fn fs(in: VsOut) -> @location(0) vec4f {
 		unsubFieldEvents?.();
 		if (bootWatchdog) { clearTimeout(bootWatchdog); bootWatchdog = null; }
 		if (!browser) return; // onDestroy also fires during SSR — no DOM there
-		cancelAnimationFrame(raf);
+		stopLoop();
 		window.removeEventListener('resize', onResize);
 		document.removeEventListener('visibilitychange', onVisibility);
-		try { handle?.partBuf?.destroy?.(); handle?.uBuf?.destroy?.(); } catch {}
+		releaseBuffers(); // destroy GPU buffers so they don't outlive the component
 		handle = null;
 	});
 </script>
