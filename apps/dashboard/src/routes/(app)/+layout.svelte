@@ -7,12 +7,15 @@
 	import {
 		websocket,
 		isConnected,
+		isReconnecting,
+		eventFeed,
 		memoryCount,
 		avgRetention,
 		suppressedCount,
 		uptimeSeconds,
 		formatUptime
 	} from '$stores/websocket';
+	import { isDreaming as isDreamingFn } from '$lib/components/awareness-helpers';
 	import ForgettingIndicator from '$lib/components/ForgettingIndicator.svelte';
 	import BackdropEngine from '$lib/core/BackdropEngine.svelte';
 	import InsightToast from '$lib/components/InsightToast.svelte';
@@ -27,9 +30,17 @@
 	let cmdQuery = $state('');
 	let cmdInput = $state<HTMLInputElement>(undefined as unknown as HTMLInputElement);
 
+	// One reactive "mood" for the whole shell: offline → alarm, dreaming → dream,
+	// otherwise → live. Drives the sidebar edge, the strip rule, and the footer.
+	let nowTick = $state(Date.now());
+	const shellState = $derived(
+		!$isConnected ? 'alarm' : isDreamingFn($eventFeed, nowTick) ? 'dream' : 'live'
+	);
+
 	onMount(() => {
 		websocket.connect();
 		const teardownTheme = initTheme();
+		const moodTick = setInterval(() => (nowTick = Date.now()), 1000);
 
 		function onKeyDown(e: KeyboardEvent) {
 			if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -81,6 +92,7 @@
 			websocket.disconnect();
 			window.removeEventListener('keydown', onKeyDown);
 			teardownTheme();
+			clearInterval(moodTick);
 		};
 	});
 
@@ -140,7 +152,7 @@
 <BackdropEngine />
 
 <div class="flex flex-col md:flex-row h-screen overflow-hidden bg-void relative z-[1]">
-	<nav class="hidden md:flex w-16 lg:w-56 flex-shrink-0 glass-sidebar flex-col">
+	<nav class="hidden md:flex w-16 lg:w-56 flex-shrink-0 glass-sidebar flex-col edge-live is-{shellState}" class:rail-dormant={!$isConnected}>
 		<a href="{base}/graph" class="logo-link flex items-center gap-3 px-4 py-5 border-b border-synapse/10">
 			<div class="logo-mark w-8 h-8 rounded-lg bg-gradient-to-br from-dream to-synapse flex items-center justify-center text-bright shadow-lg shadow-synapse/20">
 				<Icon name="logo" size={18} strokeWidth={1.8} />
@@ -184,13 +196,20 @@
 
 		<div class="px-3 py-4 border-t border-synapse/10 space-y-2">
 			<div class="flex items-center gap-2 text-xs">
-				<div class="w-2 h-2 rounded-full {$isConnected ? 'bg-recall animate-pulse-glow' : 'bg-decay'}"></div>
-				<span class="hidden lg:block text-dim">{$isConnected ? 'Connected' : 'Offline'}</span>
+				{#if $isConnected}
+					<span class="ping-host inline-flex h-2 w-2 rounded-full bg-recall breathe text-recall"></span>
+					<span class="hidden lg:block text-recall/90 text-legible">Listening</span>
+				{:else}
+					<span class="seek-host inline-flex h-2 w-2 rounded-full bg-warning"></span>
+					<span class="hidden lg:block text-warning/90 text-legible">
+						{$isReconnecting ? 'Reconnecting…' : 'Asleep — server offline'}
+					</span>
+				{/if}
 				<div class="ml-auto">
 					<ThemeToggle />
 				</div>
 			</div>
-			<div class="hidden lg:block text-xs text-muted space-y-0.5">
+			<div class="veil hidden lg:block text-xs text-dim space-y-0.5">
 				<div>{$memoryCount} memories</div>
 				<div>{($avgRetention * 100).toFixed(0)}% retention</div>
 				{#if $uptimeSeconds > 0}
@@ -206,7 +225,7 @@
 	</nav>
 
 	<main class="flex-1 flex flex-col min-h-0 pb-16 md:pb-0">
-		<AmbientAwarenessStrip />
+		<div class="strip-rail is-{shellState}"><AmbientAwarenessStrip /></div>
 		<VerdictBar />
 		<div class="flex-1 min-h-0 overflow-y-auto">
 			{@render children()}
@@ -310,5 +329,38 @@
 	.nav-link.text-synapse-glow .nav-icon :global(svg),
 	.nav-active-border .nav-icon :global(svg) {
 		filter: drop-shadow(0 0 6px rgba(129, 140, 248, 0.55));
+	}
+
+	/* Offline → the whole spine cools and desaturates: a sleeping mind. */
+	.rail-dormant {
+		filter: saturate(0.7) brightness(0.93);
+		transition: filter 0.6s ease;
+	}
+
+	/* The metric strip's bottom rule reacts to shell mood (reuses gradient-shift). */
+	.strip-rail {
+		position: relative;
+	}
+	.strip-rail::after {
+		content: '';
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		height: 1px;
+		background: linear-gradient(90deg, transparent, var(--edge-c, var(--edge-live)) 50%, transparent);
+		background-size: 220% 100%;
+	}
+	.strip-rail.is-dream::after {
+		--edge-c: var(--edge-dream);
+	}
+	.strip-rail.is-alarm::after {
+		background: var(--color-warning);
+	}
+	@media not (prefers-reduced-motion: reduce) {
+		.strip-rail.is-live::after,
+		.strip-rail.is-dream::after {
+			animation: gradient-shift 4s ease-in-out infinite;
+		}
 	}
 </style>

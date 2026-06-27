@@ -19,6 +19,7 @@
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
 	import { reveal } from '$lib/actions/reveal';
 	import ReceiptCard from '$components/ReceiptCard.svelte';
+	import LifeState from '$components/LifeState.svelte';
 	import {
 		api,
 		type TraceRunSummary,
@@ -296,10 +297,12 @@
 			<aside class="runs glass" use:reveal>
 				<h2 class="panel-title">Runs</h2>
 				{#if runs.length === 0}
-					<p class="empty">
-						No agent runs recorded yet. Make an MCP tool call — every call is
-						recorded here.
-					</p>
+					<LifeState
+						variant="dormant"
+						compact
+						title="Dormant"
+						body="No runs yet. The recorder is breathing, waiting for the first tool call."
+					/>
 				{:else}
 					<ul>
 						{#each runs as run (run.runId)}
@@ -332,9 +335,30 @@
 				{#if loading}
 					<div class="glass center-msg">Loading trace…</div>
 				{:else if error}
-					<div class="glass center-msg err">{error}</div>
+					<LifeState
+						variant="error"
+						title="Reading the flight recorder…"
+						body="The trace stream hiccuped while pulling this run. Vestige is re-establishing the connection — your runs are safe on disk."
+						detail={error}
+						actionLabel="Retry"
+						onAction={() => selectedRunId && selectRun(selectedRunId)}
+					/>
 				{:else if !detail}
-					<div class="glass center-msg">Select a run to replay.</div>
+					{#if !$isConnected}
+						<LifeState
+							variant="offline"
+							title="Listening for the agent"
+							body="No live socket yet. The moment an MCP tool call fires, this recorder lights up and replays it — runId, retrievals, receipts, all of it."
+							actionLabel="Try the firewall demo"
+							onAction={() => loadFirewallDemo()}
+						/>
+					{:else}
+						<LifeState
+							variant="empty"
+							title="Pick a run to replay"
+							body="Every MCP tool call is recorded on the left. Select a run to watch the agent think, frame by frame."
+						/>
+					{/if}
 				{:else}
 					<!-- Scrubber -->
 					<div class="scrubber glass" use:reveal>
@@ -428,7 +452,7 @@
 							Memory pulse <span class="text-dim">— touched this run</span>
 						</h3>
 						{#if pulsedIds.length === 0}
-							<p class="empty">No memories touched yet.</p>
+							<p class="empty"><span class="empty-dot">·</span> No memories touched yet — they light up as the run replays.</p>
 						{:else}
 							<div class="pulse-grid">
 								{#each pulsedIds as id (id)}
@@ -699,6 +723,15 @@
 		color: var(--color-text-dim, #8b8ba7);
 		line-height: 1.5;
 	}
+	.empty-dot {
+		color: var(--color-synapse-glow);
+	}
+	@media not (prefers-reduced-motion: reduce) {
+		.empty-dot {
+			animation: breathe 3.2s ease-in-out infinite;
+			display: inline-block;
+		}
+	}
 
 	.runs {
 		padding: 16px;
@@ -777,9 +810,6 @@
 		padding: 40px;
 		text-align: center;
 		color: var(--color-text-dim, #8b8ba7);
-	}
-	.center-msg.err {
-		color: #f87171;
 	}
 
 	/* Scrubber */

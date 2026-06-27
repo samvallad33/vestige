@@ -106,44 +106,71 @@ body {
    GLASSMORPHISM SYSTEM
    ═══════════════════════════════════════════ */
 
+/* ── Veil + living-edge tokens — one source of truth ──────────────── */
+:root {
+	/* Veil ramp: field shows through the TOP of a panel, text reads below */
+	--veil-top:   rgba(12, 12, 32, 0.30);   /* field-visible band         */
+	--veil-body:  rgba(12, 12, 32, 0.82);   /* opaque text floor          */
+	--veil-ramp:  64px;                       /* where the ramp goes opaque */
+
+	/* State-colored panel rims (the "nervous system") */
+	--edge-quiet: rgba(99, 102, 241, 0.22);  /* idle synapse rim          */
+	--edge-live:  rgba(129, 140, 248, 0.55); /* connected / active        */
+	--edge-dream: rgba(192, 132, 252, 0.50); /* dreaming                  */
+	--edge-alarm: rgba(245, 158, 11, 0.55);  /* offline/error = AMBER, not red */
+
+	--glass-blur: 16px;
+}
+
 .glass {
-	background: rgba(22, 22, 56, 0.45);
-	backdrop-filter: blur(20px) saturate(180%);
-	-webkit-backdrop-filter: blur(20px) saturate(180%);
-	border: 1px solid rgba(99, 102, 241, 0.08);
+	/* was rgba(22,22,56,0.45) flat → veil ramp: field bleeds through top 64px */
+	background: linear-gradient(180deg, var(--veil-top) 0%, var(--veil-body) var(--veil-ramp));
+	backdrop-filter: blur(var(--glass-blur)) saturate(195%);
+	-webkit-backdrop-filter: blur(var(--glass-blur)) saturate(195%);
+	border: 1px solid var(--edge-quiet);
 	box-shadow:
-		inset 0 1px 0 0 rgba(255, 255, 255, 0.03),
-		0 4px 24px rgba(0, 0, 0, 0.3);
+		inset 0 1px 0 0 rgba(168, 130, 255, 0.08),       /* top violet sheen */
+		inset 0 0 24px -16px var(--edge-live),            /* faint inner rim-glow */
+		0 4px 24px rgba(0, 0, 0, 0.30);
 }
 
 .glass-subtle {
-	background: rgba(16, 16, 42, 0.4);
-	backdrop-filter: blur(12px) saturate(150%);
-	-webkit-backdrop-filter: blur(12px) saturate(150%);
-	border: 1px solid rgba(99, 102, 241, 0.06);
+	background: linear-gradient(180deg, rgba(10, 10, 30, 0.28) 0%, rgba(10, 10, 30, 0.74) 56px);
+	backdrop-filter: blur(12px) saturate(165%);
+	-webkit-backdrop-filter: blur(12px) saturate(165%);
+	border: 1px solid var(--edge-quiet);
 	box-shadow:
-		inset 0 1px 0 0 rgba(255, 255, 255, 0.02),
-		0 2px 12px rgba(0, 0, 0, 0.2);
+		inset 0 1px 0 0 rgba(168, 130, 255, 0.05),
+		0 2px 12px rgba(0, 0, 0, 0.20);
 }
 
 .glass-sidebar {
-	background: rgba(10, 10, 26, 0.6);
-	backdrop-filter: blur(24px) saturate(180%);
-	-webkit-backdrop-filter: blur(24px) saturate(180%);
-	border-right: 1px solid rgba(99, 102, 241, 0.1);
+	/* nav rail: denser body for the dense nav list, but field still bleeds at top */
+	background: linear-gradient(180deg, rgba(14, 12, 34, 0.58) 0%, rgba(9, 8, 24, 0.52) 120px);
+	backdrop-filter: blur(22px) saturate(175%);
+	-webkit-backdrop-filter: blur(22px) saturate(175%);
+	border-right: 1px solid rgba(129, 140, 248, 0.14);
 	box-shadow:
-		inset -1px 0 0 0 rgba(255, 255, 255, 0.02),
-		4px 0 24px rgba(0, 0, 0, 0.3);
+		inset -1px 0 0 0 rgba(168, 130, 255, 0.05),
+		inset 0 0 60px -20px var(--edge-live),
+		4px 0 28px rgba(0, 0, 0, 0.30);
 }
 
 .glass-panel {
-	background: rgba(10, 10, 26, 0.8);
-	backdrop-filter: blur(24px) saturate(180%);
-	-webkit-backdrop-filter: blur(24px) saturate(180%);
-	border: 1px solid rgba(99, 102, 241, 0.1);
+	/* was 0.80 flat (worst offender) — modal/command-palette depth without going opaque */
+	background: linear-gradient(180deg, var(--veil-top) 0%, rgba(10, 10, 26, 0.86) 72px);
+	backdrop-filter: blur(26px) saturate(185%);
+	-webkit-backdrop-filter: blur(26px) saturate(185%);
+	border: 1px solid rgba(129, 140, 248, 0.16);
 	box-shadow:
-		inset 0 1px 0 0 rgba(255, 255, 255, 0.03),
-		0 8px 32px rgba(0, 0, 0, 0.4);
+		inset 0 1px 0 0 rgba(168, 130, 255, 0.08),
+		inset 0 0 40px -18px var(--edge-live),
+		0 8px 36px rgba(0, 0, 0, 0.42);
+}
+
+/* Mobile: drop blur cost on the densest panel over the animated field */
+@media (max-width: 640px) {
+	.glass { backdrop-filter: blur(8px) saturate(180%); -webkit-backdrop-filter: blur(8px) saturate(180%); }
 }
 
 /* ═══════════════════════════════════════════
@@ -173,63 +200,10 @@ body {
 	animation: pulse-glow 2s ease-in-out infinite;
 }
 
-/* Ambient background orbs */
-@keyframes orb-float-1 {
-	0%, 100% { transform: translate(0, 0) scale(1); }
-	25% { transform: translate(60px, -40px) scale(1.1); }
-	50% { transform: translate(-30px, -80px) scale(0.95); }
-	75% { transform: translate(-60px, -20px) scale(1.05); }
-}
-
-@keyframes orb-float-2 {
-	0%, 100% { transform: translate(0, 0) scale(1); }
-	25% { transform: translate(-50px, 30px) scale(1.08); }
-	50% { transform: translate(40px, 60px) scale(0.92); }
-	75% { transform: translate(20px, -40px) scale(1.03); }
-}
-
-@keyframes orb-float-3 {
-	0%, 100% { transform: translate(0, 0) scale(1); }
-	25% { transform: translate(30px, 50px) scale(1.05); }
-	50% { transform: translate(-60px, 20px) scale(0.98); }
-	75% { transform: translate(40px, -30px) scale(1.1); }
-}
-
-.ambient-orb {
-	position: fixed;
-	border-radius: 50%;
-	filter: blur(80px);
-	pointer-events: none;
-	z-index: 0;
-	opacity: 0.35;
-}
-
-.ambient-orb-1 {
-	width: 400px;
-	height: 400px;
-	background: radial-gradient(circle, rgba(168, 85, 247, 0.4), transparent 70%);
-	top: -10%;
-	right: -5%;
-	animation: orb-float-1 20s ease-in-out infinite;
-}
-
-.ambient-orb-2 {
-	width: 350px;
-	height: 350px;
-	background: radial-gradient(circle, rgba(99, 102, 241, 0.35), transparent 70%);
-	bottom: -15%;
-	left: -5%;
-	animation: orb-float-2 25s ease-in-out infinite;
-}
-
-.ambient-orb-3 {
-	width: 300px;
-	height: 300px;
-	background: radial-gradient(circle, rgba(245, 158, 11, 0.2), transparent 70%);
-	top: 40%;
-	left: 40%;
-	animation: orb-float-3 22s ease-in-out infinite;
-}
+/* Ambient background orbs removed — the WebGPU curl-noise field (BackdropEngine)
+   replaced them. Two ambient systems stacked = muddy. The light-theme
+   `[data-theme='light'] .ambient-orb` rule in theme.ts is now a harmless no-op
+   (no DOM node mounts the orbs). */
 
 /* Active nav indicator with animated gradient border */
 .nav-active-border {
@@ -543,6 +517,95 @@ body {
 		0%, 100% { background-position: 0% 50%; }
 		50% { background-position: 100% 50%; }
 	}
+}
+
+/* ── Local text legibility veil — bonds a soft dark plate behind a text
+   cluster so body copy stays WCAG-AA over the moving field WITHOUT making
+   the whole panel opaque. Apply to the TEXT wrapper, not the panel.
+   Use on any text that sits on the field or in a panel's translucent top. */
+.veil { position: relative; isolation: isolate; }
+.veil::before {
+	content: '';
+	position: absolute;
+	inset: -6px -10px;
+	z-index: -1;
+	border-radius: inherit;
+	background: radial-gradient(120% 100% at 50% 45%,
+		rgba(8, 7, 22, 0.58), rgba(8, 7, 22, 0.32) 70%, transparent 100%);
+	pointer-events: none;
+}
+.veil-strong::before {
+	inset: -10px -16px;
+	background: radial-gradient(120% 100% at 50% 45%,
+		rgba(6, 5, 18, 0.76), rgba(6, 5, 18, 0.46) 65%, transparent 100%);
+}
+/* Cheap inline fallback for single headings/labels over the field */
+.text-legible { text-shadow: 0 1px 10px rgba(5, 3, 13, 0.85), 0 0 2px rgba(5, 3, 13, 0.9); }
+
+/* ── Living edge: a state-colored synapse membrane on any .glass rim.
+   Brightens and travels only when the app has something to say. ──────── */
+@property --edge-pos { syntax: '<percentage>'; initial-value: 0%; inherits: false; }
+
+.edge-live { position: relative; isolation: isolate; }
+.edge-live::before {
+	content: '';
+	position: absolute;
+	inset: -1px;
+	border-radius: inherit;
+	padding: 1px;
+	background: linear-gradient(var(--edge-angle, 115deg),
+		transparent 0%,
+		var(--edge-c, var(--edge-quiet)) var(--edge-pos),
+		transparent calc(var(--edge-pos) + 28%));
+	-webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+	-webkit-mask-composite: xor;
+	        mask-composite: exclude;
+	pointer-events: none;
+	z-index: -1;
+}
+.edge-live.is-live  { --edge-c: var(--edge-live); }
+.edge-live.is-dream { --edge-c: var(--edge-dream); --edge-angle: 135deg; }
+.edge-live.is-alarm { --edge-c: var(--edge-alarm); }
+
+@media not (prefers-reduced-motion: reduce) {
+	.edge-live::before { animation: edge-travel 5.5s linear infinite; }
+	.edge-live.is-alarm::before { animation-duration: 2.6s; }
+	@keyframes edge-travel { to { --edge-pos: 130%; } }
+}
+/* Reduced-motion: rim still paints a quiet colored corner at --edge-pos:0% */
+
+/* Dormant mind — EMPTY state: resting but alive, slower/deeper than .breathe */
+@keyframes dormant-pulse {
+	0%, 100% { transform: scale(1);    opacity: 0.55; filter: blur(26px); }
+	50%      { transform: scale(1.06); opacity: 0.80; filter: blur(30px); }
+}
+.dormant-aura { animation: dormant-pulse 6.5s ease-in-out infinite; }
+
+/* Self-healing sweep — ERROR state: a diagnostic scan-line, "repairing itself" */
+@keyframes heal-sweep {
+	0%   { transform: translateY(-120%); opacity: 0; }
+	12%  { opacity: 0.9; }
+	88%  { opacity: 0.9; }
+	100% { transform: translateY(120%);  opacity: 0; }
+}
+
+/* Reconnect seek — OFFLINE state: a ring that expands and resets, "listening" */
+@keyframes seek-ring {
+	0%  { transform: scale(0.7); opacity: 0.7; }
+	70% { opacity: 0; }
+	100%{ transform: scale(2.2); opacity: 0; }
+}
+.seek-host { position: relative; }
+.seek-host::before {
+	content: ''; position: absolute; inset: 0; border-radius: 50%;
+	background: var(--color-warning); z-index: -1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dormant-aura { animation: none; opacity: 0.6; }
+}
+@media not (prefers-reduced-motion: reduce) {
+	.seek-host::before { animation: seek-ring 2.2s ease-out infinite; }
 }
 
 /* ── Hover lift utility — cards rise + glow when pointed at ───────────────*/

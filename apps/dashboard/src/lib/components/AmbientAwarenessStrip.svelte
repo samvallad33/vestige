@@ -156,7 +156,7 @@
 </script>
 
 <div
-	class="ambient-strip relative flex h-9 w-full items-center gap-0 overflow-hidden border-b border-synapse/15 bg-black/40 px-3 text-[11px] text-dim backdrop-blur-md"
+	class="ambient-strip text-legible relative flex h-9 w-full items-center gap-0 overflow-hidden border-b border-synapse/15 px-3 text-[11px] text-dim backdrop-blur-md"
 	class:ambient-flash={suppressionFlash}
 	aria-label="Ambient cognitive vitals"
 >
@@ -309,6 +309,12 @@
 </div>
 
 <style>
+	/* Tinted gradient floor so 11px text-dim stays legible over the live field
+	   (replaces the flat bg-black/40 that could wash dim text on bright frames). */
+	.ambient-strip {
+		background: linear-gradient(180deg, rgba(8, 7, 22, 0.62), rgba(8, 7, 22, 0.44));
+	}
+
 	.strip-item {
 		display: inline-flex;
 		align-items: center;
