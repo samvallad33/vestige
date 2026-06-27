@@ -460,9 +460,18 @@ const ROLE_DELIMITERS: &[&str] = &["<|", "[", "### ", "<", "<|im_start|>"];
 /// line-leading role prefix. Idempotent and conservative: only the gutter glyphs
 /// are removed, never alphanumerics.
 fn strip_markdown_gutter(line: &str) -> &str {
-    line.trim_start_matches(|c: char| {
+    let stripped = line.trim_start_matches(|c: char| {
         c == '>' || c == '-' || c == '*' || c == '#' || c == ' ' || c == '\t'
-    })
+    });
+    // Also strip a leading ordered-list marker (`1.`, `2)`, …) so a role prefix
+    // smuggled inside a numbered list item — `1. system: …` — is still caught.
+    let digits = stripped.trim_start_matches(|c: char| c.is_ascii_digit());
+    if digits.len() < stripped.len()
+        && let Some(rest) = digits.strip_prefix(['.', ')'])
+    {
+        return rest.trim_start_matches([' ', '\t']);
+    }
+    stripped
 }
 
 /// Whether the text *announces* base64 content as instructions to follow.
@@ -486,7 +495,7 @@ const DECODE_VERBS: &[&str] = &["decode", "execute", "follow", "run"];
 fn has_long_base64_run(lower: &str) -> bool {
     let mut run = 0usize;
     for c in lower.chars() {
-        if c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=' {
+        if c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=' || c == '-' || c == '_' {
             run += 1;
             if run >= 24 {
                 return true;
@@ -666,7 +675,15 @@ fn has_external_destination(words: &[String], lower: &str) -> bool {
     // A bare host-looking token (contains a dot between alphanumerics, e.g.
     // "evil.com", "attacker.example"), a "dot"-spelled host ("evil dot com"),
     // or a bare IPv4 ("10.0.0.5") preceded somewhere by a "to"/"at".
-    let has_dest_prep = words.iter().any(|w| w == "to" || w == "at");
+    let has_dest_prep = words.iter().any(|w| {
+        w == "to"
+            || w == "at"
+            || w == "via"
+            || w == "through"
+            || w == "using"
+            || w == "over"
+            || w == "onto"
+    });
     if has_dest_prep
         && (lower_has_hostlike(lower) || has_dot_spelled_host(words) || has_bare_ipv4(words))
     {
@@ -786,6 +803,24 @@ fn fold_confusable(ch: char) -> Option<char> {
         'в' | 'В' => 'b',
         'і' | 'І' => 'i',
         'ѕ' | 'Ѕ' => 's',
+        // Common Greek letters that are true visual Latin homoglyphs. Conservative:
+        // only glyphs that genuinely render like the Latin letter they map to
+        // (omicron/Ο≈O, iota/Ι≈I, alpha/Α≈A, epsilon/Ε≈E, rho/Ρ≈P, tau/Τ≈T,
+        // chi/Χ≈X, kappa/Κ≈K, beta/Β≈B). Upsilon and nu are intentionally omitted
+        // because they are not reliable Latin homoglyphs.
+        'ο' | 'Ο' => 'o',
+        'ι' | 'Ι' => 'i',
+        'α' | 'Α' => 'a',
+        'ε' | 'Ε' => 'e',
+        'ρ' | 'Ρ' => 'p',
+        'τ' | 'Τ' => 't',
+        'χ' | 'Χ' => 'x',
+        'κ' | 'Κ' => 'k',
+        'β' | 'Β' => 'b',
+        // TODO: Mathematical Alphanumeric Symbols (bold/italic Latin in
+        // U+1D400..U+1D7FF) are also confusable, but a correct fold requires
+        // per-block offset tables to avoid mismapping reserved code points; left
+        // unmapped rather than risk a wrong mapping.
         _ => return None,
     };
     Some(latin)
@@ -798,7 +833,9 @@ fn fold_confusable(ch: char) -> Option<char> {
 fn is_format_or_space(ch: char) -> bool {
     matches!(
         ch,
-        '\u{00A0}'   // NBSP
+        '\u{00AD}'   // soft hyphen (invisible; must not hide inside a keyword)
+        | '\u{034F}' // combining grapheme joiner
+        | '\u{00A0}' // NBSP
         | '\u{200B}' // zero-width space
         | '\u{200C}' // zero-width non-joiner
         | '\u{200D}' // zero-width joiner
@@ -809,6 +846,10 @@ fn is_format_or_space(ch: char) -> bool {
         | '\u{202F}' // narrow NBSP
         | '\u{205F}' // medium math space
         | '\u{2060}' // word joiner
+        | '\u{2061}' // function application (invisible math operator)
+        | '\u{2062}' // invisible times
+        | '\u{2063}' // invisible separator
+        | '\u{2064}' // invisible plus
         | '\u{3000}' // ideographic space
         | '\u{FEFF}' // BOM / zero-width no-break space
     ) || (ch != ' '
