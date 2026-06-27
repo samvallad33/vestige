@@ -200,6 +200,21 @@ pub enum VestigeEvent {
         timestamp: DateTime<Utc>,
     },
 
+    // -- Microglial Firewall (NeuroRuntime v0) — the ambient immune pulse --
+    // The firewall caught a poisoned memory and quarantined it before it could
+    // influence any answer. The dashboard flashes the "firewall just caught
+    // something" live pulse: "Vestige quarantined a memory — influenceAllowed:
+    // false." This is the LIVE broadcast; the replayable `MemoryQuarantine`
+    // ride inside `TraceEvent` is the Black Box replay path. `reason` is the
+    // machine code (e.g. "prompt_injection"), `threat` the human prose.
+    MemoryQuarantined {
+        id: String,
+        reason: String,
+        threat: String,
+        run_id: Option<String>,
+        timestamp: DateTime<Utc>,
+    },
+
     // -- System --
     Heartbeat {
         uptime_secs: u64,
@@ -216,5 +231,48 @@ impl VestigeEvent {
     /// Serialize to JSON string for WebSocket transmission.
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_quarantined_serializes_with_tag_and_content() {
+        let event = VestigeEvent::MemoryQuarantined {
+            id: "mem_123".to_string(),
+            reason: "prompt_injection".to_string(),
+            threat: "Detected an instruction-injection payload masquerading as a memory."
+                .to_string(),
+            run_id: Some("run_abc".to_string()),
+            timestamp: Utc::now(),
+        };
+
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+        assert_eq!(json["type"], "MemoryQuarantined");
+        assert_eq!(json["data"]["id"], "mem_123");
+        assert_eq!(json["data"]["reason"], "prompt_injection");
+        assert_eq!(
+            json["data"]["threat"],
+            "Detected an instruction-injection payload masquerading as a memory."
+        );
+        assert_eq!(json["data"]["run_id"], "run_abc");
+        assert!(json["data"]["timestamp"].is_string());
+    }
+
+    #[test]
+    fn memory_quarantined_serializes_with_null_run_id() {
+        let event = VestigeEvent::MemoryQuarantined {
+            id: "mem_456".to_string(),
+            reason: "manual".to_string(),
+            threat: "Operator manually quarantined this memory.".to_string(),
+            run_id: None,
+            timestamp: Utc::now(),
+        };
+
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+        assert_eq!(json["type"], "MemoryQuarantined");
+        assert!(json["data"]["run_id"].is_null());
     }
 }

@@ -167,8 +167,9 @@ pub use config::{CONFIG_FILE, OutputConfig, OutputDefaults, OutputProfile, Vesti
 // Agent Black Box / Receipts / Memory PRs (the cognitive flight recorder)
 pub use trace::{
     classify_write, DecayRisk, MemoryPr, MemoryPrAction, MemoryPrKind, MemoryPrStatus,
-    MemoryTraceEvent, Receipt, ReceiptMutation, ReviewMode, RiskClass, RiskSignal, SuppressReason,
-    SuppressedReceiptEntry, WriteContext, WriteSource, HIGH_TRUST_FLOOR, LOW_CONFIDENCE_FLOOR,
+    MemoryTraceEvent, QuarantinedReceiptEntry, Receipt, ReceiptMutation, ReviewMode, RiskClass,
+    RiskSignal, SuppressReason, SuppressedReceiptEntry, WriteContext, WriteSource, HIGH_TRUST_FLOOR,
+    LOW_CONFIDENCE_FLOOR,
 };
 
 // Storage layer
@@ -408,6 +409,9 @@ pub use neuroscience::{
     EmotionalMemory,
     EmotionalMemoryStats,
     EncodingContext,
+    // Microglial firewall (innate-immune screening for hostile incoming memory)
+    FIREWALL_HIGH_TRUST_FLOOR,
+    FirewallVerdict,
     FullMemory,
     // Hippocampal Indexing (Teyler & Rudy, 2007)
     HippocampalIndex,
@@ -465,6 +469,8 @@ pub use neuroscience::{
     TemporalMarker,
     TimeOfDay,
     TopicalContext,
+    // Microglial firewall screen (pure function)
+    screen_write,
 };
 
 // Embeddings (when feature enabled)

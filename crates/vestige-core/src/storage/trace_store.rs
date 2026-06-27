@@ -484,8 +484,8 @@ impl SqliteMemoryStore {
 mod tests {
     use super::*;
     use crate::trace::{
-        DecayRisk, MemoryPrKind, MemoryTraceEvent, Receipt, RiskSignal, SuppressReason,
-        SuppressedReceiptEntry,
+        DecayRisk, MemoryPrKind, MemoryTraceEvent, QuarantinedReceiptEntry, Receipt, RiskSignal,
+        SuppressReason, SuppressedReceiptEntry,
     };
 
     fn store() -> SqliteMemoryStore {
@@ -552,12 +552,110 @@ mod tests {
             trust_floor: 0.62,
             decay_risk: DecayRisk::Medium,
             mutations: vec![],
+            quarantined: vec![],
+            influence_allowed: true,
+            engram_phases: Default::default(),
         };
         s.save_receipt(&receipt, Some("run_abc"), Some("search"), Some("q"))
             .unwrap();
         let got = s.get_receipt("r_2026_06_22_abc").unwrap().unwrap();
         assert_eq!(got, receipt);
         assert_eq!(s.list_receipts(10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn firewall_receipt_persists_and_reloads_identically() {
+        // The Microglial Firewall slice: a receipt that quarantined a poisoned
+        // write and therefore proved `influence_allowed = false` must survive the
+        // JSON-blob round trip byte-for-byte. The firewall fields ride inside the
+        // serialized `payload`; no schema column backs them, so this is the test
+        // that guards the persistence contract for the launch proof line.
+        let s = store();
+        let mut engram_phases = std::collections::BTreeMap::new();
+        engram_phases.insert("m1".to_string(), "stable".to_string());
+        engram_phases.insert("mem_evil".to_string(), "quarantined".to_string());
+        let receipt = Receipt {
+            receipt_id: "r_2026_06_27_firewall".into(),
+            retrieved: vec!["m1".into()],
+            suppressed: vec![],
+            activation_path: vec!["goal -> answer".into()],
+            trust_floor: 0.81,
+            decay_risk: DecayRisk::Low,
+            mutations: vec![],
+            quarantined: vec![QuarantinedReceiptEntry::new(
+                "mem_evil",
+                "prompt_injection",
+                "Detected an instruction-injection payload masquerading as a memory.",
+            )],
+            influence_allowed: false,
+            engram_phases,
+        };
+        s.save_receipt(&receipt, Some("run_attack"), Some("search"), Some("q"))
+            .unwrap();
+
+        let got = s.get_receipt("r_2026_06_27_firewall").unwrap().unwrap();
+        assert_eq!(got, receipt, "firewall receipt must round-trip identically");
+        assert!(!got.influence_allowed, "the quarantine proof must persist");
+        assert_eq!(got.quarantined.len(), 1);
+        assert_eq!(got.quarantined[0].reason, "prompt_injection");
+        assert_eq!(got.engram_phases.get("mem_evil").map(String::as_str), Some("quarantined"));
+
+        // The per-run list path deserializes the same blob — verify it too.
+        let listed = s.list_receipts_for_run("run_attack", 10).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0], receipt);
+    }
+
+    #[test]
+    fn legacy_stored_receipt_without_firewall_fields_still_loads() {
+        // A receipt persisted BEFORE the firewall existed: its `payload` blob has
+        // no quarantined / influence_allowed / engram_phases keys. Writing that
+        // legacy JSON straight into the column and reading it back through the
+        // real store path must succeed with the safe defaults (influence allowed,
+        // nothing quarantined), proving no migration is needed for old receipts.
+        let s = store();
+        let legacy_payload = serde_json::json!({
+            "receipt_id": "r_2026_01_01_legacy_aaaaaa",
+            "retrieved": ["mem_1", "mem_7"],
+            "suppressed": [{"id": "mem_4", "reason": "contradicted"}],
+            "activation_path": ["a -> b"],
+            "trust_floor": 0.62,
+            "decay_risk": "medium",
+            "mutations": []
+        })
+        .to_string();
+        {
+            let writer = s.writer.lock().unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_receipts
+                         (receipt_id, run_id, tool, query, retrieved_count, suppressed_count,
+                          trust_floor, decay_risk, payload, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    params![
+                        "r_2026_01_01_legacy_aaaaaa",
+                        "run_legacy",
+                        "search",
+                        "q",
+                        2_i64,
+                        1_i64,
+                        0.62_f64,
+                        "medium",
+                        legacy_payload,
+                        Utc::now().to_rfc3339(),
+                    ],
+                )
+                .unwrap();
+        }
+
+        let got = s.get_receipt("r_2026_01_01_legacy_aaaaaa").unwrap().unwrap();
+        assert_eq!(got.receipt_id, "r_2026_01_01_legacy_aaaaaa");
+        assert!(got.influence_allowed, "legacy receipts allowed influence");
+        assert!(got.quarantined.is_empty());
+        assert!(got.engram_phases.is_empty());
+        // The list paths reload the same legacy blob without error.
+        assert_eq!(s.list_receipts(10).unwrap().len(), 1);
+        assert_eq!(s.list_receipts_for_run("run_legacy", 10).unwrap().len(), 1);
     }
 
     #[test]
@@ -571,6 +669,9 @@ mod tests {
             trust_floor: 0.9,
             decay_risk: DecayRisk::Low,
             mutations: vec![],
+            quarantined: vec![],
+            influence_allowed: true,
+            engram_phases: Default::default(),
         };
         s.save_receipt(&mk("r_a1"), Some("run_a"), Some("search"), None)
             .unwrap();

@@ -446,7 +446,8 @@ async fn handle_event(
         | VestigeEvent::ActivationSpread { .. }
         | VestigeEvent::TraceEvent { .. }
         | VestigeEvent::MemoryPrOpened { .. }
-        | VestigeEvent::MemoryPrDecided { .. } => {}
+        | VestigeEvent::MemoryPrDecided { .. }
+        | VestigeEvent::MemoryQuarantined { .. } => {}
     }
 }
 

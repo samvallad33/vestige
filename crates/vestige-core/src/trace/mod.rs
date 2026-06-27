@@ -47,7 +47,10 @@ use serde::{Deserialize, Serialize};
 mod receipt;
 mod review;
 
-pub use receipt::{DecayRisk, Receipt, ReceiptMutation, SuppressedReceiptEntry};
+pub use receipt::{
+    DecayRisk, EngramPhase, QuarantinedReceiptEntry, Receipt, ReceiptMutation,
+    SuppressedReceiptEntry,
+};
 pub use review::{
     classify_write, MemoryPr, MemoryPrAction, MemoryPrKind, MemoryPrStatus, ReviewMode, RiskClass,
     RiskSignal, WriteContext, HIGH_TRUST_FLOOR, LOW_CONFIDENCE_FLOOR,
@@ -69,6 +72,8 @@ pub use review::{
 ///   | { type: "memory.retrieve"; runId; ids; activation; at }
 ///   | { type: "memory.suppress"; runId; id; reason }
 ///   | { type: "memory.write"; runId; id; diff; source }
+///   | { type: "memory.quarantine"; runId; id; reason; threat; influenceAllowed; at }
+///   | { type: "episode.boundary"; runId; episode; label; at }
 ///   | { type: "sanhedrin.veto"; runId; claim; evidenceIds; confidence }
 ///   | { type: "dream.patch"; runId; proposalIds; at };
 /// ```
@@ -119,6 +124,44 @@ pub enum MemoryTraceEvent {
         id: String,
         diff: serde_json::Value,
         source: WriteSource,
+        #[serde(default)]
+        at: i64,
+    },
+
+    /// The **Microglial Firewall** caught an incoming memory and quarantined it
+    /// before it could influence the answer — its own first-class event so the
+    /// Black Box can show the exact threat the immune system stopped.
+    /// `influenceAllowed` is ALWAYS `false` here (a quarantine means zero
+    /// influence); it is carried explicitly so the receipt and Black Box render
+    /// the proof without inference.
+    #[serde(rename = "memory.quarantine")]
+    MemoryQuarantine {
+        #[serde(rename = "runId")]
+        run_id: String,
+        id: String,
+        /// Machine reason code, e.g. `"prompt_injection"`, `"exfiltration"`,
+        /// `"contradicts_high_trust"`, `"manual"`.
+        reason: String,
+        /// Human-readable description of the threat that was caught.
+        threat: String,
+        /// Always `false` for a quarantine — kept explicit for rendering.
+        #[serde(rename = "influenceAllowed")]
+        influence_allowed: bool,
+        #[serde(default)]
+        at: i64,
+    },
+
+    /// An episode / event boundary — a thin phase divider that segments a run
+    /// into readable chapters ("Installing", "Debugging") without touching any
+    /// other event variant. `episode` is a stable id; `label` is human prose.
+    #[serde(rename = "episode.boundary")]
+    EpisodeBoundary {
+        #[serde(rename = "runId")]
+        run_id: String,
+        /// Stable episode id, e.g. `"ep_install"`, `"ep_debug"`.
+        episode: String,
+        /// Human-readable phase label, e.g. `"Installing"`, `"Debugging"`.
+        label: String,
         #[serde(default)]
         at: i64,
     },
@@ -174,6 +217,8 @@ impl MemoryTraceEvent {
             | MemoryTraceEvent::MemoryRetrieve { run_id, .. }
             | MemoryTraceEvent::MemorySuppress { run_id, .. }
             | MemoryTraceEvent::MemoryWrite { run_id, .. }
+            | MemoryTraceEvent::MemoryQuarantine { run_id, .. }
+            | MemoryTraceEvent::EpisodeBoundary { run_id, .. }
             | MemoryTraceEvent::ContradictionDetected { run_id, .. }
             | MemoryTraceEvent::SanhedrinVeto { run_id, .. }
             | MemoryTraceEvent::DreamPatch { run_id, .. } => run_id,
@@ -187,6 +232,8 @@ impl MemoryTraceEvent {
             | MemoryTraceEvent::MemoryRetrieve { at, .. }
             | MemoryTraceEvent::MemorySuppress { at, .. }
             | MemoryTraceEvent::MemoryWrite { at, .. }
+            | MemoryTraceEvent::MemoryQuarantine { at, .. }
+            | MemoryTraceEvent::EpisodeBoundary { at, .. }
             | MemoryTraceEvent::ContradictionDetected { at, .. }
             | MemoryTraceEvent::SanhedrinVeto { at, .. }
             | MemoryTraceEvent::DreamPatch { at, .. } => *at,
@@ -200,6 +247,8 @@ impl MemoryTraceEvent {
             MemoryTraceEvent::MemoryRetrieve { .. } => "memory.retrieve",
             MemoryTraceEvent::MemorySuppress { .. } => "memory.suppress",
             MemoryTraceEvent::MemoryWrite { .. } => "memory.write",
+            MemoryTraceEvent::MemoryQuarantine { .. } => "memory.quarantine",
+            MemoryTraceEvent::EpisodeBoundary { .. } => "episode.boundary",
             MemoryTraceEvent::ContradictionDetected { .. } => "contradiction.detected",
             MemoryTraceEvent::SanhedrinVeto { .. } => "sanhedrin.veto",
             MemoryTraceEvent::DreamPatch { .. } => "dream.patch",
@@ -214,6 +263,8 @@ impl MemoryTraceEvent {
             | MemoryTraceEvent::MemoryRetrieve { at, .. }
             | MemoryTraceEvent::MemorySuppress { at, .. }
             | MemoryTraceEvent::MemoryWrite { at, .. }
+            | MemoryTraceEvent::MemoryQuarantine { at, .. }
+            | MemoryTraceEvent::EpisodeBoundary { at, .. }
             | MemoryTraceEvent::ContradictionDetected { at, .. }
             | MemoryTraceEvent::SanhedrinVeto { at, .. }
             | MemoryTraceEvent::DreamPatch { at, .. } => {
@@ -341,6 +392,81 @@ mod tests {
         }
         .with_at(999);
         assert_eq!(ev2.at(), 7, "explicit timestamp must not be overwritten");
+    }
+
+    #[test]
+    fn quarantine_event_roundtrips_with_ts_shape() {
+        let ev = MemoryTraceEvent::MemoryQuarantine {
+            run_id: "run_123".into(),
+            id: "mem_evil".into(),
+            reason: "prompt_injection".into(),
+            threat: "Detected an instruction-injection payload masquerading as a memory.".into(),
+            influence_allowed: false,
+            at: 42,
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        // Tagged on `type`, camelCase runId/influenceAllowed — the TS contract.
+        assert_eq!(json["type"], "memory.quarantine");
+        assert_eq!(json["runId"], "run_123");
+        assert_eq!(json["id"], "mem_evil");
+        assert_eq!(json["reason"], "prompt_injection");
+        assert_eq!(
+            json["threat"],
+            "Detected an instruction-injection payload masquerading as a memory."
+        );
+        assert_eq!(json["influenceAllowed"], false);
+        assert_eq!(json["at"], 42);
+        assert_eq!(ev.kind(), "memory.quarantine");
+        assert_eq!(ev.run_id(), "run_123");
+
+        let back: MemoryTraceEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn episode_boundary_roundtrips_with_ts_shape() {
+        let ev = MemoryTraceEvent::EpisodeBoundary {
+            run_id: "run_123".into(),
+            episode: "ep_install".into(),
+            label: "Installing".into(),
+            at: 7,
+        };
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["type"], "episode.boundary");
+        assert_eq!(json["runId"], "run_123");
+        assert_eq!(json["episode"], "ep_install");
+        assert_eq!(json["label"], "Installing");
+        assert_eq!(json["at"], 7);
+        assert_eq!(ev.kind(), "episode.boundary");
+
+        let back: MemoryTraceEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn new_events_default_at_and_stamp_with_at() {
+        // `at` defaults when absent (legacy / un-stamped emit), and with_at fills
+        // it exactly like every other variant.
+        let json = serde_json::json!({
+            "type": "memory.quarantine",
+            "runId": "r",
+            "id": "m",
+            "reason": "manual",
+            "threat": "operator quarantine",
+            "influenceAllowed": false
+        });
+        let ev: MemoryTraceEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(ev.at(), 0, "missing `at` defaults to 0");
+        assert_eq!(ev.with_at(555).at(), 555);
+
+        let ep = MemoryTraceEvent::EpisodeBoundary {
+            run_id: "r".into(),
+            episode: "ep_debug".into(),
+            label: "Debugging".into(),
+            at: 0,
+        }
+        .with_at(900);
+        assert_eq!(ep.at(), 900);
     }
 
     #[test]
