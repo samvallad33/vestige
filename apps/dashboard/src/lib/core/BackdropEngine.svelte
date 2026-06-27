@@ -174,8 +174,12 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut
 	);
 	let c = corners[vi];
 	let p = parts[ii];
-	// gentle parallax depth so the cloud reads volumetric
-	let depth = 1.7 + p.pos.z * 0.5;
+	// gentle parallax depth so the cloud reads volumetric. NOTE: pos.z is
+	// soft-wrapped into [-1,1] by the compute pass, so depth MUST be periodic
+	// across the z=+/-1 seam. A linear (1.7 + z*0.5) made size pop ~1.83x in one
+	// frame every time a particle wrapped. sin(z*pi) is 0 at both z=+/-1 (depth
+	// continuous across the seam) and sweeps depth over [1.2, 2.2] in between.
+	let depth = 1.7 + sin(p.pos.z * 3.14159265) * 0.5;
 	let sizePx = (2.6 + p.pos.w * 3.4) / depth;
 	// Position fills the FULL clip box [-1,1]^2 — do NOT divide x by aspect
 	// (that squashed the field into the center ~56% on 16:9). Roundness comes
