@@ -15,7 +15,11 @@ const config = {
 		adapter: adapter({
 			pages: 'build',
 			assets: 'build',
-			fallback: 'index.html',
+			// 200.html (not index.html) is the SPA fallback so it never clobbers a
+			// PRERENDERED root index.html. The standalone promo build prerenders the
+			// waitlist page at "/", and that index.html must survive as real HTML so
+			// visitors see the signup instantly with no empty-shell router boot.
+			fallback: '200.html',
 			precompress: true,
 			strict: false
 		}),

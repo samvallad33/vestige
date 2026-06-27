@@ -6,7 +6,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
-		port: 5173,
+		port: process.env.PORT ? Number(process.env.PORT) : 5173,
 		proxy: {
 			'/api': {
 				target: 'http://127.0.0.1:3927',

@@ -1,0 +1,47 @@
+{
+	"$schema": "https://openapi.vercel.sh/vercel.json",
+	"framework": null,
+	"installCommand": "pnpm install --frozen-lockfile",
+	"buildCommand": "VESTIGE_BASE_PATH= VITE_ROOT_REDIRECT=/launch pnpm --filter @vestige/dashboard build",
+	"outputDirectory": "apps/dashboard/build",
+	"cleanUrls": true,
+	"trailingSlash": false,
+	"headers": [
+		{
+			"source": "/_app/immutable/(.*)",
+			"headers": [
+				{
+					"key": "Cache-Control",
+					"value": "public, max-age=31536000, immutable"
+				}
+			]
+		},
+		{
+			"source": "/((?!_app/immutable/).*)",
+			"headers": [
+				{
+					"key": "Cache-Control",
+					"value": "public, max-age=0, must-revalidate"
+				}
+			]
+		}
+	],
+	"redirects": [
+		{
+			"source": "/dashboard/launch",
+			"destination": "/launch",
+			"permanent": false
+		},
+		{
+			"source": "/dashboard/launch/:path*",
+			"destination": "/launch",
+			"permanent": false
+		}
+	],
+	"rewrites": [
+		{
+			"source": "/((?!_app/|favicon\\.svg|manifest\\.json|robots\\.txt|.*\\..*).*)",
+			"destination": "/200.html"
+		}
+	]
+}

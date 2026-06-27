@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.108.2",
     "three": "^0.172.0"
   },
   "devDependencies": {

@@ -1,7 +1,7 @@
 <script lang="ts">
-	// Living neural launch sign: VESTIGE / JULY 14TH / SIGN UP NOW built from REAL
-	// grown dendrites (space colonization on the letterforms) with synapse bulbs,
-	// multi-tier bloom, energy burst, and draw-on growth. Not glow-on-text.
+	// Living neural sign: VESTIGE built from REAL
+	// grown dendrites (space colonization on the letterforms) with a quiet bloom.
+	// Not glow-on-text.
 	import { onMount } from 'svelte';
 	import { growSign, type DendriteSign } from '$lib/landing/dendriteGen';
 
@@ -25,13 +25,9 @@
 		}
 	});
 
-	// energy-burst streaks (radial, behind the letters)
-	const streaks = Array.from({ length: 30 }, (_, i) => i);
-	const cx = 500;
-	const cy = 90;
 </script>
 
-<div class="neural-sign" class:reduced aria-label="Vestige launches July 14th, sign up now">
+<div class="neural-sign" class:reduced aria-label="Vestige">
 	{#if sign}
 		<svg
 			viewBox={`0 0 ${sign.width} ${sign.height}`}
@@ -52,41 +48,13 @@
 						<feMergeNode in="SourceGraphic" />
 					</feMerge>
 				</filter>
-				<linearGradient id="ns-grad" x1="0" y1="0" x2="1" y2="0">
-					<stop offset="0%" stop-color="#b388ff" />
-					<stop offset="45%" stop-color="#22d3ee" />
-					<stop offset="75%" stop-color="#39ff9d" />
-					<stop offset="100%" stop-color="#b388ff" />
-				</linearGradient>
 			</defs>
-
-			<!-- energy burst behind -->
-			<g class="streaks" filter="url(#ns-bloom)">
-				{#each streaks as i}
-					{@const ang = (i / streaks.length) * Math.PI * 2}
-					<line
-						x1={cx + Math.cos(ang) * 36}
-						y1={cy + Math.sin(ang) * 22}
-						x2={cx + Math.cos(ang) * (240 + (i % 5) * 28)}
-						y2={cy + Math.sin(ang) * (140 + (i % 5) * 16)}
-						stroke="url(#ns-grad)"
-						stroke-width={1 + (i % 3)}
-						class="streak"
-						style={`--i:${i}`}
-					/>
-				{/each}
-			</g>
 
 			<!-- the grown dendrites -->
 			<g filter="url(#ns-bloom)">
 				<g class="dendrites">
 					{#each sign.paths as p (p.d)}
 						<path d={p.d} stroke={p.col} stroke-width={p.w} stroke-linecap="round" />
-					{/each}
-				</g>
-				<g class="synapses">
-					{#each sign.synapses as s, i (i)}
-						<circle cx={s.x} cy={s.y} r={s.r} fill="#cffff0" class="syn" style={`--i:${i}`} />
 					{/each}
 				</g>
 			</g>
@@ -130,45 +98,7 @@
 		}
 	}
 
-	/* synapse nodes fire */
-	.syn {
-		transform-origin: center;
-		animation: ns-fire 2.6s ease-in-out infinite;
-		animation-delay: calc(var(--i) * -0.073s);
-	}
-	@keyframes ns-fire {
-		0%,
-		100% {
-			opacity: 0.5;
-			transform: scale(0.8);
-		}
-		50% {
-			opacity: 1;
-			transform: scale(1.6);
-		}
-	}
-
-	/* energy streaks shimmer */
-	.streak {
-		opacity: 0.3;
-		animation: ns-streak 3.4s ease-in-out infinite;
-		animation-delay: calc(var(--i) * -0.07s);
-	}
-	@keyframes ns-streak {
-		0%,
-		100% {
-			opacity: 0.15;
-		}
-		50% {
-			opacity: 0.6;
-		}
-	}
-
 	.reduced .dendrites {
-		animation: none;
-	}
-	.reduced .syn,
-	.reduced .streak {
 		animation: none;
 	}
 </style>

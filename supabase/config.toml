@@ -1,10 +1,16 @@
-# Supabase project config for the Vestige Pro waitlist capture.
+# Supabase project config for the Vestige LAUNCH waitlist (/dashboard/launch).
+#
 # Link to a real project with:  supabase link --project-ref <your-ref>
-# Then deploy:                  supabase db push && supabase functions deploy waitlist-join
+# Apply the schema:             supabase db push
+# Deploy the welcome email fn:  supabase functions deploy waitlist-welcome --no-verify-jwt
+#
+# The launch page inserts directly with the anon key (insert-only RLS + RPCs);
+# see supabase/migrations/0002_launch_waitlist.sql and docs/launch/waitlist-setup.md.
+# The legacy service-role waitlist-join function is archived in supabase/legacy/.
 
 project_id = "vestige-waitlist"
 
-[functions.waitlist-join]
-# Public form posts here; no Supabase JWT required (we gate with the honeypot,
-# email validation, and the service-role insert inside the function).
+[functions.waitlist-welcome]
+# Invoked by a Database Webhook on INSERT into public.waitlist (no end-user JWT);
+# guard with the optional WAITLIST_WEBHOOK_SECRET header instead.
 verify_jwt = false

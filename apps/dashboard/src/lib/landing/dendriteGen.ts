@@ -1,6 +1,6 @@
 // Grows real neural dendrites from text glyphs via space colonization, in the
-// browser (canvas + fonts available), and returns SVG-ready path/synapse data.
-// Runs once on mount (~0.7s for 3 lines), deterministic via a seeded RNG so the
+// browser (canvas + fonts available), and returns SVG-ready path data.
+// Runs once on mount, deterministic via a seeded RNG so the
 // same text always grows the same neural sign.
 
 export interface DendritePath {
@@ -10,16 +10,16 @@ export interface DendritePath {
 	len: number;
 	depth: number;
 }
-export interface Synapse {
-	x: number;
-	y: number;
-	r: number;
-}
 export interface DendriteSign {
 	paths: DendritePath[];
-	synapses: Synapse[];
 	width: number;
 	height: number;
+}
+
+export interface GrowSignOptions {
+	fontPx?: number;
+	targetW?: number;
+	iters?: number;
 }
 
 // deterministic PRNG (mulberry32) so the sign is stable across loads
@@ -139,14 +139,17 @@ function growLine(text: string, fontPx: number, iters: number, rand: () => numbe
 	return { nodes, W, H };
 }
 
-/** Grow the full 3-line launch sign. Returns SVG-ready data centered to width 1000. */
-export function growSign(): DendriteSign {
+/** Grow the launch sign. Returns SVG-ready data centered to width 1000. */
+export function growSign(options: GrowSignOptions = {}): DendriteSign {
 	const rand = rng(0x5e57); // fixed seed -> stable sign
 	const palette = ['#39ff9d', '#22d3ee', '#b388ff'];
 	const specs = [
-		{ text: 'VESTIGE', px: 150, targetW: 940, iters: 600 },
-		{ text: 'JULY 14TH', px: 90, targetW: 620, iters: 400 },
-		{ text: 'SIGN UP NOW', px: 78, targetW: 700, iters: 400 }
+		{
+			text: 'VESTIGE',
+			px: options.fontPx ?? 150,
+			targetW: options.targetW ?? 940,
+			iters: options.iters ?? 600
+		}
 	];
 	const VBW = 1000;
 	const lines = specs.map((s) => {
@@ -157,15 +160,12 @@ export function growSign(): DendriteSign {
 	const VBH = lines.reduce((a, l) => a + l.scaledH, 0);
 
 	const paths: DendritePath[] = [];
-	const synapses: Synapse[] = [];
 	let yCursor = 0;
 	let colBase = 0;
 	for (const line of lines) {
 		const { res, scale, scaledH } = line;
 		const offX = (VBW - res.W * scale) / 2;
 		const offY = yCursor;
-		const childCount = new Array(res.nodes.length).fill(0);
-		for (const n of res.nodes) if (n.parent >= 0) childCount[n.parent]++;
 		for (let i = 0; i < res.nodes.length; i++) {
 			const n = res.nodes[i];
 			if (n.parent < 0) continue;
@@ -183,14 +183,9 @@ export function growSign(): DendriteSign {
 				len: Math.round(len + 1),
 				depth: Math.round((i / res.nodes.length) * 30)
 			});
-			// synapse at junctions/tips — sparse, so the pulse animation stays cheap
-			// (animating thousands of SVG nodes kills FPS; ~40 per line is plenty).
-			if ((childCount[i] === 0 || childCount[i] >= 2) && rand() < 0.08) {
-				synapses.push({ x: Math.round(x1), y: Math.round(y1), r: Math.round((w * 0.9 + 1.4) * 10) / 10 });
-			}
 		}
 		yCursor += scaledH;
 		colBase += 1;
 	}
-	return { paths, synapses, width: VBW, height: Math.round(VBH) };
+	return { paths, width: VBW, height: Math.round(VBH) };
 }
