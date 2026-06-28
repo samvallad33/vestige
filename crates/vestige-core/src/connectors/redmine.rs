@@ -104,11 +104,57 @@ impl RedmineConnector {
         if config.project.trim().is_empty() {
             return Err(ConnectorError::Config("project is required".to_string()));
         }
-        if reqwest::Url::parse(&config.root()).is_err() {
-            return Err(ConnectorError::Config(format!(
-                "base_url is not a valid URL: {}",
-                config.base_url
-            )));
+        // SSRF guard: require http(s) and reject internal/reserved hosts so a
+        // misconfigured/hostile base_url cannot point the authenticated client at
+        // localhost, link-local metadata endpoints (169.254.169.254), or private
+        // ranges. Gated off only when explicitly allowed (for local tests).
+        match reqwest::Url::parse(&config.root()) {
+            Ok(url) => {
+                let scheme = url.scheme();
+                if scheme != "http" && scheme != "https" {
+                    return Err(ConnectorError::Config(format!(
+                        "base_url scheme must be http or https, got {scheme}"
+                    )));
+                }
+                if std::env::var("VESTIGE_ALLOW_PRIVATE_CONNECTOR_HOSTS").is_err() {
+                    match url.host() {
+                        None => {
+                            return Err(ConnectorError::Config(
+                                "base_url has no host".to_string(),
+                            ));
+                        }
+                        Some(url::Host::Ipv4(ip))
+                            if ip.is_loopback()
+                                || ip.is_private()
+                                || ip.is_link_local()
+                                || ip.is_unspecified() =>
+                        {
+                            return Err(ConnectorError::Config(format!(
+                                "base_url host {ip} is a reserved/internal address (SSRF guard)"
+                            )));
+                        }
+                        Some(url::Host::Ipv6(ip)) if ip.is_loopback() || ip.is_unspecified() => {
+                            return Err(ConnectorError::Config(format!(
+                                "base_url host {ip} is a reserved/internal address (SSRF guard)"
+                            )));
+                        }
+                        Some(url::Host::Domain(d))
+                            if d.eq_ignore_ascii_case("localhost") =>
+                        {
+                            return Err(ConnectorError::Config(
+                                "base_url host localhost is blocked (SSRF guard)".to_string(),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(_) => {
+                return Err(ConnectorError::Config(format!(
+                    "base_url is not a valid URL: {}",
+                    config.base_url
+                )));
+            }
         }
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)

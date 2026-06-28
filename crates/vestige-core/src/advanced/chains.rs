@@ -491,49 +491,45 @@ impl MemoryChainBuilder {
 
         let mut steps = Vec::new();
 
-        for (i, (mem_id, conn)) in path
-            .memories
-            .iter()
-            .zip(path.connections.iter().chain(std::iter::once(&Connection {
-                from_id: path.memories.last().cloned().unwrap_or_default(),
-                to_id: to.to_string(),
-                connection_type: ConnectionType::SemanticSimilarity,
-                strength: 1.0,
-                created_at: Utc::now(),
-            })))
-            .enumerate()
-        {
+        for (i, mem_id) in path.memories.iter().enumerate() {
             let preview = self
                 .graph
                 .get(mem_id)
                 .map(|n| n.content_preview.clone())
                 .unwrap_or_default();
 
+            // The connection that LED INTO memories[i] is connections[i-1] (the
+            // edge memories[i-1] -> memories[i]). The start step (i==0) has no
+            // incoming edge. The old code paired memories[i] with connections[i]
+            // (the OUTGOING edge) and appended a synthetic connection to mask the
+            // resulting off-by-one, mislabeling every step's connection type.
+            let incoming = if i == 0 {
+                None
+            } else {
+                path.connections.get(i - 1)
+            };
+
             let reasoning = if i == 0 {
                 format!("Starting from '{}'", preview)
             } else {
-                format!(
-                    "'{}' {} '{}'",
-                    self.graph
-                        .get(
-                            &path
-                                .memories
-                                .get(i.saturating_sub(1))
-                                .cloned()
-                                .unwrap_or_default()
-                        )
-                        .map(|n| n.content_preview.as_str())
-                        .unwrap_or(""),
-                    conn.connection_type.description(),
-                    preview
-                )
+                let prev_preview = self
+                    .graph
+                    .get(&path.memories[i - 1])
+                    .map(|n| n.content_preview.as_str())
+                    .unwrap_or("");
+                let rel = incoming
+                    .map(|c| c.connection_type.description())
+                    .unwrap_or("relates to");
+                format!("'{}' {} '{}'", prev_preview, rel, preview)
             };
 
             steps.push(ChainStep {
                 memory_id: mem_id.clone(),
                 memory_preview: preview,
-                connection_type: conn.connection_type.clone(),
-                connection_strength: conn.strength,
+                connection_type: incoming
+                    .map(|c| c.connection_type.clone())
+                    .unwrap_or(ConnectionType::SemanticSimilarity),
+                connection_strength: incoming.map(|c| c.strength).unwrap_or(1.0),
                 reasoning,
             });
         }

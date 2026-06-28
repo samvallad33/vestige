@@ -209,9 +209,12 @@ impl KnowledgeEdge {
         }
     }
 
-    /// Check if the edge is currently valid
+    /// Check if the edge is currently valid (within its [valid_from, valid_until)
+    /// window). Delegates to the bi-temporal check so a not-yet-active edge
+    /// (future valid_from) or an expired one is correctly reported invalid —
+    /// the old version only checked valid_until and ignored valid_from.
     pub fn is_valid(&self) -> bool {
-        self.valid_until.is_none()
+        self.was_valid_at(chrono::Utc::now())
     }
 
     /// Check if the edge was valid at a given time

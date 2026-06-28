@@ -258,6 +258,16 @@ pub async fn run_sync<C: Connector>(
     let mut reconciled = false;
     if reconcile {
         match connector.list_live_ids().await {
+            // CATASTROPHIC-DATA-LOSS GUARD: an empty live-id set would tombstone
+            // EVERY stored memory for this source (none of them appear in the
+            // empty list). An empty result almost always means a transient/auth
+            // failure or an over-narrow scope, not "the source truly has zero
+            // issues". Treat it like None (cannot safely enumerate) and skip.
+            Ok(Some(live_ids)) if live_ids.is_empty() => report.warnings.push(
+                "list_live_ids returned an empty set; skipping reconcile to avoid \
+                 mass-tombstoning the entire source"
+                    .to_string(),
+            ),
             Ok(Some(live_ids)) => {
                 match store.reconcile_source_tombstones(&source_system, &scope, &live_ids) {
                     Ok(r) => {

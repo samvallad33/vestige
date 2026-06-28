@@ -302,6 +302,9 @@ impl EmotionalMemory {
         arousal_score: f64,
     ) -> EmotionalEvaluation {
         let mut eval = self.evaluate_content(content);
+        // evaluate_content already counted a flashbulb if IT detected one. Capture
+        // that so we can reconcile after the importance-based override below.
+        let inner_flashbulb = eval.is_flashbulb;
 
         // Override flashbulb detection with real importance scores
         eval.is_flashbulb = novelty_score >= FLASHBULB_NOVELTY_THRESHOLD
@@ -310,8 +313,12 @@ impl EmotionalMemory {
         // Blend arousal from lexicon with importance arousal
         eval.arousal = (eval.arousal * 0.4 + arousal_score * 0.6).clamp(0.0, 1.0);
 
-        if eval.is_flashbulb && self.flashbulbs_detected == 0 {
-            self.flashbulbs_detected += 1;
+        // Reconcile the counter to the FINAL decision (the old code only ever
+        // incremented once, when the counter happened to be 0 — undercounting).
+        match (inner_flashbulb, eval.is_flashbulb) {
+            (false, true) => self.flashbulbs_detected += 1, // override promoted it
+            (true, false) => self.flashbulbs_detected = self.flashbulbs_detected.saturating_sub(1), // override demoted the inner count
+            _ => {} // unchanged: inner count already correct
         }
 
         eval

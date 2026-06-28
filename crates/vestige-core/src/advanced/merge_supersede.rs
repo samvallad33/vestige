@@ -315,11 +315,19 @@ pub fn compose_merged_content(members: &[(String, String)]) -> String {
     if members.is_empty() {
         return String::new();
     }
-    let mut out = members[0].1.trim().to_string();
+    // Dedup on EXACT normalized content, not substring containment. The old
+    // `out.contains(c)` test silently dropped a distinct member whose text merely
+    // appeared as a substring of the accumulated output (e.g. "cat" inside
+    // "cathedral"), losing its content and provenance.
+    let norm = |s: &str| s.trim().to_lowercase();
+    let first = members[0].1.trim().to_string();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    seen.insert(norm(&first));
+    let mut out = first;
     for (id, content) in &members[1..] {
         let c = content.trim();
-        if c.is_empty() || out.contains(c) {
-            continue;
+        if c.is_empty() || !seen.insert(norm(c)) {
+            continue; // empty or an exact (normalized) duplicate already present
         }
         out.push_str("\n\n[merged from ");
         out.push_str(id);
