@@ -40,7 +40,7 @@ const USER_AGENT: &str = concat!("vestige-connector/", env!("CARGO_PKG_VERSION")
 const PAGE_LIMIT: u32 = 100;
 
 /// Configuration for a Redmine connector instance bound to one project.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RedmineConfig {
     /// Base URL of the Redmine instance, e.g. `https://redmine.example.com`.
     pub base_url: String,
@@ -53,6 +53,19 @@ pub struct RedmineConfig {
     pub api_key: Option<String>,
     /// Max journals to fold into one issue memory (defense against huge threads).
     pub max_journals: usize,
+}
+
+// Manual Debug that NEVER prints the api_key — a derived Debug would leak the
+// credential into any `{:?}` log line or panic message.
+impl std::fmt::Debug for RedmineConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedmineConfig")
+            .field("base_url", &self.base_url)
+            .field("project", &self.project)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("max_journals", &self.max_journals)
+            .finish()
+    }
 }
 
 impl RedmineConfig {

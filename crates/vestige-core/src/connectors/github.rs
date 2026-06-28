@@ -35,7 +35,7 @@ const USER_AGENT: &str = concat!("vestige-connector/", env!("CARGO_PKG_VERSION")
 const PER_PAGE: u32 = 100;
 
 /// Configuration for a GitHub Issues connector instance.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GithubConfig {
     /// Repository owner (user or org).
     pub owner: String,
@@ -48,6 +48,20 @@ pub struct GithubConfig {
     pub api_root: Option<String>,
     /// Max comments to fold into one issue memory (defense against huge threads).
     pub max_comments: usize,
+}
+
+// Manual Debug that NEVER prints the token — a derived Debug would leak the
+// bearer credential into any `{:?}` log line or panic message.
+impl std::fmt::Debug for GithubConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GithubConfig")
+            .field("owner", &self.owner)
+            .field("repo", &self.repo)
+            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("api_root", &self.api_root)
+            .field("max_comments", &self.max_comments)
+            .finish()
+    }
 }
 
 impl GithubConfig {
@@ -162,22 +176,29 @@ impl GithubConnector {
             {
                 let url = &part[start + 1..end];
                 // Host-pin: only follow a next-url on the same host as the API
-                // root we were configured with.
-                if let Some(expected) = expected_host {
-                    match reqwest::Url::parse(url) {
-                        Ok(parsed) if parsed.host_str() == Some(expected) => {
-                            return Some(url.to_string());
-                        }
-                        _ => {
-                            tracing::warn!(
-                                next_url = url,
-                                "dropping cross-host Link next url (host pin)"
-                            );
-                            return None;
-                        }
+                // root we were configured with. FAIL-CLOSED: if we could not
+                // determine the expected host (unparseable/hostless api_root), we
+                // must NOT follow the url — the bearer token would otherwise ride
+                // along to an attacker-influenced host (SSRF / token exfiltration).
+                let Some(expected) = expected_host else {
+                    tracing::warn!(
+                        next_url = url,
+                        "dropping Link next url: no pinned host (fail-closed)"
+                    );
+                    return None;
+                };
+                match reqwest::Url::parse(url) {
+                    Ok(parsed) if parsed.host_str() == Some(expected) => {
+                        return Some(url.to_string());
+                    }
+                    _ => {
+                        tracing::warn!(
+                            next_url = url,
+                            "dropping cross-host Link next url (host pin)"
+                        );
+                        return None;
                     }
                 }
-                return Some(url.to_string());
             }
         }
         None

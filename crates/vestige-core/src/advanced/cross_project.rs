@@ -411,7 +411,12 @@ impl CrossProjectLearner {
                         based_on: pattern.pattern.name.clone(),
                         confidence: applicable.applicability_confidence,
                         evidence: applicable.supporting_memories.clone(),
-                        priority: (10.0 * applicable.applicability_confidence) as u32 - i as u32,
+                        // saturating_sub: when confidence is low (small base) and
+                        // the suggestion index i exceeds it, a plain `-` underflows
+                        // — panicking in debug, wrapping to a huge value in release
+                        // (which corrupts the Reverse-priority sort). Saturate to 0.
+                        priority: ((10.0 * applicable.applicability_confidence) as u32)
+                            .saturating_sub(i as u32),
                     });
                 }
             }
