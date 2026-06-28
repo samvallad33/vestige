@@ -49,7 +49,11 @@ fn main() -> anyhow::Result<()> {
     // Read and parse backup
     let backup_content = std::fs::read_to_string(&backup_path)?;
     let wrapper: Vec<BackupWrapper> = serde_json::from_str(&backup_content)?;
-    let recall_result: RecallResult = serde_json::from_str(&wrapper[0].text)?;
+    // Guard the index: an empty backup array would panic on wrapper[0].
+    let first = wrapper
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("backup wrapper array is empty — nothing to restore"))?;
+    let recall_result: RecallResult = serde_json::from_str(&first.text)?;
     let memories = recall_result.results;
 
     println!("Found {} memories to restore", memories.len());

@@ -117,35 +117,34 @@ impl RedmineConnector {
                     )));
                 }
                 if std::env::var("VESTIGE_ALLOW_PRIVATE_CONNECTOR_HOSTS").is_err() {
-                    match url.host() {
-                        None => {
-                            return Err(ConnectorError::Config(
-                                "base_url has no host".to_string(),
-                            ));
-                        }
-                        Some(url::Host::Ipv4(ip))
-                            if ip.is_loopback()
-                                || ip.is_private()
-                                || ip.is_link_local()
-                                || ip.is_unspecified() =>
-                        {
+                    // Use host_str() + std IP parsing to avoid a direct `url`
+                    // crate dependency. A literal IP host is checked for
+                    // reserved/internal ranges; a "localhost" domain is blocked.
+                    let host = url.host_str().ok_or_else(|| {
+                        ConnectorError::Config("base_url has no host".to_string())
+                    })?;
+                    // strip optional IPv6 brackets, e.g. [::1]
+                    let host_clean = host.trim_start_matches('[').trim_end_matches(']');
+                    if host_clean.eq_ignore_ascii_case("localhost") {
+                        return Err(ConnectorError::Config(
+                            "base_url host localhost is blocked (SSRF guard)".to_string(),
+                        ));
+                    }
+                    if let Ok(ip) = host_clean.parse::<std::net::IpAddr>() {
+                        let reserved = match ip {
+                            std::net::IpAddr::V4(v4) => {
+                                v4.is_loopback()
+                                    || v4.is_private()
+                                    || v4.is_link_local()
+                                    || v4.is_unspecified()
+                            }
+                            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+                        };
+                        if reserved {
                             return Err(ConnectorError::Config(format!(
                                 "base_url host {ip} is a reserved/internal address (SSRF guard)"
                             )));
                         }
-                        Some(url::Host::Ipv6(ip)) if ip.is_loopback() || ip.is_unspecified() => {
-                            return Err(ConnectorError::Config(format!(
-                                "base_url host {ip} is a reserved/internal address (SSRF guard)"
-                            )));
-                        }
-                        Some(url::Host::Domain(d))
-                            if d.eq_ignore_ascii_case("localhost") =>
-                        {
-                            return Err(ConnectorError::Config(
-                                "base_url host localhost is blocked (SSRF guard)".to_string(),
-                            ));
-                        }
-                        _ => {}
                     }
                 }
             }

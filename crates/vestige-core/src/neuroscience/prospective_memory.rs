@@ -988,10 +988,11 @@ impl IntentionParser {
             }
         }
 
-        // Check for "at X" time pattern
-        if text_lower.contains(" at ") {
-            // For now, treat as a simple event trigger
-            let parts: Vec<&str> = original.splitn(2, " at ").collect();
+        // Check for "at X" time pattern. Split using the byte index found in the
+        // lowercased text so the case-insensitive contains() and the split agree
+        // (otherwise "Meeting AT 5pm" passes the check but fails the split).
+        if let Some(idx) = text_lower.find(" at ") {
+            let parts: Vec<&str> = vec![&original[..idx], &original[idx + 4..]];
             if parts.len() == 2 {
                 let part0_lower = parts[0].to_lowercase();
                 let content: String = if part0_lower.starts_with("remind me to ") {
@@ -1290,7 +1291,11 @@ impl ProspectiveMemory {
 
             // Check for deadline escalation
             if self.config.enable_escalation {
-                let threshold = Duration::hours(self.config.escalation_threshold_hours);
+                // try_hours avoids the panic Duration::hours has on an
+                // out-of-range (user-configurable) value; fall back to a large
+                // but safe default if the config is absurd.
+                let threshold = Duration::try_hours(self.config.escalation_threshold_hours)
+                    .unwrap_or_else(|| Duration::hours(24));
                 if intention.is_deadline_approaching(threshold) {
                     // Priority will be automatically escalated via effective_priority()
                 }
@@ -1346,9 +1351,11 @@ impl ProspectiveMemory {
 
             history.push_back(fulfilled_intention);
 
-            // Maintain history size
-            let retention_cutoff =
-                Utc::now() - Duration::days(self.config.completed_retention_days);
+            // Maintain history size. try_days avoids the panic on an
+            // out-of-range user-configurable retention value.
+            let retention_window = Duration::try_days(self.config.completed_retention_days)
+                .unwrap_or_else(|| Duration::days(30));
+            let retention_cutoff = Utc::now() - retention_window;
             while history
                 .front()
                 .map(|i| i.fulfilled_at.unwrap_or(i.created_at) < retention_cutoff)
