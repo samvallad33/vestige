@@ -1976,15 +1976,22 @@ impl HippocampalIndex {
             return Ok(0);
         }
 
-        // Find similar memories
-        let mut candidates: Vec<(String, f32)> = Vec::new();
-        for (id, index) in indices.iter() {
-            if id == memory_id || index.semantic_summary.is_empty() {
-                continue;
-            }
+        // Snapshot the (id, summary) pairs under the read lock, then DROP the lock
+        // before the O(n) cosine scan. Holding the read lock across the whole scan
+        // blocks all writers (index_memory/add_association/migrate_node) for its
+        // full duration on a large index.
+        let source_summary = source.semantic_summary.clone();
+        let pairs: Vec<(String, Vec<f32>)> = indices
+            .iter()
+            .filter(|(id, index)| id.as_str() != memory_id && !index.semantic_summary.is_empty())
+            .map(|(id, index)| (id.clone(), index.semantic_summary.clone()))
+            .collect();
+        drop(indices); // release read lock BEFORE the expensive scan
 
-            let similarity =
-                self.cosine_similarity(&source.semantic_summary, &index.semantic_summary);
+        // Find similar memories (lock-free)
+        let mut candidates: Vec<(String, f32)> = Vec::new();
+        for (id, summary) in &pairs {
+            let similarity = self.cosine_similarity(&source_summary, summary);
             if similarity >= similarity_threshold {
                 candidates.push((id.clone(), similarity));
             }
@@ -1993,8 +2000,6 @@ impl HippocampalIndex {
         // Sort by similarity
         candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(max_associations);
-
-        drop(indices); // Release read lock
 
         // Add associations
         let mut added = 0;

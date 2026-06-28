@@ -932,12 +932,19 @@ impl PredictiveMemory {
 
     /// Get proactive suggestions ("You might also need...")
     pub fn get_proactive_suggestions(&self, min_confidence: f64) -> Result<Vec<PredictedMemory>> {
-        let model = self
-            .user_model
-            .read()
-            .map_err(|e| PredictiveMemoryError::LockPoisoned(e.to_string()))?;
+        // Clone the context and DROP the read guard before calling
+        // predict_needed_memories, which re-acquires user_model.read(). A
+        // re-entrant read on the same thread can deadlock under std::sync::RwLock
+        // when a writer is queued between the two acquisitions.
+        let session_context = {
+            let model = self
+                .user_model
+                .read()
+                .map_err(|e| PredictiveMemoryError::LockPoisoned(e.to_string()))?;
+            model.session_context.clone()
+        };
 
-        let predictions = self.predict_needed_memories(&model.session_context)?;
+        let predictions = self.predict_needed_memories(&session_context)?;
 
         Ok(predictions
             .into_iter()
