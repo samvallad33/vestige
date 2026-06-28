@@ -103,6 +103,18 @@ impl GithubConnector {
                 "owner and repo are required".to_string(),
             ));
         }
+        // owner/repo are interpolated raw into request URLs; restrict them to
+        // GitHub's actual charset so `/`, `%`, `?`, `#`, traversal sequences, etc.
+        // cannot break out of the path or redirect the request.
+        let valid = |s: &str| {
+            s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        };
+        if !valid(&config.owner) || !valid(&config.repo) {
+            return Err(ConnectorError::Config(
+                "owner/repo may only contain [A-Za-z0-9._-]".to_string(),
+            ));
+        }
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .build()

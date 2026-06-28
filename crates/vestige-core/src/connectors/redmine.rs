@@ -491,7 +491,11 @@ impl Connector for RedmineConnector {
         // Enumerate all issue ids (open AND closed) for the reconcile pass.
         // status_id=* is mandatory here too, or closed issues read as deleted.
         let mut ids = Vec::new();
-        let mut offset: u32 = 0;
+        // u64 offset (a u32 could wrap on a huge/compromised total_count, turning
+        // the loop infinite + allocating unboundedly). Also hard-cap pages.
+        let mut offset: u64 = 0;
+        const MAX_PAGES: u32 = 10_000;
+        let mut pages = 0u32;
         loop {
             let url = format!("{}/issues.json", self.config.root());
             let resp = self
@@ -518,8 +522,14 @@ impl Connector for RedmineConnector {
             for issue in &page.issues {
                 ids.push(issue.id.to_string());
             }
-            offset += page.issues.len() as u32;
-            if (offset as u64) >= page.total_count {
+            let new_offset = offset + page.issues.len() as u64;
+            // Defensive: a non-advancing page would loop forever.
+            if new_offset <= offset {
+                break;
+            }
+            offset = new_offset;
+            pages += 1;
+            if offset >= page.total_count || pages >= MAX_PAGES {
                 break;
             }
         }

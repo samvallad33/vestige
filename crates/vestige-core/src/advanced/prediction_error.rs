@@ -493,6 +493,10 @@ impl PredictionErrorGate {
     ) -> GateDecision {
         match intent {
             EvaluationIntent::ForceCreate => {
+                // Count this evaluation: the fallback branches reach evaluate()
+                // (which counts), but these direct branches must count themselves
+                // or create/update/supersede rates can exceed 1.0.
+                self.stats.total_evaluations += 1;
                 self.stats.creates += 1;
                 GateDecision::Create {
                     reason: CreateReason::ExplicitCreate,
@@ -504,6 +508,7 @@ impl PredictionErrorGate {
                 // Find the target candidate
                 if let Some(c) = candidates.iter().find(|c| c.id == target_id) {
                     let similarity = cosine_similarity(new_embedding, &c.embedding);
+                    self.stats.total_evaluations += 1;
                     self.stats.updates += 1;
                     GateDecision::Update {
                         target_id: target_id.clone(),
@@ -522,6 +527,7 @@ impl PredictionErrorGate {
             } => {
                 if let Some(c) = candidates.iter().find(|c| c.id == old_memory_id) {
                     let similarity = cosine_similarity(new_embedding, &c.embedding);
+                    self.stats.total_evaluations += 1;
                     self.stats.supersedes += 1;
                     GateDecision::Supersede {
                         old_memory_id,

@@ -274,7 +274,10 @@ impl MemoryCompressor {
         // Update stats
         self.stats.memories_compressed += memories.len();
         self.stats.compressions_created += 1;
-        self.stats.bytes_saved += original_size - compressed.compressed_size;
+        // saturating_sub: short/repetitive memories can compress LARGER than the
+        // original (header + bullet facts > tiny inputs), which would underflow a
+        // usize subtraction (panic in debug, huge wrap in release).
+        self.stats.bytes_saved += original_size.saturating_sub(compressed.compressed_size);
         self.stats.operations += 1;
         self.update_average_stats(&compressed);
 

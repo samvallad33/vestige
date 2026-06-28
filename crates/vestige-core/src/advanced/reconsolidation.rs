@@ -551,6 +551,10 @@ impl ReconsolidationManager {
     ///
     /// Returns the reconsolidation result with all applied modifications.
     pub fn reconsolidate(&mut self, memory_id: &str) -> Option<ReconsolidatedMemory> {
+        // remove() already guarantees idempotency: a second call finds no entry
+        // and returns None via `?`. The `reconsolidated` flag was never set to
+        // true anywhere, so the guard below was dead — but keep it as a correct,
+        // explicit belt-and-suspenders in case the entry is ever retained.
         let state = self.labile_memories.remove(memory_id)?;
 
         if state.reconsolidated {

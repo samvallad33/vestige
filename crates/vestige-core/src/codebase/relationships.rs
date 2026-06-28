@@ -176,6 +176,15 @@ impl RelationshipTracker {
 
         let id = relationship.id.clone();
 
+        // Reject duplicate ids: a second insert with the same id but different
+        // files would overwrite the relationship while leaving the stale id in
+        // each previous file's index, corrupting get_related_files.
+        if self.relationships.contains_key(&id) {
+            return Err(RelationshipError::Invalid(format!(
+                "duplicate relationship id: {id}"
+            )));
+        }
+
         // Index by each file
         for file in &relationship.files {
             self.file_relationships

@@ -357,8 +357,13 @@ impl ConsolidationScheduler {
 
     /// Stage 1: Replay recent memories in sequence
     fn stage1_replay(&self, memories: &[DreamMemory]) -> MemoryReplay {
-        // Sort by creation time for sequential replay
-        let mut sorted: Vec<_> = memories.iter().take(MAX_REPLAY_MEMORIES).collect();
+        // Select the MOST RECENT memories, then order them chronologically for
+        // sequential replay. The old code took the first N in arbitrary input
+        // order BEFORE sorting, so "recent" memories were dropped whenever the
+        // caller's slice was not already recency-ordered.
+        let mut sorted: Vec<_> = memories.iter().collect();
+        sorted.sort_by_key(|m| std::cmp::Reverse(m.created_at));
+        sorted.truncate(MAX_REPLAY_MEMORIES);
         sorted.sort_by_key(|m| m.created_at);
 
         let sequence: Vec<String> = sorted.iter().map(|m| m.id.clone()).collect();

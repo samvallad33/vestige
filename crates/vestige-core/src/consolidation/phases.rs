@@ -626,13 +626,15 @@ impl DreamEngine {
         tag_b: &str,
         conn_type: CreativeConnectionType,
     ) -> String {
+        // char-boundary-safe: &content[..60] panics if a multi-byte UTF-8 char
+        // straddles byte 60. get(..60) returns None at a non-boundary => fall back.
         let a_summary = if a.content.len() > 60 {
-            &a.content[..60]
+            a.content.get(..60).unwrap_or(&a.content)
         } else {
             &a.content
         };
         let b_summary = if b.content.len() > 60 {
-            &b.content[..60]
+            b.content.get(..60).unwrap_or(&b.content)
         } else {
             &b.content
         };
