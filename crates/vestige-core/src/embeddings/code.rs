@@ -85,13 +85,21 @@ impl CodeEmbedding {
         lines.join(" ")
     }
 
-    /// Check if a line is only a comment
+    /// Check if a line is only a comment.
+    ///
+    /// Conservative on purpose: the previous version treated any line starting
+    /// with `#` or `*` as a comment, which deleted real code — C preprocessor
+    /// directives (`#include`, `#define`), pointer derefs / multiplication
+    /// (`*ptr = 5;`), CSS `* { ... }`, etc. We only strip unambiguous comment
+    /// markers; a leading `*` counts only as a block-comment continuation
+    /// (`* ...`), never a bare `*expr`.
     fn is_comment_only(&self, line: &str) -> bool {
         let trimmed = line.trim();
         trimmed.starts_with("//")
-            || trimmed.starts_with('#')
             || trimmed.starts_with("/*")
-            || trimmed.starts_with('*')
+            || trimmed == "*"
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("*/")
     }
 
     /// Extract semantic chunks from code

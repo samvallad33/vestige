@@ -558,6 +558,16 @@ impl RelationshipTracker {
     /// Load relationships from storage
     pub fn load_relationships(&mut self, relationships: Vec<FileRelationship>) -> Result<()> {
         for relationship in relationships {
+            // Advance next_id past any loaded "rel-N" id so a later new_id() can't
+            // collide with a persisted one (next_id starts at 1 and is otherwise
+            // never reconciled with loaded data).
+            if let Some(n) = relationship
+                .id
+                .strip_prefix("rel-")
+                .and_then(|s| s.parse::<u32>().ok())
+            {
+                self.next_id = self.next_id.max(n + 1);
+            }
             self.add_relationship(relationship)?;
         }
         Ok(())

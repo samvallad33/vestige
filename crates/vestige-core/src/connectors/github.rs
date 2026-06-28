@@ -369,9 +369,13 @@ impl Connector for GithubConnector {
             if issue.pull_request.is_some() {
                 continue;
             }
-            // Fetch comments only when the issue has any.
+            // Fetch comments only when the issue has any. Propagate failures
+            // instead of swallowing them: a silent unwrap_or_default() stored a
+            // comment-less record with a corrupted content hash AND let the
+            // cursor advance past it, so the issue would never be re-synced. A
+            // propagated error keeps the issue in the next window (cursor clamp).
             let comments = if issue.comments > 0 {
-                self.fetch_comments(issue.number).await.unwrap_or_default()
+                self.fetch_comments(issue.number).await?
             } else {
                 Vec::new()
             };

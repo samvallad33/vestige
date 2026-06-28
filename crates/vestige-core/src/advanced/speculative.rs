@@ -466,7 +466,11 @@ impl SpeculativeRetriever {
 
     fn store_pending_predictions(&self, predictions: &[PredictedMemory]) {
         if let Ok(mut pending) = self.pending_predictions.write() {
-            pending.clear();
+            // Merge (do NOT clear): two predict() calls without an intervening
+            // record_usage() would otherwise wipe the first batch's pending
+            // entries, destroying the right/wrong accounting record_usage relies
+            // on. Newer predictions overwrite same-id entries; older survive
+            // until consumed.
             for pred in predictions {
                 pending.insert(pred.memory_id.clone(), pred.clone());
             }

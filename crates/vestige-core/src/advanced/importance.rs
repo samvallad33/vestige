@@ -183,6 +183,14 @@ impl ImportanceTracker {
 
     /// Update importance when a memory is retrieved
     pub fn on_retrieved(&self, memory_id: &str, was_helpful: bool) {
+        self.record_retrieval(memory_id, was_helpful, None);
+    }
+
+    /// Push a usage event (with its context already populated) and update the
+    /// importance score. Context is set in the SAME critical section as the push
+    /// so a concurrent on_retrieved cannot slip an event in between and steal the
+    /// context via last_mut() (the previous two-lock approach raced).
+    fn record_retrieval(&self, memory_id: &str, was_helpful: bool, context: Option<String>) {
         let now = Utc::now();
 
         // Record the event
@@ -190,7 +198,7 @@ impl ImportanceTracker {
             events.push(UsageEvent {
                 memory_id: memory_id.to_string(),
                 was_helpful,
-                context: None,
+                context,
                 timestamp: now,
             });
 
@@ -227,15 +235,7 @@ impl ImportanceTracker {
 
     /// Update importance with additional context
     pub fn on_retrieved_with_context(&self, memory_id: &str, was_helpful: bool, context: &str) {
-        self.on_retrieved(memory_id, was_helpful);
-
-        // Store context with event
-        if let Ok(mut events) = self.recent_events.write()
-            && let Some(event) = events.last_mut()
-            && event.memory_id == memory_id
-        {
-            event.context = Some(context.to_string());
-        }
+        self.record_retrieval(memory_id, was_helpful, Some(context.to_string()));
     }
 
     /// Apply importance decay to all memories

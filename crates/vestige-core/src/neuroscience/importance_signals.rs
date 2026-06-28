@@ -366,9 +366,12 @@ impl PredictionModel {
                 *total += 1;
             }
 
-            // Prune if too large
+            // Prune if too large, then reconcile total_count to the surviving
+            // sum. The old code left total_count inflated after pruning/decay,
+            // which drove computed novelty (count/total) toward zero over time.
             if patterns.len() > MAX_PREDICTION_PATTERNS {
                 self.apply_decay(&mut patterns);
+                *total = patterns.values().map(|c| *c as u64).sum();
             }
         }
     }
