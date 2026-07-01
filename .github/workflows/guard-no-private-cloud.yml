@@ -1,8 +1,11 @@
 name: Guard — No Private Cloud Code
 
-# Fails if private Vestige Cloud *service* code (billing, sync-key/namespace
-# mapping, Lemon Squeezy webhooks, transactional email) ever lands in this
-# public repo. The public cloud *client* is allowed and does not trip this.
+# Fails if private content ever lands in this public repo:
+#   1. Private Vestige Cloud *service* code (billing, sync-key/namespace
+#      mapping, Lemon Squeezy webhooks, transactional email). The public cloud
+#      *client* is allowed and does not trip this.
+#   2. Private local paths, usernames, or machine names (e.g. a real
+#      /home/<user>/ worktree). Placeholder paths like /Users/you/ are allowed.
 on:
   push:
     branches: [main, feat/cloud-sync-mvp]
@@ -23,3 +26,6 @@ jobs:
 
       - name: Scan for private cloud service markers
         run: ./scripts/check-no-private-cloud.sh
+
+      - name: Scan for private paths, usernames, and machine names
+        run: ./scripts/check-no-private-paths.sh

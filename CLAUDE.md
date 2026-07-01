@@ -87,3 +87,9 @@ Do not commit private absolute paths, local agent memory paths, unpublished
 planning files, real credentials, personal operating notes, or private repo
 locations. Example environment variables in docs must be empty placeholders or
 obviously fake examples.
+
+Two CI guards enforce this on every push and PR (see
+`.github/workflows/guard-no-private-cloud.yml`):
+`scripts/check-no-private-cloud.sh` blocks private cloud-service code, and
+`scripts/check-no-private-paths.sh` blocks real local paths, usernames, and
+machine names (placeholder paths like `/Users/you/...` or `~/` are fine).
