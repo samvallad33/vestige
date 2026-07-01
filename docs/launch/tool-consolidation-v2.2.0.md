@@ -4,6 +4,11 @@
 > tool, then make the few always-on tools deterministic. Two layers: Layer 1
 > (this release) collapses 34 advertised tools to 12; Layer 2 (follow-up) shrinks
 > the *default* surface and enforces the memory loop with hooks.
+>
+> Note: v2.2.0 also ships one **net-new** tool from a separate value stream — the
+> flagship `backfill` (Retroactive Salience, Cai 2024 *Nature*). It is not part of
+> this fold, so the shipped advertised surface is **13** (12 from consolidation +
+> `backfill`), as asserted by `test_tools_list_returns_all_tools`.
 
 ## Why (frontier evidence)
 
@@ -21,7 +26,7 @@ ignores make the 5 it uses harder to choose:
 
 Vestige had **34** advertised tools. This is the correction.
 
-## Layer 1 — Count reduction (THIS RELEASE): 34 → 12 advertised
+## Layer 1 — Count reduction (THIS RELEASE): 34 → 12 (fold result)
 
 Principle: **one consolidation per commit, one change per submission.** Each
 consolidation is its own commit, landed in a safe order with the hot retrieval
@@ -42,9 +47,12 @@ habits keep working) and is removed in **v2.3.0**.
 
 `recall` is committed **last** because it is the hot path.
 
-### Final advertised surface (12)
+### Final advertised surface (13)
 
-| Standalone (6) | Consolidated (6) |
+The fold itself lands at 12; the release adds the net-new flagship `backfill`,
+for **13 advertised**.
+
+| Standalone (7) | Consolidated (6) |
 |---|---|
 | `smart_ingest` | `recall` |
 | `memory` | `dedup` |
@@ -52,6 +60,7 @@ habits keep working) and is removed in **v2.3.0**.
 | `intention` | `graph` |
 | `source_sync` | `maintain` |
 | `suppress` | `session_start` |
+| `backfill` | |
 
 ### Action / mode / view maps
 
@@ -66,8 +75,9 @@ habits keep working) and is removed in **v2.3.0**.
 - **`search` is folded, not kept standalone.** `recall` with no `mode` (the
   default) *is* search — a zero-overhead pass-through to `search_unified`. Keeping
   both `search` and `recall` advertised would be the exact RAG-MCP anti-pattern.
-  Final count is a clean **12**, leaving 2 slots of headroom toward a future
-  always-on `save` surface rather than spending them on a redundant verb.
+  The fold lands at a clean **12**; adding the flagship `backfill` brings the
+  shipped surface to **13**, still well inside the ~30-tool safe zone and leaving
+  headroom toward a future always-on `save` surface.
 - **`graph` actions are flat peers, not nested.** `explore`'s `chain` /
   `associations` / `bridges` sit alongside `predict` / `memory_graph` /
   `composed_graph` actions in a single `action` enum — matching the existing

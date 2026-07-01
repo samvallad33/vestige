@@ -31,7 +31,7 @@ So that's what Vestige is. Everyone else built a memory that **remembers**. I tr
 
 It's one Rust binary. It runs entirely on your machine. It never phones home. And there's a 60-second start right below.
 
-> 🎙️ **The 60-second version** of this whole story, the one I give in person, lives in [`demo/PITCH-v2-causebench.md`](demo/PITCH-v2-causebench.md). If you've got a minute, read that first. It's the clearest way to *get* why this matters.
+> 🎙️ **Want the 60-second version?** Run the [Postdict demo](demo/README.md): one command, a throwaway DB, and you watch Vestige reach backward through time to a root cause a vector search can't find. It's the clearest way to *get* why this matters.
 
 ---
 
@@ -272,7 +272,7 @@ Registering the server exposes the tools; a short instruction tells the agent *w
 
 | | |
 |---|---|
-| **Language** | Rust 2024 (MSRV 1.91), **86,000+ lines** |
+| **Language** | Rust 2024 (MSRV 1.91), **92,000+ lines** |
 | **Binary** | ~23MB, single file |
 | **Embeddings** | Nomic Embed Text v1.5 (768d→256d Matryoshka, 8192 ctx); Qwen3 optional |
 | **Vector search** | USearch HNSW (≈20× faster than FAISS) |
@@ -299,7 +299,7 @@ Registering the server exposes the tools; a short instruction tells the agent *w
 
 ### If your agent should remember what you taught it yesterday, star it. ⭐
 
-<sub><b>86,000+ lines of Rust · 13 tools · 30 cognitive modules · 130 years of memory research · one 23MB binary that never phones home.</b></sub>
+<sub><b>92,000+ lines of Rust · 13 tools · 30 cognitive modules · 130 years of memory research · one 23MB binary that never phones home.</b></sub>
 
 <sub>Built by <a href="https://github.com/samvallad33">@samvallad33</a> · AGPL-3.0 · 100% local, 100% yours</sub>
 

@@ -79,7 +79,7 @@ cd apps/dashboard && pnpm build
 # Debug build
 cargo build -p vestige-mcp
 
-# Release build (22MB binary with embedded dashboard)
+# Release build (23MB binary with embedded dashboard)
 cargo build --release -p vestige-mcp
 
 # The release binary is at target/release/vestige-mcp

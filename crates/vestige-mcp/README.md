@@ -54,17 +54,30 @@ HTTP and dashboard bearer tokens are generated locally; see
 
 ## Current Tool Surface
 
-The server exposes the current unified MCP tools from
-[`src/server.rs`](src/server.rs), including:
+As of v2.2, the server advertises **13 consolidated tools** from
+[`src/server.rs`](src/server.rs):
 
-- `session_context`
-- `search`, `smart_ingest`, `memory`, `codebase`, `intention`
-- `deep_reference`, `cross_reference`, `contradictions`
-- `dream`, `explore_connections`, `predict`
-- `memory_health`, `memory_graph`, `composed_graph`, `system_status`
-- `importance_score`, `find_duplicates`
-- `consolidate`, `memory_timeline`, `memory_changelog`
-- `backup`, `export`, `restore`, `gc`, `suppress`
+- `recall` — unified retrieval (folds `search` + `deep_reference` +
+  `cross_reference` + `contradictions`); modes `lookup`/`reason`/`contradictions`
+- `smart_ingest` — Prediction-Error-gated ingestion (single + batch)
+- `memory` — get / edit / promote / demote / state / purge
+- `graph` — chains, associations, bridges, predictions, force-directed export
+  (folds `explore_connections` + `predict` + `memory_graph` + `composed_graph`)
+- `maintain` — consolidate / dream / gc / importance_score / backup / export / restore
+- `dedup` — scan / plan_merge / plan_supersede / apply / undo / protect / policy
+  (folds `find_duplicates` + the 7 Phase-3 merge tools)
+- `memory_status` — health / retention / timeline / changelog
+  (folds `system_status` + `memory_health` + `memory_timeline` + `memory_changelog`)
+- `suppress` — top-down active forgetting (Anderson 2025 + Davis Rac1)
+- `backfill` — Retroactive Salience Backfill (Cai 2024 Nature), the flagship
+- `codebase` — per-project patterns and decisions
+- `intention` — set / check / update / list future triggers
+- `source_sync` — external-source connectors (GitHub, Redmine)
+- `session_start` — one-call session initialization (renamed from `session_context`)
+
+The ~22 pre-consolidation names (`search`, `deep_reference`, `dream`,
+`consolidate`, `memory_graph`, …) still work as **hidden back-compat aliases**
+dispatched in `handle_tools_call`, so existing configs keep working.
 
 See the root [`README.md`](../../README.md) and
 [`docs/AGENT-MEMORY-PROTOCOL.md`](../../docs/AGENT-MEMORY-PROTOCOL.md) for

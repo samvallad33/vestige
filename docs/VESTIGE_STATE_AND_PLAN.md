@@ -15,14 +15,29 @@ For current user-facing release information, use:
 
 ## Current Release Shape
 
-Vestige v2.1.21 is the "Agent-Neutral Hardening" release. Its public scope is:
+Vestige v2.2.0 is the "Retroactive Salience + Tool Consolidation" release. Its
+public scope is:
+
+- Retroactive Salience Backfill (Cai 2024 *Nature*): on a recorded failure,
+  reach backward in time to promote the causally-upstream root cause. Auto-fires
+  in the consolidation pass; also exposed as the `backfill` MCP tool and
+  `vestige backfill` CLI
+- MCP tool consolidation: 34 tools collapse to 13 advertised
+  (`recall`, `smart_ingest`, `memory`, `graph`, `maintain`, `dedup`,
+  `memory_status`, `suppress`, `backfill`, `codebase`, `intention`,
+  `source_sync`, `session_start`); the pre-consolidation names remain
+  dispatchable as hidden back-compat aliases
+- `deep_reference`/`recall` retrieval engine upgrades: F32 embeddings (was I8),
+  Reciprocal Rank Fusion, and claim-vs-memory contradiction checks
+
+It carries forward the local-first hardening baseline from prior releases:
 
 - stdio MCP as the default agent transport, with HTTP MCP opt-in only
 - binary-only `vestige update` by default
 - delete and purge confirmation parity for destructive memory removal
-- portable sync fixes for purge tombstones, UPSERT merge, and vector index
+- portable sync handling for purge tombstones, UPSERT merge, and vector index
   reloads
-- safer release packaging with dashboard freshness checks and checksums
+- release packaging with dashboard freshness checks and checksums
 - agent-neutral memory instructions for any MCP-compatible client
 
 The release keeps the local-first baseline intact. Heavy model hooks, local
@@ -69,7 +84,14 @@ Vestige is organized as:
 - `packages/vestige-init`: installer helper
 - `docs`: user and integration documentation
 
-## v2.1.21 Implementation Notes
+## v2.2.0 Implementation Notes
+
+The advertised MCP surface is 13 tools (see `handle_tools_list` in
+`crates/vestige-mcp/src/server.rs`, verified by `test_tools_list_returns_all_tools`).
+Consolidation is a facade: the ~22 folded/renamed names still dispatch through
+`handle_tools_call` as hidden aliases, so existing client configs keep working.
+`backfill` is deliberately advertised as its own tool rather than folded into
+`maintain`, because backward causal promotion is a distinct cognitive primitive.
 
 HTTP MCP is disabled unless the user passes `--http`, passes `--http-port`, or
 sets `VESTIGE_HTTP_ENABLED=1`. The stdio MCP server remains the portable default

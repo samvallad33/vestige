@@ -240,8 +240,11 @@ impl McpServer {
 
     /// Handle tools/list request
     async fn handle_tools_list(&self) -> Result<serde_json::Value, JsonRpcError> {
-        // v2.2: 12 advertised tools after Layer-1 Tool Consolidation
-        // (verified by `tools.len() == 12` in test_tools_list_returns_all_tools).
+        // v2.2: 13 advertised tools after Layer-1 Tool Consolidation
+        // (12 consolidated: dedup + memory_status + graph + maintain + recall,
+        // session_context renamed; plus the flagship `backfill`, a distinct
+        // cognitive primitive kept separate from `maintain`).
+        // Verified by `tools.len() == 13` in test_tools_list_returns_all_tools.
         // 22 deprecated/folded names still work as hidden redirects in
         // handle_tools_call. See docs/launch/tool-consolidation-v2.2.0.md.
         let mut tools = vec![

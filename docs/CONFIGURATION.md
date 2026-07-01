@@ -310,7 +310,7 @@ vestige update --sandwich-companion
 
 **Pin to specific version:**
 ```bash
-vestige update --version v2.1.21
+vestige update --version v2.2.0
 ```
 
 **Manage the optional Cognitive Sandwich layer without updating binaries:**
