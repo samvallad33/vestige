@@ -1656,6 +1656,39 @@ impl SqliteMemoryStore {
             .ok_or_else(|| StorageError::NotFound(id.to_string()))
     }
 
+    /// Backfill-specific promote: identical retrieval/retention boost to
+    /// `promote_memory`, but the stability multiply is CAPPED (MIN with an
+    /// additive +365-day ceiling — the same bound `retroactive_backfill.rs`
+    /// already computes for its reason string) so repeated per-(cause,failure)
+    /// backfill promotions cannot inflate stability without bound. Used by the
+    /// step-8.5 auto-fire path and the manual `backfill` tool.
+    /// (omega-backfill-safety patch, pending upstream.)
+    pub fn promote_memory_backfill(&self, id: &str) -> Result<KnowledgeNode> {
+        let now = Utc::now();
+
+        {
+            let writer = self
+                .writer
+                .lock()
+                .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            writer.execute(
+                "UPDATE knowledge_nodes SET
+                    last_accessed = ?1,
+                    retrieval_strength = MIN(1.0, retrieval_strength + 0.20),
+                    retention_strength = MIN(1.0, retention_strength + 0.10),
+                    stability = MIN(stability * 1.5, stability + 365.0)
+                WHERE id = ?2",
+                params![now.to_rfc3339(), id],
+            )?;
+        }
+
+        let _ = self.log_access(id, "promote");
+        let _ = self.set_waking_tag(id);
+
+        self.get_node(id)?
+            .ok_or_else(|| StorageError::NotFound(id.to_string()))
+    }
+
     /// Demote a memory (thumbs down) - used when a memory led to a bad outcome
     /// Significantly reduces retrieval strength so better alternatives surface
     /// Does NOT delete - the memory stays for reference but ranks lower
@@ -3659,10 +3692,22 @@ impl SqliteMemoryStore {
         // consolidation pass IS the offline window. Bounded on every axis so a
         // noisy day cannot trigger a promotion storm, and idempotent across cycles
         // via a durable causal edge (so the same cause is promoted once per
-        // failure, not every cycle — promote_memory's stability boost is capped
-        // but would still inflate without this guard).
+        // failure, not every cycle).
+        //
+        // OPT-IN (omega-backfill-safety patch, pending upstream): auto-fire is OFF
+        // by default. It mutates FSRS scores on the canonical store and can lift a
+        // memory across a downstream consolidation floor, so it is gated behind
+        // VESTIGE_BACKFILL_AUTOFIRE=1|true. The `backfill` MCP tool + CLI remain
+        // available for on-demand, operator-driven backfill regardless. The promote
+        // is bounded: both the auto-fire and manual paths call promote_memory_backfill
+        // (stability = MIN(stability*1.5, stability+365)) so repeated per-(cause,
+        // failure) promotions cannot inflate without bound (the prior comment
+        // claimed promote_memory was capped — it was not).
+        let backfill_autofire = std::env::var("VESTIGE_BACKFILL_AUTOFIRE")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
         let mut backfilled_causes = 0i64;
-        {
+        if backfill_autofire {
             use crate::advanced::retroactive_backfill::{
                 self as rb, BackfillCandidate, FailureEvent, RetroactiveBackfill,
             };
@@ -3755,7 +3800,7 @@ impl SqliteMemoryStore {
                         if self.save_connection(&conn).is_err() {
                             continue;
                         }
-                        if self.promote_memory(&cause.memory_id).is_ok() {
+                        if self.promote_memory_backfill(&cause.memory_id).is_ok() {
                             backfilled_causes += 1;
                         }
                     }
