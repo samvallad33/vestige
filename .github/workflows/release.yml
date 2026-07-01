@@ -31,7 +31,14 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: zip
-            cargo_flags: "--no-default-features --features embeddings,ort-download"
+            # vector-search (usearch HNSW index) is REQUIRED. Without it the
+            # storage layer's #[cfg(feature = "vector-search")] paths compile
+            # out, so embeddings are never persisted or queried: the binary
+            # reports "Embedding Service: Not Ready", 0% coverage, consolidate
+            # generates 0 embeddings, and no model download is ever attempted.
+            # usearch builds cleanly on MSVC because vestige-core pins it with
+            # features=["fp16lib"] (see crates/vestige-core/Cargo.toml).
+            cargo_flags: "--no-default-features --features embeddings,ort-download,vector-search"
             needs_onnxruntime: false
           # Intel Mac uses the ort-dynamic feature to runtime-link against a
           # system libonnxruntime (Homebrew), sidestepping the missing
