@@ -126,6 +126,68 @@ Target: turn "I have 300 notes" into a reliable workflow.
 | Review queue | Users can approve, edit, split, merge, or reject proposed memories. |
 | Post-import health pass | Vestige recommends consolidation, duplicate review, or tag cleanup after import. |
 
+## Tracked Issues (Consolidated 2026-07-02)
+
+The following roadmap issues were consolidated here and closed so the issue tracker
+reflects active work, not a standing backlog. Nothing is lost — each entry keeps its
+scope, the backend anchors that already exist, and why it is deferred. Most are
+deferred behind the dashboard focus; several are security/data-integrity boundaries
+that are deliberately *not* shipped half-done.
+
+### A. Reliability & Trust surfaces
+
+- **Agent Reliability Record** (was #84) — Unify traces, receipts, contradictions,
+  and composed-graph events into one per-run record with 5 evidence states
+  (supported / missing / stale / contradicted / suppressed) + Markdown export.
+  Backend already exists (`crates/vestige-core/src/trace/`). Remaining work is the
+  dashboard record view — see the dashboard Discussion.
+- **Trust Zones + Memory Quarantine** (was #85) — Provenance/trust class on nodes,
+  score-capping for weak-provenance content, quarantine of untrusted sources.
+  Security boundary; unsafe half-done, and depends on ACL Memory primitives that
+  don't exist yet. Deferred post-dashboard.
+- **ComposeBench** (was #86) — Reliability benchmark across 8 scenarios. Will reuse
+  the existing `benchmarks/causebench/` harness pattern; the ACL scenario is gated
+  on ACL Memory. Deferred.
+
+### B. Access & Governance boundary
+
+- **ACL Memory for source-aware connectors** (was #82) — Source-authorization-aware
+  memory: connector-ingested memories preserve upstream access rules and retrieval
+  fails closed for unauthorized callers. A hard security boundary with no foundation
+  today (no per-caller identity model; `search()` takes no subject). Must be designed
+  as one deliberate pass, not sliced. Design + user-permission-shape input welcome in
+  the Discussion.
+- **Team Pro Reliability Foundation** (was #92) — Commercial team tier (RBAC/SSO/SCIM,
+  admin review, audit export, team lanes, Postgres, hosted backups). A product-strategy
+  meta-issue, upstream of coding; depends on ACL Memory + HTTP/Postgres plans.
+
+### C. Ingest & Projection integrity
+
+- **Markdown + Rules Projection** (was #87) — Project memories into client-native
+  rule files (AGENTS.md, CLAUDE.md, `.cursor/rules`, Windsurf, Cline) with provenance
+  and an optional bidirectional re-import. The re-import leg is a data-integrity
+  boundary (must never silently overwrite user files). Target-format priorities are an
+  open user question — Discussion.
+- **Code Memory Workflow** (was #88) — First-class, inspectable code memory
+  (patterns/decisions with file+line provenance) kept separate from prose. The typed
+  model exists (`crates/vestige-core/src/codebase/`) but is unpersisted/unwired; needs
+  schema + a review/prune dashboard surface.
+- **Guided Import + Review Queue** (was #89) — Dry-run import → proposed memories →
+  approve/edit/split/merge/reject queue → post-import health pass. Ingest/corruption
+  boundary; needs a real no-write dry run + review-queue state machine.
+- **Goals + Milestones** (was #90) — A durable, non-decaying goal/milestone primitive
+  (paralleling the intentions subsystem) with lifecycle states and evidence/blockers.
+  A create-only slice would ship the primitive without its defining non-decay
+  guarantee, so it waits for the full build.
+
+### D. Dashboard productization
+
+- **ComposedGraph Productization** (was #91) — The MCP/CLI/storage backend already
+  ships in v2.2 (`crates/vestige-mcp/src/tools/composed_graph.rs`, all 7 modes). The
+  remaining slice is the dashboard surface: composition history, the never-composed
+  frontier, and closed doors. This is the natural first move in the dashboard focus —
+  shape it in the Discussion.
+
 ## Non-Goals
 
 - Do not auto-store every conversation turn by default.
