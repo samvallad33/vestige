@@ -2335,6 +2335,517 @@ pub fn read_review_mode(state: &AppState) -> vestige_core::ReviewMode {
         .unwrap_or_default()
 }
 
+// ============================================================================
+// MEMORY HYGIENE + INTELLIGENCE SURFACES (live-wire endpoints)
+//
+// GET /api/duplicates            — cosine duplicate clusters (dedup tool reshaped)
+// GET /api/contradictions        — trust-weighted contradiction pairs
+// GET /api/patterns/cross-project — CrossProjectLearner hydrated on demand
+// GET /api/memories/{id}/audit   — per-memory audit trail (state transitions)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct DuplicatesParams {
+    pub threshold: Option<f64>,
+    pub limit: Option<usize>,
+}
+
+/// Duplicate clusters for the dashboard. Reuses the `dedup` tool's
+/// union-find clustering, then re-fetches each member node so the response
+/// carries full content and nodeType (the tool only keeps a 120-char preview).
+pub async fn list_duplicates(
+    State(state): State<AppState>,
+    Query(params): Query<DuplicatesParams>,
+) -> Result<Json<Value>, StatusCode> {
+    let threshold = params.threshold.unwrap_or(0.80).clamp(0.5, 0.99);
+    let limit = params.limit.unwrap_or(20).clamp(1, 50);
+
+    let args = serde_json::json!({
+        "similarity_threshold": threshold,
+        "limit": limit,
+    });
+    let raw = crate::tools::dedup::execute(&state.storage, Some(args))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut clusters: Vec<Value> = Vec::new();
+    if let Some(raw_clusters) = raw.get("clusters").and_then(|v| v.as_array()) {
+        for cluster in raw_clusters {
+            let members = cluster
+                .get("members")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            // Representative pair similarity: max member similarity-to-anchor,
+            // skipping the anchor itself (members[0], always exactly 1.0).
+            let similarity = members
+                .iter()
+                .skip(1)
+                .filter_map(|m| {
+                    m.get("similarityToAnchor")
+                        .and_then(|s| s.as_str())
+                        .and_then(|s| s.parse::<f64>().ok())
+                })
+                .fold(0.0_f64, f64::max);
+
+            let memories: Vec<Value> = members
+                .iter()
+                .filter_map(|m| {
+                    let id = m.get("id").and_then(|v| v.as_str())?;
+                    let node = state.storage.get_node(id).ok().flatten()?;
+                    Some(serde_json::json!({
+                        "id": node.id,
+                        "content": node.content,
+                        "nodeType": node.node_type,
+                        "tags": node.tags,
+                        "retention": node.retention_strength,
+                        "createdAt": node.created_at.to_rfc3339(),
+                    }))
+                })
+                .collect();
+
+            if memories.len() < 2 {
+                continue;
+            }
+
+            clusters.push(serde_json::json!({
+                "similarity": similarity,
+                "suggestedAction": if similarity >= 0.9 { "merge" } else { "review" },
+                "memories": memories,
+            }));
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "threshold": threshold,
+        "total": clusters.len(),
+        "clusters": clusters,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ContradictionsParams {
+    pub topic: Option<String>,
+    pub min_trust: Option<f64>,
+    pub limit: Option<i32>,
+}
+
+/// Contradiction pairs for the dashboard. Same pairing primitives as the
+/// `contradictions` MCP tool (topic overlap >= 0.4, negation/correction
+/// heuristics, trust gate), but built directly against the nodes so the
+/// response carries nodeType/createdAt and chronological a→b ordering
+/// (a = older, b = newer — b is the memory that supersedes a).
+pub async fn list_contradictions(
+    State(state): State<AppState>,
+    Query(params): Query<ContradictionsParams>,
+) -> Result<Json<Value>, StatusCode> {
+    use crate::tools::cross_reference::{appears_contradictory, compute_trust, topic_overlap};
+
+    let limit = params.limit.unwrap_or(50).clamp(2, 200);
+    let min_trust = params.min_trust.unwrap_or(0.3).clamp(0.0, 1.0);
+    let topic_param = params
+        .topic
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    let memories = if let Some(topic) = topic_param.as_deref() {
+        state
+            .storage
+            .hybrid_search(topic, limit, 0.3, 0.7)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .into_iter()
+            .map(|result| result.node)
+            .collect::<Vec<_>>()
+    } else {
+        state
+            .storage
+            .get_all_nodes(limit, 0)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+
+    let mut pairs: Vec<(f32, Value)> = Vec::new();
+    for i in 0..memories.len() {
+        for j in (i + 1)..memories.len() {
+            let x = &memories[i];
+            let y = &memories[j];
+            let overlap = topic_overlap(&x.content, &y.content);
+            if overlap < 0.4 || !appears_contradictory(&x.content, &y.content) {
+                continue;
+            }
+
+            let x_trust = compute_trust(x.retention_strength, x.stability, x.reps, x.lapses);
+            let y_trust = compute_trust(y.retention_strength, y.stability, y.reps, y.lapses);
+            if x_trust.min(y_trust) < min_trust {
+                continue;
+            }
+
+            // a = older, b = newer (b supersedes a).
+            let ((a, trust_a), (b, trust_b)) = if x.created_at <= y.created_at {
+                ((x, x_trust), (y, y_trust))
+            } else {
+                ((y, y_trust), (x, x_trust))
+            };
+            let date_diff_days = (b.created_at - a.created_at).num_days().abs();
+            let topic_label = topic_param
+                .clone()
+                .unwrap_or_else(|| shared_keywords(&a.content, &b.content));
+
+            pairs.push((
+                overlap,
+                serde_json::json!({
+                    "memory_a_id": a.id,
+                    "memory_b_id": b.id,
+                    "memory_a_preview": a.content.chars().take(200).collect::<String>(),
+                    "memory_b_preview": b.content.chars().take(200).collect::<String>(),
+                    "memory_a_type": a.node_type,
+                    "memory_b_type": b.node_type,
+                    "memory_a_created": a.created_at.to_rfc3339(),
+                    "memory_b_created": b.created_at.to_rfc3339(),
+                    "memory_a_tags": a.tags,
+                    "memory_b_tags": b.tags,
+                    "trust_a": (trust_a * 100.0).round() / 100.0,
+                    "trust_b": (trust_b * 100.0).round() / 100.0,
+                    "similarity": overlap,
+                    "date_diff_days": date_diff_days,
+                    "topic": topic_label,
+                }),
+            ));
+        }
+    }
+
+    pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let contradictions: Vec<Value> = pairs.into_iter().map(|(_, v)| v).collect();
+
+    Ok(Json(serde_json::json!({
+        "memoriesAnalyzed": memories.len(),
+        "total": contradictions.len(),
+        "contradictions": contradictions,
+    })))
+}
+
+/// Top shared substantive keywords between two contents — same tokenization
+/// as `topic_overlap` (lowercase, whitespace split, length > 3), trimmed of
+/// punctuation for display. Deterministic: longest-first, then alphabetical.
+fn shared_keywords(a: &str, b: &str) -> String {
+    let a_lower = a.to_lowercase();
+    let b_lower = b.to_lowercase();
+    let tokenize = |s: &'_ str| -> HashSet<String> {
+        s.split_whitespace()
+            .map(|w| {
+                w.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_string()
+            })
+            .filter(|w| w.len() > 3)
+            .collect()
+    };
+    let a_words = tokenize(&a_lower);
+    let b_words = tokenize(&b_lower);
+    let mut shared: Vec<&String> = a_words.intersection(&b_words).collect();
+    shared.sort_by(|x, y| y.len().cmp(&x.len()).then_with(|| x.cmp(y)));
+    shared
+        .into_iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Cross-project pattern transfer. The `CrossProjectLearner` state is not
+/// persisted, so hydrate on demand: fetch the 500 most recent memories, infer
+/// project + category for each, run `learn_from_memories`, then map the
+/// discovered patterns to the dashboard DTO. Only the six frontend categories
+/// are emitted; sparse or empty results are expected on small stores.
+pub async fn get_cross_project_patterns(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, StatusCode> {
+    use std::collections::HashMap;
+    use vestige_core::advanced::cross_project::{
+        CrossProjectLearner, MemoryForLearning, PatternCategory,
+    };
+
+    let nodes = state
+        .storage
+        .get_all_nodes(500, 0)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut projects: Vec<String> = Vec::new();
+    // Earliest memory creation per project — used to order projects_seen_in
+    // (the learner stores them in HashSet order, which is nondeterministic).
+    let mut project_first_seen: HashMap<String, DateTime<Utc>> = HashMap::new();
+    let mut memories: Vec<MemoryForLearning> = Vec::new();
+
+    for node in &nodes {
+        // Memories with no real project attribution are skipped — patterns
+        // need genuine cross-project evidence, not an "unknown" bucket.
+        let Some(project) = infer_project(node) else {
+            continue;
+        };
+        if !projects.contains(&project) {
+            projects.push(project.clone());
+        }
+        project_first_seen
+            .entry(project.clone())
+            .and_modify(|t| {
+                if node.created_at < *t {
+                    *t = node.created_at;
+                }
+            })
+            .or_insert(node.created_at);
+        memories.push(MemoryForLearning {
+            id: node.id.clone(),
+            content: node.content.clone(),
+            project_name: project,
+            category: infer_category(node),
+        });
+    }
+
+    let learner = CrossProjectLearner::new();
+    learner.learn_from_memories(&memories);
+
+    let mut patterns: Vec<Value> = learner
+        .get_all_patterns()
+        .into_iter()
+        .filter_map(|p| {
+            let category = match p.pattern.category {
+                PatternCategory::ErrorHandling => "ErrorHandling",
+                PatternCategory::AsyncConcurrency => "AsyncConcurrency",
+                PatternCategory::Testing => "Testing",
+                PatternCategory::Architecture => "Architecture",
+                PatternCategory::Performance => "Performance",
+                PatternCategory::Security => "Security",
+                // Frontend tracks exactly six categories; drop the rest.
+                _ => return None,
+            };
+
+            let mut seen_in = p.projects_seen_in.clone();
+            seen_in.sort_by_key(|proj| {
+                project_first_seen
+                    .get(proj)
+                    .copied()
+                    .unwrap_or_else(Utc::now)
+            });
+            let origin_project = seen_in.first().cloned()?;
+            let transferred_to: Vec<String> = seen_in.into_iter().skip(1).collect();
+
+            Some(serde_json::json!({
+                "name": p.pattern.name,
+                "category": category,
+                "origin_project": origin_project,
+                "transferred_to": transferred_to,
+                "transfer_count": transferred_to.len(),
+                "last_used": p.last_seen.to_rfc3339(),
+                "confidence": p.confidence,
+            }))
+        })
+        .collect();
+
+    // Deterministic order: confidence desc, then name.
+    patterns.sort_by(|a, b| {
+        let ca = a["confidence"].as_f64().unwrap_or(0.0);
+        let cb = b["confidence"].as_f64().unwrap_or(0.0);
+        cb.partial_cmp(&ca)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a["name"].as_str().cmp(&b["name"].as_str()))
+    });
+
+    Ok(Json(serde_json::json!({
+        "projects": projects,
+        "patterns": patterns,
+    })))
+}
+
+/// Infer which project a memory belongs to. Priority order:
+/// 1. connector envelope's `source_project` (authoritative)
+/// 2. a `codebase:{name}` / `project:{name}` tag (codebase tool convention)
+/// 3. the `source` field when it is a bare project identifier
+///
+/// Returns None when no real attribution exists — such memories are skipped.
+fn infer_project(node: &vestige_core::KnowledgeNode) -> Option<String> {
+    if let Some(project) = node
+        .source_envelope
+        .as_ref()
+        .and_then(|e| e.source_project.as_deref())
+        .filter(|p| !p.trim().is_empty())
+    {
+        return Some(project.trim().to_string());
+    }
+
+    for tag in &node.tags {
+        for prefix in ["codebase:", "project:"] {
+            if let Some(name) = tag.strip_prefix(prefix).filter(|n| !n.trim().is_empty()) {
+                return Some(name.trim().to_string());
+            }
+        }
+    }
+
+    // `codebase` tool sets source to the bare codebase name. Reject paths,
+    // URLs, and generic provenance labels.
+    if let Some(source) = node.source.as_deref().map(str::trim)
+        && !source.is_empty()
+        && !source.contains('/')
+        && !source.contains(':')
+        && !source.contains(char::is_whitespace)
+        && !matches!(
+            source.to_lowercase().as_str(),
+            "conversation" | "chat" | "manual" | "user" | "unknown" | "file"
+        )
+    {
+        return Some(source.to_string());
+    }
+
+    None
+}
+
+/// Map a memory's tags + content onto a `PatternCategory` via the keyword
+/// conventions the dashboard tracks. First match wins; memories with no
+/// category return None and are skipped by the learner.
+fn infer_category(
+    node: &vestige_core::KnowledgeNode,
+) -> Option<vestige_core::advanced::cross_project::PatternCategory> {
+    use vestige_core::advanced::cross_project::PatternCategory;
+
+    let haystack = format!("{} {}", node.tags.join(" "), node.content).to_lowercase();
+    let rules: &[(&[&str], PatternCategory)] = &[
+        (
+            &["error", "panic", "result", "unwrap"],
+            PatternCategory::ErrorHandling,
+        ),
+        (
+            &["async", "tokio", "race", "concurrency", "deadlock"],
+            PatternCategory::AsyncConcurrency,
+        ),
+        (
+            &["test", "vitest", "cargo test", "playwright"],
+            PatternCategory::Testing,
+        ),
+        (
+            &["architecture", "module", "design"],
+            PatternCategory::Architecture,
+        ),
+        (
+            &["perf", "latency", "optimize", "benchmark"],
+            PatternCategory::Performance,
+        ),
+        (
+            &["security", "auth", "secret", "vulnerability"],
+            PatternCategory::Security,
+        ),
+    ];
+
+    rules
+        .iter()
+        .find(|(keywords, _)| keywords.iter().any(|k| haystack.contains(k)))
+        .map(|(_, category)| category.clone())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuditParams {
+    pub limit: Option<i32>,
+}
+
+/// Per-memory audit trail: state transitions mapped to the 8 dashboard
+/// `AuditAction`s, plus a synthetic `created` event at node creation time.
+/// Events are returned newest-first (matches `splitVisible` in the frontend).
+pub async fn get_memory_audit(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(params): Query<AuditParams>,
+) -> Result<Json<Value>, StatusCode> {
+    let limit = params.limit.unwrap_or(100).clamp(1, 500);
+
+    let node = state
+        .storage
+        .get_node(&id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let transitions = state
+        .storage
+        .get_state_transitions(&id, limit)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut events: Vec<(DateTime<Utc>, Value)> = Vec::new();
+    for t in &transitions {
+        let Some(action) = audit_action_for(&t.reason_type, &t.from_state, &t.to_state) else {
+            continue;
+        };
+        let triggered_by = match t.reason_type.as_str() {
+            "user_suppression" | "manual_override" => "user",
+            _ => "system",
+        };
+        let reason = t
+            .reason_data
+            .clone()
+            .unwrap_or_else(|| format!("{} → {} ({})", t.from_state, t.to_state, t.reason_type));
+        events.push((
+            t.timestamp,
+            serde_json::json!({
+                "action": action,
+                "timestamp": t.timestamp.to_rfc3339(),
+                "reason": reason,
+                "triggered_by": triggered_by,
+            }),
+        ));
+    }
+
+    // Synthetic anchor: every memory's trail begins with its creation.
+    events.push((
+        node.created_at,
+        serde_json::json!({
+            "action": "created",
+            "timestamp": node.created_at.to_rfc3339(),
+            "reason": "Memory ingested",
+            "triggered_by": "system",
+        }),
+    ));
+
+    // Newest-first, matching the frontend's expected ordering.
+    events.sort_by_key(|(ts, _)| Reverse(*ts));
+    let events: Vec<Value> = events.into_iter().map(|(_, v)| v).collect();
+
+    Ok(Json(serde_json::json!({
+        "memoryId": node.id,
+        "events": events,
+    })))
+}
+
+/// Map a `state_transitions.reason_type` onto a dashboard `AuditAction`.
+///
+/// Real reason_type values (see migrations.rs V-schema comment): access,
+/// time_decay, cue_reactivation, competition_loss, interference_resolved,
+/// user_suppression, suppression_expired, manual_override, system_init.
+/// Unknown reasons fall back to the state-rank direction (up → promoted,
+/// down → demoted, flat → accessed). `system_init` is dropped because the
+/// synthetic `created` event already anchors the trail.
+fn audit_action_for(reason_type: &str, from_state: &str, to_state: &str) -> Option<&'static str> {
+    match reason_type {
+        "access" | "cue_reactivation" => Some("accessed"),
+        "time_decay" | "competition_loss" => Some("demoted"),
+        "user_suppression" => Some("suppressed"),
+        "suppression_expired" | "interference_resolved" => Some("reconsolidated"),
+        "manual_override" => Some("edited"),
+        "system_init" => None,
+        other if other.contains("dream") => Some("dreamed"),
+        _ => {
+            let rank = |s: &str| match s {
+                "active" => 3,
+                "dormant" => 2,
+                "silent" => 1,
+                "unavailable" => 0,
+                _ => 2,
+            };
+            Some(match rank(to_state).cmp(&rank(from_state)) {
+                std::cmp::Ordering::Greater => "promoted",
+                std::cmp::Ordering::Less => "demoted",
+                std::cmp::Ordering::Equal => "accessed",
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2496,5 +3007,285 @@ mod tests {
 
         let connected_err = default_center_id(&storage, GraphSort::Connected).unwrap_err();
         assert_eq!(connected_err, StatusCode::NOT_FOUND);
+    }
+
+    // ========================================================================
+    // Live-wire endpoints: /api/duplicates, /api/contradictions,
+    // /api/patterns/cross-project, /api/memories/{id}/audit
+    // ========================================================================
+
+    #[tokio::test]
+    async fn duplicates_returns_contract_shape_when_no_embeddings() {
+        let (_dir, storage) = seed_storage();
+        ingest(&storage, "first memory about parsers");
+        ingest(&storage, "second memory about parsers");
+        let state = AppState::new(storage, None);
+
+        let Json(body) = list_duplicates(
+            State(state),
+            Query(DuplicatesParams {
+                threshold: None,
+                limit: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Field names are load-bearing — the frontend interface is shipped.
+        assert_eq!(body["threshold"], 0.8);
+        assert_eq!(body["total"], 0);
+        assert!(body["clusters"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn duplicates_clamps_threshold_and_limit() {
+        let (_dir, storage) = seed_storage();
+        let state = AppState::new(storage, None);
+
+        let Json(body) = list_duplicates(
+            State(state),
+            Query(DuplicatesParams {
+                threshold: Some(1.5),
+                limit: Some(9999),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(body["threshold"], 0.99);
+    }
+
+    #[tokio::test]
+    async fn contradictions_reports_pair_with_contract_fields() {
+        let (_dir, storage) = seed_storage();
+        let first = ingest(
+            &storage,
+            "For the release workflow we always run cargo test before publishing Vestige",
+        );
+        let second = ingest(
+            &storage,
+            "Correction: for the release workflow we never run cargo test before publishing Vestige",
+        );
+        let state = AppState::new(storage, None);
+
+        let Json(body) = list_contradictions(
+            State(state),
+            Query(ContradictionsParams {
+                topic: None,
+                min_trust: Some(0.0),
+                limit: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(body["memoriesAnalyzed"], 2);
+        assert_eq!(body["total"], 1);
+        let pair = &body["contradictions"][0];
+        // Exact frontend field names (ContradictionArcs.svelte interface).
+        for field in [
+            "memory_a_id",
+            "memory_b_id",
+            "memory_a_preview",
+            "memory_b_preview",
+            "memory_a_type",
+            "memory_b_type",
+            "memory_a_created",
+            "memory_b_created",
+            "memory_a_tags",
+            "memory_b_tags",
+            "trust_a",
+            "trust_b",
+            "similarity",
+            "date_diff_days",
+            "topic",
+        ] {
+            assert!(
+                !pair[field].is_null(),
+                "missing contract field: {}",
+                field
+            );
+        }
+        // a = older, b = newer (chronological).
+        let ids: Vec<&str> = vec![
+            pair["memory_a_id"].as_str().unwrap(),
+            pair["memory_b_id"].as_str().unwrap(),
+        ];
+        assert!(ids.contains(&first.as_str()));
+        assert!(ids.contains(&second.as_str()));
+        assert!(
+            pair["memory_a_created"].as_str().unwrap()
+                <= pair["memory_b_created"].as_str().unwrap(),
+            "a must be the older memory"
+        );
+        assert!(pair["similarity"].as_f64().unwrap() >= 0.4);
+        assert!(!pair["topic"].as_str().unwrap().is_empty());
+    }
+
+    fn ingest_project_memory(storage: &Storage, content: &str, project: &str) {
+        storage
+            .ingest(IngestInput {
+                content: content.to_string(),
+                node_type: "fact".to_string(),
+                tags: vec![format!("codebase:{}", project)],
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cross_project_patterns_finds_transfer_across_two_projects() {
+        let (_dir, storage) = seed_storage();
+        // Same ErrorHandling keyword ("timeout", > 5 chars) in two projects
+        // — exactly what the learner needs to mint a universal pattern.
+        ingest_project_memory(
+            &storage,
+            "Fixed timeout error by wrapping the retry loop in a Result",
+            "alpha",
+        );
+        ingest_project_memory(
+            &storage,
+            "The API client needs a timeout guard or the error propagates",
+            "beta",
+        );
+        let state = AppState::new(storage, None);
+
+        let Json(body) = get_cross_project_patterns(State(state)).await.unwrap();
+
+        let projects: Vec<&str> = body["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap())
+            .collect();
+        assert!(projects.contains(&"alpha"));
+        assert!(projects.contains(&"beta"));
+
+        let patterns = body["patterns"].as_array().unwrap();
+        assert!(!patterns.is_empty(), "expected at least one pattern");
+        let pattern = &patterns[0];
+        // Exact frontend field names (patterns/+page.svelte interface).
+        assert!(pattern["name"].is_string());
+        assert_eq!(pattern["category"], "ErrorHandling");
+        assert!(pattern["origin_project"].is_string());
+        assert!(pattern["transferred_to"].is_array());
+        assert_eq!(
+            pattern["transfer_count"].as_u64().unwrap() as usize,
+            pattern["transferred_to"].as_array().unwrap().len()
+        );
+        assert!(pattern["last_used"].is_string());
+        assert!(pattern["confidence"].is_number());
+    }
+
+    #[tokio::test]
+    async fn cross_project_patterns_empty_without_project_attribution() {
+        let (_dir, storage) = seed_storage();
+        ingest(&storage, "memory with no project attribution at all");
+        let state = AppState::new(storage, None);
+
+        let Json(body) = get_cross_project_patterns(State(state)).await.unwrap();
+
+        assert!(body["projects"].as_array().unwrap().is_empty());
+        assert!(body["patterns"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn memory_audit_prepends_created_and_maps_time_decay_to_demoted() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "audit trail test memory");
+        // Create the memory_states row, then force a recorded transition.
+        storage.record_memory_access(&id).unwrap();
+        storage
+            .update_memory_state(&id, "dormant", "time_decay")
+            .unwrap();
+        let state = AppState::new(storage, None);
+
+        let Json(body) = get_memory_audit(
+            State(state),
+            Path(id.clone()),
+            Query(AuditParams { limit: None }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(body["memoryId"], id.as_str());
+        let events = body["events"].as_array().unwrap();
+        assert_eq!(events.len(), 2);
+        // Newest-first: the transition, then the synthetic created anchor.
+        assert_eq!(events[0]["action"], "demoted");
+        assert_eq!(events[1]["action"], "created");
+        for event in events {
+            assert!(event["action"].is_string());
+            assert!(event["timestamp"].is_string());
+            assert!(event["reason"].is_string());
+            assert!(event["triggered_by"].is_string());
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_audit_unknown_id_is_404() {
+        let (_dir, storage) = seed_storage();
+        let state = AppState::new(storage, None);
+
+        let err = get_memory_audit(
+            State(state),
+            Path("00000000-0000-0000-0000-000000000000".to_string()),
+            Query(AuditParams { limit: None }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn audit_action_mapping_covers_real_reason_types() {
+        assert_eq!(audit_action_for("access", "dormant", "active"), Some("accessed"));
+        assert_eq!(
+            audit_action_for("cue_reactivation", "silent", "active"),
+            Some("accessed")
+        );
+        assert_eq!(
+            audit_action_for("time_decay", "active", "dormant"),
+            Some("demoted")
+        );
+        assert_eq!(
+            audit_action_for("competition_loss", "active", "unavailable"),
+            Some("demoted")
+        );
+        assert_eq!(
+            audit_action_for("user_suppression", "active", "unavailable"),
+            Some("suppressed")
+        );
+        assert_eq!(
+            audit_action_for("suppression_expired", "unavailable", "dormant"),
+            Some("reconsolidated")
+        );
+        assert_eq!(
+            audit_action_for("interference_resolved", "dormant", "dormant"),
+            Some("reconsolidated")
+        );
+        assert_eq!(
+            audit_action_for("manual_override", "silent", "active"),
+            Some("edited")
+        );
+        assert_eq!(audit_action_for("system_init", "active", "active"), None);
+        // Unknown reasons fall back to state-rank direction.
+        assert_eq!(
+            audit_action_for("mystery", "silent", "active"),
+            Some("promoted")
+        );
+        assert_eq!(
+            audit_action_for("mystery", "active", "silent"),
+            Some("demoted")
+        );
+        assert_eq!(
+            audit_action_for("mystery", "active", "active"),
+            Some("accessed")
+        );
+        assert_eq!(
+            audit_action_for("rem_dream_replay", "active", "active"),
+            Some("dreamed")
+        );
     }
 }

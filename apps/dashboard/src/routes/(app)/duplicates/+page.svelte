@@ -8,34 +8,17 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import DuplicateCluster from '$components/DuplicateCluster.svelte';
-	import { clusterKey, filterByThreshold } from '$components/duplicates-helpers';
+	import { clusterKey } from '$components/duplicates-helpers';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
 	import { reveal } from '$lib/actions/reveal';
 	import { spotlight } from '$lib/actions/interactions';
-
-	interface ClusterMemory {
-		id: string;
-		content: string;
-		nodeType: string;
-		tags: string[];
-		retention: number;
-		createdAt: string;
-	}
-
-	interface Cluster {
-		similarity: number;
-		memories: ClusterMemory[];
-		suggestedAction: 'merge' | 'review';
-	}
-
-	interface DuplicatesResponse {
-		clusters: Cluster[];
-	}
+	import { api } from '$stores/api';
+	import type { DuplicateClusterGroup } from '$types';
 
 	let threshold = $state(0.8);
-	let clusters: Cluster[] = $state([]);
+	let clusters: DuplicateClusterGroup[] = $state([]);
 	// Dismissed clusters are tracked by stable identity (sorted member ids) so
 	// dismissals survive a re-fetch. If the cluster membership changes, the key
 	// changes and the cluster is treated as fresh.
@@ -44,165 +27,11 @@
 	let error: string | null = $state(null);
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
-	// Mock realistic response. Swap for real fetch when backend ships.
-	// TODO(backend-swap): replace `mockFetchDuplicates` with:
-	//   const res = await fetch(`/api/duplicates?threshold=${t}`);
-	//   return (await res.json()) as DuplicatesResponse;
-	// The pure `filterByThreshold` helper in duplicates-helpers.ts mirrors the
-	// server-side >= semantics so the UI behaves identically before and after.
-	async function mockFetchDuplicates(t: number): Promise<DuplicatesResponse> {
-		// Simulate latency so the skeleton is visible.
-		await new Promise((r) => setTimeout(r, 450));
-
-		const all: Cluster[] = [
-			{
-				similarity: 0.96,
-				suggestedAction: 'merge',
-				memories: [
-					{
-						id: 'm-001',
-						content:
-							'BUG FIX: Harmony parser dropped `final` channel tokens when tool call followed. Root cause: 5-layer fallback missed the final channel marker when channel switched mid-stream. Solution: added final-channel detector before tool-call pop. Files: src/parser/harmony.rs',
-						nodeType: 'fact',
-						tags: ['bug-fix', 'benchmark-suite', 'parser'],
-						retention: 0.91,
-						createdAt: '2026-04-12T14:22:00Z',
-					},
-					{
-						id: 'm-002',
-						content:
-							'Fixed Harmony parser final-channel bug — 5-layer fallback was missing the final channel marker when a tool call followed. Added detector before tool pop.',
-						nodeType: 'fact',
-						tags: ['bug-fix', 'benchmark-suite'],
-						retention: 0.64,
-						createdAt: '2026-04-13T09:15:00Z',
-					},
-					{
-						id: 'm-003',
-						content:
-							'Harmony parser: final channel dropped on tool-call. Patched the fallback stack.',
-						nodeType: 'note',
-						tags: ['parser'],
-						retention: 0.38,
-						createdAt: '2026-04-14T11:02:00Z',
-					},
-				],
-			},
-			{
-				similarity: 0.88,
-				suggestedAction: 'merge',
-				memories: [
-					{
-						id: 'm-004',
-						content:
-							'DECISION: Use vLLM prefix caching at 0.35 gpu_memory_utilization for benchmark suite submissions. Alternatives considered: sglang (slower cold start), TensorRT-LLM (deployment friction).',
-						nodeType: 'decision',
-						tags: ['vllm', 'benchmark-suite', 'inference'],
-						retention: 0.84,
-						createdAt: '2026-04-05T18:44:00Z',
-					},
-					{
-						id: 'm-005',
-						content:
-							'Chose vLLM with prefix caching (0.35 mem util) over sglang and TensorRT-LLM for benchmark suite inference.',
-						nodeType: 'decision',
-						tags: ['vllm', 'benchmark-suite'],
-						retention: 0.72,
-						createdAt: '2026-04-06T10:30:00Z',
-					},
-				],
-			},
-			{
-				similarity: 0.83,
-				suggestedAction: 'review',
-				memories: [
-					{
-						id: 'm-006',
-						content:
-							'Release process prefers one change per benchmark submission — stacking changes destroyed signal in a prior run.',
-						nodeType: 'pattern',
-						tags: ['methodology', 'benchmark-suite'],
-						retention: 0.88,
-						createdAt: '2026-04-04T22:10:00Z',
-					},
-					{
-						id: 'm-007',
-						content:
-							'One-variable-at-a-time rule: never stack multiple changes per submission. Paper 2603.27844 proves +/-2 points is noise.',
-						nodeType: 'pattern',
-						tags: ['kaggle', 'methodology'],
-						retention: 0.67,
-						createdAt: '2026-04-08T16:20:00Z',
-					},
-					{
-						id: 'm-008',
-						content: 'Lesson: stacking many changes in one benchmark run hid the causal signal. Always isolate variables.',
-						nodeType: 'note',
-						tags: ['methodology'],
-						retention: 0.42,
-						createdAt: '2026-04-15T08:55:00Z',
-					},
-				],
-			},
-			{
-				similarity: 0.78,
-				suggestedAction: 'review',
-				memories: [
-					{
-						id: 'm-009',
-						content:
-							'Dimensional Illusion performance: 7-minute flow poi set, LED config Parthenos overcook preset, tempo 128 BPM.',
-						nodeType: 'event',
-						tags: ['dimensional-illusion', 'poi', 'performance'],
-						retention: 0.76,
-						createdAt: '2026-03-28T19:45:00Z',
-					},
-					{
-						id: 'm-010',
-						content: 'Dimensional Illusion set: 7 min, Parthenos LED overcook, 128 BPM.',
-						nodeType: 'event',
-						tags: ['dimensional-illusion', 'poi'],
-						retention: 0.51,
-						createdAt: '2026-04-02T12:12:00Z',
-					},
-				],
-			},
-			{
-				similarity: 0.76,
-				suggestedAction: 'review',
-				memories: [
-					{
-						id: 'm-011',
-						content:
-							'Vestige v2.0.7 shipped active forgetting via Anderson 2025 top-down inhibition + Davis Rac1 cascade. Suppress compounds, reversible 24h.',
-						nodeType: 'fact',
-						tags: ['vestige', 'release', 'active-forgetting'],
-						retention: 0.93,
-						createdAt: '2026-04-17T03:22:00Z',
-					},
-					{
-						id: 'm-012',
-						content:
-							'Active Forgetting feature: compounds on each suppress, 24h reversible labile window, violet implosion animation in graph view.',
-						nodeType: 'concept',
-						tags: ['vestige', 'active-forgetting'],
-						retention: 0.81,
-						createdAt: '2026-04-18T09:07:00Z',
-					},
-				],
-			},
-		];
-
-		return { clusters: filterByThreshold(all, t) };
-	}
-
 	async function detect() {
 		loading = true;
 		error = null;
 		try {
-			// TODO: swap for real endpoint /api/duplicates when backend ships.
-			// See comment on mockFetchDuplicates for the exact replacement.
-			const res = await mockFetchDuplicates(threshold);
+			const res = await api.duplicates(threshold);
 			clusters = res.clusters;
 			// Prune dismissals whose clusters no longer exist — prevents
 			// unbounded growth across sessions and keeps the set honest.
