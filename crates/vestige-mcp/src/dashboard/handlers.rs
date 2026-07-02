@@ -1025,10 +1025,12 @@ pub async fn get_changelog(
     }
 
     // Connections are currently persisted as graph edges rather than as audit
-    // rows, so filter by created_at from the connection table.
+    // rows, so filter by created_at from the connection table. Fetch only the
+    // most recent `fetch_limit` connections (not the entire table) — this
+    // endpoint is polled once per wake and must stay cheap on a large graph.
     let connections = state
         .storage
-        .get_all_connections()
+        .get_recent_connections(fetch_limit as usize)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     for conn in connections {
         if changelog_window_contains(conn.created_at, start.as_ref(), end.as_ref()) {

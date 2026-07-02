@@ -455,14 +455,23 @@ impl Connector for RedmineConnector {
             .map_err(|e| ConnectorError::Transport(e.to_string()))?;
 
         // Per-issue detail fetch for journals (list endpoint omits them).
+        //
+        // A detail-fetch failure must NOT silently fall back to the journal-less
+        // list summary: that persists a record with incomplete content and the
+        // WRONG content_hash, and because the offset cursor still advances past
+        // it, the issue is never revisited — a permanent silent gap. Instead we
+        // abort the page with the transport error. The driver returns without
+        // advancing the persisted cursor (fetch_updated is called with `?`), so
+        // the next run re-fetches this same window; the idempotent upsert makes
+        // reprocessing safe once the detail endpoint recovers.
         let mut records = Vec::new();
         for summary in &page.issues {
-            let detailed = match self.fetch_detail(summary.id).await {
-                Ok(d) => d,
-                // A single issue failing detail-fetch should not abort the page;
-                // fall back to the list-level fields (no journals).
-                Err(_) => summary.clone(),
-            };
+            let detailed = self.fetch_detail(summary.id).await.map_err(|e| {
+                ConnectorError::Transport(format!(
+                    "detail fetch failed for issue {}; not advancing cursor to avoid a silent gap: {e}",
+                    summary.id
+                ))
+            })?;
             records.push(self.normalize(&detailed));
         }
 

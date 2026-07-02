@@ -17,7 +17,8 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::fsrs::{
-    DEFAULT_DECAY, FSRSScheduler, FSRSState, LearningState, Rating, retrievability_with_decay,
+    DEFAULT_DECAY, FSRSScheduler, FSRSState, LearningState, MAX_STABILITY, Rating,
+    retrievability_with_decay,
 };
 use crate::fts::{sanitize_fts5_or_query, sanitize_fts5_query};
 use crate::memory::{
@@ -723,7 +724,10 @@ impl SqliteMemoryStore {
                     now.to_rfc3339(),
                     now.to_rfc3339(),
                     now.to_rfc3339(),
-                    fsrs_state.stability * sentiment_boost,
+                    // Clamp to MAX_STABILITY: the sentiment boost is otherwise
+                    // persisted unbounded, letting an emotional memory's stability
+                    // exceed the FSRS-6 ceiling every other write path respects.
+                    (fsrs_state.stability * sentiment_boost).min(MAX_STABILITY),
                     fsrs_state.difficulty,
                     fsrs_state.reps,
                     fsrs_state.lapses,
@@ -1118,9 +1122,23 @@ impl SqliteMemoryStore {
             {
                 let _ = index.remove(id);
             }
-            // Generate new embedding
-            if let Err(e) = self.generate_embedding_for_node(id, new_content) {
-                tracing::warn!("Failed to regenerate embedding for {}: {}", id, e);
+            // Generate new embedding. If the embedder isn't ready yet (e.g. the
+            // model is still downloading on first run), generate_embedding_for_node
+            // is a no-op — which previously left the OLD, now-stale embedding row
+            // with has_embedding = 1, so semantic search kept matching the old
+            // content and the consolidation regeneration query (which only selects
+            // has_embedding = 0 / missing rows / model mismatch) never refreshed
+            // it. Flip has_embedding to 0 on the not-ready path so the stale vector
+            // is picked up and rebuilt once the embedder comes online.
+            if self.embedding_service.is_ready() {
+                if let Err(e) = self.generate_embedding_for_node(id, new_content) {
+                    tracing::warn!("Failed to regenerate embedding for {}: {}", id, e);
+                }
+            } else if let Ok(writer) = self.writer.lock() {
+                let _ = writer.execute(
+                    "UPDATE knowledge_nodes SET has_embedding = 0 WHERE id = ?1",
+                    params![id],
+                );
             }
         }
 
@@ -1800,6 +1818,15 @@ impl SqliteMemoryStore {
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            // True inverse of suppress_memory (which applies stability * 0.4,
+            // retrieval - 0.35, retention - 0.20). Dividing by 0.4 exactly undoes
+            // the * 0.4, and adding back the same 0.35 / 0.20 deltas (clamped to
+            // 1.0) undoes the subtraction. Previously this used non-inverse deltas
+            // (* 1.25, + 0.15, + 0.10), so suppress-then-reverse left stability
+            // permanently halved (0.4 * 1.25 = 0.5) while reporting a full undo.
+            // Note: where the forward pass hit the MAX(0.05) floor, the exact
+            // pre-value is unrecoverable without a snapshot — that clip aside,
+            // this restores the pre-suppression FSRS state.
             writer.execute(
                 "UPDATE knowledge_nodes SET
                     suppression_count = MAX(0, COALESCE(suppression_count, 0) - 1),
@@ -1807,9 +1834,9 @@ impl SqliteMemoryStore {
                         WHEN COALESCE(suppression_count, 0) - 1 <= 0 THEN NULL
                         ELSE suppressed_at
                     END,
-                    retrieval_strength = MIN(1.0, retrieval_strength + 0.15),
-                    retention_strength = MIN(1.0, retention_strength + 0.10),
-                    stability = stability * 1.25
+                    retrieval_strength = MIN(1.0, retrieval_strength + 0.35),
+                    retention_strength = MIN(1.0, retention_strength + 0.20),
+                    stability = stability / 0.4
                 WHERE id = ?1",
                 params![id],
             )?;
@@ -2979,18 +3006,18 @@ impl SqliteMemoryStore {
                     (false, false) => MatchType::Keyword,
                 };
 
-                let weighted_score = match (keyword_score, semantic_score) {
-                    (Some(kw), Some(sem)) => kw * keyword_weight + sem * semantic_weight,
-                    (Some(kw), None) => kw * keyword_weight,
-                    (None, Some(sem)) => sem * semantic_weight,
-                    (None, None) => combined_score,
-                };
-
+                // Carry the RRF fused score as the relevance signal, NOT a linear
+                // kw*w + sem*w recomputation. RRF is what selected these candidates
+                // and rewards both-list agreement; overwriting it with the linear
+                // weighted_score made the final ranking diverge from RRF order
+                // (a both-list paraphrase could rank below a keyword-only hit).
+                // The min-max normalization in the rerank below then operates on
+                // RRF scores, so final relevance ordering matches RRF ordering.
                 results.push(SearchResult {
                     node,
                     keyword_score,
                     semantic_score,
-                    combined_score: weighted_score,
+                    combined_score,
                     match_type,
                 });
             }
@@ -2998,6 +3025,20 @@ impl SqliteMemoryStore {
 
         // Three-signal reranking (Park et al. Generative Agents 2023)
         // final_score = 0.2*recency + 0.3*importance + 0.5*relevance
+        //
+        // relevance MUST live in [0,1] for the weights to balance. The raw
+        // weighted_score does not: keyword-only results max out at
+        // `1.0 * keyword_weight` (0.3 by default), so the strongest match's
+        // relevance term was capped at 0.5*0.3 = 0.15 and lost to recency (up to
+        // 0.2) or importance (up to 0.3) — a fresh, weakly-relevant node could
+        // outrank the best match. Min-max normalize relevance across the result
+        // set so the best match scores ~1.0 regardless of the weight scaling.
+        let (min_rel, max_rel) = results.iter().fold(
+            (f32::INFINITY, f32::NEG_INFINITY),
+            |(mn, mx), r| (mn.min(r.combined_score), mx.max(r.combined_score)),
+        );
+        let rel_span = (max_rel - min_rel) as f64;
+
         let now = Utc::now();
         for result in &mut results {
             let hours_since = (now - result.node.last_accessed).num_seconds() as f64 / 3600.0;
@@ -3019,7 +3060,13 @@ impl SqliteMemoryStore {
             // Normalize ACT-R activation [-2, 5] → [0, 1]
             let importance = ((activation + 2.0) / 7.0).clamp(0.0, 1.0);
 
-            let relevance = result.combined_score as f64;
+            // Min-max normalized relevance in [0,1]. When every result ties
+            // (span 0), fall back to 1.0 so relevance still dominates ranking.
+            let relevance = if rel_span > f64::EPSILON {
+                (result.combined_score - min_rel) as f64 / rel_span
+            } else {
+                1.0
+            };
 
             let final_score = 0.2 * recency + 0.3 * importance + 0.5 * relevance;
             result.combined_score = final_score as f32;
@@ -5836,6 +5883,25 @@ impl SqliteMemoryStore {
         Ok(result)
     }
 
+    /// The most recently created connections, capped at `limit`. Used by polling
+    /// surfaces (e.g. the dashboard changelog) that only need recent activity and
+    /// must not load the entire `memory_connections` table on every request.
+    pub fn get_recent_connections(&self, limit: usize) -> Result<Vec<ConnectionRecord>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let mut stmt = reader.prepare(
+            "SELECT * FROM memory_connections ORDER BY created_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], Self::row_to_connection)?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
     /// Strengthen a connection
     pub fn strengthen_connection(
         &self,
@@ -8173,6 +8239,16 @@ impl SqliteMemoryStore {
                     .unwrap_or_else(|| member_ids[0].clone())
             }
         };
+        // The survivor MUST be one of the members. A caller-supplied survivor_id
+        // that isn't in member_ids (a typo/mixup through the plan_merge tool)
+        // otherwise sails through and panics at the `.find(...).unwrap()` below,
+        // taking down the request. Reject it with a clear error instead.
+        if !nodes.iter().any(|n| n.id == survivor) {
+            return Err(StorageError::Init(format!(
+                "survivor_id {survivor} is not among the member_ids being merged"
+            )));
+        }
+
         for node in &nodes {
             if node.id != survivor && self.is_protected(&node.id)? {
                 return Err(StorageError::Init(format!(
@@ -13353,6 +13429,50 @@ mod tests {
             (promoted.stability - 15.0).abs() < 1e-6,
             "expected *1.5 multiply (15.0) below crossover, got {}",
             promoted.stability
+        );
+    }
+
+    #[test]
+    fn suppress_then_reverse_restores_fsrs_state() {
+        // reverse_suppression must be a TRUE inverse of suppress_memory. Suppress
+        // applies stability*0.4, retrieval-0.35, retention-0.20; reverse now undoes
+        // exactly that (stability/0.4, retrieval+0.35, retention+0.20). Previously
+        // reverse used non-inverse deltas and left stability permanently halved.
+        let s = create_test_storage();
+        let node = s
+            .ingest(IngestInput {
+                content: "a memory to suppress then un-suppress".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        // Seed above the 0.05 floor so the forward pass never clips (making the
+        // round-trip exactly recoverable).
+        seed_stability(&s, &node.id, 20.0);
+        let before = s.get_node(&node.id).unwrap().unwrap();
+
+        s.suppress_memory(&node.id).unwrap();
+        let suppressed = s.get_node(&node.id).unwrap().unwrap();
+        assert!(
+            (suppressed.stability - before.stability * 0.4).abs() < 1e-6,
+            "suppress must multiply stability by 0.4"
+        );
+
+        let reversed = s.reverse_suppression(&node.id, 24).unwrap();
+        // stability: 20 * 0.4 / 0.4 = 20 (fully restored, not 0.5x)
+        assert!(
+            (reversed.stability - before.stability).abs() < 1e-6,
+            "reverse must restore stability to {} (got {})",
+            before.stability,
+            reversed.stability
+        );
+        assert!(
+            (reversed.retrieval_strength - before.retrieval_strength).abs() < 1e-6,
+            "reverse must restore retrieval_strength"
+        );
+        assert!(
+            (reversed.retention_strength - before.retention_strength).abs() < 1e-6,
+            "reverse must restore retention_strength"
         );
     }
 

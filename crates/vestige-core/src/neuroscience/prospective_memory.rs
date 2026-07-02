@@ -988,10 +988,21 @@ impl IntentionParser {
             }
         }
 
-        // Check for "at X" time pattern. Split using the byte index found in the
-        // lowercased text so the case-insensitive contains() and the split agree
-        // (otherwise "Meeting AT 5pm" passes the check but fails the split).
-        if let Some(idx) = text_lower.find(" at ") {
+        // Check for "at X" time pattern. Find " at " case-insensitively but with a
+        // byte index that is valid in `original`: to_lowercase() can change byte
+        // length (e.g. 'ẞ' U+1E9E 3 bytes -> 'ß' U+00DF 2 bytes), so an index into
+        // `text_lower` can land mid-char in `original` and panic when used to slice
+        // it. Scanning `original`'s own char indices keeps the split boundary valid.
+        // Match on raw bytes to stay boundary-safe: " at " is pure ASCII, so a
+        // byte-window match is guaranteed to fall on char boundaries in `original`.
+        let bytes = original.as_bytes();
+        let at_idx = bytes.windows(4).position(|w| {
+            (w[0] == b' ')
+                && (w[1] == b'a' || w[1] == b'A')
+                && (w[2] == b't' || w[2] == b'T')
+                && (w[3] == b' ')
+        });
+        if let Some(idx) = at_idx {
             let parts: Vec<&str> = vec![&original[..idx], &original[idx + 4..]];
             if parts.len() == 2 {
                 let part0_lower = parts[0].to_lowercase();
