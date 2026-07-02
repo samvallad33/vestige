@@ -781,6 +781,16 @@ pub async fn execute(
             };
             cog.reconsolidation.mark_labile(&result.node.id, snapshot);
         }
+
+        // 7D. Feed the co-access channel: the memories returned together by one
+        // query WERE accessed together, so record_usage learns their co-access
+        // patterns (trigger -> predicted). Without this call the speculative
+        // retriever's co-access prediction channel stays permanently empty.
+        if filtered_results.len() >= 2 {
+            let accessed: Vec<String> =
+                filtered_results.iter().map(|r| r.node.id.clone()).collect();
+            cog.speculative_retriever.record_usage(&[], &accessed);
+        }
     }
 
     // ====================================================================
