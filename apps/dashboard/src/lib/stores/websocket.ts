@@ -74,8 +74,19 @@ function createWebSocketStore() {
 	}
 
 	function disconnect() {
-		if (reconnectTimer) clearTimeout(reconnectTimer);
-		ws?.close();
+		if (reconnectTimer) {
+			clearTimeout(reconnectTimer);
+			reconnectTimer = null;
+		}
+		if (ws) {
+			// Detach onclose BEFORE closing: otherwise close() fires the handler,
+			// which calls scheduleReconnect and resurrects the socket we just
+			// asked to tear down.
+			ws.onclose = null;
+			ws.onerror = null;
+			ws.onmessage = null;
+			ws.close();
+		}
 		ws = null;
 		set({ connected: false, reconnecting: false, events: [], lastHeartbeat: null, error: null });
 	}

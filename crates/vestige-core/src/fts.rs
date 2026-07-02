@@ -28,26 +28,18 @@ pub fn sanitize_fts5_terms(query: &str) -> Option<String> {
         })
         .collect();
 
-    for op in FTS5_OPERATORS {
-        let pattern = format!(" {} ", op);
-        sanitized = sanitized.replace(&pattern, " ");
-        sanitized = sanitized.replace(&pattern.to_lowercase(), " ");
-        let upper = sanitized.to_uppercase();
-        let start_pattern = format!("{} ", op);
-        if upper.starts_with(&start_pattern) {
-            sanitized = sanitized.chars().skip(op.len()).collect();
-        }
-        let end_pattern = format!(" {}", op);
-        if upper.ends_with(&end_pattern) {
-            let char_count = sanitized.chars().count();
-            sanitized = sanitized
-                .chars()
-                .take(char_count.saturating_sub(op.len()))
-                .collect();
-        }
-    }
-
-    let terms: Vec<&str> = sanitized.split_whitespace().collect();
+    // Drop any token that IS a bare FTS5 boolean operator (AND/OR/NOT/NEAR),
+    // case-insensitively. Token-level filtering is complete and repetition-proof.
+    // The previous string-replace approach was single-pass and non-overlapping,
+    // so a doubled operator ("foo AND AND AND") left a bare operator at the edge
+    // or interior that leaked into the raw MATCH — either aborting with an FTS5
+    // syntax error, or silently flipping implicit-AND to boolean-OR
+    // ("foo OR bar"). Filtering tokens cannot leak an operator regardless of how
+    // many are chained.
+    let terms: Vec<&str> = sanitized
+        .split_whitespace()
+        .filter(|t| !FTS5_OPERATORS.iter().any(|op| t.eq_ignore_ascii_case(op)))
+        .collect();
     if terms.is_empty() {
         return None;
     }
@@ -236,5 +228,27 @@ mod tests {
         let longtok = "a".repeat(200);
         let q2 = sanitize_fts5_or_query(&longtok).unwrap();
         assert!(q2.len() <= 66, "single token capped at 64 + quotes, got {}", q2.len());
+    }
+
+    #[test]
+    fn terms_strips_all_bare_operators_even_when_doubled() {
+        // Regression: doubled/chained operators must never leak a bare operator
+        // into the raw MATCH (which aborts with a syntax error or silently flips
+        // implicit-AND to boolean-OR).
+        for op in FTS5_OPERATORS {
+            let doubled = format!("foo {op} {op} {op} bar");
+            let out = sanitize_fts5_terms(&doubled).unwrap();
+            for tok in out.split_whitespace() {
+                assert!(
+                    !FTS5_OPERATORS.iter().any(|o| tok.eq_ignore_ascii_case(o)),
+                    "operator {op} leaked into output {out:?}"
+                );
+            }
+            assert_eq!(out, "foo bar", "only real terms should survive: {out:?}");
+        }
+        // Lowercase + leading/trailing operators are stripped too.
+        assert_eq!(sanitize_fts5_terms("or foo and bar or").unwrap(), "foo bar");
+        // Operator-only input yields nothing.
+        assert_eq!(sanitize_fts5_terms("AND OR NOT").map(|_| ()), None);
     }
 }
