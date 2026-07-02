@@ -412,6 +412,35 @@ impl IntentionTrigger {
         }
     }
 
+    /// Advance a recurring trigger to its next occurrence after it fires, so it
+    /// re-arms instead of staying perpetually triggered. Returns true if the
+    /// trigger is recurring and was advanced (the intention should return to
+    /// Active), false for one-shot triggers (which stay fulfilled/triggered).
+    /// Recurs into Compound so a recurring sub-trigger inside a compound re-arms.
+    pub fn re_arm(&mut self, now: DateTime<Utc>) -> bool {
+        match self {
+            Self::Recurring {
+                recurrence,
+                next_occurrence,
+                ..
+            } => {
+                // Advance from the later of "now" and the slot that just fired,
+                // so we never re-arm into an already-past occurrence.
+                let from = next_occurrence.map(|t| t.max(now)).unwrap_or(now);
+                *next_occurrence = Some(recurrence.next_occurrence(from));
+                true
+            }
+            Self::Compound { all_of, any_of } => {
+                let mut any = false;
+                for t in all_of.iter_mut().chain(any_of.iter_mut()) {
+                    any |= t.re_arm(now);
+                }
+                any
+            }
+            _ => false,
+        }
+    }
+
     /// Get a human-readable description of the trigger
     pub fn description(&self) -> String {
         match self {
@@ -708,9 +737,18 @@ impl Intention {
 
     /// Mark as triggered
     pub fn mark_triggered(&mut self) {
-        self.status = IntentionStatus::Triggered;
+        let now = Utc::now();
         self.reminder_count += 1;
-        self.last_reminded_at = Some(Utc::now());
+        self.last_reminded_at = Some(now);
+        // A recurring intention re-arms to its next occurrence and returns to
+        // Active so it fires again; a one-shot intention stays Triggered.
+        // Previously recurring intentions never advanced next_occurrence, so they
+        // fired once and never again (or stayed perpetually triggered).
+        if self.trigger.re_arm(now) {
+            self.status = IntentionStatus::Active;
+        } else {
+            self.status = IntentionStatus::Triggered;
+        }
     }
 
     /// Mark as fulfilled
@@ -1694,6 +1732,33 @@ mod tests {
         let next = pattern.next_occurrence(now);
         assert!(next > now);
         assert!((next - now) == Duration::hours(2));
+    }
+
+    #[test]
+    fn test_recurring_intention_re_arms_after_firing() {
+        // Regression (#124): a recurring intention must re-arm (advance
+        // next_occurrence + return to Active) each time it fires, not fire once
+        // and stay Triggered forever.
+        let now = Utc::now();
+        let trigger = IntentionTrigger::Recurring {
+            base: Box::new(IntentionTrigger::at_time(now - Duration::minutes(1))),
+            recurrence: RecurrencePattern::EveryHours(2),
+            next_occurrence: Some(now - Duration::minutes(1)), // already due
+        };
+        let mut intention = Intention::new("recurring task", trigger);
+
+        // Due now, so it triggers.
+        assert!(intention.trigger.is_triggered(&Context::default(), &[]));
+        intention.mark_triggered();
+
+        // After firing it must be Active again (re-armed), not stuck Triggered.
+        assert_eq!(intention.status, IntentionStatus::Active);
+        // And next_occurrence must have advanced into the future so it is no
+        // longer immediately due.
+        assert!(
+            !intention.trigger.is_triggered(&Context::default(), &[]),
+            "recurring trigger must not stay perpetually due after re-arming"
+        );
     }
 
     #[test]
