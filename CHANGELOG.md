@@ -42,6 +42,19 @@ A single `docs/GETTING-STARTED.md` that consolidates install, "what gets saved",
 how to inspect your memory, and project scoping into one 30-minute first-run path,
 linked from the README.
 
+### Credits
+
+This release was driven by the community:
+
+- **@Vrakoss** reported the Windows embeddings regression (#101) with a clean,
+  precise repro that pinned the failure immediately.
+- **@randomnimbus** (Peter Lauzon) reported the backfill safety issue (#103) and
+  contributed the fix — the bounded `promote_memory_backfill` and the
+  `VESTIGE_BACKFILL_AUTOFIRE` lever shipped as they proposed them
+  (co-authored in `f7530af`).
+
+Thank you both.
+
 ## [2.2.0] - 2026-06-29 — "Retroactive Salience + Tool Consolidation"
 
 Three independent value streams land together as a coherent release.
