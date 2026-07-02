@@ -1657,12 +1657,15 @@ impl SqliteMemoryStore {
     }
 
     /// Backfill-specific promote: identical retrieval/retention boost to
-    /// `promote_memory`, but the stability multiply is CAPPED (MIN with an
-    /// additive +365-day ceiling — the same bound `retroactive_backfill.rs`
-    /// already computes for its reason string) so repeated per-(cause,failure)
-    /// backfill promotions cannot inflate stability without bound. Used by the
-    /// step-8.5 auto-fire path and the manual `backfill` tool.
-    /// (omega-backfill-safety patch, pending upstream.)
+    /// `promote_memory`, but the stability multiply is CAPPED at an additive
+    /// +365-day ceiling: `MIN(stability * 1.5, stability + 365.0)`. The `1.5`
+    /// factor preserves the multiplier `promote_memory` already applied; the
+    /// `+365` ceiling is the same additive bound `retroactive_backfill.rs`
+    /// uses for its reason string (that module pairs +365 with a 2.5 factor
+    /// for display only — this DB write intentionally keeps 1.5 so backfill
+    /// promotion strength is unchanged, just bounded). Repeated per-(cause,
+    /// failure) backfill promotions therefore cannot inflate stability without
+    /// bound. Used by the step-8.5 auto-fire path and the manual `backfill` tool.
     pub fn promote_memory_backfill(&self, id: &str) -> Result<KnowledgeNode> {
         let now = Utc::now();
 
@@ -3694,18 +3697,26 @@ impl SqliteMemoryStore {
         // via a durable causal edge (so the same cause is promoted once per
         // failure, not every cycle).
         //
-        // OPT-IN (omega-backfill-safety patch, pending upstream): auto-fire is OFF
-        // by default. It mutates FSRS scores on the canonical store and can lift a
-        // memory across a downstream consolidation floor, so it is gated behind
-        // VESTIGE_BACKFILL_AUTOFIRE=1|true. The `backfill` MCP tool + CLI remain
-        // available for on-demand, operator-driven backfill regardless. The promote
-        // is bounded: both the auto-fire and manual paths call promote_memory_backfill
-        // (stability = MIN(stability*1.5, stability+365)) so repeated per-(cause,
-        // failure) promotions cannot inflate without bound (the prior comment
-        // claimed promote_memory was capped — it was not).
+        // OPT-OUT (backfill-safety, v2.2.1): auto-fire is ON by default — it shipped
+        // and was documented in v2.2.0, so we keep the behavior — but is now bounded
+        // and disableable. It mutates FSRS scores on the canonical store and can lift
+        // a memory across a downstream consolidation floor, so a consumer that reads
+        // `stability` as a durability gate can turn it off with
+        // VESTIGE_BACKFILL_AUTOFIRE=0 (or false/off/no). The `backfill` MCP tool + CLI
+        // remain available for on-demand, operator-driven backfill regardless of the
+        // gate. The promote is bounded: both the auto-fire and manual paths call
+        // promote_memory_backfill (stability = MIN(stability*1.5, stability+365)) so
+        // repeated per-(cause, failure) promotions cannot inflate without bound (the
+        // prior comment claimed promote_memory was capped — it was not).
         let backfill_autofire = std::env::var("VESTIGE_BACKFILL_AUTOFIRE")
-            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(false);
+            .map(|v| {
+                let v = v.trim();
+                !(v.eq_ignore_ascii_case("false")
+                    || v.eq_ignore_ascii_case("off")
+                    || v.eq_ignore_ascii_case("no")
+                    || v == "0")
+            })
+            .unwrap_or(true);
         let mut backfilled_causes = 0i64;
         if backfill_autofire {
             use crate::advanced::retroactive_backfill::{
@@ -13274,5 +13285,98 @@ mod tests {
                 err
             );
         });
+    }
+
+    // Seed a node's stability directly via the scheduling seam so the +365 cap
+    // in promote_memory_backfill is actually exercised (a freshly ingested node
+    // has low stability where the *1.5 multiply, not the additive ceiling, wins).
+    fn seed_stability(s: &Storage, id: &str, stability: f64) {
+        use crate::storage::memory_store::{MemoryStoreSend, SchedulingState};
+        rt().block_on(async {
+            let state = SchedulingState {
+                memory_id: uuid::Uuid::parse_str(id).unwrap(),
+                stability,
+                difficulty: 0.4,
+                retrievability: 0.8,
+                last_review: Some(chrono::Utc::now()),
+                next_review: Some(chrono::Utc::now() + chrono::Duration::days(7)),
+                reps: 3,
+                lapses: 0,
+            };
+            MemoryStoreSend::update_scheduling(s, &state)
+                .await
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn promote_memory_backfill_caps_stability_at_plus_365() {
+        // Above the crossover (stability=730) the additive +365 ceiling must win
+        // over the *1.5 multiply, so repeated backfill promotions cannot inflate
+        // stability without bound. This is the bound issue #103 asked us to apply.
+        let s = create_test_storage();
+        let node = s
+            .ingest(IngestInput {
+                content: "high-stability cause memory".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        seed_stability(&s, &node.id, 1000.0);
+
+        let promoted = s.promote_memory_backfill(&node.id).unwrap();
+        // 1000 * 1.5 = 1500 (uncapped) vs 1000 + 365 = 1365 (capped). Cap wins.
+        assert!(
+            (promoted.stability - 1365.0).abs() < 1e-6,
+            "expected additive +365 cap (1365.0), got {} (uncapped would be 1500.0)",
+            promoted.stability
+        );
+    }
+
+    #[test]
+    fn promote_memory_backfill_uses_multiply_below_crossover() {
+        // Below the crossover the *1.5 multiply wins (the cap never binds), so
+        // backfill promotion strength is unchanged from the old promote_memory.
+        let s = create_test_storage();
+        let node = s
+            .ingest(IngestInput {
+                content: "low-stability cause memory".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        seed_stability(&s, &node.id, 10.0);
+
+        let promoted = s.promote_memory_backfill(&node.id).unwrap();
+        // 10 * 1.5 = 15 (multiply) vs 10 + 365 = 375 (cap). Multiply wins.
+        assert!(
+            (promoted.stability - 15.0).abs() < 1e-6,
+            "expected *1.5 multiply (15.0) below crossover, got {}",
+            promoted.stability
+        );
+    }
+
+    #[test]
+    fn backfill_autofire_gate_defaults_on_and_reads_opt_out() {
+        // v2.2.1 opt-out semantics: unset => ON (preserves shipped v2.2.0
+        // behavior); explicit 0/false/off/no => OFF; anything else => ON.
+        fn parse(v: Option<&str>) -> bool {
+            v.map(|v| {
+                let v = v.trim();
+                !(v.eq_ignore_ascii_case("false")
+                    || v.eq_ignore_ascii_case("off")
+                    || v.eq_ignore_ascii_case("no")
+                    || v == "0")
+            })
+            .unwrap_or(true)
+        }
+        assert!(parse(None), "unset must default ON");
+        assert!(parse(Some("1")), "1 is ON");
+        assert!(parse(Some("true")), "true is ON");
+        assert!(parse(Some("anything")), "unrecognized is ON");
+        assert!(!parse(Some("0")), "0 is OFF");
+        assert!(!parse(Some("false")), "false is OFF");
+        assert!(!parse(Some("OFF")), "OFF (case-insensitive) is OFF");
+        assert!(!parse(Some(" no ")), "whitespace-padded no is OFF (trim)");
     }
 }
