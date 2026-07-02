@@ -243,7 +243,14 @@ impl RedmineConnector {
             })
             .collect();
         journals.sort_by_key(|j| j.id);
-        journals.truncate(self.config.max_journals);
+        // Keep the NEWEST max_journals, not the oldest: on a capped thread the
+        // latest activity is what signals the record changed. Truncating from the
+        // front (keeping oldest) meant new comments were dropped, the content_hash
+        // never moved, and the memory never re-indexed with fresh activity.
+        if journals.len() > self.config.max_journals {
+            let drop = journals.len() - self.config.max_journals;
+            journals.drain(0..drop);
+        }
 
         // Human-readable content.
         let mut content = format!("[{}#{}] {}\n", self.scope, issue.id, issue.subject);

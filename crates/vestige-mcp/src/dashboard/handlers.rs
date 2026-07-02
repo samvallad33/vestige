@@ -58,6 +58,22 @@ pub async fn list_memories(
                     true
                 }
             })
+            // Honor node_type/tag filters on the search path too. Previously
+            // these were applied only in the no-query branch, so a filtered
+            // search (?q=foo&node_type=decision&tag=x) silently returned
+            // non-matching rows.
+            .filter(|r| {
+                params
+                    .node_type
+                    .as_ref()
+                    .is_none_or(|nt| &r.node.node_type == nt)
+            })
+            .filter(|r| {
+                params
+                    .tag
+                    .as_ref()
+                    .is_none_or(|tag| r.node.tags.iter().any(|t| t == tag))
+            })
             .map(|r| {
                 serde_json::json!({
                     "id": r.node.id,
