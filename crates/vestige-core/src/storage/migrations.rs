@@ -94,6 +94,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Agent Black Box + Memory Receipts + Memory PRs: replayable run traces, retrieval receipts, risk-gated brain-change review queue",
         up: MIGRATION_V18_UP,
     },
+    Migration {
+        version: 19,
+        description: "Scope the source idempotency key by source_project so same-system sources with overlapping ids no longer clobber each other",
+        up: MIGRATION_V19_UP,
+    },
 ];
 
 /// A database migration
@@ -1131,6 +1136,23 @@ CREATE INDEX IF NOT EXISTS idx_memory_prs_kind ON memory_prs(kind);
 CREATE INDEX IF NOT EXISTS idx_memory_prs_created_at ON memory_prs(created_at DESC);
 
 UPDATE schema_version SET version = 18, applied_at = datetime('now');
+"#;
+
+const MIGRATION_V19_UP: &str = r#"
+-- Scope the source idempotency key by source_project. The V17 index keyed only
+-- on (source_system, source_id), so two sources of the same system (e.g. github
+-- repos octocat/repoA + octocat/repoB, or two Redmine instances) with the same
+-- bare per-project id ("5") collided and overwrote each other's memory in place.
+-- Include source_project so each (system, project, id) gets its own row.
+-- COALESCE keeps legacy rows (source_project NULL) sharing a single bucket,
+-- matching the upsert lookup's `source_project IS ?` semantics.
+DROP INDEX IF EXISTS idx_nodes_source_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_source_key
+    ON knowledge_nodes(source_system, COALESCE(source_project, ''), source_id)
+    WHERE source_system IS NOT NULL AND source_id IS NOT NULL;
+
+UPDATE schema_version SET version = 19, applied_at = datetime('now');
 "#;
 
 /// Apply pending migrations

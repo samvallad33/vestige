@@ -9939,6 +9939,13 @@ impl SqliteMemoryStore {
 
         let source_system = env.source_system.clone().unwrap_or_default();
         let source_id = env.source_id.clone().unwrap_or_default();
+        // Scope the idempotency key by source_project too: two sources of the
+        // same system (e.g. github repos octocat/repoA and octocat/repoB, or two
+        // Redmine instances) reuse bare per-project ids ("5"), so keying on
+        // (source_system, source_id) alone made repoB's issue #5 overwrite
+        // repoA's row in place. `IS NOT DISTINCT FROM` matches NULL==NULL so
+        // legacy rows without a project still resolve.
+        let source_project = env.source_project.clone();
         let now = Utc::now();
 
         // Look up the existing memory for this external record, if any.
@@ -9950,8 +9957,9 @@ impl SqliteMemoryStore {
             reader
                 .query_row(
                     "SELECT id, content_hash FROM knowledge_nodes \
-                     WHERE source_system = ?1 AND source_id = ?2 LIMIT 1",
-                    params![source_system, source_id],
+                     WHERE source_system = ?1 AND source_id = ?2 \
+                       AND source_project IS ?3 LIMIT 1",
+                    params![source_system, source_id, source_project],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
                 )
                 .optional()?

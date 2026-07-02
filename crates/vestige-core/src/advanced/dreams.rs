@@ -1600,15 +1600,20 @@ impl MemoryDreamer {
         memories: &[&DreamMemory],
         common_tags: &[String],
     ) -> (String, InsightType) {
-        // Determine insight type based on memory characteristics
-        let time_range = memories
+        // Determine insight type based on memory characteristics. Seed the
+        // (min, max) fold from the ACTUAL first timestamp, not (now, now-365d)
+        // sentinels: those sentinels leaked into the span for clusters of old
+        // memories (all created > 365d ago), where min stayed pinned near `now`
+        // and inflated time_span_days past 30, fabricating a TemporalTrend.
+        let time_span_days = memories
             .iter()
             .map(|m| m.created_at)
-            .fold((Utc::now(), Utc::now() - Duration::days(365)), |acc, t| {
-                (acc.0.min(t), acc.1.max(t))
-            });
-
-        let time_span_days = (time_range.1 - time_range.0).num_days();
+            .fold(None::<(DateTime<Utc>, DateTime<Utc>)>, |acc, t| match acc {
+                None => Some((t, t)),
+                Some((lo, hi)) => Some((lo.min(t), hi.max(t))),
+            })
+            .map(|(lo, hi)| (hi - lo).num_days())
+            .unwrap_or(0);
 
         if time_span_days > 30 {
             // Temporal trend

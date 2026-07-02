@@ -174,10 +174,17 @@ fn validate_auth(headers: &HeaderMap, expected: &str) -> Result<(), (StatusCode,
         .and_then(|v| v.to_str().ok())
         .ok_or((StatusCode::UNAUTHORIZED, "Missing Authorization header"))?;
 
-    let token = header.strip_prefix("Bearer ").ok_or((
-        StatusCode::UNAUTHORIZED,
-        "Invalid Authorization scheme (expected Bearer)",
-    ))?;
+    // The auth-scheme token is case-insensitive per RFC 7235/6750, so match
+    // "Bearer" case-insensitively (accepting "bearer", "BEARER", ...) while
+    // preserving the token's original case.
+    let token = header
+        .split_once(' ')
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
+        .map(|(_, token)| token.trim_start())
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            "Invalid Authorization scheme (expected Bearer)",
+        ))?;
 
     // Constant-time comparison: prevents timing side-channel attacks.
     // We first check lengths match (length itself is not secret since UUIDs
@@ -242,8 +249,12 @@ fn validate_accept(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)
         .split(',')
         .map(|part| part.trim().split(';').next().unwrap_or("").trim())
     {
-        accepts_json |= mime == "application/json";
-        accepts_sse |= mime == "text/event-stream";
+        // `*/*` accepts anything; `application/*` / `text/*` accept a whole type.
+        // Honoring these lets generic HTTP clients (curl's default Accept: */*)
+        // reach /mcp instead of getting a hard 406.
+        accepts_json |=
+            mime == "application/json" || mime == "application/*" || mime == "*/*";
+        accepts_sse |= mime == "text/event-stream" || mime == "text/*" || mime == "*/*";
     }
 
     if accepts_json && accepts_sse {
