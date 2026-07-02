@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-07-02 — "Windows embeddings + backfill safety"
+
+A focused patch release. Two fixes plus a first-run guide.
+
+### Fixed — Windows embeddings never initialized (#101)
+
+The `x86_64-pc-windows-msvc` v2.2.0 binary was built without the `vector-search`
+feature, so the storage layer's `#[cfg(feature = "vector-search")]` paths compiled
+out. On Windows this meant new memories got no embedding, semantic search returned
+nothing, `vestige health` reported "Embedding Service: Not Ready" (0% coverage),
+and no model download was ever attempted — while v2.1.23 worked on the same machine.
+The release build now includes `vector-search` on Windows (it compiles cleanly on
+MSVC because `usearch` is pinned with `features = ["fp16lib"]`). npm and direct
+downloads are fixed by the same rebuilt release asset. Thanks @Vrakoss for the
+precise report.
+
+### Fixed — Retroactive Salience Backfill: bounded promote + opt-out lever (#103)
+
+The consolidation-pass backfill promoted root-cause memories with an **uncapped**
+`stability * 1.5` FSRS multiply, and a code comment wrongly claimed it was capped.
+On a chronically-recurring failure this could inflate a cause's stability without
+bound, distorting its review schedule. Backfill promotion is now bounded to
+`MIN(stability * 1.5, stability + 365.0)` (the additive +365-day ceiling the
+backfill module already computed but never applied), on both the auto-fire and the
+manual `backfill` tool paths. Auto-fire remains **on by default** (it shipped and
+was documented in v2.2.0) but is now disableable: set `VESTIGE_BACKFILL_AUTOFIRE=0`
+(or `false`/`off`/`no`) to turn it off; the manual `backfill` tool + CLI remain
+available regardless. Thanks @randomnimbus for the report and the initial patch.
+
+### Added — First-run guide (#83)
+
+A single `docs/GETTING-STARTED.md` that consolidates install, "what gets saved",
+how to inspect your memory, and project scoping into one 30-minute first-run path,
+linked from the README.
+
 ## [2.2.0] - 2026-06-29 — "Retroactive Salience + Tool Consolidation"
 
 Three independent value streams land together as a coherent release.

@@ -65,7 +65,7 @@ vestige-mcp --version     # prints the installed version
 vestige stats             # prints your memory count (0 on a fresh install)
 ```
 
-That's the whole install. Per-agent guides (Cursor, VS Code, Windsurf, JetBrains, Xcode, OpenCode, Codex, Claude Desktop) are [here ↓](#-works-with-every-ai-agent).
+That's the whole install. New here? The [**30-minute first-run guide**](docs/GETTING-STARTED.md) walks you from install to your first backward-reach: what gets saved (and what doesn't), how to inspect your own memory, and how to scope it per project. Per-agent guides (Cursor, VS Code, Windsurf, JetBrains, Xcode, OpenCode, Codex, Claude Desktop) are [here ↓](#-works-with-every-ai-agent).
 
 Now talk to your agent like it has a memory, because now it does:
 
@@ -287,6 +287,7 @@ Registering the server exposes the tools; a short instruction tells the agent *w
 
 | | |
 |---|---|
+| [**Getting Started**](docs/GETTING-STARTED.md) | Your first 30 minutes, start to finish |
 | [**FAQ**](docs/FAQ.md) | 30+ real questions answered |
 | [**The Science**](docs/SCIENCE.md) | Every feature, every paper |
 | [**Storage Modes**](docs/STORAGE.md) | Global · per-project · multi-instance |
