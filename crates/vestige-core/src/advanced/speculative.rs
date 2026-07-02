@@ -432,7 +432,12 @@ impl SpeculativeRetriever {
             let mut time_counts: HashMap<String, u32> = HashMap::new();
 
             for event in sequence.iter() {
-                if (event.timestamp.hour() as i32 - hour as i32).abs() <= 1 {
+                // Circular hour distance so the ±1h window wraps around midnight:
+                // 23:00 is 1 hour from 00:00, not 23. Without this, same-time
+                // predictions straddling midnight were silently dropped.
+                let raw = (event.timestamp.hour() as i32 - hour as i32).abs();
+                let circular = raw.min(24 - raw);
+                if circular <= 1 {
                     *time_counts.entry(event.memory_id.clone()).or_insert(0) += 1;
                 }
             }
