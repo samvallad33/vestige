@@ -52,7 +52,12 @@ pub const MIN_SHARED_ENTITIES: usize = 1;
 pub const FAILURE_MARKERS: &[&str] = &[
     "error", "bug", "crash", "crashed", "regression", "broke", "broken",
     "failure", "failed", "panic", "exception", "fault", "outage", "incident",
-    "500", "timeout", "deadlock", "leak", "corrupt", "stack overflow",
+    // NOTE: bare "500" was removed — it matched benign content like "$500",
+    // "500 users", or "line 500" and wrongly flagged a quiet CAUSE memory as a
+    // failure, excluding it from the backward reach. The specific HTTP error
+    // codes 502/503/504 below stay; a genuine "HTTP 500" is still caught by
+    // "error"/"failed"/"exception" in any real incident note.
+    "timeout", "deadlock", "leak", "corrupt", "stack overflow",
     // performance/degradation failures (an agent should backfill from these too)
     "spiked", "latency", "degraded", "slow", "hang", "hung", "throttled",
     "oom", "502", "503", "504", "rejected", "denied", "flaky",
@@ -139,21 +144,22 @@ pub fn extract_entities(content: &str, tags: &[String]) -> Vec<String> {
 /// hits "$500" — which wrongly flags a quiet CAUSE as a failure and excludes it
 /// from the backward reach.
 fn contains_marker_word(hay: &str, marker: &str) -> bool {
-    let bytes = hay.as_bytes();
     let mut from = 0usize;
     while let Some(pos) = hay[from..].find(marker) {
         let start = from + pos;
         let end = start + marker.len();
-        let before_ok = start == 0
-            || !{
-                let c = bytes[start - 1] as char;
-                c.is_alphanumeric() || c == '_'
-            };
-        let after_ok = end >= bytes.len()
-            || !{
-                let c = bytes[end] as char;
-                c.is_alphanumeric() || c == '_'
-            };
+        // Inspect the actual char before/after the match, not a raw byte cast to
+        // char: for a multibyte UTF-8 boundary the raw byte is a continuation
+        // byte (0x80-0xBF), which `as char` misreads as a non-alphanumeric and
+        // wrongly passes the word-boundary check. char iteration is boundary-safe.
+        let before_ok = hay[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+        let after_ok = hay[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
         if before_ok && after_ok {
             return true;
         }

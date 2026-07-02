@@ -550,23 +550,28 @@ impl PredictionErrorGate {
         let new_lower = new_content.to_lowercase();
         let old_lower = old_content.to_lowercase();
 
-        // Check for explicit negation patterns
+        // Check for explicit negation patterns — a real polarity FLIP, not the
+        // mere presence of a negation word. We require the negation term in the
+        // new content AND its paired positive term in the old content (old: "use
+        // X"; new: "avoid X"). The previous logic fired whenever the new content
+        // merely contained a negation word the old one lacked, so ordinary
+        // additive notes ("Do not forget to configure X" — contains "not ") were
+        // misread as corrections and demoted a correct memory. Bare triggers with
+        // no paired positive term ("not ", "instead of", "rather than") are
+        // dropped for the same reason: they match complementary phrasing.
         let negation_pairs = [
+            ("don't use", "use"),
             ("don't", "do"),
             ("never", "always"),
             ("avoid", "use"),
             ("wrong", "right"),
-            ("bad", "good"),
             ("incorrect", "correct"),
             ("deprecated", "recommended"),
             ("outdated", "current"),
-            ("instead of", ""),
-            ("rather than", ""),
-            ("not ", ""),
         ];
 
-        for (neg, _pos) in negation_pairs.iter() {
-            if new_lower.contains(neg) && !old_lower.contains(neg) {
+        for (neg, pos) in negation_pairs.iter() {
+            if new_lower.contains(neg) && old_lower.contains(pos) && !old_lower.contains(neg) {
                 return true;
             }
         }
@@ -835,6 +840,24 @@ mod tests {
             "Use async/await for performance",
             "Use async patterns when needed"
         ));
+
+        // Regression: a benign ADDITIVE note that merely contains a negation word
+        // ("do not", "cannot") must NOT be flagged as a contradiction. Previously
+        // the bare "not " substring fired here and demoted the correct memory.
+        assert!(
+            !gate.detect_contradiction(
+                "Do not forget to configure the async runtime for the worker pool",
+                "Use the async runtime for the worker pool"
+            ),
+            "additive 'do not forget' note must not read as a contradiction"
+        );
+        assert!(
+            !gate.detect_contradiction(
+                "You cannot skip the migration step",
+                "Run the migration step before deploying"
+            ),
+            "'cannot' in complementary guidance must not read as a contradiction"
+        );
     }
 
     #[test]

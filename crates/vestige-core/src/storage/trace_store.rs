@@ -77,13 +77,15 @@ impl SqliteMemoryStore {
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
 
-        let seq: i64 = writer
-            .query_row(
-                "SELECT COALESCE(MAX(seq), -1) + 1 FROM agent_traces WHERE run_id = ?1",
-                params![run_id],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
+        // Propagate a seq-query failure instead of defaulting to 0: swallowing
+        // the error with unwrap_or(0) could write a duplicate seq=0 for a run
+        // that already has events, corrupting Black Box replay ordering. On an
+        // empty run COALESCE(...,-1)+1 already yields 0 correctly.
+        let seq: i64 = writer.query_row(
+            "SELECT COALESCE(MAX(seq), -1) + 1 FROM agent_traces WHERE run_id = ?1",
+            params![run_id],
+            |r| r.get(0),
+        )?;
 
         writer.execute(
             "INSERT INTO agent_traces (id, run_id, seq, event_type, tool, payload, at, created_at)
@@ -435,12 +437,25 @@ impl SqliteMemoryStore {
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            // Only a still-pending PR may be decided. The `AND status = 'pending'`
+            // guard makes decisions final: re-POSTing an action on an already
+            // promoted/forgotten/merged PR cannot flip its status, re-run its
+            // side effects (e.g. release_quarantine resurrecting a rejected
+            // memory), or overwrite the audit ledger (decision/decided_at).
             let changed = writer.execute(
-                "UPDATE memory_prs SET status = ?1, decision = ?2, decided_at = ?3 WHERE id = ?4",
+                "UPDATE memory_prs SET status = ?1, decision = ?2, decided_at = ?3
+                 WHERE id = ?4 AND status = 'pending'",
                 params![new_status.as_str(), decision, now, id],
             )?;
             if changed == 0 {
-                return Err(StorageError::NotFound(id.to_string()));
+                // Distinguish "no such PR" from "already decided" so callers get
+                // a truthful error instead of a misleading NotFound.
+                return Err(match self.get_memory_pr(id)? {
+                    Some(_) => StorageError::Init(format!(
+                        "memory PR {id} is already decided and cannot be re-decided"
+                    )),
+                    None => StorageError::NotFound(id.to_string()),
+                });
             }
         }
         self.get_memory_pr(id)?

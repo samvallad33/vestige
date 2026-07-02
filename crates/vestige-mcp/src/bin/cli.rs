@@ -2006,10 +2006,16 @@ fn run_backup(output: PathBuf) -> anyhow::Result<()> {
         let _ = storage.get_stats()?;
     }
 
-    // Also flush WAL directly via a separate connection for safety
+    // Also flush WAL directly via a separate connection for extra safety. This
+    // is a raw, UN-keyed connection, so on a SQLCipher-encrypted DB it cannot
+    // read the header and the checkpoint fails with "file is not a database".
+    // The keyed `storage` opened above already flushed the WAL on drop, so this
+    // is redundant belt-and-suspenders — make it best-effort instead of letting
+    // it abort the whole backup on encrypted databases.
     {
-        let conn = rusqlite::Connection::open(&db_path)?;
-        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        }
     }
 
     // Create parent directories if needed
@@ -2592,7 +2598,16 @@ fn run_ingest(
     {
         let result = storage.smart_ingest(input)?;
         if let Some(days) = ago_days {
-            let when = chrono::Utc::now() - chrono::Duration::days(days);
+            // Duration::days panics on overflow for extreme inputs; try_days
+            // returns None instead. The subtraction itself can ALSO overflow the
+            // DateTime range, so use checked_sub_signed rather than `-` (which
+            // panics). Both the construction and the subtraction are guarded.
+            let delta = chrono::Duration::try_days(days).ok_or_else(|| {
+                anyhow::anyhow!("--ago-days value {days} is out of the supported range")
+            })?;
+            let when = chrono::Utc::now().checked_sub_signed(delta).ok_or_else(|| {
+                anyhow::anyhow!("--ago-days value {days} is out of the supported range")
+            })?;
             storage.set_created_at(&result.node.id, when)?;
         }
         println!("{}", "=== Vestige Ingest ===".cyan().bold());
@@ -2622,7 +2637,16 @@ fn run_ingest(
     {
         let node = storage.ingest(input)?;
         if let Some(days) = ago_days {
-            let when = chrono::Utc::now() - chrono::Duration::days(days);
+            // Duration::days panics on overflow for extreme inputs; try_days
+            // returns None instead. The subtraction itself can ALSO overflow the
+            // DateTime range, so use checked_sub_signed rather than `-` (which
+            // panics). Both the construction and the subtraction are guarded.
+            let delta = chrono::Duration::try_days(days).ok_or_else(|| {
+                anyhow::anyhow!("--ago-days value {days} is out of the supported range")
+            })?;
+            let when = chrono::Utc::now().checked_sub_signed(delta).ok_or_else(|| {
+                anyhow::anyhow!("--ago-days value {days} is out of the supported range")
+            })?;
             storage.set_created_at(&node.id, when)?;
         }
         println!("{}", "=== Vestige Ingest ===".cyan().bold());
