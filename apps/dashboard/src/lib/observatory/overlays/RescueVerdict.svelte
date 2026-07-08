@@ -28,7 +28,12 @@
 	let {
 		frame = 0,
 		verdict,
-		fadeWindow = [600, 615, 645, 660],
+		// Hold the verdict on screen for the REST of the loop, not a ~1s flash.
+		// Fade in over 600→620, hold fully readable through the field's decay to
+		// rest, then fade out just before the seamless wrap (705→719, back to 0
+		// at 719 so the loop seam stays clean). This is the demo money-card: the
+		// viewer needs seconds to read "root cause found", not a blink.
+		fadeWindow = [600, 620, 705, 719],
 		tone = 'triumph'
 	}: Props = $props();
 

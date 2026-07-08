@@ -62,10 +62,15 @@
 		loading = true;
 		error = '';
 		try {
+			// Pull the DENSE real subgraph (the well-connected hotspot), not the
+			// newest-memory neighborhood — 'recent' centers on a lonely fresh node
+			// (~12 nodes), while 'connected' surfaces the populous, edge-rich field
+			// (~150 real memories, thousands of edges) so the Observatory reads as
+			// a living brain doing real work, not a sparse placeholder.
 			const data = await api.graph({
-				max_nodes: 300,
+				max_nodes: 200,
 				depth: 3,
-				sort: 'recent'
+				sort: 'connected'
 			});
 			graphData = data;
 			nodeCount = data.nodeCount;
