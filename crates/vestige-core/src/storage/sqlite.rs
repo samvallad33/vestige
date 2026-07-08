@@ -4053,10 +4053,35 @@ impl SqliteMemoryStore {
 
     /// Auto-deduplicate similar memories during consolidation (episodic → semantic merge)
     ///
-    /// Finds clusters with cosine similarity > 0.85, keeps the strongest node,
+    /// Finds clusters with cosine similarity >= 0.85, keeps the strongest node,
     /// appends unique content from weaker nodes, and deletes duplicates.
+    /// Honors the `VESTIGE_AUTO_CONSOLIDATE_MERGE` opt-out (unset → on) and
+    /// never merges away or deletes protected (pinned) nodes (#142).
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn auto_dedup_consolidation(&self) -> Result<i64> {
+        // OPT-OUT (auto-consolidate-merge, #142): this pass concat-merges
+        // near-duplicate memories and HARD-DELETES the weaker ones with no
+        // reflog. It is ON by default (behavior unchanged), but a consumer that
+        // does not want unattended, no-audit merges can turn it off with
+        // VESTIGE_AUTO_CONSOLIDATE_MERGE=0 (or false/off/no). Parsed exactly like
+        // the sibling VESTIGE_BACKFILL_AUTOFIRE: unset or any other/malformed
+        // value → on (fail-open to the documented default). The `dedup` MCP tool
+        // remains available for on-demand, previewable, reversible merges
+        // regardless of the gate. Gate here (not the caller) so it stays with the
+        // pin filter and self-protects against a future second caller.
+        let auto_merge = std::env::var("VESTIGE_AUTO_CONSOLIDATE_MERGE")
+            .map(|v| {
+                let v = v.trim();
+                !(v.eq_ignore_ascii_case("false")
+                    || v.eq_ignore_ascii_case("off")
+                    || v.eq_ignore_ascii_case("no")
+                    || v == "0")
+            })
+            .unwrap_or(true);
+        if !auto_merge {
+            return Ok(0);
+        }
+
         let all_embeddings = self.get_all_embeddings()?;
         let n = all_embeddings.len();
 
@@ -4064,19 +4089,35 @@ impl SqliteMemoryStore {
             return Ok(0);
         }
 
+        // Protected (pinned) memories must never be touched by this unattended,
+        // no-audit pass — mirroring the interactive contract that a protected
+        // node may only survive a merge, never be absorbed (see `plan_merge`).
+        // Fetch the set ONCE here, before the per-cluster reader lock is taken:
+        // both `protected_node_ids()` and `is_protected()` take their OWN reader
+        // lock, so calling either inside the lock window below would self-deadlock
+        // the non-reentrant Mutex. Skipping protected ids at BOTH the outer
+        // (anchor) and inner (member) loops guarantees a protected node is never
+        // an anchor and never a cluster member — so it can never be the keeper nor
+        // land in weak_ids, and is thus never merged into and never deleted. Fails
+        // SAFE via `?`: on a poisoned lock the caller's unwrap_or(0) skips the
+        // merge this cycle rather than risk absorbing a pin. #142
+        let protected = self.protected_node_ids()?;
+
         const SIMILARITY_THRESHOLD: f32 = 0.85;
         let mut merged_count = 0i64;
         let mut consumed: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for i in 0..n {
-            if consumed.contains(&all_embeddings[i].0) {
+            if consumed.contains(&all_embeddings[i].0) || protected.contains(&all_embeddings[i].0) {
                 continue;
             }
 
             let mut cluster: Vec<(usize, f32)> = Vec::new();
 
             for j in (i + 1)..n {
-                if consumed.contains(&all_embeddings[j].0) {
+                if consumed.contains(&all_embeddings[j].0)
+                    || protected.contains(&all_embeddings[j].0)
+                {
                     continue;
                 }
                 let sim = crate::embeddings::cosine_similarity(
@@ -12995,6 +13036,376 @@ mod tests {
             .merge_candidates(MergePolicy::default(), 20, &[])
             .unwrap();
         assert!(cands.iter().all(|c| c.has_protected_member));
+    }
+
+    // ========================================================================
+    // Auto-consolidation merge: opt-out gate + protected-pin exclusion (#142)
+    //
+    // These exercise `auto_dedup_consolidation` directly — the unattended,
+    // no-audit pass the 6h background consolidation cycle runs. seed_node/
+    // axis_vector give deterministic same-axis clusters (cosine ~1.0 >> the 0.85
+    // threshold); set_retention pins down which node wins the keeper tiebreak.
+    // ========================================================================
+
+    /// Force a node's retention_strength so the keeper tiebreak in
+    /// `auto_dedup_consolidation` is deterministic regardless of insertion order.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn set_retention(storage: &Storage, id: &str, value: f64) {
+        let writer = storage.writer.lock().unwrap();
+        writer
+            .execute(
+                "UPDATE knowledge_nodes SET retention_strength = ?1 WHERE id = ?2",
+                rusqlite::params![value, id],
+            )
+            .unwrap();
+    }
+
+    /// Run `f` with VESTIGE_AUTO_CONSOLIDATE_MERGE pinned to `value`
+    /// (None = pinned-unset, i.e. the documented ON default), serialized via
+    /// ENV_LOCK and restored afterward (process env is global + unsafe under
+    /// Rust 2024). Sibling of `with_vector_search_disabled`.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn with_auto_merge_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        const KEY: &str = "VESTIGE_AUTO_CONSOLIDATE_MERGE";
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::env::var_os(KEY);
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(KEY, v),
+                None => std::env::remove_var(KEY),
+            }
+        }
+        let result = catch_unwind(AssertUnwindSafe(f));
+        unsafe {
+            if let Some(prev) = previous {
+                std::env::set_var(KEY, prev);
+            } else {
+                std::env::remove_var(KEY);
+            }
+        }
+        match result {
+            Ok(value) => value,
+            Err(payload) => resume_unwind(payload),
+        }
+    }
+
+    // --- A. Default (flag unset): near-duplicates still merge (regression) ---
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_default_on_merges_near_duplicates() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            let keeper = seed_node(
+                &storage,
+                "Rate limiting uses a token bucket per client API key",
+                &["api"],
+                axis_vector(21, 0.02),
+            );
+            let dup = seed_node(
+                &storage,
+                "Rate limiting uses a token-bucket algorithm per client API key, refilled steadily",
+                &["api"],
+                axis_vector(21, 0.01),
+            );
+            // Make `keeper` win the retention tiebreak deterministically.
+            set_retention(&storage, &keeper, 0.9);
+            set_retention(&storage, &dup, 0.3);
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 1, "one weak node folded into the keeper");
+            assert!(
+                storage.get_node(&dup).unwrap().is_none(),
+                "weak duplicate is hard-deleted"
+            );
+            let survivor = storage.get_node(&keeper).unwrap().unwrap();
+            assert!(
+                survivor.content.contains("[MERGED]"),
+                "keeper carries the folded-in [MERGED] block"
+            );
+        });
+    }
+
+    // --- B. Flag off suppresses the merge (parametrized) ---------------------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_env_off_suppresses_merge() {
+        // trimmed + case-insensitive false/off/no/0 all disable.
+        for value in ["false", "off", "no", "0", "  OFF  ", "False"] {
+            with_auto_merge_env(Some(value), || {
+                let storage = create_test_storage();
+                let a = seed_node(
+                    &storage,
+                    "Prometheus scrapes its targets every 15 seconds",
+                    &["obs"],
+                    axis_vector(23, 0.02),
+                );
+                let b = seed_node(
+                    &storage,
+                    "Prometheus scrapes its configured targets every 15s by default",
+                    &["obs"],
+                    axis_vector(23, 0.01),
+                );
+
+                let merged = storage.auto_dedup_consolidation().unwrap();
+                assert_eq!(merged, 0, "value {value:?} must suppress the merge");
+                // Both nodes survive, content byte-identical (no [MERGED] block).
+                assert_eq!(
+                    storage.get_node(&a).unwrap().unwrap().content,
+                    "Prometheus scrapes its targets every 15 seconds"
+                );
+                assert_eq!(
+                    storage.get_node(&b).unwrap().unwrap().content,
+                    "Prometheus scrapes its configured targets every 15s by default"
+                );
+            });
+        }
+    }
+
+    // --- B (cont). A malformed value fails OPEN to the ON default ------------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_env_garbage_fails_open_and_merges() {
+        with_auto_merge_env(Some("banana"), || {
+            let storage = create_test_storage();
+            let keeper = seed_node(
+                &storage,
+                "Cache entries expire after a five minute TTL",
+                &["cache"],
+                axis_vector(25, 0.02),
+            );
+            let dup = seed_node(
+                &storage,
+                "Cache entries expire after a five-minute TTL window by default",
+                &["cache"],
+                axis_vector(25, 0.01),
+            );
+            set_retention(&storage, &keeper, 0.9);
+            set_retention(&storage, &dup, 0.3);
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 1, "malformed value fails open to the ON default");
+            assert!(storage.get_node(&dup).unwrap().is_none());
+        });
+    }
+
+    // --- C(a). Protected would-be keeper: untouched; others merge -----------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_protected_would_be_keeper_untouched_others_merge() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            // P has the highest retention, so absent protection it would be the
+            // keeper. Protected → skipped entirely; the two unprotected merge alone.
+            let pinned = seed_node(
+                &storage,
+                "Deploys are gated on a green CI run and one approval",
+                &["ci"],
+                axis_vector(27, 0.02),
+            );
+            let keeper = seed_node(
+                &storage,
+                "Deploys are gated on a green CI pipeline plus one reviewer approval",
+                &["ci"],
+                axis_vector(27, 0.01),
+            );
+            let member = seed_node(
+                &storage,
+                "Deploys require a green CI run and at least one approving review",
+                &["ci"],
+                axis_vector(27, 0.015),
+            );
+            set_retention(&storage, &pinned, 0.95);
+            set_retention(&storage, &keeper, 0.80);
+            set_retention(&storage, &member, 0.30);
+            storage.set_protected(&pinned, true).unwrap();
+            let pinned_content = storage.get_node(&pinned).unwrap().unwrap().content;
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(
+                merged,
+                1,
+                "the two unprotected near-dups merge among themselves"
+            );
+
+            // Protected node byte-for-byte untouched and still protected.
+            let p = storage.get_node(&pinned).unwrap().unwrap();
+            assert_eq!(p.content, pinned_content, "protected keeper not absorbed");
+            assert!(!p.content.contains("[MERGED]"));
+            assert!(storage.is_protected(&pinned).unwrap());
+            // Unprotected pair merged: `member` gone, `keeper` carries [MERGED].
+            assert!(storage.get_node(&member).unwrap().is_none());
+            let keeper_node = storage.get_node(&keeper).unwrap().unwrap();
+            assert!(keeper_node.content.contains("[MERGED]"));
+        });
+    }
+
+    // --- C(b) / Regression (#142): protected weak member is never absorbed --
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn auto_dedup_regression_142_protected_weak_member_not_absorbed() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            // Regression (#142): before the fix this pinned node — the weaker
+            // member of the cluster — was silently absorbed into the stronger
+            // unprotected keeper and hard-deleted by the unattended pass. The
+            // PINNED-CANARY-142 marker makes accidental absorption detectable.
+            let pinned = seed_node(
+                &storage,
+                "Feature flags default to off in production PINNED-CANARY-142",
+                &["flags"],
+                axis_vector(29, 0.02),
+            );
+            let keeper = seed_node(
+                &storage,
+                "Feature flags default to off in the production environment",
+                &["flags"],
+                axis_vector(29, 0.01),
+            );
+            let member = seed_node(
+                &storage,
+                "Feature flags are off by default in production deployments",
+                &["flags"],
+                axis_vector(29, 0.015),
+            );
+            // Pinned is the LOWEST-retention member — pre-fix it would land in
+            // weak_ids and be deleted + absorbed by the keeper.
+            set_retention(&storage, &pinned, 0.10);
+            set_retention(&storage, &keeper, 0.80);
+            set_retention(&storage, &member, 0.30);
+            storage.set_protected(&pinned, true).unwrap();
+            let pinned_content = storage.get_node(&pinned).unwrap().unwrap().content;
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 1, "only the two unprotected near-dups merge");
+
+            // Invariant 1: the protected node still exists, byte-identical.
+            let p = storage.get_node(&pinned).unwrap();
+            assert!(p.is_some(), "protected node must not be deleted");
+            assert_eq!(
+                p.unwrap().content,
+                pinned_content,
+                "protected node not absorbed"
+            );
+            assert!(storage.is_protected(&pinned).unwrap());
+
+            // Invariant 2: the keeper did NOT gain the protected node's content.
+            let keeper_node = storage.get_node(&keeper).unwrap().unwrap();
+            assert!(
+                !keeper_node.content.contains("PINNED-CANARY-142"),
+                "keeper must not absorb the protected node's content"
+            );
+            // The legitimate unprotected pair still merged (member folded in).
+            assert!(storage.get_node(&member).unwrap().is_none());
+            assert!(keeper_node.content.contains("[MERGED]"));
+        });
+    }
+
+    // --- C(c). Two protected near-dups: neither merges ----------------------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_two_protected_near_dups_neither_merges() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            let a = seed_node(
+                &storage,
+                "Backups run nightly and are retained for thirty days",
+                &["backup"],
+                axis_vector(31, 0.02),
+            );
+            let b = seed_node(
+                &storage,
+                "Backups run every night and are kept for thirty days",
+                &["backup"],
+                axis_vector(31, 0.01),
+            );
+            storage.set_protected(&a, true).unwrap();
+            storage.set_protected(&b, true).unwrap();
+            let (ca, cb) = (
+                storage.get_node(&a).unwrap().unwrap().content,
+                storage.get_node(&b).unwrap().unwrap().content,
+            );
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 0, "two protected near-dups: nothing merges");
+            assert_eq!(storage.get_node(&a).unwrap().unwrap().content, ca);
+            assert_eq!(storage.get_node(&b).unwrap().unwrap().content, cb);
+        });
+    }
+
+    // --- C(d). Protected + a single unprotected near-dup: no merge ----------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_protected_plus_single_unprotected_no_merge() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            let pinned = seed_node(
+                &storage,
+                "Secrets are stored in the vault, never in the repo",
+                &["sec"],
+                axis_vector(33, 0.02),
+            );
+            let other = seed_node(
+                &storage,
+                "Secrets live in the vault and are never committed to the repo",
+                &["sec"],
+                axis_vector(33, 0.01),
+            );
+            storage.set_protected(&pinned, true).unwrap();
+            let (cp, co) = (
+                storage.get_node(&pinned).unwrap().unwrap().content,
+                storage.get_node(&other).unwrap().unwrap().content,
+            );
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 0, "a lone unprotected node cannot form a cluster");
+            assert_eq!(storage.get_node(&pinned).unwrap().unwrap().content, cp);
+            assert_eq!(storage.get_node(&other).unwrap().unwrap().content, co);
+        });
+    }
+
+    // --- D. Liveness: protected + two unprotected → the two merge -----------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_protected_plus_two_unprotected_liveness() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            // The pin exclusion must not block a legitimate merge of the others.
+            let pinned = seed_node(
+                &storage,
+                "The API returns ISO-8601 timestamps in UTC",
+                &["api"],
+                axis_vector(35, 0.02),
+            );
+            let keeper = seed_node(
+                &storage,
+                "The API returns ISO 8601 timestamps in UTC by convention",
+                &["api"],
+                axis_vector(35, 0.01),
+            );
+            let member = seed_node(
+                &storage,
+                "All API timestamps are returned as ISO-8601 in the UTC timezone",
+                &["api"],
+                axis_vector(35, 0.015),
+            );
+            set_retention(&storage, &pinned, 0.50);
+            set_retention(&storage, &keeper, 0.80);
+            set_retention(&storage, &member, 0.30);
+            storage.set_protected(&pinned, true).unwrap();
+            let pinned_content = storage.get_node(&pinned).unwrap().unwrap().content;
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 1, "the two unprotected near-dups still merge");
+            assert!(storage.get_node(&member).unwrap().is_none());
+            let keeper_node = storage.get_node(&keeper).unwrap().unwrap();
+            assert!(keeper_node.content.contains("[MERGED]"));
+            // Protected node untouched.
+            assert_eq!(
+                storage.get_node(&pinned).unwrap().unwrap().content,
+                pinned_content
+            );
+            assert!(storage.is_protected(&pinned).unwrap());
+        });
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
