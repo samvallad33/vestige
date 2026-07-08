@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Auto-consolidation merge: opt-out lever + protected pins honored (#142)
+
+The background consolidation cycle's auto-dedup pass silently concat-merges
+near-duplicate memories (cosine ≥ 0.85): it keeps the strongest node, folds the
+weaker ones in as `[MERGED]` blocks, and **hard-deletes** the originals — with no
+reflog and no way to turn it off. Two fixes. First, it is now disableable: set
+`VESTIGE_AUTO_CONSOLIDATE_MERGE=0` (or `false`/`off`/`no`) to suppress it. It
+remains **on by default** (behavior unchanged), and the `dedup` MCP tool stays
+available for on-demand, previewable, reversible merges regardless. Second,
+**protected (pinned) memories are now excluded from this pass** — previously
+`dedup protect` did nothing here, so a pinned memory could be absorbed or deleted
+unattended, contradicting the interactive contract that a protected node may only
+survive a merge, never be absorbed. A protected node is now never an anchor, never
+a cluster member, and thus never merged into or deleted, whether the lever is on
+or off.
+
 ## [2.2.1] - 2026-07-02 — "Windows embeddings + backfill safety"
 
 A focused patch release. Two fixes plus a first-run guide.
