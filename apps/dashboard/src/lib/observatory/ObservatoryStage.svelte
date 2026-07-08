@@ -44,6 +44,19 @@
 		ondemochange?: (demo: DemoMode) => void;
 		/** When provided, renders the exit control (× back to the dashboard). */
 		onexit?: () => void;
+		/**
+		 * Embedded mode — the stage fills its PARENT (absolute) instead of the
+		 * viewport (fixed). Used by the main graph page, where the field is the
+		 * default renderer living under the page's own chrome.
+		 */
+		embedded?: boolean;
+		/**
+		 * 'full'  — telemetry strip, spine, verdicts, switcher, exit (the route
+		 *           and the takeover overlay).
+		 * 'none'  — pure living canvas + loading/error text only; the host page
+		 *           provides all chrome (the main graph's field renderer).
+		 */
+		chrome?: 'full' | 'none';
 	}
 
 	let {
@@ -53,7 +66,9 @@
 		capture = false,
 		showSwitcher = true,
 		ondemochange,
-		onexit
+		onexit,
+		embedded = false,
+		chrome = 'full'
 	}: Props = $props();
 
 	// Human labels for the switcher chips — short, mono, uppercase (visual DNA §7.3).
@@ -246,8 +261,11 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<!-- Full-bleed void stage: #05060a -->
-<div class="fixed inset-0 overflow-hidden bg-[#05060a]" class:cursor-none={capture}>
+<!-- Void stage: #05060a — full-bleed (route/takeover) or parent-filling (embedded) -->
+<div
+	class="{embedded ? 'absolute' : 'fixed'} inset-0 overflow-hidden bg-[#05060a]"
+	class:cursor-none={capture}
+>
 	<!-- Canvas layer (z-index 0) — the living memory field -->
 	<div class="absolute inset-0 z-0">
 		<ObservatoryCanvas
@@ -260,9 +278,11 @@
 	</div>
 
 	<!-- DOM overlay layer (pointer-events:none) — instruments only.
-	     capture hides it all (pure canvas for recording); H toggles. -->
+	     capture hides it all (pure canvas for recording); H toggles;
+	     chrome='none' leaves only loading/error (host page owns the chrome). -->
 	{#if showHud}
 	<div class="absolute inset-0 z-10 pointer-events-none">
+		{#if chrome === 'full'}
 		<!-- Top telemetry strip -->
 		<TelemetryStrip
 			demoMode={demo}
@@ -276,9 +296,10 @@
 			{loading}
 			{error}
 		/>
+		{/if}
 
 		<!-- Exit control — back to the dashboard graph. Esc works too. -->
-		{#if onexit}
+		{#if chrome === 'full' && onexit}
 			<button
 				onclick={onexit}
 				class="absolute top-10 right-4 pointer-events-auto font-mono text-xs tracking-widest
@@ -291,7 +312,7 @@
 		{/if}
 
 		<!-- Demo moment switcher — the 5 cognitive moments, one click each. -->
-		{#if showSwitcher}
+		{#if chrome === 'full' && showSwitcher}
 			<div class="absolute top-10 left-4 pointer-events-auto flex flex-col gap-1.5">
 				{#each DEMO_MODES as mode (mode)}
 					<button
@@ -327,15 +348,17 @@
 		{/if}
 
 		<!-- Timeline spine: beat ticks + playhead riding the loop -->
-		<TimelineSpine steps={pathSteps} frame={frameCount} />
+		{#if chrome === 'full'}
+			<TimelineSpine steps={pathSteps} frame={frameCount} />
+		{/if}
 
 		<!-- Salience-rescue verdict card (frame-driven opacity) -->
-		{#if demo === 'salience-rescue' && rescuePlan?.viable}
+		{#if chrome === 'full' && demo === 'salience-rescue' && rescuePlan?.viable}
 			<RescueVerdict frame={frameCount} verdict={rescuePlan.verdict} />
 		{/if}
 
 		<!-- Firewall quarantine verdict card (frames 480-620, crimson tone) -->
-		{#if demo === 'firewall' && firewallPlan?.viable}
+		{#if chrome === 'full' && demo === 'firewall' && firewallPlan?.viable}
 			<RescueVerdict
 				frame={frameCount}
 				tone="quarantine"
