@@ -20,6 +20,10 @@
 	import type { GraphMutation } from '$lib/graph/events';
 	import { AHAGRAPH_COLORS, AHAGRAPH_DESCRIPTIONS, type ColorMode } from '$lib/graph/nodes';
 	import { filterByDate } from '$lib/graph/temporal';
+	// Cognitive Observatory — the WebGPU cinematic moments, launched from THIS
+	// page (its primary home) as a full-bleed takeover, like Memory Cinema.
+	import ObservatoryStage from '$lib/observatory/ObservatoryStage.svelte';
+	import type { DemoMode } from '$lib/observatory/types';
 
 	let graphData: GraphResponse | null = $state(null);
 	let selectedMemory: Memory | null = $state(null);
@@ -53,6 +57,12 @@
 	// Live counts that update on mutations
 	let liveNodeCount = $state(0);
 	let liveEdgeCount = $state(0);
+
+	// Observatory takeover state — opens full-bleed over the graph; Esc or
+	// × EXIT returns here. {#key obsDemo} remounts the stage per moment so
+	// every demo starts deterministically from frame 0.
+	let showObservatory = $state(false);
+	let obsDemo = $state<DemoMode>('recall-path');
 
 	// Filtered graph data based on temporal mode
 	let displayNodes = $derived.by((): GraphNode[] => {
@@ -389,6 +399,18 @@ disown</code>
 				{isDreaming ? 'Dreaming…' : 'Dream'}
 			</button>
 
+			<!-- Observatory — the WebGPU cognitive moments, full-bleed takeover.
+			     Lives HERE on the main graph, beside Dream and Memory Cinema. -->
+			<button
+				onclick={() => (showObservatory = true)}
+				class="shrink-0 inline-flex items-center gap-2 min-h-10 px-4 py-2 rounded-xl bg-[#5dcaa5]/15 border border-[#5dcaa5]/40 text-[#7fe6c0] text-sm
+					hover:bg-[#5dcaa5]/25 transition-all backdrop-blur-sm"
+				title="Open the Cognitive Observatory"
+			>
+				<Icon name="sparkle" size={16} />
+				Observatory
+			</button>
+
 			<!-- ═══════════════════════════════════════════════════════════
 			     MEMORY CINEMA — PROTECTED · DO NOT MODIFY
 			     The AI-narrated flythrough. Its trigger + props are flawless
@@ -544,3 +566,21 @@ disown</code>
 		</div>
 	{/if}
 </div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     COGNITIVE OBSERVATORY — full-bleed takeover, part of the MAIN graph.
+     z-50 lifts it above all app chrome; the {#key} remounts the stage per
+     moment so every demo runs deterministically from frame 0. × EXIT / Esc
+     returns to this graph exactly as it was.
+     ═══════════════════════════════════════════════════════════════════════ -->
+{#if showObservatory}
+	<div class="fixed inset-0 z-50">
+		{#key obsDemo}
+			<ObservatoryStage
+				demo={obsDemo}
+				ondemochange={(d) => (obsDemo = d)}
+				onexit={() => (showObservatory = false)}
+			/>
+		{/key}
+	</div>
+{/if}
