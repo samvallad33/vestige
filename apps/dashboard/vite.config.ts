@@ -9,11 +9,14 @@ export default defineConfig({
 		port: 5173,
 		proxy: {
 			'/api': {
-				target: 'http://127.0.0.1:3927',
+				target: process.env.VESTIGE_API_TARGET ?? 'http://127.0.0.1:3927',
 				changeOrigin: true
 			},
 			'/ws': {
-				target: 'ws://127.0.0.1:3927',
+				target: (process.env.VESTIGE_API_TARGET ?? 'http://127.0.0.1:3927').replace(
+					'http',
+					'ws'
+				),
 				ws: true
 			}
 		}
