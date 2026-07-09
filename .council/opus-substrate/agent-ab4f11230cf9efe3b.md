@@ -1,0 +1,1 @@
+Key finding: `AmbientField.svelte` (used by the contradictions page) has WebGPU. `ContradictionArcs`, `DuplicateCluster`, and `PatternTransferHeatmap` are the core visual components. Let me read the backend handlers to confirm the real response shapes, and check the three visual components' rendering tech (SVG vs canvas vs WebGPU).
