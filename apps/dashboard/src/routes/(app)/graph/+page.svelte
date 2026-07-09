@@ -20,6 +20,10 @@
 	import type { GraphMutation } from '$lib/graph/events';
 	import { AHAGRAPH_COLORS, AHAGRAPH_DESCRIPTIONS, type ColorMode } from '$lib/graph/nodes';
 	import { filterByDate } from '$lib/graph/temporal';
+	// Cognitive Observatory — the WebGPU cinematic moments, launched from THIS
+	// page (its primary home) as a full-bleed takeover, like Memory Cinema.
+	import ObservatoryStage from '$lib/observatory/ObservatoryStage.svelte';
+	import type { DemoMode } from '$lib/observatory/types';
 
 	let graphData: GraphResponse | null = $state(null);
 	let selectedMemory: Memory | null = $state(null);
@@ -53,6 +57,28 @@
 	// Live counts that update on mutations
 	let liveNodeCount = $state(0);
 	let liveEdgeCount = $state(0);
+
+	// Observatory takeover state — opens full-bleed over the graph; Esc or
+	// × EXIT returns here. {#key obsDemo} remounts the stage per moment so
+	// every demo starts deterministically from frame 0.
+	let showObservatory = $state(false);
+	let obsDemo = $state<DemoMode>('recall-path');
+
+	// Main-canvas renderer: 'field' = the raw-WebGPU living memory field (the
+	// Observatory engine — HDR bloom, GPU force sim, recall wavefront riding
+	// the REAL graph; visuals to the max, the default wherever WebGPU exists).
+	// 'classic' = the Three.js inspector (node picking, colour modes, temporal
+	// scrubbing) — kept one click away until GPU picking lands in the field.
+	const RENDERER_KEY = 'vestige-graph-renderer';
+	let renderMode = $state<'field' | 'classic'>('classic');
+	function setRenderMode(m: 'field' | 'classic') {
+		renderMode = m;
+		try {
+			localStorage.setItem(RENDERER_KEY, m);
+		} catch {
+			/* storage unavailable (private mode) — session-only choice */
+		}
+	}
 
 	// Filtered graph data based on temporal mode
 	let displayNodes = $derived.by((): GraphNode[] => {
@@ -102,6 +128,17 @@
 	}
 
 	onMount(() => {
+		// Renderer choice: honor the saved preference, defaulting to the WebGPU
+		// field wherever the GPU exists. No WebGPU → classic, always.
+		const hasWebGpu = typeof navigator !== 'undefined' && 'gpu' in navigator;
+		let saved: string | null = null;
+		try {
+			saved = localStorage.getItem(RENDERER_KEY);
+		} catch {
+			/* storage unavailable */
+		}
+		renderMode = !hasWebGpu ? 'classic' : saved === 'classic' ? 'classic' : 'field';
+
 		const sp = new URLSearchParams(window.location.search);
 		const requestedMode = sp.get('colorMode');
 		if (isColorMode(requestedMode)) {
@@ -276,16 +313,31 @@ disown</code>
 			</div>
 		</div>
 	{:else if graphData}
-		<Graph3D
-			nodes={displayNodes}
-			edges={displayEdges}
-			centerId={graphData.center_id}
-			events={$eventFeed}
-			{isDreaming}
-			{colorMode}
-			onSelect={onNodeSelect}
-			onGraphMutation={handleGraphMutation}
-		/>
+		{#if renderMode === 'field'}
+			<!-- The raw-WebGPU living memory field — the Observatory engine as the
+			     MAIN renderer: GPU force sim, HDR bloom, the recall wavefront
+			     sweeping the real graph on a 12s loop. Page chrome stays DOM. -->
+			<div class="absolute inset-0">
+				<ObservatoryStage
+					embedded
+					chrome="none"
+					demo="recall-path"
+					showSwitcher={false}
+					onpick={onNodeSelect}
+				/>
+			</div>
+		{:else}
+			<Graph3D
+				nodes={displayNodes}
+				edges={displayEdges}
+				centerId={graphData.center_id}
+				events={$eventFeed}
+				{isDreaming}
+				{colorMode}
+				onSelect={onNodeSelect}
+				onGraphMutation={handleGraphMutation}
+			/>
+		{/if}
 	{/if}
 
 	<!-- Top controls bar -->
@@ -294,7 +346,8 @@ disown</code>
 			[padding-top:max(0.75rem,env(safe-area-inset-top))] [padding-left:max(0.75rem,env(safe-area-inset-left))] [padding-right:max(0.75rem,env(safe-area-inset-right))]
 			sm:[padding-top:0] sm:[padding-left:0] sm:[padding-right:0]"
 	>
-		<!-- Search -->
+		<!-- Search — classic-renderer feature (centers + reloads the inspector) -->
+		{#if renderMode === 'classic'}
 		<div class="flex gap-2 w-full sm:flex-1 sm:w-auto sm:max-w-md">
 			<input
 				type="text"
@@ -309,8 +362,36 @@ disown</code>
 				Focus
 			</button>
 		</div>
+		{/if}
 
 		<div class="flex flex-wrap gap-2 w-full sm:w-auto sm:ml-auto">
+			<!-- Renderer toggle: the WebGPU living field (default) vs the classic
+				 Three.js inspector. The field is the banger; classic keeps node
+				 picking / colour modes / temporal until GPU picking lands. -->
+			<div class="flex shrink-0 glass rounded-xl p-0.5 text-xs" role="radiogroup" aria-label="Renderer">
+				<button
+					type="button"
+					role="radio"
+					aria-checked={renderMode === 'field'}
+					onclick={() => setRenderMode('field')}
+					class="min-h-9 px-3 py-1.5 rounded-lg transition {renderMode === 'field' ? 'bg-[#5dcaa5]/25 text-[#7fe6c0]' : 'text-dim hover:text-text'}"
+					title="Raw-WebGPU living memory field — visuals to the max"
+				>
+					✦ Field
+				</button>
+				<button
+					type="button"
+					role="radio"
+					aria-checked={renderMode === 'classic'}
+					onclick={() => setRenderMode('classic')}
+					class="min-h-9 px-3 py-1.5 rounded-lg transition {renderMode === 'classic' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
+					title="Classic 3D inspector — node picking, colour modes, temporal scrubbing"
+				>
+					Classic
+				</button>
+			</div>
+
+			{#if renderMode === 'classic'}
 			<!-- v2.0.8: colour mode toggle. Switches sphere tint between node type
 				 (fact / concept / event / …) and FSRS memory state (active / dormant /
 				 silent / unavailable). Legend auto-renders in state mode. -->
@@ -376,6 +457,7 @@ disown</code>
 					{graphState.brightness.toFixed(1)}x
 				</span>
 			</label>
+			{/if}
 
 			<!-- Dream button -->
 			<button
@@ -387,6 +469,18 @@ disown</code>
 			>
 				<span class={isDreaming ? 'breathe' : ''}><Icon name="dreams" size={16} /></span>
 				{isDreaming ? 'Dreaming…' : 'Dream'}
+			</button>
+
+			<!-- Observatory — the WebGPU cognitive moments, full-bleed takeover.
+			     Lives HERE on the main graph, beside Dream and Memory Cinema. -->
+			<button
+				onclick={() => (showObservatory = true)}
+				class="shrink-0 inline-flex items-center gap-2 min-h-10 px-4 py-2 rounded-xl bg-[#5dcaa5]/15 border border-[#5dcaa5]/40 text-[#7fe6c0] text-sm
+					hover:bg-[#5dcaa5]/25 transition-all backdrop-blur-sm"
+				title="Open the Cognitive Observatory"
+			>
+				<Icon name="sparkle" size={16} />
+				Observatory
 			</button>
 
 			<!-- ═══════════════════════════════════════════════════════════
@@ -427,13 +521,13 @@ disown</code>
 
 	<!-- v2.0.8: FSRS memory-state legend. Only rendered in state mode so the
 		 legend doesn't compete with the node-type palette in type mode. -->
-	{#if colorMode === 'state'}
+	{#if renderMode === 'classic' && colorMode === 'state'}
 		<div class="absolute bottom-4 right-4 z-10">
 			<MemoryStateLegend />
 		</div>
 	{/if}
 
-	{#if colorMode === 'ahagraph'}
+	{#if renderMode === 'classic' && colorMode === 'ahagraph'}
 		<div class="absolute bottom-4 right-4 z-10 glass rounded-xl px-4 py-3 text-xs">
 			<div class="text-bright font-semibold mb-2">AhaGraph</div>
 			<div class="space-y-1.5">
@@ -447,8 +541,8 @@ disown</code>
 		</div>
 	{/if}
 
-	<!-- Temporal playback slider -->
-	{#if graphData}
+	<!-- Temporal playback slider — scrubs the classic inspector only -->
+	{#if graphData && renderMode === 'classic'}
 		<TimeSlider
 			nodes={graphData.nodes}
 			onDateChange={(date) => { temporalDate = date; }}
@@ -544,3 +638,21 @@ disown</code>
 		</div>
 	{/if}
 </div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     COGNITIVE OBSERVATORY — full-bleed takeover, part of the MAIN graph.
+     z-50 lifts it above all app chrome; the {#key} remounts the stage per
+     moment so every demo runs deterministically from frame 0. × EXIT / Esc
+     returns to this graph exactly as it was.
+     ═══════════════════════════════════════════════════════════════════════ -->
+{#if showObservatory}
+	<div class="fixed inset-0 z-50">
+		{#key obsDemo}
+			<ObservatoryStage
+				demo={obsDemo}
+				ondemochange={(d) => (obsDemo = d)}
+				onexit={() => (showObservatory = false)}
+			/>
+		{/key}
+	</div>
+{/if}

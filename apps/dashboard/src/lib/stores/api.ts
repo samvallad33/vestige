@@ -6,6 +6,10 @@ import type {
 	HealthCheck,
 	TimelineResponse,
 	GraphResponse,
+	DuplicatesResponse,
+	ContradictionsResponse,
+	CrossProjectPatternsResponse,
+	MemoryAuditResponse,
 	DreamResult,
 	ImportanceScore,
 	RetentionDistribution,
@@ -110,6 +114,28 @@ export const api = {
 	consolidate: () => fetcher<ConsolidationResult>('/consolidate', { method: 'POST' }),
 
 	retentionDistribution: () => fetcher<RetentionDistribution>('/retention-distribution'),
+
+	// Memory hygiene & provenance: duplicate clusters, contradiction pairs,
+	// cross-project pattern transfer, per-memory audit trail.
+	duplicates: (threshold = 0.8, limit = 20) =>
+		fetcher<DuplicatesResponse>(`/duplicates?threshold=${threshold}&limit=${limit}`),
+
+	contradictions: (params?: { topic?: string; min_trust?: number; limit?: number }) => {
+		const qs = params
+			? '?' +
+				new URLSearchParams(
+					Object.entries(params)
+						.filter(([, v]) => v !== undefined)
+						.map(([k, v]) => [k, String(v)])
+				).toString()
+			: '';
+		return fetcher<ContradictionsResponse>(`/contradictions${qs}`);
+	},
+
+	crossProjectPatterns: () => fetcher<CrossProjectPatternsResponse>('/patterns/cross-project'),
+
+	memoryAudit: (id: string, limit = 100) =>
+		fetcher<MemoryAuditResponse>(`/memories/${encodeURIComponent(id)}/audit?limit=${limit}`),
 
 	// Intentions
 	intentions: (status = 'active') =>
