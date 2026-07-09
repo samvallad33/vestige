@@ -69,14 +69,17 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     let time_weight = args["time_weight"].as_f64().unwrap_or(0.3);
     let topic_weight = args["topic_weight"].as_f64().unwrap_or(0.4);
 
-    let limit = args["limit"].as_i64().unwrap_or(10) as i32;
+    // Clamp caller-supplied limit to a sane range. Without this a negative value
+    // reaches Vec::with_capacity as a huge usize (capacity-overflow panic ->
+    // process abort under panic=abort) and a huge value overflows `limit * 2`.
+    let limit = args["limit"].as_i64().unwrap_or(10).clamp(1, 200) as i32;
 
     let now = Utc::now();
 
     // Get candidate memories
     let recall_input = RecallInput {
         query: query.to_string(),
-        limit: limit * 2, // Get more, then filter
+        limit: limit.saturating_mul(2), // Get more, then filter
         min_retention: 0.0,
         search_mode: SearchMode::Hybrid,
         valid_at: None,
@@ -105,7 +108,11 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
                             .any(|topic| topic.to_lowercase().contains(&t.to_lowercase()))
                     })
                     .count();
-                matching as f64 / topics.len().max(1) as f64
+                // Numerator counts matching TAGS while the denominator is the
+                // number of TOPICS, so the ratio can exceed 1.0 when several tags
+                // match (unit mismatch). Clamp to keep this a bounded [0,1] score
+                // that doesn't distort the weighted ranking below.
+                (matching as f64 / topics.len().max(1) as f64).min(1.0)
             };
 
             // 3. Project match

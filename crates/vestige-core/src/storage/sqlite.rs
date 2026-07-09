@@ -17,7 +17,8 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::fsrs::{
-    DEFAULT_DECAY, FSRSScheduler, FSRSState, LearningState, Rating, retrievability_with_decay,
+    DEFAULT_DECAY, FSRSScheduler, FSRSState, LearningState, MAX_STABILITY, Rating,
+    retrievability_with_decay,
 };
 use crate::fts::{sanitize_fts5_or_query, sanitize_fts5_query};
 use crate::memory::{
@@ -723,7 +724,10 @@ impl SqliteMemoryStore {
                     now.to_rfc3339(),
                     now.to_rfc3339(),
                     now.to_rfc3339(),
-                    fsrs_state.stability * sentiment_boost,
+                    // Clamp to MAX_STABILITY: the sentiment boost is otherwise
+                    // persisted unbounded, letting an emotional memory's stability
+                    // exceed the FSRS-6 ceiling every other write path respects.
+                    (fsrs_state.stability * sentiment_boost).min(MAX_STABILITY),
                     fsrs_state.difficulty,
                     fsrs_state.reps,
                     fsrs_state.lapses,
@@ -1118,9 +1122,23 @@ impl SqliteMemoryStore {
             {
                 let _ = index.remove(id);
             }
-            // Generate new embedding
-            if let Err(e) = self.generate_embedding_for_node(id, new_content) {
-                tracing::warn!("Failed to regenerate embedding for {}: {}", id, e);
+            // Generate new embedding. If the embedder isn't ready yet (e.g. the
+            // model is still downloading on first run), generate_embedding_for_node
+            // is a no-op — which previously left the OLD, now-stale embedding row
+            // with has_embedding = 1, so semantic search kept matching the old
+            // content and the consolidation regeneration query (which only selects
+            // has_embedding = 0 / missing rows / model mismatch) never refreshed
+            // it. Flip has_embedding to 0 on the not-ready path so the stale vector
+            // is picked up and rebuilt once the embedder comes online.
+            if self.embedding_service.is_ready() {
+                if let Err(e) = self.generate_embedding_for_node(id, new_content) {
+                    tracing::warn!("Failed to regenerate embedding for {}: {}", id, e);
+                }
+            } else if let Ok(writer) = self.writer.lock() {
+                let _ = writer.execute(
+                    "UPDATE knowledge_nodes SET has_embedding = 0 WHERE id = ?1",
+                    params![id],
+                );
             }
         }
 
@@ -1656,6 +1674,42 @@ impl SqliteMemoryStore {
             .ok_or_else(|| StorageError::NotFound(id.to_string()))
     }
 
+    /// Backfill-specific promote: identical retrieval/retention boost to
+    /// `promote_memory`, but the stability multiply is CAPPED at an additive
+    /// +365-day ceiling: `MIN(stability * 1.5, stability + 365.0)`. The `1.5`
+    /// factor preserves the multiplier `promote_memory` already applied; the
+    /// `+365` ceiling is the same additive bound `retroactive_backfill.rs`
+    /// uses for its reason string (that module pairs +365 with a 2.5 factor
+    /// for display only — this DB write intentionally keeps 1.5 so backfill
+    /// promotion strength is unchanged, just bounded). Repeated per-(cause,
+    /// failure) backfill promotions therefore cannot inflate stability without
+    /// bound. Used by the step-8.5 auto-fire path and the manual `backfill` tool.
+    pub fn promote_memory_backfill(&self, id: &str) -> Result<KnowledgeNode> {
+        let now = Utc::now();
+
+        {
+            let writer = self
+                .writer
+                .lock()
+                .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            writer.execute(
+                "UPDATE knowledge_nodes SET
+                    last_accessed = ?1,
+                    retrieval_strength = MIN(1.0, retrieval_strength + 0.20),
+                    retention_strength = MIN(1.0, retention_strength + 0.10),
+                    stability = MIN(stability * 1.5, stability + 365.0)
+                WHERE id = ?2",
+                params![now.to_rfc3339(), id],
+            )?;
+        }
+
+        let _ = self.log_access(id, "promote");
+        let _ = self.set_waking_tag(id);
+
+        self.get_node(id)?
+            .ok_or_else(|| StorageError::NotFound(id.to_string()))
+    }
+
     /// Demote a memory (thumbs down) - used when a memory led to a bad outcome
     /// Significantly reduces retrieval strength so better alternatives surface
     /// Does NOT delete - the memory stays for reference but ranks lower
@@ -1764,6 +1818,15 @@ impl SqliteMemoryStore {
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            // True inverse of suppress_memory (which applies stability * 0.4,
+            // retrieval - 0.35, retention - 0.20). Dividing by 0.4 exactly undoes
+            // the * 0.4, and adding back the same 0.35 / 0.20 deltas (clamped to
+            // 1.0) undoes the subtraction. Previously this used non-inverse deltas
+            // (* 1.25, + 0.15, + 0.10), so suppress-then-reverse left stability
+            // permanently halved (0.4 * 1.25 = 0.5) while reporting a full undo.
+            // Note: where the forward pass hit the MAX(0.05) floor, the exact
+            // pre-value is unrecoverable without a snapshot — that clip aside,
+            // this restores the pre-suppression FSRS state.
             writer.execute(
                 "UPDATE knowledge_nodes SET
                     suppression_count = MAX(0, COALESCE(suppression_count, 0) - 1),
@@ -1771,9 +1834,9 @@ impl SqliteMemoryStore {
                         WHEN COALESCE(suppression_count, 0) - 1 <= 0 THEN NULL
                         ELSE suppressed_at
                     END,
-                    retrieval_strength = MIN(1.0, retrieval_strength + 0.15),
-                    retention_strength = MIN(1.0, retention_strength + 0.10),
-                    stability = stability * 1.25
+                    retrieval_strength = MIN(1.0, retrieval_strength + 0.35),
+                    retention_strength = MIN(1.0, retention_strength + 0.20),
+                    stability = stability / 0.4
                 WHERE id = ?1",
                 params![id],
             )?;
@@ -2943,18 +3006,18 @@ impl SqliteMemoryStore {
                     (false, false) => MatchType::Keyword,
                 };
 
-                let weighted_score = match (keyword_score, semantic_score) {
-                    (Some(kw), Some(sem)) => kw * keyword_weight + sem * semantic_weight,
-                    (Some(kw), None) => kw * keyword_weight,
-                    (None, Some(sem)) => sem * semantic_weight,
-                    (None, None) => combined_score,
-                };
-
+                // Carry the RRF fused score as the relevance signal, NOT a linear
+                // kw*w + sem*w recomputation. RRF is what selected these candidates
+                // and rewards both-list agreement; overwriting it with the linear
+                // weighted_score made the final ranking diverge from RRF order
+                // (a both-list paraphrase could rank below a keyword-only hit).
+                // The min-max normalization in the rerank below then operates on
+                // RRF scores, so final relevance ordering matches RRF ordering.
                 results.push(SearchResult {
                     node,
                     keyword_score,
                     semantic_score,
-                    combined_score: weighted_score,
+                    combined_score,
                     match_type,
                 });
             }
@@ -2962,6 +3025,20 @@ impl SqliteMemoryStore {
 
         // Three-signal reranking (Park et al. Generative Agents 2023)
         // final_score = 0.2*recency + 0.3*importance + 0.5*relevance
+        //
+        // relevance MUST live in [0,1] for the weights to balance. The raw
+        // weighted_score does not: keyword-only results max out at
+        // `1.0 * keyword_weight` (0.3 by default), so the strongest match's
+        // relevance term was capped at 0.5*0.3 = 0.15 and lost to recency (up to
+        // 0.2) or importance (up to 0.3) — a fresh, weakly-relevant node could
+        // outrank the best match. Min-max normalize relevance across the result
+        // set so the best match scores ~1.0 regardless of the weight scaling.
+        let (min_rel, max_rel) = results.iter().fold(
+            (f32::INFINITY, f32::NEG_INFINITY),
+            |(mn, mx), r| (mn.min(r.combined_score), mx.max(r.combined_score)),
+        );
+        let rel_span = (max_rel - min_rel) as f64;
+
         let now = Utc::now();
         for result in &mut results {
             let hours_since = (now - result.node.last_accessed).num_seconds() as f64 / 3600.0;
@@ -2983,7 +3060,13 @@ impl SqliteMemoryStore {
             // Normalize ACT-R activation [-2, 5] → [0, 1]
             let importance = ((activation + 2.0) / 7.0).clamp(0.0, 1.0);
 
-            let relevance = result.combined_score as f64;
+            // Min-max normalized relevance in [0,1]. When every result ties
+            // (span 0), fall back to 1.0 so relevance still dominates ranking.
+            let relevance = if rel_span > f64::EPSILON {
+                (result.combined_score - min_rel) as f64 / rel_span
+            } else {
+                1.0
+            };
 
             let final_score = 0.2 * recency + 0.3 * importance + 0.5 * relevance;
             result.combined_score = final_score as f32;
@@ -3659,10 +3742,30 @@ impl SqliteMemoryStore {
         // consolidation pass IS the offline window. Bounded on every axis so a
         // noisy day cannot trigger a promotion storm, and idempotent across cycles
         // via a durable causal edge (so the same cause is promoted once per
-        // failure, not every cycle — promote_memory's stability boost is capped
-        // but would still inflate without this guard).
+        // failure, not every cycle).
+        //
+        // OPT-OUT (backfill-safety, v2.2.1): auto-fire is ON by default — it shipped
+        // and was documented in v2.2.0, so we keep the behavior — but is now bounded
+        // and disableable. It mutates FSRS scores on the canonical store and can lift
+        // a memory across a downstream consolidation floor, so a consumer that reads
+        // `stability` as a durability gate can turn it off with
+        // VESTIGE_BACKFILL_AUTOFIRE=0 (or false/off/no). The `backfill` MCP tool + CLI
+        // remain available for on-demand, operator-driven backfill regardless of the
+        // gate. The promote is bounded: both the auto-fire and manual paths call
+        // promote_memory_backfill (stability = MIN(stability*1.5, stability+365)) so
+        // repeated per-(cause, failure) promotions cannot inflate without bound (the
+        // prior comment claimed promote_memory was capped — it was not).
+        let backfill_autofire = std::env::var("VESTIGE_BACKFILL_AUTOFIRE")
+            .map(|v| {
+                let v = v.trim();
+                !(v.eq_ignore_ascii_case("false")
+                    || v.eq_ignore_ascii_case("off")
+                    || v.eq_ignore_ascii_case("no")
+                    || v == "0")
+            })
+            .unwrap_or(true);
         let mut backfilled_causes = 0i64;
-        {
+        if backfill_autofire {
             use crate::advanced::retroactive_backfill::{
                 self as rb, BackfillCandidate, FailureEvent, RetroactiveBackfill,
             };
@@ -3755,7 +3858,7 @@ impl SqliteMemoryStore {
                         if self.save_connection(&conn).is_err() {
                             continue;
                         }
-                        if self.promote_memory(&cause.memory_id).is_ok() {
+                        if self.promote_memory_backfill(&cause.memory_id).is_ok() {
                             backfilled_causes += 1;
                         }
                     }
@@ -3950,10 +4053,35 @@ impl SqliteMemoryStore {
 
     /// Auto-deduplicate similar memories during consolidation (episodic → semantic merge)
     ///
-    /// Finds clusters with cosine similarity > 0.85, keeps the strongest node,
+    /// Finds clusters with cosine similarity >= 0.85, keeps the strongest node,
     /// appends unique content from weaker nodes, and deletes duplicates.
+    /// Honors the `VESTIGE_AUTO_CONSOLIDATE_MERGE` opt-out (unset → on) and
+    /// never merges away or deletes protected (pinned) nodes (#142).
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn auto_dedup_consolidation(&self) -> Result<i64> {
+        // OPT-OUT (auto-consolidate-merge, #142): this pass concat-merges
+        // near-duplicate memories and HARD-DELETES the weaker ones with no
+        // reflog. It is ON by default (behavior unchanged), but a consumer that
+        // does not want unattended, no-audit merges can turn it off with
+        // VESTIGE_AUTO_CONSOLIDATE_MERGE=0 (or false/off/no). Parsed exactly like
+        // the sibling VESTIGE_BACKFILL_AUTOFIRE: unset or any other/malformed
+        // value → on (fail-open to the documented default). The `dedup` MCP tool
+        // remains available for on-demand, previewable, reversible merges
+        // regardless of the gate. Gate here (not the caller) so it stays with the
+        // pin filter and self-protects against a future second caller.
+        let auto_merge = std::env::var("VESTIGE_AUTO_CONSOLIDATE_MERGE")
+            .map(|v| {
+                let v = v.trim();
+                !(v.eq_ignore_ascii_case("false")
+                    || v.eq_ignore_ascii_case("off")
+                    || v.eq_ignore_ascii_case("no")
+                    || v == "0")
+            })
+            .unwrap_or(true);
+        if !auto_merge {
+            return Ok(0);
+        }
+
         let all_embeddings = self.get_all_embeddings()?;
         let n = all_embeddings.len();
 
@@ -3961,19 +4089,35 @@ impl SqliteMemoryStore {
             return Ok(0);
         }
 
+        // Protected (pinned) memories must never be touched by this unattended,
+        // no-audit pass — mirroring the interactive contract that a protected
+        // node may only survive a merge, never be absorbed (see `plan_merge`).
+        // Fetch the set ONCE here, before the per-cluster reader lock is taken:
+        // both `protected_node_ids()` and `is_protected()` take their OWN reader
+        // lock, so calling either inside the lock window below would self-deadlock
+        // the non-reentrant Mutex. Skipping protected ids at BOTH the outer
+        // (anchor) and inner (member) loops guarantees a protected node is never
+        // an anchor and never a cluster member — so it can never be the keeper nor
+        // land in weak_ids, and is thus never merged into and never deleted. Fails
+        // SAFE via `?`: on a poisoned lock the caller's unwrap_or(0) skips the
+        // merge this cycle rather than risk absorbing a pin. #142
+        let protected = self.protected_node_ids()?;
+
         const SIMILARITY_THRESHOLD: f32 = 0.85;
         let mut merged_count = 0i64;
         let mut consumed: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for i in 0..n {
-            if consumed.contains(&all_embeddings[i].0) {
+            if consumed.contains(&all_embeddings[i].0) || protected.contains(&all_embeddings[i].0) {
                 continue;
             }
 
             let mut cluster: Vec<(usize, f32)> = Vec::new();
 
             for j in (i + 1)..n {
-                if consumed.contains(&all_embeddings[j].0) {
+                if consumed.contains(&all_embeddings[j].0)
+                    || protected.contains(&all_embeddings[j].0)
+                {
                     continue;
                 }
                 let sim = crate::embeddings::cosine_similarity(
@@ -5773,6 +5917,25 @@ impl SqliteMemoryStore {
         let mut stmt = reader.prepare("SELECT * FROM memory_connections ORDER BY strength DESC")?;
 
         let rows = stmt.query_map([], Self::row_to_connection)?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// The most recently created connections, capped at `limit`. Used by polling
+    /// surfaces (e.g. the dashboard changelog) that only need recent activity and
+    /// must not load the entire `memory_connections` table on every request.
+    pub fn get_recent_connections(&self, limit: usize) -> Result<Vec<ConnectionRecord>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let mut stmt = reader.prepare(
+            "SELECT * FROM memory_connections ORDER BY created_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], Self::row_to_connection)?;
         let mut result = Vec::new();
         for row in rows {
             result.push(row?);
@@ -8117,6 +8280,16 @@ impl SqliteMemoryStore {
                     .unwrap_or_else(|| member_ids[0].clone())
             }
         };
+        // The survivor MUST be one of the members. A caller-supplied survivor_id
+        // that isn't in member_ids (a typo/mixup through the plan_merge tool)
+        // otherwise sails through and panics at the `.find(...).unwrap()` below,
+        // taking down the request. Reject it with a clear error instead.
+        if !nodes.iter().any(|n| n.id == survivor) {
+            return Err(StorageError::Init(format!(
+                "survivor_id {survivor} is not among the member_ids being merged"
+            )));
+        }
+
         for node in &nodes {
             if node.id != survivor && self.is_protected(&node.id)? {
                 return Err(StorageError::Init(format!(
@@ -9807,6 +9980,13 @@ impl SqliteMemoryStore {
 
         let source_system = env.source_system.clone().unwrap_or_default();
         let source_id = env.source_id.clone().unwrap_or_default();
+        // Scope the idempotency key by source_project too: two sources of the
+        // same system (e.g. github repos octocat/repoA and octocat/repoB, or two
+        // Redmine instances) reuse bare per-project ids ("5"), so keying on
+        // (source_system, source_id) alone made repoB's issue #5 overwrite
+        // repoA's row in place. `IS NOT DISTINCT FROM` matches NULL==NULL so
+        // legacy rows without a project still resolve.
+        let source_project = env.source_project.clone();
         let now = Utc::now();
 
         // Look up the existing memory for this external record, if any.
@@ -9818,8 +9998,9 @@ impl SqliteMemoryStore {
             reader
                 .query_row(
                     "SELECT id, content_hash FROM knowledge_nodes \
-                     WHERE source_system = ?1 AND source_id = ?2 LIMIT 1",
-                    params![source_system, source_id],
+                     WHERE source_system = ?1 AND source_id = ?2 \
+                       AND source_project IS ?3 LIMIT 1",
+                    params![source_system, source_id, source_project],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
                 )
                 .optional()?
@@ -12857,6 +13038,376 @@ mod tests {
         assert!(cands.iter().all(|c| c.has_protected_member));
     }
 
+    // ========================================================================
+    // Auto-consolidation merge: opt-out gate + protected-pin exclusion (#142)
+    //
+    // These exercise `auto_dedup_consolidation` directly — the unattended,
+    // no-audit pass the 6h background consolidation cycle runs. seed_node/
+    // axis_vector give deterministic same-axis clusters (cosine ~1.0 >> the 0.85
+    // threshold); set_retention pins down which node wins the keeper tiebreak.
+    // ========================================================================
+
+    /// Force a node's retention_strength so the keeper tiebreak in
+    /// `auto_dedup_consolidation` is deterministic regardless of insertion order.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn set_retention(storage: &Storage, id: &str, value: f64) {
+        let writer = storage.writer.lock().unwrap();
+        writer
+            .execute(
+                "UPDATE knowledge_nodes SET retention_strength = ?1 WHERE id = ?2",
+                rusqlite::params![value, id],
+            )
+            .unwrap();
+    }
+
+    /// Run `f` with VESTIGE_AUTO_CONSOLIDATE_MERGE pinned to `value`
+    /// (None = pinned-unset, i.e. the documented ON default), serialized via
+    /// ENV_LOCK and restored afterward (process env is global + unsafe under
+    /// Rust 2024). Sibling of `with_vector_search_disabled`.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn with_auto_merge_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        const KEY: &str = "VESTIGE_AUTO_CONSOLIDATE_MERGE";
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::env::var_os(KEY);
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var(KEY, v),
+                None => std::env::remove_var(KEY),
+            }
+        }
+        let result = catch_unwind(AssertUnwindSafe(f));
+        unsafe {
+            if let Some(prev) = previous {
+                std::env::set_var(KEY, prev);
+            } else {
+                std::env::remove_var(KEY);
+            }
+        }
+        match result {
+            Ok(value) => value,
+            Err(payload) => resume_unwind(payload),
+        }
+    }
+
+    // --- A. Default (flag unset): near-duplicates still merge (regression) ---
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_default_on_merges_near_duplicates() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            let keeper = seed_node(
+                &storage,
+                "Rate limiting uses a token bucket per client API key",
+                &["api"],
+                axis_vector(21, 0.02),
+            );
+            let dup = seed_node(
+                &storage,
+                "Rate limiting uses a token-bucket algorithm per client API key, refilled steadily",
+                &["api"],
+                axis_vector(21, 0.01),
+            );
+            // Make `keeper` win the retention tiebreak deterministically.
+            set_retention(&storage, &keeper, 0.9);
+            set_retention(&storage, &dup, 0.3);
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 1, "one weak node folded into the keeper");
+            assert!(
+                storage.get_node(&dup).unwrap().is_none(),
+                "weak duplicate is hard-deleted"
+            );
+            let survivor = storage.get_node(&keeper).unwrap().unwrap();
+            assert!(
+                survivor.content.contains("[MERGED]"),
+                "keeper carries the folded-in [MERGED] block"
+            );
+        });
+    }
+
+    // --- B. Flag off suppresses the merge (parametrized) ---------------------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_env_off_suppresses_merge() {
+        // trimmed + case-insensitive false/off/no/0 all disable.
+        for value in ["false", "off", "no", "0", "  OFF  ", "False"] {
+            with_auto_merge_env(Some(value), || {
+                let storage = create_test_storage();
+                let a = seed_node(
+                    &storage,
+                    "Prometheus scrapes its targets every 15 seconds",
+                    &["obs"],
+                    axis_vector(23, 0.02),
+                );
+                let b = seed_node(
+                    &storage,
+                    "Prometheus scrapes its configured targets every 15s by default",
+                    &["obs"],
+                    axis_vector(23, 0.01),
+                );
+
+                let merged = storage.auto_dedup_consolidation().unwrap();
+                assert_eq!(merged, 0, "value {value:?} must suppress the merge");
+                // Both nodes survive, content byte-identical (no [MERGED] block).
+                assert_eq!(
+                    storage.get_node(&a).unwrap().unwrap().content,
+                    "Prometheus scrapes its targets every 15 seconds"
+                );
+                assert_eq!(
+                    storage.get_node(&b).unwrap().unwrap().content,
+                    "Prometheus scrapes its configured targets every 15s by default"
+                );
+            });
+        }
+    }
+
+    // --- B (cont). A malformed value fails OPEN to the ON default ------------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_env_garbage_fails_open_and_merges() {
+        with_auto_merge_env(Some("banana"), || {
+            let storage = create_test_storage();
+            let keeper = seed_node(
+                &storage,
+                "Cache entries expire after a five minute TTL",
+                &["cache"],
+                axis_vector(25, 0.02),
+            );
+            let dup = seed_node(
+                &storage,
+                "Cache entries expire after a five-minute TTL window by default",
+                &["cache"],
+                axis_vector(25, 0.01),
+            );
+            set_retention(&storage, &keeper, 0.9);
+            set_retention(&storage, &dup, 0.3);
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 1, "malformed value fails open to the ON default");
+            assert!(storage.get_node(&dup).unwrap().is_none());
+        });
+    }
+
+    // --- C(a). Protected would-be keeper: untouched; others merge -----------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_protected_would_be_keeper_untouched_others_merge() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            // P has the highest retention, so absent protection it would be the
+            // keeper. Protected → skipped entirely; the two unprotected merge alone.
+            let pinned = seed_node(
+                &storage,
+                "Deploys are gated on a green CI run and one approval",
+                &["ci"],
+                axis_vector(27, 0.02),
+            );
+            let keeper = seed_node(
+                &storage,
+                "Deploys are gated on a green CI pipeline plus one reviewer approval",
+                &["ci"],
+                axis_vector(27, 0.01),
+            );
+            let member = seed_node(
+                &storage,
+                "Deploys require a green CI run and at least one approving review",
+                &["ci"],
+                axis_vector(27, 0.015),
+            );
+            set_retention(&storage, &pinned, 0.95);
+            set_retention(&storage, &keeper, 0.80);
+            set_retention(&storage, &member, 0.30);
+            storage.set_protected(&pinned, true).unwrap();
+            let pinned_content = storage.get_node(&pinned).unwrap().unwrap().content;
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(
+                merged,
+                1,
+                "the two unprotected near-dups merge among themselves"
+            );
+
+            // Protected node byte-for-byte untouched and still protected.
+            let p = storage.get_node(&pinned).unwrap().unwrap();
+            assert_eq!(p.content, pinned_content, "protected keeper not absorbed");
+            assert!(!p.content.contains("[MERGED]"));
+            assert!(storage.is_protected(&pinned).unwrap());
+            // Unprotected pair merged: `member` gone, `keeper` carries [MERGED].
+            assert!(storage.get_node(&member).unwrap().is_none());
+            let keeper_node = storage.get_node(&keeper).unwrap().unwrap();
+            assert!(keeper_node.content.contains("[MERGED]"));
+        });
+    }
+
+    // --- C(b) / Regression (#142): protected weak member is never absorbed --
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn auto_dedup_regression_142_protected_weak_member_not_absorbed() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            // Regression (#142): before the fix this pinned node — the weaker
+            // member of the cluster — was silently absorbed into the stronger
+            // unprotected keeper and hard-deleted by the unattended pass. The
+            // PINNED-CANARY-142 marker makes accidental absorption detectable.
+            let pinned = seed_node(
+                &storage,
+                "Feature flags default to off in production PINNED-CANARY-142",
+                &["flags"],
+                axis_vector(29, 0.02),
+            );
+            let keeper = seed_node(
+                &storage,
+                "Feature flags default to off in the production environment",
+                &["flags"],
+                axis_vector(29, 0.01),
+            );
+            let member = seed_node(
+                &storage,
+                "Feature flags are off by default in production deployments",
+                &["flags"],
+                axis_vector(29, 0.015),
+            );
+            // Pinned is the LOWEST-retention member — pre-fix it would land in
+            // weak_ids and be deleted + absorbed by the keeper.
+            set_retention(&storage, &pinned, 0.10);
+            set_retention(&storage, &keeper, 0.80);
+            set_retention(&storage, &member, 0.30);
+            storage.set_protected(&pinned, true).unwrap();
+            let pinned_content = storage.get_node(&pinned).unwrap().unwrap().content;
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 1, "only the two unprotected near-dups merge");
+
+            // Invariant 1: the protected node still exists, byte-identical.
+            let p = storage.get_node(&pinned).unwrap();
+            assert!(p.is_some(), "protected node must not be deleted");
+            assert_eq!(
+                p.unwrap().content,
+                pinned_content,
+                "protected node not absorbed"
+            );
+            assert!(storage.is_protected(&pinned).unwrap());
+
+            // Invariant 2: the keeper did NOT gain the protected node's content.
+            let keeper_node = storage.get_node(&keeper).unwrap().unwrap();
+            assert!(
+                !keeper_node.content.contains("PINNED-CANARY-142"),
+                "keeper must not absorb the protected node's content"
+            );
+            // The legitimate unprotected pair still merged (member folded in).
+            assert!(storage.get_node(&member).unwrap().is_none());
+            assert!(keeper_node.content.contains("[MERGED]"));
+        });
+    }
+
+    // --- C(c). Two protected near-dups: neither merges ----------------------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_two_protected_near_dups_neither_merges() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            let a = seed_node(
+                &storage,
+                "Backups run nightly and are retained for thirty days",
+                &["backup"],
+                axis_vector(31, 0.02),
+            );
+            let b = seed_node(
+                &storage,
+                "Backups run every night and are kept for thirty days",
+                &["backup"],
+                axis_vector(31, 0.01),
+            );
+            storage.set_protected(&a, true).unwrap();
+            storage.set_protected(&b, true).unwrap();
+            let (ca, cb) = (
+                storage.get_node(&a).unwrap().unwrap().content,
+                storage.get_node(&b).unwrap().unwrap().content,
+            );
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 0, "two protected near-dups: nothing merges");
+            assert_eq!(storage.get_node(&a).unwrap().unwrap().content, ca);
+            assert_eq!(storage.get_node(&b).unwrap().unwrap().content, cb);
+        });
+    }
+
+    // --- C(d). Protected + a single unprotected near-dup: no merge ----------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_protected_plus_single_unprotected_no_merge() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            let pinned = seed_node(
+                &storage,
+                "Secrets are stored in the vault, never in the repo",
+                &["sec"],
+                axis_vector(33, 0.02),
+            );
+            let other = seed_node(
+                &storage,
+                "Secrets live in the vault and are never committed to the repo",
+                &["sec"],
+                axis_vector(33, 0.01),
+            );
+            storage.set_protected(&pinned, true).unwrap();
+            let (cp, co) = (
+                storage.get_node(&pinned).unwrap().unwrap().content,
+                storage.get_node(&other).unwrap().unwrap().content,
+            );
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 0, "a lone unprotected node cannot form a cluster");
+            assert_eq!(storage.get_node(&pinned).unwrap().unwrap().content, cp);
+            assert_eq!(storage.get_node(&other).unwrap().unwrap().content, co);
+        });
+    }
+
+    // --- D. Liveness: protected + two unprotected → the two merge -----------
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_auto_dedup_protected_plus_two_unprotected_liveness() {
+        with_auto_merge_env(None, || {
+            let storage = create_test_storage();
+            // The pin exclusion must not block a legitimate merge of the others.
+            let pinned = seed_node(
+                &storage,
+                "The API returns ISO-8601 timestamps in UTC",
+                &["api"],
+                axis_vector(35, 0.02),
+            );
+            let keeper = seed_node(
+                &storage,
+                "The API returns ISO 8601 timestamps in UTC by convention",
+                &["api"],
+                axis_vector(35, 0.01),
+            );
+            let member = seed_node(
+                &storage,
+                "All API timestamps are returned as ISO-8601 in the UTC timezone",
+                &["api"],
+                axis_vector(35, 0.015),
+            );
+            set_retention(&storage, &pinned, 0.50);
+            set_retention(&storage, &keeper, 0.80);
+            set_retention(&storage, &member, 0.30);
+            storage.set_protected(&pinned, true).unwrap();
+            let pinned_content = storage.get_node(&pinned).unwrap().unwrap().content;
+
+            let merged = storage.auto_dedup_consolidation().unwrap();
+            assert_eq!(merged, 1, "the two unprotected near-dups still merge");
+            assert!(storage.get_node(&member).unwrap().is_none());
+            let keeper_node = storage.get_node(&keeper).unwrap().unwrap();
+            assert!(keeper_node.content.contains("[MERGED]"));
+            // Protected node untouched.
+            assert_eq!(
+                storage.get_node(&pinned).unwrap().unwrap().content,
+                pinned_content
+            );
+            assert!(storage.is_protected(&pinned).unwrap());
+        });
+    }
+
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn test_apply_requires_confirm_for_low_confidence() {
@@ -13229,5 +13780,142 @@ mod tests {
                 err
             );
         });
+    }
+
+    // Seed a node's stability directly via the scheduling seam so the +365 cap
+    // in promote_memory_backfill is actually exercised (a freshly ingested node
+    // has low stability where the *1.5 multiply, not the additive ceiling, wins).
+    fn seed_stability(s: &Storage, id: &str, stability: f64) {
+        use crate::storage::memory_store::{MemoryStoreSend, SchedulingState};
+        rt().block_on(async {
+            let state = SchedulingState {
+                memory_id: uuid::Uuid::parse_str(id).unwrap(),
+                stability,
+                difficulty: 0.4,
+                retrievability: 0.8,
+                last_review: Some(chrono::Utc::now()),
+                next_review: Some(chrono::Utc::now() + chrono::Duration::days(7)),
+                reps: 3,
+                lapses: 0,
+            };
+            MemoryStoreSend::update_scheduling(s, &state)
+                .await
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn promote_memory_backfill_caps_stability_at_plus_365() {
+        // Above the crossover (stability=730) the additive +365 ceiling must win
+        // over the *1.5 multiply, so repeated backfill promotions cannot inflate
+        // stability without bound. This is the bound issue #103 asked us to apply.
+        let s = create_test_storage();
+        let node = s
+            .ingest(IngestInput {
+                content: "high-stability cause memory".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        seed_stability(&s, &node.id, 1000.0);
+
+        let promoted = s.promote_memory_backfill(&node.id).unwrap();
+        // 1000 * 1.5 = 1500 (uncapped) vs 1000 + 365 = 1365 (capped). Cap wins.
+        assert!(
+            (promoted.stability - 1365.0).abs() < 1e-6,
+            "expected additive +365 cap (1365.0), got {} (uncapped would be 1500.0)",
+            promoted.stability
+        );
+    }
+
+    #[test]
+    fn promote_memory_backfill_uses_multiply_below_crossover() {
+        // Below the crossover the *1.5 multiply wins (the cap never binds), so
+        // backfill promotion strength is unchanged from the old promote_memory.
+        let s = create_test_storage();
+        let node = s
+            .ingest(IngestInput {
+                content: "low-stability cause memory".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        seed_stability(&s, &node.id, 10.0);
+
+        let promoted = s.promote_memory_backfill(&node.id).unwrap();
+        // 10 * 1.5 = 15 (multiply) vs 10 + 365 = 375 (cap). Multiply wins.
+        assert!(
+            (promoted.stability - 15.0).abs() < 1e-6,
+            "expected *1.5 multiply (15.0) below crossover, got {}",
+            promoted.stability
+        );
+    }
+
+    #[test]
+    fn suppress_then_reverse_restores_fsrs_state() {
+        // reverse_suppression must be a TRUE inverse of suppress_memory. Suppress
+        // applies stability*0.4, retrieval-0.35, retention-0.20; reverse now undoes
+        // exactly that (stability/0.4, retrieval+0.35, retention+0.20). Previously
+        // reverse used non-inverse deltas and left stability permanently halved.
+        let s = create_test_storage();
+        let node = s
+            .ingest(IngestInput {
+                content: "a memory to suppress then un-suppress".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        // Seed above the 0.05 floor so the forward pass never clips (making the
+        // round-trip exactly recoverable).
+        seed_stability(&s, &node.id, 20.0);
+        let before = s.get_node(&node.id).unwrap().unwrap();
+
+        s.suppress_memory(&node.id).unwrap();
+        let suppressed = s.get_node(&node.id).unwrap().unwrap();
+        assert!(
+            (suppressed.stability - before.stability * 0.4).abs() < 1e-6,
+            "suppress must multiply stability by 0.4"
+        );
+
+        let reversed = s.reverse_suppression(&node.id, 24).unwrap();
+        // stability: 20 * 0.4 / 0.4 = 20 (fully restored, not 0.5x)
+        assert!(
+            (reversed.stability - before.stability).abs() < 1e-6,
+            "reverse must restore stability to {} (got {})",
+            before.stability,
+            reversed.stability
+        );
+        assert!(
+            (reversed.retrieval_strength - before.retrieval_strength).abs() < 1e-6,
+            "reverse must restore retrieval_strength"
+        );
+        assert!(
+            (reversed.retention_strength - before.retention_strength).abs() < 1e-6,
+            "reverse must restore retention_strength"
+        );
+    }
+
+    #[test]
+    fn backfill_autofire_gate_defaults_on_and_reads_opt_out() {
+        // v2.2.1 opt-out semantics: unset => ON (preserves shipped v2.2.0
+        // behavior); explicit 0/false/off/no => OFF; anything else => ON.
+        fn parse(v: Option<&str>) -> bool {
+            v.map(|v| {
+                let v = v.trim();
+                !(v.eq_ignore_ascii_case("false")
+                    || v.eq_ignore_ascii_case("off")
+                    || v.eq_ignore_ascii_case("no")
+                    || v == "0")
+            })
+            .unwrap_or(true)
+        }
+        assert!(parse(None), "unset must default ON");
+        assert!(parse(Some("1")), "1 is ON");
+        assert!(parse(Some("true")), "true is ON");
+        assert!(parse(Some("anything")), "unrecognized is ON");
+        assert!(!parse(Some("0")), "0 is OFF");
+        assert!(!parse(Some("false")), "false is OFF");
+        assert!(!parse(Some("OFF")), "OFF (case-insensitive) is OFF");
+        assert!(!parse(Some(" no ")), "whitespace-padded no is OFF (trim)");
     }
 }

@@ -152,9 +152,11 @@ pub async fn execute(
             }
         };
         let global_force = match args.force_create {
-            Some(true) => true,
-            Some(false) if batch_merge_policy == "smart" => false,
-            Some(false) => default_force_create,
+            // An EXPLICIT forceCreate is authoritative and must be honored in both
+            // policies. Previously `Some(false)` under the default 'force_create'
+            // policy fell through to `default_force_create` (= true), silently
+            // inverting the caller's explicit false into a force-create.
+            Some(explicit) => explicit,
             None => default_force_create,
         };
         return execute_batch(storage, cognitive, items, global_force, &batch_merge_policy).await;
@@ -857,12 +859,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_defaults_to_force_create_for_caller_separated_items() {
+        // Default policy (no explicit forceCreate) force-creates each
+        // caller-separated item so they stay separate.
         let (storage, _dir) = test_storage().await;
         let result = execute(
             &storage,
             &test_cognitive(),
             Some(serde_json::json!({
-                "forceCreate": false,
                 "items": [
                     { "content": "Jira tickets should not auto-assign sprint fields." },
                     { "content": "Sprint planning summaries should not append Jira status labels." }
@@ -878,6 +881,36 @@ mod tests {
         for item in value["results"].as_array().unwrap() {
             assert_eq!(item["decision"], "create");
             assert!(item["reason"].as_str().unwrap().contains("Forced creation"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_batch_explicit_force_create_false_is_honored() {
+        // Regression (#130): an EXPLICIT forceCreate:false must NOT be silently
+        // inverted to force-create by the default policy. Distinct/novel items are
+        // still created (PE gating creates novel content), but NOT via the
+        // "Forced creation" path.
+        let (storage, _dir) = test_storage().await;
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "forceCreate": false,
+                "items": [
+                    { "content": "Jira tickets should not auto-assign sprint fields." },
+                    { "content": "Sprint planning summaries should not append Jira status labels." }
+                ]
+            })),
+        )
+        .await;
+
+        let value = result.unwrap();
+        assert_eq!(value["summary"]["created"], 2, "novel items still created");
+        for item in value["results"].as_array().unwrap() {
+            assert!(
+                !item["reason"].as_str().unwrap().contains("Forced creation"),
+                "explicit forceCreate:false must not force-create"
+            );
         }
     }
 
