@@ -12,6 +12,13 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
+	import RouteStage, { type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import { createDuplicatesPasses } from '$lib/observatory/duplicates/duplicates-pass';
+	import {
+		normalizeDuplicatesScene,
+		type DuplicateFusionCluster,
+		type DuplicatesScene
+	} from '$lib/observatory/duplicates/duplicates-scene';
 	import { reveal } from '$lib/actions/reveal';
 	import { spotlight } from '$lib/actions/interactions';
 	import { api } from '$stores/api';
@@ -25,6 +32,7 @@
 	let dismissed = $state(new Set<string>());
 	let loading = $state(true);
 	let error: string | null = $state(null);
+	let selectedCluster: DuplicateFusionCluster | null = $state(null);
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
 	async function detect() {
@@ -83,11 +91,35 @@
 		overflowed ? visibleClusters.slice(0, CLUSTER_RENDER_CAP) : visibleClusters
 	);
 
+	const duplicatesScene = $derived.by<DuplicatesScene>(() =>
+		normalizeDuplicatesScene({
+			threshold,
+			total: visibleClusters.length,
+			clusters: visibleClusters.map(({ c }) => c)
+		})
+	);
+
+	function handleRoutePick(pick: RoutePick) {
+		if (pick.kind !== 'duplicate-neck' && pick.kind !== 'duplicate-memory') return;
+		selectedCluster = pick.payload as DuplicateFusionCluster;
+	}
+
 	onMount(() => detect());
 	onDestroy(() => clearTimeout(debounceTimer));
 </script>
 
-<div class="relative mx-auto max-w-5xl space-y-6 p-6">
+<RouteStage
+	organ="duplicates"
+	seed={`synaptic-fusion:${threshold}:${visibleClusters.length}:${totalDuplicates}`}
+	scene={duplicatesScene}
+	passes={createDuplicatesPasses}
+	loading={loading}
+	error={error}
+	emptyLabel={`NO DUPLICATES ABOVE ${(threshold * 100).toFixed(0)}% SIMILARITY`}
+	onpick={handleRoutePick}
+/>
+
+<div class="relative z-10 mx-auto max-w-5xl space-y-6 p-6 pointer-events-none">
 	<!-- Header -->
 	<PageHeader
 		icon="duplicates"
@@ -105,7 +137,7 @@
 	</PageHeader>
 
 	<!-- Controls panel -->
-	<div class="glass-panel flex flex-wrap items-center gap-5 rounded-2xl p-4">
+	<div class="glass-panel pointer-events-auto flex flex-wrap items-center gap-5 rounded-2xl p-4">
 		<!-- Threshold slider -->
 		<label class="flex flex-1 min-w-64 items-center gap-3 text-xs text-dim">
 			<span class="whitespace-nowrap">Similarity threshold</span>
@@ -158,10 +190,36 @@
 		</button>
 	</div>
 
+	<!-- Field pick inspector -->
+	{#if selectedCluster}
+		<div class="glass-panel pointer-events-auto rounded-2xl border border-synapse/25 bg-black/30 p-4">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<div>
+					<div class="font-mono text-[11px] uppercase tracking-[0.18em] text-synapse-glow">
+						Synaptic neck selected
+					</div>
+					<div class="mt-1 text-sm text-bright">
+						{selectedCluster.memories.length} memories · {(selectedCluster.similarity * 100).toFixed(1)}% similar · winner {selectedCluster.winnerId.slice(0, 8)}
+					</div>
+					<div class="mt-1 max-w-2xl text-xs text-muted">
+						Real pair key: {selectedCluster.id}. Mismatch filaments: {selectedCluster.mismatchTokens.length ? selectedCluster.mismatchTokens.join(', ') : 'none exposed'}.
+					</div>
+				</div>
+				<button
+					type="button"
+					onclick={() => (selectedCluster = null)}
+					class="rounded-lg bg-white/[0.04] px-3 py-1.5 text-xs text-dim transition hover:bg-white/[0.08] hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60"
+				>
+					Clear field focus
+				</button>
+			</div>
+		</div>
+	{/if}
+
 	<!-- Results -->
 	{#if error}
 		<div
-			class="glass-panel flex flex-col items-center gap-3 rounded-2xl p-10 text-center"
+			class="glass-panel pointer-events-auto flex flex-col items-center gap-3 rounded-2xl p-10 text-center"
 		>
 			<div class="text-sm text-decay">Couldn't detect duplicates</div>
 			<div class="max-w-md text-xs text-muted">{error}</div>
@@ -174,14 +232,14 @@
 			</button>
 		</div>
 	{:else if loading}
-		<div class="space-y-3">
+		<div class="pointer-events-auto space-y-3">
 			{#each Array(3) as _}
 				<div class="glass-subtle shimmer h-40 rounded-2xl"></div>
 			{/each}
 		</div>
 	{:else if visibleClusters.length === 0}
 		<div
-			class="glass-panel enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center"
+			class="glass-panel pointer-events-auto enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center"
 		>
 			<div
 				class="flex h-14 w-14 items-center justify-center rounded-2xl border border-recall/25 bg-recall/10 text-recall"
@@ -197,7 +255,7 @@
 			</div>
 		</div>
 	{:else}
-		<div class="space-y-4">
+		<div class="pointer-events-auto space-y-4">
 			{#if overflowed}
 				<div
 					class="glass-subtle rounded-xl border border-warning/30 bg-warning/5 px-4 py-2 text-xs text-dim"

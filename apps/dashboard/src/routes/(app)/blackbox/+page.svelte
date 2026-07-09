@@ -36,6 +36,13 @@
 		formatAt,
 		relativeMs
 	} from '$components/blackbox-helpers';
+	import RouteStage, { type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import { createBlackboxPasses } from '$lib/observatory/blackbox/blackbox-pass';
+	import {
+		normalizeBlackboxScene,
+		type BlackboxScene,
+		type BlackboxTraceImpulse
+	} from '$lib/observatory/blackbox/blackbox-scene';
 
 	// ---- state ----------------------------------------------------------
 	let runs = $state<TraceRunSummary[]>([]);
@@ -46,6 +53,7 @@
 	let scrubIndex = $state(0); // index into detail.events
 	let proofMode = $state(false);
 	let receipts = $state<Receipt[]>([]);
+	let selectedImpulse = $state<BlackboxTraceImpulse | null>(null);
 
 	// The events up to and including the scrubber position — what the agent had
 	// "experienced" at that moment in the run.
@@ -68,6 +76,14 @@
 	const hasContradiction = $derived(
 		detail?.events.some((e) => e.type === 'contradiction.detected') ?? false
 	);
+	const blackboxScene = $derived<BlackboxScene>(normalizeBlackboxScene(detail, receipts, scrubIndex));
+
+	function handleRoutePick(pick: RoutePick) {
+		if (pick.kind !== 'trace-event') return;
+		const impulse = pick.payload as BlackboxTraceImpulse;
+		selectedImpulse = impulse;
+		scrubIndex = Math.max(0, Math.min(detail?.events.length ? detail.events.length - 1 : 0, impulse.index));
+	}
 
 	async function loadRuns() {
 		try {
@@ -86,6 +102,7 @@
 		try {
 			detail = await api.traces.get(runId);
 			scrubIndex = Math.max(0, (detail.events.length || 1) - 1);
+			selectedImpulse = null;
 			// Receipts are the proof behind THIS run's retrievals — scoped to
 			// the selected run (B5), not the global latest.
 			receipts = (await api.receipts.listForRun(runId, 8)).receipts;
@@ -123,7 +140,18 @@
 	onMount(loadRuns);
 </script>
 
-<div class="mx-auto max-w-6xl px-5 py-6">
+<RouteStage
+	organ="blackbox"
+	seed={`agent-flight-recorder:${selectedRunId ?? 'empty'}:${blackboxScene.visibleEventCount}`}
+	scene={blackboxScene}
+	passes={createBlackboxPasses}
+	loading={loading}
+	error={error}
+	emptyLabel="NO AGENT TRACE SELECTED — RECORDER ARMED"
+	onpick={handleRoutePick}
+/>
+
+<div class="relative z-10 mx-auto max-w-6xl px-5 py-6">
 	<PageHeader
 		icon="blackbox"
 		title="Agent Black Box"
@@ -177,6 +205,15 @@
 			</span>
 		</div>
 	</div>
+
+	{#if selectedImpulse}
+		<div class="selected-impulse glass" use:reveal>
+			<span class="selected-kicker">GPU pick</span>
+			<strong>{selectedImpulse.label}</strong>
+			<span>{selectedImpulse.summary}</span>
+			<code>{selectedImpulse.provenance.id}</code>
+		</div>
+	{/if}
 
 	{#if !proofMode}
 		<div class="layout">
