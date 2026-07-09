@@ -5,9 +5,16 @@
 	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
 	import Icon from '$components/Icon.svelte';
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
-	import AmbientField from '$components/AmbientField.svelte';
+	import RouteStage, { type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import { createContradictionsPasses } from '$lib/observatory/contradictions/contradictions-pass';
+	import {
+		normalizeContradictionsScene,
+		type ContradictionsScene,
+		type ImmuneSynapsePair
+	} from '$lib/observatory/contradictions/contradictions-scene';
 	import { reveal } from '$lib/actions/reveal';
 	import { api } from '$stores/api';
+	import { eventFeed } from '$stores/websocket';
 	import {
 		severityColor,
 		severityLabel,
@@ -23,8 +30,10 @@
 	// System-wide count from the backend, vs. the derived stats below which
 	// reflect only the pairs the page holds.
 	let totalDetected = $state(0);
+	let memoriesAnalyzed = $state(0);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+	let selectedSynapsePair = $state<ImmuneSynapsePair | null>(null);
 
 	async function load() {
 		loading = true;
@@ -33,10 +42,12 @@
 			const res = await api.contradictions();
 			contradictions = res.contradictions;
 			totalDetected = res.total;
+			memoriesAnalyzed = res.memoriesAnalyzed;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load contradictions';
 			contradictions = [];
 			totalDetected = 0;
+			memoriesAnalyzed = 0;
 		} finally {
 			loading = false;
 		}
@@ -113,6 +124,11 @@
 
 	function selectPair(i: number | null) {
 		focusedPairIndex = i;
+		selectedSynapsePair = i == null ? null : visibleList[i]?.scenePair ?? null;
+	}
+
+	function sameUnorderedPair(a1: string, b1: string, a2: string, b2: string) {
+		return (a1 === a2 && b1 === b2) || (a1 === b2 && b1 === a2);
 	}
 
 	// --- Stats. `totalDetected` is the backend's system-wide count; everything
@@ -123,50 +139,74 @@
 
 	// Map filtered index -> original index in `contradictions` so the
 	// constellation and sidebar stay in sync regardless of which filter is on.
-	const visibleList = $derived.by<{ orig: number; c: Contradiction }[]>(() => {
+	const contradictionsScene = $derived.by<ContradictionsScene>(() =>
+		normalizeContradictionsScene({
+			contradictions,
+			total: totalDetected,
+			memoriesAnalyzed,
+			deepReferenceEvents: $eventFeed
+		})
+	);
+
+	const visibleList = $derived.by<{ orig: number; c: Contradiction; scenePair: ImmuneSynapsePair | null }[]>(() => {
 		const byId = new Map(contradictions.map((c, i) => [c.memory_a_id + '|' + c.memory_b_id, i]));
 		return filtered.map((c) => ({
 			orig: byId.get(c.memory_a_id + '|' + c.memory_b_id) ?? 0,
-			c
+			c,
+			scenePair:
+				contradictionsScene.pairs.find((p) =>
+					sameUnorderedPair(p.stronger.id, p.weaker.id, c.memory_a_id, c.memory_b_id)
+				) ?? null
 		}));
 	});
 
 	// The ContradictionArcs component receives the filtered list; its internal
 	// indices run 0..filtered.length-1. We translate when the sidebar clicks.
 	function sidebarClick(localIndex: number) {
-		focusedPairIndex = focusedPairIndex === localIndex ? null : localIndex;
+		const next = focusedPairIndex === localIndex ? null : localIndex;
+		focusedPairIndex = next;
+		selectedSynapsePair = next == null ? null : visibleList[next]?.scenePair ?? null;
 	}
 
-	// Phase 5 base coat — the field behind this page fractures with the REAL
-	// contradiction load: no contradictions = a calm field, many = visible rifts.
-	let fractureFrac = $derived.by(() => Math.min(1, totalDetected / 24));
+	function handleRoutePick(pick: RoutePick) {
+		if (pick.kind !== 'contradiction-seam') return;
+		const pair = pick.payload as ImmuneSynapsePair;
+		selectedSynapsePair = pair;
+		const visibleIndex = visibleList.findIndex((entry) =>
+			sameUnorderedPair(pair.stronger.id, pair.weaker.id, entry.c.memory_a_id, entry.c.memory_b_id)
+		);
+		focusedPairIndex = visibleIndex >= 0 ? visibleIndex : null;
+	}
 </script>
 
-<div class="relative isolate min-h-full">
-<div class="absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
-	<AmbientField
-		count={Math.max(120, uniqueMemoryCount(contradictions) * 6)}
-		fracture={fractureFrac}
-		endangered={0.15}
-		accent={[0.95, 0.32, 0.42]}
-		opacity={0.32}
-	/>
-</div>
-<div class="min-h-full p-6 space-y-6">
+<RouteStage
+	organ="contradictions"
+	seed={`immune-synapse-arena:${totalDetected}:${memoriesAnalyzed}`}
+	scene={contradictionsScene}
+	passes={createContradictionsPasses}
+	loading={loading}
+	error={error}
+	emptyLabel="CALM IMMUNE FIELD — NO STANDING CONTRADICTIONS"
+	onpick={handleRoutePick}
+/>
+
+<div class="relative z-10 min-h-full p-6 space-y-6 pointer-events-none">
+	<div class="pointer-events-auto">
 	<!-- Header -->
 	<PageHeader
 		icon="contradictions"
-		title="Contradiction Constellation"
-		subtitle="Where your memory disagrees with itself"
+		title="Immune Synapse Arena"
+		subtitle="Contradictory memories face each other across a scarlet trust-weighted seam. Click a fracture for the receipt."
 		accent="warning"
 	>
 		<span class="text-dim text-sm tabular-nums inline-flex items-center gap-1.5">
 			<AnimatedNumber value={filtered.length} /> in view
 		</span>
 	</PageHeader>
+	</div>
 
 	{#if error}
-		<div class="glass-panel flex flex-col items-center gap-3 rounded-2xl p-10 text-center">
+		<div class="glass-panel pointer-events-auto flex flex-col items-center gap-3 rounded-2xl p-10 text-center">
 			<div class="text-sm text-decay">Couldn't load contradictions</div>
 			<div class="max-w-md text-xs text-muted">{error}</div>
 			<button
@@ -178,17 +218,17 @@
 			</button>
 		</div>
 	{:else if loading}
-		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 pointer-events-auto">
 			{#each Array(4) as _}
 				<div class="glass-subtle shimmer h-20 rounded-xl"></div>
 			{/each}
 		</div>
-		<div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4">
+		<div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4 pointer-events-auto">
 			<div class="glass-subtle shimmer min-h-[520px] rounded-2xl"></div>
 			<div class="glass-subtle shimmer h-[520px] rounded-2xl"></div>
 		</div>
 	{:else if contradictions.length === 0}
-		<div class="glass-panel enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center">
+		<div class="glass-panel pointer-events-auto enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center">
 			<div
 				class="flex h-14 w-14 items-center justify-center rounded-2xl border border-recall/25 bg-recall/10 text-recall"
 			>
@@ -203,7 +243,7 @@
 		</div>
 	{:else}
 	<!-- Stats bar -->
-	<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+	<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 pointer-events-auto">
 		<div use:reveal={{ delay: 0, y: 12 }} class="p-4 glass rounded-xl lift">
 			<div class="text-2xl text-bright font-bold tabular-nums">
 				<AnimatedNumber value={totalDetected} />
@@ -238,7 +278,7 @@
 	</div>
 
 	<!-- Filter bar -->
-	<div class="flex flex-wrap gap-3 items-end enter">
+	<div class="flex flex-wrap gap-3 items-end enter pointer-events-auto">
 		<Dropdown
 			options={filterOptions}
 			value={filter}
@@ -257,7 +297,10 @@
 		{/if}
 		{#if focusedPairIndex !== null}
 			<button
-				onclick={() => (focusedPairIndex = null)}
+				onclick={() => {
+					focusedPairIndex = null;
+					selectedSynapsePair = null;
+				}}
 				class="ml-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs border border-subtle/30 text-dim hover:text-text hover:border-synapse/30 hover:bg-white/[0.03] transition lift"
 			>
 				<Icon name="close" size={13} />
@@ -267,7 +310,7 @@
 	</div>
 
 	<!-- Main view: constellation + sidebar -->
-	<div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4">
+	<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,0.9fr)_380px] gap-4 pointer-events-auto">
 		<!-- Constellation. NOTE: no `use:reveal` on this wrapper or the
 		     ContradictionArcs SVG container — a transform/opacity entrance here
 		     would interfere with the constellation's own layout. -->
@@ -370,6 +413,72 @@
 			{/each}
 		</aside>
 	</div>
+
+	{#if selectedSynapsePair}
+		<section class="glass-panel pointer-events-auto rounded-2xl p-5 border-[#FF3B30]/35 shadow-[0_0_40px_rgba(255,59,48,0.12)]">
+			<div class="flex flex-wrap items-start justify-between gap-3 border-b border-[#FF3B30]/20 pb-3">
+				<div>
+					<div class="font-mono text-[10px] uppercase tracking-[0.22em] text-[#FF3B30]">Contradiction receipt</div>
+					<h2 class="mt-1 text-lg font-semibold text-bright">{selectedSynapsePair.topic}</h2>
+				</div>
+				<button
+					type="button"
+					onclick={() => {
+						selectedSynapsePair = null;
+						focusedPairIndex = null;
+					}}
+					class="rounded-lg border border-subtle/30 px-3 py-1.5 text-xs text-muted transition hover:border-[#FF3B30]/40 hover:text-[#FF3B30]"
+				>
+					Close
+				</button>
+			</div>
+
+			<div class="mt-4 grid gap-4 lg:grid-cols-2">
+				<div class="rounded-xl border border-[#F4F1D0]/18 bg-[#020307]/70 p-4">
+					<div class="mb-2 flex items-center justify-between gap-2">
+						<span class="font-mono text-[10px] uppercase tracking-wider text-[#F4F1D0]">Higher-trust membrane</span>
+						<span class="font-mono text-xs text-[#F4F1D0]">{(selectedSynapsePair.stronger.trust * 100).toFixed(0)}%</span>
+					</div>
+					<div class="text-xs text-muted break-all">{selectedSynapsePair.stronger.id}</div>
+					<p class="mt-3 text-sm text-text">{selectedSynapsePair.stronger.preview}</p>
+					{#if selectedSynapsePair.stronger.date}
+						<div class="mt-3 text-[11px] text-dim">{selectedSynapsePair.stronger.date}</div>
+					{/if}
+				</div>
+				<div class="rounded-xl border border-[#FF3B30]/24 bg-[#160407]/70 p-4">
+					<div class="mb-2 flex items-center justify-between gap-2">
+						<span class="font-mono text-[10px] uppercase tracking-wider text-[#FF3B30]">Opposing evidence</span>
+						<span class="font-mono text-xs text-[#FF3B30]">{(selectedSynapsePair.weaker.trust * 100).toFixed(0)}%</span>
+					</div>
+					<div class="text-xs text-muted break-all">{selectedSynapsePair.weaker.id}</div>
+					<p class="mt-3 text-sm text-text">{selectedSynapsePair.weaker.preview}</p>
+					{#if selectedSynapsePair.weaker.date}
+						<div class="mt-3 text-[11px] text-dim">{selectedSynapsePair.weaker.date}</div>
+					{/if}
+				</div>
+			</div>
+
+			<div class="mt-4 grid gap-3 md:grid-cols-4">
+				<div class="rounded-xl bg-white/[0.03] p-3">
+					<div class="text-[10px] uppercase tracking-wider text-muted">topic overlap</div>
+					<div class="mt-1 font-mono text-lg text-[#FF3B30]">{(selectedSynapsePair.topic_overlap * 100).toFixed(0)}%</div>
+				</div>
+				<div class="rounded-xl bg-white/[0.03] p-3">
+					<div class="text-[10px] uppercase tracking-wider text-muted">trust delta</div>
+					<div class="mt-1 font-mono text-lg text-[#F4F1D0]">{selectedSynapsePair.trust_delta.toFixed(2)}</div>
+				</div>
+				<div class="rounded-xl bg-white/[0.03] p-3">
+					<div class="text-[10px] uppercase tracking-wider text-muted">status</div>
+					<div class="mt-1 font-mono text-lg {selectedSynapsePair.resolved ? 'text-recall' : 'text-[#FF3B30]'}">
+						{selectedSynapsePair.resolved ? 'resolved' : 'unresolved'}
+					</div>
+				</div>
+				<div class="rounded-xl bg-white/[0.03] p-3">
+					<div class="text-[10px] uppercase tracking-wider text-muted">provenance</div>
+					<div class="mt-1 truncate font-mono text-xs text-dim" title={selectedSynapsePair.provenance.id}>{selectedSynapsePair.provenance.kind}:{selectedSynapsePair.provenance.id}</div>
+				</div>
+			</div>
+		</section>
 	{/if}
-</div>
+	{/if}
 </div>
