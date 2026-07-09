@@ -96,6 +96,11 @@
 	let projectionDays = $state(0);
 	let liveBridge: LiveBridge | null = null;
 	let liveDecayReady = $state(false);
+	// Live contradiction-firewall verdict — set when a real MemorySuppressed /
+	// contradiction event quarantines a memory on camera. Held ~7s then fades.
+	let liveFirewallLabel = $state('');
+	let liveFirewallAt = $state(0);
+	let liveFirewallVisible = $derived(liveFirewallLabel !== '' && liveFirewallAt > 0);
 
 	// GPU picking — screen px → NDC → NodeRenderer.pickAt (one readback/click).
 	let canvasLayerEl: HTMLDivElement | null = $state(null);
@@ -297,7 +302,12 @@
 					engine,
 					renderer,
 					graph: renderer.graph,
-					projectionDays: () => projectionDays
+					seed,
+					projectionDays: () => projectionDays,
+					onFirewall: (info) => {
+						liveFirewallLabel = info.intruderLabel;
+						liveFirewallAt = Date.now();
+					}
 				});
 				liveDecayReady = liveBridge.liveDecayAvailable;
 				engine.setPreFrameHook((simFrame) => liveBridge?.drain(simFrame));
@@ -322,6 +332,17 @@
 	$effect(() => {
 		void projectionDays;
 		liveBridge?.refreshDecay();
+	});
+
+	// Auto-clear the live firewall verdict ~7s after it fires (matches the
+	// quarantine choreography length so the card leaves with the crimson ring).
+	$effect(() => {
+		if (!liveFirewallAt) return;
+		const t = setTimeout(() => {
+			liveFirewallLabel = '';
+			liveFirewallAt = 0;
+		}, 7000);
+		return () => clearTimeout(t);
 	});
 
 	onMount(() => {
@@ -359,6 +380,28 @@
 	     chrome='none' leaves only loading/error (host page owns the chrome). -->
 	{#if showHud}
 	<div class="absolute inset-0 z-10 pointer-events-none">
+		<!-- v2.3 living field — LIVE contradiction firewall verdict. Fires only
+		     when a real MemorySuppressed / contradiction event quarantines a
+		     memory on camera; the crimson quarantine ring plays on the field
+		     itself (firewall.wgsl live path). Crimson tone = the immune response. -->
+		{#if live && liveFirewallVisible}
+			<div
+				class="absolute top-20 left-1/2 -translate-x-1/2 pointer-events-none
+					flex flex-col items-center gap-1 px-5 py-3 rounded-xl border border-[#ff2d55]/40
+					bg-[#1a0508]/85 backdrop-blur-sm text-center enter"
+			>
+				<div class="font-mono text-[11px] tracking-[0.2em] text-[#ff5c78] uppercase">
+					⬤ threat quarantined
+				</div>
+				<div class="font-mono text-[13px] text-[#ffd0d8] max-w-sm truncate">
+					{liveFirewallLabel}
+				</div>
+				<div class="font-mono text-[10px] tracking-wide text-[#ff5c78]/70">
+					memory held in review · Memory PR opened
+				</div>
+			</div>
+		{/if}
+
 		<!-- v2.3 living field — forward-projection scrubber. Real per-memory FSRS
 		     decay drifts too slowly to watch in one session, so this projects the
 		     field N days forward on the SAME true forgetting curve (honest, not

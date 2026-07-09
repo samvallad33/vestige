@@ -91,9 +91,37 @@ export class FirewallRenderer implements FramePass {
 		});
 	}
 
+	/**
+	 * v2.3 living field — re-arm the firewall for a LIVE event with a fresh plan
+	 * (a real MemorySuppressed / contradiction target + its real neighbors).
+	 * Rebuilds the fire buffer + bind group so the choreography quarantines the
+	 * true intruder. Safe to call any time after upload(); a non-viable plan
+	 * disarms (the pass becomes a no-op until the next real event).
+	 */
+	rearm(plan: FirewallPlan): void {
+		this.plan = plan;
+		const device = this.engine.gpuDevice;
+		if (!device) return;
+		if (!plan.viable) {
+			this.pipeline = null;
+			this.bindGroup = null;
+			return;
+		}
+		this.upload();
+	}
+
+	/** Whether a viable plan is currently armed (live or demo). */
+	get armed(): boolean {
+		return this.plan.viable && !!this.pipeline && !!this.bindGroup;
+	}
+
 	/** FramePass — overwrite the four demo lanes for this frame (pure of frame). */
 	compute(encoder: GPUCommandEncoder): void {
-		if (this.engine.params[9] !== FIREWALL_DEMO_ID) return;
+		// Fire for the deterministic demo (demo index 4) OR a live firewall event
+		// (live_kind lane == LIVE_KIND.firewall == 1). Both drive the same shader.
+		const isDemo = this.engine.params[9] === FIREWALL_DEMO_ID;
+		const isLive = this.engine.params[12] === 1;
+		if (!isDemo && !isLive) return;
 		if (!this.pipeline || !this.bindGroup) return;
 		const n = this.nodeRenderer.nodeCountValue;
 		if (n === 0) return;

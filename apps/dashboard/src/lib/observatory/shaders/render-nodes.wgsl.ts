@@ -24,7 +24,7 @@ struct Params {
 	time: f32,
 	capture_mode: f32,
 	live_kind: f32,
-	live_start_frame: f32,
+	live_frame: f32,
 	live_energy: f32,
 	projection_days: f32,
 };
@@ -125,11 +125,15 @@ fn vs_main(
 	let dy = node.demo.y;
 	let dz = node.demo.z;
 	let dw = node.demo.w;
+	// The firewall grammar fires for the deterministic demo (demo_id==4) AND for
+	// a LIVE contradiction/suppression event (live_kind==1). Both write the same
+	// demo lanes (firewall.wgsl), so the visual reads identically either way.
+	let firewall_active = params.demo_id == 4.0 || params.live_kind == 1.0;
 	var lane_swell = 0.0;
 	if (params.demo_id == 2.0) {
 		// salience-rescue: searchlight pop, wave shiver, shock bloom.
 		lane_swell = 0.5 * dy + 0.25 * dz + 0.9 * dw;
-	} else if (params.demo_id == 4.0) {
+	} else if (firewall_active) {
 		// firewall: intrusion flare pop (band (0..1]), membrane presence
 		// (band [2.6..2.9] via the range gate), crimson shock bloom.
 		lane_swell = 0.35 * min(dy, 1.0) + 0.3 * smoothstep(1.5, 2.2, dy) + 0.55 * dw;
@@ -233,7 +237,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 			color = color + vec3<f32>(1.00, 0.16, 0.10) * in.demo_yzw.z * (core * 1.9 + halo * 1.1)
 				+ vec3<f32>(1.0, 0.85, 0.8) * core * in.demo_yzw.z * 0.4;
 		}
-	} else if (params.demo_id == 4.0) {
+	} else if (params.demo_id == 4.0 || params.live_kind == 1.0) {
 		// firewall: demo.y carries TWO value bands — intrusion flare (0..1]
 		// and membrane [2.6..2.9] — separated by range, one lane. demo.w is
 		// the crimson shock rim / sever blink. (demo_yzw = y/z/w lanes.)

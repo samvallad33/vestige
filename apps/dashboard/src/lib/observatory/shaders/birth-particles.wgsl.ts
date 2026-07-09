@@ -35,7 +35,7 @@ struct Params {
 	time: f32,
 	capture_mode: f32,
 	live_kind: f32,
-	live_start_frame: f32,
+	live_frame: f32,
 	live_energy: f32,
 	projection_days: f32,
 };

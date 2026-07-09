@@ -252,6 +252,11 @@ export function firewallEnvelopes(
 
 const UINTS_PER_STEP = 4;
 
+/** An idle (viable:false) firewall plan — the field breathes, nothing fires. */
+export function emptyFirewallPlan(nodeCount: number): FirewallPlan {
+	return emptyPlan(nodeCount);
+}
+
 function emptyPlan(nodeCount: number): FirewallPlan {
 	return {
 		viable: false,
@@ -276,8 +281,36 @@ function emptyPlan(nodeCount: number): FirewallPlan {
  * viable:false — the field breathes, nothing pretends to be a threat.
  */
 export function buildFirewallPlan(graph: ObservatoryGraph, seed: string): FirewallPlan {
+	return buildFirewallPlanFor(graph, seed, pickIntruderIndex(graph));
+}
+
+/**
+ * v2.3 living field — build a firewall plan for a SPECIFIC intruder (a real
+ * MemorySuppressed target, or a real contradiction-pair member) instead of the
+ * deterministic demo pick. Everything downstream (shock delays from the real
+ * layout, severed real neighbors, spine beats, verdict) is identical — only the
+ * intruder is supplied by the live event. The neighbors are the intruder's REAL
+ * graph edges (pickSeveredNeighbors), so the quarantine ring severs true
+ * connections, never invented ones. Returns viable:false if the intruder isn't
+ * in the field (nothing pretends).
+ */
+export function buildLiveFirewallPlan(
+	graph: ObservatoryGraph,
+	seed: string,
+	intruderIndex: number
+): FirewallPlan {
+	if (intruderIndex < 0 || intruderIndex >= graph.nodes.length) {
+		return emptyPlan(graph.nodes.length);
+	}
+	return buildFirewallPlanFor(graph, seed, intruderIndex);
+}
+
+function buildFirewallPlanFor(
+	graph: ObservatoryGraph,
+	seed: string,
+	intruderIndex: number
+): FirewallPlan {
 	const n = graph.nodes.length;
-	const intruderIndex = pickIntruderIndex(graph);
 	if (n === 0 || intruderIndex < 0) return emptyPlan(n);
 
 	// Shock delays come from the REAL layout (rescue-plan.layoutPositions —

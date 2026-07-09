@@ -46,7 +46,7 @@ struct Params {
 	time: f32,
 	capture_mode: f32,
 	live_kind: f32,
-	live_start_frame: f32,
+	live_frame: f32,
 	live_energy: f32,
 	projection_days: f32,
 };
@@ -79,8 +79,13 @@ fn firewall_choreo(@builtin(global_invocation_id) id: vec3<u32>) {
 	if (i >= arrayLength(&fire)) {
 		return;
 	}
-	// Belt-and-braces atop the TS gate: firewall is demo index 4.
-	if (params.demo_id != 4.0) {
+	// Fire in TWO modes: the deterministic demo (demo_id == 4, wrapped loop
+	// frame) OR a LIVE event (live_kind == 1, driven by live_frame = frames
+	// since a real MemorySuppressed / contradiction fired). Anything else →
+	// no-op, and other grammars own the lanes.
+	let is_demo = params.demo_id == 4.0;
+	let is_live = params.live_kind == 1.0;
+	if (!is_demo && !is_live) {
 		return;
 	}
 
@@ -90,7 +95,15 @@ fn firewall_choreo(@builtin(global_invocation_id) id: vec3<u32>) {
 	let is_sever = (packed & 0x200u) != 0u;
 	let k = f32((packed >> 10u) & 0xfu);
 
-	let f = params.frame;
+	// Live mode replays the SAME 720-frame beat map from the event: f =
+	// live_frame (clamped to the loop window), loop_phase derived from it so the
+	// integer-cycle sines still resolve. Demo mode reads the wrapped loop clock.
+	var f = params.frame;
+	var lp = params.loop_phase;
+	if (is_live) {
+		f = clamp(params.live_frame, 0.0, 719.0);
+		lp = f / 720.0;
+	}
 
 	var fy = 0.0;
 	var fw = 0.0;
@@ -100,10 +113,10 @@ fn firewall_choreo(@builtin(global_invocation_id) id: vec3<u32>) {
 		// C¹ handoff into the membrane over 330-332 (the rise sweeps the flare
 		// band exactly once — the condensation read is intentional).
 		fy = env(f, 90.0, 96.0, 310.0, 332.0)
-			* (0.55 + 0.45 * sin(TAU * 36.0 * params.loop_phase));
+			* (0.55 + 0.45 * sin(TAU * 36.0 * lp));
 		// Membrane: sustained ring band [2.60..2.90], 12 integer cycles/loop.
 		fy = fy + env(f, 330.0, 352.0, 620.0, 680.0)
-			* (2.75 + 0.15 * sin(TAU * 12.0 * params.loop_phase));
+			* (2.75 + 0.15 * sin(TAU * 12.0 * lp));
 		// Source detonation as the front leaves.
 		fw = env(f, 148.0, 153.0, 162.0, 196.0);
 	} else {

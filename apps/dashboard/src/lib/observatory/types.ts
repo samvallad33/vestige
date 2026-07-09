@@ -112,9 +112,10 @@ export const PATH_KIND = {
 // DemoClock. All are 0.0 at rest (a calm field), so a build with no live
 // bridge is pixel-identical to before.
 //   [12] liveKind         (LiveKind index — 0 none, see LIVE_KIND below)
-//   [13] liveStartFrame   (absolute sim frame the live event fired — its
-//                          animation envelope anchor; NOT the wrapped loop
-//                          frame, so live events never pop at the 720 seam)
+//   [13] liveFrame        (frames SINCE the active live event fired — the
+//                          event-relative animation frame the live shader
+//                          branches read, so the choreography plays once from
+//                          the event instead of riding the wrapped loop clock)
 //   [14] liveEnergy       (0..1+ global agitation — dream storm loosens the
 //                          sim, firewall shock rings the field, etc.)
 //   [15] projectionDays   (Phase 1 forward-scrub: added to every node's real
@@ -151,7 +152,7 @@ export const PARAM_IDX = {
 	time: 10,
 	captureMode: 11,
 	liveKind: 12,
-	liveStartFrame: 13,
+	liveFrame: 13,
 	liveEnergy: 14,
 	projectionDays: 15
 } as const;

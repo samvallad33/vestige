@@ -25,6 +25,8 @@ import type { NodeRenderer } from './node-renderer';
 import type { VestigeEvent } from '$types';
 import { LIVE_KIND, PARAM_IDX, type ObservatoryGraph } from './types';
 import { liveRetrievability } from './fsrs';
+import { FirewallRenderer } from './firewall-renderer';
+import { buildLiveFirewallPlan, emptyFirewallPlan } from './firewall-plan';
 
 /** A decoded live event, normalized off the wire's { type, data } envelope. */
 interface DecodedEvent {
@@ -52,6 +54,9 @@ export interface LiveBridgeDeps {
 	engine: ObservatoryEngine;
 	renderer: NodeRenderer;
 	graph: ObservatoryGraph;
+	/** Layout seed (matches NodeRenderer.upload) — the firewall shock delays
+	 *  come from the REAL layout, so this must be the same seed the field used. */
+	seed: string;
 	/**
 	 * Forward-projection scrubber (Phase 1). Days added to every node's real
 	 * FSRS elapsed so decay is legible in one viewing session. A getter so the
@@ -60,14 +65,22 @@ export interface LiveBridgeDeps {
 	projectionDays?: () => number;
 	/** Dev/verification: mirror what the bridge applied, for assertions. */
 	onApply?: (info: { simFrame: number; activeKind: number; eventsSeen: number }) => void;
+	/** Fired when a live firewall arms — the host can surface a verdict card. */
+	onFirewall?: (info: { intruderLabel: string; startFrame: number }) => void;
 }
 
 export class LiveBridge {
 	private engine: ObservatoryEngine;
 	private renderer: NodeRenderer;
 	private graph: ObservatoryGraph;
+	private seed: string;
 	private projectionDays: () => number;
 	private onApply?: LiveBridgeDeps['onApply'];
+	private onFirewall?: LiveBridgeDeps['onFirewall'];
+
+	/** Live firewall pass — constructed lazily on the first firewall event so a
+	 *  field that never sees a suppression pays nothing. */
+	private firewall: FirewallRenderer | null = null;
 
 	/** id → stable buffer index (from the ObservatoryGraph). */
 	private indexById: Map<string, number>;
@@ -90,8 +103,10 @@ export class LiveBridge {
 		this.engine = deps.engine;
 		this.renderer = deps.renderer;
 		this.graph = deps.graph;
+		this.seed = deps.seed;
 		this.projectionDays = deps.projectionDays ?? (() => 0);
 		this.onApply = deps.onApply;
+		this.onFirewall = deps.onFirewall;
 		this.indexById = deps.graph.indexById;
 
 		const n = deps.graph.nodes.length;
@@ -105,7 +120,7 @@ export class LiveBridge {
 		// Seed the live lanes to a calm resting state.
 		const p = this.engine.params;
 		p[PARAM_IDX.liveKind] = LIVE_KIND.none;
-		p[PARAM_IDX.liveStartFrame] = 0;
+		p[PARAM_IDX.liveFrame] = 0;
 		p[PARAM_IDX.liveEnergy] = 0;
 		p[PARAM_IDX.projectionDays] = 0;
 	}
@@ -248,6 +263,27 @@ export class LiveBridge {
 	private arm(ev: DecodedEvent): void {
 		this.active = ev;
 		this.eventsSeen++;
+
+		// Firewall: build a live plan for the REAL intruder + its real neighbors
+		// and (re)arm the quarantine pass. Lazily construct the renderer on first
+		// use so a field that never sees a suppression pays nothing. Pass order is
+		// safe: the bridge (and thus this renderer) is created AFTER the
+		// NodeRenderer, so firewall_choreo encodes after recall_sim.
+		if (ev.kind === LIVE_KIND.firewall) {
+			const intruderIndex = this.indexById.get(ev.targetId);
+			if (intruderIndex === undefined) return;
+			const plan = buildLiveFirewallPlan(this.graph, this.seed, intruderIndex);
+			if (!plan.viable) return;
+			if (!this.firewall) {
+				this.firewall = new FirewallRenderer({
+					engine: this.engine,
+					nodeRenderer: this.renderer,
+					plan: emptyFirewallPlan(this.graph.nodes.length)
+				});
+			}
+			this.firewall.rearm(plan);
+			this.onFirewall?.({ intruderLabel: plan.verdict.intruderLabel, startFrame: ev.startFrame });
+		}
 	}
 
 	/** Real graph neighbors of a node id (for the firewall quarantine ring). */
@@ -293,7 +329,9 @@ export class LiveBridge {
 				p[PARAM_IDX.liveEnergy] = 0;
 			} else {
 				p[PARAM_IDX.liveKind] = this.active.kind;
-				p[PARAM_IDX.liveStartFrame] = this.active.startFrame;
+				// Event-relative frame: the live shader branches replay the
+				// choreography once from here, never riding the wrapped loop.
+				p[PARAM_IDX.liveFrame] = Math.max(0, elapsed);
 				p[PARAM_IDX.liveEnergy] = this.energyEnvelope(this.active, elapsed, openEnded);
 			}
 		} else {
