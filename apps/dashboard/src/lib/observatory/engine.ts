@@ -110,6 +110,15 @@ export class ObservatoryEngine {
 	private accumulatorMs = 0;
 	private static readonly FIXED_DT_MS = 1000 / 60;
 
+	/**
+	 * Paused (prefers-reduced-motion or the on-page control): the deterministic
+	 * clock stops advancing so the ambient orbit + force-sim drift FREEZE, but
+	 * the frame still renders and the live preFrameHook still runs — discrete
+	 * event pulses (firewall, decay, dream) are information, not decoration, so
+	 * they must land even when motion is reduced (WCAG-friendly).
+	 */
+	private paused = false;
+
 	constructor(opts: EngineOptions) {
 		this.canvas = opts.canvas;
 		this.demo = opts.demo;
@@ -176,6 +185,19 @@ export class ObservatoryEngine {
 	/** Monotonic sim frame (does NOT wrap at the loop period). */
 	get totalFrames(): number {
 		return this.clock.state.totalFrames;
+	}
+
+	/**
+	 * Freeze/unfreeze the ambient motion (prefers-reduced-motion or the on-page
+	 * pause control). Frozen = the clock stops advancing, so the orbit + force
+	 * sim hold still; live event pulses (via the preFrameHook) still land.
+	 */
+	setPaused(paused: boolean): void {
+		this.paused = paused;
+	}
+
+	get isPaused(): boolean {
+		return this.paused;
 	}
 
 	/**
@@ -317,8 +339,10 @@ export class ObservatoryEngine {
 		// on every display; only the scheduling reads the wall clock.
 		this.accumulatorMs += Math.min(deltaMs, 250);
 		let ticked = false;
+		// When paused, the clock is frozen (ambient/sim drift stops) — but we
+		// keep draining the accumulator so it doesn't fast-forward on resume.
 		while (this.accumulatorMs >= ObservatoryEngine.FIXED_DT_MS) {
-			this.clock.tick();
+			if (!this.paused) this.clock.tick();
 			this.accumulatorMs -= ObservatoryEngine.FIXED_DT_MS;
 			ticked = true;
 		}

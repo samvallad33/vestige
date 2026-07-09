@@ -96,6 +96,32 @@
 	let projectionDays = $state(0);
 	let liveBridge: LiveBridge | null = null;
 	let liveDecayReady = $state(false);
+
+	// Motion control (WCAG): the field's ambient orbit/sim drift runs >5s, so it
+	// needs a persistent pause control AND must honor prefers-reduced-motion.
+	// When paused the clock freezes (drift stops) but live event pulses still
+	// land — they are information, not decoration. Auto-pauses under
+	// reduced-motion; the user can still override with the button.
+	let paused = $state(false);
+	let userSetPause = $state(false);
+	function initReducedMotion() {
+		if (typeof window === 'undefined') return;
+		const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+		if (mq.matches && !userSetPause) paused = true;
+		const onChange = (e: MediaQueryListEvent) => {
+			if (!userSetPause) paused = e.matches;
+		};
+		mq.addEventListener('change', onChange);
+		return () => mq.removeEventListener('change', onChange);
+	}
+	function togglePause() {
+		userSetPause = true;
+		paused = !paused;
+	}
+	// Push the pause state to the engine whenever either changes.
+	$effect(() => {
+		engine?.setPaused(paused);
+	});
 	// Live contradiction-firewall verdict — set when a real MemorySuppressed /
 	// contradiction event quarantines a memory on camera. Held ~7s then fades.
 	let liveFirewallLabel = $state('');
@@ -354,6 +380,7 @@
 
 	onMount(() => {
 		loadGraph();
+		return initReducedMotion();
 	});
 </script>
 
@@ -407,6 +434,23 @@
 					memory held in review · Memory PR opened
 				</div>
 			</div>
+		{/if}
+
+		<!-- Motion pause control (WCAG: persistent, for >5s ambient motion). Live
+		     field only. Pausing freezes ambient drift; live event pulses persist.
+		     Auto-on under prefers-reduced-motion. -->
+		{#if live}
+			<button
+				onclick={togglePause}
+				class="absolute bottom-4 right-4 pointer-events-auto flex items-center gap-2 px-3 py-1.5
+					rounded-xl border border-[#22C7DE]/25 bg-[#05060a]/80 backdrop-blur-sm
+					font-mono text-[11px] tracking-wide text-[#22C7DE]/80 hover:text-[#22C7DE]
+					hover:border-[#22C7DE]/50 transition-colors"
+				title={paused ? 'Resume field motion' : 'Pause field motion (event pulses stay live)'}
+				aria-pressed={paused}
+			>
+				{paused ? '▶ RESUME' : '❚❚ PAUSE'}
+			</button>
 		{/if}
 
 		<!-- v2.3 living field — forward-projection scrubber. Real per-memory FSRS
