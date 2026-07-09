@@ -14,6 +14,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import { api } from '$stores/api';
+	import { eventFeed } from '$stores/websocket';
 	import type { GraphResponse } from '$types';
 	import TelemetryStrip from '$lib/observatory/overlays/TelemetryStrip.svelte';
 	import TimelineSpine from '$lib/observatory/overlays/TimelineSpine.svelte';
@@ -30,6 +31,7 @@
 	import { FirewallRenderer } from '$lib/observatory/firewall-renderer';
 	import { buildFirewallPlan, type FirewallPlan } from '$lib/observatory/firewall-plan';
 	import type { PathStepMeta } from '$lib/observatory/path-builder';
+	import { LiveBridge } from '$lib/observatory/live-bridge';
 
 	interface Props {
 		demo: DemoMode;
@@ -62,6 +64,15 @@
 		 * back with its memory id (the host opens its inspector panel).
 		 */
 		onpick?: (memoryId: string) => void;
+		/**
+		 * v2.3 living field — subscribe the field to the REAL backend event
+		 * stream ($eventFeed) so it renders live FSRS decay, the contradiction
+		 * firewall, the dream storm, and the causal recall wavefront driven by
+		 * real cognitive events instead of the deterministic DemoClock. Only the
+		 * main graph's field renderer turns this on; the scripted ?demo= moments
+		 * stay deterministic (live=false).
+		 */
+		live?: boolean;
 	}
 
 	let {
@@ -74,8 +85,17 @@
 		onexit,
 		embedded = false,
 		chrome = 'full',
-		onpick
+		onpick,
+		live = false
 	}: Props = $props();
+
+	// v2.3 living field — forward-projection scrubber (Phase 1 honesty control).
+	// Real FSRS drift over a viewing session is imperceptibly slow, so this adds
+	// N days to every node's real elapsed and recomputes decay on the SAME true
+	// curve — legible, not faked. 0 = "now". Bound by the on-page control below.
+	let projectionDays = $state(0);
+	let liveBridge: LiveBridge | null = null;
+	let liveDecayReady = $state(false);
 
 	// GPU picking — screen px → NDC → NodeRenderer.pickAt (one readback/click).
 	let canvasLayerEl: HTMLDivElement | null = $state(null);
@@ -266,10 +286,42 @@
 				pathSteps = renderer.pathSteps;
 			}
 
+			// v2.3 living field — wire the field to the REAL backend event stream.
+			// Only the main graph's field renderer (live=true); the scripted
+			// ?demo= moments stay deterministic. The bridge drives the live lanes
+			// + per-node FSRS decay via the engine's preFrameHook; the eventFeed
+			// subscription below feeds it. Created here (once) because it needs
+			// both the engine AND renderer.graph, which only exist post-upload.
+			if (live && renderer.graph) {
+				liveBridge = new LiveBridge({
+					engine,
+					renderer,
+					graph: renderer.graph,
+					projectionDays: () => projectionDays
+				});
+				liveDecayReady = liveBridge.liveDecayAvailable;
+				engine.setPreFrameHook((simFrame) => liveBridge?.drain(simFrame));
+			}
+
 			// Start the story at frame 0 now that the field exists — where the
 			// loop begins must never depend on how long the API call took.
 			engine.demoClock.reset();
 		}
+	});
+
+	// Feed the live bridge every time the event store changes (newest-first).
+	// The bridge dedupes internally (only events newer than the last seen are
+	// applied) and is a no-op when live=false / the bridge isn't built yet.
+	$effect(() => {
+		const events = $eventFeed;
+		if (liveBridge) liveBridge.ingest(events);
+	});
+
+	// The forward-projection scrubber recomputes decay immediately on change so
+	// dragging the slider is responsive (the per-frame drain throttles decay).
+	$effect(() => {
+		void projectionDays;
+		liveBridge?.refreshDecay();
 	});
 
 	onMount(() => {
@@ -307,6 +359,42 @@
 	     chrome='none' leaves only loading/error (host page owns the chrome). -->
 	{#if showHud}
 	<div class="absolute inset-0 z-10 pointer-events-none">
+		<!-- v2.3 living field — forward-projection scrubber. Real per-memory FSRS
+		     decay drifts too slowly to watch in one session, so this projects the
+		     field N days forward on the SAME true forgetting curve (honest, not
+		     faked). Only shown when the backend serves real FSRS state. -->
+		{#if live && liveDecayReady}
+			<div
+				class="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-auto
+					flex items-center gap-3 px-4 py-2.5 rounded-xl border border-[#22C7DE]/25
+					bg-[#05060a]/80 backdrop-blur-sm font-mono text-[11px] tracking-wide"
+			>
+				<span class="text-[#22C7DE]/80 uppercase">Forgetting horizon</span>
+				<input
+					type="range"
+					min="0"
+					max="365"
+					step="1"
+					bind:value={projectionDays}
+					class="w-40 sm:w-56 accent-[#22C7DE] cursor-pointer"
+					aria-label="Project the forgetting curve forward N days"
+					title="Project every memory forward on its real FSRS curve"
+				/>
+				<span class="text-[#7fe6c0] w-16 text-right tabular-nums">
+					{projectionDays === 0 ? 'now' : `+${projectionDays}d`}
+				</span>
+				{#if projectionDays !== 0}
+					<button
+						onclick={() => (projectionDays = 0)}
+						class="text-[#22C7DE]/60 hover:text-[#22C7DE] transition-colors"
+						title="Return to now"
+					>
+						reset
+					</button>
+				{/if}
+			</div>
+		{/if}
+
 		{#if chrome === 'full'}
 		<!-- Top telemetry strip -->
 		<TelemetryStrip

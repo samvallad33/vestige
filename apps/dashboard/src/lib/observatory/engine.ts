@@ -88,6 +88,17 @@ export class ObservatoryEngine {
 	private _status: EngineStatus = { state: 'booting' };
 	private statusListeners = new Set<(s: EngineStatus) => void>();
 
+	/**
+	 * Live-event hook (v2.3 living field). Invoked once per frame AFTER p[0..11]
+	 * are set but BEFORE the params buffer is written to the GPU, so the live
+	 * bridge can drive lanes 12..15 (liveKind/liveStartFrame/liveEnergy/
+	 * projectionDays) and mutate node buffers from the real backend WebSocket
+	 * stream. `simFrame` is the monotonic (non-wrapping) sim frame so live
+	 * event envelopes never pop at the 720-frame loop seam. Allocation-free by
+	 * contract — the bridge drains a preallocated ring buffer here.
+	 */
+	private preFrameHook: ((simFrame: number) => void) | null = null;
+
 	// fps estimate for telemetry only (never sim state)
 	private lastRafTs = 0;
 	private fpsEstimate = 0;
@@ -152,6 +163,29 @@ export class ObservatoryEngine {
 	/** Register a frame pass (later increments: sim, nodes, edges, path, post). */
 	addPass(pass: FramePass): void {
 		this.passes.push(pass);
+	}
+
+	/**
+	 * Register the per-frame live-event hook (v2.3). See `preFrameHook`. Pass
+	 * null to detach (the field falls back to the calm deterministic loop).
+	 */
+	setPreFrameHook(hook: ((simFrame: number) => void) | null): void {
+		this.preFrameHook = hook;
+	}
+
+	/** Monotonic sim frame (does NOT wrap at the loop period). */
+	get totalFrames(): number {
+		return this.clock.state.totalFrames;
+	}
+
+	/**
+	 * Wall-clock now in ms. The ONE sanctioned wall-clock read (never for sim
+	 * state — the DemoClock owns that). The live FSRS decay field legitimately
+	 * needs real time to compute "days since last review"; that is a real
+	 * external fact, not simulation state, so it does not break determinism.
+	 */
+	get wallNowMs(): number {
+		return Date.now();
 	}
 
 	/** Boot WebGPU. Resolves true when running, false when unsupported/error. */
@@ -319,6 +353,14 @@ export class ObservatoryEngine {
 		// storage-buffer state stays frozen at the initial upload values,
 		// making same URL + frame → identical pixels (spec §4 Inc 9).
 		p[11] = this.freezeFrame !== null ? 1.0 : 0.0;
+
+		// v2.3 living field — let the live bridge drive lanes 12..15 and mutate
+		// node buffers from the real backend event stream. Runs on the
+		// monotonic sim frame so envelopes never pop at the loop seam. Lanes
+		// 12..15 persist across frames in `this.params` (the loop above only
+		// writes 0..11), so a settled field with no live events stays calm.
+		this.preFrameHook?.(state.totalFrames);
+
 		this.device.queue.writeBuffer(this.paramsBuffer, 0, p);
 
 		let swapTex: GPUTexture;

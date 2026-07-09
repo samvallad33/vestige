@@ -12,7 +12,7 @@
  *   frames 510–719: stabilization (hold, then reset)
  *
  * All time terms are integer-cycles per 720 frames so the loop seam is
- * invisible. Capture mode (params._pad == 1.0) skips integration.
+ * invisible. Capture mode (params.capture_mode == 1.0) skips integration.
  *
  * Particle layout (16 floats / 64 bytes per particle):
  *   start_life  : xyz start position, w phase offset (stagger)
@@ -33,7 +33,11 @@ struct Params {
 	brightness: f32,
 	demo_id: f32,
 	time: f32,
-	_pad: f32,
+	capture_mode: f32,
+	live_kind: f32,
+	live_start_frame: f32,
+	live_energy: f32,
+	projection_days: f32,
 };
 
 // 16 floats / 64 bytes per particle (matches birth-plan.ts layout).
@@ -54,9 +58,9 @@ fn birth_compute(@builtin(global_invocation_id) id: vec3<u32>) {
 		return;
 	}
 
-	// Capture mode (params._pad == 1.0): skip physics integration.
+	// Capture mode (params.capture_mode == 1.0): skip physics integration.
 	// The storage-buffer state stays frozen at initial upload values.
-	if (params._pad == 1.0) {
+	if (params.capture_mode == 1.0) {
 		return;
 	}
 

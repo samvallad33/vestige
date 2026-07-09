@@ -77,6 +77,12 @@ export interface GraphNode {
 	// v2.0.5 Active Forgetting — top-down suppression state
 	suppression_count?: number;
 	suppressed_at?: string;
+	// v2.3 living field — real FSRS state so the graph can render LIVE decay
+	// (retrievability recomputed each frame on the true forgetting curve).
+	// stability in days; lastAccessed is an ISO timestamp. Optional so an old
+	// serializer (pre-2026-07) still parses.
+	stability?: number;
+	lastAccessed?: string;
 }
 
 export interface GraphEdge {
@@ -167,6 +173,11 @@ export type VestigeEventType =
 	| 'ActivationSpread'
 	| 'ImportanceScored'
 	| 'DeepReferenceCompleted'
+	// v2.3 living field — RSB causal recall receipt (Phase 4): a failure-
+	// triggered backward-only causal path with shared-entity join keys, so the
+	// field lights the REAL cause chain instead of a random pulse.
+	| 'BackfillFired'
+	| 'CausalReceipt'
 	| 'HookVerdictRecorded'
 	| 'TraceEvent'
 	| 'MemoryPrOpened'

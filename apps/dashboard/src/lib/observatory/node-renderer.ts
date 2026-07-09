@@ -47,6 +47,13 @@ export class NodeRenderer implements FramePass {
 	private simBindGroup: GPUBindGroup | null = null;
 	private pathBuffer: GPUBuffer | null = null;
 
+	// v2.3 living field — per-node LIVE retrievability (one f32/node), recomputed
+	// on the real FSRS curve each frame by the LiveBridge and read by the sim
+	// compute pass to overwrite vel_retention.w. Created at upload with node
+	// count; seeded to the static retention snapshot so a pre-bridge field is
+	// unchanged.
+	private liveRetentionBuffer: GPUBuffer | null = null;
+
 	// Path edge wavefront (Increment 6)
 	private pathPipeline: GPURenderPipeline | null = null;
 	private pathBindGroup: GPUBindGroup | null = null;
@@ -102,6 +109,20 @@ export class NodeRenderer implements FramePass {
 		});
 		device.queue.writeBuffer(this.edgeBuffer, 0, edgeData.buffer as ArrayBuffer);
 
+		// v2.3 live retrievability — one f32 per node, seeded to each node's
+		// static retention so the field is unchanged until the LiveBridge starts
+		// recomputing on the real FSRS curve. Padded to ≥16 bytes so a tiny
+		// graph still makes a valid storage buffer.
+		const liveRet = new Float32Array(Math.max(nodeCount, 4));
+		for (let i = 0; i < nodeCount; i++) liveRet[i] = graph.nodes[i].retention;
+		this.liveRetentionBuffer?.destroy();
+		this.liveRetentionBuffer = device.createBuffer({
+			label: 'observatory-live-retention',
+			size: liveRet.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+		});
+		device.queue.writeBuffer(this.liveRetentionBuffer, 0, liveRet.buffer as ArrayBuffer);
+
 		// Recall path: deterministic story beats → PathStep storage buffer.
 		// (Skipped for demo modes with their own choreography — the buffer is
 		// still created so the sim bind group stays valid, just with 0 steps.)
@@ -155,6 +176,21 @@ export class NodeRenderer implements FramePass {
 		this.createPipeline(device);
 	}
 
+	/**
+	 * v2.3 living field — push freshly-computed per-node live retrievability to
+	 * the GPU. The LiveBridge calls this (throttled) with a Float32Array whose
+	 * length is the node count; the sim compute pass reads it to overwrite each
+	 * node's vel_retention.w, so render-nodes dims every memory on its REAL FSRS
+	 * curve. One writeBuffer, no pipeline rebuild — the buffer is already bound.
+	 */
+	uploadLiveRetention(data: Float32Array): void {
+		const device = this.engine.gpuDevice;
+		if (!device || !this.liveRetentionBuffer) return;
+		const n = Math.min(data.length, this.nodeCount);
+		if (n <= 0) return;
+		device.queue.writeBuffer(this.liveRetentionBuffer, 0, data.buffer as ArrayBuffer, 0, n * 4);
+	}
+
 	private createPipeline(device: GPUDevice): void {
 		if (!this.engine.paramsBuffer || !this.cameraBuffer || !this.nodeBuffer) return;
 
@@ -176,6 +212,9 @@ export class NodeRenderer implements FramePass {
 			];
 			if (this.edgeBuffer) {
 				simEntries.push({ binding: 3, resource: { buffer: this.edgeBuffer } });
+			}
+			if (this.liveRetentionBuffer) {
+				simEntries.push({ binding: 4, resource: { buffer: this.liveRetentionBuffer } });
 			}
 			this.simBindGroup = device.createBindGroup({
 				label: 'observatory-recall-sim-bind',
@@ -402,10 +441,12 @@ export class NodeRenderer implements FramePass {
 		this.edgeBuffer?.destroy();
 		this.cameraBuffer?.destroy();
 		this.pathBuffer?.destroy();
+		this.liveRetentionBuffer?.destroy();
 		this.nodeBuffer = null;
 		this.edgeBuffer = null;
 		this.cameraBuffer = null;
 		this.pathBuffer = null;
+		this.liveRetentionBuffer = null;
 		this.pipeline = null;
 		this.bindGroup = null;
 		this.simPipeline = null;

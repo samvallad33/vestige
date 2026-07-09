@@ -33,7 +33,11 @@ struct Params {
 	brightness: f32,
 	demo_id: f32,
 	time: f32,
-	_pad: f32,
+	capture_mode: f32,
+	live_kind: f32,
+	live_start_frame: f32,
+	live_energy: f32,
+	projection_days: f32,
 };
 
 struct Node {
@@ -49,6 +53,10 @@ struct Node {
 @group(0) @binding(2) var<storage, read> path: array<vec4<u32>>;
 // x source index, y target node index (Increment 7: force simulation edges)
 @group(0) @binding(3) var<storage, read> edges: array<vec2<u32>>;
+// v2.3 living field — per-node LIVE retrievability (real FSRS curve, recomputed
+// on the CPU by the LiveBridge). One f32 per node. read to overwrite
+// vel_retention.w so render-nodes dims each memory on its true forgetting curve.
+@group(0) @binding(4) var<storage, read> live_retention: array<f32>;
 
 // --- Force-simulation helpers (Increment 7) ---
 
@@ -100,12 +108,25 @@ fn recall_sim(@builtin(global_invocation_id) id: vec3<u32>) {
 	// Write recall intensity (existing behavior preserved).
 	node.demo.x = intensity;
 
+	// v2.3 LIVE FSRS decay — overwrite retention with the real forgetting-curve
+	// value the LiveBridge computed for this node on the CPU. This is the #1
+	// moat: render-nodes already dims by vel_retention.w (line ~183), so writing
+	// the true retrievability here makes every memory visibly forget on its own
+	// curve. Guarded so a graph with no live-decay data (all zeros) keeps its
+	// static snapshot instead of collapsing to black.
+	if (i < arrayLength(&live_retention)) {
+		let lr = live_retention[i];
+		if (lr > 0.0) {
+			node.vel_retention = vec4<f32>(node.vel_retention.xyz, lr);
+		}
+	}
+
 	// --- Increment 7: force simulation ---
 
-	// Capture mode (params._pad == 1.0): skip physics integration entirely.
-	// The storage-buffer state stays frozen at initial upload values,
-	// making same URL + frame → identical pixels (spec §4 Inc 9).
-	if (params._pad == 0.0) {
+	// Capture mode (params.capture_mode == 1.0): skip physics integration
+	// entirely. The storage-buffer state stays frozen at initial upload
+	// values, making same URL + frame → identical pixels (spec §4 Inc 9).
+	if (params.capture_mode == 0.0) {
 		// 7B: center anchor — center node never moves.
 		// (WGSL forbids swizzle stores — reconstruct the vec4, preserving .w.)
 		if (is_center) {
@@ -155,7 +176,7 @@ fn recall_sim(@builtin(global_invocation_id) id: vec3<u32>) {
 		node.vel_retention = vec4<f32>(vel, node.vel_retention.w);
 		node.pos_radius = vec4<f32>(pos + vel, node.pos_radius.w);
 	}
-	// When capture_mode (params._pad == 1.0), node is NOT written back —
+	// When capture_mode (params.capture_mode == 1.0), node is NOT written back —
 	// the storage buffer retains its initial upload values, guaranteeing
 	// deterministic pixels for the same frame index.
 	nodes[i] = node;

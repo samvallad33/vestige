@@ -1239,6 +1239,12 @@ pub async fn get_graph(
                 "createdAt": n.created_at.to_rfc3339(),
                 "updatedAt": n.updated_at.to_rfc3339(),
                 "isCenter": n.id == center_id,
+                // v2.3 living field — real FSRS state so the dashboard graph can
+                // render LIVE per-memory decay (retrievability recomputed each
+                // frame on the true forgetting curve). Already emitted by the
+                // single-node handlers; the field just needed it per-node too.
+                "stability": n.stability,
+                "lastAccessed": n.last_accessed.to_rfc3339(),
             })
         })
         .collect();

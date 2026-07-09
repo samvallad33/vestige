@@ -320,6 +320,7 @@ disown</code>
 			<div class="absolute inset-0">
 				<ObservatoryStage
 					embedded
+					live
 					chrome="none"
 					demo="recall-path"
 					showSwitcher={false}
