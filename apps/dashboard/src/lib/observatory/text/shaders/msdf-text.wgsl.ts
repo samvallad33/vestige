@@ -62,20 +62,25 @@ fn vs_text(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
 	let uv_min = glyph.uv_rect.xy;
 	let uv_max = glyph.uv_rect.zw;
 	let aspect = max(0.0001, params.viewport_w / max(1.0, params.viewport_h));
-	var pos = anchor + quad_offset + corner * size;
 	let depth = clamp(glyph.info.z, 0.0, 1.0);
 	let cursor_pre = vec2f(params.cursor_x, params.cursor_y);
 	let cursor_delta = cursor_pre - anchor;
 	let d = distance(anchor, cursor_pre);
-	let R = 0.45;
+	// Wide influence radius so the field reacts when the cursor is anywhere NEAR
+	// the text, not only dead-on (v1 R=0.45 was too tight to feel).
+	let R = 0.75;
 	let cursor_w = exp(-(d * d) / (R * R));
+	// Per-glyph SCALE-UP near the cursor: glyphs the pointer approaches swell toward
+	// you. Scaling the quad around its anchor is the most legible "alive" cue.
+	let grow = 1.0 + cursor_w * 0.55;
+	var pos = anchor + (quad_offset + corner * size) * grow;
 	// Depth → clip z. Trust (depth~1) floats forward (small z), low-trust sinks back.
 	// Cursor lifts a glyph forward, but z MUST stay > 0 or clip.z<0 clips the quad
 	// behind the near plane and the glyph vanishes (v1 bug: cursor made text disappear).
 	var z = mix(0.42, 0.10, depth);
-	z = clamp(z - cursor_w * 0.20, 0.04, 0.6);
+	z = clamp(z - cursor_w * 0.42, 0.04, 0.6);
 	let lean_dir = select(vec2f(0.0, 0.0), normalize(cursor_delta), length(cursor_delta) > 0.0001);
-	pos = pos + lean_dir * cursor_w * 0.015;
+	pos = pos + lean_dir * cursor_w * 0.04;
 	pos = pos + vec2f(sin(params.time * 0.6), cos(params.time * 0.5)) * ((1.0 - depth) * 0.006) * params.pulse;
 	// Keep glyphs square in BOTH orientations: normalize by the longer axis.
 	// Landscape (aspect>1): narrow x. Portrait (aspect<1): shrink y instead —
@@ -99,7 +104,7 @@ fn fs_text(in: VSOut) -> @location(0) vec4f {
 	let depth = clamp(in.info.w, 0.0, 1.0);
 	let weight = clamp(in.weight, 0.0, 1.0);
 	var uv = in.uv;
-	uv = uv + vec2f(sin(uv.y * 40.0 + params.time * 3.0), cos(uv.x * 40.0 + params.time * 3.0)) * (cursor_w * 0.010);
+	uv = uv + vec2f(sin(uv.y * 40.0 + params.time * 3.0), cos(uv.x * 40.0 + params.time * 3.0)) * (cursor_w * 0.007);
 	let msdf = textureSample(atlas_tex, atlas_sampler, uv).rgb;
 	let dist = median3(msdf);
 	let uv_width = max(fwidth(uv), vec2f(1.0 / max(atlas_px.x, 1.0), 1.0 / max(atlas_px.y, 1.0)));
@@ -116,9 +121,9 @@ fn fs_text(in: VSOut) -> @location(0) vec4f {
 	let reveal = clamp((params.frame - in.info.x) / reveal_span, 0.0, 1.0);
 	let alpha = coverage * in.color.a * reveal;
 	if (alpha < 0.001) { discard; }
-	// Glow floor raised so even mid-depth text is visibly lit at rest (v1 bug: 0.6
-	// floor left it near-black); depth + cursor push bright glyphs past the bloom line.
-	let glow = mix(1.0, 1.5, depth) + cursor_w * 0.6;
+	// Glow floor keeps rest visible; cursor pushes near glyphs HARD past the bloom
+	// line so they visibly flare (v1 cursor*0.6 was too weak to read).
+	let glow = mix(1.0, 1.5, depth) + cursor_w * 1.4;
 	let rgb = in.color.rgb * params.brightness * glow;
 	return vec4f(rgb * alpha, alpha);
 }
