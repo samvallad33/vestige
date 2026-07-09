@@ -195,6 +195,17 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
         .route("/api/receipts", get(handlers::list_receipts))
         .route("/api/receipts/{receipt_id}", get(handlers::get_receipt))
         // ============================================================
+        // MEMORY HYGIENE + INTELLIGENCE (live-wire) — duplicates,
+        // contradictions, cross-project patterns, per-memory audit
+        // ============================================================
+        .route("/api/duplicates", get(handlers::list_duplicates))
+        .route("/api/contradictions", get(handlers::list_contradictions))
+        .route(
+            "/api/patterns/cross-project",
+            get(handlers::get_cross_project_patterns),
+        )
+        .route("/api/memories/{id}/audit", get(handlers::get_memory_audit))
+        // ============================================================
         // MEMORY PRs (v2.2) — risk-gated brain-change review queue
         // ============================================================
         .route("/api/memory-prs", get(handlers::list_memory_prs))

@@ -302,6 +302,107 @@ export interface IntentionItem {
 	snoozed_until?: string | null;
 }
 
+// Memory Hygiene — GET /api/duplicates (cosine-similarity clusters)
+export interface DuplicateClusterMemory {
+	id: string;
+	content: string;
+	nodeType: string;
+	tags: string[];
+	retention: number;
+	createdAt: string;
+}
+
+export interface DuplicateClusterGroup {
+	similarity: number;
+	suggestedAction: 'merge' | 'review';
+	memories: DuplicateClusterMemory[];
+}
+
+export interface DuplicatesResponse {
+	threshold: number;
+	total: number;
+	clusters: DuplicateClusterGroup[];
+}
+
+// Contradiction pairs — GET /api/contradictions. Field names mirror the
+// Contradiction interface in $components/ContradictionArcs.svelte; a = older
+// memory, b = newer. Sorted by similarity desc.
+export interface ContradictionPair {
+	memory_a_id: string;
+	memory_b_id: string;
+	memory_a_preview: string;
+	memory_b_preview: string;
+	memory_a_type?: string;
+	memory_b_type?: string;
+	memory_a_created?: string;
+	memory_b_created?: string;
+	memory_a_tags?: string[];
+	memory_b_tags?: string[];
+	trust_a: number;
+	trust_b: number;
+	similarity: number;
+	date_diff_days: number;
+	topic: string;
+}
+
+export interface ContradictionsResponse {
+	memoriesAnalyzed: number;
+	total: number;
+	contradictions: ContradictionPair[];
+}
+
+// Cross-project pattern transfer — GET /api/patterns/cross-project.
+// Only the six tracked categories ever cross the wire (backend drops others).
+export type CrossProjectCategory =
+	| 'ErrorHandling'
+	| 'AsyncConcurrency'
+	| 'Testing'
+	| 'Architecture'
+	| 'Performance'
+	| 'Security';
+
+export interface CrossProjectPattern {
+	name: string;
+	category: CrossProjectCategory;
+	origin_project: string;
+	transferred_to: string[];
+	transfer_count: number;
+	last_used: string;
+	confidence: number;
+}
+
+export interface CrossProjectPatternsResponse {
+	projects: string[];
+	patterns: CrossProjectPattern[];
+}
+
+// Per-memory audit trail — GET /api/memories/{id}/audit. Events arrive
+// newest-first; the action union matches AuditAction in
+// $components/audit-trail-helpers.ts.
+export type MemoryAuditAction =
+	| 'created'
+	| 'accessed'
+	| 'promoted'
+	| 'demoted'
+	| 'edited'
+	| 'suppressed'
+	| 'dreamed'
+	| 'reconsolidated';
+
+export interface MemoryAuditEvent {
+	action: MemoryAuditAction;
+	timestamp: string; // RFC3339
+	old_value?: number;
+	new_value?: number;
+	reason?: string;
+	triggered_by?: string;
+}
+
+export interface MemoryAuditResponse {
+	memoryId: string;
+	events: MemoryAuditEvent[];
+}
+
 // Node type colors for visualization — bioluminescent palette
 export const NODE_TYPE_COLORS: Record<string, string> = {
 	fact: '#00A8FF',      // electric blue

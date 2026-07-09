@@ -29,15 +29,19 @@
 		$page.url.pathname.startsWith(base) ? $page.url.pathname.slice(base.length) || '/' : $page.url.pathname
 	);
 	let isMarketingRoute = $derived(dashboardPath === '/waitlist' || dashboardPath.startsWith('/waitlist/'));
+	// The Observatory is a full-bleed cinematic surface (spec §7): DOM =
+	// instrument overlays ONLY — no app chrome, no websocket toasts, no nav.
+	// Same bare-children bypass as marketing routes so recordings stay clean.
+	let isImmersiveRoute = $derived(dashboardPath.startsWith('/observatory'));
 
 	onMount(() => {
-		if (!isMarketingRoute) {
+		if (!isMarketingRoute && !isImmersiveRoute) {
 			websocket.connect();
 		}
 		const teardownTheme = initTheme();
 
 		function onKeyDown(e: KeyboardEvent) {
-			if (isMarketingRoute) return;
+			if (isMarketingRoute || isImmersiveRoute) return;
 			if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
 				e.preventDefault();
 				showCommandPalette = !showCommandPalette;
@@ -98,6 +102,7 @@
 	// set reused the same Unicode glyph across multiple items; every entry here
 	// now has a distinct silhouette that reads instantly.
 	const nav: { href: string; label: string; icon: IconName; shortcut: string }[] = [
+		{ href: '/observatory', label: 'Observatory', icon: 'sparkle', shortcut: 'O' },
 		{ href: '/blackbox', label: 'Black Box', icon: 'blackbox', shortcut: 'B' },
 		{ href: '/memory-prs', label: 'Memory PRs', icon: 'memorypr', shortcut: 'Q' },
 		{ href: '/graph', label: 'Graph', icon: 'graph', shortcut: 'G' },
@@ -140,7 +145,7 @@
 	}
 </script>
 
-{#if isMarketingRoute}
+{#if isMarketingRoute || isImmersiveRoute}
 	{@render children()}
 {:else}
 	<!-- Ambient background orbs -->
@@ -259,7 +264,7 @@
 {/if}
 
 <!-- Command Palette overlay -->
-{#if showCommandPalette && !isMarketingRoute}
+{#if showCommandPalette && !isMarketingRoute && !isImmersiveRoute}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="fixed inset-0 z-50 flex items-start justify-center pt-[10vh] md:pt-[15vh] px-4 bg-void/60 backdrop-blur-sm"

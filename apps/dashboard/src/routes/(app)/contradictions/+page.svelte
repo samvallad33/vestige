@@ -1,10 +1,12 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import ContradictionArcs, { type Contradiction } from '$components/ContradictionArcs.svelte';
 	import PageHeader from '$components/PageHeader.svelte';
 	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
 	import Icon from '$components/Icon.svelte';
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
 	import { reveal } from '$lib/actions/reveal';
+	import { api } from '$stores/api';
 	import {
 		severityColor,
 		severityLabel,
@@ -13,285 +15,33 @@
 		avgTrustDelta as avgTrustDeltaFn,
 	} from '$components/contradiction-helpers';
 
-	// TODO: swap for /api/contradictions when backend ships.
-	// Expected shape matches the `Contradiction` interface in
-	// $components/ContradictionArcs.svelte. Backend should derive pairs from the
-	// contradiction-analysis step of deep_reference (only flag when BOTH memories
-	// have >0.3 FSRS trust).
-	const MOCK_CONTRADICTIONS: Contradiction[] = [
-		{
-			memory_a_id: 'a1',
-			memory_b_id: 'b1',
-			memory_a_preview: 'Dev server runs on port 3000 (default Vite config)',
-			memory_b_preview: 'Dev server moved to port 3002 to avoid conflict',
-			memory_a_type: 'fact',
-			memory_b_type: 'decision',
-			memory_a_created: '2026-01-14',
-			memory_b_created: '2026-03-22',
-			memory_a_tags: ['dev', 'vite'],
-			memory_b_tags: ['dev', 'vite', 'decision'],
-			trust_a: 0.42,
-			trust_b: 0.91,
-			similarity: 0.88,
-			date_diff_days: 67,
-			topic: 'dev server port'
-		},
-		{
-			memory_a_id: 'a2',
-			memory_b_id: 'b2',
-			memory_a_preview: 'Prompt variation helps at higher sampling temperatures',
-			memory_b_preview: 'Prompt variation reduced accuracy in the latest benchmark run',
-			memory_a_type: 'concept',
-			memory_b_type: 'fact',
-			memory_a_created: '2026-03-30',
-			memory_b_created: '2026-04-03',
-			memory_a_tags: ['research', 'prompting'],
-			memory_b_tags: ['research', 'prompting', 'evidence'],
-			trust_a: 0.35,
-			trust_b: 0.88,
-			similarity: 0.92,
-			date_diff_days: 4,
-			topic: 'prompt diversity'
-		},
-		{
-			memory_a_id: 'a3',
-			memory_b_id: 'b3',
-			memory_a_preview: 'Use min_p=0.05 for long-form sampling',
-			memory_b_preview: 'min_p scheduling failed at high sampling temperatures',
-			memory_a_type: 'pattern',
-			memory_b_type: 'fact',
-			memory_a_created: '2026-04-01',
-			memory_b_created: '2026-04-05',
-			memory_a_tags: ['sampling'],
-			memory_b_tags: ['sampling'],
-			trust_a: 0.58,
-			trust_b: 0.74,
-			similarity: 0.81,
-			date_diff_days: 4,
-			topic: 'min_p sampling'
-		},
-		{
-			memory_a_id: 'a4',
-			memory_b_id: 'b4',
-			memory_a_preview: 'LoRA rank 16 is enough for domain adaptation',
-			memory_b_preview: 'LoRA rank 32 consistently outperforms rank 16 on math',
-			memory_a_type: 'concept',
-			memory_b_type: 'fact',
-			memory_a_created: '2026-02-10',
-			memory_b_created: '2026-04-12',
-			memory_a_tags: ['lora', 'training'],
-			memory_b_tags: ['lora', 'training', 'nemotron'],
-			trust_a: 0.48,
-			trust_b: 0.76,
-			similarity: 0.74,
-			date_diff_days: 61,
-			topic: 'LoRA rank'
-		},
-		{
-			memory_a_id: 'a5',
-			memory_b_id: 'b5',
-			memory_a_preview: 'Team prefers Rust for backend services',
-			memory_b_preview: 'Project chose Axum + Rust for the dashboard backend',
-			memory_a_type: 'note',
-			memory_b_type: 'decision',
-			memory_a_created: '2026-01-05',
-			memory_b_created: '2026-02-18',
-			memory_a_tags: ['preference', 'backend'],
-			memory_b_tags: ['backend', 'decision'],
-			trust_a: 0.81,
-			trust_b: 0.88,
-			similarity: 0.42,
-			date_diff_days: 44,
-			topic: 'backend language'
-		},
-		{
-			memory_a_id: 'a6',
-			memory_b_id: 'b6',
-			memory_a_preview: 'Warm-start from checkpoint saves 8h of training',
-			memory_b_preview: 'Warm-start code never loaded the PEFT adapter correctly',
-			memory_a_type: 'pattern',
-			memory_b_type: 'fact',
-			memory_a_created: '2026-03-11',
-			memory_b_created: '2026-04-16',
-			memory_a_tags: ['training', 'warm-start'],
-			memory_b_tags: ['training', 'warm-start', 'bug-fix'],
-			trust_a: 0.55,
-			trust_b: 0.93,
-			similarity: 0.79,
-			date_diff_days: 36,
-			topic: 'warm-start correctness'
-		},
-		{
-			memory_a_id: 'a7',
-			memory_b_id: 'b7',
-			memory_a_preview: 'Three.js force-directed graph runs fine at 5k nodes',
-			memory_b_preview: 'WebGL graph stutters above 2k nodes on M1 MacBook Air',
-			memory_a_type: 'fact',
-			memory_b_type: 'fact',
-			memory_a_created: '2025-12-02',
-			memory_b_created: '2026-03-29',
-			memory_a_tags: ['vestige', 'graph', 'perf'],
-			memory_b_tags: ['vestige', 'graph', 'perf'],
-			trust_a: 0.39,
-			trust_b: 0.72,
-			similarity: 0.67,
-			date_diff_days: 117,
-			topic: 'graph performance'
-		},
-		{
-			memory_a_id: 'a8',
-			memory_b_id: 'b8',
-			memory_a_preview: 'Submit benchmark runs with a 16384 token budget',
-			memory_b_preview: 'Latest baseline improved when token budget increased to 32768',
-			memory_a_type: 'pattern',
-			memory_b_type: 'event',
-			memory_a_created: '2026-04-04',
-			memory_b_created: '2026-04-10',
-			memory_a_tags: ['benchmark', 'tokens'],
-			memory_b_tags: ['benchmark', 'baseline'],
-			trust_a: 0.31,
-			trust_b: 0.85,
-			similarity: 0.73,
-			date_diff_days: 6,
-			topic: 'token budget'
-		},
-		{
-			memory_a_id: 'a9',
-			memory_b_id: 'b9',
-			memory_a_preview: 'FSRS-6 parameters require ~1k reviews to train',
-			memory_b_preview: 'FSRS-6 default parameters work fine out of the box',
-			memory_a_type: 'concept',
-			memory_b_type: 'concept',
-			memory_a_created: '2026-01-22',
-			memory_b_created: '2026-02-28',
-			memory_a_tags: ['fsrs', 'training'],
-			memory_b_tags: ['fsrs'],
-			trust_a: 0.62,
-			trust_b: 0.54,
-			similarity: 0.57,
-			date_diff_days: 37,
-			topic: 'FSRS parameter tuning'
-		},
-		{
-			memory_a_id: 'a10',
-			memory_b_id: 'b10',
-			memory_a_preview: 'Tailwind 4 requires explicit CSS import only',
-			memory_b_preview: 'Tailwind 4 config still supports tailwind.config.js',
-			memory_a_type: 'fact',
-			memory_b_type: 'fact',
-			memory_a_created: '2026-01-30',
-			memory_b_created: '2026-02-14',
-			memory_a_tags: ['tailwind', 'config'],
-			memory_b_tags: ['tailwind', 'config'],
-			trust_a: 0.47,
-			trust_b: 0.33,
-			similarity: 0.85,
-			date_diff_days: 15,
-			topic: 'Tailwind 4 config'
-		},
-		{
-			memory_a_id: 'a11',
-			memory_b_id: 'b11',
-			memory_a_preview: 'Dataset API silently ignores invalid source slugs',
-			memory_b_preview: 'Dataset API throws an error when source slug is invalid',
-			memory_a_type: 'fact',
-			memory_b_type: 'concept',
-			memory_a_created: '2026-04-07',
-			memory_b_created: '2026-02-20',
-			memory_a_tags: ['api', 'bug-fix'],
-			memory_b_tags: ['api'],
-			trust_a: 0.89,
-			trust_b: 0.28,
-			similarity: 0.91,
-			date_diff_days: 46,
-			topic: 'API validation'
-		},
-		{
-			memory_a_id: 'a12',
-			memory_b_id: 'b12',
-			memory_a_preview: 'USearch HNSW is 20x faster than FAISS for embeddings',
-			memory_b_preview: 'FAISS IVF is the fastest vector index at scale',
-			memory_a_type: 'fact',
-			memory_b_type: 'concept',
-			memory_a_created: '2026-02-01',
-			memory_b_created: '2025-11-15',
-			memory_a_tags: ['vectors', 'perf'],
-			memory_b_tags: ['vectors', 'perf'],
-			trust_a: 0.78,
-			trust_b: 0.36,
-			similarity: 0.69,
-			date_diff_days: 78,
-			topic: 'vector index perf'
-		},
-		{
-			memory_a_id: 'a13',
-			memory_b_id: 'b13',
-			memory_a_preview: 'Leaderboard scores weight by top-10 consistency',
-			memory_b_preview: 'Leaderboard uses single-best-episode scoring',
-			memory_a_type: 'fact',
-			memory_b_type: 'fact',
-			memory_a_created: '2026-04-18',
-			memory_b_created: '2026-04-10',
-			memory_a_tags: ['leaderboard', 'scoring'],
-			memory_b_tags: ['leaderboard', 'scoring'],
-			trust_a: 0.64,
-			trust_b: 0.52,
-			similarity: 0.82,
-			date_diff_days: 8,
-			topic: 'leaderboard scoring'
-		},
-		{
-			memory_a_id: 'a14',
-			memory_b_id: 'b14',
-			memory_a_preview: 'Release notes were planned for 8am ET',
-			memory_b_preview: 'Release notes moved to 9am ET after schedule review',
-			memory_a_type: 'decision',
-			memory_b_type: 'decision',
-			memory_a_created: '2026-03-01',
-			memory_b_created: '2026-04-15',
-			memory_a_tags: ['cadence', 'content'],
-			memory_b_tags: ['cadence', 'content'],
-			trust_a: 0.50,
-			trust_b: 0.81,
-			similarity: 0.58,
-			date_diff_days: 45,
-			topic: 'posting cadence'
-		},
-		{
-			memory_a_id: 'a15',
-			memory_b_id: 'b15',
-			memory_a_preview: 'Dream cycle consolidates ~50 memories per run',
-			memory_b_preview: 'Dream cycle replays closer to 120 memories in practice',
-			memory_a_type: 'fact',
-			memory_b_type: 'fact',
-			memory_a_created: '2026-02-15',
-			memory_b_created: '2026-04-08',
-			memory_a_tags: ['vestige', 'dream'],
-			memory_b_tags: ['vestige', 'dream'],
-			trust_a: 0.44,
-			trust_b: 0.79,
-			similarity: 0.76,
-			date_diff_days: 52,
-			topic: 'dream cycle count'
-		},
-		{
-			memory_a_id: 'a16',
-			memory_b_id: 'b16',
-			memory_a_preview: 'Never commit API keys to git; use .env files',
-			memory_b_preview: 'Environment secrets should live in a 1Password vault',
-			memory_a_type: 'pattern',
-			memory_b_type: 'pattern',
-			memory_a_created: '2025-10-11',
-			memory_b_created: '2026-03-20',
-			memory_a_tags: ['security', 'secrets'],
-			memory_b_tags: ['security', 'secrets'],
-			trust_a: 0.72,
-			trust_b: 0.64,
-			similarity: 0.48,
-			date_diff_days: 160,
-			topic: 'secret storage'
+	// Live pairs from /api/contradictions — the contradiction-analysis
+	// primitives behind deep_reference (only flagged when BOTH memories clear
+	// the trust floor). Sorted by similarity desc by the backend.
+	let contradictions = $state<Contradiction[]>([]);
+	// System-wide count from the backend, vs. the derived stats below which
+	// reflect only the pairs the page holds.
+	let totalDetected = $state(0);
+	let loading = $state(true);
+	let error = $state<string | null>(null);
+
+	async function load() {
+		loading = true;
+		error = null;
+		try {
+			const res = await api.contradictions();
+			contradictions = res.contradictions;
+			totalDetected = res.total;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to load contradictions';
+			contradictions = [];
+			totalDetected = 0;
+		} finally {
+			loading = false;
 		}
-	];
+	}
+
+	onMount(() => load());
 
 	// --- Filters ---
 	type Filter = 'all' | 'recent' | 'high-trust' | 'topic';
@@ -299,7 +49,7 @@
 	let topicFilter = $state<string>('');
 
 	const uniqueTopics = $derived(
-		Array.from(new Set(MOCK_CONTRADICTIONS.map((c) => c.topic))).sort()
+		Array.from(new Set(contradictions.map((c) => c.topic))).sort()
 	);
 
 	// --- Clear, labelled dropdown options replace the bare filter buttons +
@@ -317,7 +67,7 @@
 		...uniqueTopics.map((t) => ({
 			value: t,
 			label: t,
-			badge: MOCK_CONTRADICTIONS.filter((c) => c.topic === t).length,
+			badge: contradictions.filter((c) => c.topic === t).length,
 		})),
 	]);
 
@@ -332,30 +82,28 @@
 	const filtered = $derived.by<Contradiction[]>(() => {
 		switch (filter) {
 			case 'recent':
-				// Within 7 days of "now" — use date_diff as a proxy by keeping pairs
-				// where either memory was created within the last 7 days of our fixed
-				// mock "today" (2026-04-20). Simple approach: keep pairs whose newest
-				// created date is within 7 days of 2026-04-20.
+				// Within 7 days of now — keep pairs whose newest created date is
+				// within the last week.
 				{
-					const now = new Date('2026-04-20').getTime();
+					const now = Date.now();
 					const week = 7 * 24 * 60 * 60 * 1000;
-					return MOCK_CONTRADICTIONS.filter((c) => {
+					return contradictions.filter((c) => {
 						const aT = c.memory_a_created ? new Date(c.memory_a_created).getTime() : 0;
 						const bT = c.memory_b_created ? new Date(c.memory_b_created).getTime() : 0;
 						return now - Math.max(aT, bT) <= week;
 					});
 				}
 			case 'high-trust':
-				return MOCK_CONTRADICTIONS.filter(
+				return contradictions.filter(
 					(c) => Math.min(c.trust_a, c.trust_b) > 0.6
 				);
 			case 'topic':
 				return topicFilter
-					? MOCK_CONTRADICTIONS.filter((c) => c.topic === topicFilter)
-					: MOCK_CONTRADICTIONS;
+					? contradictions.filter((c) => c.topic === topicFilter)
+					: contradictions;
 			case 'all':
 			default:
-				return MOCK_CONTRADICTIONS;
+				return contradictions;
 		}
 	});
 
@@ -366,18 +114,16 @@
 		focusedPairIndex = i;
 	}
 
-	// --- Stats. `TOTAL_CONTRADICTIONS_DETECTED` stays illustrative so the tile
-	// reads like a system-wide count once the backend ships; everything else
-	// is derived from the pairs the page actually holds so the numbers are
+	// --- Stats. `totalDetected` is the backend's system-wide count; everything
+	// else is derived from the pairs the page actually holds so the numbers are
 	// self-consistent with what the user sees. ---
-	const TOTAL_CONTRADICTIONS_DETECTED = 47;
-	const totalMemoriesInvolved = $derived(uniqueMemoryCount(MOCK_CONTRADICTIONS));
-	const avgTrustDelta = $derived(avgTrustDeltaFn(MOCK_CONTRADICTIONS));
+	const totalMemoriesInvolved = $derived(uniqueMemoryCount(contradictions));
+	const avgTrustDelta = $derived(avgTrustDeltaFn(contradictions));
 
-	// Map filtered index -> original index in MOCK_CONTRADICTIONS so the
+	// Map filtered index -> original index in `contradictions` so the
 	// constellation and sidebar stay in sync regardless of which filter is on.
 	const visibleList = $derived.by<{ orig: number; c: Contradiction }[]>(() => {
-		const byId = new Map(MOCK_CONTRADICTIONS.map((c, i) => [c.memory_a_id + '|' + c.memory_b_id, i]));
+		const byId = new Map(contradictions.map((c, i) => [c.memory_a_id + '|' + c.memory_b_id, i]));
 		return filtered.map((c) => ({
 			orig: byId.get(c.memory_a_id + '|' + c.memory_b_id) ?? 0,
 			c
@@ -404,11 +150,48 @@
 		</span>
 	</PageHeader>
 
+	{#if error}
+		<div class="glass-panel flex flex-col items-center gap-3 rounded-2xl p-10 text-center">
+			<div class="text-sm text-decay">Couldn't load contradictions</div>
+			<div class="max-w-md text-xs text-muted">{error}</div>
+			<button
+				type="button"
+				onclick={load}
+				class="mt-2 rounded-lg bg-synapse/20 px-4 py-2 text-xs font-medium text-synapse-glow transition hover:bg-synapse/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60"
+			>
+				Retry
+			</button>
+		</div>
+	{:else if loading}
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+			{#each Array(4) as _}
+				<div class="glass-subtle shimmer h-20 rounded-xl"></div>
+			{/each}
+		</div>
+		<div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4">
+			<div class="glass-subtle shimmer min-h-[520px] rounded-2xl"></div>
+			<div class="glass-subtle shimmer h-[520px] rounded-2xl"></div>
+		</div>
+	{:else if contradictions.length === 0}
+		<div class="glass-panel enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center">
+			<div
+				class="flex h-14 w-14 items-center justify-center rounded-2xl border border-recall/25 bg-recall/10 text-recall"
+			>
+				<Icon name="sparkle" size={26} draw />
+			</div>
+			<div class="text-sm font-medium text-bright">
+				No contradictions found — your memory agrees with itself.
+			</div>
+			<div class="max-w-sm text-xs text-muted">
+				Pairs appear here when two trusted memories about the same topic make opposing claims.
+			</div>
+		</div>
+	{:else}
 	<!-- Stats bar -->
 	<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
 		<div use:reveal={{ delay: 0, y: 12 }} class="p-4 glass rounded-xl lift">
 			<div class="text-2xl text-bright font-bold tabular-nums">
-				<AnimatedNumber value={TOTAL_CONTRADICTIONS_DETECTED} />
+				<AnimatedNumber value={totalDetected} />
 			</div>
 			<div class="text-xs text-dim mt-1">
 				contradictions across {totalMemoriesInvolved.toLocaleString()} memories
@@ -572,4 +355,5 @@
 			{/each}
 		</aside>
 	</div>
+	{/if}
 </div>

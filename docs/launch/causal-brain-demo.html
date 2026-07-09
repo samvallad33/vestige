@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vestige — causal brain demo</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; background:#05060a; overflow:hidden; }
+  #stage { position:fixed; inset:0; }
+  canvas { display:block; width:100%; height:100%; }
+  .layer { position:fixed; inset:0; pointer-events:none; }
+  .cap {
+    position:fixed; left:0; right:0; bottom:8.5%;
+    text-align:center; font:500 clamp(15px,2.4vw,26px)/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    letter-spacing:.01em; color:#cfe9ff; opacity:0; transition:opacity .5s ease;
+    text-shadow:0 0 24px rgba(30,180,255,.35); padding:0 6%;
+  }
+  .cap.mono { font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace; font-size:clamp(13px,1.9vw,20px); }
+  .verdict {
+    position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); text-align:center; opacity:0;
+    transition:opacity .6s ease; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    padding:clamp(18px,3vw,40px) clamp(28px,6vw,80px); border-radius:20px;
+    background:radial-gradient(ellipse at center, rgba(5,7,14,.86) 0%, rgba(5,7,14,.72) 60%, rgba(5,7,14,0) 100%);
+  }
+  .verdict .k { font-size:clamp(13px,1.8vw,18px); color:#9fd0e4; letter-spacing:.16em; text-transform:uppercase; }
+  .verdict .v { font-size:clamp(32px,6.4vw,72px); font-weight:600; margin-top:.12em; line-height:1.05;
+    background:linear-gradient(90deg,#7fe6c0,#6ef0e6,#a6dcff); -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter:drop-shadow(0 0 26px rgba(110,240,220,.45)); }
+  .verdict .s { font-size:clamp(11px,1.5vw,15px); color:#8fb0be; margin-top:.6em; font-family:"SF Mono",ui-monospace,monospace; letter-spacing:.04em; }
+  .wordmark { position:fixed; left:5%; bottom:6%; font:600 clamp(16px,2.2vw,24px)/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    letter-spacing:.28em; color:#5dcaa5; opacity:0; transition:opacity .8s ease; text-shadow:0 0 20px rgba(93,202,165,.4); }
+  .replay { position:fixed; right:16px; bottom:14px; font:400 13px/1 -apple-system,sans-serif; color:#7c8a97;
+    background:rgba(255,255,255,.04); border:.5px solid rgba(255,255,255,.14); border-radius:8px; padding:6px 12px; cursor:pointer; pointer-events:auto; }
+  .replay:hover { background:rgba(255,255,255,.08); color:#cfe9ff; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c"></canvas></div>
+<div class="layer">
+  <div class="cap mono" id="cap"></div>
+  <div class="verdict" id="verdict">
+    <div class="k">root-cause recall@1</div>
+    <div class="v">Vestige 60% &middot; vector search 0%</div>
+    <div class="s">on CauseBench &middot; reproducible</div>
+  </div>
+  <div class="wordmark" id="wordmark">VESTIGE</div>
+</div>
+<button class="replay" id="replay">replay</button>
+
+<script>
+(function(){
+  const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  const cap = document.getElementById('cap'), verdict = document.getElementById('verdict');
+  const wordmark = document.getElementById('wordmark');
+  let W, H, DPR;
+  function viewport(){
+    const w = window.innerWidth || document.documentElement.clientWidth || document.getElementById('stage').clientWidth || 1280;
+    const h = window.innerHeight || document.documentElement.clientHeight || document.getElementById('stage').clientHeight || 720;
+    return { w: Math.max(w, 320), h: Math.max(h, 240) };
+  }
+  function resize(){
+    DPR = Math.min(devicePixelRatio||1, 2);
+    const { w, h } = viewport();
+    W = cv.width = w*DPR; H = cv.height = h*DPR;
+    cv.style.width = w+'px'; cv.style.height = h+'px';
+  }
+  function reflow(){ resize(); if(typeof seedBrain==='function'){ seedBrain(); placeActors(); } }
+  resize(); addEventListener('resize', reflow);
+  if(window.ResizeObserver){ let first=true; new ResizeObserver(()=>{ if(first){first=false;return;} reflow(); }).observe(document.getElementById('stage')); }
+
+  // ---- iridescent thin-film palette: indigo -> teal -> cyan -> magenta rim ----
+  // hand-tuned so the CORE reads indigo/teal (living tissue) and motion shifts it
+  // toward cyan/magenta, never muddy orange. w in [0,1].
+  function spectral(w){
+    w = ((w%1)+1)%1;
+    // 4 anchor colors around the film band, catmull-ish blend
+    const stops = [
+      [0.20,0.28,0.95],  // indigo
+      [0.20,0.85,0.90],  // cyan-teal
+      [0.45,1.00,0.72],  // mint
+      [0.85,0.45,1.00],  // magenta rim
+    ];
+    const f = w*stops.length, i = Math.floor(f)%stops.length, frac = f-Math.floor(f);
+    const a = stops[i], b = stops[(i+1)%stops.length];
+    return [ a[0]+(b[0]-a[0])*frac, a[1]+(b[1]-a[1])*frac, a[2]+(b[2]-a[2])*frac ];
+  }
+
+  // ---- brain point cloud: two overlapping lobes, denser near centre ----
+  const N = 4200;
+  const pts = [];
+  function seedBrain(){
+    pts.length = 0;
+    const cx = W*0.5, cy = H*0.55, s = Math.min(W,H)*0.30;
+    for(let i=0;i<N;i++){
+      // pick a lobe (clear left/right hemispheres)
+      const lobe = Math.random()<0.5 ? -1 : 1;
+      const r = Math.pow(Math.random(), 0.5); // center-weighted -> dense core
+      const a = Math.random()*Math.PI*2;
+      const ex = 0.62, ey = 0.98;
+      let x = Math.cos(a)*r*ex, y = Math.sin(a)*r*ey;
+      x += lobe*0.40; // hemisphere split
+      // pinch the top (frontal) and round the base so silhouette reads as a brain
+      y *= (1.0 - 0.18*Math.max(0,-y));
+      // sulci wrinkle
+      const wob = 0.06*Math.sin(6*x)*Math.sin(5*y);
+      const px = cx + (x+wob)*s, py = cy + (y+wob)*s;
+      pts.push({
+        hx:px, hy:py,          // brain-home
+        x:px + (Math.random()-0.5)*60, y:py + (Math.random()-0.5)*60,
+        vx:0, vy:0,
+        // base hue biased toward the indigo->teal core of the palette
+        base:0.02+Math.random()*0.42,
+        life:Math.random(),
+        r:0.8+Math.random()*1.6,
+        ignite:0,               // 0..1 activation glow
+      });
+    }
+  }
+  seedBrain(); addEventListener('resize', seedBrain);
+
+  // ---- named actors (screen positions in brain space) ----
+  function homeAt(fx, fy){ // fractional brain coords -> nearest cloud point
+    const cx=W*0.5, cy=H*0.55, s=Math.min(W,H)*0.30;
+    return { x: cx+fx*s, y: cy+fy*s };
+  }
+  let actors = {};
+  function placeActors(){
+    actors = {
+      cause:  homeAt(-0.92, 0.35),   // deep left lobe, dormant
+      conf1:  homeAt(-0.10,-0.45),
+      conf2:  homeAt( 0.30, 0.55),
+      fail:   homeAt( 0.92,-0.10),   // deep right, the symptom
+    };
+  }
+  placeActors(); addEventListener('resize', placeActors);
+
+  // ---- animation clock / beats ----
+  let t0 = performance.now();
+  const DUR = 15000;
+  let arrow = 0;        // 0..1 backward-trace progress
+  let failFlare = 0, vecStall = 0, causeGlow = 0;
+
+  function setCap(s, mono){ cap.textContent = s; cap.className = 'cap'+(mono?' mono':''); cap.style.opacity = s? 1:0; }
+
+  function schedule(el){ el.style.opacity = 1; }
+  function reset(){
+    t0 = performance.now(); arrow=0; failFlare=0; vecStall=0; causeGlow=0;
+    verdict.style.opacity=0; wordmark.style.opacity=0; setCap('');
+    seedBrain();
+  }
+  document.getElementById('replay').addEventListener('click', reset);
+
+  // ---- draw a soft additive glow blob ----
+  function glow(x,y,rad,col,alpha){
+    const g = ctx.createRadialGradient(x,y,0,x,y,rad);
+    g.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},${alpha})`);
+    g.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0)`);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x,y,rad,0,Math.PI*2); ctx.fill();
+  }
+
+  function frame(now){
+    const t = (now - t0);
+    if(t > DUR){ reset(); requestAnimationFrame(frame); return; }
+    const pulse = 0.5 + 0.5*Math.sin(now*0.002); // ~0.32Hz breath
+
+    // ---- beat logic ----
+    // 0.0-1.5s brain forms + settles; failure fades in ~0.3s
+    // 4.0-6.5s vector search stalls on confounders
+    // 6.5-10.5s backward trace fires
+    // 10.5-13s verdict
+    // 13-15s signature
+    failFlare = t>300 ? Math.min(1,(t-300)/700) : 0;
+    if(t>4000 && t<6500){ vecStall = Math.min(1,(t-4000)/600); setCap('vector search: finds what looks like the bug', true); }
+    if(t>=1500 && t<4000){ setCap('your agent’s bug, today →', true); }
+    if(t>=6500 && t<10500){
+      arrow = Math.min(1,(t-6500)/3400);
+      vecStall = Math.max(0, vecStall-0.02);
+      setCap('Vestige reaches back to what caused it', true);
+    }
+    if(t>=9200){ causeGlow = Math.min(1,(t-9200)/900); }
+    if(t>=10500 && t<13000){ setCap(''); verdict.style.opacity=1; }
+    if(t>=13000){ wordmark.style.opacity=1; setCap('memory that finds the cause, not the resemblance', false); }
+
+    // field recedes behind the verdict so the headline is the focus
+    let fieldDim = 1;
+    if(t>=10200 && t<13000) fieldDim = 0.34;
+    else if(t>=13000) fieldDim = 0.7;
+
+    // ---- render ----
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(5,6,10,0.30)'; // trails / motion blur
+    ctx.fillRect(0,0,W,H);
+    ctx.globalCompositeOperation = 'lighter';
+
+    const formT = Math.min(1, t/1400);
+    // update + draw particles
+    for(let i=0;i<pts.length;i++){
+      const p = pts[i];
+      // spring to brain-home + gentle curl-ish drift
+      const k = 0.02*formT;
+      p.vx += (p.hx-p.x)*k; p.vy += (p.hy-p.y)*k;
+      const ca = now*0.0006 + i*0.3;
+      p.vx += Math.cos(ca+p.hy*0.01)*0.06; p.vy += Math.sin(ca+p.hx*0.01)*0.06;
+      // breathing: tighten toward center on systole
+      p.vx *= 0.90; p.vy *= 0.90;
+      p.x += p.vx; p.y += p.vy;
+
+      // ignition decays
+      p.ignite *= 0.94;
+
+      // hue: base + velocity-driven film shift + breath
+      const speed = Math.hypot(p.vx,p.vy);
+      let w = p.base + Math.min(speed*0.05,0.25) + 0.05*pulse + p.ignite*0.35;
+      const col = spectral(w);
+      // brighter, luminous tissue — floor keeps it from muddy, scale keeps it vivid
+      let R = 30+col[0]*225, G = 40+col[1]*215, B = 90+col[2]*165;
+      let a = (0.09 + 0.16*formT + p.ignite*0.7) * fieldDim;
+      const rad = p.r*DPR*(0.85 + p.ignite*3);
+      glow(p.x, p.y, rad*3.4, [R|0,G|0,B|0], a*0.45);
+      ctx.fillStyle = `rgba(${R|0},${G|0},${B|0},${Math.min(1,a*1.9)})`;
+      ctx.beginPath(); ctx.arc(p.x,p.y,rad,0,Math.PI*2); ctx.fill();
+    }
+
+    // ---- failure flare (red) ----
+    if(failFlare>0){
+      const shake = failFlare<1 ? (Math.random()-0.5)*4*DPR : 0;
+      glow(actors.fail.x+shake, actors.fail.y, 70*DPR*(0.7+0.3*pulse), [230,70,70], 0.5*failFlare);
+      glow(actors.fail.x+shake, actors.fail.y, 24*DPR, [255,180,170], 0.8*failFlare);
+    }
+
+    // ---- vector search: gray beams to confounders, then a fail cross ----
+    if(vecStall>0){
+      ctx.strokeStyle = `rgba(150,150,150,${0.5*vecStall})`;
+      ctx.lineWidth = 1.2*DPR; ctx.setLineDash([5*DPR,4*DPR]);
+      [actors.conf1, actors.conf2].forEach(c=>{
+        ctx.beginPath(); ctx.moveTo(actors.fail.x,actors.fail.y); ctx.lineTo(c.x,c.y); ctx.stroke();
+      });
+      ctx.setLineDash([]);
+      // faint pulses on the confounders it wrongly surfaces
+      [actors.conf1, actors.conf2].forEach(c=> glow(c.x,c.y,26*DPR,[150,150,150],0.25*vecStall));
+    }
+
+    // ---- the backward-trace arrow: bright iridescent light travelling fail -> cause ----
+    if(arrow>0){
+      const ax = actors.fail.x + (actors.cause.x-actors.fail.x)*arrow;
+      const ay = actors.fail.y + (actors.cause.y-actors.fail.y)*arrow
+                 + Math.sin(arrow*Math.PI)* -60*DPR; // arc up through the cortex
+      // trailing comet
+      for(let s=0;s<14;s++){
+        const tt = Math.max(0, arrow - s*0.02);
+        const tx = actors.fail.x + (actors.cause.x-actors.fail.x)*tt;
+        const ty = actors.fail.y + (actors.cause.y-actors.fail.y)*tt + Math.sin(tt*Math.PI)*-60*DPR;
+        glow(tx,ty, (10-s*0.5)*DPR, [90,230,210], 0.22*(1-s/14));
+      }
+      glow(ax,ay, 16*DPR, [140,245,255], 0.9);
+      glow(ax,ay, 40*DPR, [90,220,255], 0.4);
+      // ignite nearby particles as it passes (propagating thought)
+      for(let i=0;i<pts.length;i++){
+        const p=pts[i]; const d=Math.hypot(p.x-ax,p.y-ay);
+        if(d < 55*DPR) p.ignite = Math.min(1, p.ignite + (1-d/(55*DPR))*0.5);
+      }
+    }
+
+    // ---- cause neuron ignites ----
+    if(causeGlow>0){
+      glow(actors.cause.x, actors.cause.y, 80*DPR*(0.7+0.3*pulse), [93,230,180], 0.55*causeGlow);
+      glow(actors.cause.x, actors.cause.y, 26*DPR, [180,255,220], 0.9*causeGlow);
+      // ripple ring
+      const rr = (1-((t-9200)%1400/1400))*90*DPR;
+      ctx.strokeStyle = `rgba(93,230,180,${0.4*causeGlow})`; ctx.lineWidth=2*DPR;
+      ctx.beginPath(); ctx.arc(actors.cause.x,actors.cause.y, 90*DPR-rr, 0, Math.PI*2); ctx.stroke();
+    }
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
