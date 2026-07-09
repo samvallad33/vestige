@@ -188,8 +188,10 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             .unwrap_or_default();
         let mut did_promote = false;
         if promote {
-            // promote_memory boosts retrieval strength + reps (the FSRS promote knob)
-            did_promote = storage.promote_memory(&cause.memory_id).is_ok();
+            // promote_memory_backfill boosts retrieval strength + reps (the FSRS
+            // promote knob) with a bounded stability multiply — shared with the
+            // step-8.5 auto-fire path (omega-backfill-safety patch, pending upstream).
+            did_promote = storage.promote_memory_backfill(&cause.memory_id).is_ok();
         }
         promoted.push(json!({
             "memory_id": cause.memory_id,

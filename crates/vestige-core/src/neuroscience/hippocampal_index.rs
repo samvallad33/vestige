@@ -1146,7 +1146,14 @@ impl ContentStore {
                 }
             }
 
-            cache.insert(key.to_string(), data.to_vec());
+            // insert() returns the previous value when the key already existed;
+            // subtract its size so the counter reflects a REPLACE, not an ADD.
+            // Without this the counter drifts monotonically upward on every
+            // overwrite and evicts far too aggressively.
+            let replaced = cache.insert(key.to_string(), data.to_vec());
+            if let Some(old) = replaced {
+                *size = size.saturating_sub(old.len());
+            }
             *size += data_size;
         }
     }
@@ -1292,6 +1299,13 @@ impl HippocampalIndex {
     }
 
     /// Index a new memory
+    ///
+    /// If `memory_id` is already indexed (a smart_ingest update/reinforce/replace
+    /// re-indexes the same node), the existing entry's barcode, association links,
+    /// and access history are PRESERVED — only the content-derived fields (preview,
+    /// semantic summary) are refreshed. Previously this always minted a new barcode
+    /// and inserted a fresh `MemoryIndex`, silently dropping every accumulated
+    /// association and the node's history on each re-index.
     pub fn index_memory(
         &self,
         memory_id: &str,
@@ -1300,7 +1314,27 @@ impl HippocampalIndex {
         created_at: DateTime<Utc>,
         semantic_embedding: Option<Vec<f32>>,
     ) -> Result<MemoryBarcode> {
-        // Generate barcode
+        let preview: String = content.chars().take(100).collect();
+        let new_summary = semantic_embedding
+            .as_ref()
+            .map(|e| self.compress_embedding(e));
+
+        // Re-index path: refresh content fields in place, keep barcode + links.
+        {
+            let mut indices = self
+                .indices
+                .write()
+                .map_err(|e| HippocampalIndexError::LockError(e.to_string()))?;
+            if let Some(existing) = indices.get_mut(memory_id) {
+                existing.preview = preview;
+                if let Some(summary) = new_summary {
+                    existing.semantic_summary = summary;
+                }
+                return Ok(existing.barcode);
+            }
+        }
+
+        // First-time index: mint a barcode and create a fresh entry.
         let barcode = {
             let mut generator = self
                 .barcode_generator
@@ -1309,10 +1343,6 @@ impl HippocampalIndex {
             generator.generate(content, created_at)
         };
 
-        // Create preview
-        let preview: String = content.chars().take(100).collect();
-
-        // Create index entry
         let mut index = MemoryIndex::new(
             barcode,
             memory_id.to_string(),
@@ -1321,9 +1351,7 @@ impl HippocampalIndex {
             preview,
         );
 
-        // Compress embedding if provided
-        if let Some(embedding) = semantic_embedding {
-            let summary = self.compress_embedding(&embedding);
+        if let Some(summary) = new_summary {
             index.semantic_summary = summary;
         }
 

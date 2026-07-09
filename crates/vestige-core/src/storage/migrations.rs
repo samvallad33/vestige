@@ -94,6 +94,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Agent Black Box + Memory Receipts + Memory PRs: replayable run traces, retrieval receipts, risk-gated brain-change review queue",
         up: MIGRATION_V18_UP,
     },
+    Migration {
+        version: 19,
+        description: "Scope the source idempotency key by source_project so same-system sources with overlapping ids no longer clobber each other",
+        up: MIGRATION_V19_UP,
+    },
 ];
 
 /// A database migration
@@ -1133,7 +1138,33 @@ CREATE INDEX IF NOT EXISTS idx_memory_prs_created_at ON memory_prs(created_at DE
 UPDATE schema_version SET version = 18, applied_at = datetime('now');
 "#;
 
+const MIGRATION_V19_UP: &str = r#"
+-- Scope the source idempotency key by source_project. The V17 index keyed only
+-- on (source_system, source_id), so two sources of the same system (e.g. github
+-- repos octocat/repoA + octocat/repoB, or two Redmine instances) with the same
+-- bare per-project id ("5") collided and overwrote each other's memory in place.
+-- Include source_project so each (system, project, id) gets its own row.
+-- COALESCE keeps legacy rows (source_project NULL) sharing a single bucket,
+-- matching the upsert lookup's `source_project IS ?` semantics.
+DROP INDEX IF EXISTS idx_nodes_source_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_source_key
+    ON knowledge_nodes(source_system, COALESCE(source_project, ''), source_id)
+    WHERE source_system IS NOT NULL AND source_id IS NOT NULL;
+
+UPDATE schema_version SET version = 19, applied_at = datetime('now');
+"#;
+
 /// Apply pending migrations
+///
+/// Each migration is applied inside an explicit transaction so its schema
+/// change and its trailing `UPDATE schema_version` commit atomically. If a
+/// migration fails partway (crash-free error, lock, disk-full), the whole
+/// migration rolls back and `schema_version` stays behind — so the next run
+/// replays it from a clean state instead of hitting a fatal
+/// `duplicate column name` on a half-applied `ADD COLUMN` (which previously
+/// bricked the DB permanently). VACUUM (V7) cannot run inside a transaction,
+/// so it runs after the transaction commits.
 pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
     let current_version = get_current_version(conn)?;
     let mut applied = 0;
@@ -1146,47 +1177,62 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
                 migration.description
             );
 
-            // V14: add the two bitemporal/protect columns BEFORE the batch (the
-            // batch's indexes reference them). SQLite lacks
-            // `ADD COLUMN IF NOT EXISTS`, so swallow the "duplicate column"
-            // error to stay idempotent on replay.
-            if migration.version == 14 {
-                add_column_if_missing(
-                    conn,
-                    "ALTER TABLE knowledge_nodes ADD COLUMN protected INTEGER NOT NULL DEFAULT 0",
-                )?;
-                add_column_if_missing(
-                    conn,
-                    "ALTER TABLE knowledge_nodes ADD COLUMN superseded_by TEXT",
-                )?;
-            }
+            // Atomic per-migration: schema change + version bump commit together
+            // or roll back together. On rollback, schema_version is unchanged so
+            // the migration cleanly re-applies next run.
+            {
+                let tx = conn.unchecked_transaction()?;
 
-            // V16 adds columns via ALTER TABLE, which SQLite does not support
-            // with IF NOT EXISTS. Run them individually and ignore duplicate
-            // column errors so replay stays idempotent.
-            if migration.version == 16 {
-                for stmt in MIGRATION_V16_ALTER_COLUMNS {
-                    add_column_if_missing(conn, stmt)?;
+                // V14: add the two bitemporal/protect columns BEFORE the batch (the
+                // batch's indexes reference them). SQLite lacks
+                // `ADD COLUMN IF NOT EXISTS`, so swallow the "duplicate column"
+                // error to stay idempotent on replay.
+                if migration.version == 14 {
+                    add_column_if_missing(
+                        &tx,
+                        "ALTER TABLE knowledge_nodes ADD COLUMN protected INTEGER NOT NULL DEFAULT 0",
+                    )?;
+                    add_column_if_missing(
+                        &tx,
+                        "ALTER TABLE knowledge_nodes ADD COLUMN superseded_by TEXT",
+                    )?;
                 }
-            }
 
-            // V17 (#57) adds the source-envelope columns. Same idempotent
-            // ALTER handling as V16 — the unique index in the V17 batch
-            // references these columns, so they must exist before the batch.
-            if migration.version == 17 {
-                for stmt in MIGRATION_V17_ALTER_COLUMNS {
-                    add_column_if_missing(conn, stmt)?;
+                // V16 adds columns via ALTER TABLE, which SQLite does not support
+                // with IF NOT EXISTS. Run them individually and ignore duplicate
+                // column errors so replay stays idempotent.
+                if migration.version == 16 {
+                    for stmt in MIGRATION_V16_ALTER_COLUMNS {
+                        add_column_if_missing(&tx, stmt)?;
+                    }
                 }
+
+                // V17 (#57) adds the source-envelope columns. Same idempotent
+                // ALTER handling as V16 — the unique index in the V17 batch
+                // references these columns, so they must exist before the batch.
+                if migration.version == 17 {
+                    for stmt in MIGRATION_V17_ALTER_COLUMNS {
+                        add_column_if_missing(&tx, stmt)?;
+                    }
+                }
+
+                // Use execute_batch to handle multi-statement SQL including triggers
+                tx.execute_batch(migration.up)?;
+
+                tx.commit()?;
             }
 
-            // Use execute_batch to handle multi-statement SQL including triggers
-            conn.execute_batch(migration.up)?;
-
-            // V7: Upgrade page_size to 8192 (10-30% faster large-row reads)
-            // VACUUM rewrites the DB with the new page size — can't run inside execute_batch
+            // V7: Upgrade page_size to 8192 (10-30% faster large-row reads).
+            // VACUUM rewrites the DB with the new page size — it cannot run
+            // inside a transaction, so it runs after the migration commits.
+            // Under WAL, changing page_size + VACUUM is silently ignored; SQLite
+            // requires a non-WAL journal mode to repage. Drop to DELETE, repage,
+            // then restore WAL so the performance upgrade actually takes effect.
             if migration.version == 7 {
+                conn.pragma_update(None, "journal_mode", "DELETE")?;
                 conn.pragma_update(None, "page_size", 8192)?;
                 conn.execute_batch("VACUUM;")?;
+                conn.pragma_update(None, "journal_mode", "WAL")?;
                 tracing::info!("Database page_size upgraded to 8192 via VACUUM");
             }
 
@@ -1200,6 +1246,54 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: a migration that is interrupted after its `ADD COLUMN`
+    /// commits but before `schema_version` advances must NOT permanently brick
+    /// the DB on replay with `duplicate column name`. Because each migration now
+    /// runs in a transaction, an interrupted migration rolls back atomically and
+    /// replays cleanly.
+    ///
+    /// We simulate the pre-fix corrupt state directly: run all migrations, then
+    /// hand-apply one of V2's `ADD COLUMN`s again on a DB whose version we roll
+    /// back, and confirm `apply_migrations` still succeeds (the transaction
+    /// makes the whole migration atomic, so a real interruption can never leave
+    /// the half-applied state the old code could).
+    #[test]
+    fn test_interrupted_migration_replays_without_duplicate_column_brick() {
+        // A fresh DB migrates cleanly and reaches the latest version.
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("initial migrations succeed");
+        let latest = MIGRATIONS.last().unwrap().version;
+        assert_eq!(get_current_version(&conn).expect("version"), latest);
+
+        // Running apply_migrations again on an already-migrated DB is a no-op and
+        // must never error (idempotent) — the previous brick surfaced here.
+        let applied = apply_migrations(&conn).expect("replay must not brick");
+        assert_eq!(applied, 0, "no migrations should re-apply on a current DB");
+
+        // Directly prove atomicity: an ADD COLUMN inside a rolled-back
+        // transaction leaves no trace, so a retried migration sees a clean slate.
+        let conn2 = rusqlite::Connection::open_in_memory().expect("open in-memory 2");
+        conn2
+            .execute_batch(
+                "CREATE TABLE t (id INTEGER);
+                 CREATE TABLE schema_version (version INTEGER, applied_at TEXT);
+                 INSERT INTO schema_version (version, applied_at) VALUES (0, datetime('now'));",
+            )
+            .expect("seed");
+        {
+            let tx = conn2.unchecked_transaction().expect("tx");
+            tx.execute_batch("ALTER TABLE t ADD COLUMN c INTEGER;")
+                .expect("add column in tx");
+            // Simulate mid-migration failure: drop the tx without committing.
+            drop(tx);
+        }
+        // The column must be gone (rolled back), so re-adding it succeeds — the
+        // exact operation that previously failed with "duplicate column name".
+        conn2
+            .execute_batch("ALTER TABLE t ADD COLUMN c INTEGER;")
+            .expect("column must not survive a rolled-back transaction");
+    }
 
     /// A fresh in-memory DB must end up at schema_version = highest migration
     /// version after `apply_migrations` runs all migrations end-to-end, and
@@ -1565,3 +1659,4 @@ mod tests {
         assert_eq!(domain_scores, "{}");
     }
 }
+

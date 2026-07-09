@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Auto-consolidation merge: opt-out lever + protected pins honored (#142)
+
+The background consolidation cycle's auto-dedup pass silently concat-merges
+near-duplicate memories (cosine ≥ 0.85): it keeps the strongest node, folds the
+weaker ones in as `[MERGED]` blocks, and **hard-deletes** the originals — with no
+reflog and no way to turn it off. Two fixes. First, it is now disableable: set
+`VESTIGE_AUTO_CONSOLIDATE_MERGE=0` (or `false`/`off`/`no`) to suppress it. It
+remains **on by default** (behavior unchanged), and the `dedup` MCP tool stays
+available for on-demand, previewable, reversible merges regardless. Second,
+**protected (pinned) memories are now excluded from this pass** — previously
+`dedup protect` did nothing here, so a pinned memory could be absorbed or deleted
+unattended, contradicting the interactive contract that a protected node may only
+survive a merge, never be absorbed. A protected node is now never an anchor, never
+a cluster member, and thus never merged into or deleted, whether the lever is on
+or off.
+
+## [2.2.1] - 2026-07-02 — "Windows embeddings + backfill safety"
+
+A focused patch release. Two fixes plus a first-run guide.
+
+### Fixed — Windows embeddings never initialized (#101)
+
+The `x86_64-pc-windows-msvc` v2.2.0 binary was built without the `vector-search`
+feature, so the storage layer's `#[cfg(feature = "vector-search")]` paths compiled
+out. On Windows this meant new memories got no embedding, semantic search returned
+nothing, `vestige health` reported "Embedding Service: Not Ready" (0% coverage),
+and no model download was ever attempted — while v2.1.23 worked on the same machine.
+The release build now includes `vector-search` on Windows (it compiles cleanly on
+MSVC because `usearch` is pinned with `features = ["fp16lib"]`). npm and direct
+downloads are fixed by the same rebuilt release asset. Thanks @Vrakoss for the
+precise report.
+
+### Fixed — Retroactive Salience Backfill: bounded promote + opt-out lever (#103)
+
+The consolidation-pass backfill promoted root-cause memories with an **uncapped**
+`stability * 1.5` FSRS multiply, and a code comment wrongly claimed it was capped.
+On a chronically-recurring failure this could inflate a cause's stability without
+bound, distorting its review schedule. Backfill promotion is now bounded to
+`MIN(stability * 1.5, stability + 365.0)` (the additive +365-day ceiling the
+backfill module already computed but never applied), on both the auto-fire and the
+manual `backfill` tool paths. Auto-fire remains **on by default** (it shipped and
+was documented in v2.2.0) but is now disableable: set `VESTIGE_BACKFILL_AUTOFIRE=0`
+(or `false`/`off`/`no`) to turn it off; the manual `backfill` tool + CLI remain
+available regardless. Thanks @randomnimbus for the report and the initial patch.
+
+### Added — First-run guide (#83)
+
+A single `docs/GETTING-STARTED.md` that consolidates install, "what gets saved",
+how to inspect your memory, and project scoping into one 30-minute first-run path,
+linked from the README.
+
+### Credits
+
+This release was driven by the community:
+
+- **@Vrakoss** reported the Windows embeddings regression (#101) with a clean,
+  precise repro that pinned the failure immediately.
+- **@randomnimbus** (Peter Lauzon) reported the backfill safety issue (#103) and
+  contributed the fix — the bounded `promote_memory_backfill` and the
+  `VESTIGE_BACKFILL_AUTOFIRE` lever shipped as they proposed them
+  (co-authored in `f7530af`).
+
+Thank you both.
+
 ## [2.2.0] - 2026-06-29 — "Retroactive Salience + Tool Consolidation"
 
 Three independent value streams land together as a coherent release.

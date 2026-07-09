@@ -1,1 +1,0 @@
-import{aB as a,az as t,w as u,v as o}from"./CpWkWWOo.js";function c(e){throw new Error("https://svelte.dev/e/lifecycle_outside_component")}function l(e){t===null&&c(),u&&t.l!==null?i(t).m.push(e):a(()=>{const n=o(e);if(typeof n=="function")return n})}function f(e){t===null&&c(),l(()=>()=>o(e))}function i(e){var n=e.l;return n.u??(n.u={a:[],b:[],m:[]})}export{f as a,l as o};
