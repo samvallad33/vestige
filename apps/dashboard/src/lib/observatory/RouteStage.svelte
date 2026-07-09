@@ -76,6 +76,8 @@
 	let paused = $state(false);
 	let userSetPause = $state(false);
 	let ready = $state(false);
+	let cursorSmoothed: { x: number; y: number } | null = null;
+	let focusedChromeRun: string | null = null;
 
 	const CYAN = [...rgb01(CAUSAL.forward), 1] satisfies [number, number, number, number];
 	const DIM_GREEN = [...rgb01(RETENTION.recall), 0.58] satisfies [number, number, number, number];
@@ -239,16 +241,44 @@
 		};
 	}
 
+	function writeCursorLens(ndc: { x: number; y: number }) {
+		if (!canvasLayerEl || !engine) return;
+		const rect = canvasLayerEl.getBoundingClientRect();
+		if (rect.width === 0 || rect.height === 0) return;
+		const aspect = Math.max(0.0001, rect.width / Math.max(1, rect.height));
+		const raw = {
+			x: ndc.x * Math.max(aspect, 1),
+			y: ndc.y / Math.min(aspect, 1)
+		};
+		const prev = cursorSmoothed ?? raw;
+		const next = {
+			x: prev.x + (raw.x - prev.x) * 0.35,
+			y: prev.y + (raw.y - prev.y) * 0.35
+		};
+		cursorSmoothed = next;
+		engine.setCursorPreNdc(next.x, next.y, next.x - prev.x, next.y - prev.y);
+	}
+
 	function handlePointerMove(e: PointerEvent) {
 		const ndc = pointerToNdc(e);
 		if (!ndc) return;
+		writeCursorLens(ndc);
 		const navHit = navPass?.setHoverFromNdc(ndc.x, ndc.y);
 		const chromeHit = chromeText?.pickAt(ndc.x, ndc.y);
+		const nextFocus = chromeHit?.id ?? null;
+		if (nextFocus !== focusedChromeRun) {
+			focusedChromeRun = nextFocus;
+			chromeText?.setRunDepth(nextFocus, 1.0);
+		}
 		if (canvasLayerEl) canvasLayerEl.style.cursor = navHit || chromeHit || onpick ? 'crosshair' : 'default';
 	}
 
 	function handlePointerLeave() {
 		navPass?.clearHover();
+		focusedChromeRun = null;
+		chromeText?.setRunDepth(null);
+		cursorSmoothed = null;
+		engine?.setCursorPreNdc(999, 999, 0, 0);
 		if (canvasLayerEl) canvasLayerEl.style.cursor = 'default';
 	}
 

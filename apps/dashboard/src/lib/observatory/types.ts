@@ -120,8 +120,12 @@ export const PATH_KIND = {
 //                          sim, firewall shock rings the field, etc.)
 //   [15] projectionDays   (Phase 1 forward-scrub: added to every node's real
 //                          FSRS elapsed so decay is legible in one session)
-export const PARAMS_FLOATS = 16;
-export const PARAMS_BYTES = PARAMS_FLOATS * 4; // 64 (multiple of 16)
+//   [16] cursorX          (cursor in pre-aspect-divide NDC; far offscreen at rest)
+//   [17] cursorY
+//   [18] cursorVx         (smoothed pre-divide cursor velocity, per pointer sample)
+//   [19] cursorVy
+export const PARAMS_FLOATS = 20;
+export const PARAMS_BYTES = PARAMS_FLOATS * 4; // 80 (multiple of 16)
 
 /**
  * Live-event kinds written into params[12] (liveKind). The field's shaders
@@ -154,7 +158,11 @@ export const PARAM_IDX = {
 	liveKind: 12,
 	liveFrame: 13,
 	liveEnergy: 14,
-	projectionDays: 15
+	projectionDays: 15,
+	cursorX: 16,
+	cursorY: 17,
+	cursorVx: 18,
+	cursorVy: 19
 } as const;
 
 export function demoModeId(mode: DemoMode): number {

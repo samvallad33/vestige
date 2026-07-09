@@ -13,7 +13,7 @@
  */
 
 import { DemoClock } from './demo-clock';
-import { PARAMS_FLOATS, demoModeId, type DemoMode } from './types';
+import { PARAMS_FLOATS, PARAM_IDX, demoModeId, type DemoMode } from './types';
 import { PostChain, SCENE_FORMAT } from './post/post-chain';
 import { VOID_CLEAR_HDR } from './post/tone-reference';
 
@@ -132,6 +132,7 @@ export class ObservatoryEngine {
 					this.clock.framesPerLoop
 				: null;
 		this.params[8] = 1; // brightness default — the void must never eat the field
+		this.setCursorPreNdc(999, 999, 0, 0);
 	}
 
 	get status(): EngineStatus {
@@ -185,6 +186,18 @@ export class ObservatoryEngine {
 	/** Monotonic sim frame (does NOT wrap at the loop period). */
 	get totalFrames(): number {
 		return this.clock.state.totalFrames;
+	}
+
+	/**
+	 * Cursor lens for Parallax Engram text. x/y are in the text layer's
+	 * pre-aspect-divide NDC space (the inverse of TextLayerPass.pickAt's
+	 * screen-space transform), and velocity is in that same space.
+	 */
+	setCursorPreNdc(x: number, y: number, vx = 0, vy = 0): void {
+		this.params[PARAM_IDX.cursorX] = Number.isFinite(x) ? x : 999;
+		this.params[PARAM_IDX.cursorY] = Number.isFinite(y) ? y : 999;
+		this.params[PARAM_IDX.cursorVx] = Number.isFinite(vx) ? vx : 0;
+		this.params[PARAM_IDX.cursorVy] = Number.isFinite(vy) ? vy : 0;
 	}
 
 	/**

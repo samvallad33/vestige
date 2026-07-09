@@ -20,6 +20,10 @@ export type TextLayerItem = {
 	revealSpan?: number;
 	maxWidthEm?: number;
 	maxLines?: number;
+	/** 0..1 data depth/trust channel: 1.0 renders closer/crisper/brighter. */
+	depth?: number;
+	/** 0..1 data weight/retention channel: higher biases the MSDF stroke bolder. */
+	weight?: number;
 };
 
 type TextRunRect = {
@@ -31,6 +35,8 @@ type TextRunRect = {
 	y0: number;
 	y1: number;
 	payload: TextLayerItem;
+	glyphStart: number;
+	glyphCount: number;
 };
 
 const GLYPH_FLOATS = 20;
@@ -47,6 +53,7 @@ export class TextLayerPass implements FramePass {
 	private glyphCount = 0;
 	private pendingItems: TextLayerItem[] = [];
 	private runs: TextRunRect[] = [];
+	private runDepths = new Map<string, number>();
 	private initPromise: Promise<void> | null = null;
 
 	constructor(engine: ObservatoryEngine) {
@@ -114,6 +121,7 @@ export class TextLayerPass implements FramePass {
 			});
 			const color = item.color ?? DEFAULT_COLOR;
 			const runGlyphs = laid;
+			const glyphStart = glyphIndex;
 			let x0 = Number.POSITIVE_INFINITY;
 			let x1 = Number.NEGATIVE_INFINITY;
 			let y0 = Number.POSITIVE_INFINITY;
@@ -130,16 +138,20 @@ export class TextLayerPass implements FramePass {
 				packGlyph(packed, item, glyph, color, size, glyphIndex++);
 			}
 			if (runGlyphs.length > 0) {
+				const id = item.id ?? `msdf-text:${itemIndex}`;
 				runs.push({
-					id: item.id ?? `msdf-text:${itemIndex}`,
+					id,
 					kind: item.kind ?? 'text',
 					text: item.text,
 					x0,
 					x1,
 					y0,
 					y1,
-					payload: item
+					payload: item,
+					glyphStart,
+					glyphCount: glyphIndex - glyphStart
 				});
+				this.runDepths.set(id, clamp01(item.depth ?? 0.5));
 			}
 		});
 
@@ -198,6 +210,22 @@ export class TextLayerPass implements FramePass {
 		return null;
 	}
 
+	setRunDepth(id: string | null, depth = 0.5): void {
+		const device = this.engine.gpuDevice;
+		if (!device || !this.glyphBuffer) return;
+		for (const run of this.runs) {
+			const targetDepth = run.id === id ? depth : (run.payload.depth ?? 0.5);
+			const clamped = clamp01(targetDepth);
+			if (this.runDepths.get(run.id) === clamped) continue;
+			this.runDepths.set(run.id, clamped);
+			const one = new Float32Array([clamped]);
+			for (let i = 0; i < run.glyphCount; i += 1) {
+				const floatOffset = (run.glyphStart + i) * GLYPH_FLOATS + 14;
+				device.queue.writeBuffer(this.glyphBuffer, floatOffset * 4, one);
+			}
+		}
+	}
+
 	dispose(): void {
 		this.glyphBuffer?.destroy();
 		this.glyphBuffer = null;
@@ -233,11 +261,15 @@ function packGlyph(
 		glyph.v + glyph.vh,
 		ageFrame,
 		revealSpan,
-		0,
-		0,
+		clamp01(item.depth ?? 0.5),
+		clamp01(item.weight ?? 0.5),
 		color[0],
 		color[1],
 		color[2],
 		color[3]
 	);
+}
+
+function clamp01(value: number): number {
+	return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.5));
 }
