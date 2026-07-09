@@ -20,7 +20,7 @@ import {
 	buildNodeStateArray,
 	buildEdgeIndexArray
 } from './graph-upload';
-import { FLOATS_PER_NODE, NODE_LANE, type ObservatoryGraph } from './types';
+import { FLOATS_PER_NODE, NODE_LANE, type ObservatoryGraph, type ObservatoryEdge } from './types';
 import { renderNodesWGSL } from './shaders/render-nodes.wgsl';
 import { simulateWGSL } from './shaders/simulate.wgsl';
 import { renderPathWGSL } from './shaders/render-path.wgsl';
@@ -173,6 +173,32 @@ export class NodeRenderer implements FramePass {
 		});
 		device.queue.writeBuffer(this.pathBuffer, 0, data.buffer as ArrayBuffer);
 		this.engine.params[4] = steps.length;
+		this.createPipeline(device);
+	}
+
+	/**
+	 * v2.3 living field — replace the edge set (Phase 3, dream storm). A
+	 * setPathSteps clone for the EDGE index buffer: rebuild it at the new size,
+	 * update the CPU graph edge list (so the force sim's springs pull the new
+	 * connections together — clusters merge is the emergent settle), bump
+	 * params.edge_count, and rebuild the sim pipeline/bind group so it references
+	 * the regrown buffer. The dream handler streams real ConnectionDiscovered
+	 * pairs; the LiveBridge accumulates them and calls this so each new edge
+	 * physically tugs its endpoints closer, live.
+	 */
+	setEdges(edges: ObservatoryEdge[]): void {
+		const device = this.engine.gpuDevice;
+		if (!device || !this.graph) return;
+		this.graph.edges = edges;
+		const edgeData = buildEdgeIndexArray(this.graph);
+		this.edgeBuffer?.destroy();
+		this.edgeBuffer = device.createBuffer({
+			label: 'observatory-edge-index',
+			size: Math.max(edgeData.byteLength, 8),
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+		});
+		device.queue.writeBuffer(this.edgeBuffer, 0, edgeData.buffer as ArrayBuffer);
+		this.engine.params[3] = edges.length;
 		this.createPipeline(device);
 	}
 

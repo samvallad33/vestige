@@ -169,9 +169,26 @@ fn recall_sim(@builtin(global_invocation_id) id: vec3<u32>) {
 		// Gentle centering: keeps the field in frame without crushing it.
 		force = force + (-pos) * 0.0008;
 
+		// v2.3 DREAM STORM — while the real dream pipeline streams (live_kind ==
+		// 2 == LIVE_KIND.dreamStorm), the field enters a metabolic consolidation
+		// storm: damping loosens (springs overshoot, clusters slosh together as
+		// new ConnectionDiscovered edges are appended) and a deterministic
+		// turbulence rides live_energy. Pure of node index + live_frame, so no
+		// wall clock — the storm is a function of the real event envelope. At
+		// rest (energy 0) both terms vanish → the field is byte-identical.
+		var damping = 0.88;
+		if (params.live_kind == 2.0) {
+			let e = clamp(params.live_energy, 0.0, 1.4);
+			damping = 0.88 + 0.09 * e; // up to ~0.97 — longer, sloshier settling
+			// Curl-free deterministic jitter: phase from node index + live_frame.
+			let ph = f32(i) * 0.61803 + params.live_frame * 0.05;
+			let jitter = vec3<f32>(sin(ph * 6.2831), sin(ph * 4.7123 + 1.3), sin(ph * 5.318 + 2.1));
+			force = force + jitter * (0.006 * e);
+		}
+
 		// 7B: velocity damping + cap, then position integration.
 		var vel = node.vel_retention.xyz;
-		vel = (vel + force) * 0.88;
+		vel = (vel + force) * damping;
 		vel = clamp_len(vel, 0.42);
 		node.vel_retention = vec4<f32>(vel, node.vel_retention.w);
 		node.pos_radius = vec4<f32>(pos + vel, node.pos_radius.w);

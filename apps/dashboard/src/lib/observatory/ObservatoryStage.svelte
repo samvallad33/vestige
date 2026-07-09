@@ -311,6 +311,12 @@
 				});
 				liveDecayReady = liveBridge.liveDecayAvailable;
 				engine.setPreFrameHook((simFrame) => liveBridge?.drain(simFrame));
+				// Dev/verification hook — read live state from the console. Guarded
+				// so it never runs in SSR and is harmless in production.
+				if (typeof window !== 'undefined') {
+					(window as unknown as { __vestigeLiveBridge?: unknown }).__vestigeLiveBridge =
+						liveBridge;
+				}
 			}
 
 			// Start the story at frame 0 now that the field exists — where the

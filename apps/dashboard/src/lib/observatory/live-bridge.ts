@@ -23,7 +23,7 @@
 import type { ObservatoryEngine } from './engine';
 import type { NodeRenderer } from './node-renderer';
 import type { VestigeEvent } from '$types';
-import { LIVE_KIND, PARAM_IDX, type ObservatoryGraph } from './types';
+import { LIVE_KIND, PARAM_IDX, type ObservatoryGraph, type ObservatoryEdge } from './types';
 import { liveRetrievability } from './fsrs';
 import { FirewallRenderer } from './firewall-renderer';
 import { buildLiveFirewallPlan, emptyFirewallPlan } from './firewall-plan';
@@ -45,7 +45,14 @@ interface DecodedEvent {
 /** How long (sim frames @60fps) each live event's envelope plays before idle. */
 const LIVE_DURATION: Record<number, number> = {
 	[LIVE_KIND.firewall]: 620, // full quarantine choreography (matches demo)
-	[LIVE_KIND.dreamStorm]: 0, // open-ended: held until DreamCompleted arrives
+	// Dream storm: a real dream on the local brain finishes in ~150ms (far
+	// faster than a frame), but the CONSOLIDATION it performed — real edges
+	// appended, clusters re-settling — is a genuine physical event that takes
+	// seconds to play out. So the storm holds a minimum visible window (~6s)
+	// while the newly-appended springs pull the field into its new shape, then
+	// settles. Honest: the edges + physics are real; only the tempo is stretched
+	// to human-perceptible (like the forgetting-horizon scrubber).
+	[LIVE_KIND.dreamStorm]: 360,
 	[LIVE_KIND.causalRecall]: 260, // wavefront sweep + afterglow
 	[LIVE_KIND.birth]: 180
 };
@@ -82,6 +89,16 @@ export class LiveBridge {
 	 *  field that never sees a suppression pays nothing. */
 	private firewall: FirewallRenderer | null = null;
 
+	/** Live edge accumulator (Phase 3 dream storm). Starts as the uploaded
+	 *  graph edges; each real ConnectionDiscovered appends one, and setEdges
+	 *  regrows the GPU buffer so the new spring physically pulls its endpoints
+	 *  together. Deduped by (min,max) index so a re-discovered edge is a no-op. */
+	private liveEdges: ObservatoryEdge[] = [];
+	private liveEdgeKeys = new Set<string>();
+	/** Set when new edges arrived this frame; drain() flushes ONE setEdges per
+	 *  frame so a 50-connection dream burst is one buffer regrow, not fifty. */
+	private edgesDirty = false;
+
 	/** id → stable buffer index (from the ObservatoryGraph). */
 	private indexById: Map<string, number>;
 
@@ -117,6 +134,19 @@ export class LiveBridge {
 			if (node.stability !== undefined && node.lastAccessed) this.hasLiveDecay = true;
 		}
 
+		// Seed the live edge accumulator with the uploaded graph edges so dream
+		// connections APPEND to the real field, never replace it.
+		this.liveEdges = deps.graph.edges.slice();
+		for (const e of this.liveEdges) this.liveEdgeKeys.add(edgeKey(e.sourceIndex, e.targetIndex));
+
+		// Only react to events that arrive AFTER the bridge exists — skip the
+		// store's backlog. Anchor to the BACKEND clock (the newest event already
+		// in the feed), NOT the browser wall clock: on a sandboxed backend the
+		// two can skew by tens of seconds, and a browser-time floor would then
+		// skip every backend event forever. seedWatermark() sets this from the
+		// store the moment the bridge is wired.
+		this.lastAppliedMs = 0;
+
 		// Seed the live lanes to a calm resting state.
 		const p = this.engine.params;
 		p[PARAM_IDX.liveKind] = LIVE_KIND.none;
@@ -138,22 +168,53 @@ export class LiveBridge {
 	// dedupe window on timestamp is unnecessary — the store slices FIFO).
 	// -------------------------------------------------------------------------
 
-	private lastSeenTop: VestigeEvent | null = null;
+	/**
+	 * Wire timestamp (ms) of the newest event already applied — a monotonic
+	 * watermark. Robust to the 200-event ring evicting our anchor during a
+	 * dream's 1000+-event burst: apply every event with a strictly newer
+	 * timestamp, oldest→newest, then advance the watermark. Idempotent (re-
+	 * ingesting the same store is a no-op) and survives eviction (identity
+	 * anchors don't). A same-ms tie can drop at most one event, whose visual
+	 * impact is nil (one connection among a thousand).
+	 */
+	private lastAppliedMs = 0;
+	private seeded = false;
+
+	/**
+	 * Anchor the watermark to the backend clock: set it to the newest event
+	 * timestamp currently in the feed, so the bridge ignores the pre-mount
+	 * backlog but reacts to everything after. Immune to browser↔backend clock
+	 * skew. Call once, right after wiring, before the first ingest.
+	 */
+	seedWatermark(events: VestigeEvent[]): void {
+		let maxMs = 0;
+		for (const ev of events) {
+			const ts = evTimestampMs(ev);
+			if (ts > maxMs) maxMs = ts;
+		}
+		this.lastAppliedMs = maxMs;
+		this.seeded = true;
+	}
 
 	ingest(events: VestigeEvent[]): void {
 		if (events.length === 0) return;
-		// Find the boundary: everything above lastSeenTop is new.
-		let newCount = events.length;
-		if (this.lastSeenTop) {
-			const idx = events.indexOf(this.lastSeenTop);
-			if (idx >= 0) newCount = idx;
+		// If we were never explicitly seeded, seed from this first batch (anchor
+		// to the backend clock) and apply nothing — avoids replaying the backlog.
+		if (!this.seeded) {
+			this.seedWatermark(events);
+			return;
 		}
-		if (newCount === 0) return;
-		// Apply oldest→newest (reverse, since events[] is newest-first).
-		for (let i = newCount - 1; i >= 0; i--) {
-			this.decodeAndArm(events[i], this.engine.totalFrames);
+		let maxMs = this.lastAppliedMs;
+		// events[] is newest-first → walk oldest→newest so cause precedes effect.
+		for (let i = events.length - 1; i >= 0; i--) {
+			const ev = events[i];
+			const ts = evTimestampMs(ev);
+			if (ts > this.lastAppliedMs) {
+				this.decodeAndArm(ev, this.engine.totalFrames);
+				if (ts > maxMs) maxMs = ts;
+			}
 		}
-		this.lastSeenTop = events[0];
+		this.lastAppliedMs = maxMs;
 	}
 
 	/** Decode one wire event and, if it's a hero trigger, arm it. */
@@ -239,17 +300,45 @@ export class LiveBridge {
 			}
 			case 'DreamCompleted': {
 				this.dreamOpen = false;
-				// Let the storm settle: keep the current active event but mark it
-				// finite from now (drain will fade it out over ~120 frames).
+				// A real dream completes in ~150ms and floods the 200-event WS ring
+				// with ConnectionDiscovered, often EVICTING the DreamStarted we'd
+				// otherwise arm on. DreamCompleted is the newest event so it always
+				// survives — start (or refresh) the storm HERE too, driven by the
+				// real connections_found count, so the consolidation always plays.
+				// The appended edges (already applied above) need seconds to pull
+				// the clusters into their new shape; the finite window plays it out.
+				const found = num(data.connections_found);
 				if (this.active && this.active.kind === LIVE_KIND.dreamStorm) {
-					this.active.startFrame = simFrame - 500; // jump near the tail
+					this.active.scalar = Math.max(this.active.scalar, found);
+				} else {
+					this.arm({
+						kind: LIVE_KIND.dreamStorm,
+						startFrame: simFrame,
+						targetId: '',
+						relatedIds: [],
+						pairs: [],
+						scalar: found
+					});
 				}
 				break;
 			}
-			// ConnectionDiscovered is consumed by the dream-storm edge appender
-			// in ObservatoryStage directly (it needs the renderer's setEdges);
-			// the bridge just keeps the storm energy high while they stream.
+			// Dream storm: append the REAL discovered edge so its spring
+			// physically pulls the two memories together (clusters merge is the
+			// emergent settle — no new physics, the force sim already runs).
 			case 'ConnectionDiscovered': {
+				const s = this.indexById.get(str(data.source_id));
+				const t = this.indexById.get(str(data.target_id));
+				if (s === undefined || t === undefined || s === t) break;
+				const key = edgeKey(s, t);
+				if (this.liveEdgeKeys.has(key)) break;
+				this.liveEdgeKeys.add(key);
+				this.liveEdges.push({
+					sourceIndex: s,
+					targetIndex: t,
+					weight: num(data.weight) || 0.5,
+					type: str(data.connection_type) || 'semantic'
+				});
+				this.edgesDirty = true; // coalesced flush in drain()
 				if (this.dreamOpen && this.active?.kind === LIVE_KIND.dreamStorm) {
 					this.active.scalar += 1; // more connections → more agitation
 				}
@@ -306,6 +395,13 @@ export class LiveBridge {
 	drain(simFrame: number): void {
 		const p = this.engine.params;
 
+		// Flush any edges appended this frame in ONE buffer regrow (a 50-edge
+		// dream burst = one setEdges, not fifty pipeline rebuilds).
+		if (this.edgesDirty) {
+			this.renderer.setEdges(this.liveEdges);
+			this.edgesDirty = false;
+		}
+
 		// --- Phase 1: live FSRS decay (recompute retrievability on the true
 		// curve). Throttled to every 6 frames (10Hz) — decay drifts far slower
 		// than a frame, and the scrubber jumps are applied immediately below. ---
@@ -321,8 +417,7 @@ export class LiveBridge {
 		if (this.active) {
 			const dur = LIVE_DURATION[this.active.kind] ?? 300;
 			const elapsed = simFrame - this.active.startFrame;
-			const openEnded = dur === 0 && this.dreamOpen;
-			if (!openEnded && dur > 0 && elapsed > dur + 140) {
+			if (elapsed > dur + 140) {
 				// Envelope finished (+ fade tail) → back to calm.
 				this.active = null;
 				p[PARAM_IDX.liveKind] = LIVE_KIND.none;
@@ -332,7 +427,7 @@ export class LiveBridge {
 				// Event-relative frame: the live shader branches replay the
 				// choreography once from here, never riding the wrapped loop.
 				p[PARAM_IDX.liveFrame] = Math.max(0, elapsed);
-				p[PARAM_IDX.liveEnergy] = this.energyEnvelope(this.active, elapsed, openEnded);
+				p[PARAM_IDX.liveEnergy] = this.energyEnvelope(this.active, elapsed, false);
 			}
 		} else {
 			p[PARAM_IDX.liveKind] = LIVE_KIND.none;
@@ -346,18 +441,39 @@ export class LiveBridge {
 		});
 	}
 
+	/** Dev/verification snapshot — current live state (not used in production). */
+	debugState(): {
+		activeKind: number;
+		liveEnergy: number;
+		liveFrame: number;
+		edgeCount: number;
+		eventsSeen: number;
+	} {
+		const p = this.engine.params;
+		return {
+			activeKind: p[PARAM_IDX.liveKind],
+			liveEnergy: p[PARAM_IDX.liveEnergy],
+			liveFrame: p[PARAM_IDX.liveFrame],
+			edgeCount: this.liveEdges.length,
+			eventsSeen: this.eventsSeen
+		};
+	}
+
 	private lastProj = -1;
 
-	/** 0..1 agitation envelope for the active event at `elapsed` frames. */
-	private energyEnvelope(ev: DecodedEvent, elapsed: number, openEnded: boolean): number {
+	/** 0..1+ agitation envelope for the active event at `elapsed` frames. */
+	private energyEnvelope(ev: DecodedEvent, elapsed: number, _openEnded: boolean): number {
 		if (elapsed < 0) return 0;
-		if (openEnded) {
-			// Dream storm: ramp in over 45f, hold high, agitation scales with
-			// how many connections have streamed in (scalar).
-			const ramp = Math.min(1, elapsed / 45);
-			return ramp * Math.min(1.4, 0.6 + ev.scalar * 0.04);
-		}
 		const dur = LIVE_DURATION[ev.kind] ?? 300;
+		if (ev.kind === LIVE_KIND.dreamStorm) {
+			// Ramp in (45f) → sustained storm plateau (scaled by how many real
+			// connections the dream found) → ease out over the last ~90f as the
+			// clusters settle into their new shape.
+			const ramp = Math.min(1, elapsed / 45);
+			const ease = 1 - Math.max(0, (elapsed - (dur - 90)) / 90);
+			const intensity = Math.min(1.4, 0.7 + ev.scalar * 0.02);
+			return Math.max(0, ramp * Math.min(1, ease) * intensity);
+		}
 		const attack = Math.min(1, elapsed / 24);
 		const release = 1 - Math.max(0, (elapsed - dur) / 140);
 		return Math.max(0, attack * Math.min(1, release));
@@ -384,6 +500,23 @@ export class LiveBridge {
 }
 
 // --- tiny decoders (no allocation beyond the returned value) ---
+
+/** Undirected edge key (min,max) so a re-discovered edge dedupes either way. */
+function edgeKey(a: number, b: number): string {
+	return a < b ? `${a}-${b}` : `${b}-${a}`;
+}
+
+/**
+ * Wire timestamp of an event in ms. Every VestigeEvent's data carries an RFC3339
+ * `timestamp`. Falls back to a monotonic-ish 0 so a malformed event is treated
+ * as old (skipped) rather than replayed forever.
+ */
+function evTimestampMs(ev: VestigeEvent): number {
+	const raw = (ev.data as { timestamp?: unknown } | undefined)?.timestamp;
+	if (typeof raw !== 'string') return 0;
+	const t = Date.parse(raw);
+	return Number.isFinite(t) ? t : 0;
+}
 
 function str(v: unknown): string {
 	return typeof v === 'string' ? v : '';
