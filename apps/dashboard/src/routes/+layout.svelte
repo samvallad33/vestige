@@ -29,10 +29,12 @@
 		$page.url.pathname.startsWith(base) ? $page.url.pathname.slice(base.length) || '/' : $page.url.pathname
 	);
 	let isMarketingRoute = $derived(dashboardPath === '/waitlist' || dashboardPath.startsWith('/waitlist/'));
-	// The Observatory is a full-bleed cinematic surface (spec §7): DOM =
-	// instrument overlays ONLY — no app chrome, no websocket toasts, no nav.
-	// Same bare-children bypass as marketing routes so recordings stay clean.
-	let isImmersiveRoute = $derived(dashboardPath.startsWith('/observatory'));
+	// Zero-DOM Cognitive OS (Sam, Jul 9 2026): EVERY organ is a full-bleed
+	// all-WebGPU surface. DOM app chrome (sidebar nav, websocket toasts,
+	// ambient orbs, command palette) is bypassed for all dashboard routes so
+	// each route is a single shareable canvas — nav itself is drawn in WebGPU.
+	// Only true marketing/waitlist pages keep DOM. Recordings stay clean.
+	let isImmersiveRoute = $derived(!isMarketingRoute);
 
 	onMount(() => {
 		if (!isMarketingRoute && !isImmersiveRoute) {
