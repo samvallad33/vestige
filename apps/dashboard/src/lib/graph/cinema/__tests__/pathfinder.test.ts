@@ -1,9 +1,29 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { planCinemaPath } from '../pathfinder';
+import { planCinemaPath, isCausalEdge } from '../pathfinder';
 import { makeNode, makeEdge, resetNodeCounter } from '../../__tests__/helpers';
 
 describe('planCinemaPath', () => {
 	beforeEach(() => resetNodeCounter());
+
+	// Phase 4 — the causal recall wavefront follows REAL causal edges.
+	it('prefers causal edges when preferCausal is set (the moat)', () => {
+		const a = makeNode({ id: 'a', isCenter: true });
+		const b = makeNode({ id: 'b' });
+		const c = makeNode({ id: 'c' });
+		// From 'a': a strong co-occurrence edge to b (weight 0.9) and a weaker
+		// CAUSAL edge to c (weight 0.4). Default picks b (strongest); preferCausal
+		// must instead trace the true cause to c.
+		const edges = [
+			makeEdge('a', 'b', { weight: 0.9, type: 'complementary' }),
+			makeEdge('a', 'c', { weight: 0.4, type: 'causal' })
+		];
+		const plain = planCinemaPath([a, b, c], edges, 'a', 3);
+		expect(plain.beats[1].nodeId).toBe('b'); // strongest wins by default
+
+		const causal = planCinemaPath([a, b, c], edges, 'a', 3, { preferCausal: true });
+		expect(causal.beats[1].nodeId).toBe('c'); // the real cause wins
+		expect(isCausalEdge(causal.beats[1].viaEdge!)).toBe(true);
+	});
 
 	it('returns an empty path for no nodes', () => {
 		const path = planCinemaPath([], [], 'missing');

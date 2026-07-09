@@ -51,12 +51,18 @@ class MockRenderer {
 	lastEdgeCount = 0;
 	retentionUploads: Float32Array[] = [];
 	rearmCalls = 0;
+	setPathStepsCalls = 0;
+	lastPathStepCount = 0;
 	setEdges(edges: unknown[]) {
 		this.setEdgesCalls++;
 		this.lastEdgeCount = edges.length;
 	}
 	uploadLiveRetention(data: Float32Array) {
 		this.retentionUploads.push(data.slice());
+	}
+	setPathSteps(_data: Uint32Array, steps: unknown[]) {
+		this.setPathStepsCalls++;
+		this.lastPathStepCount = steps.length;
 	}
 }
 
@@ -73,22 +79,29 @@ function gnode(partial: Partial<GraphNode> & { id: string }): GraphNode {
 	};
 }
 
-function makeGraph(): ReturnType<typeof buildObservatoryGraph> {
+function makeResponse(): GraphResponse {
 	const nodes: GraphNode[] = [
 		gnode({ id: 'a', isCenter: true, stability: 5, lastAccessed: '2026-06-20T00:00:00Z' }),
 		gnode({ id: 'b', stability: 0.2, lastAccessed: '2026-06-25T00:00:00Z' }),
 		gnode({ id: 'c', stability: 3, lastAccessed: '2026-06-10T00:00:00Z' }),
 		gnode({ id: 'd', stability: 1, lastAccessed: '2026-06-28T00:00:00Z' })
 	];
-	const resp: GraphResponse = {
+	return {
 		nodes,
-		edges: [{ source: 'a', target: 'b', weight: 0.5, type: 'semantic' }],
+		edges: [
+			{ source: 'a', target: 'b', weight: 0.5, type: 'semantic' },
+			{ source: 'b', target: 'c', weight: 0.9, type: 'causal' },
+			{ source: 'c', target: 'd', weight: 0.8, type: 'causal' }
+		],
 		center_id: 'a',
 		depth: 2,
 		nodeCount: nodes.length,
-		edgeCount: 1
+		edgeCount: 3
 	};
-	return buildObservatoryGraph(resp);
+}
+
+function makeGraph(): ReturnType<typeof buildObservatoryGraph> {
+	return buildObservatoryGraph(makeResponse());
 }
 
 function ev(type: string, data: Record<string, unknown>, tsMs: number): VestigeEvent {
@@ -98,11 +111,19 @@ function ev(type: string, data: Record<string, unknown>, tsMs: number): VestigeE
 function makeBridge() {
 	const engine = new MockEngine();
 	const renderer = new MockRenderer();
+	const response = makeResponse();
 	const graph = makeGraph();
 	renderer.graph = graph;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const bridge = new LiveBridge({ engine: engine as any, renderer: renderer as any, graph, seed: 'test' });
-	return { engine, renderer, graph, bridge };
+	const bridge = new LiveBridge({
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		engine: engine as any,
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		renderer: renderer as any,
+		graph,
+		response,
+		seed: 'test'
+	});
+	return { engine, renderer, graph, response, bridge };
 }
 
 describe('LiveBridge', () => {
@@ -149,26 +170,27 @@ describe('LiveBridge', () => {
 	it('appends real ConnectionDiscovered edges and flushes ONE setEdges per frame', () => {
 		const { engine, renderer, bridge } = makeBridge();
 		bridge.ingest([ev('Heartbeat', {}, base)]);
-		// Two new connections in the same burst → coalesced to one setEdges.
+		// The graph seeds with 3 edges (a-b, b-c, c-d). Two BRAND-NEW connections
+		// in the same burst → coalesced to one setEdges.
 		bridge.ingest([
-			ev('ConnectionDiscovered', { source_id: 'c', target_id: 'd', weight: 0.7, connection_type: 'causal' }, base + 2000),
-			ev('ConnectionDiscovered', { source_id: 'b', target_id: 'c', weight: 0.6, connection_type: 'semantic' }, base + 1500)
+			ev('ConnectionDiscovered', { source_id: 'a', target_id: 'd', weight: 0.7, connection_type: 'causal' }, base + 2000),
+			ev('ConnectionDiscovered', { source_id: 'a', target_id: 'c', weight: 0.6, connection_type: 'semantic' }, base + 1500)
 		]);
 		const before = renderer.setEdgesCalls;
 		bridge.drain(engine.totalFrames);
 		expect(renderer.setEdgesCalls).toBe(before + 1); // ONE flush
-		// started with 1 edge (a-b), +2 new = 3
-		expect(renderer.lastEdgeCount).toBe(3);
+		// started with 3 edges, +2 new = 5
+		expect(renderer.lastEdgeCount).toBe(5);
 	});
 
 	it('dedupes a re-discovered edge (no duplicate append)', () => {
 		const { engine, renderer, bridge } = makeBridge();
 		bridge.ingest([ev('Heartbeat', {}, base)]);
-		bridge.ingest([ev('ConnectionDiscovered', { source_id: 'c', target_id: 'd' }, base + 1000)]);
+		bridge.ingest([ev('ConnectionDiscovered', { source_id: 'a', target_id: 'd' }, base + 1000)]);
 		bridge.drain(engine.totalFrames);
 		const afterFirst = renderer.lastEdgeCount;
 		// same edge, reversed direction, later ts → must be a no-op
-		bridge.ingest([ev('ConnectionDiscovered', { source_id: 'd', target_id: 'c' }, base + 2000)]);
+		bridge.ingest([ev('ConnectionDiscovered', { source_id: 'd', target_id: 'a' }, base + 2000)]);
 		bridge.drain(engine.totalFrames);
 		expect(renderer.lastEdgeCount).toBe(afterFirst);
 	});
@@ -200,14 +222,42 @@ describe('LiveBridge', () => {
 		expect(engine.params[PARAM_IDX.liveEnergy]).toBe(0);
 	});
 
+	it('lights a causal recall path on a real DeepReferenceCompleted', () => {
+		const { engine, renderer, bridge } = makeBridge();
+		bridge.ingest([ev('Heartbeat', {}, base)]);
+		// A real recall whose primary is in-field → build a causal wavefront.
+		bridge.ingest([
+			ev(
+				'DeepReferenceCompleted',
+				{ primary_id: 'a', supporting_ids: ['b', 'c'], contradiction_pairs: [], confidence: 0.8 },
+				base + 1000
+			)
+		]);
+		engine.advance(3);
+		bridge.drain(engine.totalFrames);
+		expect(engine.params[PARAM_IDX.liveKind]).toBe(LIVE_KIND.causalRecall);
+		// The causal pathfinder walked a>b>c>d over the causal edges → path steps.
+		expect(renderer.setPathStepsCalls).toBeGreaterThan(0);
+		expect(renderer.lastPathStepCount).toBeGreaterThan(0);
+	});
+
 	it('the forward-projection scrubber decays the field further', () => {
 		const engine = new MockEngine();
 		const renderer = new MockRenderer();
+		const response = makeResponse();
 		const graph = makeGraph();
 		renderer.graph = graph;
 		let proj = 0;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const bridge = new LiveBridge({ engine: engine as any, renderer: renderer as any, graph, seed: 't', projectionDays: () => proj });
+		const bridge = new LiveBridge({
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			engine: engine as any,
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			renderer: renderer as any,
+			graph,
+			response,
+			seed: 't',
+			projectionDays: () => proj
+		});
 		engine.advance(10);
 		bridge.drain(engine.totalFrames);
 		const atNow = renderer.retentionUploads.at(-1)!.slice();

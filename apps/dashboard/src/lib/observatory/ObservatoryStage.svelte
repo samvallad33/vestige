@@ -297,11 +297,12 @@
 			// + per-node FSRS decay via the engine's preFrameHook; the eventFeed
 			// subscription below feeds it. Created here (once) because it needs
 			// both the engine AND renderer.graph, which only exist post-upload.
-			if (live && renderer.graph) {
+			if (live && renderer.graph && graphData) {
 				liveBridge = new LiveBridge({
 					engine,
 					renderer,
 					graph: renderer.graph,
+					response: graphData,
 					seed,
 					projectionDays: () => projectionDays,
 					onFirewall: (info) => {

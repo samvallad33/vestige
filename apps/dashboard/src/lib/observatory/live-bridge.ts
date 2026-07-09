@@ -22,11 +22,12 @@
 
 import type { ObservatoryEngine } from './engine';
 import type { NodeRenderer } from './node-renderer';
-import type { VestigeEvent } from '$types';
+import type { GraphResponse, VestigeEvent } from '$types';
 import { LIVE_KIND, PARAM_IDX, type ObservatoryGraph, type ObservatoryEdge } from './types';
 import { liveRetrievability } from './fsrs';
 import { FirewallRenderer } from './firewall-renderer';
 import { buildLiveFirewallPlan, emptyFirewallPlan } from './firewall-plan';
+import { buildRecallPath } from './path-builder';
 
 /** A decoded live event, normalized off the wire's { type, data } envelope. */
 interface DecodedEvent {
@@ -61,6 +62,9 @@ export interface LiveBridgeDeps {
 	engine: ObservatoryEngine;
 	renderer: NodeRenderer;
 	graph: ObservatoryGraph;
+	/** The raw graph response the field was uploaded from — the causal recall
+	 *  pathfinder (Phase 4) needs the full nodes+edges, not just the graph. */
+	response: GraphResponse;
 	/** Layout seed (matches NodeRenderer.upload) — the firewall shock delays
 	 *  come from the REAL layout, so this must be the same seed the field used. */
 	seed: string;
@@ -80,6 +84,7 @@ export class LiveBridge {
 	private engine: ObservatoryEngine;
 	private renderer: NodeRenderer;
 	private graph: ObservatoryGraph;
+	private response: GraphResponse;
 	private seed: string;
 	private projectionDays: () => number;
 	private onApply?: LiveBridgeDeps['onApply'];
@@ -120,6 +125,7 @@ export class LiveBridge {
 		this.engine = deps.engine;
 		this.renderer = deps.renderer;
 		this.graph = deps.graph;
+		this.response = deps.response;
 		this.seed = deps.seed;
 		this.projectionDays = deps.projectionDays ?? (() => 0);
 		this.onApply = deps.onApply;
@@ -372,6 +378,27 @@ export class LiveBridge {
 			}
 			this.firewall.rearm(plan);
 			this.onFirewall?.({ intruderLabel: plan.verdict.intruderLabel, startFrame: ev.startFrame });
+		}
+
+		// Causal recall (Phase 4): a real recall (DeepReferenceCompleted /
+		// BackfillFired) lights the backward CAUSE chain from the recalled memory.
+		// Rebuild the PathStep buffer centered on the real target, preferring real
+		// causal edges so the wavefront traces true causation, not co-occurrence.
+		// The proven recall-wavefront machinery (render-path.wgsl, simulate.wgsl)
+		// renders it — kind-1 (backward) hops burn into the magenta rim.
+		if (ev.kind === LIVE_KIND.causalRecall && this.indexById.has(ev.targetId)) {
+			const built = buildRecallPath(this.response, this.graph, 8, {
+				preferCausal: true,
+				centerId: ev.targetId
+			});
+			if (built.steps.length > 0) {
+				// Re-anchor the beats so the wavefront fires FROM this event
+				// (live_frame), not the loop clock. The render-path/simulate
+				// shaders read absolute beatFrames; the demo path used 60,120,…
+				// which the live loop frame also sweeps, so the existing timing
+				// works — the wavefront plays over the causalRecall window.
+				this.renderer.setPathSteps(built.data, built.steps);
+			}
 		}
 	}
 

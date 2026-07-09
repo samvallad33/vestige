@@ -62,6 +62,18 @@ export function isContradictionEdge(edge: GraphEdge): boolean {
 	return t.includes('contradict') || t.includes('conflict') || t.includes('supersede');
 }
 
+/**
+ * A real CAUSAL edge (ConnectionType::Causal / DiscoveredConnectionType::
+ * CausalChain, serialized as connection_type "causal"). Vestige is the only
+ * memory product that computes directed causation (RSB backward backfill), so
+ * a path that PREFERS these edges follows the true cause chain, not mere
+ * co-occurrence — the moat behind the causal recall wavefront (Phase 4).
+ */
+export function isCausalEdge(edge: GraphEdge): boolean {
+	const t = (edge.type ?? '').toLowerCase();
+	return t === 'causal' || t.includes('causal') || t.includes('cause');
+}
+
 export function recencyOf(node: GraphNode): number {
 	// Larger = more recent. Tolerates missing/invalid timestamps.
 	const t = Date.parse(node.updatedAt || node.createdAt || '');
@@ -79,8 +91,10 @@ export function planCinemaPath(
 	nodes: GraphNode[],
 	edges: GraphEdge[],
 	centerId: string,
-	maxBeats = 7
+	maxBeats = 7,
+	opts: { preferCausal?: boolean } = {}
 ): CinemaPath {
+	const preferCausal = opts.preferCausal ?? false;
 	const byId = new Map(nodes.map((n) => [n.id, n]));
 	const empty: CinemaPath = { beats: [], centerId, pivoted: false, flowEdges: [] };
 	if (nodes.length === 0) return empty;
@@ -115,9 +129,16 @@ export function planCinemaPath(
 	while (beats.length < maxBeats) {
 		const neighbours = adj[current] ?? [];
 
-		// Prefer an unused contradiction edge once — tension makes a better story.
+		// Causal recall (Phase 4): when asked, PREFER a real causal edge every
+		// step so the path traces the true cause chain (RSB substrate), not just
+		// the strongest co-occurrence. neighbours are already weight-sorted, so
+		// this picks the strongest causal tie first.
 		let next: { edge: GraphEdge; otherId: string } | undefined;
-		if (!contradictionUsed) {
+		if (preferCausal) {
+			next = neighbours.find((n) => !visited.has(n.otherId) && isCausalEdge(n.edge));
+		}
+		// Prefer an unused contradiction edge once — tension makes a better story.
+		if (!next && !contradictionUsed) {
 			next = neighbours.find((n) => !visited.has(n.otherId) && isContradictionEdge(n.edge));
 			if (next) contradictionUsed = true;
 		}
@@ -145,12 +166,18 @@ export function planCinemaPath(
 		}
 		visited.add(node.id);
 		flowEdges.push(next.edge);
+		const causal = preferCausal && isCausalEdge(next.edge);
 		beats.push({
 			nodeId: node.id,
 			node,
 			viaEdge: next.edge,
+			// Kind stays within the shared Cinema union (the narrator maps it) —
+			// a causal step reads as a contradiction-style backward hop for the
+			// wavefront; consumers that care read viaEdge.type directly.
 			kind: isContradictionEdge(next.edge) ? 'contradiction' : 'connection',
-			intensity: isContradictionEdge(next.edge) ? 1 : Math.min(1, 0.55 + (next.edge.weight ?? 0) * 0.45),
+			intensity: isContradictionEdge(next.edge) || causal
+				? 1
+				: Math.min(1, 0.55 + (next.edge.weight ?? 0) * 0.45),
 		});
 		current = node.id;
 	}
