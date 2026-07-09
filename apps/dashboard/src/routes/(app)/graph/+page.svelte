@@ -318,7 +318,13 @@ disown</code>
 			     MAIN renderer: GPU force sim, HDR bloom, the recall wavefront
 			     sweeping the real graph on a 12s loop. Page chrome stays DOM. -->
 			<div class="absolute inset-0">
-				<ObservatoryStage embedded chrome="none" demo="recall-path" showSwitcher={false} />
+				<ObservatoryStage
+					embedded
+					chrome="none"
+					demo="recall-path"
+					showSwitcher={false}
+					onpick={onNodeSelect}
+				/>
 			</div>
 		{:else}
 			<Graph3D

@@ -57,6 +57,11 @@
 		 *           provides all chrome (the main graph's field renderer).
 		 */
 		chrome?: 'full' | 'none';
+		/**
+		 * GPU picking: when provided, clicking a memory node in the field calls
+		 * back with its memory id (the host opens its inspector panel).
+		 */
+		onpick?: (memoryId: string) => void;
 	}
 
 	let {
@@ -68,8 +73,21 @@
 		ondemochange,
 		onexit,
 		embedded = false,
-		chrome = 'full'
+		chrome = 'full',
+		onpick
 	}: Props = $props();
+
+	// GPU picking — screen px → NDC → NodeRenderer.pickAt (one readback/click).
+	let canvasLayerEl: HTMLDivElement | null = $state(null);
+	async function handleFieldClick(e: MouseEvent) {
+		if (!onpick || !renderer || !canvasLayerEl) return;
+		const rect = canvasLayerEl.getBoundingClientRect();
+		if (rect.width === 0 || rect.height === 0) return;
+		const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+		const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+		const hit = await renderer.pickAt(ndcX, ndcY);
+		if (hit) onpick(hit.id);
+	}
 
 	// Human labels for the switcher chips — short, mono, uppercase (visual DNA §7.3).
 	const DEMO_LABELS: Record<DemoMode, string> = {
@@ -266,8 +284,15 @@
 	class="{embedded ? 'absolute' : 'fixed'} inset-0 overflow-hidden bg-[#05060a]"
 	class:cursor-none={capture}
 >
-	<!-- Canvas layer (z-index 0) — the living memory field -->
-	<div class="absolute inset-0 z-0">
+	<!-- Canvas layer (z-index 0) — the living memory field. When the host
+	     passes onpick, clicks GPU-pick the memory under the cursor. -->
+	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+	<div
+		bind:this={canvasLayerEl}
+		class="absolute inset-0 z-0"
+		class:cursor-crosshair={!!onpick && !capture}
+		onclick={handleFieldClick}
+	>
 		<ObservatoryCanvas
 			{demo}
 			{seed}

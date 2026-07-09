@@ -6,7 +6,9 @@
  * written from the deterministic loop phase each frame (orbit), nodes draw
  * as instanced soft-glow sprites straight from the storage buffer.
  *
- * No GPU readback, no wall-clock state (spec §6).
+ * The RENDER LOOP does no GPU readback and holds no wall-clock state
+ * (spec §6 — deterministic frames). pickAt() is the one sanctioned,
+ * input-driven readback: click-frequency only, never per-frame.
  */
 
 import type { GraphResponse } from '$types';
@@ -18,7 +20,7 @@ import {
 	buildNodeStateArray,
 	buildEdgeIndexArray
 } from './graph-upload';
-import type { ObservatoryGraph } from './types';
+import { FLOATS_PER_NODE, NODE_LANE, type ObservatoryGraph } from './types';
 import { renderNodesWGSL } from './shaders/render-nodes.wgsl';
 import { simulateWGSL } from './shaders/simulate.wgsl';
 import { renderPathWGSL } from './shaders/render-path.wgsl';
@@ -79,10 +81,15 @@ export class NodeRenderer implements FramePass {
 		this.nodeCount = nodeCount;
 
 		this.nodeBuffer?.destroy();
+		// COPY_SRC exists solely for pickAt()'s click-time readback.
 		this.nodeBuffer = device.createBuffer({
 			label: 'observatory-node-state',
 			size: Math.max(data.byteLength, 64),
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.VERTEX
+			usage:
+				GPUBufferUsage.STORAGE |
+				GPUBufferUsage.COPY_DST |
+				GPUBufferUsage.COPY_SRC |
+				GPUBufferUsage.VERTEX
 		});
 		device.queue.writeBuffer(this.nodeBuffer, 0, data.buffer as ArrayBuffer);
 
@@ -317,6 +324,77 @@ export class NodeRenderer implements FramePass {
 
 	get pathStepMeta(): PathStepMeta[] {
 		return this.pathSteps;
+	}
+
+	/**
+	 * Click picking — the ONE sanctioned GPU readback (input-driven, never
+	 * per-frame, so the render loop's determinism contract holds).
+	 *
+	 * Copies the live NodeState buffer (post force-sim positions) to a staging
+	 * buffer, reprojects every node through the SAME deterministic orbit camera
+	 * the current frame used (engine params: phase + canvas size), and returns
+	 * the nearest node whose projected disc contains the click.
+	 *
+	 * @param ndcX click x in NDC (-1..1, right = +)
+	 * @param ndcY click y in NDC (-1..1, up = +)
+	 */
+	async pickAt(ndcX: number, ndcY: number): Promise<{ index: number; id: string } | null> {
+		const device = this.engine.gpuDevice;
+		if (!device || !this.nodeBuffer || !this.graph || this.nodeCount === 0) return null;
+
+		const byteSize = this.nodeCount * FLOATS_PER_NODE * 4;
+		const staging = device.createBuffer({
+			label: 'observatory-pick-staging',
+			size: byteSize,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+		});
+		const encoder = device.createCommandEncoder({ label: 'observatory-pick-copy' });
+		encoder.copyBufferToBuffer(this.nodeBuffer, 0, staging, 0, byteSize);
+		device.queue.submit([encoder.finish()]);
+		let data: Float32Array;
+		try {
+			await staging.mapAsync(GPUMapMode.READ);
+			data = new Float32Array(staging.getMappedRange().slice(0));
+		} catch {
+			staging.destroy();
+			return null;
+		}
+		staging.unmap();
+		staging.destroy();
+
+		// Same camera inputs the frame pass uses (compute() above).
+		const w = this.engine.params[6] || 1;
+		const h = this.engine.params[7] || 1;
+		const phase = this.engine.params[1];
+		const m = orbitCamera(phase, w / h, ORBIT_DISTANCE).viewProj; // column-major
+
+		// Projected-disc hit test: fovY 50° → f = 1/tan(25°); a node of world
+		// radius r at clip-w distance projects to ~r·f/w in NDC y. A small
+		// floor keeps faint distant nodes clickable; score <1.6 allows a
+		// forgiving halo around the disc; lowest score (closest relative to
+		// its disc) wins.
+		const f = 1 / Math.tan((50 * Math.PI) / 360);
+		let best = -1;
+		let bestScore = Infinity;
+		for (let i = 0; i < this.nodeCount; i++) {
+			const b = i * FLOATS_PER_NODE + NODE_LANE.posRadius;
+			const x = data[b];
+			const y = data[b + 1];
+			const z = data[b + 2];
+			const r = data[b + 3];
+			const cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+			if (cw <= 0) continue; // behind the camera
+			const cx = (m[0] * x + m[4] * y + m[8] * z + m[12]) / cw;
+			const cy = (m[1] * x + m[5] * y + m[9] * z + m[13]) / cw;
+			const projR = Math.max((r * f) / cw, 0.012);
+			const score = Math.hypot(cx - ndcX, cy - ndcY) / projR;
+			if (score < 1.6 && score < bestScore) {
+				bestScore = score;
+				best = i;
+			}
+		}
+		if (best < 0) return null;
+		return { index: best, id: this.graph.nodes[best].id };
 	}
 
 	dispose(): void {
