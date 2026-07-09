@@ -4,6 +4,7 @@
 	import type { SystemStats, HealthCheck, RetentionDistribution } from '$types';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
+	import AmbientField from '$lib/components/AmbientField.svelte';
 	import { reveal } from '$lib/actions/reveal';
 	import { spotlight } from '$lib/actions/interactions';
 	import { NODE_TYPE_COLORS } from '$types';
@@ -12,6 +13,20 @@
 	let health: HealthCheck | null = $state(null);
 	let retention: RetentionDistribution | null = $state(null);
 	let loading = $state(true);
+
+	// Phase 5 ambient base coat — the field behind this page READS these real
+	// metrics: the endangered share storms it, due-for-review pulses it. A store
+	// with 129 actively-forgetting memories looks visibly different from a calm one.
+	let endangeredFrac = $derived.by(() => {
+		const r = retention;
+		if (!r || r.total <= 0) return 0;
+		return (r.endangered?.length ?? 0) / r.total;
+	});
+	let dueFrac = $derived.by(() => {
+		const s = stats;
+		if (!s || s.totalMemories <= 0) return 0;
+		return s.dueForReview / s.totalMemories;
+	});
 
 	onMount(async () => {
 		try {
@@ -41,6 +56,20 @@
 	}
 </script>
 
+<!-- Phase 5 base coat: a metric-bound WebGPU field behind the page. Degrades to
+     nothing (the page background) without WebGPU; freezes under reduced-motion. -->
+<div class="relative isolate min-h-full">
+<div class="absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
+	{#if stats}
+		<AmbientField
+			count={stats.totalMemories}
+			endangered={endangeredFrac}
+			due={dueFrac}
+			accent={[0.36, 0.92, 0.72]}
+			opacity={0.4}
+		/>
+	{/if}
+</div>
 <div class="p-6 max-w-5xl mx-auto space-y-6">
 	<PageHeader
 		icon="stats"
@@ -154,6 +183,7 @@
 			</button>
 		</div>
 	{/if}
+</div>
 </div>
 
 <style>

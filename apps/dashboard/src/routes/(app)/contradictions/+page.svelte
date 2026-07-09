@@ -5,6 +5,7 @@
 	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
 	import Icon from '$components/Icon.svelte';
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
+	import AmbientField from '$components/AmbientField.svelte';
 	import { reveal } from '$lib/actions/reveal';
 	import { api } from '$stores/api';
 	import {
@@ -135,8 +136,22 @@
 	function sidebarClick(localIndex: number) {
 		focusedPairIndex = focusedPairIndex === localIndex ? null : localIndex;
 	}
+
+	// Phase 5 base coat — the field behind this page fractures with the REAL
+	// contradiction load: no contradictions = a calm field, many = visible rifts.
+	let fractureFrac = $derived.by(() => Math.min(1, totalDetected / 24));
 </script>
 
+<div class="relative isolate min-h-full">
+<div class="absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
+	<AmbientField
+		count={Math.max(120, uniqueMemoryCount(contradictions) * 6)}
+		fracture={fractureFrac}
+		endangered={0.15}
+		accent={[0.95, 0.32, 0.42]}
+		opacity={0.32}
+	/>
+</div>
 <div class="min-h-full p-6 space-y-6">
 	<!-- Header -->
 	<PageHeader
@@ -356,4 +371,5 @@
 		</aside>
 	</div>
 	{/if}
+</div>
 </div>
