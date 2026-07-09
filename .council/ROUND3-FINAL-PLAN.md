@@ -245,9 +245,15 @@ with legacy fallback:
   closest real receipt id = `composition_event_id`. There is NO `receipt` field.
 
 **T3 — WebGPU format + FramePass traps.**
-- Field ping-pong / storage textures: use `rgba16float`, NOT `rg16float` write-
-  only storage (narrower support; portability trap). Logical channels in `.rg`,
-  `.ba` reserved. OR do separable blur as fullscreen render-pass draws.
+- HARD RULE (verified live on M-series: `rgba16float-renderable`=false, rgba16float
+  is NOT a writable storage-texture format here): NEVER use `texture_storage_2d<...,
+  write>` + `textureStore` for the blur. Do the separable blur as FULLSCREEN
+  RENDER-PASS draws (H then V) into RENDER_ATTACHMENT textures, sampling the
+  source via `textureSampleLevel`. Field textures usage = `RENDER_ATTACHMENT |
+  TEXTURE_BINDING` (NO `STORAGE_BINDING`). The whole field pipeline is render
+  passes: splat (additive) → blur-H → blur-V → membrane. No storage textures
+  anywhere. `rgba16float` is fully valid as a RENDER TARGET.
+- Logical channels in `.rg`, `.ba` reserved.
 - FramePass sequencing: the engine calls ALL `compute()` then opens ONE main HDR
   scene pass and calls ALL `render()`. So a field pass does splat+blur INSIDE its
   `compute(encoder)` (it receives a `GPUCommandEncoder`, not a compute-pass
@@ -269,6 +275,19 @@ shared Graph params. Run `assertProvenance(scene)` in dev before upload.
 **T5 — magenta stays RSB-ONLY.** The D1 sample mixed magenta into the
 contradiction seam — WRONG. Contradictions use scarlet/immune reds. Magenta
 `#FF2DF7` appears ONLY in the retrograde causal axon.
+
+**T6 — NEVER share one WGSL module between compute and render pipelines when it
+declares a `read_write` storage buffer or a `write` storage texture.** WebGPU
+forbids read_write storage buffers AND write storage textures in vertex/fragment
+stages (compute-only). A render pipeline whose module/layout exposes such a
+binding is INVALID at runtime (check+build stay green — only live-GPU validation
+catches it). SPLIT WGSL into per-pipeline modules: compute module (advect/blur)
+= read_write storage + write storage texture OK; render modules (splat/membrane)
+= storage buffers as `var<storage, read>` only. Each pipeline gets its own
+explicit bind group layout matching exactly. (Found live in Organ 1's field
+splat pass — this is the D1 metaball pattern's #1 trap.)
+This is why Claude's LIVE-GPU verify per organ is non-optional: the swarm
+verifier's check/build cannot catch invalid-pipeline runtime errors.
 
 ## 7. THE PROTOTYPE ACCEPTANCE TEST (Organ 1, de-risks all)
 1. User enters a query on `/reasoning`.

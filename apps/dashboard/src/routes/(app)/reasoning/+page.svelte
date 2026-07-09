@@ -6,6 +6,13 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
+	import RouteStage, { type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import { createReasoningTheaterPasses } from '$lib/observatory/reasoning/reasoning-theater-pass';
+	import {
+		normalizeDeepReferenceResponse,
+		type ReasoningScene,
+		type ReasoningStageReceipt
+	} from '$lib/observatory/reasoning/reasoning-scene';
 	import { reveal } from '$lib/actions/reveal';
 	import { spotlight, magnetic } from '$lib/actions/interactions';
 	import {
@@ -66,11 +73,14 @@
 		memoriesAnalyzed: number;
 	}
 
+	let latestReasoningScene: ReasoningScene | null = null;
+
 	// Real backend call — wraps the 8-stage deep_reference cognitive pipeline
 	// via /api/deep_reference. The handler emits DeepReferenceCompleted on
 	// the WebSocket so Graph3D can glide + pulse + arc in the 3D scene.
 	async function deepReferenceFetch(query: string): Promise<DeepReferenceResponse> {
 		const raw = (await api.deepReference(query, 20)) as Record<string, unknown>;
+		latestReasoningScene = normalizeDeepReferenceResponse(raw);
 
 		const evidenceRaw = Array.isArray(raw.evidence) ? (raw.evidence as Record<string, unknown>[]) : [];
 		const evidence: EvidenceEntry[] = evidenceRaw.map((e) => {
@@ -170,6 +180,8 @@
 	let query = $state('');
 	let loading = $state(false);
 	let response: DeepReferenceResponse | null = $state(null);
+	let reasoningScene: ReasoningScene | null = $state(null);
+	let selectedStage: ReasoningStageReceipt | null = $state(null);
 	let error: string | null = $state(null);
 	let askInputEl: HTMLInputElement | null = $state(null);
 
@@ -183,9 +195,12 @@
 		loading = true;
 		error = null;
 		response = null;
+		reasoningScene = null;
+		selectedStage = null;
 		arcs = [];
 		try {
 			response = await deepReferenceFetch(q);
+			reasoningScene = latestReasoningScene;
 			// After DOM paints the evidence cards, measure & draw arcs
 			requestAnimationFrame(() => requestAnimationFrame(measureArcs));
 		} catch (e) {
@@ -216,6 +231,12 @@
 			});
 		}
 		arcs = next;
+	}
+
+	function handleRoutePick(pick: RoutePick) {
+		if (pick.kind === 'stage') {
+			selectedStage = pick.payload as ReasoningStageReceipt;
+		}
 	}
 
 	function handleGlobalKey(e: KeyboardEvent) {
@@ -249,7 +270,18 @@
 	<title>Reasoning Theater · Vestige</title>
 </svelte:head>
 
-<div class="p-6 max-w-6xl mx-auto space-y-8 enter">
+<RouteStage
+	organ="reasoning"
+	seed={`reasoning-theater:${query || 'empty'}`}
+	scene={reasoningScene}
+	passes={createReasoningTheaterPasses}
+	loading={loading}
+	error={error}
+	emptyLabel="ASK A QUERY TO LIGHT THE EIGHT-STAGE ORGAN"
+	onpick={handleRoutePick}
+/>
+
+<div class="relative z-10 p-6 max-w-6xl mx-auto space-y-8 enter">
 	<!-- Header -->
 	<PageHeader
 		icon="reasoning"
@@ -609,6 +641,56 @@
 		</div>
 	{/if}
 </div>
+
+{#if selectedStage}
+	<aside
+		class="fixed right-4 top-24 bottom-4 z-30 w-[min(26rem,calc(100vw-2rem))] overflow-auto rounded-2xl
+			border border-[#A8FF5E]/25 bg-[#020307]/92 p-4 shadow-2xl backdrop-blur-xl font-mono"
+		aria-label="Reasoning stage receipt"
+	>
+		<div class="flex items-start justify-between gap-3 border-b border-[#A8FF5E]/15 pb-3">
+			<div>
+				<div class="text-[10px] uppercase tracking-[0.22em] text-[#A8FF5E]/70">stage receipt</div>
+				<h2 class="text-bright text-sm mt-1">{selectedStage.index + 1}. {selectedStage.label}</h2>
+			</div>
+			<button class="text-muted hover:text-bright" onclick={() => (selectedStage = null)} aria-label="Close stage receipt">×</button>
+		</div>
+
+		<div class="grid grid-cols-3 gap-2 py-3 text-[11px]">
+			<div class="rounded-lg border border-white/10 bg-white/[0.03] p-2">
+				<div class="text-muted">count</div>
+				<div class="text-[#E9FFB7]">{selectedStage.count}</div>
+			</div>
+			<div class="rounded-lg border border-white/10 bg-white/[0.03] p-2">
+				<div class="text-muted">confidence</div>
+				<div class="text-[#E9FFB7]">{Math.round(selectedStage.confidence * 100)}%</div>
+			</div>
+			<div class="rounded-lg border border-white/10 bg-white/[0.03] p-2">
+				<div class="text-muted">interrupt</div>
+				<div class={selectedStage.interrupt === 'none' ? 'text-dim' : 'text-[#FF3B30]'}>{selectedStage.interrupt}</div>
+			</div>
+		</div>
+
+		<div class="space-y-3 text-[11px]">
+			<div>
+				<div class="uppercase tracking-[0.16em] text-muted mb-1">provenance</div>
+				<pre class="whitespace-pre-wrap rounded-xl border border-[#22C7DE]/15 bg-[#07100D]/75 p-3 text-[#9DFFEB]">{JSON.stringify(selectedStage.provenance, null, 2)}</pre>
+			</div>
+			<div>
+				<div class="uppercase tracking-[0.16em] text-muted mb-1">exact exposed backend data</div>
+				<pre class="whitespace-pre-wrap rounded-xl border border-[#A8FF5E]/15 bg-[#07100D]/75 p-3 text-[#E9FFB7]">{JSON.stringify(selectedStage.exposed, null, 2)}</pre>
+			</div>
+			<div>
+				<div class="uppercase tracking-[0.16em] text-muted mb-1">not_exposed_by_backend</div>
+				<ul class="rounded-xl border border-[#FFD166]/15 bg-[#11140A]/75 p-3 text-[#FFD166] space-y-1">
+					{#each selectedStage.not_exposed_by_backend as item}
+						<li>• {item}</li>
+					{/each}
+				</ul>
+			</div>
+		</div>
+	</aside>
+{/if}
 
 <style>
 	.conf-number {
