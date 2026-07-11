@@ -40,7 +40,10 @@
 		void loadImportanceField();
 	});
 
+	let stopReducedMotion: (() => void) | null = null;
+
 	onDestroy(() => {
+		stopReducedMotion?.();
 		textPass?.dispose();
 		fieldPass?.dispose();
 		textPass = null;
@@ -48,8 +51,20 @@
 		engineRef = null;
 	});
 
+	// Mounts ObservatoryCanvas directly (not RouteStage), so wire prefers-reduced-
+	// motion here: a reduce-motion user gets a frozen field, not a moving one.
+	function initReducedMotion(engine: ObservatoryEngine): () => void {
+		if (typeof window === 'undefined') return () => {};
+		const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+		engine.setPaused(mq.matches);
+		const onChange = (e: MediaQueryListEvent) => engine.setPaused(e.matches);
+		mq.addEventListener('change', onChange);
+		return () => mq.removeEventListener('change', onChange);
+	}
+
 	async function handleReady(engine: ObservatoryEngine) {
 		engineRef = engine;
+		stopReducedMotion = initReducedMotion(engine);
 		const field = new LivingFieldPass(engine);
 		fieldPass = field;
 		field.setCells(buildFieldCells());
@@ -230,12 +245,23 @@
 	async function handlePointerDown(e: PointerEvent) {
 		const ndc = pointerToNdc(e);
 		if (!ndc || !textPass) return;
-		const hit = textPass.pickAt(ndc.x, ndc.y);
-		if (hit?.kind !== 'importance') return;
-		const item = hit.payload as ImportanceTextItem;
-		if (!item.memoryId) return;
+		// Pick the TEXT row first; if it misses, pick the FIELD cell (its payload is
+		// the ImportanceRecord, id at record.memory.id). Without this, clicking a
+		// glowing importance orb did nothing — only the text rows were clickable.
+		let memoryId: string | undefined;
+		const textHit = textPass.pickAt(ndc.x, ndc.y);
+		if (textHit?.kind === 'importance') {
+			memoryId = (textHit.payload as ImportanceTextItem).memoryId;
+		} else {
+			const fieldHit = fieldPass?.pickAt(ndc.x, ndc.y);
+			if (fieldHit?.kind === 'importance') {
+				const rec = fieldHit.payload as { memory?: { id?: string } };
+				memoryId = rec.memory?.id;
+			}
+		}
+		if (!memoryId) return;
 		try {
-			const promoted = await api.memories.promote(item.memoryId);
+			const promoted = await api.memories.promote(memoryId);
 			// The promote endpoint returns a PARTIAL payload ({ id, promoted,
 			// retentionStrength }) — NOT a full Memory. Merge it onto the existing
 			// record so content/createdAt/etc. survive; replacing outright would drop

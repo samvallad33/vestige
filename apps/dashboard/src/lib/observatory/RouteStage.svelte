@@ -315,8 +315,13 @@
 			togglePause();
 			return;
 		}
-		for (const pass of routePasses) {
-			const hit = await pass.pickAt?.(ndc.x, ndc.y);
+		// Pick TOP-DOWN: routePasses render back-to-front (organs return
+		// [field, ...text/chrome], so text draws ON TOP of the field). Picking must
+		// mirror what the user sees on top — so iterate in REVERSE (front first).
+		// Otherwise a background field cell that happens to sit under a foreground
+		// text control would steal the click from the control the user actually sees.
+		for (let i = routePasses.length - 1; i >= 0; i--) {
+			const hit = await routePasses[i].pickAt?.(ndc.x, ndc.y);
 			if (hit) {
 				onpick?.(hit);
 				return;

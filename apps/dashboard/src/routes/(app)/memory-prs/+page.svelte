@@ -189,10 +189,14 @@
 
 	async function handleRoutePick(pick: RoutePick) {
 		if (pick.kind !== 'memory-pr') return;
-		const item = pick.payload as MemoryPrTextItem;
-		if (!item.prId) return;
+		// Pick can be a TEXT row (payload = MemoryPrTextItem with .prId) or a FIELD
+		// cell (payload = RouteNode with .source.id == pr id). Read whichever, so
+		// field cells act on the real PR, not silently no-op.
+		const payload = pick.payload as Partial<MemoryPrTextItem> & { source?: { id?: string } };
+		const prId = payload.prId ?? payload.source?.id;
+		if (!prId) return;
 		try {
-			const res = (await api.memoryPrs.act(item.prId, 'ask_agent_why')) as { why?: WhySignal[] };
+			const res = (await api.memoryPrs.act(prId, 'ask_agent_why')) as { why?: WhySignal[] };
 			whySignals = res.why ?? [];
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'UNKNOWN MEMORY PR ACTION ERROR';

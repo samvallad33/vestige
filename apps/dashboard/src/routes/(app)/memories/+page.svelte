@@ -37,12 +37,14 @@
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let activeRun: string | null = null;
+	let stopReducedMotion: (() => void) | null = null;
 
 	onMount(() => {
 		void loadMemories();
 	});
 
 	onDestroy(() => {
+		stopReducedMotion?.();
 		textPass?.dispose();
 		fieldPass?.dispose();
 		textPass = null;
@@ -50,8 +52,21 @@
 		engineRef = null;
 	});
 
+	// This organ mounts ObservatoryCanvas directly (not RouteStage), so it must
+	// wire prefers-reduced-motion itself: a reduce-motion user gets a frozen field
+	// (the engine still renders one static frame) instead of continuous orbit.
+	function initReducedMotion(engine: ObservatoryEngine): () => void {
+		if (typeof window === 'undefined') return () => {};
+		const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+		engine.setPaused(mq.matches);
+		const onChange = (e: MediaQueryListEvent) => engine.setPaused(e.matches);
+		mq.addEventListener('change', onChange);
+		return () => mq.removeEventListener('change', onChange);
+	}
+
 	async function handleReady(engine: ObservatoryEngine) {
 		engineRef = engine;
+		stopReducedMotion = initReducedMotion(engine);
 		// Engram galaxy FIRST (behind the parallax MSDF text): every real memory a
 		// glowing cell, retention = oxygen. The cursor-parallax text field rides on top.
 		const field = new LivingFieldPass(engine);
@@ -228,10 +243,16 @@
 				await api.memories.suppress(item.memoryId, 'suppressed from memories field');
 				suppressedIds = new Set(suppressedIds).add(item.memoryId);
 			} else if (e.altKey) {
-				await api.memories.unsuppress(item.memoryId);
-				const next = new Set(suppressedIds);
-				next.delete(item.memoryId);
-				suppressedIds = next;
+				// unsuppress COMPOUNDS down by one — a memory suppressed twice is still
+				// suppressed after one unsuppress. Only clear the scar when the backend
+				// says it's fully released (stillSuppressed=false), else the cell would
+				// lie (render healthy while retrieval is still penalized).
+				const res = await api.memories.unsuppress(item.memoryId);
+				if (!res.stillSuppressed) {
+					const next = new Set(suppressedIds);
+					next.delete(item.memoryId);
+					suppressedIds = next;
+				}
 			} else {
 				const promoted = await api.memories.promote(item.memoryId);
 				memories = memories.map((memory) =>

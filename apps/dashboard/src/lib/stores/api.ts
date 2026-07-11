@@ -274,6 +274,7 @@ export type ChangelogEvent = {
 };
 export type ChangelogResponse = {
 	events: ChangelogEvent[];
+	totalEvents: number;
 	filter?: { start: string | null; end: string | null; limit: number };
 };
 

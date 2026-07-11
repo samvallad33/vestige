@@ -262,10 +262,13 @@
 
 	async function handleRoutePick(pick: RoutePick) {
 		if (pick.kind !== 'schedule-memory') return;
-		const item = pick.payload as ScheduleTextItem;
-		if (!item.memoryId) return;
+		// TEXT row payload has .memoryId; FIELD cell payload is a RouteNode whose
+		// source.id is the memory id. Read either so field cells promote, not no-op.
+		const item = pick.payload as Partial<ScheduleTextItem> & { source?: { id?: string } };
+		const memoryId = item.memoryId ?? item.source?.id;
+		if (!memoryId) return;
 		try {
-			const promoted = await api.memories.promote(item.memoryId);
+			const promoted = await api.memories.promote(memoryId);
 			// promote returns a PARTIAL {id, promoted, retentionStrength} — merge the
 			// changed field into the full Memory, never replace it (a full swap drops
 			// content/nodeType/... and crashes the next render — the /memories bug).

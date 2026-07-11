@@ -25,6 +25,7 @@
 	const LUCIFERIN = [...rgb01(RETENTION.luciferin), 0.88] satisfies [number, number, number, number];
 	const SCARLET = [...rgb01(IMMUNE.veto), 0.92] satisfies [number, number, number, number];
 	const MUTED = [...rgb01(RETENTION.recall), 0.62] satisfies [number, number, number, number];
+	const AMBER = [...rgb01(IMMUNE.caution), 0.9] satisfies [number, number, number, number];
 	const INTENTION_LIMIT = 36;
 	const ACTIVE_FILTER = 'active';
 	const ALL_FILTER = 'all';
@@ -83,8 +84,10 @@
 		constructor(engine: ObservatoryEngine) { this.field = new LivingFieldPass(engine); }
 		uploadScene(scene: RouteSceneModel): void {
 			const data: FieldDatum[] = scene.nodes.map((node) => ({ id: node.source.id, score: node.activation ?? node.retention, hue: FIELD_HUE.forward, energy: node.activation, metric2: node.retention, selected: node.source.id === selectedIntentionId, kind: 'intention', payload: node }));
+			// RouteStage now picks text chrome (front) before field cells (behind),
+			// so the galaxy can fill without stealing the filter toggle's click.
 			const sparse = data.length < 4;
-			this.field.setCells(layoutGalaxy(data, { maxRadius: 0.82, minCellR: sparse ? 0.24 : 0.025, maxCellR: sparse ? 0.32 : 0.075 }));
+			this.field.setCells(layoutGalaxy(data, { maxRadius: 0.82, minCellR: sparse ? 0.22 : 0.025, maxCellR: sparse ? 0.3 : 0.075 }));
 		}
 		compute(encoder: GPUCommandEncoder): void { this.field.compute(encoder); }
 		render(pass: GPURenderPassEncoder): void { this.field.render(pass); }
@@ -160,18 +163,43 @@
 		};
 	}
 
+	// A dedicated, explicit filter toggle (active <-> all). Selecting an intention
+	// must NOT silently flip the global filter — that lives here as its own target.
+	function filterToggleItem(): IntentionTextItem {
+		return {
+			id: 'intentions:filter',
+			kind: 'intention-filter',
+			text: filter === ACTIVE_FILTER ? '[ SHOWING: ACTIVE - CLICK FOR ALL ]' : '[ SHOWING: ALL - CLICK FOR ACTIVE ]',
+			// Far top-left corner (radius ~1.3 from origin) — beyond the galaxy's
+			// bounded reach (maxRadius 0.7 + maxCellR 0.2 ≈ 0.9), so no field cell can
+			// overlap and steal this click (field is picked before text chrome).
+			x: -0.94,
+			y: 0.9,
+			size: 0.024,
+			color: AMBER,
+			depth: 1,
+			weight: 0.7,
+			revealSpan: 12,
+			maxWidthEm: 40,
+			hitPadX: 0.03,
+			hitPadY: 0.03
+		};
+	}
+
 	function buildTextItems(): IntentionTextItem[] {
 		if (loading) return [statusItem('LOADING INTENTION FIELD...', CYAN)];
 		if (error) return [statusItem(`ERROR - ${error}`.slice(0, 72), SCARLET)];
-		if (intentions.length === 0) return [statusItem(`EMPTY ${filter.toUpperCase()} INTENTION FIELD`, MUTED)];
+		if (intentions.length === 0) return [filterToggleItem(), statusItem(`EMPTY ${filter.toUpperCase()} INTENTION FIELD`, MUTED)];
 
+		const items: IntentionTextItem[] = [filterToggleItem()];
 		const rows = intentions.slice(0, INTENTION_LIMIT);
 		const top = 0.72;
 		const rowStep = 1.5 / Math.max(1, INTENTION_LIMIT - 1);
-		return rows.map((intention, i) => {
+		for (let i = 0; i < rows.length; i++) {
+			const intention = rows[i];
 			const id = `intent:${intention.id}`;
 			const active = selectedIntentionId === intention.id;
-			return {
+			items.push({
 				id,
 				kind: 'intention',
 				intentionId: intention.id,
@@ -187,8 +215,9 @@
 				maxWidthEm: 52,
 				hitPadX: 0.03,
 				hitPadY: 0.015
-			};
-		});
+			});
+		}
+		return items;
 	}
 
 	const scene = $derived<RouteSceneModel>({
@@ -232,11 +261,19 @@
 	});
 
 	function handlePick(pick: RoutePick) {
+		// The explicit filter toggle switches active <-> all (its own target).
+		if (pick.kind === 'intention-filter') {
+			void loadIntentions(filter === ACTIVE_FILTER ? ALL_FILTER : ACTIVE_FILTER);
+			return;
+		}
 		if (pick.kind !== 'intention') return;
-		const item = pick.payload as IntentionTextItem;
-		selectedIntentionId = item.intentionId ?? null;
+		// The pick can come from the TEXT pass (payload = IntentionTextItem with
+		// .intentionId) OR the FIELD pass (payload = RouteNode with .source.id).
+		// Read the intention id from whichever shape it is, so field cells are
+		// clickable, not just text rows.
+		const payload = pick.payload as Partial<IntentionTextItem> & { source?: { id?: string } };
+		selectedIntentionId = payload.intentionId ?? payload.source?.id ?? null;
 		updateTextPass();
-		void loadIntentions(filter === ACTIVE_FILTER ? ALL_FILTER : ACTIVE_FILTER);
 	}
 </script>
 

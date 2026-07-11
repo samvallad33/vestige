@@ -248,31 +248,42 @@ export class LivingFieldPass implements FramePass {
 		this.cellCount = Math.min(MAX_CELLS, this.cells.length);
 		for (let i = 0; i < this.cellCount; i++) {
 			const c = this.cells[i];
-			const ringR = Math.hypot(c.x, c.y);
+			// Finite-guard every value that reaches the GPU: one NaN/Infinity in a
+			// position or hue poisons the additive splat (NaN spreads through the
+			// blur to the whole membrane). A bad organ mapper (score/0, a degenerate
+			// layout) must not be able to black out the field.
+			const x = finite(c.x);
+			const y = finite(c.y);
+			const ringR = Math.hypot(x, y);
+			const phase = finite(c.phase);
 			// flags: bit0 selected, bit1 scar, bit2 pulse-strong (energy>0.8)
 			let flags = 0;
 			if (c.selected) flags |= 1;
 			if (c.scar) flags |= 2;
-			if (c.energy > 0.8) flags |= 4;
+			if (finite(c.energy) > 0.8) flags |= 4;
 			const o = i * CELL_FLOATS;
-			data[o + 0] = c.x;
-			data[o + 1] = c.y;
-			data[o + 2] = Math.max(0.006, c.radius);
+			data[o + 0] = x;
+			data[o + 1] = y;
+			data[o + 2] = Math.max(0.006, finite(c.radius, 0.02));
 			data[o + 3] = ringR;
-			data[o + 4] = c.hue[0];
-			data[o + 5] = c.hue[1];
-			data[o + 6] = c.hue[2];
+			data[o + 4] = finite(c.hue[0]);
+			data[o + 5] = finite(c.hue[1]);
+			data[o + 6] = finite(c.hue[2]);
 			data[o + 7] = clamp01(c.energy);
-			data[o + 8] = c.phase;
+			data[o + 8] = phase;
 			data[o + 9] = flags;
 			data[o + 10] = clamp01(c.metric2 ?? c.energy);
-			data[o + 11] = c.spin ?? 1;
+			data[o + 11] = finite(c.spin ?? 1, 1);
 			data[o + 12] = i;
-			data[o + 13] = c.seed ?? c.phase * 97.13;
+			data[o + 13] = finite(c.seed ?? phase * 97.13);
 			data[o + 14] = 0;
 			data[o + 15] = 0;
 		}
-		this.engine.params[2] = this.cellCount;
+		// NOTE: do NOT write engine.params[2] (node_count) here. That lane is SHARED
+		// with any co-resident scene pass (the recall-path NodeRenderer on graph/
+		// observatory/memories reads params.node_count to cull its instances). The
+		// field draws this.cellCount instances directly in render() and never reads
+		// node_count, so writing it would silently corrupt a sibling pass's cull.
 		device.queue.writeBuffer(this.resources.cellBuffer, 0, data);
 	}
 
@@ -351,6 +362,11 @@ export class LivingFieldPass implements FramePass {
 
 function clamp01(v: number): number {
 	return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
+}
+
+/** Coerce a value to a finite number so no NaN/Infinity reaches the GPU buffer. */
+function finite(v: number, fallback = 0): number {
+	return Number.isFinite(v) ? v : fallback;
 }
 
 function diagShader(device: GPUDevice, label: string, code: string): GPUShaderModule {

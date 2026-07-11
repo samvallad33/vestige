@@ -14,6 +14,10 @@ export default defineConfig({
 		screenshot: 'on',
 		video: 'retain-on-failure',
 		trace: 'retain-on-failure',
+		// Pin motion ON so the living-field motion assertions (isAnimating) are
+		// stable: a CI/host that reports prefers-reduced-motion would otherwise
+		// freeze every field and false-fail the "field is moving" gate.
+		reducedMotion: 'no-preference',
 		launchOptions: {
 			args: ['--use-gl=angle', '--ignore-gpu-blocklist'],
 		},

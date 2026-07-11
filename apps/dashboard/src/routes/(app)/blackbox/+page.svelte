@@ -191,7 +191,10 @@
 	}
 	// Refresh the run constellation whenever the run list changes.
 	$effect(() => {
+		// Rebuild on run-list change AND on selection change (so the selected cell's
+		// bright highlight follows the picked run, not just new runs appearing).
 		void runs.length;
+		void selectedRunId;
 		runsField?.setCells(buildRunCells());
 	});
 </script>

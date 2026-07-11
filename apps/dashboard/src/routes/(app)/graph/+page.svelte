@@ -63,9 +63,16 @@
 		field.setCells(buildGraphFieldCells());
 		engine.addPass(field);
 	}
+	// Drop the field handle when we leave field mode: ObservatoryStage unmounts and
+	// disposes its engine (destroying the field's GPU resources), so the handle is
+	// stale — calling setCells on it would touch a destroyed device. Nulling it
+	// keeps the data-refresh $effect from firing against a dead pass.
+	$effect(() => {
+		if (renderMode !== 'field') graphFieldPass = null;
+	});
 	$effect(() => {
 		void graphData?.nodes.length;
-		graphFieldPass?.setCells(buildGraphFieldCells());
+		if (renderMode === 'field') graphFieldPass?.setCells(buildGraphFieldCells());
 	});
 	let selectedMemory: Memory | null = $state(null);
 	let loading = $state(true);

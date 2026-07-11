@@ -54,12 +54,11 @@ export function layoutGalaxy(
 		const y = Math.sin(ang) * rr;
 		const score = clamp01(d.score);
 		const radius = minCellR + (maxCellR - minCellR) * Math.sqrt(score);
-		const hue = d.hue ?? retentionColor(score);
 		return {
 			x,
 			y,
 			radius,
-			hue: [hue[0], hue[1], hue[2]] as [number, number, number],
+			hue: safeHue(d.hue, score),
 			energy: clamp01(d.energy ?? 0.35 + 0.65 * score),
 			phase: rank / n,
 			pickId: d.id,
@@ -92,18 +91,21 @@ export function layoutRings(
 	// group indices per ring to spread points evenly around each ring
 	const perRing = new Map<number, number>();
 	return data.map((d, i) => {
-		const ring = ((ringOf(d, i) % rings) + rings) % rings;
+		// Guard the bucket: a NaN/Infinity ringOf return would make the modulo NaN
+		// and collapse every cell to ring 0 (or NaN positions). Floor to a safe int.
+		const rawRing = ringOf(d, i);
+		const bucket = Number.isFinite(rawRing) ? Math.floor(rawRing) : 0;
+		const ring = ((bucket % rings) + rings) % rings;
 		const seen = perRing.get(ring) ?? 0;
 		perRing.set(ring, seen + 1);
 		const ringR = maxR * (0.18 + 0.82 * (ring / Math.max(1, rings - 1)));
 		const ang = seen * GOLDEN_ANGLE + ring * 0.7;
 		const score = clamp01(d.score);
-		const hue = d.hue ?? retentionColor(score);
 		return {
 			x: Math.cos(ang) * ringR,
 			y: Math.sin(ang) * ringR,
 			radius: minCellR + (maxCellR - minCellR) * Math.sqrt(score),
-			hue: [hue[0], hue[1], hue[2]] as [number, number, number],
+			hue: safeHue(d.hue, score),
 			energy: clamp01(d.energy ?? 0.35 + 0.65 * score),
 			phase: ring / rings,
 			pickId: d.id,
@@ -132,4 +134,18 @@ export const FIELD_HUE = {
 
 function clamp01(v: number): number {
 	return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
+}
+
+/**
+ * Return a hue whose channels are finite (falls back to the retention ramp on a
+ * missing or NaN/Infinity component), so no bad color reaches the GPU splat and
+ * blur — one NaN channel would poison the additive field.
+ */
+function safeHue(hue: [number, number, number] | undefined, score: number): [number, number, number] {
+	const base = hue ?? retentionColor(score);
+	return [
+		Number.isFinite(base[0]) ? base[0] : 0,
+		Number.isFinite(base[1]) ? base[1] : 0,
+		Number.isFinite(base[2]) ? base[2] : 0
+	];
 }

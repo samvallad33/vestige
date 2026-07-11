@@ -78,9 +78,18 @@
 				kind: 'feed-event',
 				payload: event
 			}));
-			// A quiet live stream may contain only the real Connected event. Give
-			// sparse event impulses a broad shockwave rather than inventing motes.
-			this.field.setCells(layoutGalaxy(data, { maxRadius: 0.78, minCellR: 0.24, maxCellR: 0.32 }));
+			// A quiet live stream may contain only a couple real events — give those a
+			// broad shockwave so the field still fills. But a busy stream (up to
+			// ROW_LIMIT events) needs SMALL cells or they overlap into one blob; scale
+			// the cell size to the real event count instead of hardcoding the sparse case.
+			const sparse = data.length < 4;
+			this.field.setCells(
+				layoutGalaxy(data, {
+					maxRadius: sparse ? 0.78 : 0.92,
+					minCellR: sparse ? 0.24 : 0.018,
+					maxCellR: sparse ? 0.32 : 0.06
+				})
+			);
 		}
 		compute(encoder: GPUCommandEncoder): void { this.field.compute(encoder); }
 		render(pass: GPURenderPassEncoder): void { this.field.render(pass); }

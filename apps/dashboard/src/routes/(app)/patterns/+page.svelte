@@ -35,9 +35,33 @@
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let selectedCategory: CrossProjectCategory | null = $state(null);
+	// The corpus cross-project patterns are mined FROM — a dim living substrate so
+	// the organ breathes even when there are zero standing transfers today (the
+	// pattern set is recomputed and legitimately empty at times). Real memories,
+	// so the field still passes the discipline test.
+	let poolCells: FieldDatum[] = [];
+	let patternField: PatternFieldPass | null = null;
 
 	onMount(() => {
 		void loadPatterns();
+		void api.memories
+			.list({ limit: '90' })
+			.then((res) => {
+				poolCells = res.memories.map((m) => {
+					const retention = clamp01(m.retentionStrength);
+					return {
+						id: m.id,
+						score: 0.28 + 0.4 * retention,
+						hue: FIELD_HUE.bridge,
+						energy: 0.14 + 0.28 * retention,
+						metric2: retention,
+						kind: 'pattern-pool',
+						payload: m
+					} satisfies FieldDatum;
+				});
+				patternField?.refresh();
+			})
+			.catch(() => {});
 	});
 
 	async function loadPatterns() {
@@ -122,6 +146,7 @@
 	function createPatternPasses(engine: ObservatoryEngine): RouteFramePass[] {
 		// Field FIRST (renders behind), then MSDF text labels on top.
 		const field = new PatternFieldPass(engine);
+		patternField = field;
 		const textPass = new TextLayerPass(engine);
 		void textPass.init();
 		return [
@@ -144,11 +169,33 @@
 	 */
 	class PatternFieldPass implements RouteFramePass {
 		private field: LivingFieldPass;
+		private lastNodes: RouteNode[] = [];
 		constructor(engine: ObservatoryEngine) {
 			this.field = new LivingFieldPass(engine);
 		}
 		uploadScene(scene: RouteSceneModel): void {
-			const nodes = (scene as PatternScene).nodes;
+			this.lastNodes = (scene as PatternScene).nodes;
+			this.apply();
+		}
+		/** Re-apply when the fallback memory pool arrives after mount. */
+		refresh(): void {
+			this.apply();
+		}
+		private apply(): void {
+			const nodes = this.lastNodes;
+			// No standing cross-project patterns today → breathe the real memory pool
+			// they're mined from (dim tissue), so the organ is alive, not black.
+			if (nodes.length === 0) {
+				this.field.setCells(
+					layoutRings(poolCells, (_d, i) => i % 6, {
+						ringCount: 6,
+						maxRadius: 0.92,
+						minCellR: 0.02,
+						maxCellR: 0.05
+					})
+				);
+				return;
+			}
 			const data: FieldDatum[] = nodes.map((node) => {
 				const strength = clamp01(finite(node.activation ?? 0));
 				return {
