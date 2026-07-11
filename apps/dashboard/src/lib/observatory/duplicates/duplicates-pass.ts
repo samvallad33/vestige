@@ -486,18 +486,63 @@ export class DuplicatesPass implements FramePass {
 		const n = Math.max(1, clusters.length);
 		const cells: CellGeometry[] = [];
 		const necks: NeckGeometry[] = [];
+		// FAIR cell allocator (Wave 3, Claude + GPT-5.6-sol, hardened in cross-
+		// review): the old sequential fill let one oversized similarity component
+		// (428 members on the real brain) devour 428/512 cells, dropping clusters
+		// 5-18 from the field entirely. Policy, in order, each pass budget-capped:
+		//   pass 0 — ONE cell (the winner) per cluster, so representation degrades
+		//            to winner-only before any cluster is dropped (a naive
+		//            2-per-cluster first pass silently zeroed clusters past #256);
+		//   pass 1 — upgrade to 2 (winner + strongest candidate) in order;
+		//   pass 2 — round-robin the remainder up to a per-cluster visual cap.
+		// Beyond MAX_CELLS clusters (>512), later clusters are deterministically
+		// omitted — unavoidable with a fixed budget, and far past any real scene.
+		const PER_CLUSTER_CELL_CAP = 12;
+		const alloc = new Array<number>(clusters.length).fill(0);
+		let budget = MAX_CELLS;
+		for (let i = 0; i < clusters.length && budget > 0; i++) {
+			alloc[i] = 1;
+			budget -= 1;
+		}
+		for (let i = 0; i < clusters.length && budget > 0; i++) {
+			if (alloc[i] === 1 && clusters[i].memories.length >= 2) {
+				alloc[i] = 2;
+				budget -= 1;
+			}
+		}
+		let grew = true;
+		while (budget > 0 && grew) {
+			grew = false;
+			for (let i = 0; i < clusters.length && budget > 0; i++) {
+				if (alloc[i] > 0 && alloc[i] < Math.min(clusters[i].memories.length, PER_CLUSTER_CELL_CAP)) {
+					alloc[i] += 1;
+					budget -= 1;
+					grew = true;
+				}
+			}
+		}
 		for (let i = 0; i < clusters.length; i++) {
 			const cluster = clusters[i];
+			// Zero allocation = deterministically omitted (only possible past
+			// MAX_CELLS clusters). Skip honestly instead of faking a 1-member
+			// subset that the global cell guard would silently drop anyway.
+			if (alloc[i] === 0) continue;
 			const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
 			const lane = 0.18 + 0.58 * Math.sqrt((i + 0.5) / n);
 			const centerX = Math.cos(angle) * lane * 0.86;
 			const centerY = Math.sin(angle) * lane;
-			const memberCount = Math.max(1, cluster.memories.length);
 			const pull = Math.max(0.04, 0.25 - Math.max(0, cluster.similarity - cluster.threshold) * 0.55);
 			const winnerMemory = cluster.memories.find((m) => m.id === cluster.winnerId) ?? cluster.memories[0];
+			// Winner-first subset of the allocated size — the winner must always be
+			// on the field (necks radiate from it), the rest are the top candidates.
+			const rendered = [
+				winnerMemory,
+				...cluster.memories.filter((m) => m.id !== winnerMemory.id)
+			].slice(0, alloc[i]);
+			const memberCount = Math.max(1, rendered.length);
 			const cellById = new Map<string, CellGeometry>();
-			for (let j = 0; j < cluster.memories.length && cells.length < MAX_CELLS; j++) {
-				const memory = cluster.memories[j];
+			for (let j = 0; j < rendered.length && cells.length < MAX_CELLS; j++) {
+				const memory = rendered[j];
 				const memberAngle = angle + (j / memberCount) * Math.PI * 2 + (memberCount % 2 ? 0 : Math.PI / memberCount);
 				const winner = memory.id === cluster.winnerId;
 				const spread = winner ? pull * 0.18 : pull + 0.025 * (j % 3);

@@ -1,325 +1,287 @@
-<!--
-  Cross-Project Intelligence — Pattern Transfer Heatmap
-  Dashboard exposure of the CrossProjectLearner backend state. Visualizes
-  which coding patterns were learned in one project and reused in another,
-  across all six tracked categories (ErrorHandling, AsyncConcurrency, Testing,
-  Architecture, Performance, Security).
-
-  Category tabs filter the pattern set. Heatmap cell click filters the
-  "Top Transferred Patterns" sidebar to a specific origin → destination pair.
--->
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import PatternTransferHeatmap from '$components/PatternTransferHeatmap.svelte';
-	import PageHeader from '$components/PageHeader.svelte';
-	import Icon from '$components/Icon.svelte';
-	import AnimatedNumber from '$components/AnimatedNumber.svelte';
-	import { reveal } from '$lib/actions/reveal';
+	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
 	import { api } from '$stores/api';
-	import type {
-		CrossProjectCategory as Category,
-		CrossProjectPatternsResponse
-	} from '$types';
+	import { rgb01 } from '$lib/observatory/cognitive-palette';
+	import { assertProvenance, type RouteNode, type RouteSceneModel } from '$lib/observatory/route-scene';
+	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutRings, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
+	import type { CrossProjectCategory, CrossProjectPattern, CrossProjectPatternsResponse } from '$types';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
 
-	const CATEGORIES: readonly Category[] = [
-		'ErrorHandling',
-		'AsyncConcurrency',
-		'Testing',
-		'Architecture',
-		'Performance',
-		'Security'
-	] as const;
-
-	const CATEGORY_COLORS: Record<Category, string> = {
-		ErrorHandling: 'var(--color-decay)',
-		AsyncConcurrency: 'var(--color-synapse-glow)',
-		Testing: 'var(--color-recall)',
-		Architecture: 'var(--color-dream-glow)',
-		Performance: 'var(--color-warning)',
-		Security: 'var(--color-node-pattern)'
+	type PatternLineItem = TextLayerItem & { patternKey?: string; category?: CrossProjectCategory };
+	type PatternScene = RouteSceneModel & {
+		organ: 'patterns';
+		patterns: CrossProjectPattern[];
+		projects: string[];
+		maxTransferCount: number;
 	};
 
-	let activeCategory = $state<'All' | Category>('All');
+	const CYAN = [...rgb01('#22C7DE'), 1] satisfies [number, number, number, number];
+	const AMBER = [...rgb01('#FFB020'), 0.88] satisfies [number, number, number, number];
+	const SCARLET = [...rgb01('#FF3B30'), 0.92] satisfies [number, number, number, number];
+	const ROW_LIMIT = 42;
+	// The MSDF reveal is frame-driven per glyph: the shared text layer packs
+	// ageFrame = startFrame + globalGlyphIndex * 2. Across many long rows that
+	// global index reaches the thousands, so late glyphs would only reveal after
+	// thousands of frames — the field renders near-black at rest. Anchor startFrame
+	// far in the past so every glyph's ageFrame is already elapsed and the whole
+	// queue is legible immediately (the shared layer is used by 15 organs, so the
+	// fix stays here in the item timing, not in the protected pass).
+	const REVEAL_ANCHOR = -100000;
+
 	let data = $state<CrossProjectPatternsResponse>({ projects: [], patterns: [] });
 	let loading = $state(true);
 	let error: string | null = $state(null);
-	let selectedCell = $state<{ from: string; to: string } | null>(null);
+	let selectedCategory: CrossProjectCategory | null = $state(null);
 
-	async function load() {
+	onMount(() => {
+		void loadPatterns();
+	});
+
+	async function loadPatterns() {
 		loading = true;
 		error = null;
 		try {
 			data = await api.crossProjectPatterns();
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load pattern transfers';
+		} catch (err) {
 			data = { projects: [], patterns: [] };
+			error = err instanceof Error ? err.message : String(err);
 		} finally {
 			loading = false;
 		}
 	}
 
-	onMount(() => load());
-
-	// Filter by active category first — this drives both the heatmap and sidebar.
-	const categoryFiltered = $derived(
-		activeCategory === 'All'
-			? data.patterns
-			: data.patterns.filter((p) => p.category === activeCategory)
-	);
-
-	// Sidebar list: if a cell is selected, show only A → B; else show all (top-N
-	// by transfer_count). Still respects active category via categoryFiltered.
-	const sidebarPatterns = $derived.by(() => {
-		const list = selectedCell
-			? categoryFiltered.filter(
-					(p) =>
-						p.origin_project === selectedCell!.from &&
-						p.transferred_to.includes(selectedCell!.to)
-				)
-			: categoryFiltered;
-		return [...list].sort((a, b) => b.transfer_count - a.transfer_count);
+	const visiblePatterns = $derived.by(() => {
+		const patterns = selectedCategory
+			? data.patterns.filter((pattern) => pattern.category === selectedCategory)
+			: data.patterns;
+		return [...patterns].sort((a, b) => b.transfer_count - a.transfer_count || b.confidence - a.confidence);
 	});
 
-	// Stats footer
-	const totalTransfers = $derived(
-		categoryFiltered.reduce((sum, p) => sum + p.transferred_to.length, 0)
-	);
-	const projectCount = $derived(data.projects.length);
-	const patternCount = $derived(categoryFiltered.length);
+	const patternScene = $derived.by<PatternScene>(() => normalizePatternScene(data.projects, visiblePatterns));
 
-	function selectCategory(c: 'All' | Category) {
-		activeCategory = c;
-		selectedCell = null; // clear cell filter when switching category
+	function normalizePatternScene(projects: string[], patterns: CrossProjectPattern[]): PatternScene {
+		const maxTransferCount = Math.max(1, ...patterns.map((pattern) => finite(pattern.transfer_count)));
+		const nodes: RouteNode[] = patterns.slice(0, ROW_LIMIT).map((pattern, index) => {
+			const strength = clamp01(finite(pattern.transfer_count) / maxTransferCount);
+			const confidence = clamp01(pattern.confidence);
+			return {
+				source: { kind: 'pattern', id: patternKey(pattern) },
+				index,
+				label: patternLine(pattern),
+				retention: confidence,
+				activation: strength,
+				trust: confidence,
+				lastAccessed: pattern.last_used,
+				tags: [pattern.category, pattern.origin_project, ...pattern.transferred_to],
+				type: pattern.category
+			};
+		});
+
+		const scene: PatternScene = {
+			organ: 'patterns',
+			nodes,
+			edges: [],
+			events: patterns.slice(0, ROW_LIMIT).map((pattern, index) => ({
+				source: { kind: 'event', id: `patterns.${patternKey(pattern)}.${pattern.last_used}` },
+				type: pattern.category,
+				targetIndex: index,
+				frame: 12 + index * 3,
+				energy: clamp01(pattern.confidence)
+			})),
+			receipts: [],
+			scalars: {
+				projectCount: projects.length,
+				patternCount: patterns.length,
+				maxTransferCount,
+				totalTransfers: patterns.reduce((sum, pattern) => sum + finite(pattern.transfer_count), 0)
+			},
+			alive: patterns.length > 0,
+			patterns,
+			projects,
+			maxTransferCount
+		};
+		if (import.meta.env.DEV) assertProvenance(scene);
+		return scene;
 	}
 
-	function onCellClick(from: string, to: string) {
-		if (selectedCell && selectedCell.from === from && selectedCell.to === to) {
-			selectedCell = null;
-		} else {
-			selectedCell = { from, to };
+	// Stable ring index per tracked category so each project-family (category) is
+	// its own concentric ring. Order is fixed (not data-dependent) so the same
+	// category always lands on the same ring across reloads/filters.
+	const CATEGORY_RING: Record<CrossProjectCategory, number> = {
+		ErrorHandling: 0,
+		AsyncConcurrency: 1,
+		Testing: 2,
+		Architecture: 3,
+		Performance: 4,
+		Security: 5
+	};
+
+	function createPatternPasses(engine: ObservatoryEngine): RouteFramePass[] {
+		// Field FIRST (renders behind), then MSDF text labels on top.
+		const field = new PatternFieldPass(engine);
+		const textPass = new TextLayerPass(engine);
+		void textPass.init();
+		return [
+			field,
+			{
+				render: (pass) => textPass.render(pass),
+				pickAt: (x, y) => textPass.pickAt(x, y),
+				dispose: () => textPass.dispose(),
+				uploadScene: (scene) => textPass.setText(buildTextItems(scene as PatternScene))
+			}
+		];
+	}
+
+	/**
+	 * Cross-project patterns as a living field of concentric rings — one ring per
+	 * category (project-family). Each cell is a REAL scene.node: radius/glow scale
+	 * with transfer strength (activation), the oxygen membrane tints by retention
+	 * (confidence), and high-transfer patterns burn CAUSAL.forward while the rest
+	 * hold the bridge hue. The field breathes behind the readable MSDF rows.
+	 */
+	class PatternFieldPass implements RouteFramePass {
+		private field: LivingFieldPass;
+		constructor(engine: ObservatoryEngine) {
+			this.field = new LivingFieldPass(engine);
+		}
+		uploadScene(scene: RouteSceneModel): void {
+			const nodes = (scene as PatternScene).nodes;
+			const data: FieldDatum[] = nodes.map((node) => {
+				const strength = clamp01(finite(node.activation ?? 0));
+				return {
+					id: node.source.id,
+					score: strength,
+					hue: strength >= 0.5 ? FIELD_HUE.forward : FIELD_HUE.bridge,
+					// Lift the glow floor so faint-transfer patterns still emit membrane
+					// plasma and the whole field fills instead of pinpricking. Retention
+					// (confidence) still drives the top of the range.
+					energy: clamp01(0.5 + 0.5 * finite(node.retention ?? 0)),
+					metric2: clamp01(finite(node.trust ?? 0)),
+					kind: 'pattern',
+					payload: node
+				};
+			});
+			this.field.setCells(
+				layoutRings(data, (_d, i) => ringOfNode(nodes[i]), {
+					ringCount: 6,
+					maxRadius: 0.92,
+					minCellR: 0.055,
+					maxCellR: 0.15
+				})
+			);
+		}
+		compute(encoder: GPUCommandEncoder): void {
+			this.field.compute(encoder);
+		}
+		render(pass: GPURenderPassEncoder): void {
+			this.field.render(pass);
+		}
+		pickAt(ndcX: number, ndcY: number): RoutePick | null {
+			return this.field.pickAt(ndcX, ndcY);
+		}
+		dispose(): void {
+			this.field.dispose();
 		}
 	}
 
-	function clearCellFilter() {
-		selectedCell = null;
+	function ringOfNode(node: RouteNode): number {
+		const category = node.type as CrossProjectCategory;
+		return CATEGORY_RING[category] ?? 0;
 	}
 
-	function relativeDate(iso: string): string {
-		const then = new Date(iso).getTime();
-		const now = Date.now();
-		const days = Math.floor((now - then) / 86_400_000);
-		if (days <= 0) return 'today';
-		if (days === 1) return '1d ago';
-		if (days < 30) return `${days}d ago`;
-		const months = Math.floor(days / 30);
-		return `${months}mo ago`;
+	function buildTextItems(scene: PatternScene): PatternLineItem[] {
+		const rows = scene.patterns.slice(0, ROW_LIMIT);
+		const top = 0.74;
+		const rowStep = 1.48 / Math.max(1, ROW_LIMIT - 1);
+		return rows.map((pattern, index) => {
+			const strength = clamp01(finite(pattern.transfer_count) / scene.maxTransferCount);
+			const confidence = clamp01(pattern.confidence);
+			// Depth drives z-layering AND the shader's idle wobble ((1-depth)*sin(time)).
+			// Real cross-project data is often uniform (every transfer_count == 1 →
+			// strength == 1), which would pin depth at 1.0 and freeze the field. Blend
+			// strength with confidence and a gentle per-row phase so depth lives in the
+			// animated 0.55..0.9 band (matching the sibling text organs) and the field
+			// breathes at rest without faking any data channel.
+			const rowPhase = 0.06 * Math.sin(index * 0.7);
+			const depth = clamp01(0.6 + strength * 0.2 + (confidence - 0.5) * 0.4 + rowPhase);
+			return {
+				id: `pattern:${patternKey(pattern)}`,
+				kind: 'pattern',
+				patternKey: patternKey(pattern),
+				category: pattern.category,
+				text: patternLine(pattern),
+				x: -0.88,
+				y: top - index * rowStep,
+				size: 0.024 + confidence * 0.005,
+				color: selectedCategory && pattern.category === selectedCategory ? AMBER : CYAN,
+				depth,
+				weight: confidence,
+				startFrame: REVEAL_ANCHOR + index * 2,
+				revealSpan: 20,
+				maxWidthEm: 58,
+				hitPadX: 0.03,
+				hitPadY: 0.013
+			};
+		});
+	}
+
+	function handleRoutePick(pick: RoutePick) {
+		if (pick.kind !== 'pattern') return;
+		const item = pick.payload as PatternLineItem;
+		selectedCategory = selectedCategory === item.category ? null : (item.category ?? null);
+	}
+
+	function patternLine(pattern: CrossProjectPattern): string {
+		return sanitizeAscii(
+			[
+				pattern.name,
+				pattern.origin_project,
+				pattern.transferred_to.join(','),
+				pattern.category,
+				String(pattern.transfer_count),
+				String(Math.round(clamp01(pattern.confidence) * 100)),
+				pattern.last_used
+			].join(' | ')
+		).slice(0, 118);
+	}
+
+	function patternKey(pattern: CrossProjectPattern): string {
+		return sanitizeAscii(
+			[pattern.name, pattern.origin_project, pattern.category, pattern.last_used].join(':')
+		).slice(0, 180);
+	}
+
+	function sanitizeAscii(value: string): string {
+		return value
+			.replace(/[\u2014\u2013]/g, '-')
+			.replace(/[\u2018\u2019]/g, "'")
+			.replace(/[\u201C\u201D]/g, '"')
+			.replace(/\u2026/g, '...')
+			.replace(/[^\x20-\x7E]/g, '?');
+	}
+
+	function finite(value: number): number {
+		return Number.isFinite(value) ? value : 0;
+	}
+
+	function clamp01(value: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 	}
 </script>
 
-<div class="relative mx-auto max-w-7xl space-y-6 p-6">
-	<PageHeader
-		icon="patterns"
-		title="Cross-Project Intelligence"
-		subtitle="Patterns learned here, applied there — across every tracked project."
-		accent="dream"
-	>
-		{#if !loading && !error}
-			<span class="glass-subtle rounded-full px-3 py-1 text-xs text-dim tabular-nums">
-				<span class="font-semibold text-bright"><AnimatedNumber value={patternCount} /></span>
-				pattern{patternCount === 1 ? '' : 's'}
-				·
-				<span class="font-semibold text-bright"><AnimatedNumber value={totalTransfers} /></span>
-				transfer{totalTransfers === 1 ? '' : 's'}
-			</span>
-		{/if}
-	</PageHeader>
+<svelte:head>
+	<title>Patterns · Vestige</title>
+</svelte:head>
 
-	<!-- Category tabs — switching category clears the selected heatmap cell. -->
-	<div class="glass-panel flex flex-wrap items-center gap-1.5 rounded-2xl p-2 enter">
-		<button
-			type="button"
-			onclick={() => selectCategory('All')}
-			class="lift rounded-lg px-3 py-1.5 text-xs font-medium transition {activeCategory === 'All'
-				? 'bg-synapse/25 text-synapse-glow shadow-[0_0_16px_-4px_var(--color-synapse-glow)]'
-				: 'text-dim hover:bg-white/[0.04] hover:text-text'}"
-		>
-			<span class="inline-flex items-center gap-1.5">
-				<Icon name="sparkle" size={13} />
-				All
-			</span>
-		</button>
-		{#each CATEGORIES as cat (cat)}
-			<button
-				type="button"
-				onclick={() => selectCategory(cat)}
-				class="lift flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition {activeCategory ===
-				cat
-					? 'bg-synapse/25 text-synapse-glow shadow-[0_0_16px_-4px_var(--color-synapse-glow)]'
-					: 'text-dim hover:bg-white/[0.04] hover:text-text'}"
-			>
-				<span
-					class="h-1.5 w-1.5 rounded-full transition-all duration-300 {activeCategory === cat
-						? 'scale-150'
-						: ''}"
-					style="background: {CATEGORY_COLORS[cat]}; {activeCategory === cat
-						? `box-shadow: 0 0 8px ${CATEGORY_COLORS[cat]};`
-						: ''}"
-				></span>
-				{cat}
-			</button>
-		{/each}
-	</div>
-
-	{#if error}
-		<div class="glass-panel enter flex flex-col items-center gap-3 rounded-2xl p-10 text-center">
-			<div class="text-decay/80"><Icon name="contradictions" size={28} /></div>
-			<div class="text-sm text-decay">Couldn't load pattern transfers</div>
-			<div class="max-w-md text-xs text-muted">{error}</div>
-			<button
-				type="button"
-				onclick={load}
-				class="lift mt-2 inline-flex items-center gap-1.5 rounded-lg bg-synapse/20 px-4 py-2 text-xs font-medium text-synapse-glow transition hover:bg-synapse/30"
-			>
-				<Icon name="pulse" size={14} />
-				Retry
-			</button>
-		</div>
-	{:else if loading}
-		<div class="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-			<div class="glass-subtle shimmer h-[520px] rounded-2xl"></div>
-			<div class="glass-subtle shimmer h-[520px] rounded-2xl"></div>
-		</div>
-	{:else}
-		<!-- Main grid: heatmap (70%) + sidebar -->
-		<div class="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-			<!-- Heatmap column -->
-			<div class="space-y-4 enter">
-				<PatternTransferHeatmap
-					projects={data.projects}
-					patterns={categoryFiltered}
-					{selectedCell}
-					{onCellClick}
-				/>
-
-				{#if selectedCell}
-					<div
-						class="glass-subtle enter flex items-center justify-between rounded-xl px-4 py-2.5 text-xs"
-					>
-						<div class="flex items-center gap-2">
-							<span class="text-synapse-glow"><Icon name="filter" size={13} /></span>
-							<span class="text-muted">Filtered to</span>
-							<span class="font-mono text-bright">{selectedCell.from}</span>
-							<span class="text-synapse-glow">→</span>
-							<span class="font-mono text-bright">{selectedCell.to}</span>
-						</div>
-						<button
-							type="button"
-							onclick={clearCellFilter}
-							class="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-1 text-dim transition hover:bg-white/[0.08] hover:text-text"
-						>
-							<Icon name="close" size={12} />
-							Clear
-						</button>
-					</div>
-				{/if}
-			</div>
-
-			<!-- Sidebar: Top Transferred Patterns -->
-			<aside class="glass-panel enter flex flex-col rounded-2xl p-4">
-				<div class="mb-3 flex items-center justify-between">
-					<h2 class="flex items-center gap-2 text-sm font-semibold text-bright">
-						<span class="text-dream-glow"><Icon name="patterns" size={15} /></span>
-						Top Transferred Patterns
-					</h2>
-					<span class="text-[11px] text-muted tabular-nums">
-						<AnimatedNumber value={sidebarPatterns.length} />
-						{sidebarPatterns.length === 1 ? 'pattern' : 'patterns'}
-					</span>
-				</div>
-
-				{#if sidebarPatterns.length === 0}
-					<div class="flex flex-1 flex-col items-center justify-center gap-3 py-12 text-center">
-						<div class="breathe text-dim/70"><Icon name="explore" size={32} /></div>
-						<div class="text-xs font-medium text-dim">No matching patterns</div>
-						<div class="max-w-[220px] text-[11px] text-muted">
-							{selectedCell
-								? 'No patterns transferred from this origin to this destination yet — try another cell or clear the filter.'
-								: 'Nothing in this category yet. Pick another category to explore what travels between projects.'}
-						</div>
-					</div>
-				{:else}
-					<ul class="flex-1 space-y-2 overflow-y-auto pr-1" style="max-height: 560px;">
-						{#each sidebarPatterns as p, i (p.name)}
-							<li
-								use:reveal={{ y: 12, delay: Math.min(i * 45, 360) }}
-								class="lift rounded-lg border border-synapse/5 bg-white/[0.02] p-3 transition hover:border-synapse/20 hover:bg-white/[0.04]"
-							>
-								<div class="flex items-start justify-between gap-2">
-									<div class="min-w-0 flex-1 space-y-1.5">
-										<div class="truncate text-xs font-medium text-bright" title={p.name}>
-											{p.name}
-										</div>
-										<div class="flex flex-wrap items-center gap-1.5">
-											<span
-												class="rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
-												style="border-color: {CATEGORY_COLORS[
-													p.category
-												]}66; color: {CATEGORY_COLORS[p.category]}; background: {CATEGORY_COLORS[
-													p.category
-												]}1a;"
-											>
-												{p.category}
-											</span>
-											<span class="text-[10px] text-muted">{relativeDate(p.last_used)}</span>
-										</div>
-										<div class="flex items-center gap-1.5 text-[11px] text-dim">
-											<span class="font-mono text-text">{p.origin_project}</span>
-											<span class="text-synapse-glow">→</span>
-											<span class="text-muted">
-												{p.transferred_to.length}
-												{p.transferred_to.length === 1 ? 'project' : 'projects'}
-											</span>
-										</div>
-									</div>
-									<div class="flex flex-shrink-0 flex-col items-end gap-1">
-										<span
-											class="rounded-full bg-synapse/15 px-2 py-0.5 text-xs font-semibold text-synapse-glow tabular-nums"
-										>
-											<AnimatedNumber value={p.transfer_count} />
-										</span>
-										<span class="text-[10px] text-muted tabular-nums">
-											{(p.confidence * 100).toFixed(0)}%
-										</span>
-									</div>
-								</div>
-							</li>
-						{/each}
-					</ul>
-				{/if}
-			</aside>
-		</div>
-
-		<!-- Stats footer -->
-		<footer
-			class="glass-subtle enter flex flex-wrap items-center justify-between gap-3 rounded-xl px-4 py-3 text-xs text-dim"
-		>
-			<div class="tabular-nums">
-				<span class="font-semibold text-bright"><AnimatedNumber value={patternCount} /></span>
-				pattern{patternCount === 1 ? '' : 's'} across
-				<span class="font-semibold text-bright"><AnimatedNumber value={projectCount} /></span>
-				project{projectCount === 1 ? '' : 's'},
-				<span class="font-semibold text-bright"><AnimatedNumber value={totalTransfers} /></span>
-				total transfer{totalTransfers === 1 ? '' : 's'}
-			</div>
-			<div class="inline-flex items-center gap-1.5 text-muted">
-				<span
-					class="h-1.5 w-1.5 rounded-full"
-					style="background: {activeCategory === 'All'
-						? 'var(--color-synapse-glow)'
-						: CATEGORY_COLORS[activeCategory]}"
-				></span>
-				{activeCategory === 'All' ? 'All categories' : activeCategory}
-			</div>
-		</footer>
-	{/if}
-</div>
+<RouteStage
+	organ="patterns"
+	seed={`cross-project-patterns:${data.projects.length}:${visiblePatterns.length}:${selectedCategory ?? 'all'}`}
+	scene={patternScene}
+	passes={createPatternPasses}
+	loading={loading}
+	error={error}
+	onpick={handleRoutePick}
+/>

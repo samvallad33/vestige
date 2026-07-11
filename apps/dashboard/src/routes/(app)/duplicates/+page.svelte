@@ -26,6 +26,12 @@
 
 	let threshold = $state(0.8);
 	let clusters: DuplicateClusterGroup[] = $state([]);
+	// Backend's own cluster count (res.total) — previously thrown away, which let
+	// the header mislabel the summed member count as "potential duplicates".
+	let apiTotal = $state(0);
+	// Above this member count a cluster is a similarity-CHAINED component (A~B~C~D
+	// with A likely unrelated to D), not a mergeable duplicate set → quarantine.
+	const OVERSIZED_MEMBERS = 12;
 	// Dismissed clusters are tracked by stable identity (sorted member ids) so
 	// dismissals survive a re-fetch. If the cluster membership changes, the key
 	// changes and the cluster is treated as fresh.
@@ -38,9 +44,13 @@
 	async function detect() {
 		loading = true;
 		error = null;
+		// A rerun invalidates any field selection — the inspector must never show a
+		// cluster that is no longer part of the current detection result.
+		selectedCluster = null;
 		try {
 			const res = await api.duplicates(threshold);
 			clusters = res.clusters;
+			apiTotal = res.total ?? res.clusters.length;
 			// Prune dismissals whose clusters no longer exist — prevents
 			// unbounded growth across sessions and keeps the set honest.
 			const presentKeys = new Set(clusters.map((c) => clusterKey(c.memories)));
@@ -64,15 +74,17 @@
 		const next = new Set(dismissed);
 		next.add(key);
 		dismissed = next;
+		// If the dismissed cluster is the one in the field inspector, clear it —
+		// the inspector must not outlive the visible result set.
+		if (selectedCluster && clusterKey(selectedCluster.memories) === key) {
+			selectedCluster = null;
+		}
 	}
 
-	function mergeCluster(key: string, winnerId: string, loserIds: string[]) {
-		// TODO: POST /api/duplicates/merge { winner, losers } when backend ships.
-		// For now we optimistically dismiss the cluster so the UI reflects the
-		// action and rerun counts stay consistent.
-		console.log('Merge cluster', key, { winnerId, loserIds });
-		dismissCluster(key);
-	}
+	// NOTE: merge intentionally has NO handler. The old mergeCluster console.logged
+	// and optimistically dismissed — a fake success claiming destructive work
+	// happened. DuplicateCluster now renders a visibly-disabled "Merge unavailable"
+	// control until POST /api/duplicates/merge ships.
 
 	const visibleClusters = $derived(
 		clusters
@@ -80,9 +92,10 @@
 			.filter(({ key }) => !dismissed.has(key))
 	);
 
-	const totalDuplicates = $derived(
-		visibleClusters.reduce((sum, { c }) => sum + c.memories.length, 0)
-	);
+	// Full implicated-memory count from the ENTIRE detection result — dismissal is
+	// session-local concealment, not removal, so the headline must not shrink when
+	// a cluster is hidden (GPT-5.6-sol cross-review).
+	const totalImplicated = $derived(clusters.reduce((sum, c) => sum + c.memories.length, 0));
 
 	// Cluster overflow: >50 would saturate the scroll. Show a warning and cap.
 	const CLUSTER_RENDER_CAP = 50;
@@ -110,7 +123,7 @@
 
 <RouteStage
 	organ="duplicates"
-	seed={`synaptic-fusion:${threshold}:${visibleClusters.length}:${totalDuplicates}`}
+	seed={`synaptic-fusion:${threshold}:${visibleClusters.length}:${totalImplicated}`}
 	scene={duplicatesScene}
 	passes={createDuplicatesPasses}
 	loading={loading}
@@ -119,12 +132,20 @@
 	onpick={handleRoutePick}
 />
 
-<div class="relative z-10 mx-auto max-w-5xl space-y-6 p-6 pointer-events-none">
+<!-- Bounded, explicitly-scrollable results viewport (Wave 3): the overlay used to
+     rely on inherited page scroll that the fixed RouteStage composition broke —
+     with a 44,000px cluster card, every action below the fold was unreachable.
+     pointer-events-none on the container + auto on children means wheel events
+     over the cards scroll THIS viewport while the empty gaps still reach the
+     WebGPU field beneath. -->
+<div
+	class="relative z-10 mx-auto max-h-dvh max-w-5xl space-y-6 overflow-y-auto overscroll-contain p-6 pb-28 pointer-events-none"
+>
 	<!-- Header -->
 	<PageHeader
 		icon="duplicates"
 		title="Memory Hygiene — Duplicate Detection"
-		subtitle="Cosine-similarity clustering over embeddings. Merges reinforce the winner's FSRS state; losers inherit into the merged node. Dismissed clusters are hidden for this session only."
+		subtitle="Cosine-similarity clustering over embeddings. Oversized similarity components are quarantined for review — they chain through pairwise similarity and are not safe to merge. Dismissed clusters are hidden for this session only."
 		accent="synapse"
 	>
 		<span
@@ -171,11 +192,13 @@
 			{:else}
 				<span class="breathe h-2 w-2 rounded-full bg-synapse-glow text-synapse-glow"></span>
 				<span class="tabular-nums">
-					<AnimatedNumber value={visibleClusters.length} />
-					{visibleClusters.length === 1 ? 'cluster' : 'clusters'},
-					<AnimatedNumber value={totalDuplicates} /> potential duplicate{totalDuplicates === 1
-						? ''
-						: 's'}
+					{#if visibleClusters.length < apiTotal}
+						<AnimatedNumber value={visibleClusters.length} /> visible of {apiTotal} clusters
+					{:else}
+						<AnimatedNumber value={visibleClusters.length} />
+						{visibleClusters.length === 1 ? 'cluster' : 'clusters'}
+					{/if}
+					· <AnimatedNumber value={totalImplicated} /> memories implicated
 				</span>
 			{/if}
 		</div>
@@ -275,8 +298,8 @@
 							similarity={c.similarity}
 							memories={c.memories}
 							suggestedAction={c.suggestedAction}
+							oversized={c.memories.length > OVERSIZED_MEMBERS}
 							onDismiss={() => dismissCluster(key)}
-							onMerge={(winnerId, loserIds) => mergeCluster(key, winnerId, loserIds)}
 						/>
 					</div>
 				</div>

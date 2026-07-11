@@ -37,7 +37,14 @@
 	let isImmersiveRoute = $derived(!isMarketingRoute);
 
 	onMount(() => {
-		if (!isMarketingRoute && !isImmersiveRoute) {
+		// Live nervous system: every immersive organ consumes the WebSocket
+		// ($isConnected, live event feed, birth/salience/firewall pulses). Only
+		// true marketing/waitlist pages skip it. NOTE: this is deliberately NOT
+		// gated on isImmersiveRoute — immersive is the whole point of connecting.
+		// (The prior guard `!isMarketingRoute && !isImmersiveRoute` was always
+		// false since isImmersiveRoute === !isMarketingRoute, so the socket never
+		// connected on any route and the live system was dead everywhere.)
+		if (!isMarketingRoute) {
 			websocket.connect();
 		}
 		const teardownTheme = initTheme();

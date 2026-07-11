@@ -1,352 +1,269 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
+	import { onDestroy, onMount } from 'svelte';
+	import ObservatoryCanvas from '$lib/components/ObservatoryCanvas.svelte';
 	import { api } from '$stores/api';
 	import type { ImportanceScore, Memory } from '$types';
-	import { NODE_TYPE_COLORS } from '$types';
-	import ImportanceRadar from '$components/ImportanceRadar.svelte';
-	import PageHeader from '$components/PageHeader.svelte';
-	import AnimatedNumber from '$components/AnimatedNumber.svelte';
-	import Icon from '$components/Icon.svelte';
-	import { reveal } from '$lib/actions/reveal';
-	import { spotlight } from '$lib/actions/interactions';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import { rgb01 } from '$lib/observatory/cognitive-palette';
+	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 
-	// ── Section 1: Test Importance ───────────────────────────────────────────
-	let content = $state('');
-	let score: ImportanceScore | null = $state(null);
-	let scoring = $state(false);
-	let scoreError: string | null = $state(null);
-
-	// Keyed radar remount — we flip the key each time a new score lands so the
-	// onMount grow-from-center animation re-fires instead of just mutating props.
-	let radarKey = $state(0);
-
-	async function scoreContent() {
-		const trimmed = content.trim();
-		if (!trimmed || scoring) return;
-		scoring = true;
-		scoreError = null;
-		try {
-			score = await api.importance(trimmed);
-			radarKey++;
-		} catch (e) {
-			scoreError = e instanceof Error ? e.message : String(e);
-			score = null;
-		} finally {
-			scoring = false;
-		}
-	}
-
-	function onKeydown(e: KeyboardEvent) {
-		// Cmd/Ctrl+Enter submits so the power-user flow isn't "click the button".
-		if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-			e.preventDefault();
-			scoreContent();
-		}
-	}
-
-	// Which channel contributed the most to the composite? Drives the "why"
-	// blurb under the recommendation. Uses the same weights ImportanceSignals
-	// applies server-side (novelty 0.25 / arousal 0.30 / reward 0.25 / attention 0.20)
-	// so the explanation lines up with the composite.
-	const CHANNEL_WEIGHTS = { novelty: 0.25, arousal: 0.3, reward: 0.25, attention: 0.2 } as const;
-	type ChannelKey = keyof typeof CHANNEL_WEIGHTS;
-
-	const CHANNEL_BLURBS: Record<ChannelKey, { high: string; low: string }> = {
-		novelty: {
-			high: 'new information not already in your graph',
-			low: 'overlaps heavily with what you already know'
-		},
-		arousal: {
-			high: 'emotionally salient — decisions, bugs, or discoveries stick',
-			low: 'neutral tone, no strong affect signal'
-		},
-		reward: {
-			high: 'high reward value — preferences, wins, or solutions you will revisit',
-			low: 'low reward value — transient or incidental detail'
-		},
-		attention: {
-			high: 'strong attentional markers (imperatives, questions, urgency)',
-			low: 'passive phrasing, no clear attentional hook'
-		}
+	type ImportanceRecord = {
+		memory: Memory;
+		score: ImportanceScore;
 	};
 
-	let topChannel = $derived.by<{ key: ChannelKey; contribution: number } | null>(() => {
-		if (!score) return null;
-		const ranked = (Object.keys(CHANNEL_WEIGHTS) as ChannelKey[])
-			.map((k) => ({ key: k, contribution: score!.channels[k] * CHANNEL_WEIGHTS[k] }))
-			.sort((a, b) => b.contribution - a.contribution);
-		return ranked[0];
+	type ImportanceTextItem = TextLayerItem & { memoryId?: string };
+
+	const CYAN = [...rgb01('#22C7DE'), 1] satisfies [number, number, number, number];
+	const SCARLET = [...rgb01('#FF3B30'), 0.92] satisfies [number, number, number, number];
+	const MUTED = [...rgb01('#29F2A9'), 0.62] satisfies [number, number, number, number];
+	const AMBER = [...rgb01('#FFB020'), 0.86] satisfies [number, number, number, number];
+	const MEMORY_LIMIT = 36;
+	const ROW_LIMIT = 30;
+	const REVEAL_ANCHOR = -100000;
+	const MIN_VISIBLE_DEPTH = 0.62;
+
+	let hostEl: HTMLDivElement | null = $state(null);
+	let engineRef: ObservatoryEngine | null = null;
+	let textPass: TextLayerPass | null = null;
+	let fieldPass: LivingFieldPass | null = null;
+	let cursorSmoothed: { x: number; y: number } | null = null;
+	let records: ImportanceRecord[] = $state([]);
+	let total = $state(0);
+	let loading = $state(true);
+	let error: string | null = $state(null);
+	let activeRun: string | null = null;
+
+	onMount(() => {
+		void loadImportanceField();
 	});
 
-	let weakestChannel = $derived.by<ChannelKey | null>(() => {
-		if (!score) return null;
-		return (Object.keys(CHANNEL_WEIGHTS) as ChannelKey[])
-			.slice()
-			.sort((a, b) => score!.channels[a] - score!.channels[b])[0];
+	onDestroy(() => {
+		textPass?.dispose();
+		fieldPass?.dispose();
+		textPass = null;
+		fieldPass = null;
+		engineRef = null;
 	});
 
-	// ── Section 2: Top Important Memories This Week ──────────────────────────
-	// The Memory response does NOT include the per-memory importance channels,
-	// so we approximate a "trending importance" proxy from the FSRS state we
-	// DO have: retention strength × (1 + reviewCount) × recency-boost. Clients
-	// who want the true composite would need the backend to include channels.
-	// TODO: backend should include channels on Memory response directly
-	let memories: Memory[] = $state([]);
-	let loadingMemories = $state(true);
-	// Per-memory radar channels, fetched lazily via api.importance(content).
-	// Keyed by memory.id. Until populated, mini-radars render with zeroed props.
-	let perMemoryScores: Record<string, ImportanceScore['channels']> = $state({});
-
-	function importanceProxy(m: Memory): number {
-		// retentionStrength × log(1 + reviewCount) / age_days.
-		// Heavy short-term bias so the "this week" framing actually holds.
-		const ageDays = Math.max(
-			1,
-			(Date.now() - new Date(m.createdAt).getTime()) / 86_400_000
-		);
-		const reviews = m.reviewCount ?? 0;
-		const recencyBoost = 1 / Math.pow(ageDays, 0.5);
-		return m.retentionStrength * Math.log1p(reviews + 1) * recencyBoost;
+	async function handleReady(engine: ObservatoryEngine) {
+		engineRef = engine;
+		const field = new LivingFieldPass(engine);
+		fieldPass = field;
+		field.setCells(buildFieldCells());
+		engine.addPass(field);
+		const pass = new TextLayerPass(engine);
+		textPass = pass;
+		await pass.init();
+		pass.setText(buildTextItems());
+		engine.addPass(pass);
+		engine.demoClock.reset();
 	}
 
-	async function loadTrending() {
-		loadingMemories = true;
+	async function loadImportanceField() {
+		loading = true;
+		error = null;
+		textPass?.setText(buildTextItems());
 		try {
-			const res = await api.memories.list({ limit: '20' });
-			// Sort client-side by our proxy, keep top 20.
-			const ranked = res.memories
-				.slice()
-				.sort((a, b) => importanceProxy(b) - importanceProxy(a))
-				.slice(0, 20);
-			memories = ranked;
-			// Lazily score each one so the mini-radars aren't all zeros. We fan
-			// these out in parallel but don't await them before painting — the
-			// list renders immediately and radars fill in as results arrive.
-			memories.forEach(async (m) => {
-				try {
-					const s = await api.importance(m.content);
-					perMemoryScores[m.id] = s.channels;
-				} catch {
-					// swallow — per-memory score is cosmetic, list still works
-				}
-			});
-		} catch {
-			memories = [];
+			const res = await api.memories.list({ limit: String(MEMORY_LIMIT) });
+			total = res.total;
+			const scored = await Promise.allSettled(
+				res.memories.map(async (memory) => ({ memory, score: await api.importance(memory.content) }))
+			);
+			records = scored
+				.filter((result): result is PromiseFulfilledResult<ImportanceRecord> => result.status === 'fulfilled')
+				.map((result) => result.value)
+				.sort((a, b) => b.score.composite - a.score.composite);
+			if (res.memories.length > 0 && records.length === 0) {
+				error = 'API IMPORTANCE RETURNED NO SCORES';
+			}
+		} catch (err) {
+			records = [];
+			total = 0;
+			error = err instanceof Error ? err.message : 'UNKNOWN IMPORTANCE FETCH ERROR';
 		} finally {
-			loadingMemories = false;
+			loading = false;
+			textPass?.setText(buildTextItems());
+			fieldPass?.setCells(buildFieldCells());
+			engineRef?.demoClock.reset();
 		}
 	}
 
-	onMount(loadTrending);
+	function buildFieldCells() {
+		const data: FieldDatum[] = records.map((record) => ({
+			id: record.memory.id,
+			score: clamp01(record.score.composite),
+			hue: record.score.recommendation === 'save' ? FIELD_HUE.oxygen : FIELD_HUE.caution,
+			energy: Math.max(0.35, clamp01(record.score.composite)),
+			metric2: clamp01(record.memory.retentionStrength),
+			kind: 'importance',
+			payload: record
+		}));
+		return layoutGalaxy(data, { maxRadius: 0.9, minCellR: 0.04, maxCellR: 0.1 });
+	}
 
-	function openMemory(id: string) {
-		// The memories page doesn't support deep-linking to a specific memory
-		// yet; navigate there and let the user scroll. base is '/dashboard'.
-		goto(`${base}/memories`);
-		void id;
+	function sanitizeAscii(value: string): string {
+		if (typeof value !== 'string') return '';
+		return value
+			.replace(/[\u2014\u2013]/g, '-')
+			.replace(/[\u2018\u2019]/g, "'")
+			.replace(/[\u201C\u201D]/g, '"')
+			.replace(/\u2026/g, '...')
+			.replace(/[^\x20-\x7E]/g, '?');
+	}
+
+	function importanceLine(record: ImportanceRecord): string {
+		const { memory, score } = record;
+		const snippet = sanitizeAscii(memory.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 44);
+		const strongest = strongestChannel(score);
+		return sanitizeAscii(
+			`${snippet} | ${memory.id.slice(0, 8)} | ${Math.round(score.composite * 100)}% | ${Math.round(memory.retentionStrength * 100)}% | ${score.recommendation} | ${strongest}`
+		);
+	}
+
+	function strongestChannel(score: ImportanceScore): string {
+		return (Object.entries(score.channels) as [keyof ImportanceScore['channels'], number][])
+			.sort((a, b) => b[1] - a[1])[0][0];
+	}
+
+	function clamp01(value: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.5));
+	}
+
+	function statusItem(text: string, color = MUTED): ImportanceTextItem {
+		return {
+			id: 'importance:status',
+			kind: 'importance-status',
+			text: sanitizeAscii(text),
+			x: -0.58,
+			y: 0.02,
+			size: 0.044,
+			color,
+			depth: 0.78,
+			weight: 0.62,
+			revealSpan: 32,
+			maxWidthEm: 50
+		};
+	}
+
+	function buildTextItems(): ImportanceTextItem[] {
+		if (loading) return [statusItem('LOADING IMPORTANCE FIELD...', CYAN)];
+		if (error) return [statusItem(`ERROR - ${error}`.slice(0, 72), SCARLET)];
+		if (records.length === 0) return [statusItem('EMPTY IMPORTANCE FIELD', MUTED)];
+
+		const rows = records.slice(0, ROW_LIMIT);
+		const top = 0.72;
+		const rowStep = 1.5 / Math.max(1, ROW_LIMIT - 1);
+		return rows.map((record, i) => {
+			// depth = crispness/forward channel — floor it or the DOF blur + dim glow
+			// makes low-composite rows invisible (composite is low for most memories).
+			const depth = Math.max(MIN_VISIBLE_DEPTH, clamp01(record.score.composite));
+			const weight = clamp01(record.memory.retentionStrength);
+			return {
+				id: `importance:${record.memory.id}`,
+				kind: 'importance',
+				memoryId: record.memory.id,
+				text: importanceLine(record),
+				x: -0.9,
+				y: top - i * rowStep,
+				size: 0.025,
+				color: record.score.recommendation === 'save' ? CYAN : AMBER,
+				depth,
+				weight,
+				// The shared reveal packs ageFrame = startFrame + GLOBAL glyphIndex*2;
+				// 30 long rows age far past the ~720-frame wrapped clock, so all but
+				// the first row never reveal. Anchor deeply negative so every glyph is
+				// pre-revealed on frame 0 (same fix as memories/schedule/patterns).
+				startFrame: REVEAL_ANCHOR + i * 2,
+				revealSpan: 1,
+				maxWidthEm: 54,
+				hitPadX: 0.03,
+				hitPadY: 0.018
+			};
+		});
+	}
+
+	function pointerToNdc(e: PointerEvent | MouseEvent): { x: number; y: number } | null {
+		if (!hostEl) return null;
+		const rect = hostEl.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0) return null;
+		return {
+			x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+			y: -(((e.clientY - rect.top) / rect.height) * 2 - 1)
+		};
+	}
+
+	function writeCursorLens(ndc: { x: number; y: number }) {
+		if (!hostEl || !engineRef) return;
+		const rect = hostEl.getBoundingClientRect();
+		const aspect = Math.max(0.0001, rect.width / Math.max(1, rect.height));
+		const raw = { x: ndc.x * Math.max(aspect, 1), y: ndc.y / Math.min(aspect, 1) };
+		const prev = cursorSmoothed ?? raw;
+		const next = { x: prev.x + (raw.x - prev.x) * 0.35, y: prev.y + (raw.y - prev.y) * 0.35 };
+		cursorSmoothed = next;
+		engineRef.setCursorPreNdc(next.x, next.y, next.x - prev.x, next.y - prev.y);
+	}
+
+	function handlePointerMove(e: PointerEvent) {
+		const ndc = pointerToNdc(e);
+		if (!ndc) return;
+		writeCursorLens(ndc);
+		const hit = textPass?.pickAt(ndc.x, ndc.y) ?? null;
+		const nextRun = hit?.kind === 'importance' ? hit.id : null;
+		if (nextRun !== activeRun) {
+			activeRun = nextRun;
+			textPass?.setRunDepth(nextRun, 1);
+		}
+		if (hostEl) hostEl.style.cursor = nextRun ? 'crosshair' : 'default';
+	}
+
+	function handlePointerLeave() {
+		cursorSmoothed = null;
+		activeRun = null;
+		engineRef?.setCursorPreNdc(999, 999, 0, 0);
+		textPass?.setRunDepth(null);
+		if (hostEl) hostEl.style.cursor = 'default';
+	}
+
+	async function handlePointerDown(e: PointerEvent) {
+		const ndc = pointerToNdc(e);
+		if (!ndc || !textPass) return;
+		const hit = textPass.pickAt(ndc.x, ndc.y);
+		if (hit?.kind !== 'importance') return;
+		const item = hit.payload as ImportanceTextItem;
+		if (!item.memoryId) return;
+		try {
+			const promoted = await api.memories.promote(item.memoryId);
+			// The promote endpoint returns a PARTIAL payload ({ id, promoted,
+			// retentionStrength }) — NOT a full Memory. Merge it onto the existing
+			// record so content/createdAt/etc. survive; replacing outright would drop
+			// memory.content and crash importanceLine() on the next render.
+			records = records.map((record) =>
+				record.memory.id === promoted.id
+					? {
+							...record,
+							memory: {
+								...record.memory,
+								retentionStrength: promoted.retentionStrength ?? record.memory.retentionStrength
+							}
+						}
+					: record
+			);
+			textPass.setText(buildTextItems());
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'UNKNOWN IMPORTANCE PROMOTE ERROR';
+			textPass.setText(buildTextItems());
+		}
 	}
 </script>
 
-<div class="p-6 max-w-5xl mx-auto space-y-8">
-	<PageHeader
-		icon="importance"
-		title="Importance Radar"
-		subtitle="4-channel importance model: Novelty · Arousal · Reward · Attention"
-		accent="warning"
-	/>
+<svelte:head>
+	<title>Importance · Vestige</title>
+</svelte:head>
 
-	<!-- ── Section 1: Test Importance ─────────────────────────────────────── -->
-	<section use:reveal class="glass-panel rounded-2xl p-6 space-y-5">
-		<div>
-			<h2 class="text-sm font-semibold text-bright uppercase tracking-wider">Test Importance</h2>
-			<p class="text-xs text-muted mt-1">
-				Paste any content below. Vestige scores it across 4 channels and
-				decides whether it is worth saving.
-			</p>
-		</div>
-
-		<div class="grid md:grid-cols-[1fr_auto] gap-5 items-start">
-			<div class="space-y-3">
-				<textarea
-					bind:value={content}
-					onkeydown={onKeydown}
-					placeholder="Type some content above to score its importance."
-					class="w-full min-h-40 px-4 py-3 bg-white/[0.03] border border-synapse/10 rounded-xl text-text text-sm
-						placeholder:text-muted focus:outline-none focus:border-synapse/40 focus:ring-1 focus:ring-synapse/20
-						transition backdrop-blur-sm resize-y font-mono"
-				></textarea>
-				<div class="flex items-center gap-3">
-					<button
-						onclick={scoreContent}
-						disabled={scoring || !content.trim()}
-						class="px-4 py-2 bg-synapse/20 text-synapse-glow text-sm rounded-xl border border-synapse/30
-							hover:bg-synapse/30 hover:border-synapse/50 transition disabled:opacity-40 disabled:cursor-not-allowed"
-					>
-						{scoring ? 'Scoring…' : 'Score Importance'}
-					</button>
-					<span class="text-xs text-muted">⌘/Ctrl + Enter</span>
-					{#if scoreError}
-						<span class="text-xs text-decay">{scoreError}</span>
-					{/if}
-				</div>
-			</div>
-
-			<!-- Radar + composite readout -->
-			<div
-				use:spotlight
-				class="spotlight-surface flex flex-col items-center gap-4 md:min-w-[340px] rounded-2xl"
-			>
-				{#if score}
-					<div class="relative z-[1] text-center enter">
-						<div class="text-[10px] uppercase tracking-widest text-muted">Composite</div>
-						<div class="text-5xl font-semibold text-aurora leading-none mt-1 tabular-nums">
-							<AnimatedNumber value={score.composite} scale={100} decimals={0} suffix="%" />
-						</div>
-					</div>
-					{#key radarKey}
-						<ImportanceRadar
-							novelty={score.channels.novelty}
-							arousal={score.channels.arousal}
-							reward={score.channels.reward}
-							attention={score.channels.attention}
-							size="lg"
-						/>
-					{/key}
-
-					<!-- Recommendation -->
-					{#if score.composite > 0.6}
-						<div class="relative z-[1] w-full text-center space-y-1 enter">
-							<div class="flex items-center justify-center gap-1.5 text-lg font-semibold text-recall">
-								<Icon name="sparkle" size={18} />
-								<span>Save</span>
-							</div>
-							<p class="text-xs text-dim leading-relaxed">
-								Composite {(score.composite * 100).toFixed(0)}% &gt; 60% threshold.
-								{#if topChannel}
-									Driven by <span class="text-bright">{topChannel.key}</span> — {CHANNEL_BLURBS[topChannel.key].high}.
-								{/if}
-							</p>
-						</div>
-					{:else}
-						<div class="relative z-[1] w-full text-center space-y-1 enter">
-							<div class="flex items-center justify-center gap-1.5 text-lg font-semibold text-decay">
-								<Icon name="close" size={18} />
-								<span>Skip</span>
-							</div>
-							<p class="text-xs text-dim leading-relaxed">
-								Composite {(score.composite * 100).toFixed(0)}% &lt; 60% threshold.
-								{#if weakestChannel}
-									Weakest channel: <span class="text-bright">{weakestChannel}</span> — {CHANNEL_BLURBS[weakestChannel].low}.
-								{/if}
-							</p>
-						</div>
-					{/if}
-				{:else}
-					<div class="relative z-[1] flex flex-col items-center justify-center min-h-[320px] w-full text-center px-4">
-						<div class="text-warning/70 mb-3 breathe">
-							<Icon name="importance" size={36} />
-						</div>
-						<p class="text-sm text-dim">Type some content above to score its importance.</p>
-						<p class="text-xs text-muted mt-2 max-w-xs">
-							Composite = 0.25·novelty + 0.30·arousal + 0.25·reward + 0.20·attention.
-							Threshold for save: 60%.
-						</p>
-					</div>
-				{/if}
-			</div>
-		</div>
-	</section>
-
-	<!-- ── Section 2: Top Important Memories This Week ────────────────────── -->
-	<section use:reveal class="space-y-4">
-		<div class="flex items-end justify-between">
-			<div>
-				<h2 class="text-sm font-semibold text-bright uppercase tracking-wider">
-					Top Important Memories This Week
-				</h2>
-				<p class="text-xs text-muted mt-1">
-					Ranked by retention × reviews ÷ age. Click any card to open it.
-				</p>
-			</div>
-			<button
-				onclick={loadTrending}
-				class="text-xs text-muted hover:text-text transition"
-			>
-				Refresh
-			</button>
-		</div>
-
-		{#if loadingMemories}
-			<div class="grid gap-3 md:grid-cols-2">
-				{#each Array(6) as _}
-					<div class="h-28 glass-subtle rounded-xl shimmer"></div>
-				{/each}
-			</div>
-		{:else if memories.length === 0}
-			<div class="flex flex-col items-center justify-center text-center py-16 px-6 glass-subtle rounded-2xl enter">
-				<div class="text-warning/60 mb-3 breathe">
-					<Icon name="importance" size={40} />
-				</div>
-				<p class="text-sm text-bright font-medium">No standout memories yet</p>
-				<p class="text-xs text-muted mt-1.5 max-w-sm">
-					As you capture decisions, wins, and discoveries, the most important ones
-					will rise to the top here — ranked by retention, reviews, and recency.
-				</p>
-			</div>
-		{:else}
-			<div class="grid gap-3 md:grid-cols-2">
-				{#each memories as memory, i (memory.id)}
-					{@const ch = perMemoryScores[memory.id]}
-					<button
-						type="button"
-						use:reveal={{ delay: i * 45 }}
-						onclick={() => openMemory(memory.id)}
-						class="lift text-left p-4 glass-subtle rounded-xl hover:bg-white/[0.04] hover:border-synapse/30
-							transition-all duration-200 flex items-start gap-4"
-					>
-						<div class="flex-1 min-w-0 space-y-2">
-							<div class="flex items-center gap-2">
-								<span
-									class="w-2 h-2 rounded-full"
-									style="background: {NODE_TYPE_COLORS[memory.nodeType] || '#8B95A5'}"
-								></span>
-								<span class="text-xs text-dim">{memory.nodeType}</span>
-								<span class="text-xs text-muted">·</span>
-								<span class="text-xs text-muted">
-									{(memory.retentionStrength * 100).toFixed(0)}% retention
-								</span>
-								{#if memory.reviewCount}
-									<span class="text-xs text-muted">·</span>
-									<span class="text-xs text-muted">{memory.reviewCount} reviews</span>
-								{/if}
-							</div>
-							<p class="text-sm text-text leading-relaxed line-clamp-3">
-								{memory.content}
-							</p>
-							{#if memory.tags.length > 0}
-								<div class="flex gap-1.5 flex-wrap">
-									{#each memory.tags.slice(0, 4) as tag}
-										<span class="text-[10px] px-1.5 py-0.5 bg-white/[0.04] rounded text-muted">
-											{tag}
-										</span>
-									{/each}
-								</div>
-							{/if}
-						</div>
-						<div class="flex-shrink-0">
-							<ImportanceRadar
-								novelty={ch?.novelty ?? 0}
-								arousal={ch?.arousal ?? 0}
-								reward={ch?.reward ?? 0}
-								attention={ch?.attention ?? 0}
-								size="sm"
-							/>
-						</div>
-					</button>
-				{/each}
-			</div>
-		{/if}
-	</section>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div bind:this={hostEl} class="fixed inset-0 bg-[#020307]" onpointerdown={handlePointerDown} onpointermove={handlePointerMove} onpointerleave={handlePointerLeave}>
+	<ObservatoryCanvas demo="recall-path" seed={`real-importance-field:${total}`} onready={handleReady} />
 </div>

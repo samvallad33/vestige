@@ -176,6 +176,35 @@ export class ObservatoryEngine {
 	}
 
 	/**
+	 * Deregister a single frame pass and free its GPU resources — WITHOUT tearing
+	 * down the device. This is the Spatial Palace primitive: one persistent engine
+	 * outlives every route, and organs register/deregister their passes as the
+	 * camera flies between regions. Calls the pass's optional `dispose()` (the
+	 * RouteFramePass contract) so its buffers/textures are released. `dispose()`
+	 * (the whole-engine teardown) remains the ONLY path that destroys the device.
+	 * No-op if the pass was never registered.
+	 */
+	removePass(pass: FramePass): void {
+		const i = this.passes.indexOf(pass);
+		if (i === -1) return;
+		this.passes.splice(i, 1);
+		(pass as FramePass & { dispose?: () => void }).dispose?.();
+	}
+
+	/**
+	 * Deregister ALL frame passes, disposing each, but keep the device/context/
+	 * paramsBuffer/post stack alive. Used on a scene swap (fly into a new organ):
+	 * clear the old organ's passes, then addPass the new organ's set + re-add the
+	 * persistent nav/chrome passes. Does NOT destroy the device — see `dispose()`.
+	 */
+	clearPasses(): void {
+		for (const pass of this.passes) {
+			(pass as FramePass & { dispose?: () => void }).dispose?.();
+		}
+		this.passes.length = 0;
+	}
+
+	/**
 	 * Register the per-frame live-event hook (v2.3). See `preFrameHook`. Pass
 	 * null to detach (the field falls back to the calm deterministic loop).
 	 */

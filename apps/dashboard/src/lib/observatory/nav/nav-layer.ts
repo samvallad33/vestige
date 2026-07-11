@@ -28,24 +28,21 @@ export interface NavLayerPass extends FramePass {
 	dispose(): void;
 }
 
+// LAUNCH CURATION (Sam, Jul 10 2026): the in-canvas nav rail mirrors the palace's
+// curated hero set (ORGAN_REGIONS in palace-map.ts) so there is ONE surfaced set
+// across the palace and every organ's nav. The 10 hidden power-user/hygiene
+// organs (contradictions, blackbox, duplicates, memory-prs, activation, dreams,
+// schedule, importance, patterns, intentions) still work by direct URL — they are
+// just not listed here or in the palace. Restore one by adding it back to BOTH
+// this list and ORGAN_REGIONS. Shortcuts kept from the original mapping.
 export const COGNITIVE_OS_ROUTES: NavRoute[] = [
 	{ href: '/observatory', label: 'Observatory', shortcut: 'O' },
-	{ href: '/reasoning', label: 'Reasoning', shortcut: 'R' },
-	{ href: '/contradictions', label: 'Contradictions', shortcut: 'X' },
-	{ href: '/blackbox', label: 'Black Box', shortcut: 'B' },
-	{ href: '/timeline', label: 'Timeline', shortcut: 'T' },
-	{ href: '/duplicates', label: 'Duplicates', shortcut: 'U' },
 	{ href: '/graph', label: 'Graph', shortcut: 'G' },
-	{ href: '/memory-prs', label: 'Memory PRs', shortcut: 'Q' },
 	{ href: '/memories', label: 'Memories', shortcut: 'M' },
+	{ href: '/timeline', label: 'Timeline', shortcut: 'T' },
 	{ href: '/feed', label: 'Feed', shortcut: 'F' },
 	{ href: '/explore', label: 'Explore', shortcut: 'E' },
-	{ href: '/activation', label: 'Activation', shortcut: 'A' },
-	{ href: '/dreams', label: 'Dreams', shortcut: 'D' },
-	{ href: '/schedule', label: 'Schedule', shortcut: 'C' },
-	{ href: '/importance', label: 'Importance', shortcut: 'P' },
-	{ href: '/patterns', label: 'Patterns', shortcut: 'N' },
-	{ href: '/intentions', label: 'Intentions', shortcut: 'I' },
+	{ href: '/reasoning', label: 'Reasoning', shortcut: 'R' },
 	{ href: '/stats', label: 'Stats', shortcut: 'S' },
 	{ href: '/settings', label: 'Settings', shortcut: ',' }
 ];
@@ -54,9 +51,28 @@ const NAV_X = -0.93;
 const NAV_Y = 0.83;
 const NAV_SIZE = 0.024;
 const NAV_STEP = 0.058;
+// Collapsed dock (Jul 11 2026, Claude + GPT-5.6-sol): at rest the rail is a thin
+// column of just shortcut letters at NAV_MARKER_X, clear of all organ content
+// (which starts at x>=-0.94). It expands to the full labelled rail only while the
+// cursor is in the left activation/retention band — so the nav never overprints a
+// page's content, but stays one edge-hover away. Zone-triggered (NOT glyph-hover,
+// since collapsed markers are too thin to reliably pick). Hysteresis: expand at
+// a tight edge, retain across the whole expanded footprint, collapse outside it.
+const NAV_MARKER_X = -0.965; // single left-anchored letters grow rightward → safe
+const NAV_EXPAND_X = -0.9; // collapsed → expand when cursor x <= this…
+const NAV_EXPAND_Y_LO = -0.4; // …and inside this vertical band
+const NAV_EXPAND_Y_HI = 0.92;
+const NAV_RETAIN_X = -0.73; // stay expanded while cursor x <= this (wider)…
+const NAV_RETAIN_Y_LO = -0.44; // …within this slightly taller band
+const NAV_RETAIN_Y_HI = 0.96;
 const CYAN = [...rgb01(CAUSAL.forward), 1] satisfies [number, number, number, number];
 const HOVER = [...rgb01(RETENTION.luciferin), 1] satisfies [number, number, number, number];
 const DIM = [...rgb01(RETENTION.bridge), 0.36] satisfies [number, number, number, number];
+// Resting collapsed markers: dimmer than DIM so the strip reads as latent chrome,
+// not content — but perceptible enough that a first-time viewer notices the edge
+// affordance. 0.36 (Claude + GPT-5.6-sol @ max effort): 0.28 read as
+// undiscoverable, 0.40 crept back toward a persistent rail. Active route = CYAN.
+const MARKER_DIM = [...rgb01(RETENTION.bridge), 0.36] satisfies [number, number, number, number];
 const BLACKWATER = [...rgb01(MEDIUM.blackwater), 0.15] satisfies [number, number, number, number];
 
 export function createNavLayerPass(engine: ObservatoryEngine, opts: NavLayerOptions = {}): NavLayerPass {
@@ -68,6 +84,7 @@ class TextNavLayer implements NavLayerPass {
 	private readonly routes: NavRoute[];
 	private activePath: string;
 	private hoverHref: string | null = null;
+	private expanded = false;
 	private ready = false;
 
 	constructor(engine: ObservatoryEngine, opts: NavLayerOptions) {
@@ -89,17 +106,37 @@ class TextNavLayer implements NavLayerPass {
 	}
 
 	setHoverFromNdc(ndcX: number, ndcY: number): NavPick | null {
+		// 1. Decide expand/collapse from the cursor ZONE (with hysteresis) BEFORE
+		//    picking, so that on the first move into the edge the labels are built
+		//    and immediately hoverable in this same call (no dead pointermove).
+		const inExpandZone =
+			ndcX <= NAV_EXPAND_X && ndcY >= NAV_EXPAND_Y_LO && ndcY <= NAV_EXPAND_Y_HI;
+		const inRetainZone =
+			ndcX <= NAV_RETAIN_X && ndcY >= NAV_RETAIN_Y_LO && ndcY <= NAV_RETAIN_Y_HI;
+		const nextExpanded = this.expanded ? inRetainZone : inExpandZone;
+		if (nextExpanded !== this.expanded) {
+			this.expanded = nextExpanded;
+			if (!nextExpanded) this.hoverHref = null; // clear stale hover on collapse
+			this.rebuild(); // 2. structural rebuild so pickAt sees current items
+		}
+		// 3. Pick against the (now current) item set. Collapsed → markers aren't
+		//    'route-nav', so pickAt returns null and nothing hovers, by design.
 		const hit = this.pickAt(ndcX, ndcY);
 		const next = hit?.payload.href ?? null;
 		if (next !== this.hoverHref) {
-			this.hoverHref = next;
+			this.hoverHref = next; // 4. update hover, rebuild once more if changed
 			this.rebuild();
 		}
 		return hit;
 	}
 
 	clearHover(): void {
-		if (this.hoverHref === null) return;
+		// Pointer left the canvas → collapse the dock deterministically (capture-
+		// stable) AND clear hover. Guard covers the expanded-but-unhovered case
+		// (GPT-5.6-sol caught this: a plain hoverHref===null early-return would
+		// leave an expanded rail stranded when the cursor exits without hovering).
+		if (!this.expanded && this.hoverHref === null) return;
+		this.expanded = false;
 		this.hoverHref = null;
 		this.rebuild();
 	}
@@ -122,7 +159,40 @@ class TextNavLayer implements NavLayerPass {
 
 	private rebuild(): void {
 		if (!this.ready) return;
-		const items: TextLayerItem[] = [
+		this.text.setText(this.expanded ? this.buildExpanded() : this.buildCollapsed());
+	}
+
+	/**
+	 * Collapsed dock — a thin left-edge column of just the shortcut letters at
+	 * NAV_MARKER_X, sharing the EXACT Y anchors of the expanded labels so the rail
+	 * appears to unfold from stable points rather than swap in. Resting markers are
+	 * very dim (latent chrome); the active route stays CYAN so "where am I" is
+	 * always answered. No header, no hover ring. Markers are NOT 'route-nav', so
+	 * pickAt() returns null while collapsed (no clicking a thin target — you hover
+	 * to expand, then click the full label).
+	 */
+	private buildCollapsed(): TextLayerItem[] {
+		return this.routes.map((route, i) => {
+			const active = this.isActive(route.href);
+			const glyph = route.shortcut ?? route.label.charAt(0).toUpperCase();
+			return {
+				id: `route-nav-marker:${route.href}`,
+				kind: 'route-nav-marker',
+				text: glyph,
+				x: NAV_MARKER_X,
+				y: NAV_Y - i * NAV_STEP,
+				size: NAV_SIZE, // same size as expanded → no scale-pop on unfold
+				color: active ? CYAN : MARKER_DIM,
+				startFrame: 0,
+				revealSpan: 1,
+				maxWidthEm: 4
+			} satisfies TextLayerItem;
+		});
+	}
+
+	/** Expanded rail — the full labelled nav (header + 9 routes + hover ring). */
+	private buildExpanded(): TextLayerItem[] {
+		return [
 			{
 				id: 'route-nav:rail',
 				kind: 'route-nav-rail',
@@ -150,6 +220,10 @@ class TextNavLayer implements NavLayerPass {
 					startFrame: 0,
 					revealSpan: 1,
 					maxWidthEm: 16,
+					// Generous hit padding so the expanded labels are easy to click
+					// (bare glyph boxes are ~14px thin — the systemic hitPad fix).
+					hitPadX: 0.03,
+					hitPadY: 0.02,
 					route
 				} satisfies TextLayerItem & { route: NavRoute };
 			}),
@@ -168,7 +242,6 @@ class TextNavLayer implements NavLayerPass {
 					]
 				: [])
 		];
-		this.text.setText(items);
 	}
 
 	private isActive(href: string): boolean {

@@ -36,13 +36,17 @@
 		formatAt,
 		relativeMs
 	} from '$components/blackbox-helpers';
-	import RouteStage, { type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import RouteStage, { type RoutePick, type RouteFramePass } from '$lib/observatory/RouteStage.svelte';
 	import { createBlackboxPasses } from '$lib/observatory/blackbox/blackbox-pass';
 	import {
 		normalizeBlackboxScene,
 		type BlackboxScene,
 		type BlackboxTraceImpulse
 	} from '$lib/observatory/blackbox/blackbox-scene';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import type { RouteSceneModel } from '$lib/observatory/route-scene';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 
 	// ---- state ----------------------------------------------------------
 	let runs = $state<TraceRunSummary[]>([]);
@@ -138,16 +142,68 @@
 	});
 
 	onMount(loadRuns);
+
+	// Every real agent run becomes a cell in the recorder's constellation behind
+	// the trace lanes: bigger = more events, scarlet = had a veto, amber = had a
+	// suppression, forward-cyan = clean. The field breathes even between runs.
+	let runsField: LivingFieldPass | null = null;
+	function buildRunCells() {
+		const maxEvents = Math.max(1, ...runs.map((r) => r.eventCount ?? 0));
+		const data: FieldDatum[] = runs.slice(0, 200).map((r) => {
+			const load = clampLocal((r.eventCount ?? 0) / maxEvents);
+			const hue =
+				(r.vetoCount ?? 0) > 0
+					? FIELD_HUE.scarlet
+					: (r.suppressedCount ?? 0) > 0
+						? FIELD_HUE.caution
+						: FIELD_HUE.forward;
+			return {
+				id: r.runId,
+				score: 0.35 + 0.65 * load,
+				hue,
+				energy: 0.4 + 0.6 * load,
+				selected: r.runId === selectedRunId,
+				scar: (r.vetoCount ?? 0) > 0,
+				metric2: clampLocal((r.retrievedCount ?? 0) / Math.max(1, r.eventCount ?? 1)),
+				kind: 'trace-run',
+				payload: r
+			} satisfies FieldDatum;
+		});
+		return layoutGalaxy(data, { maxRadius: 0.95, minCellR: 0.016, maxCellR: 0.06 });
+	}
+	function clampLocal(v: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
+	}
+	function createRecorderPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		const field = new LivingFieldPass(engine);
+		runsField = field;
+		field.setCells(buildRunCells());
+		const fieldWrapper: RouteFramePass = {
+			compute: (encoder) => field.compute(encoder),
+			render: (pass) => field.render(pass),
+			pickAt: (x, y) => field.pickAt(x, y),
+			dispose: () => {
+				field.dispose();
+				if (runsField === field) runsField = null;
+			}
+		};
+		return [fieldWrapper, ...createBlackboxPasses(engine, scene)];
+	}
+	// Refresh the run constellation whenever the run list changes.
+	$effect(() => {
+		void runs.length;
+		runsField?.setCells(buildRunCells());
+	});
 </script>
 
 <RouteStage
 	organ="blackbox"
 	seed={`agent-flight-recorder:${selectedRunId ?? 'empty'}:${blackboxScene.visibleEventCount}`}
 	scene={blackboxScene}
-	passes={createBlackboxPasses}
+	passes={createRecorderPasses}
 	loading={loading}
 	error={error}
-	emptyLabel="NO AGENT TRACE SELECTED — RECORDER ARMED"
+	emptyLabel="NO AGENT TRACE SELECTED - RECORDER ARMED"
 	onpick={handleRoutePick}
 />
 
@@ -553,9 +609,9 @@
 	}
 
 	.glass {
-		background: color-mix(in oklab, var(--color-void, #050510) 55%, transparent);
-		border: 1px solid color-mix(in oklab, white 8%, transparent);
-		backdrop-filter: blur(12px);
+		background: linear-gradient(180deg, rgba(2, 3, 7, 0.26), rgba(0, 5, 16, 0.16));
+		border: 1px solid color-mix(in oklab, var(--color-synapse) 16%, transparent);
+		backdrop-filter: blur(8px) saturate(122%);
 		border-radius: 14px;
 	}
 
@@ -633,7 +689,7 @@
 		color: var(--color-recall, #10b981);
 	}
 	.s-suppress {
-		color: #a78bfa;
+		color: #b90d2b;
 	}
 	.s-write {
 		color: #38bdf8;

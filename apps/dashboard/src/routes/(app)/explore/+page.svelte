@@ -1,273 +1,365 @@
 <script lang="ts">
+	import { onDestroy, onMount } from 'svelte';
+	import { replaceState } from '$app/navigation';
 	import { api } from '$stores/api';
-	import type { Memory } from '$types';
-	import PageHeader from '$lib/components/PageHeader.svelte';
-	import Icon, { type IconName } from '$lib/components/Icon.svelte';
-	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
-	import { reveal } from '$lib/actions/reveal';
-	import { spotlight } from '$lib/actions/interactions';
+	import type { Memory, SearchResult } from '$types';
+	import ObservatoryCanvas from '$lib/components/ObservatoryCanvas.svelte';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import { rgb01 } from '$lib/observatory/cognitive-palette';
+	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 
-	let searchQuery = $state('');
-	let targetQuery = $state('');
-	let sourceMemory: Memory | null = $state(null);
-	let targetMemory: Memory | null = $state(null);
-	let associations: Record<string, unknown>[] = $state([]);
-	let mode = $state<'associations' | 'chains' | 'bridges'>('associations');
-	let loading = $state(false);
-	let importanceText = $state('');
-	let importanceResult: Record<string, unknown> | null = $state(null);
-
-	const MODE_INFO: Record<string, { icon: IconName; desc: string }> = {
-		associations: { icon: 'activation', desc: 'Spreading activation — find related memories via graph traversal' },
-		chains: { icon: 'reasoning', desc: 'Build reasoning path from source to target memory' },
-		bridges: { icon: 'explore', desc: 'Find connecting memories between two concepts' },
+	type SearchMemory = Memory & {
+		similarity?: number;
+		score?: number;
+		relevance?: number;
+		retention?: number;
 	};
+	type ExploreTextItem = TextLayerItem & { memoryId?: string };
 
-	async function findSource() {
-		if (!searchQuery.trim()) return;
-		loading = true;
+	const CYAN = [...rgb01('#22C7DE'), 1] satisfies [number, number, number, number];
+	const SCARLET = [...rgb01('#FF3B30'), 0.92] satisfies [number, number, number, number];
+	const MUTED = [...rgb01('#29F2A9'), 0.62] satisfies [number, number, number, number];
+	const SEARCH_LIMIT = 40;
+	const ROW_LIMIT = 36;
+	// The shared text pass packs reveal as ageFrame = startFrame + GLOBAL glyph
+	// index * 2; 36 rows × ~77 glyphs ≈ 2,845 glyphs → ages to ~5,688 frames,
+	// far past the ~720-frame wrapped clock, so late rows would NEVER reveal.
+	// Anchor deeply negative (same fix as /memories, /patterns, /memory-prs).
+	const REVEAL_ANCHOR = -100000;
+
+	let hostEl: HTMLDivElement | null = $state(null);
+	let engineRef: ObservatoryEngine | null = null;
+	let textPass: TextLayerPass | null = null;
+	let fieldPass: LivingFieldPass | null = null;
+	let cursorSmoothed: { x: number; y: number } | null = null;
+	let results: SearchMemory[] = $state([]);
+	let searchResult: SearchResult | null = $state(null);
+	let searchQuery = $state('');
+	let loading = $state(true);
+	let error: string | null = $state(null);
+	let activeRun: string | null = null;
+	// Semantic walk (Wave 3): clicking a neighbor re-centers the whole neighborhood
+	// on that thought, in place. walkingFrom carries the 8-char id of the thought
+	// being walked from (shown in the loading status); seededFrom marks the newest-
+	// memory auto-seed used when the page is opened with no ?q=.
+	let walkingFrom: string | null = $state(null);
+	let seededFrom: string | null = $state(null);
+	let centerId: string | null = $state(null);
+	// Generation token: two rapid walks race (B finishes, then stale A overwrites
+	// B's neighborhood while the URL keeps B's query). Only the newest generation
+	// may apply results / clear the walking label. (GPT-5.6-sol cross-review.)
+	let loadGen = 0;
+
+	onMount(() => {
+		const params = new URLSearchParams(window.location.search);
+		searchQuery = params.get('q') ?? '';
+		void loadNeighbors();
+	});
+
+	onDestroy(() => {
+		textPass?.dispose();
+		fieldPass?.dispose();
+		textPass = null;
+		fieldPass = null;
+		engineRef = null;
+	});
+
+	async function handleReady(engine: ObservatoryEngine) {
+		engineRef = engine;
+		const field = new LivingFieldPass(engine);
+		fieldPass = field;
+		field.setCells(buildFieldCells());
+		engine.addPass(field);
+		const pass = new TextLayerPass(engine);
+		textPass = pass;
+		await pass.init();
+		pass.setText(buildTextItems());
+		engine.addPass(pass);
+		engine.demoClock.reset();
+	}
+
+	/**
+	 * Squash a memory's content into a compact semantic seed (URL + API safe).
+	 * Prefers a word boundary near the cap so the seed never ends mid-word (or,
+	 * worse, mid-surrogate-pair — raw slice cuts UTF-16 code units).
+	 */
+	function walkQuery(content: string): string {
+		const squashed = content.replace(/\s+/g, ' ').trim();
+		if (squashed.length <= 280) return squashed;
+		const hard = squashed.slice(0, 280);
+		const lastSpace = hard.lastIndexOf(' ');
+		return lastSpace > 200 ? hard.slice(0, lastSpace) : hard;
+	}
+
+	/** Sync ?q= without a history entry; a failed sync is warned, never silent. */
+	function syncQueryToUrl() {
 		try {
-			const res = await api.search(searchQuery, 1);
-			if (res.results.length > 0) {
-				sourceMemory = res.results[0];
-				await explore();
+			replaceState(`?q=${encodeURIComponent(searchQuery)}`, {});
+		} catch (err) {
+			console.warn('[explore] URL sync failed — walk state is not shareable:', err);
+		}
+	}
+
+	async function loadNeighbors() {
+		const gen = ++loadGen;
+		error = null;
+		// The search backend rejects an empty query (500). The page is zero-DOM (no
+		// input field), so with no ?q= we AUTO-SEED the expedition from the newest
+		// memory (verified: /api/memories returns newest-first) — landing here is
+		// immediately alive, and every click walks onward from a real thought.
+		if (!searchQuery.trim()) {
+			try {
+				const seed = await api.memories.list({ limit: '1' });
+				if (gen !== loadGen) return; // a newer walk superseded this load
+				const newest = seed.memories?.[0];
+				if (newest?.content) {
+					searchQuery = walkQuery(newest.content);
+					centerId = newest.id;
+					seededFrom = newest.id.slice(0, 8);
+					// The seeded expedition must be shareable/reproducible too — a
+					// reload mid-ingest would otherwise seed from a different memory.
+					syncQueryToUrl();
+				}
+			} catch {
+				/* fall through to the calm empty state */
 			}
-		} catch { /* ignore */ }
-		finally { loading = false; }
-	}
-
-	async function findTarget() {
-		if (!targetQuery.trim()) return;
+		}
+		if (!searchQuery.trim()) {
+			loading = false;
+			searchResult = null;
+			results = [];
+			textPass?.setText(buildTextItems());
+			engineRef?.demoClock.reset();
+			return;
+		}
 		loading = true;
+		textPass?.setText(buildTextItems());
 		try {
-			const res = await api.search(targetQuery, 1);
-			if (res.results.length > 0) {
-				targetMemory = res.results[0];
-				if (sourceMemory) await explore();
+			const res = centerId
+				? await api.explore(centerId, 'associations', undefined, SEARCH_LIMIT)
+				: await api.search(searchQuery, SEARCH_LIMIT);
+			if (gen !== loadGen) return; // stale response — the newer walk owns state
+			searchResult = 'query' in res ? (res as SearchResult) : null;
+			results = res.results as SearchMemory[];
+		} catch (err) {
+			if (gen !== loadGen) return;
+			searchResult = null;
+			results = [];
+			error = err instanceof Error ? err.message : 'UNKNOWN EXPLORE FETCH ERROR';
+		} finally {
+			if (gen === loadGen) {
+				loading = false;
+				walkingFrom = null; // only the owning generation clears the label
+				textPass?.setText(buildTextItems());
+				fieldPass?.setCells(buildFieldCells());
+				engineRef?.demoClock.reset();
 			}
-		} catch { /* ignore */ }
-		finally { loading = false; }
+		}
 	}
 
-	async function explore() {
-		if (!sourceMemory) return;
-		loading = true;
-		try {
-			const toId = (mode === 'chains' || mode === 'bridges') && targetMemory
-				? targetMemory.id : undefined;
-			const res = await api.explore(sourceMemory.id, mode, toId);
-			associations = (res.results || res.nodes || res.chain || res.bridges || []) as Record<string, unknown>[];
-		} catch { associations = []; }
-		finally { loading = false; }
+	function buildFieldCells() {
+		const data: FieldDatum[] = results.map((memory, index) => ({
+			id: memory.id,
+			score: similarity(memory),
+			hue: index === 0 ? FIELD_HUE.oxygen : FIELD_HUE.bridge,
+			energy: similarity(memory),
+			metric2: retention(memory),
+			selected: index === 0,
+			kind: 'explore-neighbor',
+			payload: memory
+		}));
+		return layoutGalaxy(data, { maxRadius: 0.9, minCellR: 0.035, maxCellR: 0.1 });
 	}
 
-	async function scoreImportance() {
-		if (!importanceText.trim()) return;
-		importanceResult = await api.importance(importanceText) as unknown as Record<string, unknown>;
+	function sanitizeAscii(value: string): string {
+		return value
+			.replace(/[\u2014\u2013]/g, '-')
+			.replace(/[\u2018\u2019]/g, "'")
+			.replace(/[\u201C\u201D]/g, '"')
+			.replace(/\u2026/g, '...')
+			.replace(/[^\x20-\x7E]/g, '?');
 	}
 
-	function switchMode(m: typeof mode) {
-		mode = m;
-		if (sourceMemory) explore();
+	function clamp01(value: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.5));
+	}
+
+	function scalar(value: unknown, fallback = 0.5): number {
+		return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+	}
+
+	function similarity(memory: SearchMemory): number {
+		return clamp01(
+			scalar(
+				memory.similarity,
+				scalar(memory.score, scalar(memory.relevance, scalar(memory.combinedScore, memory.retrievalStrength)))
+			)
+		);
+	}
+
+	function retention(memory: SearchMemory): number {
+		return clamp01(scalar(memory.retention, memory.retentionStrength));
+	}
+
+	function resultLine(memory: SearchMemory): string {
+		const snippet = sanitizeAscii(memory.content).replace(/\s+/g, ' ').trim().slice(0, 52);
+		return sanitizeAscii(
+			`${snippet} | ${memory.id.slice(0, 8)} | ${Math.round(similarity(memory) * 100)}% | ${Math.round(retention(memory) * 100)}%`
+		);
+	}
+
+	function statusItem(text: string, color = MUTED): ExploreTextItem {
+		return {
+			id: 'explore:status',
+			kind: 'explore-status',
+			text: sanitizeAscii(text),
+			x: -0.58,
+			y: 0.02,
+			size: 0.044,
+			color,
+			depth: 0.78,
+			weight: 0.62,
+			revealSpan: 32,
+			maxWidthEm: 50
+		};
+	}
+
+	function buildTextItems(): ExploreTextItem[] {
+		if (loading) {
+			return [
+				statusItem(
+					walkingFrom ? `WALKING FROM ${walkingFrom}...` : 'LOADING SEARCH NEIGHBORS...',
+					CYAN
+				)
+			];
+		}
+		if (error) return [statusItem(`ERROR - ${error}`.slice(0, 72), SCARLET)];
+		if (results.length === 0) {
+			// No query and no seedable memory → invite one; empty result → say so.
+			if (!searchQuery.trim()) {
+				return [statusItem('SEMANTIC EXPEDITION - EMPTY BRAIN, INGEST A MEMORY TO EXPLORE', MUTED)];
+			}
+			const emptyText = searchResult?.query
+				? `NO NEIGHBORS FOR "${searchResult.query}" | ${searchResult.durationMs}ms`
+				: `NO NEIGHBORS FOR "${searchQuery}"`;
+			return [statusItem(emptyText, MUTED)];
+		}
+
+		const rows = results.slice(0, ROW_LIMIT);
+		const top = 0.72;
+		const rowStep = 1.5 / Math.max(1, ROW_LIMIT - 1);
+		// Expedition origin line (display-only, not pickable — no hitPad): tells the
+		// viewer where this neighborhood came from (auto-seed or an explicit query).
+		const origin: ExploreTextItem = {
+			id: 'explore:origin',
+			kind: 'explore-origin',
+			text: sanitizeAscii(
+				seededFrom
+					? `EXPEDITION SEEDED FROM NEWEST MEMORY ${seededFrom} - CLICK ANY THOUGHT TO WALK`
+					: `SEMANTIC NEIGHBORHOOD - ${rows.length} THOUGHTS - CLICK TO WALK`
+			),
+			x: -0.88,
+			y: 0.82,
+			size: 0.022,
+			color: MUTED,
+			depth: 0.85,
+			weight: 0.6,
+			revealSpan: 24,
+			maxWidthEm: 60
+		};
+		return [origin, ...rows.map((memory, i) => ({
+			id: `explore:${memory.id}`,
+			kind: 'explore-neighbor',
+			memoryId: memory.id,
+			text: resultLine(memory),
+			x: -0.88,
+			y: top - i * rowStep,
+			size: 0.026,
+			color: CYAN,
+			depth: similarity(memory),
+			weight: retention(memory),
+			startFrame: REVEAL_ANCHOR + i * 2,
+			revealSpan: 20,
+			maxWidthEm: 46,
+			hitPadX: 0.03,
+			hitPadY: 0.015
+		}))];
+	}
+
+	function pointerToNdc(e: PointerEvent | MouseEvent): { x: number; y: number } | null {
+		if (!hostEl) return null;
+		const rect = hostEl.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0) return null;
+		return {
+			x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+			y: -(((e.clientY - rect.top) / rect.height) * 2 - 1)
+		};
+	}
+
+	function writeCursorLens(ndc: { x: number; y: number }) {
+		if (!hostEl || !engineRef) return;
+		const rect = hostEl.getBoundingClientRect();
+		const aspect = Math.max(0.0001, rect.width / Math.max(1, rect.height));
+		const raw = { x: ndc.x * Math.max(aspect, 1), y: ndc.y / Math.min(aspect, 1) };
+		const prev = cursorSmoothed ?? raw;
+		const next = { x: prev.x + (raw.x - prev.x) * 0.35, y: prev.y + (raw.y - prev.y) * 0.35 };
+		cursorSmoothed = next;
+		engineRef.setCursorPreNdc(next.x, next.y, next.x - prev.x, next.y - prev.y);
+	}
+
+	function handlePointerMove(e: PointerEvent) {
+		const ndc = pointerToNdc(e);
+		if (!ndc) return;
+		writeCursorLens(ndc);
+		const hit = textPass?.pickAt(ndc.x, ndc.y) ?? null;
+		const nextRun = hit?.kind === 'explore-neighbor' ? hit.id : null;
+		if (nextRun !== activeRun) {
+			activeRun = nextRun;
+			textPass?.setRunDepth(nextRun, 1);
+		}
+		if (hostEl) hostEl.style.cursor = nextRun ? 'crosshair' : 'default';
+	}
+
+	function handlePointerLeave() {
+		cursorSmoothed = null;
+		activeRun = null;
+		engineRef?.setCursorPreNdc(999, 999, 0, 0);
+		textPass?.setRunDepth(null);
+		if (hostEl) hostEl.style.cursor = 'default';
+	}
+
+	async function handlePointerDown(e: PointerEvent) {
+		const ndc = pointerToNdc(e);
+		if (!ndc || !textPass) return;
+		const hit = textPass.pickAt(ndc.x, ndc.y);
+		if (hit?.kind !== 'explore-neighbor') return;
+		const item = hit.payload as ExploreTextItem;
+		if (!item.memoryId) return;
+		// SEMANTIC WALK (Wave 3): re-center the neighborhood on the clicked thought,
+		// IN PLACE. (The old goto('/memories/{id}') 404'd — no such route exists.)
+		// We search by the memory's CONTENT (semantic seed), not its id; the URL ?q=
+		// is synced via replaceState so the walk is shareable/back-safe without
+		// relying on onMount re-running (it doesn't on same-route navigation).
+		const memory = results.find((m) => m.id === item.memoryId);
+		if (!memory?.content) return;
+		walkingFrom = memory.id.slice(0, 8);
+		centerId = memory.id;
+		seededFrom = null;
+		searchQuery = walkQuery(memory.content);
+		syncQueryToUrl();
+		// walkingFrom is cleared by loadNeighbors' gen-guarded finally, so a rapid
+		// second walk can't have its label wiped by the superseded first walk.
+		await loadNeighbors();
 	}
 </script>
 
-<div class="p-6 max-w-5xl mx-auto space-y-8">
-	<PageHeader
-		icon="explore"
-		title="Explore Connections"
-		subtitle="Traverse the memory graph — spreading activation, reasoning chains, and conceptual bridges."
-		accent="synapse"
-	/>
+<svelte:head>
+	<title>Explore · Vestige</title>
+</svelte:head>
 
-	<!-- Mode selector -->
-	<div class="grid grid-cols-3 gap-2">
-		{#each (['associations', 'chains', 'bridges'] as const) as m}
-			<button onclick={() => switchMode(m)}
-				class="lift flex flex-col items-center gap-1 p-3 rounded-xl text-sm transition
-					{mode === m
-						? 'glass !border-synapse/30 text-synapse-glow'
-						: 'glass-subtle text-dim hover:bg-white/[0.03]'}">
-				<span class="{mode === m ? 'breathe' : ''}"><Icon name={MODE_INFO[m].icon} size={22} /></span>
-				<span class="font-medium">{m.charAt(0).toUpperCase() + m.slice(1)}</span>
-				<span class="text-[10px] text-muted text-center">{MODE_INFO[m].desc}</span>
-			</button>
-		{/each}
-	</div>
-
-	<!-- Search for source memory -->
-	<div class="space-y-3">
-		<span class="text-xs text-dim font-medium">Source Memory</span>
-		<div class="flex gap-2">
-			<input type="text" placeholder="Search for a memory to explore from..."
-				bind:value={searchQuery}
-				onkeydown={(e) => e.key === 'Enter' && findSource()}
-				class="flex-1 px-4 py-2.5 bg-white/[0.03] border border-synapse/10 rounded-xl text-text text-sm
-					placeholder:text-muted focus:outline-none focus:border-synapse/40 transition backdrop-blur-sm" />
-			<button onclick={findSource}
-				class="px-4 py-2.5 bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm rounded-xl hover:bg-synapse/30 transition">
-				Find
-			</button>
-		</div>
-	</div>
-
-	{#if sourceMemory}
-		<div class="p-3 glass rounded-xl !border-synapse/20">
-			<div class="text-[10px] text-synapse-glow mb-1 uppercase tracking-wider">Source</div>
-			<p class="text-sm text-text">{sourceMemory.content.slice(0, 200)}</p>
-			<div class="flex gap-2 mt-1.5 text-[10px] text-muted">
-				<span>{sourceMemory.nodeType}</span>
-				<span>{(sourceMemory.retentionStrength * 100).toFixed(0)}% retention</span>
-			</div>
-		</div>
-	{/if}
-
-	<!-- Target memory (for chains/bridges) -->
-	{#if mode === 'chains' || mode === 'bridges'}
-		<div class="space-y-3">
-			<span class="text-xs text-dim font-medium">Target Memory <span class="text-muted">(for {mode})</span></span>
-			<div class="flex gap-2">
-				<input type="text" placeholder="Search for the target memory..."
-					bind:value={targetQuery}
-					onkeydown={(e) => e.key === 'Enter' && findTarget()}
-					class="flex-1 px-4 py-2.5 bg-white/[0.03] border border-synapse/10 rounded-xl text-text text-sm
-						placeholder:text-muted focus:outline-none focus:border-dream/40 transition backdrop-blur-sm" />
-				<button onclick={findTarget}
-					class="px-4 py-2.5 bg-dream/20 border border-dream/40 text-dream-glow text-sm rounded-xl hover:bg-dream/30 transition">
-					Find
-				</button>
-			</div>
-		</div>
-
-		{#if targetMemory}
-			<div class="p-3 glass rounded-xl !border-dream/20">
-				<div class="text-[10px] text-dream-glow mb-1 uppercase tracking-wider">Target</div>
-				<p class="text-sm text-text">{targetMemory.content.slice(0, 200)}</p>
-				<div class="flex gap-2 mt-1.5 text-[10px] text-muted">
-					<span>{targetMemory.nodeType}</span>
-					<span>{(targetMemory.retentionStrength * 100).toFixed(0)}% retention</span>
-				</div>
-			</div>
-		{/if}
-	{/if}
-
-	<!-- Results -->
-	{#if sourceMemory}
-		{#if loading}
-			<div class="space-y-3" aria-busy="true">
-				<div class="flex items-center gap-2.5 text-dim">
-					<Icon name="activation" size={18} class="breathe text-synapse-glow" />
-					<span class="text-sm">Exploring {mode}…</span>
-				</div>
-				<div class="space-y-2">
-					{#each Array(4) as _, i}
-						<div class="shimmer p-3 glass-subtle rounded-xl flex items-start gap-3">
-							<div class="shimmer w-6 h-6 rounded-full bg-white/[0.05] flex-shrink-0 mt-0.5"></div>
-							<div class="flex-1 min-w-0 space-y-2">
-								<div class="shimmer h-3.5 rounded bg-white/[0.05]" style="width: {88 - i * 9}%"></div>
-								<div class="shimmer h-3 rounded bg-white/[0.04]" style="width: {52 - i * 6}%"></div>
-							</div>
-						</div>
-					{/each}
-				</div>
-			</div>
-		{:else if associations.length > 0}
-			<div class="space-y-4">
-				<div class="flex items-center justify-between">
-					<h2 class="text-sm text-bright font-semibold flex items-baseline gap-1.5">
-						<AnimatedNumber value={associations.length} class="text-aurora font-bold" />
-						<span>Connections Found</span>
-					</h2>
-				</div>
-				<div class="space-y-2">
-					{#each associations as assoc, i (i)}
-						<div
-							use:reveal={{ delay: Math.min(i * 35, 350), y: 12 }}
-							use:spotlight
-							class="spotlight-surface lift p-3 glass-subtle rounded-xl hover:bg-white/[0.03] transition"
-						>
-							<div class="relative z-[1] flex items-start gap-3">
-								<div class="w-6 h-6 rounded-full bg-synapse/15 text-synapse-glow text-xs flex items-center justify-center flex-shrink-0 mt-0.5 tabular-nums">
-									{i + 1}
-								</div>
-								<div class="flex-1 min-w-0">
-									<p class="text-sm text-text line-clamp-2">{assoc.content}</p>
-									<div class="flex flex-wrap gap-3 mt-1.5 text-xs text-muted">
-										{#if assoc.nodeType}<span class="px-1.5 py-0.5 bg-white/[0.04] rounded">{assoc.nodeType}</span>{/if}
-										{#if assoc.score}<span class="tabular-nums">Score: {Number(assoc.score).toFixed(3)}</span>{/if}
-										{#if assoc.similarity}<span class="tabular-nums">Similarity: {Number(assoc.similarity).toFixed(3)}</span>{/if}
-										{#if assoc.retention}<span class="tabular-nums">{(Number(assoc.retention) * 100).toFixed(0)}% retention</span>{/if}
-										{#if assoc.connectionType}<span class="text-synapse-glow">{assoc.connectionType}</span>{/if}
-									</div>
-								</div>
-							</div>
-						</div>
-					{/each}
-				</div>
-			</div>
-		{:else}
-			<div class="enter text-center py-12 px-6 glass-subtle rounded-2xl">
-				<Icon name="explore" size={40} class="breathe text-synapse-glow mx-auto mb-4 opacity-80" />
-				<p class="text-sm text-bright font-medium">No connections surfaced yet</p>
-				<p class="text-xs text-muted mt-1.5 max-w-sm mx-auto">
-					{#if mode === 'associations'}
-						This memory hasn't formed strong links here. Try a broader source query — the graph rewards more general seeds.
-					{:else}
-						No {mode} found between these two memories. Pick a different source or target and the path may light up.
-					{/if}
-				</p>
-			</div>
-		{/if}
-	{/if}
-
-	<!-- Importance Scorer -->
-	<div class="pt-8 border-t border-synapse/10">
-		<h2 class="text-lg text-bright font-semibold mb-4 flex items-center gap-2">
-			<Icon name="importance" size={20} class="text-recall" />
-			Importance Scorer
-		</h2>
-		<p class="text-xs text-muted mb-3">4-channel neuroscience scoring: novelty, arousal, reward, attention</p>
-		<textarea
-			bind:value={importanceText}
-			placeholder="Paste any text to score its importance..."
-			class="w-full h-24 px-4 py-3 bg-white/[0.03] border border-synapse/10 rounded-xl text-text text-sm
-				placeholder:text-muted resize-none focus:outline-none focus:border-synapse/40 transition backdrop-blur-sm"
-		></textarea>
-		<button onclick={scoreImportance}
-			class="mt-2 px-4 py-2 bg-dream/20 border border-dream/40 text-dream-glow text-sm rounded-xl hover:bg-dream/30 transition">
-			Score
-		</button>
-
-		{#if importanceResult}
-			{@const channels = importanceResult.channels as Record<string, number> | undefined}
-			{@const composite = Number(importanceResult.composite || importanceResult.compositeScore || 0)}
-			<div class="enter mt-4 p-4 glass rounded-xl">
-				<div class="flex items-center gap-3 mb-4">
-					<AnimatedNumber value={composite} decimals={2} class="text-3xl text-aurora font-bold" />
-					<span class="px-2 py-1 rounded-lg text-xs {composite > 0.6
-						? 'bg-recall/20 text-recall border border-recall/30'
-						: 'bg-white/[0.04] text-dim border border-subtle/20'}">
-						{composite > 0.6 ? 'SAVE' : 'SKIP'}
-					</span>
-				</div>
-				{#if channels}
-					<div class="grid grid-cols-4 gap-3">
-						{#each Object.entries(channels) as [channel, score]}
-							<div>
-								<div class="text-xs text-dim mb-1.5 capitalize">{channel}</div>
-								<div class="h-2 bg-deep rounded-full overflow-hidden">
-									<div class="h-full rounded-full transition-all duration-500
-										{channel === 'novelty' ? 'bg-synapse' :
-										 channel === 'arousal' ? 'bg-dream' :
-										 channel === 'reward' ? 'bg-recall' : 'bg-amber-400'}"
-										style="width: {score * 100}%"></div>
-								</div>
-								<div class="text-xs text-muted mt-1">{score.toFixed(2)}</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			</div>
-		{/if}
-	</div>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div bind:this={hostEl} class="fixed inset-0 bg-[#020307]" onpointerdown={handlePointerDown} onpointermove={handlePointerMove} onpointerleave={handlePointerLeave}>
+	<ObservatoryCanvas demo="recall-path" seed={`real-explore-neighbors:${searchQuery}:${searchResult?.total ?? 0}`} onready={handleReady} />
 </div>

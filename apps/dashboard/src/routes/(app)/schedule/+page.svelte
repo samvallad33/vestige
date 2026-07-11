@@ -1,266 +1,293 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
 	import { api } from '$stores/api';
 	import type { Memory } from '$types';
-	import FSRSCalendar from '$components/FSRSCalendar.svelte';
-	import PageHeader from '$components/PageHeader.svelte';
-	import Icon from '$components/Icon.svelte';
-	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
-	import AnimatedNumber from '$components/AnimatedNumber.svelte';
-	import { reveal } from '$lib/actions/reveal';
-	import { spotlight, magnetic } from '$lib/actions/interactions';
-	import {
-		classifyUrgency,
-		computeScheduleStats,
-		daysUntilReview,
-	} from '$components/schedule-helpers';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import { rgb01 } from '$lib/observatory/cognitive-palette';
+	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
+	import { emptyScene, type RouteSceneModel } from '$lib/observatory/route-scene';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutRings, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 
-	type WindowFilter = 'today' | 'week' | 'month' | 'all';
+	type ScheduleTextItem = TextLayerItem & { memoryId?: string };
+
+	const CYAN = [...rgb01('#22C7DE'), 1] satisfies [number, number, number, number];
+	const AMBER = [...rgb01('#FFB000'), 0.9] satisfies [number, number, number, number];
+	const SCARLET = [...rgb01('#FF3B30'), 0.92] satisfies [number, number, number, number];
+	const FETCH_LIMIT = 2000;
+	const ROW_LIMIT = 40;
+	// The list endpoint (/api/memories) omits FSRS review fields (nextReviewAt /
+	// lastAccessedAt) — only the per-memory endpoint (/api/memories/:id) returns
+	// them. We enrich a bounded window of the loaded records with their REAL
+	// review timestamps so the schedule reflects genuine due-for-review data
+	// instead of collapsing to an empty field. Verified: 200 parallel per-memory
+	// GETs against the local brain take <1s.
+	const ENRICH_LIMIT = 200;
+	const ENRICH_CONCURRENCY = 16;
 
 	let memories: Memory[] = $state([]);
-	let totalMemories = $state(0);
 	let loading = $state(true);
-	let errored = $state(false);
-	let windowFilter: WindowFilter = $state<WindowFilter>('week');
+	let error: string | null = $state(null);
 
-	// The corpus cap. 2000 covers a very large personal corpus while keeping
-	// the request fast; `truncated` surfaces when there's more to fetch.
-	const FETCH_LIMIT = 2000;
-
-	async function fetchMemories() {
-		const res = await api.memories.list({ limit: String(FETCH_LIMIT) });
-		memories = res.memories;
-		totalMemories = res.total;
-	}
-
-	onMount(async () => {
-		try {
-			await fetchMemories();
-		} catch {
-			errored = true;
-			memories = [];
-		} finally {
-			loading = false;
-		}
+	onMount(() => {
+		void loadSchedule();
 	});
 
-	// Only memories that actually have an FSRS next-review timestamp.
-	let scheduled = $derived(memories.filter((m) => !!m.nextReviewAt));
-
-	let now = $derived(new Date());
-	let truncated = $derived(totalMemories > memories.length);
-
-	// Memories that match the currently-selected window. The calendar itself
-	// always renders the full 6-week window for spatial context — this filter
-	// drives the sidebar counts and the right-hand list. Day-granular so the
-	// buckets match the calendar cell colors (both go through classifyUrgency).
-	let filtered = $derived(
-		(() => {
-			const wf: WindowFilter = windowFilter;
-			if (wf === 'all') return scheduled;
-			return scheduled.filter((m) => {
-				const u = classifyUrgency(now, m.nextReviewAt);
-				if (u === 'none') return false;
-				if (wf === 'today') return u === 'overdue' || u === 'today';
-				if (wf === 'week') return u !== 'future';
-				// month: anything due within 30 whole days
-				const d = daysUntilReview(now, m.nextReviewAt);
-				return d !== null && d <= 30;
-			});
-		})()
-	);
-
-	// Stats — due today, this week, this month — and avg days-until-review.
-	let stats = $derived(computeScheduleStats(now, scheduled));
-
-	async function runConsolidation() {
+	async function loadSchedule() {
 		loading = true;
+		error = null;
 		try {
-			await api.consolidate();
-			await fetchMemories();
-			errored = false;
-		} catch {
-			errored = true;
+			const res = await api.memories.list({ limit: String(FETCH_LIMIT) });
+			memories = await enrichReviewFields(res.memories);
+		} catch (err) {
+			memories = [];
+			error = err instanceof Error ? err.message : 'API FETCH FAILED';
 		} finally {
 			loading = false;
 		}
 	}
 
-	// The review windows.
-	const FILTERS: { key: WindowFilter; label: string }[] = [
-		{ key: 'today', label: 'Due today' },
-		{ key: 'week', label: 'This week' },
-		{ key: 'month', label: 'This month' },
-		{ key: 'all', label: 'All upcoming' }
-	];
+	/**
+	 * The list payload lacks nextReviewAt/lastAccessedAt. Backfill them from the
+	 * per-memory endpoint (which does return real FSRS review timestamps) for a
+	 * bounded window, in small concurrent batches. Records that already carry a
+	 * nextReviewAt, or that fail to enrich, are passed through unchanged — a
+	 * failed enrich just omits that row from the schedule, never fakes one.
+	 */
+	async function enrichReviewFields(source: Memory[]): Promise<Memory[]> {
+		const enriched = source.slice();
+		const targets = enriched
+			.map((memory, index) => ({ memory, index }))
+			.filter(({ memory }) => !memory.nextReviewAt)
+			.slice(0, ENRICH_LIMIT);
+		for (let i = 0; i < targets.length; i += ENRICH_CONCURRENCY) {
+			const batch = targets.slice(i, i + ENRICH_CONCURRENCY);
+			await Promise.all(
+				batch.map(async ({ memory, index }) => {
+					try {
+						const full = await api.memories.get(memory.id);
+						enriched[index] = { ...memory, ...full };
+					} catch {
+						// leave the un-enriched record; it simply won't schedule
+					}
+				})
+			);
+		}
+		return enriched;
+	}
 
-	// Live, badge-counted options for the window Dropdown. Each badge reflects
-	// the exact bucket size so the choice is CLEAR before the user even opens it.
-	let windowOptions = $derived<DropdownOption[]>([
-		{ value: 'today', label: 'Due today', icon: 'schedule', badge: stats.dueToday, color: '#fbbf24' },
-		{ value: 'week', label: 'This week', icon: 'schedule', badge: stats.dueThisWeek, color: '#818cf8' },
-		{ value: 'month', label: 'This month', icon: 'schedule', badge: stats.dueThisMonth, color: '#c084fc' },
-		{ value: 'all', label: 'All upcoming', icon: 'schedule', badge: scheduled.length, color: '#6ee7b7' }
-	]);
+	function sanitizeAscii(value: string): string {
+		return value
+			.replace(/[\u2014\u2013]/g, '-')
+			.replace(/[\u2018\u2019]/g, "'")
+			.replace(/[\u201C\u201D]/g, '"')
+			.replace(/\u2026/g, '...')
+			.replace(/[^\x20-\x7E]/g, '?');
+	}
 
-	let activeFilterLabel = $derived(FILTERS.find((f) => f.key === windowFilter)?.label ?? '');
+	function clamp01(value: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.5));
+	}
+
+	function dueAt(memory: Memory): number {
+		const parsed = memory.nextReviewAt ? Date.parse(memory.nextReviewAt) : Number.POSITIVE_INFINITY;
+		return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+	}
+
+	function urgency(memory: Memory, nowMs: number): number {
+		const next = dueAt(memory);
+		if (!Number.isFinite(next)) return 0;
+		const days = (next - nowMs) / 86_400_000;
+		return clamp01(1 - days / 30);
+	}
+
+	function scheduleLine(memory: Memory, nowMs: number): string {
+		const snippet = sanitizeAscii(memory.content).replace(/\s+/g, ' ').trim().slice(0, 48);
+		const next = dueAt(memory);
+		const days = Number.isFinite(next) ? Math.ceil((next - nowMs) / 86_400_000) : 9999;
+		const due = days < 0 ? `${Math.abs(days)}D OVER` : days === 0 ? 'DUE 0D' : `DUE ${days}D`;
+		return sanitizeAscii(
+			`${snippet} | ${memory.id.slice(0, 8)} | ${due} | ${Math.round(memory.retentionStrength * 100)}%`
+		);
+	}
+
+	function dueMemories(source: Memory[]): Memory[] {
+		const nowMs = Date.now();
+		return source
+			.filter((memory) => !!memory.nextReviewAt)
+			.slice()
+			.sort((a, b) => {
+				const dueDelta = dueAt(a) - dueAt(b);
+				if (dueDelta !== 0) return dueDelta;
+				return (a.retentionStrength ?? 0) - (b.retentionStrength ?? 0);
+			})
+			.sort((a, b) => urgency(b, nowMs) - urgency(a, nowMs));
+	}
+
+	const scheduled = $derived(dueMemories(memories));
+	const scene = $derived< RouteSceneModel >(
+		scheduled.length === 0
+			? emptyScene('schedule')
+			: {
+					organ: 'schedule',
+					nodes: scheduled.slice(0, ROW_LIMIT).map((memory, index) => ({
+						source: { kind: 'memory', id: memory.id },
+						index,
+						label: scheduleLine(memory, Date.now()),
+						retention: clamp01(memory.retentionStrength),
+						stability: clamp01(memory.retrievalStrength),
+						lastAccessed: memory.lastAccessedAt,
+						activation: urgency(memory, Date.now()),
+						tags: memory.tags,
+						type: memory.nodeType
+					})),
+					edges: [],
+					events: [],
+					receipts: [],
+					scalars: {
+						scheduled: scheduled.length,
+						loaded: memories.length,
+						dueNow: scheduled.filter((memory) => urgency(memory, Date.now()) >= 1).length
+					},
+					alive: true
+				}
+	);
+
+	const emptyLabel = $derived(
+		memories.length === 0
+			? '0 MEMORIES LOADED'
+			: `${memories.length} MEMORIES / 0 REVIEW TIMESTAMPS`
+	);
+
+	function buildTextItems(routeScene: RouteSceneModel): ScheduleTextItem[] {
+		const top = 0.74;
+		const rowStep = 1.52 / Math.max(1, ROW_LIMIT - 1);
+		return routeScene.nodes.slice(0, ROW_LIMIT).map((node, i) => ({
+			id: `schedule:${node.source.id}`,
+			kind: 'schedule-memory',
+			memoryId: node.source.id,
+			text: sanitizeAscii(node.label),
+			x: -0.9,
+			y: top - i * rowStep,
+			size: 0.026,
+			color: urgencyByNode(node.activation ?? 0, node.retention),
+			// depth = trust/crispness channel (1.0 = crisp + forward + brighter).
+			// It must stay high or the DOF blur + dim glow makes the small rows
+			// invisible. Urgency biases it up so due-now rows read crispest;
+			// retention is carried by `weight` (MSDF stroke mass), not depth.
+			depth: clamp01(0.62 + (node.activation ?? 0) * 0.38),
+			weight: clamp01(node.retention),
+			// The MSDF reveal gate is `(params.frame - ageFrame)/revealSpan`, and
+			// packGlyph bumps ageFrame by (globalGlyphIndex * 2). A 40-row schedule
+			// packs ~2700 glyphs, so past the first few rows ageFrame exceeds the
+			// 720-frame loop and those rows are discarded FOREVER. A large negative
+			// startFrame drives every glyph's ageFrame far below 0, so reveal
+			// saturates to 1 on frame 0 and EVERY due row renders immediately.
+			startFrame: -100000,
+			revealSpan: 1,
+			maxWidthEm: 54,
+				hitPadX: 0.03,
+				hitPadY: 0.014
+		}));
+	}
+
+	function urgencyByNode(urgencyDepth: number, retention: number): [number, number, number, number] {
+		// On the real brain nearly every record is overdue (urgency saturates to 1),
+		// so gating colour on urgency alone paints the whole field one flat scarlet.
+		// Grade by retention instead: low-retention rows are the ones actually at
+		// risk (scarlet), mid rows amber, healthy rows cyan — a readable, honest
+		// heat map of what most needs review.
+		if (retention < 0.4) return SCARLET;
+		if (retention < 0.7) return AMBER;
+		return CYAN;
+	}
+
+	class ScheduleTextPass implements RouteFramePass {
+		private readonly text: TextLayerPass;
+		private current: RouteSceneModel;
+
+		constructor(engine: ObservatoryEngine, initialScene: RouteSceneModel) {
+			this.current = initialScene;
+			this.text = new TextLayerPass(engine);
+			this.text.setText(buildTextItems(this.current));
+			void this.text.init().then(() => this.text.setText(buildTextItems(this.current)));
+		}
+
+		uploadScene(nextScene: RouteSceneModel) {
+			this.current = nextScene;
+			this.text.setText(buildTextItems(this.current));
+		}
+
+		render(pass: GPURenderPassEncoder) {
+			this.text.render(pass);
+		}
+
+		pickAt(ndcX: number, ndcY: number) {
+			return this.text.pickAt(ndcX, ndcY);
+		}
+
+		dispose() {
+			this.text.dispose();
+		}
+	}
+
+	class ScheduleFieldPass implements RouteFramePass {
+		private field: LivingFieldPass;
+		constructor(engine: ObservatoryEngine) { this.field = new LivingFieldPass(engine); }
+		uploadScene(scene: RouteSceneModel): void {
+			const data: FieldDatum[] = scene.nodes.map((node) => ({
+				id: node.source.id,
+				score: node.activation ?? 0,
+				hue: node.retention < 0.4 ? FIELD_HUE.scarlet : node.retention < 0.7 ? FIELD_HUE.caution : FIELD_HUE.oxygen,
+				energy: node.activation,
+				metric2: node.retention,
+				scar: (node.activation ?? 0) >= 1,
+				kind: 'schedule-memory',
+				payload: node
+			}));
+			this.field.setCells(layoutRings(data, (datum) => datum.score >= 1 ? 0 : datum.score >= 0.75 ? 1 : datum.score >= 0.5 ? 2 : 3, { ringCount: 4, maxRadius: 0.88, minCellR: 0.045, maxCellR: 0.11 }));
+		}
+		compute(encoder: GPUCommandEncoder): void { this.field.compute(encoder); }
+		render(pass: GPURenderPassEncoder): void { this.field.render(pass); }
+		pickAt(x: number, y: number): RoutePick | null { return this.field.pickAt(x, y); }
+		dispose(): void { this.field.dispose(); }
+	}
+
+	function createSchedulePasses(engine: ObservatoryEngine, initialScene: RouteSceneModel): RouteFramePass[] {
+		const field = new ScheduleFieldPass(engine);
+		field.uploadScene(initialScene);
+		return [field, new ScheduleTextPass(engine, initialScene)];
+	}
+
+	async function handleRoutePick(pick: RoutePick) {
+		if (pick.kind !== 'schedule-memory') return;
+		const item = pick.payload as ScheduleTextItem;
+		if (!item.memoryId) return;
+		try {
+			const promoted = await api.memories.promote(item.memoryId);
+			// promote returns a PARTIAL {id, promoted, retentionStrength} — merge the
+			// changed field into the full Memory, never replace it (a full swap drops
+			// content/nodeType/... and crashes the next render — the /memories bug).
+			memories = memories.map((memory) =>
+				memory.id === promoted.id
+					? { ...memory, retentionStrength: promoted.retentionStrength }
+					: memory
+			);
+			error = null;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'PROMOTE FAILED';
+		}
+	}
 </script>
 
-<div class="p-6 max-w-7xl mx-auto space-y-6">
-	<PageHeader
-		icon="schedule"
-		title="Review Schedule"
-		subtitle="FSRS-6 next-review dates across your memory corpus"
-		accent="warning"
-	>
-		<!-- Badge-counted window Dropdown — each option shows its exact bucket
-		     size, so the choice is clear before the menu even opens. -->
-		<Dropdown
-			options={windowOptions}
-			bind:value={windowFilter}
-			label="Window"
-			icon="filter"
-		/>
-	</PageHeader>
-
-	{#if activeFilterLabel}<span class="sr-only">{activeFilterLabel}</span>{/if}
-
-	{#if !loading && !errored && truncated}
-		<div class="px-3 py-2 glass-subtle rounded-lg text-[11px] text-dim">
-			Showing the first {memories.length.toLocaleString()} of {totalMemories.toLocaleString()} memories.
-			Schedule reflects this slice only.
-		</div>
-	{/if}
-
-	{#if loading}
-		<div class="grid lg:grid-cols-[1fr_280px] gap-6">
-			<div class="space-y-3">
-				<div class="h-14 glass-subtle rounded-xl shimmer"></div>
-				<div class="grid grid-cols-7 gap-2">
-					{#each Array(42) as _}
-						<div class="aspect-square glass-subtle rounded-lg shimmer"></div>
-					{/each}
-				</div>
-			</div>
-			<div class="space-y-3">
-				{#each Array(5) as _}
-					<div class="h-20 glass-subtle rounded-xl shimmer"></div>
-				{/each}
-			</div>
-		</div>
-	{:else if errored}
-		<div class="p-10 glass rounded-xl text-center space-y-3">
-			<p class="text-sm text-decay">API unavailable.</p>
-			<p class="text-xs text-dim">Could not fetch memories from /api/memories.</p>
-		</div>
-	{:else if scheduled.length === 0}
-		<div class="p-10 glass rounded-xl text-center space-y-4 enter">
-			<div class="mx-auto w-fit text-dream/50 breathe"><Icon name="schedule" size={42} strokeWidth={1.2} /></div>
-			<p class="text-sm text-bright font-medium">FSRS review schedule not yet populated.</p>
-			<p class="text-xs text-dim max-w-md mx-auto">
-				None of your {memories.length} memor{memories.length === 1 ? 'y has' : 'ies have'} a
-				<code class="text-muted">nextReviewAt</code> timestamp yet. Run consolidation to compute
-				next-review dates via FSRS-6.
-			</p>
-			<button
-				type="button"
-				onclick={runConsolidation}
-				class="px-4 py-2 bg-warning/20 border border-warning/40 text-warning text-sm rounded-xl hover:bg-warning/30 transition"
-			>
-				Run Consolidation
-			</button>
-		</div>
-	{:else}
-		<div class="grid lg:grid-cols-[1fr_280px] gap-6">
-			<!-- Calendar -->
-			<div class="min-w-0">
-				<FSRSCalendar memories={scheduled} />
-			</div>
-
-			<!-- Sidebar: stats -->
-			<aside class="space-y-4">
-				<div class="p-5 glass rounded-xl space-y-4">
-					<h2 class="text-xs text-dim font-semibold uppercase tracking-wider">Queue</h2>
-					<div class="space-y-3">
-						{#if stats.overdue > 0}
-							<div class="flex items-baseline justify-between">
-								<span class="text-xs text-dim">Overdue</span>
-								<span class="text-2xl font-bold text-decay">{stats.overdue}</span>
-							</div>
-						{/if}
-						<div class="flex items-baseline justify-between">
-							<span class="text-xs text-dim">Due today</span>
-							<span class="text-2xl font-bold text-warning">{stats.dueToday}</span>
-						</div>
-						<div class="flex items-baseline justify-between">
-							<span class="text-xs text-dim">This week</span>
-							<span class="text-2xl font-bold text-synapse-glow">{stats.dueThisWeek}</span>
-						</div>
-						<div class="flex items-baseline justify-between">
-							<span class="text-xs text-dim">This month</span>
-							<span class="text-2xl font-bold text-dream-glow">{stats.dueThisMonth}</span>
-						</div>
-					</div>
-					<div class="pt-3 border-t border-synapse/10">
-						<div class="flex items-baseline justify-between">
-							<span class="text-xs text-dim">Avg days until review</span>
-							<span class="text-lg font-semibold text-text">{stats.avgDays.toFixed(1)}</span>
-						</div>
-						<p class="text-[10px] text-muted mt-1">
-							Across {scheduled.length} scheduled memor{scheduled.length === 1 ? 'y' : 'ies'}
-						</p>
-					</div>
-				</div>
-
-				<!-- Filtered list preview -->
-				<div class="p-5 glass-subtle rounded-xl space-y-3">
-					<div class="flex items-center justify-between">
-						<h2 class="text-xs text-dim font-semibold uppercase tracking-wider">
-							{FILTERS.find((f) => f.key === windowFilter)?.label}
-						</h2>
-						<span class="text-xs text-muted">{filtered.length}</span>
-					</div>
-					{#if filtered.length === 0}
-						<p class="text-xs text-muted italic">Nothing in this window.</p>
-					{:else}
-						<div class="space-y-2 max-h-96 overflow-y-auto pr-1">
-							{#each filtered
-								.slice()
-								.sort((a, b) => (a.nextReviewAt ?? '').localeCompare(b.nextReviewAt ?? ''))
-								.slice(0, 50) as m (m.id)}
-								{@const urgency = classifyUrgency(now, m.nextReviewAt)}
-								{@const delta = daysUntilReview(now, m.nextReviewAt) ?? 0}
-								<div class="p-2 rounded-lg bg-white/[0.02] hover:bg-white/[0.04] transition">
-									<p class="text-xs text-text leading-snug line-clamp-2">{m.content}</p>
-									<div class="flex items-center gap-2 mt-1 text-[10px]">
-										<span
-											class="{urgency === 'overdue'
-												? 'text-decay'
-												: urgency === 'today'
-													? 'text-warning'
-													: urgency === 'week'
-														? 'text-synapse-glow'
-														: 'text-dream-glow'}"
-										>
-											{urgency === 'overdue'
-												? `${-delta}d overdue`
-												: urgency === 'today'
-													? 'today'
-													: `in ${delta}d`}
-										</span>
-										<span class="text-muted">· {(m.retentionStrength * 100).toFixed(0)}%</span>
-									</div>
-								</div>
-							{/each}
-							{#if filtered.length > 50}
-								<p class="text-[10px] text-muted text-center pt-1">
-									+{filtered.length - 50} more
-								</p>
-							{/if}
-						</div>
-					{/if}
-				</div>
-			</aside>
-		</div>
-	{/if}
-</div>
+<RouteStage
+	organ="schedule"
+	seed={`schedule-due-field:${scheduled.length}:${memories.length}`}
+	{scene}
+	passes={createSchedulePasses}
+	{loading}
+	{error}
+	{emptyLabel}
+	onpick={handleRoutePick}
+/>

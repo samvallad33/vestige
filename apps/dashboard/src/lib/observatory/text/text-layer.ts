@@ -24,6 +24,16 @@ export type TextLayerItem = {
 	depth?: number;
 	/** 0..1 data weight/retention channel: higher biases the MSDF stroke bolder. */
 	weight?: number;
+	/**
+	 * Extra click/hit padding (logical-NDC units) added around this run's glyph
+	 * box for pickAt ONLY — purely widens the clickable target, never the visual.
+	 * A bare glyph box is ~1 line tall (≈14px), far too thin to click reliably;
+	 * interactive runs (buttons) should set this (e.g. 0.045) so a normal cursor
+	 * lands. `hitPadX`/`hitPadY` override per axis. Default 0 = tight glyph box.
+	 */
+	hitPad?: number;
+	hitPadX?: number;
+	hitPadY?: number;
 };
 
 type TextRunRect = {
@@ -199,10 +209,15 @@ export class TextLayerPass implements FramePass {
 		const xScale = Math.max(aspect, 1);
 		const yScale = Math.min(aspect, 1);
 		for (const run of this.runs) {
-			const x0 = run.x0 / xScale;
-			const x1 = run.x1 / xScale;
-			const y0 = run.y0 * yScale;
-			const y1 = run.y1 * yScale;
+			// Optional per-run hit padding (logical-NDC) widens the CLICK target
+			// only — the visual glyph box is unchanged. Applied in screen space
+			// (after the same aspect scale) so the pad is uniform on screen.
+			const padX = (run.payload.hitPadX ?? run.payload.hitPad ?? 0) / xScale;
+			const padY = (run.payload.hitPadY ?? run.payload.hitPad ?? 0) * yScale;
+			const x0 = run.x0 / xScale - padX;
+			const x1 = run.x1 / xScale + padX;
+			const y0 = run.y0 * yScale - padY;
+			const y1 = run.y1 * yScale + padY;
 			if (ndcX >= x0 && ndcX <= x1 && ndcY >= y0 && ndcY <= y1) {
 				return { id: run.id, kind: run.kind, payload: run.payload };
 			}

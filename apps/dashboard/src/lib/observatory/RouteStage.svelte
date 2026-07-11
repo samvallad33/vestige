@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/stores';
@@ -142,13 +142,33 @@
 	}
 
 	$effect(() => {
+		// Track ONLY the scene: re-upload when the data changes, never every frame.
+		// upload() calls updateChromeText(), which reads the per-frame frameCount /
+		// fpsEstimate $state; without untrack the effect would take a reactive dep on
+		// those and re-run every frame, calling demoClock.reset() each time — pinning
+		// params.frame at ~0 and permanently zeroing the MSDF reveal gate (text goes
+		// black on every text-primary RouteStage organ). untrack severs that leak.
+		const nextScene = currentScene;
 		if (!engine || !ready) return;
-		upload(currentScene);
+		untrack(() => upload(nextScene));
 	});
 
 	function currentDashboardPath(): string {
 		const path = $page.url.pathname;
 		return path.startsWith(base) ? path.slice(base.length) || '/' : path;
+	}
+
+	// MSDF atlas is ASCII-only: any non-ASCII (em-dashes in organ emptyLabels,
+	// unicode in backend error messages) renders as a literal '?'. Sanitize the two
+	// chrome strings that come from OUTSIDE this file (emptyLabel prop, error prop)
+	// at the single point they enter the text pass, so no organ can ship a '?'.
+	function asciiSafe(value: string): string {
+		return value
+			.replace(/[—–]/g, '-')
+			.replace(/[‘’]/g, "'")
+			.replace(/[“”]/g, '"')
+			.replace(/…/g, '...')
+			.replace(/[^\x20-\x7E]/g, '?');
 	}
 
 	function makeChromeItems(frame = frameCount, fps = fpsEstimate): TextLayerItem[] {
@@ -202,7 +222,7 @@
 				{
 					id: 'route-chrome:error',
 					kind: 'route-status',
-					text: `ERROR - ${error}`.slice(0, 72),
+					text: asciiSafe(`ERROR - ${error}`).slice(0, 72),
 					x: -0.54,
 					y: 0.025,
 					size: 0.032,
@@ -215,7 +235,7 @@
 			items.push({
 				id: 'route-chrome:empty',
 				kind: 'route-status',
-				text: emptyLabel,
+				text: asciiSafe(emptyLabel),
 				x: -0.36,
 				y: 0.02,
 				size: 0.034,

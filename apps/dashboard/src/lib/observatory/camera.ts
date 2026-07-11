@@ -137,3 +137,70 @@ export function orbitCamera(
 		eye
 	};
 }
+
+/**
+ * Spatial Palace orbit — a richer, palace-only motion that the SHARED graph
+ * camera constants (ORBIT_DISTANCE in node-renderer.ts) must never be forced to
+ * carry. The 19 organs are laid out on a wider field, so the palace flies at a
+ * closer, fitted distance and adds living motion the flat graph orbit lacks:
+ *
+ *  - continuous azimuth orbit (loop_phase drives a full 360° per loop → the
+ *    constellation slowly turns; seamless at the wrap because it is a pure
+ *    function of phase),
+ *  - a gentle vertical BOB (elevation eases up and down twice per loop) so the
+ *    camera never sits on a dead rail,
+ *  - a slow dolly BREATH (distance swells and contracts a few percent) so the
+ *    field subtly inhales — flying through a living brain-galaxy, not a turntable.
+ *
+ * All three cycle an INTEGER number of times per loop, so the seam is invisible
+ * and ?frame=N capture stays exact. Returns the same OrbitCamera contract as
+ * orbitCamera(), so a palace pass writes the identical 24-float camera uniform.
+ *
+ * @param phase     loop phase 0..1 (engine params[1])
+ * @param aspect    viewport w/h
+ * @param distance  base fly distance (fitted to the palace field radius)
+ */
+export function palaceCamera(phase: number, aspect: number, distance: number): OrbitCamera {
+	const tau = Math.PI * 2;
+	// 1 full azimuth revolution per loop.
+	const angle = phase * tau;
+	// Vertical bob: elevation eases between ~0.20 and ~0.62, twice per loop.
+	const elevation = 0.41 + 0.21 * Math.sin(phase * tau * 2);
+	// Dolly breath: ±6% distance, three times per loop (integer → seamless).
+	const dist = distance * (1 + 0.06 * Math.sin(phase * tau * 3));
+
+	const eye: [number, number, number] = [
+		Math.sin(angle) * dist,
+		dist * elevation,
+		Math.cos(angle) * dist
+	];
+	const proj = perspective((52 * Math.PI) / 180, aspect, 0.1, 6000);
+	const view = lookAt(eye, [0, 0, 0], [0, 1, 0]);
+
+	// Camera basis (forward = normalize(target - eye)), same derivation as
+	// orbitCamera — billboards + edge ribbons extrude against right/up.
+	let fx = -eye[0],
+		fy = -eye[1],
+		fz = -eye[2];
+	let len = Math.hypot(fx, fy, fz) || 1;
+	fx /= len;
+	fy /= len;
+	fz /= len;
+	let rx = fy * 0 - fz * 1;
+	let ry = fz * 0 - fx * 0;
+	let rz = fx * 1 - fy * 0;
+	len = Math.hypot(rx, ry, rz) || 1;
+	rx /= len;
+	ry /= len;
+	rz /= len;
+	const ux = ry * fz - rz * fy;
+	const uy = rz * fx - rx * fz;
+	const uz = rx * fy - ry * fx;
+
+	return {
+		viewProj: multiply(proj, view),
+		right: [rx, ry, rz],
+		up: [ux, uy, uz],
+		eye
+	};
+}

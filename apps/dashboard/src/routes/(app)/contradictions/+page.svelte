@@ -5,8 +5,14 @@
 	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
 	import Icon from '$components/Icon.svelte';
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
-	import RouteStage, { type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import RouteStage, { type RoutePick, type RouteFramePass } from '$lib/observatory/RouteStage.svelte';
 	import { createContradictionsPasses } from '$lib/observatory/contradictions/contradictions-pass';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import type { RouteSceneModel } from '$lib/observatory/route-scene';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
+	import { retentionColor } from '$lib/observatory/cognitive-palette';
+	import type { Memory } from '$types';
 	import {
 		normalizeContradictionsScene,
 		type ContradictionsScene,
@@ -54,6 +60,61 @@
 	}
 
 	onMount(() => load());
+
+	// Patrolled tissue: the memory pool the immune system is watching. Even with
+	// zero standing contradictions the arena reads as living tissue (dim healthy
+	// cells), and any contradiction pair lights scarlet on top via the arcs pass.
+	let tissuePool = $state<Memory[]>([]);
+	let tissueField: LivingFieldPass | null = null;
+	onMount(() => {
+		void api.memories
+			.list({ limit: '90' })
+			.then((res) => {
+				tissuePool = res.memories;
+				tissueField?.setCells(buildTissueCells());
+			})
+			.catch(() => {});
+	});
+
+	function buildTissueCells() {
+		const data: FieldDatum[] = tissuePool.map((m) => {
+			const retention = clamp01Local(m.retentionStrength);
+			// contradiction pairs (if any) will be marked scarlet by the arcs pass;
+			// here every cell is calm healthy tissue tinted by retention.
+			return {
+				id: m.id,
+				score: 0.3 + 0.4 * retention,
+				hue: retentionColor(retention),
+				energy: 0.16 + 0.3 * retention,
+				metric2: retention,
+				kind: 'immune-tissue',
+				payload: m
+			} satisfies FieldDatum;
+		});
+		void FIELD_HUE;
+		return layoutGalaxy(data, { maxRadius: 0.95, minCellR: 0.012, maxCellR: 0.044 });
+	}
+
+	function clamp01Local(v: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
+	}
+
+	function createArenaPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		const field = new LivingFieldPass(engine);
+		tissueField = field;
+		field.setCells(buildTissueCells());
+		const fieldWrapper: RouteFramePass = {
+			compute: (encoder) => field.compute(encoder),
+			render: (pass) => field.render(pass),
+			pickAt: (x, y) => field.pickAt(x, y),
+			dispose: () => {
+				field.dispose();
+				if (tissueField === field) tissueField = null;
+			}
+		};
+		// Field FIRST (behind), then the real contradiction arcs/seams on top.
+		return [fieldWrapper, ...createContradictionsPasses(engine, scene)];
+	}
 
 	// --- Filters ---
 	type Filter = 'all' | 'recent' | 'high-trust' | 'topic';
@@ -183,10 +244,10 @@
 	organ="contradictions"
 	seed={`immune-synapse-arena:${totalDetected}:${memoriesAnalyzed}`}
 	scene={contradictionsScene}
-	passes={createContradictionsPasses}
+	passes={createArenaPasses}
 	loading={loading}
 	error={error}
-	emptyLabel="CALM IMMUNE FIELD — NO STANDING CONTRADICTIONS"
+	emptyLabel="CALM IMMUNE FIELD - NO STANDING CONTRADICTIONS"
 	onpick={handleRoutePick}
 />
 

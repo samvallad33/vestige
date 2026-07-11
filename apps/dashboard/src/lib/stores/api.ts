@@ -25,6 +25,18 @@ import type {
 
 const BASE = '/api';
 
+export interface MemoryPromotion {
+	id: string;
+	promoted: boolean;
+	retentionStrength: number;
+}
+
+export interface MemoryDemotion {
+	id: string;
+	demoted: boolean;
+	retentionStrength: number;
+}
+
 async function fetcher<T>(path: string, options?: RequestInit): Promise<T> {
 	const res = await fetch(`${BASE}${path}`, {
 		headers: { 'Content-Type': 'application/json' },
@@ -43,8 +55,8 @@ export const api = {
 		},
 		get: (id: string) => fetcher<Memory>(`/memories/${id}`),
 		delete: (id: string) => fetcher<{ deleted: boolean }>(`/memories/${id}`, { method: 'DELETE' }),
-		promote: (id: string) => fetcher<Memory>(`/memories/${id}/promote`, { method: 'POST' }),
-		demote: (id: string) => fetcher<Memory>(`/memories/${id}/demote`, { method: 'POST' }),
+		promote: (id: string) => fetcher<MemoryPromotion>(`/memories/${id}/promote`, { method: 'POST' }),
+		demote: (id: string) => fetcher<MemoryDemotion>(`/memories/${id}/demote`, { method: 'POST' }),
 		// v2.0.7: suppress + unsuppress. Anderson 2025 top-down inhibitory
 		// control. Each suppress call compounds; reversible within 24h. The
 		// backend emits MemorySuppressed / MemoryUnsuppressed so the 3D graph
@@ -114,6 +126,13 @@ export const api = {
 	consolidate: () => fetcher<ConsolidationResult>('/consolidate', { method: 'POST' }),
 
 	retentionDistribution: () => fetcher<RetentionDistribution>('/retention-distribution'),
+
+	// Memory changelog (#changelog): the historical event stream (DreamCompleted,
+	// ConnectionDiscovered, MemorySuppressed, ...) — the recorded past of the live
+	// feed. Powers the Feed organ's real-data seed so it is alive before a live
+	// WebSocket event fires.
+	memoryChangelog: (limit = 100) =>
+		fetcher<ChangelogResponse>(`/changelog?limit=${limit}`),
 
 	// Memory hygiene & provenance: duplicate clusters, contradiction pairs,
 	// cross-project pattern transfer, per-memory audit trail.
@@ -247,6 +266,16 @@ export type Receipt = {
 };
 
 export type ReceiptListResponse = { total: number; receipts: Receipt[] };
+
+export type ChangelogEvent = {
+	type: string;
+	timestamp: string;
+	data: Record<string, unknown>;
+};
+export type ChangelogResponse = {
+	events: ChangelogEvent[];
+	filter?: { start: string | null; end: string | null; limit: number };
+};
 
 export type MemoryPrAction =
 	| 'promote'

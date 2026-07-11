@@ -111,19 +111,22 @@ fn fs_text(in: VSOut) -> @location(0) vec4f {
 	let texels_per_px = max(length(uv_width * atlas_px), 0.0001);
 	let screen_range = max(0.5, 4.0 / texels_per_px);
 	// Depth-of-field: far/un-hovered glyphs soften, cursor sharpens. Kept GENTLE so
-	// the resting field stays READABLE (v1 bug: *3 blurred rest into invisibility).
+	// the resting field stays READABLE regardless of the data's depth value.
 	let dof = (1.0 - depth) * (1.0 - cursor_w);
-	let screen_range_dof = screen_range / (1.0 + dof * 1.1);
-	let weight_bias = (weight - 0.5) * 0.18;
+	let screen_range_dof = screen_range / (1.0 + dof * 0.6);
+	// Weight (FSRS retention) modulates stroke mass WITHIN a readable band: it can
+	// thicken a lot but only thin slightly, so a low-retention record never
+	// disappears (data must be legible even at weight~0 — every route depends on this).
+	let weight_bias = (weight - 0.5) * 0.10 + 0.03;
 	let px_dist = screen_range_dof * (dist - 0.5 + weight_bias);
 	let coverage = clamp(px_dist + 0.5, 0.0, 1.0);
 	let reveal_span = max(1.0, in.info.y);
 	let reveal = clamp((params.frame - in.info.x) / reveal_span, 0.0, 1.0);
 	let alpha = coverage * in.color.a * reveal;
 	if (alpha < 0.001) { discard; }
-	// Glow floor keeps rest visible; cursor pushes near glyphs HARD past the bloom
-	// line so they visibly flare (v1 cursor*0.6 was too weak to read).
-	let glow = mix(1.0, 1.5, depth) + cursor_w * 1.4;
+	// Glow floor keeps EVERY line clearly lit at rest (even depth~0), depth adds
+	// forward-brightness, cursor pushes near glyphs HARD past the bloom line to flare.
+	let glow = mix(1.15, 1.5, depth) + cursor_w * 1.4;
 	let rgb = in.color.rgb * params.brightness * glow;
 	return vec4f(rgb * alpha, alpha);
 }

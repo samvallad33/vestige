@@ -4,8 +4,10 @@
 	import { api } from '$stores/api';
 	import type { Memory } from '$types';
 	import type { ObservatoryEngine } from '$lib/observatory/engine';
-	import { rgb01 } from '$lib/observatory/cognitive-palette';
+	import { rgb01, retentionColor } from '$lib/observatory/cognitive-palette';
 	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, type FieldDatum } from '$lib/observatory/field/cell-layout';
 
 	type MemoryTextItem = TextLayerItem & { memoryId?: string };
 
@@ -14,11 +16,22 @@
 	const MUTED = [...rgb01('#29F2A9'), 0.62] satisfies [number, number, number, number];
 	const MEMORY_LIMIT = 40;
 	const ROW_LIMIT = 36;
+	const MIN_VISIBLE_DEPTH = 0.62;
+	// The MSDF reveal is frame-driven per glyph: the shared text layer packs
+	// ageFrame = startFrame + globalGlyphIndex * 2. Across many long rows that
+	// global index reaches the thousands, so late glyphs would never reveal
+	// before the demo clock wraps. Anchor the reveal far in the past so the
+	// complete memory field is legible immediately.
+	const REVEAL_ANCHOR = -100000;
 
 	let hostEl: HTMLDivElement | null = $state(null);
 	let engineRef: ObservatoryEngine | null = null;
 	let textPass: TextLayerPass | null = null;
+	let fieldPass: LivingFieldPass | null = null;
 	let cursorSmoothed: { x: number; y: number } | null = null;
+	// Local suppressed-id set — Memory has no suppression field, so we track the
+	// immune state we just applied so the field cell can scar immediately.
+	let suppressedIds = $state<Set<string>>(new Set());
 	let memories: Memory[] = $state([]);
 	let total = $state(0);
 	let loading = $state(true);
@@ -31,18 +44,43 @@
 
 	onDestroy(() => {
 		textPass?.dispose();
+		fieldPass?.dispose();
 		textPass = null;
+		fieldPass = null;
 		engineRef = null;
 	});
 
 	async function handleReady(engine: ObservatoryEngine) {
 		engineRef = engine;
+		// Engram galaxy FIRST (behind the parallax MSDF text): every real memory a
+		// glowing cell, retention = oxygen. The cursor-parallax text field rides on top.
+		const field = new LivingFieldPass(engine);
+		fieldPass = field;
+		field.setCells(buildFieldCells());
+		engine.addPass(field);
 		const pass = new TextLayerPass(engine);
 		textPass = pass;
 		await pass.init();
 		pass.setText(buildTextItems());
 		engine.addPass(pass);
 		engine.demoClock.reset();
+	}
+
+	function buildFieldCells() {
+		const data: FieldDatum[] = memories.map((m) => {
+			const retention = clamp01(m.retentionStrength);
+			return {
+				id: m.id,
+				score: clamp01(m.retrievalStrength ?? retention),
+				hue: retentionColor(retention),
+				energy: 0.4 + 0.6 * clamp01(m.retrievalStrength ?? retention),
+				metric2: retention,
+				scar: suppressedIds.has(m.id),
+				kind: 'memory',
+				payload: m
+			} satisfies FieldDatum;
+		});
+		return layoutGalaxy(data, { maxRadius: 0.95, minCellR: 0.014, maxCellR: 0.05 });
 	}
 
 	async function loadMemories() {
@@ -60,6 +98,7 @@
 		} finally {
 			loading = false;
 			textPass?.setText(buildTextItems());
+			fieldPass?.setCells(buildFieldCells());
 			engineRef?.demoClock.reset();
 		}
 	}
@@ -120,11 +159,13 @@
 				y: top - i * rowStep,
 				size: 0.026,
 				color: CYAN,
-				depth: retrieval,
+				depth: Math.max(MIN_VISIBLE_DEPTH, retrieval),
 				weight: retention,
-				startFrame: i * 2,
+				startFrame: REVEAL_ANCHOR + i * 2,
 				revealSpan: 20,
-				maxWidthEm: 46
+				maxWidthEm: 46,
+				hitPadX: 0.03,
+				hitPadY: 0.015
 			};
 		});
 	}
@@ -178,12 +219,32 @@
 		if (hit?.kind !== 'memory') return;
 		const item = hit.payload as MemoryTextItem;
 		if (!item.memoryId) return;
+		// Immune actions surfaced right on the field (backend demoability):
+		//   shift-click  -> suppress (macrophage engulfs; cell scars)
+		//   alt-click    -> unsuppress (labile release)
+		//   plain click  -> promote (retention boost)
 		try {
-			const promoted = await api.memories.promote(item.memoryId);
-			memories = memories.map((memory) => (memory.id === promoted.id ? promoted : memory));
+			if (e.shiftKey) {
+				await api.memories.suppress(item.memoryId, 'suppressed from memories field');
+				suppressedIds = new Set(suppressedIds).add(item.memoryId);
+			} else if (e.altKey) {
+				await api.memories.unsuppress(item.memoryId);
+				const next = new Set(suppressedIds);
+				next.delete(item.memoryId);
+				suppressedIds = next;
+			} else {
+				const promoted = await api.memories.promote(item.memoryId);
+				memories = memories.map((memory) =>
+					memory.id === promoted.id
+						? { ...memory, retentionStrength: promoted.retentionStrength }
+						: memory
+				);
+			}
+			error = null;
 			textPass.setText(buildTextItems());
+			fieldPass?.setCells(buildFieldCells());
 		} catch (err) {
-			error = err instanceof Error ? err.message : 'UNKNOWN MEMORY PROMOTE ERROR';
+			error = err instanceof Error ? err.message : 'UNKNOWN MEMORY ACTION ERROR';
 			textPass.setText(buildTextItems());
 		}
 	}

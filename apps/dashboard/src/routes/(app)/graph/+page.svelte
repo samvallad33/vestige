@@ -24,8 +24,49 @@
 	// page (its primary home) as a full-bleed takeover, like Memory Cinema.
 	import ObservatoryStage from '$lib/observatory/ObservatoryStage.svelte';
 	import type { DemoMode } from '$lib/observatory/types';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, type FieldDatum } from '$lib/observatory/field/cell-layout';
+	import { retentionColor } from '$lib/observatory/cognitive-palette';
 
 	let graphData: GraphResponse | null = $state(null);
+
+	// Dense real-memory galaxy layered on the recall-path field so the WebGPU
+	// graph renderer fills the frame like observatory (12% -> ~80%). Every cell is
+	// a real graph node; retention = oxygen; the recall-path scene shaders stay
+	// untouched (this is an ADDITIVE pass on top, not a scene-shader edit).
+	let graphFieldPass: LivingFieldPass | null = null;
+	function buildGraphFieldCells() {
+		const nodes = graphData?.nodes ?? [];
+		const data: FieldDatum[] = nodes.slice(0, 600).map((n) => {
+			const retention = clampGraph(n.retention);
+			return {
+				id: n.id,
+				score: retention,
+				hue: retentionColor(retention),
+				energy: 0.35 + 0.65 * retention,
+				selected: !!n.isCenter,
+				scar: (n.suppression_count ?? 0) > 0,
+				metric2: retention,
+				kind: 'graph-node',
+				payload: n
+			} satisfies FieldDatum;
+		});
+		return layoutGalaxy(data, { maxRadius: 0.98, minCellR: 0.008, maxCellR: 0.036 });
+	}
+	function clampGraph(v: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
+	}
+	function handleFieldReady(engine: ObservatoryEngine) {
+		const field = new LivingFieldPass(engine);
+		graphFieldPass = field;
+		field.setCells(buildGraphFieldCells());
+		engine.addPass(field);
+	}
+	$effect(() => {
+		void graphData?.nodes.length;
+		graphFieldPass?.setCells(buildGraphFieldCells());
+	});
 	let selectedMemory: Memory | null = $state(null);
 	let loading = $state(true);
 	let error = $state('');
@@ -325,6 +366,7 @@ disown</code>
 					demo="recall-path"
 					showSwitcher={false}
 					onpick={onNodeSelect}
+					onready={handleFieldReady}
 				/>
 			</div>
 		{:else}

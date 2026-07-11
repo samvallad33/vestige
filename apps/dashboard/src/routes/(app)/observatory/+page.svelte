@@ -1,49 +1,333 @@
 <script lang="ts">
-	/**
-	 * /observatory route — thin wrapper over ObservatoryStage.
-	 *
-	 * The full experience lives in $lib/observatory/ObservatoryStage.svelte so
-	 * the MAIN dashboard graph page can host it too (its primary home). This
-	 * route keeps the deep-link + recording contract byte-compatible:
-	 *   ?demo=recall-path&seed=vestige-observatory-v1  — pick the moment
-	 *   ?frame=N                                       — deterministic freeze
-	 *   ?capture=1 (&hud=1)                            — chrome-free recording
-	 */
+	import { onDestroy, onMount } from 'svelte';
+	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import ObservatoryStage from '$lib/observatory/ObservatoryStage.svelte';
-	import { isDemoMode, type DemoMode } from '$lib/observatory/types';
+	import { CAUSAL, IMMUNE, RETENTION, rgb01 } from '$lib/observatory/cognitive-palette';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import { DEMO_MODES, isDemoMode, type DemoMode } from '$lib/observatory/types';
+	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, type FieldDatum } from '$lib/observatory/field/cell-layout';
+	import { retentionColor } from '$lib/observatory/cognitive-palette';
+	import { api } from '$stores/api';
+	import type { GraphNode, GraphResponse } from '$types';
 
-	const params = new URLSearchParams(window.location.search);
+	type ObservatoryTextItem = TextLayerItem & { action?: 'demo' | 'exit'; demo?: DemoMode };
+
+	const params = browser ? new URLSearchParams(window.location.search) : new URLSearchParams();
 	const demoParam = params.get('demo') ?? 'recall-path';
 	let demo = $state<DemoMode>(isDemoMode(demoParam) ? demoParam : 'recall-path');
 	const seedValue = params.get('seed') ?? 'vestige-observatory-v1';
-	// Capture mode: ?frame=N freezes the sim at one loop frame (identical pixels).
 	const frameParam = params.get('frame');
 	const freezeFrame = frameParam !== null && frameParam !== '' ? Number(frameParam) : null;
-	// Recording mode: ?capture=1 hides EVERY DOM instrument — pure canvas.
-	const isCapture = params.get('capture') === '1' && params.get('hud') !== '1';
+
+	const CYAN = [...rgb01(CAUSAL.forward), 1] satisfies [number, number, number, number];
+	const GREEN = [...rgb01(RETENTION.recall), 0.76] satisfies [number, number, number, number];
+	const OXYGEN = [...rgb01(RETENTION.luciferin), 0.9] satisfies [number, number, number, number];
+	const SCARLET = [...rgb01(IMMUNE.veto), 0.92] satisfies [number, number, number, number];
+	const AMBER = [...rgb01(IMMUNE.caution), 0.82] satisfies [number, number, number, number];
+	const GRAPH_LIMIT = 18;
+
+	let hostEl: HTMLDivElement | null = $state(null);
+	let engineRef: ObservatoryEngine | null = null;
+	let textPass: TextLayerPass | null = null;
+	let fieldPass: LivingFieldPass | null = null;
+	let graphData: GraphResponse | null = $state(null);
+	let loading = $state(true);
+	let error: string | null = $state(null);
+	let focusedRun: string | null = null;
+	let cursorSmoothed: { x: number; y: number } | null = null;
+
+	onMount(() => {
+		void loadGraph();
+	});
+
+	onDestroy(() => {
+		textPass?.dispose();
+		fieldPass?.dispose();
+		textPass = null;
+		fieldPass = null;
+		engineRef = null;
+	});
+
+	async function handleReady(engine: ObservatoryEngine) {
+		engineRef = engine;
+		// Field FIRST (renders behind) — the real 200-memory cortex galaxy on top
+		// of the recall-path scene. Then the MSDF text HUD on top of that.
+		const field = new LivingFieldPass(engine);
+		fieldPass = field;
+		field.setCells(buildFieldCells());
+		engine.addPass(field);
+		const pass = new TextLayerPass(engine);
+		textPass = pass;
+		await pass.init();
+		pass.setText(buildTextItems());
+		engine.addPass(pass);
+		engine.demoClock.reset();
+	}
+
+	/**
+	 * The densest cortex: every real memory in the graph (up to 200) becomes a
+	 * bioluminescent cell, retention = oxygen hue + inner-ring pull, center memory
+	 * selected, suppressed = scar. Swap retention for Math.random and the galaxy's
+	 * bright core would legibly scatter — the discipline test.
+	 */
+	function buildFieldCells() {
+		const nodes = graphData?.nodes ?? [];
+		const data: FieldDatum[] = nodes.map((n) => ({
+			id: n.id,
+			score: clamp01(n.retention),
+			hue: retentionColor(clamp01(n.retention)),
+			energy: 0.4 + 0.6 * clamp01(n.retention),
+			selected: !!n.isCenter,
+			scar: (n.suppression_count ?? 0) > 0,
+			metric2: clamp01(n.retention),
+			kind: 'observatory-cell',
+			payload: n
+		}));
+		return layoutGalaxy(data, { maxRadius: 0.95, minCellR: 0.01, maxCellR: 0.038 });
+	}
+
+	async function loadGraph() {
+		loading = true;
+		error = null;
+		textPass?.setText(buildTextItems());
+		try {
+			graphData = await api.graph({ max_nodes: 200, depth: 3, sort: 'connected' });
+		} catch (err) {
+			graphData = null;
+			error = err instanceof Error ? err.message : 'UNKNOWN OBSERVATORY GRAPH ERROR';
+		} finally {
+			loading = false;
+			textPass?.setText(buildTextItems());
+			fieldPass?.setCells(buildFieldCells());
+			engineRef?.demoClock.reset();
+		}
+	}
+
+	function sanitizeAscii(value: string): string {
+		return value
+			.replace(/[\u2014\u2013]/g, '-')
+			.replace(/[\u2018\u2019]/g, "'")
+			.replace(/[\u201C\u201D]/g, '"')
+			.replace(/\u2026/g, '...')
+			.replace(/[^\x20-\x7E]/g, '?');
+	}
+
+	function clamp01(value: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.5));
+	}
+
+	function demoLabel(mode: DemoMode): string {
+		const [head] = mode.split('-');
+		return sanitizeAscii(head.toUpperCase());
+	}
+
+	function graphMetric(value: number, max: number): number {
+		return clamp01(max <= 0 ? 0 : value / max);
+	}
+
+	function nodeLine(node: GraphNode): string {
+		const label = sanitizeAscii(node.label).replace(/\s+/g, ' ').trim().slice(0, 44);
+		const tag = node.tags[0] ? sanitizeAscii(node.tags[0]).slice(0, 14) : sanitizeAscii(node.type);
+		return sanitizeAscii(`${label} | ${node.id.slice(0, 8)} | ${tag} | ${Math.round(clamp01(node.retention) * 100)}%`);
+	}
+
+	function statusItem(text: string, color = OXYGEN): ObservatoryTextItem {
+		return {
+			id: 'observatory:status',
+			kind: 'observatory-status',
+			text: sanitizeAscii(text),
+			x: -0.48,
+			y: 0.02,
+			size: 0.044,
+			color,
+			depth: 0.76,
+			weight: 0.66,
+			revealSpan: 32,
+			maxWidthEm: 52
+		};
+	}
+
+	function buildTextItems(): ObservatoryTextItem[] {
+		const items: ObservatoryTextItem[] = [];
+		const graph = graphData;
+		const nodeDepth = graph ? graphMetric(graph.nodeCount, Math.max(1, graph.nodes.length, 200)) : 0.5;
+		const edgeWeight = graph ? graphMetric(graph.edgeCount, Math.max(1, graph.nodeCount * 8)) : 0.5;
+
+		DEMO_MODES.forEach((mode, i) => {
+			items.push({
+				id: `observatory:demo:${mode}`,
+				kind: 'observatory-demo',
+				action: 'demo',
+				demo: mode,
+				text: demoLabel(mode),
+				x: -0.91,
+				y: 0.76 - i * 0.075,
+				size: 0.03,
+				color: mode === demo ? OXYGEN : GREEN,
+				depth: mode === demo ? 1 : nodeDepth,
+				weight: mode === demo ? 0.9 : edgeWeight,
+				startFrame: i * 2,
+				revealSpan: 14,
+				maxWidthEm: 18,
+				hitPadX: 0.03,
+				hitPadY: 0.026
+			});
+		});
+
+		items.push({
+			id: 'observatory:exit',
+			kind: 'observatory-exit',
+			action: 'exit',
+			text: sanitizeAscii('EXIT'),
+			x: 0.75,
+			y: 0.82,
+			size: 0.03,
+			color: AMBER,
+			depth: nodeDepth,
+			weight: edgeWeight,
+			revealSpan: 10,
+			maxWidthEm: 12,
+			hitPadX: 0.03,
+			hitPadY: 0.05
+		});
+
+		if (loading) return [...items, statusItem('LOADING MEMORY FIELD...', CYAN)];
+		if (error) return [...items, statusItem(`ERROR - ${error}`.slice(0, 76), SCARLET)];
+		if (!graph || graph.nodeCount === 0) return [...items, statusItem('NO MEMORIES IN FIELD', GREEN)];
+
+		const telemetry = [
+			[`NODES ${graph.nodeCount}`, graphMetric(graph.nodeCount, Math.max(1, graph.nodes.length, 200))],
+			[`EDGES ${graph.edgeCount}`, graphMetric(graph.edgeCount, Math.max(1, graph.nodeCount * 8))],
+			[`DEPTH ${graph.depth}`, clamp01(graph.depth / 4)],
+			[`CENTER ${graph.center_id.slice(0, 12)}`, 1]
+		] as const;
+		telemetry.forEach(([text, value], i) => {
+			items.push({
+				id: `observatory:telemetry:${i}`,
+				kind: 'observatory-telemetry',
+				text: sanitizeAscii(text),
+				x: 0.39,
+				y: 0.72 - i * 0.045,
+				size: 0.022,
+				color: CYAN,
+				depth: value,
+				weight: edgeWeight,
+				startFrame: 8 + i * 2,
+				revealSpan: 10,
+				maxWidthEm: 24
+			});
+		});
+
+		const sortedNodes = [...graph.nodes]
+			.sort((a, b) => Number(b.isCenter) - Number(a.isCenter) || clamp01(b.retention) - clamp01(a.retention))
+			.slice(0, GRAPH_LIMIT);
+		const top = 0.47;
+		const rowStep = 1.06 / Math.max(1, GRAPH_LIMIT - 1);
+		sortedNodes.forEach((node, i) => {
+			const retention = clamp01(node.retention);
+			items.push({
+				id: `observatory:node:${node.id}`,
+				kind: 'observatory-node',
+				text: nodeLine(node),
+				x: -0.67,
+				y: top - i * rowStep,
+				size: 0.024,
+				color: node.isCenter ? OXYGEN : CYAN,
+				depth: node.isCenter ? 1 : retention,
+				weight: retention,
+				startFrame: 18 + i * 2,
+				revealSpan: 18,
+				maxWidthEm: 54
+			});
+		});
+		return items;
+	}
 
 	function switchDemo(next: DemoMode) {
 		if (next === demo) return;
 		demo = next;
-		// Keep the URL shareable — same contract as arriving via deep link.
 		const url = new URL(window.location.href);
 		url.searchParams.set('demo', next);
 		history.replaceState(history.state, '', url);
+		textPass?.setText(buildTextItems());
+		engineRef?.demoClock.reset();
+	}
+
+	function pointerToNdc(e: PointerEvent | MouseEvent): { x: number; y: number } | null {
+		if (!hostEl) return null;
+		const rect = hostEl.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0) return null;
+		return {
+			x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+			y: -(((e.clientY - rect.top) / rect.height) * 2 - 1)
+		};
+	}
+
+	function writeCursorLens(ndc: { x: number; y: number }) {
+		if (!hostEl || !engineRef) return;
+		const rect = hostEl.getBoundingClientRect();
+		const aspect = Math.max(0.0001, rect.width / Math.max(1, rect.height));
+		const raw = { x: ndc.x * Math.max(aspect, 1), y: ndc.y / Math.min(aspect, 1) };
+		const prev = cursorSmoothed ?? raw;
+		const next = { x: prev.x + (raw.x - prev.x) * 0.35, y: prev.y + (raw.y - prev.y) * 0.35 };
+		cursorSmoothed = next;
+		engineRef.setCursorPreNdc(next.x, next.y, next.x - prev.x, next.y - prev.y);
+	}
+
+	function handlePointerMove(e: PointerEvent) {
+		const ndc = pointerToNdc(e);
+		if (!ndc) return;
+		writeCursorLens(ndc);
+		const hit = textPass?.pickAt(ndc.x, ndc.y) ?? null;
+		const nextRun = hit?.kind === 'observatory-demo' || hit?.kind === 'observatory-exit' ? hit.id : null;
+		if (nextRun !== focusedRun) {
+			focusedRun = nextRun;
+			textPass?.setRunDepth(nextRun, 1);
+		}
+		if (hostEl) hostEl.style.cursor = nextRun ? 'crosshair' : 'default';
+	}
+
+	function handlePointerLeave() {
+		cursorSmoothed = null;
+		focusedRun = null;
+		engineRef?.setCursorPreNdc(999, 999, 0, 0);
+		textPass?.setRunDepth(null);
+		if (hostEl) hostEl.style.cursor = 'default';
+	}
+
+	async function handlePointerDown(e: PointerEvent) {
+		const ndc = pointerToNdc(e);
+		if (!ndc || !textPass) return;
+		const hit = textPass.pickAt(ndc.x, ndc.y);
+		const item = hit?.payload as ObservatoryTextItem | undefined;
+		if (item?.action === 'demo' && item.demo) {
+			switchDemo(item.demo);
+		} else if (item?.action === 'exit') {
+			await goto(`${base}/graph`);
+		}
 	}
 </script>
 
-<!-- {#key} forces a full remount on demo switch: fresh engine, plans, clock —
-     deterministic from frame 0, no partial-state carryover. -->
-{#key demo}
-	<ObservatoryStage
-		{demo}
-		seed={seedValue}
-		{freezeFrame}
-		capture={isCapture}
-		showSwitcher={freezeFrame === null}
-		ondemochange={switchDemo}
-		onexit={() => goto(`${base}/graph`)}
-	/>
-{/key}
+<svelte:head>
+	<title>Observatory · Vestige</title>
+</svelte:head>
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div bind:this={hostEl} class="fixed inset-0 bg-[#020307]" onpointerdown={handlePointerDown} onpointermove={handlePointerMove} onpointerleave={handlePointerLeave}>
+	{#key demo}
+		<ObservatoryStage
+			{demo}
+			seed={seedValue}
+			{freezeFrame}
+			capture={true}
+			showSwitcher={false}
+			chrome="none"
+			onready={handleReady}
+			onexit={() => goto(`${base}/graph`)}
+		/>
+	{/key}
+</div>

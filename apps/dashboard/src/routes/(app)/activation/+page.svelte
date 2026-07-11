@@ -1,318 +1,239 @@
 <script lang="ts">
-	/**
-	 * Spreading Activation Live View.
-	 *
-	 * Two sources of bursts feed the ActivationNetwork canvas:
-	 *   1. User search — type a query, we pick the top-1 match and fetch its
-	 *      associations (up to 15), then pass `{source, neighbours}` as props.
-	 *   2. Live mode — subscribe to `$eventFeed` and, on every NEW
-	 *      `ActivationSpread` event, trigger an overlay burst at a randomised
-	 *      offset. Old events (those present before mount, or already
-	 *      processed) never re-fire; we track `lastSeen` by object identity
-	 *      so overlapping batches inside the same Svelte update tick are
-	 *      still handled.
-	 *
-	 * All heavy lifting (decay, geometry, color, event filter) lives in
-	 * `$components/activation-helpers` so it's unit-tested in Node without
-	 * a browser.
-	 */
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
+	import { get } from 'svelte/store';
+	import { page } from '$app/stores';
 	import { api } from '$stores/api';
-	import { eventFeed } from '$stores/websocket';
-	import ActivationNetwork, {
-		type ActivationNode,
-	} from '$components/ActivationNetwork.svelte';
-	import { filterNewSpreadEvents } from '$components/activation-helpers';
-	import type { Memory, VestigeEvent } from '$types';
-	import PageHeader from '$lib/components/PageHeader.svelte';
-	import Icon from '$lib/components/Icon.svelte';
-	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
-	import { reveal } from '$lib/actions/reveal';
-	import { spotlight, magnetic } from '$lib/actions/interactions';
+	import type { Memory } from '$types';
+	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import { rgb01, retentionColor } from '$lib/observatory/cognitive-palette';
+	import type { RouteSceneModel, RouteNode } from '$lib/observatory/route-scene';
+	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 
-	let searchQuery = $state('');
-	let loading = $state(false);
-	let searched = $state(false); // true after the first submitted search
-	let errorMessage = $state<string | null>(null);
+	type ActivationTextItem = TextLayerItem & { memoryId?: string };
 
-	let focusedSource = $state<ActivationNode | null>(null);
-	let focusedNeighbours = $state<ActivationNode[]>([]);
+	const CYAN = [...rgb01('#22C7DE'), 1] satisfies [number, number, number, number];
+	const ROW_LIMIT = 36;
+	const SEARCH_LIMIT = 40;
 
-	let liveEnabled = $state(true);
-	let liveBurstKey = $state(0);
-	let liveBurst = $state<{
-		source: ActivationNode;
-		neighbours: ActivationNode[];
-	} | null>(null);
-	let liveBurstsFired = $state(0);
+	let results = $state<Memory[]>([]);
+	let total = $state(0);
+	let durationMs = $state(0);
+	let seedQuery = $state('');
+	let loading = $state(true);
+	let error: string | null = $state(null);
 
-	// Track every memory we've seen so live-mode events (which carry only
-	// IDs) can be rendered with real labels + node types. If a spread event
-	// references an unknown ID we fall back to a short hash so the burst
-	// still renders — this mirrors how the 3D graph degrades gracefully.
-	const memoryCache = new Map<string, Memory>();
+	onMount(() => {
+		void loadActivationField();
+	});
 
-	function rememberMemory(m: Memory) {
-		memoryCache.set(m.id, m);
+	async function resolveSearchQuery(): Promise<string> {
+		const routeQuery = get(page).url.searchParams.get('q')?.trim();
+		if (routeQuery) return routeQuery;
+		const memories = await api.memories.list({ limit: '1' });
+		const seed = memories.memories[0]?.content?.replace(/\s+/g, ' ').trim() ?? '';
+		return seed.slice(0, 96);
 	}
 
-	function memoryToNode(m: Memory): ActivationNode {
-		return {
-			id: m.id,
-			label: labelFor(m.content, m.id),
-			nodeType: m.nodeType,
-		};
-	}
-
-	function labelFor(content: string | undefined, id: string): string {
-		if (content && content.trim().length > 0) {
-			const trimmed = content.trim();
-			return trimmed.length > 60 ? trimmed.slice(0, 60) + '…' : trimmed;
-		}
-		return id.slice(0, 8);
-	}
-
-	function fallbackNode(id: string): ActivationNode {
-		const cached = memoryCache.get(id);
-		if (cached) return memoryToNode(cached);
-		return { id, label: id.slice(0, 8), nodeType: 'note' };
-	}
-
-	// ────────────────────────────────────────────────────────────────
-	// User-driven search → focused burst
-	// ────────────────────────────────────────────────────────────────
-
-	async function runSearch() {
-		const q = searchQuery.trim();
-		if (!q) {
-			// Empty query is a no-op — don't clobber the current burst.
-			errorMessage = null;
-			return;
-		}
-
+	async function loadActivationField() {
 		loading = true;
-		searched = true;
-		errorMessage = null;
-		focusedSource = null;
-		focusedNeighbours = [];
-
+		error = null;
 		try {
-			const searchRes = await api.search(q, 1);
-			if (!searchRes.results || searchRes.results.length === 0) {
-				// Leave `searched=true` + `focusedSource=null` → UI shows
-				// the "no matches" empty state rather than crashing on
-				// `searchRes.results[0]`.
+			const q = await resolveSearchQuery();
+			seedQuery = q;
+			if (!q) {
+				results = [];
+				total = 0;
+				durationMs = 0;
 				return;
 			}
-			const top = searchRes.results[0];
-			rememberMemory(top);
-			focusedSource = memoryToNode(top);
-
-			const assocRes = (await api.explore(top.id, 'associations', undefined, 15)) as
-				| {
-						results?: Memory[];
-						nodes?: Memory[];
-						// The backend has shipped at least two shapes; accept both.
-						associations?: Memory[];
-				  }
-				| null
-				| undefined;
-
-			const rawList =
-				assocRes?.results ?? assocRes?.nodes ?? assocRes?.associations ?? [];
-
-			const neighbours: ActivationNode[] = [];
-			for (const n of rawList) {
-				if (!n || typeof n !== 'object' || !('id' in n)) continue;
-				const mem = n as Memory;
-				rememberMemory(mem);
-				neighbours.push(memoryToNode(mem));
-			}
-			focusedNeighbours = neighbours;
-		} catch (e) {
-			errorMessage = e instanceof Error ? e.message : String(e);
-			focusedSource = null;
-			focusedNeighbours = [];
+			const res = await api.search(q, SEARCH_LIMIT);
+			results = res.results;
+			total = res.total;
+			durationMs = res.durationMs;
+		} catch (err) {
+			results = [];
+			total = 0;
+			durationMs = 0;
+			error = err instanceof Error ? err.message : 'UNKNOWN ACTIVATION FETCH ERROR';
 		} finally {
 			loading = false;
 		}
 	}
 
-	// ────────────────────────────────────────────────────────────────
-	// Live mode — $eventFeed → overlay bursts
-	// ────────────────────────────────────────────────────────────────
+	function sanitizeAscii(value: string): string {
+		return value
+			.replace(/[\u2014\u2013]/g, '-')
+			.replace(/[\u2018\u2019]/g, "'")
+			.replace(/[\u201C\u201D]/g, '"')
+			.replace(/\u2026/g, '...')
+			.replace(/[^\x20-\x7E]/g, '?');
+	}
 
-	let feedUnsub: (() => void) | null = null;
-	// Object identity of the most recently processed event. We walk the
-	// feed head until we hit this reference, so mid-burst batches in one
-	// Svelte tick are all processed. Mirrors toast.ts.
-	let lastSeenEvent: VestigeEvent | null = null;
-	let primedLiveBaseline = false;
+	function clamp01(value: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.5));
+	}
 
-	onMount(() => {
-		feedUnsub = eventFeed.subscribe((events) => {
-			if (!events || events.length === 0) return;
-			// Prime lastSeen to the current head BEFORE we're live — we don't
-			// want to flood the canvas with every ActivationSpread in the
-			// 200-event ring buffer on first mount. Post-prime, only new
-			// events fire bursts.
-			if (!primedLiveBaseline) {
-				lastSeenEvent = events[0];
-				primedLiveBaseline = true;
-				return;
-			}
-			if (!liveEnabled) {
-				// Still advance the baseline so toggling live back on doesn't
-				// dump a backlog.
-				lastSeenEvent = events[0];
-				return;
-			}
-			const spreads = filterNewSpreadEvents(events, lastSeenEvent);
-			lastSeenEvent = events[0];
-			if (spreads.length === 0) return;
-			for (const s of spreads) {
-				const srcNode = fallbackNode(s.source_id);
-				const nbrs = s.target_ids.map((tid) => fallbackNode(tid));
-				liveBurstKey += 1;
-				liveBurst = { source: srcNode, neighbours: nbrs };
-				liveBurstsFired += 1;
-			}
-		});
+	function relevance(memory: Memory): number {
+		return clamp01(memory.combinedScore ?? memory.retrievalStrength ?? memory.retentionStrength ?? 0.5);
+	}
+
+	function retentionOrScore(memory: Memory): number {
+		return clamp01(memory.retentionStrength ?? relevance(memory));
+	}
+
+	function activationLine(memory: Memory): string {
+		const snippet = sanitizeAscii(memory.content).replace(/\s+/g, ' ').trim().slice(0, 54);
+		const score = Math.round(relevance(memory) * 100);
+		return sanitizeAscii(`${snippet} | ${memory.id.slice(0, 8)} | ${score}%`);
+	}
+
+	function buildTextItems(): ActivationTextItem[] {
+		const rows = results.slice(0, ROW_LIMIT);
+		const top = 0.72;
+		const rowStep = 1.5 / Math.max(1, ROW_LIMIT - 1);
+		return rows.map((memory, i) => ({
+			id: `activation:${memory.id}`,
+			kind: 'activation-result',
+			memoryId: memory.id,
+			text: activationLine(memory),
+			x: -0.88,
+			y: top - i * rowStep,
+			size: 0.026,
+			color: CYAN,
+			depth: relevance(memory),
+			weight: retentionOrScore(memory),
+			startFrame: i * 2,
+			revealSpan: 20,
+			maxWidthEm: 46,
+				hitPadX: 0.03,
+				hitPadY: 0.015
+		}));
+	}
+
+	let activationScene: RouteSceneModel = $derived({
+		organ: 'activation',
+		nodes: results.slice(0, ROW_LIMIT).map((memory, index) => ({
+			source: { kind: 'memory', id: memory.id },
+			index,
+			label: sanitizeAscii(memory.content).replace(/\s+/g, ' ').trim().slice(0, 54),
+			retention: retentionOrScore(memory),
+			stability: memory.storageStrength,
+			lastAccessed: memory.lastAccessedAt,
+			activation: relevance(memory),
+			trust: relevance(memory),
+			tags: memory.tags ?? [],
+			type: memory.nodeType
+		})),
+		edges: [],
+		events: [],
+		receipts: [],
+		scalars: {
+			total,
+			durationMs,
+			visibleResults: Math.min(results.length, ROW_LIMIT),
+			queryLength: seedQuery.length
+		},
+		alive: results.length > 0
 	});
 
-	onDestroy(() => {
-		if (feedUnsub) feedUnsub();
-	});
+	/**
+	 * The search-result SPREAD: every returned memory becomes a living cell whose
+	 * radius + glow = its search relevance, so the most-activated results are the
+	 * bright motes pulled to the core while weak matches drift to the cold rim.
+	 * Field renders BEHIND the MSDF result rows so the labels stay readable.
+	 */
+	class ActivationFieldPass implements RouteFramePass {
+		private field: LivingFieldPass;
+		constructor(engine: ObservatoryEngine) {
+			this.field = new LivingFieldPass(engine);
+		}
+		uploadScene(scene: RouteSceneModel): void {
+			const nodes = scene.nodes as RouteNode[];
+			const data: FieldDatum[] = nodes.map((n) => {
+				const activation = clamp01(n.activation ?? 0.5);
+				const retention = clamp01(n.retention);
+				return {
+					id: n.source.id,
+					score: activation,
+					hue: retention > 0 ? retentionColor(retention) : FIELD_HUE.recall,
+					energy: 0.4 + 0.6 * activation,
+					metric2: retention,
+					kind: 'activation-result',
+					payload: n
+				} satisfies FieldDatum;
+			});
+			this.field.setCells(layoutGalaxy(data, { maxRadius: 0.92, minCellR: 0.012, maxCellR: 0.05 }));
+		}
+		compute(encoder: GPUCommandEncoder): void {
+			this.field.compute(encoder);
+		}
+		render(pass: GPURenderPassEncoder): void {
+			this.field.render(pass);
+		}
+		pickAt(ndcX: number, ndcY: number): RoutePick | null {
+			return this.field.pickAt(ndcX, ndcY);
+		}
+		dispose(): void {
+			this.field.dispose();
+		}
+	}
+
+	function createActivationPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		// Field FIRST (renders behind the MSDF labels), then the readable text rows.
+		const field = new ActivationFieldPass(engine);
+		field.uploadScene(scene);
+		const text = new TextLayerPass(engine);
+		void text.init().then(() => text.setText(buildTextItems()));
+		const textPass: RouteFramePass = {
+			render: (pass) => text.render(pass),
+			uploadScene: () => text.setText(buildTextItems()),
+			pickAt: (x, y) => text.pickAt(x, y),
+			dispose: () => text.dispose()
+		};
+		return [field, textPass];
+	}
+
+	function pickedMemoryId(pick: RoutePick): string | null {
+		// Text rows carry an ActivationTextItem (memoryId); field cells carry the
+		// real RouteNode (source.id). Resolve either so a click on a bright mote OR
+		// its label promotes the same memory.
+		const payload = pick.payload as Partial<ActivationTextItem> & { source?: { id?: string } };
+		return payload?.memoryId ?? payload?.source?.id ?? null;
+	}
+
+	async function handleRoutePick(pick: RoutePick) {
+		if (pick.kind !== 'activation-result') return;
+		const memoryId = pickedMemoryId(pick);
+		if (!memoryId) return;
+		try {
+			const promoted = await api.memories.promote(memoryId);
+			// The promote endpoint returns a PARTIAL memory ({ id, promoted,
+			// retentionStrength }) — no content/combinedScore/nodeType. Merging over
+			// the existing record (not replacing it) keeps content defined so the
+			// derived scene + MSDF rows never hit `undefined.replace(...)`.
+			results = results.map((memory) =>
+				memory.id === promoted.id ? { ...memory, ...promoted } : memory
+			);
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'UNKNOWN ACTIVATION PROMOTE ERROR';
+		}
+	}
 </script>
 
-<div class="p-6 max-w-6xl mx-auto space-y-6 enter">
-	<PageHeader
-		icon="activation"
-		title="Spreading Activation"
-		subtitle="Collins & Loftus 1975 — activation spreads from a seed memory to neighbours along semantic edges, decaying 0.93 per frame until it drops below 0.05. Search seeds a focused burst; live mode overlays every engine spread in real time."
-		accent="synapse"
-	>
-		<div
-			class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-synapse/10 border border-synapse/25 text-xs"
-		>
-			<span
-				class="ping-host inline-flex h-2 w-2 rounded-full"
-				style="color: var(--synapse-glow, #8b9dff); background: currentColor;"
-				class:breathe={liveEnabled}
-			></span>
-			<span class="text-dim">{liveEnabled ? 'Live' : 'Paused'}</span>
-			<span class="text-muted">·</span>
-			<AnimatedNumber value={liveBurstsFired} class="text-synapse-glow font-semibold" />
-			<span class="text-muted">bursts</span>
-		</div>
-	</PageHeader>
+<svelte:head>
+	<title>Activation · Vestige</title>
+</svelte:head>
 
-	<!-- Search -->
-	<div class="space-y-3" use:reveal={{ delay: 60 }}>
-		<span class="text-xs text-dim font-medium">Seed Memory</span>
-		<div class="flex gap-2">
-			<input
-				type="text"
-				placeholder="Search for a memory to activate..."
-				bind:value={searchQuery}
-				onkeydown={(e) => e.key === 'Enter' && runSearch()}
-				class="flex-1 px-4 py-2.5 bg-white/[0.03] border border-synapse/10 rounded-xl text-text text-sm
-					placeholder:text-muted focus:outline-none focus:border-synapse/40 transition backdrop-blur-sm"
-			/>
-			<button
-				use:magnetic
-				onclick={runSearch}
-				disabled={loading}
-				class="inline-flex items-center gap-1.5 px-4 py-2.5 bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm rounded-xl hover:bg-synapse/30 transition disabled:opacity-50"
-			>
-				<Icon name="activation" size={15} />
-				{loading ? 'Activating…' : 'Activate'}
-			</button>
-		</div>
-	</div>
-
-	<!-- Live toggle + stats -->
-	<div class="flex items-center justify-between text-xs">
-		<label class="flex items-center gap-2 text-dim cursor-pointer select-none">
-			<input
-				type="checkbox"
-				bind:checked={liveEnabled}
-				class="accent-synapse-glow"
-			/>
-			<span>Live mode — overlay bursts from cognitive engine events</span>
-		</label>
-		<span class="text-muted">
-			Live bursts fired: <span class="text-synapse-glow">{liveBurstsFired}</span>
-		</span>
-	</div>
-
-	<!-- Canvas + empty/error states -->
-	<div
-		class="glass rounded-2xl overflow-hidden !border-synapse/15 bg-deep/40"
-		style="min-height: 560px;"
-	>
-		{#if loading}
-			<div class="flex items-center justify-center h-[560px] text-dim">
-				<div class="text-center">
-					<div class="mx-auto w-fit text-synapse-glow mb-2 breathe"><Icon name="activation" size={32} /></div>
-					<p class="text-sm">Computing activation…</p>
-				</div>
-			</div>
-		{:else if errorMessage}
-			<div class="flex items-center justify-center h-[560px] text-dim">
-				<div class="text-center max-w-md px-6">
-					<div class="text-3xl opacity-30 mb-3">⚠</div>
-					<p class="text-sm text-bright mb-1">Activation failed</p>
-					<p class="text-xs text-muted">{errorMessage}</p>
-				</div>
-			</div>
-		{:else if !focusedSource && searched}
-			<div class="flex items-center justify-center h-[560px] text-dim">
-				<div class="text-center max-w-md px-6 enter">
-					<div class="mx-auto w-fit text-dim opacity-40 mb-3"><Icon name="search" size={30} /></div>
-					<p class="text-sm text-bright mb-1">No matching memory</p>
-					<p class="text-xs text-muted">
-						Nothing in the graph matches
-						<span class="text-text">"{searchQuery}"</span>. Try a broader
-						query or switch on live mode to watch the engine fire its own
-						bursts.
-					</p>
-				</div>
-			</div>
-		{:else if !focusedSource}
-			<div class="flex items-center justify-center h-[560px] text-dim">
-				<div class="text-center max-w-md px-6 enter">
-					<div class="mx-auto w-fit text-synapse-glow opacity-40 mb-3 breathe"><Icon name="activation" size={32} /></div>
-					<p class="text-sm text-bright mb-1">Waiting for activation</p>
-					<p class="text-xs text-muted">
-						Seed a burst with the search bar above, or enable live mode to
-						overlay bursts from the cognitive engine as they happen.
-					</p>
-				</div>
-			</div>
-		{:else}
-			<ActivationNetwork
-				width={1040}
-				height={560}
-				source={focusedSource}
-				neighbours={focusedNeighbours}
-				{liveBurstKey}
-				{liveBurst}
-			/>
-		{/if}
-	</div>
-
-	<!-- Focused burst metadata -->
-	{#if focusedSource}
-		<div class="p-3 glass rounded-xl !border-synapse/20">
-			<div class="text-[10px] text-synapse-glow mb-1 uppercase tracking-wider">
-				Seed
-			</div>
-			<p class="text-sm text-text">{focusedSource.label}</p>
-			<div class="flex gap-2 mt-1.5 text-[10px] text-muted">
-				<span>{focusedSource.nodeType}</span>
-				<span>{focusedNeighbours.length} neighbours</span>
-			</div>
-		</div>
-	{/if}
-</div>
+<RouteStage
+	organ="activation"
+	seed={`activation-field:${seedQuery}:${total}:${durationMs}`}
+	scene={activationScene}
+	passes={createActivationPasses}
+	{loading}
+	{error}
+	emptyLabel="NO SEARCH ACTIVATION RESULTS"
+	onpick={handleRoutePick}
+/>

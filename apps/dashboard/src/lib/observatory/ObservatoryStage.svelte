@@ -64,6 +64,8 @@
 		 * back with its memory id (the host opens its inspector panel).
 		 */
 		onpick?: (memoryId: string) => void;
+		/** Route-local all-WebGPU instrument overlays can attach their own passes. */
+		onready?: (engine: ObservatoryEngine) => void;
 		/**
 		 * v2.3 living field — subscribe the field to the REAL backend event
 		 * stream ($eventFeed) so it renders live FSRS decay, the contradiction
@@ -86,6 +88,7 @@
 		embedded = false,
 		chrome = 'full',
 		onpick,
+		onready,
 		live = false
 	}: Props = $props();
 
@@ -218,6 +221,7 @@
 		uploaded = false;
 		engine = e;
 		renderer = new NodeRenderer(e);
+		onready?.(e);
 	}
 
 	// Upload the memory field once the engine AND the graph are both ready.

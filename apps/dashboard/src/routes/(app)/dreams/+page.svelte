@@ -1,504 +1,471 @@
-<!--
-  Dream Cinema — scrubbable replay of Vestige's 5-stage dream consolidation.
-
-  The /api/dream endpoint returns a DreamResult. We render the 5 phases of
-  the MemoryDreamer pipeline (Replay → Cross-reference → Strengthen → Prune
-  → Transfer) and a sorted insight list. Clicking "Dream Now" triggers a
-  fresh dream; the scrubber then lets the user step through the stages.
--->
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import { CAUSAL, IMMUNE, RETENTION, rgb01 } from '$lib/observatory/cognitive-palette';
+	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
+	import { assertProvenance, type Provenance, type RouteNode, type RouteSceneModel } from '$lib/observatory/route-scene';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
+	import { retentionColor } from '$lib/observatory/cognitive-palette';
 	import { api } from '$stores/api';
-	import type { DreamResult } from '$types';
-	import DreamStageReplay from '$components/DreamStageReplay.svelte';
-	import DreamInsightCard from '$components/DreamInsightCard.svelte';
-	import PageHeader from '$components/PageHeader.svelte';
-	import Icon from '$components/Icon.svelte';
-	import AnimatedNumber from '$components/AnimatedNumber.svelte';
-	import { reveal } from '$lib/actions/reveal';
-	import { spotlight, magnetic } from '$lib/actions/interactions';
-	import {
-		STAGE_NAMES,
-		clampStage,
-		formatDurationMs,
-	} from '$components/dream-helpers';
+	import type { DreamInsight, DreamResult, Memory } from '$types';
 
-	let dreamResult: DreamResult | null = $state(null);
-	let stage = $state(1);
-	let dreaming = $state(false);
+	type DreamTextItem = TextLayerItem & { insightIndex?: number };
+	type DreamItemKind = 'dream-action' | 'dream-cycle' | 'dream-detail' | 'dream-insight' | 'dream-status';
+	type DreamRecord = {
+		id: string;
+		kind: 'dream-cycle' | 'dream-insight';
+		text: string;
+		depth: number;
+		weight: number;
+		source: Provenance;
+		insightIndex?: number;
+	};
+	type DreamScene = RouteSceneModel & {
+		organ: 'dreams';
+		records: DreamRecord[];
+		raw: DreamResult | null;
+		selectedRecordId: string | null;
+		busy: boolean;
+	};
+	type DreamResultEnvelope = DreamResult & { message?: string };
+
+	const CYAN = [...rgb01(CAUSAL.forward), 1] satisfies [number, number, number, number];
+	const OXYGEN = [...rgb01(RETENTION.luciferin), 0.88] satisfies [number, number, number, number];
+	const MUTED = [...rgb01(RETENTION.recall), 0.62] satisfies [number, number, number, number];
+	const SCARLET = [...rgb01(IMMUNE.veto), 0.92] satisfies [number, number, number, number];
+	const ROW_LIMIT = 36;
+	const REVEAL_ANCHOR = -100000;
+	const WRAP_COLUMNS = 64;
+
+	let dreamResult: DreamResultEnvelope | null = $state(null);
+	let loading = $state(false);
 	let error: string | null = $state(null);
+	let selectedRecordId: string | null = $state(null);
+	let dormantPool: Memory[] = $state([]);
 
-	let hasDream = $derived(dreamResult !== null);
+	const dreamScene = $derived.by<DreamScene>(() => normalizeDreamScene(dreamResult, selectedRecordId, loading));
 
-	let sortedInsights = $derived.by(() => {
-		const r = dreamResult;
-		if (!r) return [];
-		return [...r.insights].sort((a, b) => (b.noveltyScore ?? 0) - (a.noveltyScore ?? 0));
+	onMount(() => {
+		// Seed the dormant field so the organ is ALIVE before you hit RUN — a slow,
+		// dim pool of real memories waiting to be replayed. On a dream run this same
+		// field storms bright with the insight cells.
+		void api.memories
+			.list({ limit: '80' })
+			.then((res) => {
+				dormantPool = res.memories;
+				fieldPass?.setCells(buildFieldCells());
+			})
+			.catch(() => {});
 	});
 
 	async function runDream() {
-		if (dreaming) return;
-		dreaming = true;
+		if (loading) return;
+		loading = true;
 		error = null;
 		try {
-			const result = await api.dream();
-			dreamResult = result;
-			stage = 1;
+			dreamResult = await api.dream();
+			fieldPass?.setCells(buildFieldCells(), { ambient: 0.5 });
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Dream failed';
+			error = e instanceof Error ? e.message : String(e);
 		} finally {
-			dreaming = false;
+			loading = false;
 		}
 	}
 
-	function setStage(n: number) {
-		stage = clampStage(n);
+	let fieldPass: LivingFieldPass | null = null;
+
+	/**
+	 * Dormant → storm. At rest: the memory pool as slow dim cells (the mind
+	 * asleep). After a dream: the insight nodes light up bright (consolidation
+	 * storm). Both map to REAL data (memories list / dream insights).
+	 */
+	function buildFieldCells() {
+		const insights = dreamResult?.insights ?? [];
+		let data: FieldDatum[];
+		if (insights.length > 0) {
+			data = insights.slice(0, 120).map((ins, i) => {
+				const confidence = clamp01(Number(ins.confidence ?? 0));
+				const novelty = clamp01(Number(ins.noveltyScore ?? confidence));
+				return {
+					id: ins.sourceMemories?.[0] ?? `dream-insight:${i}`,
+					score: 0.5 + 0.5 * novelty,
+					hue: novelty > 0.6 ? FIELD_HUE.retrograde : FIELD_HUE.bridge,
+					energy: 0.6 + 0.4 * confidence,
+					metric2: confidence,
+					kind: 'dream-insight',
+					payload: ins
+				} satisfies FieldDatum;
+			});
+		} else {
+			data = dormantPool.map((m) => {
+				const retention = clamp01(m.retentionStrength);
+				return {
+					id: m.id,
+					score: 0.3 + 0.3 * retention,
+					hue: retentionColor(retention),
+					energy: 0.12 + 0.28 * retention, // dim: the mind asleep
+					metric2: retention,
+					kind: 'dream-dormant',
+					payload: m
+				} satisfies FieldDatum;
+			});
+		}
+		return layoutGalaxy(data, { maxRadius: 0.92, minCellR: 0.014, maxCellR: 0.052 });
 	}
 
-	function onScrub(e: Event) {
-		const v = Number((e.currentTarget as HTMLInputElement).value);
-		setStage(v);
+	function sanitizeAscii(value: string): string {
+		return value
+			.replace(/[\u2014\u2013]/g, '-')
+			.replace(/[\u2018\u2019]/g, "'")
+			.replace(/[\u201C\u201D]/g, '"')
+			.replace(/\u2026/g, '...')
+			.replace(/[^\x20-\x7E]/g, '?');
+	}
+
+	function clamp01(value: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.5));
+	}
+
+	function scalarSource(name: string, value: number): Provenance {
+		return { kind: 'scalar', id: `dreams.${name}`, scalar: { name, value } };
+	}
+
+	function insightId(insight: DreamInsight, index: number): string {
+		const source = insight.sourceMemories?.[0] ?? `${insight.type}:${index}`;
+		return sanitizeAscii(`${source}:${index}`).slice(0, 96);
+	}
+
+	function normalizeDreamScene(
+		result: DreamResultEnvelope | null,
+		selection: string | null,
+		busy: boolean
+	): DreamScene {
+		if (!result) {
+			return {
+				organ: 'dreams',
+				nodes: [],
+				edges: [],
+				events: [],
+				receipts: [],
+				scalars: {},
+				alive: true,
+				records: [],
+				raw: null,
+				selectedRecordId: selection,
+				busy
+			};
+		}
+
+		const insights = Array.isArray(result.insights) ? result.insights : [];
+		const memoriesReplayed = Number(result.memoriesReplayed ?? 0);
+		const connectionsPersisted = Number(result.connectionsPersisted ?? 0);
+		const generated = Number(result.stats?.insightsGenerated ?? insights.length);
+		const durationMs = Number(result.stats?.durationMs ?? 0);
+		const newConnectionsFound = Number(result.stats?.newConnectionsFound ?? connectionsPersisted);
+		const strengthened = Number(result.stats?.memoriesStrengthened ?? 0);
+		const compressed = Number(result.stats?.memoriesCompressed ?? 0);
+		const summaryParts = [
+			result.status,
+			String(memoriesReplayed),
+			String(connectionsPersisted),
+			String(generated),
+			String(durationMs)
+		].map((part) => sanitizeAscii(part ?? ''));
+		const records: DreamRecord[] = [
+			{
+				id: 'dreams:cycle',
+				kind: 'dream-cycle',
+				text: summaryParts.join(' | '),
+				depth: clamp01(memoriesReplayed / 50),
+				weight: clamp01(newConnectionsFound / Math.max(1, memoriesReplayed)),
+				source: scalarSource('memoriesReplayed', memoriesReplayed)
+			}
+		];
+
+		if (result.message && insights.length === 0) {
+			records.push({
+				id: 'dreams:message',
+				kind: 'dream-cycle',
+				text: sanitizeAscii(result.message),
+				depth: clamp01(memoriesReplayed / 50),
+				weight: clamp01(generated / Math.max(1, memoriesReplayed)),
+				source: scalarSource('message', memoriesReplayed)
+			});
+		}
+
+		insights.forEach((insight, index) => {
+			const confidence = clamp01(Number(insight.confidence ?? 0));
+			const strength = clamp01(Number(insight.noveltyScore ?? confidence));
+			const id = insightId(insight, index);
+			const sourceMemory = insight.sourceMemories?.[0] ?? id;
+			records.push({
+				id: `dreams:insight:${id}`,
+				kind: 'dream-insight',
+				text: `C ${Math.round(confidence * 100)} · N ${Math.round(strength * 100)} | ${sanitizeAscii(insight.insight ?? '')}`,
+				depth: confidence,
+				weight: strength,
+				source: { kind: 'memory', id: sourceMemory },
+				insightIndex: index
+			});
+		});
+
+		const nodes: RouteNode[] = records.map((record, index) => ({
+			source: record.source,
+			index,
+			label: record.text,
+			retention: record.weight,
+			trust: record.depth,
+			tags: [record.kind],
+			type: record.kind
+		}));
+		const scene: DreamScene = {
+			organ: 'dreams',
+			nodes,
+			edges: [],
+			events: records.map((record, index) => ({
+				source: record.source,
+				type: record.kind,
+				targetIndex: index,
+				frame: 18 + index * 10,
+				energy: record.weight
+			})),
+			receipts: [],
+			scalars: {
+				memoriesReplayed,
+				connectionsPersisted,
+				newConnectionsFound,
+				insightsGenerated: generated,
+				memoriesStrengthened: strengthened,
+				memoriesCompressed: compressed,
+				durationMs
+			},
+			alive: true,
+			records,
+			raw: result,
+			selectedRecordId: selection,
+			busy
+		};
+		if (import.meta.env.DEV) assertProvenance(scene);
+		return scene;
+	}
+
+	function wrapAscii(value: string, width = WRAP_COLUMNS): string[] {
+		const words = sanitizeAscii(value).split(/\s+/).filter(Boolean);
+		const lines: string[] = [];
+		let line = '';
+		for (const word of words) {
+			if (!line) {
+				line = word.slice(0, width);
+				continue;
+			}
+			if (`${line} ${word}`.length <= width) line += ` ${word}`;
+			else {
+				lines.push(line);
+				line = word.slice(0, width);
+			}
+		}
+		if (line) lines.push(line);
+		return lines.length > 0 ? lines : [''];
+	}
+
+	function textItem(
+		id: string,
+		kind: DreamItemKind,
+		text: string,
+		y: number,
+		options: Partial<DreamTextItem> = {}
+	): DreamTextItem {
+		return {
+			id,
+			kind,
+			text,
+			x: -0.88,
+			y,
+			size: 0.024,
+			color: MUTED,
+			depth: 0.5,
+			weight: 0.5,
+			startFrame: REVEAL_ANCHOR,
+			revealSpan: 20,
+			maxWidthEm: 64,
+			...options
+		};
+	}
+
+	function buildDreamItems(scene: RouteSceneModel): DreamTextItem[] {
+		const dream = scene as DreamScene;
+		const records = dream.records.slice(0, ROW_LIMIT);
+		const items: DreamTextItem[] = [];
+		let y = 0.76;
+		items.push(
+			textItem('dreams:run', 'dream-action', dream.busy ? '[ DREAMING... ]' : '[ RUN DREAM CYCLE ]', y, {
+				size: 0.032,
+				color: dream.busy ? MUTED : OXYGEN,
+				hitPadX: 0.03,
+				hitPadY: 0.05
+			})
+		);
+		y -= 0.065;
+		items.push(
+			textItem('dreams:run-note', 'dream-detail', 'strengthens memories and persists connections', y, {
+				color: MUTED,
+				size: 0.02
+			})
+		);
+		y -= 0.09;
+		if (!dream.raw) {
+			items.push(
+				textItem('dreams:dormant', 'dream-status', 'DREAM ENGINE DORMANT - RUN EXPLICIT CYCLE', y, {
+					color: MUTED,
+					size: 0.028
+				})
+			);
+			return items;
+		}
+
+		for (const record of records) {
+			items.push({
+			id: record.id,
+			kind: record.kind,
+			text: record.text,
+			x: -0.88,
+			y,
+			size: record.kind === 'dream-cycle' ? 0.03 : 0.024,
+			color: record.id === dream.selectedRecordId ? OXYGEN : record.kind === 'dream-cycle' ? MUTED : CYAN,
+			depth: record.depth,
+			weight: record.weight,
+			startFrame: REVEAL_ANCHOR,
+			revealSpan: 20,
+			maxWidthEm: 52,
+			hitPadX: 0.03,
+			hitPadY: 0.014,
+			insightIndex: record.insightIndex
+			});
+			y -= 0.052;
+		}
+
+		const selected = records.find((record) => record.id === dream.selectedRecordId);
+		if (!selected) return items;
+		y = 0.45;
+		const inspectorX = 0.08;
+		items.push(
+			textItem('dreams:detail-heading', 'dream-detail', 'SELECTED DREAM RECEIPT', y, {
+				x: inspectorX,
+				color: OXYGEN,
+				maxWidthEm: 34
+			})
+		);
+		y -= 0.052;
+		if (selected.kind === 'dream-insight' && selected.insightIndex !== undefined) {
+			const insight = dream.raw.insights?.[selected.insightIndex];
+			if (insight) {
+				wrapAscii(insight.insight, 34).forEach((line, lineIndex) => {
+					items.push(
+						textItem(`dreams:detail:text:${lineIndex}`, 'dream-detail', line, y, {
+							x: inspectorX,
+							color: CYAN,
+							maxWidthEm: 34
+						})
+					);
+					y -= 0.043;
+				});
+				items.push(textItem('dreams:detail:type', 'dream-detail', `TYPE: ${sanitizeAscii(insight.type)}`, y, { x: inspectorX }));
+				y -= 0.043;
+				items.push(textItem('dreams:detail:confidence', 'dream-detail', `CONFIDENCE: ${Math.round(clamp01(insight.confidence) * 100)}`, y, { x: inspectorX }));
+				y -= 0.043;
+				items.push(textItem('dreams:detail:novelty', 'dream-detail', `NOVELTY: ${Math.round(clamp01(insight.noveltyScore) * 100)}`, y, { x: inspectorX }));
+				y -= 0.043;
+				items.push(textItem('dreams:detail:sources', 'dream-detail', `SOURCE COUNT: ${insight.sourceMemories?.length ?? 0}`, y, { x: inspectorX }));
+				y -= 0.06;
+			}
+		} else {
+			wrapAscii(selected.text, 34).forEach((line, lineIndex) => {
+				items.push(textItem(`dreams:detail:cycle:${lineIndex}`, 'dream-detail', line, y, { x: inspectorX }));
+				y -= 0.043;
+			});
+			y -= 0.017;
+		}
+		items.push(
+			textItem('dreams:again', 'dream-action', dream.busy ? '[ DREAMING... ]' : '[ DREAM AGAIN ]', y, {
+				x: inspectorX,
+				color: dream.busy ? MUTED : OXYGEN,
+				size: 0.03,
+				hitPadX: 0.03,
+				hitPadY: 0.05
+			})
+		);
+		return items;
+	}
+
+	class DreamTextPass implements RouteFramePass {
+		private text: TextLayerPass;
+		private scene: RouteSceneModel;
+		private engine: ObservatoryEngine;
+
+		constructor(engine: ObservatoryEngine, scene: RouteSceneModel) {
+			this.engine = engine;
+			this.scene = scene;
+			this.text = new TextLayerPass(engine);
+			void this.text.init().then(() => this.text.setText(buildDreamItems(this.scene)));
+		}
+
+		uploadScene(scene: RouteSceneModel): void {
+			this.scene = scene;
+			this.text.setText(buildDreamItems(scene));
+		}
+
+		render(pass: GPURenderPassEncoder): void {
+			this.text.render(pass);
+		}
+
+		pickAt(ndcX: number, ndcY: number): RoutePick | null {
+			return this.text.pickAt(ndcX, ndcY);
+		}
+
+		dispose(): void {
+			this.text.dispose();
+			void this.engine;
+		}
+	}
+
+	function createDreamPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		const field = new LivingFieldPass(engine);
+		fieldPass = field;
+		field.setCells(buildFieldCells());
+		const fieldWrapper: RouteFramePass = {
+			compute: (encoder) => field.compute(encoder),
+			render: (pass) => field.render(pass),
+			pickAt: (x, y) => field.pickAt(x, y),
+			dispose: () => {
+				field.dispose();
+				if (fieldPass === field) fieldPass = null;
+			}
+		};
+		return [fieldWrapper, new DreamTextPass(engine, scene)];
+	}
+
+	function handleRoutePick(pick: RoutePick) {
+		if (pick.kind === 'dream-action') {
+			if (!loading) void runDream();
+			return;
+		}
+		if (pick.kind !== 'dream-cycle' && pick.kind !== 'dream-insight') return;
+		selectedRecordId = pick.id;
 	}
 </script>
 
 <svelte:head>
-	<title>Dream Cinema · Vestige</title>
+	<title>Dreams · Vestige</title>
 </svelte:head>
 
-<div class="p-6 max-w-7xl mx-auto space-y-6 enter">
-	<!-- Header -->
-	<PageHeader
-		icon="dreams"
-		title="Dream Cinema"
-		subtitle="Scrub through Vestige's 5-stage consolidation cycle. Replay, cross-reference, strengthen, prune, transfer. Watch episodic become semantic."
-		accent="dream"
-	>
-		<div class="flex items-center gap-3">
-			{#if dreaming}
-				<span class="live-status">
-					<span class="ping-host live-dot" style="color: var(--color-dream-glow); background: var(--color-dream-glow);"></span>
-					<span>Consolidating</span>
-				</span>
-			{:else if hasDream}
-				<span class="live-status idle">
-					<span class="live-dot breathe" style="background: var(--color-synapse-glow);"></span>
-					<span>Cycle complete</span>
-				</span>
-			{/if}
-
-			<button
-				type="button"
-				onclick={runDream}
-				disabled={dreaming}
-				class="dream-button"
-				class:is-dreaming={dreaming}
-				use:magnetic
-			>
-				{#if dreaming}
-					<span class="spinner" aria-hidden="true"></span>
-					<span>Dreaming...</span>
-				{:else}
-					<span class="dream-icon" aria-hidden="true"><Icon name="sparkle" size={16} /></span>
-					<span>Dream Now</span>
-				{/if}
-			</button>
-		</div>
-	</PageHeader>
-
-	{#if error}
-		<div class="glass-subtle rounded-xl px-4 py-3 text-sm border !border-decay/40 text-decay flex items-center gap-2" use:reveal>
-			<Icon name="contradictions" size={16} />
-			<span>{error}</span>
-		</div>
-	{/if}
-
-	{#if !hasDream && !dreaming}
-		<!-- Empty state -->
-		<div class="empty-state glass-panel rounded-2xl p-12 text-center space-y-4" use:reveal>
-			<div class="empty-glyph" aria-hidden="true">
-				<Icon name="dreams" size={52} draw />
-			</div>
-			<p class="text-bright font-semibold text-lg">Nothing's been dreamt yet.</p>
-			<p class="text-dim text-sm max-w-sm mx-auto leading-relaxed">
-				Run a consolidation cycle and watch your episodic memories replay,
-				cross-reference, and crystallize into lasting semantic knowledge.
-			</p>
-			<button
-				type="button"
-				onclick={runDream}
-				class="dream-button mx-auto"
-				use:magnetic
-			>
-				<span class="dream-icon" aria-hidden="true"><Icon name="sparkle" size={16} /></span>
-				<span>Start the first dream</span>
-			</button>
-		</div>
-	{:else}
-		<!-- Scrubber + stage markers -->
-		<section class="glass-panel rounded-2xl p-5 space-y-4">
-			<div class="flex items-center justify-between gap-2 flex-wrap">
-				<div class="text-[11px] text-dream-glow uppercase tracking-[0.18em] font-semibold">
-					Stage {stage} · {STAGE_NAMES[stage - 1]}
-				</div>
-				<div class="flex gap-1 text-[11px] text-dim">
-					<button
-						type="button"
-						class="step-btn"
-						onclick={() => setStage(stage - 1)}
-						disabled={stage <= 1 || dreaming}
-						aria-label="Previous stage">◀</button>
-					<button
-						type="button"
-						class="step-btn"
-						onclick={() => setStage(stage + 1)}
-						disabled={stage >= 5 || dreaming}
-						aria-label="Next stage">▶</button>
-				</div>
-			</div>
-
-			<!-- Scrubber -->
-			<div class="scrubber-wrap">
-				<input
-					type="range"
-					min="1"
-					max="5"
-					step="1"
-					value={stage}
-					oninput={onScrub}
-					disabled={dreaming}
-					class="scrubber"
-					aria-label="Dream stage scrubber"
-				/>
-				<div class="scrubber-ticks">
-					{#each STAGE_NAMES as name, i (name)}
-						<button
-							type="button"
-							class="tick"
-							class:active={stage === i + 1}
-							class:passed={stage > i + 1}
-							onclick={() => setStage(i + 1)}
-							disabled={dreaming}
-						>
-							<span class="tick-dot"></span>
-							<span class="tick-label">{i + 1}. {name}</span>
-						</button>
-					{/each}
-				</div>
-			</div>
-		</section>
-
-		<!-- Main grid: stage replay + insights -->
-		<section class="grid gap-6 lg:grid-cols-[1fr_360px]">
-			<!-- Stage replay -->
-			<DreamStageReplay {stage} {dreamResult} />
-
-			<!-- Insights panel -->
-			<aside class="glass-panel rounded-2xl p-4 space-y-3 min-h-[240px]">
-				<div class="flex items-center justify-between">
-					<h2 class="text-sm font-semibold text-bright">Insights</h2>
-					<span class="text-[10px] text-dim uppercase tracking-wider">
-						{sortedInsights.length} total · by novelty
-					</span>
-				</div>
-
-				<div class="insights-scroll space-y-3">
-					{#if sortedInsights.length === 0}
-						<div class="text-center py-8 text-dim text-sm">
-							{#if dreaming}
-								Dreaming...
-							{:else}
-								No insights generated this cycle.
-							{/if}
-						</div>
-					{:else}
-						{#each sortedInsights as insight, i (i + '-' + (insight.insight?.slice(0, 32) ?? ''))}
-							<DreamInsightCard {insight} index={i} />
-						{/each}
-					{/if}
-				</div>
-			</aside>
-		</section>
-
-		<!-- Stats footer -->
-		{#if dreamResult}
-			<footer class="glass-subtle rounded-2xl p-4 grid gap-3 grid-cols-2 md:grid-cols-5">
-				<div class="stat-cell">
-					<div class="stat-value">{dreamResult.memoriesReplayed ?? 0}</div>
-					<div class="stat-label">Replayed</div>
-				</div>
-				<div class="stat-cell">
-					<div class="stat-value">{dreamResult.stats?.newConnectionsFound ?? 0}</div>
-					<div class="stat-label">Connections Found</div>
-				</div>
-				<div class="stat-cell">
-					<div class="stat-value">{dreamResult.connectionsPersisted ?? 0}</div>
-					<div class="stat-label">Connections Persisted</div>
-				</div>
-				<div class="stat-cell">
-					<div class="stat-value">{dreamResult.stats?.insightsGenerated ?? 0}</div>
-					<div class="stat-label">Insights</div>
-				</div>
-				<div class="stat-cell">
-					<div class="stat-value">{formatDurationMs(dreamResult.stats?.durationMs)}</div>
-					<div class="stat-label">Duration</div>
-				</div>
-			</footer>
-		{/if}
-	{/if}
-</div>
-
-<style>
-	.dream-button {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.6rem;
-		padding: 0.7rem 1.4rem;
-		border-radius: 999px;
-		font-size: 0.9rem;
-		font-weight: 600;
-		letter-spacing: 0.02em;
-		color: white;
-		background: linear-gradient(135deg, var(--color-dream), var(--color-synapse));
-		border: 1px solid color-mix(in srgb, var(--color-dream-glow) 60%, transparent);
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.18),
-			0 8px 24px -6px rgba(168, 85, 247, 0.55),
-			0 0 48px -10px rgba(168, 85, 247, 0.45);
-		cursor: pointer;
-		transition: transform 400ms cubic-bezier(0.34, 1.56, 0.64, 1),
-			box-shadow 220ms ease, filter 220ms ease;
-	}
-
-	.dream-button:hover:not(:disabled) {
-		transform: translateY(-2px) scale(1.03);
-		box-shadow:
-			inset 0 1px 0 0 rgba(255, 255, 255, 0.22),
-			0 12px 32px -6px rgba(168, 85, 247, 0.7),
-			0 0 64px -10px rgba(168, 85, 247, 0.55);
-	}
-
-	.dream-button:disabled {
-		cursor: not-allowed;
-		filter: saturate(0.85);
-	}
-
-	.dream-button.is-dreaming {
-		background: linear-gradient(135deg, var(--color-synapse), var(--color-dream));
-		animation: button-breathe 2s ease-in-out infinite;
-	}
-
-	@keyframes button-breathe {
-		0%, 100% { box-shadow: 0 8px 24px -6px rgba(168, 85, 247, 0.5), 0 0 48px -10px rgba(168, 85, 247, 0.4); }
-		50% { box-shadow: 0 12px 36px -6px rgba(168, 85, 247, 0.8), 0 0 80px -10px rgba(168, 85, 247, 0.6); }
-	}
-
-	.dream-icon {
-		display: inline-block;
-		animation: twinkle 3s ease-in-out infinite;
-	}
-
-	.spinner {
-		width: 14px;
-		height: 14px;
-		border-radius: 50%;
-		border: 2px solid rgba(255, 255, 255, 0.25);
-		border-top-color: white;
-		animation: spin 0.8s linear infinite;
-	}
-
-	@keyframes spin {
-		to { transform: rotate(360deg); }
-	}
-
-	.empty-state {
-		border: 1px dashed rgba(168, 85, 247, 0.25);
-	}
-
-	.empty-glyph {
-		font-size: 3rem;
-		color: var(--color-dream-glow);
-		opacity: 0.5;
-		text-shadow: 0 0 20px var(--color-dream);
-		animation: twinkle 4s ease-in-out infinite;
-	}
-
-	/* Scrubber */
-	.scrubber-wrap {
-		position: relative;
-		padding: 4px 0 8px;
-	}
-
-	.scrubber {
-		appearance: none;
-		-webkit-appearance: none;
-		width: 100%;
-		height: 6px;
-		border-radius: 999px;
-		background: linear-gradient(
-			90deg,
-			var(--color-synapse-glow) 0%,
-			var(--color-dream) 50%,
-			var(--color-recall) 100%
-		);
-		opacity: 0.35;
-		outline: none;
-		cursor: pointer;
-		transition: opacity 220ms ease;
-	}
-
-	.scrubber:hover:not(:disabled) {
-		opacity: 0.55;
-	}
-
-	.scrubber::-webkit-slider-thumb {
-		-webkit-appearance: none;
-		appearance: none;
-		width: 20px;
-		height: 20px;
-		border-radius: 50%;
-		background: var(--color-dream-glow);
-		border: 2px solid white;
-		box-shadow:
-			0 0 0 3px rgba(192, 132, 252, 0.25),
-			0 0 20px var(--color-dream),
-			0 4px 12px rgba(0, 0, 0, 0.4);
-		cursor: grab;
-		transition: transform 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
-	}
-
-	.scrubber::-webkit-slider-thumb:hover {
-		transform: scale(1.2);
-	}
-
-	.scrubber::-moz-range-thumb {
-		width: 20px;
-		height: 20px;
-		border-radius: 50%;
-		background: var(--color-dream-glow);
-		border: 2px solid white;
-		box-shadow:
-			0 0 0 3px rgba(192, 132, 252, 0.25),
-			0 0 20px var(--color-dream);
-		cursor: grab;
-	}
-
-	.scrubber:disabled {
-		cursor: not-allowed;
-		opacity: 0.25;
-	}
-
-	.scrubber-ticks {
-		display: flex;
-		justify-content: space-between;
-		margin-top: 10px;
-		gap: 4px;
-	}
-
-	.tick {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 4px;
-		background: transparent;
-		border: none;
-		cursor: pointer;
-		padding: 2px 4px;
-		color: var(--color-dim);
-		font-size: 10px;
-		letter-spacing: 0.04em;
-		transition: color 220ms ease, transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
-	}
-
-	.tick:disabled {
-		cursor: not-allowed;
-	}
-
-	.tick:hover:not(:disabled) {
-		color: var(--color-dream-glow);
-		transform: translateY(-1px);
-	}
-
-	.tick-dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: rgba(255, 255, 255, 0.1);
-		border: 1px solid rgba(255, 255, 255, 0.15);
-		transition: all 280ms ease;
-	}
-
-	.tick.passed .tick-dot {
-		background: var(--color-synapse-glow);
-		border-color: var(--color-synapse-glow);
-		opacity: 0.7;
-	}
-
-	.tick.active .tick-dot {
-		background: var(--color-dream-glow);
-		border-color: white;
-		box-shadow:
-			0 0 0 3px rgba(192, 132, 252, 0.3),
-			0 0 14px var(--color-dream);
-		transform: scale(1.3);
-	}
-
-	.tick.active {
-		color: var(--color-dream-glow);
-		font-weight: 600;
-	}
-
-	.tick-label {
-		white-space: nowrap;
-	}
-
-	.step-btn {
-		width: 28px;
-		height: 28px;
-		border-radius: 6px;
-		background: rgba(99, 102, 241, 0.1);
-		border: 1px solid rgba(99, 102, 241, 0.2);
-		color: var(--color-synapse-glow);
-		cursor: pointer;
-		transition: all 180ms ease;
-		font-size: 11px;
-	}
-
-	.step-btn:hover:not(:disabled) {
-		background: rgba(99, 102, 241, 0.2);
-		transform: translateY(-1px);
-	}
-
-	.step-btn:disabled {
-		opacity: 0.35;
-		cursor: not-allowed;
-	}
-
-	/* Insights */
-	.insights-scroll {
-		max-height: 520px;
-		overflow-y: auto;
-		padding-right: 4px;
-	}
-
-	/* Stat cells */
-	.stat-cell {
-		padding: 0.5rem 0.75rem;
-		border-left: 2px solid rgba(168, 85, 247, 0.3);
-	}
-
-	.stat-value {
-		font-family: var(--font-mono);
-		font-size: 1.25rem;
-		font-weight: 700;
-		color: var(--color-bright);
-		font-variant-numeric: tabular-nums;
-		line-height: 1.1;
-	}
-
-	.stat-label {
-		font-size: 10px;
-		color: var(--color-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.1em;
-		margin-top: 2px;
-	}
-</style>
+<RouteStage
+	organ="dreams"
+	seed={`dreams:${dreamResult?.status ?? 'pending'}:${dreamScene.records.length}:${dreamScene.scalars.durationMs ?? 0}`}
+	scene={dreamScene}
+	passes={createDreamPasses}
+	loading={loading}
+	error={error}
+	onpick={handleRoutePick}
+/>

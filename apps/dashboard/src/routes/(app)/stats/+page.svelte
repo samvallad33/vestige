@@ -1,193 +1,286 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import { CAUSAL, IMMUNE, RETENTION, VITALS, rgb01 } from '$lib/observatory/cognitive-palette';
+	import type { RouteReceipt, RouteSceneModel } from '$lib/observatory/route-scene';
+	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 	import { api } from '$stores/api';
-	import type { SystemStats, HealthCheck, RetentionDistribution } from '$types';
-	import PageHeader from '$lib/components/PageHeader.svelte';
-	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
-	import AmbientField from '$lib/components/AmbientField.svelte';
-	import { reveal } from '$lib/actions/reveal';
-	import { spotlight } from '$lib/actions/interactions';
-	import { NODE_TYPE_COLORS } from '$types';
+	import type { ConsolidationResult, SystemStats } from '$types';
+
+	type VitalReceipt = RouteReceipt & {
+		metric: string;
+		rawValue: unknown;
+		magnitude: number;
+	};
+
+	const CYAN = [...rgb01(CAUSAL.forward), 1] satisfies [number, number, number, number];
+	const FLOW = [...rgb01(VITALS.throughput), 0.96] satisfies [number, number, number, number];
+	const LUCIFERIN = [...rgb01(RETENTION.luciferin), 0.9] satisfies [number, number, number, number];
+	const AMBER = [...rgb01(IMMUNE.caution), 0.88] satisfies [number, number, number, number];
+	const SCARLET = [...rgb01(IMMUNE.veto), 0.9] satisfies [number, number, number, number];
 
 	let stats: SystemStats | null = $state(null);
-	let health: HealthCheck | null = $state(null);
-	let retention: RetentionDistribution | null = $state(null);
 	let loading = $state(true);
+	let error: string | null = $state(null);
+	let consolidation: ConsolidationResult | null = $state(null);
 
-	// Phase 5 ambient base coat — the field behind this page READS these real
-	// metrics: the endangered share storms it, due-for-review pulses it. A store
-	// with 129 actively-forgetting memories looks visibly different from a calm one.
-	let endangeredFrac = $derived.by(() => {
-		const r = retention;
-		if (!r || r.total <= 0) return 0;
-		return (r.endangered?.length ?? 0) / r.total;
-	});
-	let dueFrac = $derived.by(() => {
-		const s = stats;
-		if (!s || s.totalMemories <= 0) return 0;
-		return s.dueForReview / s.totalMemories;
+	const statsScene = $derived.by<RouteSceneModel>(() => {
+		const receipts = stats ? buildReceipts(stats, consolidation) : [];
+		const scalars = Object.fromEntries(receipts.map((r) => [r.metric, r.magnitude]));
+		return {
+			organ: 'stats',
+			nodes: [],
+			edges: [],
+			events: [],
+			receipts,
+			scalars,
+			alive: receipts.length > 0
+		};
 	});
 
-	onMount(async () => {
+	onMount(() => {
+		void loadStats();
+	});
+
+	async function loadStats() {
+		loading = true;
+		error = null;
 		try {
-			[stats, health, retention] = await Promise.all([
-				api.stats(),
-				api.health(),
-				api.retentionDistribution()
-			]);
-		} catch {
-			// API not available
+			stats = await api.stats();
+		} catch (err) {
+			stats = null;
+			error = err instanceof Error ? err.message : String(err);
 		} finally {
 			loading = false;
 		}
-	});
-
-	function statusColor(status: string): string {
-		return { healthy: '#10b981', degraded: '#f59e0b', critical: '#ef4444', empty: '#6b7280' }[status] || '#6b7280';
 	}
 
-	async function runConsolidation() {
+	async function handleRoutePick(pick: RoutePick) {
+		if (pick.kind !== 'stats-vital') return;
+		loading = true;
+		error = null;
 		try {
-			await api.consolidate();
-			[stats, health, retention] = await Promise.all([api.stats(), api.health(), api.retentionDistribution()]);
-		} catch {
-			// API not available
+			consolidation = await api.consolidate();
+			stats = await api.stats();
+		} catch (err) {
+			error = err instanceof Error ? err.message : String(err);
+		} finally {
+			loading = false;
 		}
+	}
+
+	function createStatsVitalsPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		// Field FIRST (renders behind), then text labels on top.
+		const field = new StatsVitalsFieldPass(engine);
+		field.uploadScene(scene);
+		const text = new StatsVitalsTextPass(engine);
+		text.uploadScene(scene);
+		return [field, text];
+	}
+
+	/**
+	 * Vitals as pulsing gauge-orbs: each real stat becomes a living cell whose
+	 * radius + glow = its magnitude, hue by metric family. The whole set orbits
+	 * as one galaxy so the vitals BREATHE instead of sitting as flat text.
+	 */
+	class StatsVitalsFieldPass implements RouteFramePass {
+		private field: LivingFieldPass;
+		constructor(engine: ObservatoryEngine) {
+			this.field = new LivingFieldPass(engine);
+		}
+		uploadScene(scene: RouteSceneModel): void {
+			const receipts = scene.receipts as VitalReceipt[];
+			const data: FieldDatum[] = receipts.map((r) => ({
+				id: `stats:${r.metric}`,
+				score: r.magnitude,
+				hue: vitalHue(r.metric, r.magnitude),
+				energy: 0.4 + 0.6 * r.magnitude,
+				scar: (r.metric.includes('due') || r.metric.includes('Retention')) && r.magnitude < 0.4,
+				kind: 'stats-vital',
+				payload: r
+			}));
+			// Fewer, bigger orbs than a memory galaxy — vitals are gauges, not motes.
+			this.field.setCells(layoutGalaxy(data, { maxRadius: 0.86, minCellR: 0.03, maxCellR: 0.11 }));
+		}
+		compute(encoder: GPUCommandEncoder): void {
+			this.field.compute(encoder);
+		}
+		render(pass: GPURenderPassEncoder): void {
+			this.field.render(pass);
+		}
+		pickAt(ndcX: number, ndcY: number): RoutePick | null {
+			return this.field.pickAt(ndcX, ndcY);
+		}
+		dispose(): void {
+			this.field.dispose();
+		}
+	}
+
+	function vitalHue(metric: string, magnitude: number): [number, number, number] {
+		if (metric.includes('due') || metric.includes('decay')) return magnitude > 0.4 ? FIELD_HUE.caution : FIELD_HUE.forward;
+		if (metric.includes('Coverage') || metric.includes('Embeddings')) return magnitude > 0.7 ? FIELD_HUE.oxygen : FIELD_HUE.bridge;
+		if (metric.includes('Retention') || metric.includes('Strength')) return magnitude < 0.4 ? FIELD_HUE.scarlet : FIELD_HUE.oxygen;
+		return FIELD_HUE.recall;
+	}
+
+	class StatsVitalsTextPass implements RouteFramePass {
+		private text: TextLayerPass;
+		private initPromise: Promise<void> | null = null;
+		private scene: RouteSceneModel | null = null;
+		private focused: string | null = null;
+
+		constructor(engine: ObservatoryEngine) {
+			this.text = new TextLayerPass(engine);
+		}
+
+		uploadScene(scene: RouteSceneModel): void {
+			this.scene = scene;
+			void this.ensureReady().then(() => this.text.setText(this.buildItems(scene)));
+		}
+
+		render(pass: GPURenderPassEncoder): void {
+			this.text.render(pass);
+		}
+
+		pickAt(ndcX: number, ndcY: number): RoutePick | null {
+			const hit = this.text.pickAt(ndcX, ndcY);
+			const next = hit?.id ?? null;
+			if (next !== this.focused) {
+				this.focused = next;
+				this.text.setRunDepth(next, 1);
+			}
+			return hit;
+		}
+
+		dispose(): void {
+			this.text.dispose();
+			this.scene = null;
+		}
+
+		private async ensureReady(): Promise<void> {
+			if (!this.initPromise) this.initPromise = this.text.init();
+			await this.initPromise;
+		}
+
+		private buildItems(scene: RouteSceneModel): TextLayerItem[] {
+			const receipts = scene.receipts as VitalReceipt[];
+			if (receipts.length === 0) return [];
+			const top = 0.68;
+			const step = 1.36 / Math.max(1, receipts.length - 1);
+			return receipts.map((receipt, i) => {
+				const magnitude = clamp01(receipt.magnitude);
+				return {
+					id: `stats:${receipt.metric}`,
+					kind: 'stats-vital',
+					text: receipt.label,
+					x: -0.82,
+					y: top - i * step,
+					size: i < 4 ? 0.036 : 0.027,
+					color: vitalColor(receipt.metric, magnitude),
+					depth: magnitude,
+					weight: Math.max(0.18, Math.sqrt(magnitude)),
+					startFrame: i * 2,
+					revealSpan: 22,
+					maxWidthEm: 48,
+					hitPadX: 0.03,
+					hitPadY: 0.03
+				};
+			});
+		}
+	}
+
+	function buildReceipts(currentStats: SystemStats, currentConsolidation: ConsolidationResult | null): VitalReceipt[] {
+		const entries = Object.entries(currentStats);
+		const numericValues = entries
+			.map(([, value]) => (typeof value === 'number' && Number.isFinite(value) ? Math.abs(value) : null))
+			.filter((value): value is number => value !== null);
+		const maxNumeric = Math.max(1, ...numericValues);
+		const receipts = entries.map(([metric, rawValue], index) => {
+			const magnitude = metricMagnitude(metric, rawValue, maxNumeric);
+			return makeReceipt(metric, rawValue, magnitude, index);
+		});
+		if (currentConsolidation) {
+			for (const [metric, rawValue] of Object.entries(currentConsolidation)) {
+				const prefixed = `consolidate.${metric}`;
+				receipts.push(makeReceipt(prefixed, rawValue, metricMagnitude(prefixed, rawValue, maxNumeric), receipts.length));
+			}
+		}
+		return receipts;
+	}
+
+	function makeReceipt(metric: string, rawValue: unknown, magnitude: number, index: number): VitalReceipt {
+		return {
+			source: {
+				kind: 'scalar',
+				id: metric,
+				scalar: { name: metric, value: magnitude }
+			},
+			label: sanitizeAscii(`${metric} | ${formatValue(metric, rawValue)}`),
+			nodeIndices: [],
+			metric,
+			rawValue,
+			magnitude: clamp01(magnitude)
+		};
+	}
+
+	function metricMagnitude(metric: string, value: unknown, maxNumeric: number): number {
+		if (typeof value === 'number' && Number.isFinite(value)) {
+			if (metric.includes('Coverage')) return clamp01(value > 1 ? value / 100 : value);
+			if (metric.includes('average') || metric.includes('Retention') || metric.includes('Strength')) return clamp01(value);
+			return clamp01(Math.log10(Math.abs(value) + 1) / Math.log10(maxNumeric + 1));
+		}
+		if (typeof value === 'string') {
+			const parsed = Date.parse(value);
+			if (Number.isFinite(parsed)) {
+				const days = Math.max(0, (Date.now() - parsed) / 86_400_000);
+				return clamp01(1 / (1 + days / 30));
+			}
+			return clamp01(value.length / 48);
+		}
+		return 0.5;
+	}
+
+	function formatValue(metric: string, value: unknown): string {
+		if (typeof value === 'number' && Number.isFinite(value)) {
+			if (metric.includes('Coverage')) return `${value.toFixed(value > 1 ? 0 : 2)}%`;
+			if (metric.includes('average')) return `${(value * 100).toFixed(1)}%`;
+			if (Number.isInteger(value)) return value.toLocaleString();
+			return value.toFixed(3);
+		}
+		if (typeof value === 'string') return value;
+		return String(value);
+	}
+
+	function vitalColor(metric: string, magnitude: number): [number, number, number, number] {
+		if (metric.includes('due') || metric.includes('decay')) return magnitude > 0.4 ? AMBER : FLOW;
+		if (metric.includes('Coverage') || metric.includes('Embeddings')) return magnitude > 0.7 ? LUCIFERIN : CYAN;
+		if (metric.includes('Retention') || metric.includes('Strength')) return magnitude < 0.4 ? SCARLET : LUCIFERIN;
+		return FLOW;
+	}
+
+	function sanitizeAscii(value: string): string {
+		return value
+			.replace(/[\u2014\u2013]/g, '-')
+			.replace(/[\u2018\u2019]/g, "'")
+			.replace(/[\u201C\u201D]/g, '"')
+			.replace(/\u2026/g, '...')
+			.replace(/[^\x20-\x7E]/g, '?');
+	}
+
+	function clamp01(value: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.5));
 	}
 </script>
 
-<!-- Phase 5 base coat: a metric-bound WebGPU field behind the page. Degrades to
-     nothing (the page background) without WebGPU; freezes under reduced-motion. -->
-<div class="relative isolate min-h-full">
-<div class="absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
-	{#if stats}
-		<AmbientField
-			count={stats.totalMemories}
-			endangered={endangeredFrac}
-			due={dueFrac}
-			accent={[0.36, 0.92, 0.72]}
-			opacity={0.4}
-		/>
-	{/if}
-</div>
-<div class="p-6 max-w-5xl mx-auto space-y-6">
-	<PageHeader
-		icon="stats"
-		title="System Stats"
-		subtitle="Live health and retention across your memory store"
-		accent="recall"
-	>
-		{#if health}
-			<div class="flex items-center gap-2 px-3 py-1.5 rounded-full glass-subtle text-xs" style="color: {statusColor(health.status)}">
-				<span class="ping-host w-2 h-2 rounded-full" style="color: {statusColor(health.status)}; background: {statusColor(health.status)}"></span>
-				<span class="font-semibold tracking-wide">{health.status.toUpperCase()}</span>
-				<span class="text-muted">v{health.version}</span>
-			</div>
-		{/if}
-	</PageHeader>
-
-	{#if loading}
-		<div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-			{#each Array(8) as _}
-				<div class="h-24 glass-subtle rounded-xl shimmer"></div>
-			{/each}
-		</div>
-	{:else if stats && health}
-		<!-- Key metrics -->
-		<div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-			<div use:reveal={{ delay: 0 }} use:spotlight class="metric-card spotlight-surface lift p-4 glass rounded-xl">
-				<div class="relative z-[1] text-3xl text-bright font-bold">
-					<AnimatedNumber value={stats.totalMemories} />
-				</div>
-				<div class="relative z-[1] text-xs text-dim mt-1">Total Memories</div>
-			</div>
-			<div use:reveal={{ delay: 70 }} use:spotlight class="metric-card spotlight-surface lift p-4 glass rounded-xl">
-				<div class="relative z-[1] text-3xl font-bold" style="color: {stats.averageRetention > 0.7 ? 'var(--color-recall)' : stats.averageRetention > 0.4 ? 'var(--color-warning)' : 'var(--color-decay)'}">
-					<AnimatedNumber value={stats.averageRetention} scale={100} decimals={1} suffix="%" />
-				</div>
-				<div class="relative z-[1] text-xs text-dim mt-1">Avg Retention</div>
-			</div>
-			<div use:reveal={{ delay: 140 }} use:spotlight class="metric-card spotlight-surface lift p-4 glass rounded-xl">
-				<div class="relative z-[1] text-3xl text-bright font-bold">
-					<AnimatedNumber value={stats.dueForReview} />
-				</div>
-				<div class="relative z-[1] text-xs text-dim mt-1">Due for Review</div>
-			</div>
-			<div use:reveal={{ delay: 210 }} use:spotlight class="metric-card spotlight-surface lift p-4 glass rounded-xl">
-				<div class="relative z-[1] text-3xl text-bright font-bold">
-					<AnimatedNumber value={stats.embeddingCoverage} decimals={0} suffix="%" />
-				</div>
-				<div class="relative z-[1] text-xs text-dim mt-1">Embedding Coverage</div>
-			</div>
-		</div>
-
-		<!-- Retention Distribution -->
-		{#if retention}
-			<div use:reveal class="p-6 glass rounded-xl">
-				<h2 class="text-sm text-bright font-semibold mb-4">Retention Distribution</h2>
-				<div class="flex items-end gap-1 h-40">
-					{#each retention.distribution as bucket, i}
-						{@const maxCount = Math.max(...retention.distribution.map(b => b.count), 1)}
-						{@const height = (bucket.count / maxCount) * 100}
-						{@const color = i < 3 ? '#ef4444' : i < 5 ? '#f59e0b' : i < 7 ? '#10b981' : '#6366f1'}
-						<div class="flex-1 flex flex-col items-center gap-1">
-							<span class="text-xs text-dim">{bucket.count}</span>
-							<div class="w-full rounded-t transition-all duration-500" style="height: {height}%; background: {color}; opacity: 0.7; min-height: 2px"></div>
-							<span class="text-xs text-muted">{bucket.range}</span>
-						</div>
-					{/each}
-				</div>
-			</div>
-
-			<!-- Type breakdown -->
-			<div use:reveal class="p-6 glass-subtle rounded-xl">
-				<h2 class="text-sm text-bright font-semibold mb-4">Memory Types</h2>
-				<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-					{#each Object.entries(retention.byType) as [type, count]}
-						<div class="flex items-center gap-2 text-sm rounded-lg px-2 py-1.5 hover:bg-white/[0.03] transition">
-							<div class="w-3 h-3 rounded-full" style="background: {NODE_TYPE_COLORS[type] || '#8B95A5'}; box-shadow: 0 0 8px {NODE_TYPE_COLORS[type] || '#8B95A5'}80"></div>
-							<span class="text-dim capitalize">{type}</span>
-							<span class="text-muted ml-auto tabular-nums"><AnimatedNumber value={count} /></span>
-						</div>
-					{/each}
-				</div>
-			</div>
-
-			<!-- Endangered memories -->
-			{#if retention.endangered.length > 0}
-				<div use:reveal class="p-6 glass rounded-xl !border-decay/20">
-					<h2 class="text-sm text-decay font-semibold mb-3 flex items-center gap-2">
-						<span class="breathe inline-block w-2 h-2 rounded-full bg-decay text-decay"></span>
-						Endangered Memories ({retention.endangered.length})
-					</h2>
-					<div class="space-y-1 max-h-48 overflow-y-auto">
-						{#each retention.endangered.slice(0, 20) as m}
-							<div class="flex items-center gap-3 text-sm rounded-lg px-2 py-1 hover:bg-decay/[0.06] transition">
-								<span class="text-xs text-decay tabular-nums w-9">{(m.retentionStrength * 100).toFixed(0)}%</span>
-								<div class="w-16 h-1 rounded-full bg-deep overflow-hidden shrink-0">
-									<div class="h-full rounded-full bg-decay" style="width: {m.retentionStrength * 100}%"></div>
-								</div>
-								<span class="text-dim truncate">{m.content}</span>
-							</div>
-						{/each}
-					</div>
-				</div>
-			{/if}
-		{/if}
-
-		<!-- Actions -->
-		<div use:reveal class="flex gap-3">
-			<button onclick={runConsolidation}
-				class="lift px-4 py-2 bg-warning/20 border border-warning/40 text-warning text-sm rounded-xl hover:bg-warning/30 transition">
-				Run Consolidation
-			</button>
-		</div>
-	{/if}
-</div>
-</div>
-
-<style>
-	.metric-card {
-		cursor: default;
-	}
-</style>
+<RouteStage
+	organ="stats"
+	seed={`stats-vitals:${stats?.totalMemories ?? 0}:${stats?.dueForReview ?? 0}:${stats?.averageRetention ?? 0}`}
+	scene={statsScene}
+	passes={createStatsVitalsPasses}
+	loading={loading}
+	error={error}
+	onpick={handleRoutePick}
+/>
