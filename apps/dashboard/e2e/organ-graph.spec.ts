@@ -68,6 +68,18 @@ test.describe('/graph organ — real-data WebGPU memory field', () => {
 	}) => {
 		const capture = captureErrors(page);
 
+		// Graph persists its renderer choice in localStorage, and a prior test in
+		// the shared context may have left 'classic'. This test asserts the WebGPU
+		// FIELD is the active/default renderer, so clear the pref before navigating
+		// to get the deterministic default (field where WebGPU exists).
+		await page.addInitScript(() => {
+			try {
+				localStorage.removeItem('vestige-graph-renderer');
+			} catch {
+				/* ignore */
+			}
+		});
+
 		// ── 1. REACHABLE ──────────────────────────────────────────────────────
 		const canvas = await gotoRoute(page, GRAPH);
 		await expect(canvas).toBeAttached();
