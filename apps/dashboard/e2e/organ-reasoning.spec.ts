@@ -1,132 +1,88 @@
-import { test, expect } from '@playwright/test';
-import {
-	BASE,
-	captureErrors,
-	expectNoErrors,
-	gotoRoute,
-	sampleCanvas,
-	isAnimating
-} from './helpers/dashboard';
+import { test, expect, type Page } from '@playwright/test';
+import { BASE, captureErrors, expectNoErrors, gotoRoute, sampleCanvas, isAnimating } from './helpers/dashboard';
 
 // ─────────────────────────────────────────────────────────────────────────
 // ORGAN OWNER SPEC — /reasoning (Reasoning Theater, the deep_reference organ)
 //
-// Proves the 7-point ship-a-working-product contract for THIS organ against
-// the REAL brain (:3931, 1285 memories). Focused + fast — does not duplicate
-// all-routes-smoke; adds the organ-specific proof:
-//   1. REACHABLE      — /dashboard/reasoning mounts its WebGPU canvas.
-//   5. HONEST EMPTY   — before any query the organ shows a calm empty state
-//                       (empty-state DOM copy + the field's empty label), NOT
-//                       fake data or a broken/errored surface.
-//   2. RENDERS REAL   — a real query runs the 8-stage pipeline and the DOM
-//      DATA             materializes REAL numbers straight from deep_reference
-//                       (memoriesAnalyzed / confidence% / Primary Source /
-//                       Evidence count). Asserted on values that only exist
-//                       because the real backend produced them.
-//   3. ALIVE          — the organ field animates after the scene is uploaded.
-//   4. CRASH-FREE     — a grid of in-canvas clicks (drives pass.pickAt over the
-//      CLICK + HOVER    static stage rects) + a hover sweep; the canvas SURVIVES
-//                       every one with zero page/WebGPU errors. Stage centers do
-//                       NOT animate in the vertex shader (only radius/energy do),
-//                       and pickAt() uses the same y = 0.76 - i*(1.52/7) layout
-//                       as buildStageRects(), so picks land on the real targets.
-//
-// Real ground truth captured live via curl POST /api/deep_reference
-// {query:"How does FSRS-6 trust scoring work?"}:
-//   confidence 0.87 · memoriesAnalyzed 26 · activationExpanded 6 ·
-//   evidence 10 · contradictions 0 · superseded 0 · intent "Synthesis".
-// contradictions/superseded are legitimately 0 for this query, so those
-// sections correctly DON'T render — the honest no-fake-data path.
+// The Reasoning Theater is a ZERO-DOM WebGPU organ: the ONLY DOM is a
+// visually-hidden (sr-only) ask input for keyboard + screen-reader access.
+// There is no DOM response panel — the decision trace (beam / ribbon / nucleus),
+// the evidence galaxy, gates, and receipt are all rendered IN-CANVAS. So the
+// 7-point organ contract is proven on PIXELS + the real API round-trip, not DOM
+// widgets, against the REAL brain (:3931):
+//   1. REACHABLE    — /dashboard/reasoning mounts its WebGPU canvas.
+//   5. HONEST-EMPTY — before any query there is NO fabricated response; the
+//                     sr-only ask input is empty and the DOM has no DOM response
+//                     panels. The field is still alive from a passive real
+//                     memory-pool substrate (no invented trace is claimed).
+//   2. RENDERS REAL — a real query runs the 8-stage deep_reference pipeline (200)
+//                     and the field RE-LIGHTS with the real evidence galaxy.
+//   3. ALIVE        — the field animates at rest.
+//   4. CRASH-FREE   — a grid of in-canvas clicks + a hover sweep survive with
+//                     zero page/WebGPU errors.
 // ─────────────────────────────────────────────────────────────────────────
 
 const REASONING = '/reasoning';
 const QUERY = 'How does FSRS-6 trust scoring work?';
 
-test.describe('Organ /reasoning — Reasoning Theater', () => {
+async function askQuery(page: Page, query: string): Promise<void> {
+	const input = page.locator('#reasoning-ask');
+	await input.waitFor({ state: 'attached', timeout: 15_000 });
+	await input.fill(query);
+	await expect(input).toHaveValue(query);
+	await input.press('Enter');
+}
+
+test.describe('Organ /reasoning — Reasoning Theater (zero-DOM)', () => {
 	test('reachable, honest-empty, renders REAL data, alive, and survives click+hover', async ({
 		page
 	}) => {
 		const capture = captureErrors(page);
 
-		// ── 1. REACHABLE: route mounts its WebGPU canvas ───────────────────
+		// ── 1. REACHABLE ───────────────────────────────────────────────────
 		const canvas = await gotoRoute(page, REASONING);
 		await expect(canvas).toBeVisible();
 
-		// ── 5. HONEST EMPTY STATE (pre-query) ──────────────────────────────
-		// The DOM empty panel renders with real, non-faked copy — and NO fake
-		// "Live" data / response sections exist yet.
-		await expect(
-			page.getByText('Ask anything. Vestige will run the full reasoning pipeline and show you its work.')
-		).toBeVisible();
-		// No response artifacts before a query: no Primary Source citation, no
-		// Cognitive Pipeline result, no confidence meter — nothing fabricated.
-		await expect(page.getByText('Primary Source', { exact: true })).toHaveCount(0);
-		await expect(page.getByRole('heading', { name: 'Cognitive Pipeline' })).toHaveCount(0);
-		// The immersive field is present but shows its honest empty label (no
-		// invented scene) — canvas is still a real, sampleable surface.
+		// ── 5. HONEST-EMPTY (pre-query) ────────────────────────────────────
+		// The ask input exists (sr-only) and is empty — no query has run, so no
+		// trace is claimed. There are no DOM response panels to fake at all.
+		const input = page.locator('#reasoning-ask');
+		await expect(input).toHaveValue('');
+		// The field is still sampleable + alive from the passive memory-pool
+		// substrate (an honest "here is your corpus" backdrop, not a fake trace).
+		await page.waitForTimeout(3500);
 		const emptySample = await sampleCanvas(page);
 		expect(emptySample.ok, 'empty-state canvas should be sampleable').toBe(true);
+		expect(
+			emptySample.fillPct,
+			`the rest substrate should fill the field (fillPct=${emptySample.fillPct})`
+		).toBeGreaterThan(20);
 
-		// ── 2. RENDERS REAL DATA: run the real 8-stage pipeline ────────────
-		const input = page.getByPlaceholder('Ask your memory anything…');
-		await expect(input).toBeVisible();
-		await input.click();
-		await input.fill(QUERY);
-		await input.press('Enter');
+		// ── 2. RENDERS REAL DATA — run the real 8-stage pipeline ───────────
+		const respPromise = page.waitForResponse(
+			(r) => /\/api\/deep[_-]reference/.test(r.url()) && r.status() === 200,
+			{ timeout: 30_000 }
+		);
+		await askQuery(page, QUERY);
+		const resp = await respPromise;
+		const payload = (await resp.json()) as { evidence?: unknown[]; confidence?: number };
+		// The real backend produced evidence — the field will lay it out as cells.
+		expect(Array.isArray(payload.evidence), 'deep_reference returns an evidence array').toBe(true);
 
-		const cognitivePipeline = page.getByRole('heading', { name: 'Cognitive Pipeline' });
-		const errorSurface = page.locator('text=/^Error:/');
-		await Promise.race([
-			cognitivePipeline.waitFor({ state: 'visible', timeout: 30_000 }),
-			errorSurface.waitFor({ state: 'visible', timeout: 30_000 })
-		]);
-
-		// A real backend error is a genuine finding — surface it, never hide it.
-		const errored = await errorSurface.isVisible().catch(() => false);
-		if (errored) {
-			const msg = (await errorSurface.textContent())?.trim();
-			throw new Error(`Reasoning Theater surfaced a backend error: ${msg}`);
-		}
-
-		// The pipeline finished (button left its "Reasoning…" limbo).
-		await expect(page.getByRole('button', { name: /Reason(ing…)?/ })).toBeEnabled({
-			timeout: 15_000
-		});
-
-		// These assertions can ONLY pass if real deep_reference data drove the DOM:
-		//   • the recommended Primary Source citation block,
-		await expect(page.getByText('Primary Source', { exact: true })).toBeVisible();
-		//   • an "N analyzed" count (real memoriesAnalyzed from the backend),
-		const analyzed = page.getByText(/\banalyzed\b/).first();
-		await expect(analyzed).toBeVisible();
-		//   • a real confidence percentage in the meter,
-		await expect(page.locator('text=/\\d+%/').first()).toBeVisible();
-		//   • the Evidence header WITH a real non-zero count in parentheses.
-		const evidenceHeading = page.getByRole('heading', { name: /^Evidence/ });
-		await expect(evidenceHeading).toBeVisible();
-		const evidenceText = (await evidenceHeading.textContent()) ?? '';
-		const evCount = Number(evidenceText.match(/\((\d+)\)/)?.[1] ?? '0');
-		expect(evCount, `Evidence count should be real & non-zero (saw "${evidenceText.trim()}")`).toBeGreaterThan(0);
-		// At least one real EvidenceCard rendered from the backend payload.
-		await expect(page.locator('[data-evidence-id]').first()).toBeVisible();
-
-		// ── 3. ALIVE: the organ field animates after the scene upload ──────
-		await page.waitForTimeout(2500);
+		// The field re-lights with the real evidence galaxy.
+		await page.waitForTimeout(3500);
 		const lit = await sampleCanvas(page);
 		expect(lit.ok, 'organ canvas should be sampleable').toBe(true);
 		expect(
 			lit.rendered,
-			`organ field should render non-black (avgLum=${lit.avgLum}, variance=${lit.variance})`
+			`evidence galaxy should render non-black (avgLum=${lit.avgLum}, variance=${lit.variance})`
 		).toBe(true);
+
+		// ── 3. ALIVE ───────────────────────────────────────────────────────
 		const animating = await isAnimating(page);
 		expect(animating, 'organ field should animate (living, not a frozen frame)').toBe(true);
 
 		// ── 4. CRASH-FREE in-canvas click grid + hover sweep ───────────────
-		// The RouteStage field layer is full-bleed fixed inset-0; clicking it
-		// routes through handleFieldClick → pass.pickAt over the 8 static stage
-		// rects. Sweep a grid so several clicks LAND on stage chambers (which
-		// open the DOM stage-receipt aside) and several miss (no-op) — the
-		// canvas must survive every one.
 		const box = await canvas.boundingBox();
 		expect(box, 'canvas should have a bounding box').not.toBeNull();
 		if (box) {
@@ -136,34 +92,24 @@ test.describe('Organ /reasoning — Reasoning Theater', () => {
 				for (let c = 0; c < cols; c++) {
 					const x = box.x + ((c + 0.5) / cols) * box.width;
 					const y = box.y + ((r + 0.5) / rows) * box.height;
-					await page.mouse.move(x, y); // hover sweep
-					await page.mouse.click(x, y); // in-canvas pick
+					await page.mouse.move(x, y);
+					await page.mouse.click(x, y);
 				}
 			}
-			// A hover along the vertical stage column (x≈center) — where the
-			// eight chambers live — must not throw either.
 			for (let r = 0; r < 9; r++) {
 				await page.mouse.move(box.x + box.width * 0.5, box.y + (r / 8) * box.height);
 			}
 		}
 
-		// The canvas is still alive and rendering after all that interaction.
 		const afterInteract = await sampleCanvas(page);
 		expect(
 			afterInteract.rendered,
 			`organ field should still render after clicks/hover (avgLum=${afterInteract.avgLum}, variance=${afterInteract.variance})`
 		).toBe(true);
 
-		// A stage-receipt aside may have opened from a landed pick; if so it must
-		// be a real receipt panel (has the "stage receipt" label), never junk.
-		const receiptAside = page.getByLabel('Reasoning stage receipt');
-		if (await receiptAside.isVisible().catch(() => false)) {
-			await expect(receiptAside.getByText('stage receipt')).toBeVisible();
-		}
-
 		await page.screenshot({ path: 'e2e/screenshots/organ-reasoning.png', fullPage: true });
 
-		// ── 4/5. No real app / WebGPU-validation errors across the whole run ─
+		// ── No real app / WebGPU-validation errors across the whole run ────
 		expectNoErrors(capture);
 	});
 });

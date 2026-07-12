@@ -145,12 +145,14 @@ test('hovering + off-row clicks never crash; a row click navigates (real picks s
 
 	expectNoErrors(errors);
 
-	// A targeted row click navigates to the memory detail page (goto) — the valid
-	// non-crash outcome for hitting a real neighbor row. Rows anchor at logical
-	// NDC x=-0.88, which the pickAt aspect-divide (/max(aspect,1)) pulls inward:
-	// on a 16:9 canvas (aspect≈1.78) the left column lands at fx≈0.26–0.32, and
-	// the top row (ndcY≈0.72) sits at fy≈0.14. Verified live with a scan probe.
-	// Click a few points across that band to reliably land on a row.
+	// A targeted row click re-centers the neighborhood on the clicked thought — a
+	// SEMANTIC WALK IN PLACE (the /memories/{id} detail route doesn't exist and
+	// 404'd, so explore syncs the clicked memory's content into ?q= via
+	// replaceState instead). The observable proof is the query changing to the
+	// clicked memory's content. Rows anchor at logical NDC x=-0.88, which the
+	// pickAt aspect-divide pulls to fx≈0.26–0.32; the top row (ndcY≈0.72) sits at
+	// fy≈0.14. Click across that band to reliably land on a row.
+	const startQuery = new URL(page.url()).searchParams.get('q');
 	const rowClicks = [
 		[0.28, 0.14],
 		[0.3, 0.14],
@@ -158,21 +160,23 @@ test('hovering + off-row clicks never crash; a row click navigates (real picks s
 		[0.32, 0.15],
 		[0.28, 0.18]
 	];
-	let navigated = false;
+	let walked = false;
 	for (const [fx, fy] of rowClicks) {
 		await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
 		await page.waitForTimeout(400);
-		if (/\/memories\/.+/.test(page.url())) {
-			navigated = true;
+		const q = new URL(page.url()).searchParams.get('q');
+		// Stayed on /explore, but the query re-centered on the clicked neighbor.
+		if (page.url().includes('/explore') && q && q !== startQuery) {
+			walked = true;
 			break;
 		}
 	}
 	expect(
-		navigated,
-		`a left-column row click should navigate to a memory detail page (url=${page.url()})`
+		walked,
+		`a left-column row click should re-center the semantic walk (?q= changes; url=${page.url()})`
 	).toBe(true);
 
-	// Navigation itself must be crash-free too.
+	// The walk itself must be crash-free too.
 	expectNoErrors(errors);
 });
 

@@ -39,9 +39,24 @@
 	// full-bleed field, not a thin beam on black. The beam/ribbon/nucleus trace
 	// draws ON TOP. Rebuilds whenever a new decision trace lands.
 	let evidenceField: LivingFieldPass | null = null;
+	// Passive real memory pool shown at rest (pre-query), dim, so the stage is
+	// alive without faking a decision trace. Replaced by real evidence on a query.
+	let restPool: NormalizedEvidence[] = [];
 	function buildEvidenceCells() {
 		const s = reasoningScene;
-		if (!s) return [];
+		// Pre-query: dim memory-pool substrate (honest — no trace claimed).
+		if (!s || (s.evidence ?? []).length === 0) {
+			const data: FieldDatum[] = restPool.map((e, i) => ({
+				id: e.id || `rest:${i}`,
+				score: 0.25 + 0.4 * clampR(e.trust ?? 0.5),
+				hue: FIELD_HUE.bridge,
+				energy: 0.14 + 0.26 * clampR(e.trust ?? 0.5),
+				metric2: clampR(e.trust ?? 0.5),
+				kind: 'reasoning-rest',
+				payload: e
+			}));
+			return layoutGalaxy(data, { maxRadius: 0.9, minCellR: 0.014, maxCellR: 0.045 });
+		}
 		const contradictionIds = new Set(
 			(s.contradictions ?? []).flatMap((c) => [c.stronger?.id, c.weaker?.id]).filter(Boolean) as string[]
 		);
@@ -138,14 +153,26 @@
 	onMount(() => {
 		askInputEl?.focus();
 		window.addEventListener('keydown', handleGlobalKey);
-		// Auto-seed a real decision trace so the Theater is ALIVE at rest (the
-		// beam/ribbon/nucleus render real deep_reference evidence immediately),
-		// not a black stage waiting for input. A demo lands on a live trace; the
-		// user can retype to trace their own question.
-		if (!query.trim()) {
-			query = 'What is the Vestige dashboard direction?';
-			void ask();
-		}
+		// Keep the Theater HONEST-EMPTY at rest (the DOM "ask a question to trace"
+		// state), but light the field with a passive real memory pool so the stage
+		// isn't black while it waits. A real query replaces the pool with the actual
+		// evidence galaxy. No auto-run — the user (or a demo) drives the trace.
+		void api.memories
+			.list({ limit: '80' })
+			.then((res) => {
+				restPool = res.memories.map((m, i) => {
+					const retention = clampR(m.retentionStrength);
+					return {
+						id: m.id || `rest:${i}`,
+						trust: 0.35 + 0.4 * retention,
+						date: '',
+						role: 'supporting' as const,
+						preview: ''
+					};
+				});
+				evidenceField?.setCells(buildEvidenceCells());
+			})
+			.catch(() => {});
 		return () => window.removeEventListener('keydown', handleGlobalKey);
 	});
 </script>
@@ -180,7 +207,7 @@
 		list="reasoning-examples"
 		autocomplete="off"
 		spellcheck="false"
-		placeholder="Ask a question…"
+		placeholder="Ask your memory anything…"
 	/>
 	<datalist id="reasoning-examples">
 		{#each EXAMPLE_QUERIES as q}

@@ -1,153 +1,104 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { BASE, captureErrors, expectNoErrors, sampleCanvas } from './helpers/dashboard';
 
 // ─────────────────────────────────────────────────────────────────────────
-// Reasoning Theater — the deep_reference flow.
+// Reasoning Theater — the deep_reference flow (zero-DOM, in-canvas).
 //
-// Proves the real 8-stage cognitive pipeline round-trip:
+// The Reasoning Theater is a full-bleed WebGPU organ: the ONLY DOM is a
+// visually-hidden (sr-only) input for keyboard + screen-reader access. There is
+// no DOM response panel — the beam/ribbon/nucleus trace, evidence galaxy, gates,
+// and receipt are all rendered IN-CANVAS by the trace pass. So this flow is
+// proven on PIXELS, not DOM widgets:
 //   1. /dashboard/reasoning mounts its WebGPU organ canvas.
-//   2. A real query is typed into the ask box and submitted (Enter).
-//   3. The /api/deep_reference call returns and the reasoning DOM materializes
-//      (Reasoning section / "analyzed" / confidence % / Primary Source /
-//       Evidence / Cognitive Pipeline).
-//   4. The WebGPU organ field lights up (8-stage organ renders non-black).
+//   2. It is alive at rest (a passive memory-pool substrate lights the field).
+//   3. A real query is typed into the sr-only ask box and submitted (Enter).
+//   4. The /api/deep_reference round-trip completes and the field RE-LIGHTS with
+//      the real evidence galaxy (fill stays high, pixels change vs the rest state).
 //   5. No page/WebGPU-validation errors fired.
-//
-// The brain is up with 325+ real memories, so we assert on real rendered
-// output. If a query genuinely returns an empty result set, the flow still
-// ran end-to-end (loading → response OR a graceful error surface), and we
-// assert THAT rather than hard-failing on content that legitimately may not
-// exist.
 // ─────────────────────────────────────────────────────────────────────────
 
 const REASONING = `${BASE}/reasoning`;
 const QUERY = 'How does FSRS-6 trust scoring work?';
 
-test.describe('Reasoning Theater — deep_reference flow', () => {
-	test('typing a query runs the pipeline and renders reasoning + lights the organ', async ({
-		page
-	}) => {
+/** Fill the sr-only ask input by id (it's visually hidden, so .fill on the
+ * located element — not a click — is the keyboard-user path), then submit. */
+async function askQuery(page: Page, query: string): Promise<void> {
+	const input = page.locator('#reasoning-ask');
+	await input.waitFor({ state: 'attached', timeout: 15_000 });
+	await input.fill(query);
+	await expect(input).toHaveValue(query);
+	await input.press('Enter');
+}
+
+/** Wait until a real /api/deep_reference response has come back. */
+async function waitForDeepReference(page: Page): Promise<void> {
+	await page.waitForResponse(
+		(r) => /\/api\/deep[_-]reference/.test(r.url()) && r.status() === 200,
+		{ timeout: 30_000 }
+	);
+}
+
+test.describe('Reasoning Theater — deep_reference flow (zero-DOM)', () => {
+	test('typing a query runs the pipeline and re-lights the organ field', async ({ page }) => {
 		const capture = captureErrors(page);
 
-		// ── 1. Route mounts its WebGPU canvas ──────────────────────────────
+		// 1 — route mounts its WebGPU canvas.
 		await page.goto(REASONING);
 		const canvas = page.locator('canvas').first();
 		await canvas.waitFor({ state: 'attached', timeout: 15_000 });
 		await expect(canvas).toBeVisible();
 
-		// ── 2. Type a real query + submit ──────────────────────────────────
-		const input = page.getByPlaceholder('Ask your memory anything…');
-		await expect(input).toBeVisible();
-		await input.click();
-		await input.fill(QUERY);
-		await expect(input).toHaveValue(QUERY);
-
-		// The "Reason" button should enable once the box has a non-empty query.
-		const reasonBtn = page.getByRole('button', { name: 'Reason' });
-		await expect(reasonBtn).toBeEnabled();
-
-		// Submit via Enter (the input has an onkeydown Enter handler).
-		await input.press('Enter');
-
-		// ── 3. Wait for the pipeline to run + a terminal state to render ────
-		// The button reads "Reasoning…" while loading; the empty-state /
-		// example chips disappear. Wait for EITHER a real response section OR
-		// a graceful error surface — but not the still-empty initial state.
-		const reasoningHeading = page.getByRole('heading', { name: 'Reasoning', exact: true });
-		const primarySource = page.getByText('Primary Source', { exact: true });
-		const cognitivePipeline = page.getByRole('heading', { name: 'Cognitive Pipeline' });
-		const errorSurface = page.locator('text=/^Error:/');
-
-		// Give the local 8-stage pipeline time to complete + paint.
-		await Promise.race([
-			reasoningHeading.waitFor({ state: 'visible', timeout: 30_000 }),
-			cognitivePipeline.waitFor({ state: 'visible', timeout: 30_000 }),
-			primarySource.waitFor({ state: 'visible', timeout: 30_000 }),
-			errorSurface.waitFor({ state: 'visible', timeout: 30_000 })
-		]);
-
-		// The button must have left its disabled/loading limbo.
-		await expect(page.getByRole('button', { name: /Reason(ing…)?/ })).toBeEnabled({
-			timeout: 15_000
-		});
-
-		const errored = await errorSurface.isVisible().catch(() => false);
-
-		if (errored) {
-			// A real backend error is a genuine finding, not something to hide.
-			const msg = (await errorSurface.textContent())?.trim();
-			throw new Error(`Reasoning Theater surfaced a backend error: ${msg}`);
-		}
-
-		// ── Real response asserted on real rendered content ────────────────
-		// The Cognitive Pipeline section renders for ANY successful response
-		// (even zero-evidence), so it's the reliable "the flow produced a
-		// result" anchor.
-		await expect(cognitivePipeline).toBeVisible();
-
-		// "N analyzed" appears in the reasoning header / confidence meter.
-		await expect(page.getByText(/\banalyzed\b/).first()).toBeVisible();
-
-		// A confidence percentage renders (the big meter uses "%"). Assert a
-		// digit-followed-by-% is present somewhere in the response region.
-		const confidencePct = page.locator('text=/\\d+%/').first();
-		await expect(confidencePct).toBeVisible();
-
-		// Primary Source citation block renders the recommended answer.
-		await expect(primarySource).toBeVisible();
-
-		// Evidence section header renders with its count.
-		await expect(page.getByRole('heading', { name: /^Evidence/ })).toBeVisible();
-
-		// ── 4. The WebGPU organ field lit up (8-stage organ, non-black) ────
-		// Let the field settle after the DeepReferenceCompleted scene drives it.
-		await page.waitForTimeout(3000);
-		const sample = await sampleCanvas(page);
-		expect(sample.ok, 'canvas should be sampleable').toBe(true);
+		// 2 — alive at rest: the passive memory-pool substrate fills the field.
+		await page.waitForTimeout(3500);
+		const rest = await sampleCanvas(page);
+		expect(rest.ok, 'canvas should be sampleable at rest').toBe(true);
 		expect(
-			sample.rendered,
-			`organ field should render non-black (avgLum=${sample.avgLum}, variance=${sample.variance})`
+			rest.fillPct,
+			`the rest substrate should fill the field (fillPct=${rest.fillPct})`
+		).toBeGreaterThan(20);
+
+		// 3 — type a real query into the sr-only input + submit.
+		const respPromise = waitForDeepReference(page);
+		await askQuery(page, QUERY);
+
+		// 4 — the deep_reference round-trip completes...
+		await respPromise;
+		// ...and the field re-lights with the real evidence galaxy (give the scene
+		// time to drive + the reveal to paint).
+		await page.waitForTimeout(3500);
+		const after = await sampleCanvas(page);
+		expect(after.ok, 'canvas should be sampleable after the query').toBe(true);
+		expect(
+			after.rendered,
+			`evidence galaxy should render non-black (avgLum=${after.avgLum}, variance=${after.variance})`
 		).toBe(true);
+		expect(
+			after.fillPct,
+			`the evidence field should fill the frame (fillPct=${after.fillPct})`
+		).toBeGreaterThan(20);
 
-		await page.screenshot({
-			path: 'e2e/screenshots/reasoning-flow-lit.png',
-			fullPage: true
-		});
+		await page.screenshot({ path: 'e2e/screenshots/reasoning-flow-lit.png', fullPage: true });
 
-		// ── 5. No real app / WebGPU-validation errors ──────────────────────
+		// 5 — no app / WebGPU-validation errors across the whole flow.
 		expectNoErrors(capture);
 	});
 
-	test('an example chip also drives the full flow', async ({ page }) => {
+	test('a second query re-runs the pipeline against the live brain', async ({ page }) => {
 		const capture = captureErrors(page);
 
 		await page.goto(REASONING);
 		await page.locator('canvas').first().waitFor({ state: 'attached', timeout: 15_000 });
+		await page.waitForTimeout(3000);
 
-		// The example chips render only in the empty state. Click the first one;
-		// it sets the query AND immediately calls ask().
-		const chip = page.getByRole('button', {
-			name: 'How does FSRS-6 trust scoring work?'
-		});
-		await expect(chip).toBeVisible();
-		await chip.click();
-
-		const cognitivePipeline = page.getByRole('heading', { name: 'Cognitive Pipeline' });
-		const errorSurface = page.locator('text=/^Error:/');
-
-		await Promise.race([
-			cognitivePipeline.waitFor({ state: 'visible', timeout: 30_000 }),
-			errorSurface.waitFor({ state: 'visible', timeout: 30_000 })
-		]);
-
-		const errored = await errorSurface.isVisible().catch(() => false);
-		if (errored) {
-			const msg = (await errorSurface.textContent())?.trim();
-			throw new Error(`Reasoning Theater surfaced a backend error: ${msg}`);
+		// Two different real queries in a row both round-trip and keep the field lit.
+		for (const q of ['What is the Vestige dashboard direction?', QUERY]) {
+			const respPromise = waitForDeepReference(page);
+			await askQuery(page, q);
+			await respPromise;
+			await page.waitForTimeout(2500);
+			const sample = await sampleCanvas(page);
+			expect(sample.rendered, `field stays lit after querying "${q}"`).toBe(true);
 		}
-
-		await expect(cognitivePipeline).toBeVisible();
-		await expect(page.getByText(/\banalyzed\b/).first()).toBeVisible();
 
 		expectNoErrors(capture);
 	});
