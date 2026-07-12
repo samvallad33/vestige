@@ -1,8 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // PATTERNS — the cross-project pattern-transfer MSDF field (real-data spec).
 //
-// This organ renders the REAL brain's cross-project pattern transfers as an MSDF
-// text field (TextLayerPass over the observatory RouteStage). It consumes
+// This organ renders the REAL brain's cross-project pattern transfers as a
+// LivingFieldPass galaxy (concentric rings by category) behind an MSDF text
+// field. When there are zero standing patterns it falls back to a real
+// memory-pool substrate so the organ is never black. It consumes
 // GET /api/patterns/cross-project and lays each pattern out as a row:
 //   name | origin_project | transferred_to | category | transfer_count | conf% | last_used
 // Clicking a row toggles a category filter (recolors the matching rows amber).
@@ -96,40 +98,51 @@ test('patterns organ mounts a canvas and renders the REAL cross-project field', 
 	};
 	expect(Array.isArray(payload.projects), 'projects is an array').toBe(true);
 	expect(Array.isArray(payload.patterns), 'patterns is an array').toBe(true);
-	expect(
-		payload.patterns.length,
-		'real brain should have cross-project patterns to render'
-	).toBeGreaterThan(0);
-	const first = payload.patterns[0];
-	expect(typeof first.name).toBe('string');
-	expect(typeof first.category).toBe('string');
-	expect(typeof first.origin_project).toBe('string');
-	expect(Array.isArray(first.transferred_to)).toBe(true);
-	expect(typeof first.transfer_count).toBe('number');
-	expect(typeof first.confidence).toBe('number');
+	// The cross-project pattern set is RECOMPUTED and legitimately empty at times.
+	// The organ must be alive in BOTH states: with patterns it lays out the real
+	// rows; with zero it falls back to a real memory-pool substrate (never black).
+	const hasPatterns = payload.patterns.length > 0;
+	if (hasPatterns) {
+		const first = payload.patterns[0];
+		expect(typeof first.name).toBe('string');
+		expect(typeof first.category).toBe('string');
+		expect(typeof first.origin_project).toBe('string');
+		expect(Array.isArray(first.transferred_to)).toBe(true);
+		expect(typeof first.transfer_count).toBe('number');
+		expect(typeof first.confidence).toBe('number');
+	}
 
 	const errors = captureErrors(page);
 	await gotoRoute(page, '/patterns');
 	// The field loads patterns then reveals row-by-row; settle before sampling.
 	await page.waitForTimeout(3500);
 
-	// 1 + 2 — the canvas renders a non-black field (the real rows lit it up).
+	// 1 + 2 — the canvas renders a non-black field (real rows OR the pool substrate).
 	const sample = await sampleCanvas(page);
 	expect(
 		sample.rendered,
-		`patterns field should render real data (avgLum=${sample.avgLum} variance=${sample.variance})`
+		`patterns field should render (avgLum=${sample.avgLum} variance=${sample.variance})`
 	).toBe(true);
 
-	// Strict anti-false-green: the real cyan pattern rows must be genuinely LIT in
-	// the left column, not a near-black field that only passes the PNG-size branch.
+	// The field must be genuinely LIT, never a near-black PNG-size false-green.
 	const lum = await decodeLeftColumnLuminance(page);
 	expect(lum.maxLum, `patterns field must be genuinely lit (maxLum=${lum.maxLum})`).toBeGreaterThan(
 		60
 	);
-	expect(
-		lum.leftBright,
-		`the 27 pattern rows must render in the left column (leftBright=${lum.leftBright})`
-	).toBeGreaterThan(500);
+	if (hasPatterns) {
+		// With real patterns, the cyan MSDF rows light the left column.
+		expect(
+			lum.leftBright,
+			`the pattern rows must render in the left column (leftBright=${lum.leftBright})`
+		).toBeGreaterThan(500);
+	} else {
+		// Zero patterns → the memory-pool substrate must still fill the frame (the
+		// full-bleed living field), proving the organ is alive, not a black void.
+		expect(
+			sample.fillPct,
+			`empty-pattern substrate must still fill the field (fillPct=${sample.fillPct})`
+		).toBeGreaterThan(20);
+	}
 
 	expectNoErrors(errors);
 });
