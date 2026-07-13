@@ -1,5 +1,7 @@
 <script lang="ts">
-	import MobileNav from '$lib/components/MobileNav.svelte';
+	// Mobile navigation is now the ONE registry-driven os-mobilebar in the root
+	// +layout.svelte (which also handles ?frame=/?capture= hiding). The old
+	// MobileNav is removed to avoid a duplicate mobile bar + a capture-mode leak.
 	let { children } = $props();
 </script>
 
@@ -13,5 +15,4 @@
 -->
 <div class="relative h-[100dvh] w-full overflow-hidden">
 	{@render children()}
-	<MobileNav />
 </div>

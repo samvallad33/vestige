@@ -21,6 +21,7 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import { initTheme } from '$stores/theme';
 	import { OS_ROUTES, DOCK_ROUTES, routesByGroup, HOME_ROUTE } from '$lib/os-routes';
+	import { shell } from '$lib/stores/shell.svelte';
 
 	let { children } = $props();
 	let showCommandPalette = $state(false);
@@ -36,10 +37,12 @@
 	// every dashboard route so no canvas page is a navigation island (the launch
 	// audit: 6 organs had no desktop nav, Palace had none at all).
 	//
-	// Recording cleanliness is preserved by ?capture=1 (or ?capture): the shell
-	// hides so hero footage / ?frame=N captures stay pure canvas.
+	// Recording cleanliness: ?capture=1 (or ?capture) AND ?frame=N (deterministic
+	// still capture) both hide ALL chrome so hero footage / ?frame captures stay
+	// pure canvas. The old MobileNav had no such gate and leaked into captures.
 	let isCaptureMode = $derived(
-		$page.url.searchParams.has('capture') && $page.url.searchParams.get('capture') !== '0'
+		($page.url.searchParams.has('capture') && $page.url.searchParams.get('capture') !== '0') ||
+			$page.url.searchParams.has('frame')
 	);
 	// Show the floating OS shell on real dashboard routes (not marketing, not capture).
 	let showShell = $derived(!isMarketingRoute && !isCaptureMode);
@@ -58,7 +61,12 @@
 		const teardownTheme = initTheme();
 
 		function onKeyDown(e: KeyboardEvent) {
-			if (isMarketingRoute || isCaptureMode) return;
+			// While a full-screen takeover (Memory Cinema, a demo) owns the keyboard,
+			// the OS shell must NOT react to ⌘K/Escape — otherwise ⌘K opens the
+			// palette behind the takeover and steals Escape so it can't be closed.
+			// Cinema is PROTECTED, so we detect its active overlay read-only via the
+			// DOM (.cinema-overlay mounts only while open) rather than editing it.
+			if (isMarketingRoute || isCaptureMode || takeoverActive()) return;
 			if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
 				e.preventDefault();
 				showCommandPalette = !showCommandPalette;
@@ -137,12 +145,60 @@
 		cmdQuery = '';
 		goto(`${base}${href}`);
 	}
+
+	// A full-screen takeover is active if either the shell store was raised OR a
+	// protected Cinema overlay is mounted (read-only DOM probe — we never touch
+	// the protected MemoryCinema component).
+	function takeoverActive(): boolean {
+		if (shell.overlayActive) return true;
+		return typeof document !== 'undefined' && document.querySelector('.cinema-overlay') !== null;
+	}
+
+	// Dialog a11y: trap focus inside the palette while open, mark the rest of the
+	// page inert, and restore focus to the element that opened it on close. A
+	// Svelte action so it wires/tears-down with the palette's mount lifecycle.
+	function paletteDialog(node: HTMLElement) {
+		const opener = document.activeElement as HTMLElement | null;
+		const appRoot = document.querySelector('[data-app-root]') as HTMLElement | null;
+		appRoot?.setAttribute('inert', '');
+		function focusables(): HTMLElement[] {
+			return Array.from(
+				node.querySelectorAll<HTMLElement>(
+					'a[href], button:not([disabled]), input, [tabindex]:not([tabindex="-1"])'
+				)
+			).filter((el) => el.offsetParent !== null);
+		}
+		function onKey(e: KeyboardEvent) {
+			if (e.key !== 'Tab') return;
+			const items = focusables();
+			if (items.length === 0) return;
+			const first = items[0];
+			const last = items[items.length - 1];
+			if (e.shiftKey && document.activeElement === first) {
+				e.preventDefault();
+				last.focus();
+			} else if (!e.shiftKey && document.activeElement === last) {
+				e.preventDefault();
+				first.focus();
+			}
+		}
+		node.addEventListener('keydown', onKey);
+		return {
+			destroy() {
+				node.removeEventListener('keydown', onKey);
+				appRoot?.removeAttribute('inert');
+				opener?.focus?.();
+			}
+		};
+	}
 </script>
 
 <!-- Organs always render FULL-BLEED (they own the viewport as fixed-inset
      WebGPU canvases). The OS shell floats OVER them, so it never fights the
      canvas layout the way the old flex-sidebar did. -->
-{@render children()}
+<div data-app-root class="contents">
+	{@render children()}
+</div>
 
 {#if showShell}
 	<!-- ── Persistent desktop dock (floating, left edge) ──────────────────────
@@ -224,14 +280,20 @@
 {/if}
 
 <!-- ── Command palette — ALL 20 organs, grouped, searchable, everywhere ──── -->
-{#if showCommandPalette && showShell}
+{#if showCommandPalette && showShell && !shell.overlayActive}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="fixed inset-0 z-[100] flex items-start justify-center pt-[10vh] md:pt-[14vh] px-4 bg-void/70 backdrop-blur-md"
 		onkeydown={(e) => { if (e.key === 'Escape') showCommandPalette = false; }}
 		onclick={(e) => { if (e.target === e.currentTarget) showCommandPalette = false; }}
 	>
-		<div class="w-full max-w-xl glass-panel rounded-xl shadow-2xl shadow-synapse/10 overflow-hidden">
+		<div
+			class="w-full max-w-xl glass-panel rounded-xl shadow-2xl shadow-synapse/10 overflow-hidden"
+			role="dialog"
+			aria-modal="true"
+			aria-label="Command palette — jump to any organ"
+			use:paletteDialog
+		>
 			<div class="flex items-center gap-3 px-4 py-3 border-b border-synapse/10">
 				<span class="text-synapse"><Icon name="search" size={16} /></span>
 				<input
