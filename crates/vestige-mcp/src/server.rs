@@ -464,12 +464,25 @@ impl McpServer {
             cog.consolidation_scheduler.record_activity();
         }
 
-        // Save args for event emission (tool dispatch consumes request.arguments)
-        let saved_args = if self.event_tx.is_some() {
-            request.arguments.clone()
-        } else {
-            None
-        };
+        // Capture the args for tracing/event emission BEFORE tool dispatch
+        // consumes request.arguments. The Black Box must populate even in pure
+        // stdio mode (no dashboard socket), so this is NOT gated on event_tx —
+        // only the WebSocket broadcast inside record()/emit is.
+        let saved_args = request.arguments.clone();
+
+        // Agent Black Box: record the opening mcp.call event for this tool
+        // invocation. run_id groups the events of one agent turn; it is derived
+        // from the args (an explicit runId, or a fresh id) so record_result below
+        // can attach the downstream memory events (retrieve/suppress/veto) to the
+        // same run.
+        let trace_run_id = crate::trace_recorder::run_id_for(&saved_args);
+        crate::trace_recorder::record_call(
+            &self.storage,
+            self.event_tx.as_ref(),
+            &trace_run_id,
+            &request.name,
+            &saved_args,
+        );
 
         let result = match request.name.as_str() {
             // ================================================================
@@ -1129,6 +1142,17 @@ impl McpServer {
         // ================================================================
         if let Ok(ref content) = result {
             self.emit_tool_event(&request.name, &saved_args, content);
+            // Agent Black Box: inspect the successful result and record the
+            // downstream memory events (retrieve/suppress/veto/dream) under the
+            // same run_id as the opening mcp.call, so /api/traces, /api/receipts
+            // and the trace:// resource are actually populated.
+            crate::trace_recorder::record_result(
+                &self.storage,
+                self.event_tx.as_ref(),
+                &trace_run_id,
+                &request.name,
+                content,
+            );
         }
 
         let response = match result {
@@ -2447,6 +2471,35 @@ mod tests {
 
         assert!(response.error.is_some());
         assert_eq!(response.error.unwrap().code, -32602); // InvalidParams
+    }
+
+    #[tokio::test]
+    async fn test_tool_call_populates_agent_black_box_trace() {
+        // Regression (#117): the trace recorder was dead code — no production
+        // caller — so agent_traces/receipts/memory_prs never populated. A tool
+        // call must now record at least the opening mcp.call event under the
+        // supplied runId.
+        let (mut server, _dir) = test_server().await;
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let run_id = "test-run-blackbox";
+        let request = make_request(
+            "tools/call",
+            Some(serde_json::json!({
+                "name": "search",
+                "arguments": { "query": "anything", "runId": run_id }
+            })),
+        );
+        let response = server.handle_request(request).await.unwrap();
+        assert!(response.error.is_none(), "tool call should succeed");
+
+        let events = server.storage.get_trace(run_id).expect("read trace");
+        assert!(
+            !events.is_empty(),
+            "the Black Box must record at least the mcp.call event for this run"
+        );
     }
 
     #[tokio::test]

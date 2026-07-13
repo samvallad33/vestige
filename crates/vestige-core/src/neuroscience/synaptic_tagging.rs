@@ -369,14 +369,25 @@ impl CaptureWindow {
         }
     }
 
-    /// Get the start of the capture window
+    /// Get the start of the capture window.
+    ///
+    /// Uses checked Duration + subtraction: `Duration::minutes` panics for an
+    /// out-of-range magnitude and the subtraction can overflow the DateTime
+    /// range, so an unbounded caller-supplied `backward_hours` (via the
+    /// `trigger_importance` MCP tool) would otherwise abort the server. On
+    /// overflow we saturate to the minimum representable time.
     pub fn window_start(&self, event_time: DateTime<Utc>) -> DateTime<Utc> {
-        event_time - Duration::minutes((self.backward_hours * 60.0) as i64)
+        Duration::try_minutes((self.backward_hours * 60.0) as i64)
+            .and_then(|d| event_time.checked_sub_signed(d))
+            .unwrap_or(DateTime::<Utc>::MIN_UTC)
     }
 
-    /// Get the end of the capture window
+    /// Get the end of the capture window. See `window_start` for the overflow
+    /// rationale; on overflow we saturate to the maximum representable time.
     pub fn window_end(&self, event_time: DateTime<Utc>) -> DateTime<Utc> {
-        event_time + Duration::minutes((self.forward_hours * 60.0) as i64)
+        Duration::try_minutes((self.forward_hours * 60.0) as i64)
+            .and_then(|d| event_time.checked_add_signed(d))
+            .unwrap_or(DateTime::<Utc>::MAX_UTC)
     }
 
     /// Check if a time is within the capture window

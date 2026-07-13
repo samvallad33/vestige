@@ -844,6 +844,17 @@ impl PredictiveMemory {
             .write()
             .map_err(|e| PredictiveMemoryError::LockPoisoned(e.to_string()))?;
 
+        // Bound the metadata cache like every sibling cache in this module.
+        // Without a cap it grows unbounded (one entry per memory ever ingested),
+        // a slow leak in a long-running process. This is a best-effort prediction
+        // cache, so evicting an arbitrary entry when over the limit is fine.
+        const MAX_METADATA_ENTRIES: usize = 10_000;
+        if metadata.len() >= MAX_METADATA_ENTRIES
+            && !metadata.contains_key(memory_id)
+            && let Some(evict) = metadata.keys().next().cloned()
+        {
+            metadata.remove(&evict);
+        }
         metadata.insert(
             memory_id.to_string(),
             (content_preview.to_string(), tags.to_vec()),
@@ -1291,13 +1302,26 @@ impl PredictiveMemory {
 
     fn merge_predictions(&self, predictions: Vec<PredictedMemory>) -> Vec<PredictedMemory> {
         let mut merged: HashMap<String, PredictedMemory> = HashMap::new();
+        let min_conf = self.config.min_confidence;
 
         for pred in predictions {
             merged
                 .entry(pred.memory_id.clone())
                 .and_modify(|existing| {
-                    // Combine confidence scores (taking max, with a small boost for multiple signals)
-                    existing.confidence = (existing.confidence.max(pred.confidence) * 1.1).min(1.0);
+                    // Combine confidence scores: take the max, with a small boost
+                    // for multiple corroborating signals. The boost must NOT
+                    // manufacture a threshold crossing — two individually
+                    // sub-min_confidence signals should stay sub-threshold rather
+                    // than combining (via *1.1) into a passing score. So the boost
+                    // is capped at min_confidence when the strongest signal is
+                    // itself below it.
+                    let best = existing.confidence.max(pred.confidence);
+                    let boosted = (best * 1.1).min(1.0);
+                    existing.confidence = if best < min_conf {
+                        boosted.min(min_conf - f64::EPSILON).max(best)
+                    } else {
+                        boosted
+                    };
                 })
                 .or_insert(pred);
         }

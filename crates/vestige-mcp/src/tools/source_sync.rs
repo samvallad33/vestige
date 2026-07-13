@@ -111,7 +111,10 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         None => return Err("Missing arguments".to_string()),
     };
 
-    let max_pages = args.max_pages.unwrap_or(10);
+    // Clamp to the schema's advertised maximum (1000). The JSON-schema `maximum`
+    // is advisory only — a client can still send a larger value — so enforce it
+    // here to bound the paginated fetch loop.
+    let max_pages = args.max_pages.unwrap_or(10).clamp(1, 1000);
 
     match args.source.as_str() {
         "github" => {

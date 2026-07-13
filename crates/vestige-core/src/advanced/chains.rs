@@ -534,13 +534,17 @@ impl MemoryChainBuilder {
             });
         }
 
-        // Calculate overall confidence
+        // Calculate overall confidence as the geometric mean of the CONNECTION
+        // strengths. The root must be the number of connections (the count of
+        // factors in the product), not memories.len() (= connections + 1), which
+        // systematically inflated the reported confidence.
+        let n = path.connections.len().max(1) as f64;
         let confidence = path
             .connections
             .iter()
             .map(|c| c.strength)
             .fold(1.0, |acc, s| acc * s)
-            .powf(1.0 / path.memories.len() as f64); // Geometric mean
+            .powf(1.0 / n); // Geometric mean over connections
 
         // Generate explanation
         let explanation = self.generate_explanation(&steps);

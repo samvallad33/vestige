@@ -45,6 +45,8 @@ Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the stand
 | `VESTIGE_AUTH_TOKEN` | auto-generated | Dashboard + MCP HTTP bearer auth |
 | `VESTIGE_DASHBOARD_ENABLED` | `false` | Set `true` or `1` to enable the web dashboard |
 | `VESTIGE_CONSOLIDATION_INTERVAL_HOURS` | `6` | FSRS-6 decay cycle cadence |
+| `VESTIGE_BACKFILL_AUTOFIRE` | `on` | Retroactive Salience Backfill auto-fire during consolidation. On by default; set `0`/`false`/`off`/`no` to disable. The manual `backfill` tool + CLI stay available either way. When on, promotion is bounded (`stability = MIN(stability * 1.5, stability + 365)`) |
+| `VESTIGE_AUTO_CONSOLIDATE_MERGE` | `on` | Auto concat-merge of near-duplicate memories during consolidation (keeps the strongest, folds the rest in as `[MERGED]` blocks, deletes the originals). On by default; set `0`/`false`/`off`/`no` to disable. Protected (`dedup protect`) memories are never absorbed or deleted by this pass, on or off. |
 
 > **Storage location precedence:** `--data-dir <path>` wins over `VESTIGE_DATA_DIR`; if neither is set, Vestige uses your OS's per-user data directory: `~/Library/Application Support/com.vestige.core/` on macOS, `~/.local/share/vestige/core/` on Linux, `%APPDATA%\vestige\core\` on Windows. Custom paths are directories, are created if missing, expand a leading `~`, and store the database at `<dir>/vestige.db`.
 

@@ -1365,7 +1365,12 @@ impl RewardPattern {
     fn matches(&self, tags: &[String]) -> bool {
         let tag_set: HashSet<_> = tags.iter().cloned().collect();
         let overlap = self.tags.intersection(&tag_set).count();
-        overlap >= self.tags.len().min(tag_set.len()).max(1) / 2
+        // Require at least one shared tag AND at least half of the smaller set to
+        // overlap. The previous integer-division threshold
+        // (`min(a,b).max(1) / 2`) evaluated to 0 for small sets, so `overlap >= 0`
+        // matched EVERY pattern — including disjoint or empty tag sets.
+        let smaller = self.tags.len().min(tag_set.len());
+        overlap >= 1 && overlap * 2 >= smaller
     }
 
     fn update(&mut self, reward: f64) {
