@@ -52,9 +52,16 @@
 	// may apply results / clear the walking label. (GPT-5.6-sol cross-review.)
 	let loadGen = 0;
 
+	// A memory id passed from another organ (e.g. Graph's "Explore Connections")
+	// seeds the walk from THAT thought instead of re-seeding from the newest one,
+	// so the selected memory survives the Graph → Explore handoff.
+	let seedMemoryId: string | null = $state(null);
+
 	onMount(() => {
 		const params = new URLSearchParams(window.location.search);
 		searchQuery = params.get('q') ?? '';
+		// `memory` is the canonical cross-organ selection contract (center = legacy).
+		seedMemoryId = params.get('memory') ?? params.get('center');
 		void loadNeighbors();
 	});
 
@@ -145,13 +152,20 @@
 		// immediately alive, and every click walks onward from a real thought.
 		if (!searchQuery.trim()) {
 			try {
-				const seed = await api.memories.list({ limit: '1' });
+				// If another organ handed us a memory (?memory=<id>), seed the walk
+				// from THAT thought so the selection survives the handoff. Otherwise
+				// auto-seed from the newest memory so landing here is always alive.
+				const seedMemory = seedMemoryId
+					? await api.memories.get(seedMemoryId).catch(() => null)
+					: null;
+				const start = seedMemory ?? (await api.memories.list({ limit: '1' })).memories?.[0] ?? null;
 				if (gen !== loadGen) return; // a newer walk superseded this load
-				const newest = seed.memories?.[0];
-				if (newest?.content) {
-					searchQuery = walkQuery(newest.content);
-					centerId = newest.id;
-					seededFrom = newest.id.slice(0, 8);
+				if (start?.content) {
+					searchQuery = walkQuery(start.content);
+					centerId = start.id;
+					seededFrom = start.id.slice(0, 8);
+					// Consume the one-shot seed so a later re-walk doesn't re-pin it.
+					seedMemoryId = null;
 					// The seeded expedition must be shareable/reproducible too — a
 					// reload mid-ingest would otherwise seed from a different memory.
 					syncQueryToUrl();

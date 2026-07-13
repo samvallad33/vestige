@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
+	import { osHref } from '$lib/os-nav';
 	import Graph3D from '$components/Graph3D.svelte';
 	import RetentionCurve from '$components/RetentionCurve.svelte';
 	import TimeSlider from '$components/TimeSlider.svelte';
@@ -223,13 +224,36 @@
 		if (isColorMode(requestedMode)) {
 			colorMode = requestedMode;
 		}
-		// "Open receipt in Cinema" deep-links here with ?center=<memoryId>, so
-		// the graph loads centered on the receipt's primary memory and the
-		// (protected) Cinema flythrough starts from that exact node. We do not
-		// touch MemoryCinema itself — only seed the graph it renders.
-		const center = sp.get('center');
-		void loadGraph(undefined, center || undefined);
+		// The hero journey deep-links here carrying cognitive context: ?memory=<id>
+		// (canonical; ?center= is the legacy alias) centers the graph on the
+		// receipt's primary memory, and ?cinema=1 AUTO-LAUNCHES the (protected)
+		// Cinema flythrough over that exact evidence set. We NEVER touch
+		// MemoryCinema — a Graph-owned one-shot bridge just clicks its own launch
+		// control once the graph has loaded, so the component stays untouched.
+		const center = sp.get('memory') ?? sp.get('center');
+		const autoCinema = sp.get('cinema') === '1';
+		void loadGraph(undefined, center || undefined).then(() => {
+			if (autoCinema) launchCinemaOnce();
+		});
 	});
+
+	// One-shot bridge: after the graph has real nodes, programmatically trigger
+	// the protected Cinema's own launch button exactly once. Read-only w.r.t.
+	// MemoryCinema — we click its rendered control, never import/modify its state.
+	function launchCinemaOnce() {
+		let tries = 0;
+		const timer = setInterval(() => {
+			tries += 1;
+			const btn = document.querySelector<HTMLButtonElement>('.cinema-launch');
+			if (btn) {
+				btn.click();
+				clearInterval(timer);
+			} else if (tries > 40) {
+				// ~6s: nodes never materialized (empty/errored graph) — give up quietly.
+				clearInterval(timer);
+			}
+		}, 150);
+	}
 
 	function isColorMode(value: string | null): value is ColorMode {
 		return value === 'type' || value === 'state' || value === 'ahagraph';
@@ -708,9 +732,10 @@ disown</code>
 					</button>
 				</div>
 
-				<!-- Explore from this node -->
+				<!-- Explore from this node — carries the selected memory so the walk
+				     starts from THIS thought, not a re-seed from the newest memory. -->
 				<a
-					href="{base}/explore"
+					href={osHref('/explore', { memory: selectedMemory.id })}
 					class="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-dream/10 text-dream-glow text-xs hover:bg-dream/20 transition border border-dream/20"
 				>
 					<Icon name="explore" size={14} /> Explore Connections

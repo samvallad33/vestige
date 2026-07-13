@@ -8,9 +8,9 @@
 	//  the receipt's primary memory, starting the (protected) Cinema flythrough
 	//  over the exact memory set the receipt names.
 	// ═══════════════════════════════════════════════════════════════════════
-	import { goto } from '$app/navigation';
 	import Icon from './Icon.svelte';
 	import type { Receipt } from '$lib/stores/api';
+	import { osGoto } from '$lib/os-nav';
 
 	interface Props {
 		receipt: Receipt;
@@ -24,11 +24,20 @@
 		high: '#f43f5e'
 	};
 
+	// Hero-journey handoff: open the exact receipt in the Graph, centered on its
+	// primary memory, with the full retrieved set focused, then AUTO-LAUNCH Cinema
+	// over that evidence. Base-safe via osGoto (a bare goto('/graph') escaped the
+	// /dashboard base and 404'd); the cognitive context (memory/focus/receipt/
+	// cinema) rides the URL so the whole set survives the navigation.
 	function openInCinema() {
 		const primary = receipt.retrieved[0];
 		if (!primary) return;
-		const focus = receipt.retrieved.join(',');
-		goto(`/graph?center=${encodeURIComponent(primary)}&focus=${encodeURIComponent(focus)}`);
+		osGoto('/graph', {
+			memory: primary,
+			focus: receipt.retrieved,
+			receipt: receipt.receipt_id,
+			cinema: true
+		});
 	}
 </script>
 
