@@ -37,6 +37,10 @@
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let activeRun: string | null = null;
+	// Tracked when the user picks a memory from the canvas. Selection only —
+	// no API call. Mutations are gated to explicit modifier keys (shift/alt)
+	// whose affordances are mirrored by the on-canvas hint line.
+	let selectedMemoryId: string | null = $state(null);
 	let stopReducedMotion: (() => void) | null = null;
 
 	onMount(() => {
@@ -188,6 +192,25 @@
 		if (error) return [statusItem(`ERROR - ${error}`.slice(0, 72), SCARLET)];
 		if (memories.length === 0) return [statusItem('EMPTY MEMORY FIELD', MUTED)];
 
+		// Persistent on-canvas affordance: a plain click selects; shift and alt are
+		// the only modifiers that mutate. Anchored low so it never collides with the
+		// row band above, and shaped as a "memory-hint" kind so it is NEVER picked as
+		// a memory row by the text layer.
+		const hint: MemoryTextItem = {
+			id: 'memories:hint',
+			kind: 'memory-hint',
+			text: 'click: select  ·  shift: suppress  ·  alt: unsuppress',
+			x: -0.82,
+			y: -0.9,
+			size: 0.022,
+			color: MUTED,
+			depth: 0.7,
+			weight: 0.5,
+			startFrame: REVEAL_ANCHOR,
+			revealSpan: 24,
+			maxWidthEm: 50
+		};
+
 		const aspect = viewportAspect();
 		const portrait = aspect < 0.85;
 
@@ -221,6 +244,7 @@
 				maxWidthEm: 30
 			};
 			return [
+				hint,
 				header,
 				...rows.map((memory, i) => {
 					const retrieval = clamp01(memory.retrievalStrength);
@@ -249,27 +273,30 @@
 		const rows = memories.slice(0, ROW_LIMIT);
 		const top = 0.72;
 		const rowStep = 1.5 / Math.max(1, ROW_LIMIT - 1);
-		return rows.map((memory, i) => {
-			const retrieval = clamp01(memory.retrievalStrength);
-			const retention = clamp01(memory.retentionStrength);
-			return {
-				id: `mem:${memory.id}`,
-				kind: 'memory',
-				memoryId: memory.id,
-				text: memoryLine(memory, false),
-				x: -0.88,
-				y: top - i * rowStep,
-				size: 0.026,
-				color: CYAN,
-				depth: Math.max(MIN_VISIBLE_DEPTH, retrieval),
-				weight: retention,
-				startFrame: REVEAL_ANCHOR + i * 2,
-				revealSpan: 20,
-				maxWidthEm: 46,
-				hitPadX: 0.03,
-				hitPadY: 0.015
-			};
-		});
+		return [
+			hint,
+			...rows.map((memory, i) => {
+				const retrieval = clamp01(memory.retrievalStrength);
+				const retention = clamp01(memory.retentionStrength);
+				return {
+					id: `mem:${memory.id}`,
+					kind: 'memory',
+					memoryId: memory.id,
+					text: memoryLine(memory, false),
+					x: -0.88,
+					y: top - i * rowStep,
+					size: 0.026,
+					color: CYAN,
+					depth: Math.max(MIN_VISIBLE_DEPTH, retrieval),
+					weight: retention,
+					startFrame: REVEAL_ANCHOR + i * 2,
+					revealSpan: 20,
+					maxWidthEm: 46,
+					hitPadX: 0.03,
+					hitPadY: 0.015
+				};
+			})
+		];
 	}
 
 	function pointerToNdc(e: PointerEvent | MouseEvent): { x: number; y: number } | null {
@@ -321,39 +348,37 @@
 		if (hit?.kind !== 'memory') return;
 		const item = hit.payload as MemoryTextItem;
 		if (!item.memoryId) return;
-		// Immune actions surfaced right on the field (backend demoability):
+		// Read-intent click must SELECT only — no API call. Mutations are
+		// gated to explicit modifier keys whose affordances are mirrored by
+		// the on-canvas hint line ("shift: suppress  ·  alt: unsuppress").
+		//   plain click  -> select (no mutation)
 		//   shift-click  -> suppress (macrophage engulfs; cell scars)
 		//   alt-click    -> unsuppress (labile release)
-		//   plain click  -> promote (retention boost)
-		try {
-			if (e.shiftKey) {
-				await api.memories.suppress(item.memoryId, 'suppressed from memories field');
-				suppressedIds = new Set(suppressedIds).add(item.memoryId);
-			} else if (e.altKey) {
-				// unsuppress COMPOUNDS down by one — a memory suppressed twice is still
-				// suppressed after one unsuppress. Only clear the scar when the backend
-				// says it's fully released (stillSuppressed=false), else the cell would
-				// lie (render healthy while retrieval is still penalized).
-				const res = await api.memories.unsuppress(item.memoryId);
-				if (!res.stillSuppressed) {
-					const next = new Set(suppressedIds);
-					next.delete(item.memoryId);
-					suppressedIds = next;
+		selectedMemoryId = item.memoryId;
+		if (e.shiftKey || e.altKey) {
+			try {
+				if (e.shiftKey) {
+					await api.memories.suppress(item.memoryId, 'suppressed from memories field');
+					suppressedIds = new Set(suppressedIds).add(item.memoryId);
+				} else if (e.altKey) {
+					// unsuppress COMPOUNDS down by one — a memory suppressed twice is still
+					// suppressed after one unsuppress. Only clear the scar when the backend
+					// says it's fully released (stillSuppressed=false), else the cell would
+					// lie (render healthy while retrieval is still penalized).
+					const res = await api.memories.unsuppress(item.memoryId);
+					if (!res.stillSuppressed) {
+						const next = new Set(suppressedIds);
+						next.delete(item.memoryId);
+						suppressedIds = next;
+					}
 				}
-			} else {
-				const promoted = await api.memories.promote(item.memoryId);
-				memories = memories.map((memory) =>
-					memory.id === promoted.id
-						? { ...memory, retentionStrength: promoted.retentionStrength }
-						: memory
-				);
+				error = null;
+				textPass.setText(buildTextItems());
+				fieldPass?.setCells(buildFieldCells());
+			} catch (err) {
+				error = err instanceof Error ? err.message : 'UNKNOWN MEMORY ACTION ERROR';
+				textPass.setText(buildTextItems());
 			}
-			error = null;
-			textPass.setText(buildTextItems());
-			fieldPass?.setCells(buildFieldCells());
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'UNKNOWN MEMORY ACTION ERROR';
-			textPass.setText(buildTextItems());
 		}
 	}
 </script>

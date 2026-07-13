@@ -26,6 +26,9 @@
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let consolidation: ConsolidationResult | null = $state(null);
+	// Tracked when the user picks a vital. Selection only — no API call.
+	// Consolidation runs only from the explicit [ CONSOLIDATE ] button on settings.
+	let selectedVitalId: string | null = $state(null);
 
 	const statsScene = $derived.by<RouteSceneModel>(() => {
 		const receipts = stats ? buildReceipts(stats, consolidation) : [];
@@ -58,17 +61,13 @@
 		}
 	}
 
-	async function handleRoutePick(pick: RoutePick) {
-		if (pick.kind !== 'stats-vital') return;
-		loading = true;
-		error = null;
-		try {
-			consolidation = await api.consolidate();
-			stats = await api.stats();
-		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
-		} finally {
-			loading = false;
+	function handleRoutePick(pick: RoutePick) {
+		// Plain click on a vital must SELECT/INSPECT only — never mutate.
+		// Consolidation is an expensive real FSRS mutation and lives behind the
+		// EXPLICIT [ CONSOLIDATE ] action button on the settings page. Reading a
+		// number here must not silently rewrite the whole memory system.
+		if (pick.kind === 'stats-vital') {
+			selectedVitalId = pick.id;
 		}
 	}
 

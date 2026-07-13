@@ -18,8 +18,9 @@
 	import AmbientAwarenessStrip from '$lib/components/AmbientAwarenessStrip.svelte';
 	import VerdictBar from '$lib/components/VerdictBar.svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
-	import Icon, { type IconName } from '$lib/components/Icon.svelte';
+	import Icon from '$lib/components/Icon.svelte';
 	import { initTheme } from '$stores/theme';
+	import { OS_ROUTES, DOCK_ROUTES, routesByGroup, HOME_ROUTE } from '$lib/os-routes';
 
 	let { children } = $props();
 	let showCommandPalette = $state(false);
@@ -29,12 +30,19 @@
 		$page.url.pathname.startsWith(base) ? $page.url.pathname.slice(base.length) || '/' : $page.url.pathname
 	);
 	let isMarketingRoute = $derived(dashboardPath === '/waitlist' || dashboardPath.startsWith('/waitlist/'));
-	// Zero-DOM Cognitive OS (Sam, Jul 9 2026): EVERY organ is a full-bleed
-	// all-WebGPU surface. DOM app chrome (sidebar nav, websocket toasts,
-	// ambient orbs, command palette) is bypassed for all dashboard routes so
-	// each route is a single shareable canvas — nav itself is drawn in WebGPU.
-	// Only true marketing/waitlist pages keep DOM. Recordings stay clean.
-	let isImmersiveRoute = $derived(!isMarketingRoute);
+	// The organs are full-bleed WebGPU canvases. The OS shell (persistent dock +
+	// ⌘K palette) is NOT the old flex-sidebar — it FLOATS over the canvas as an
+	// overlay so it never fights the `fixed inset-0` organ layout. It shows on
+	// every dashboard route so no canvas page is a navigation island (the launch
+	// audit: 6 organs had no desktop nav, Palace had none at all).
+	//
+	// Recording cleanliness is preserved by ?capture=1 (or ?capture): the shell
+	// hides so hero footage / ?frame=N captures stay pure canvas.
+	let isCaptureMode = $derived(
+		$page.url.searchParams.has('capture') && $page.url.searchParams.get('capture') !== '0'
+	);
+	// Show the floating OS shell on real dashboard routes (not marketing, not capture).
+	let showShell = $derived(!isMarketingRoute && !isCaptureMode);
 
 	onMount(() => {
 		// Live nervous system: every immersive organ consumes the WebSocket
@@ -50,7 +58,7 @@
 		const teardownTheme = initTheme();
 
 		function onKeyDown(e: KeyboardEvent) {
-			if (isMarketingRoute || isImmersiveRoute) return;
+			if (isMarketingRoute || isCaptureMode) return;
 			if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
 				e.preventDefault();
 				showCommandPalette = !showCommandPalette;
@@ -65,21 +73,9 @@
 				return;
 			}
 			if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-			if (e.key === '/') {
-				e.preventDefault();
-				const searchInput = document.querySelector<HTMLInputElement>('input[type="text"]');
-				searchInput?.focus();
-				return;
-			}
-			// Single-key navigation shortcuts
-			const shortcutMap: Record<string, string> = {
-				g: '/graph', m: '/memories', t: '/timeline', f: '/feed',
-				e: '/explore', i: '/intentions', s: '/stats',
-				r: '/reasoning', a: '/activation', d: '/dreams',
-				c: '/schedule', p: '/importance', u: '/duplicates',
-				x: '/contradictions', n: '/patterns',
-			};
-			const target = shortcutMap[e.key.toLowerCase()];
+			// Single-key navigation shortcuts — derived from the canonical registry
+			// so there is ONE source of truth (no drift between dock/palette/keys).
+			const target = SHORTCUT_MAP[e.key.toLowerCase()];
 			if (target && !e.metaKey && !e.ctrlKey && !e.altKey) {
 				e.preventDefault();
 				goto(`${base}${target}`);
@@ -107,45 +103,34 @@
 		});
 	});
 
-	// Each nav item carries a UNIQUE semantic icon (see Icon.svelte). The old
-	// set reused the same Unicode glyph across multiple items; every entry here
-	// now has a distinct silhouette that reads instantly.
-	const nav: { href: string; label: string; icon: IconName; shortcut: string }[] = [
-		{ href: '/observatory', label: 'Observatory', icon: 'sparkle', shortcut: 'O' },
-		{ href: '/blackbox', label: 'Black Box', icon: 'blackbox', shortcut: 'B' },
-		{ href: '/memory-prs', label: 'Memory PRs', icon: 'memorypr', shortcut: 'Q' },
-		{ href: '/graph', label: 'Graph', icon: 'graph', shortcut: 'G' },
-		{ href: '/reasoning', label: 'Reasoning', icon: 'reasoning', shortcut: 'R' },
-		{ href: '/memories', label: 'Memories', icon: 'memories', shortcut: 'M' },
-		{ href: '/timeline', label: 'Timeline', icon: 'timeline', shortcut: 'T' },
-		{ href: '/feed', label: 'Feed', icon: 'feed', shortcut: 'F' },
-		{ href: '/explore', label: 'Explore', icon: 'explore', shortcut: 'E' },
-		{ href: '/activation', label: 'Activation', icon: 'activation', shortcut: 'A' },
-		{ href: '/dreams', label: 'Dreams', icon: 'dreams', shortcut: 'D' },
-		{ href: '/schedule', label: 'Schedule', icon: 'schedule', shortcut: 'C' },
-		{ href: '/importance', label: 'Importance', icon: 'importance', shortcut: 'P' },
-		{ href: '/duplicates', label: 'Duplicates', icon: 'duplicates', shortcut: 'U' },
-		{ href: '/contradictions', label: 'Contradictions', icon: 'contradictions', shortcut: 'X' },
-		{ href: '/patterns', label: 'Patterns', icon: 'patterns', shortcut: 'N' },
-		{ href: '/intentions', label: 'Intentions', icon: 'intentions', shortcut: 'I' },
-		{ href: '/stats', label: 'Stats', icon: 'stats', shortcut: 'S' },
-		{ href: '/settings', label: 'Settings', icon: 'settings', shortcut: ',' },
-	];
-
-	// Mobile nav shows top 5 items
-	const mobileNav = nav.slice(0, 5);
+	// ── All nav surfaces derive from the ONE canonical registry (os-routes.ts) ──
+	// Single-key shortcut map, built from the registry (no hand-maintained drift).
+	const SHORTCUT_MAP: Record<string, string> = Object.fromEntries(
+		OS_ROUTES.filter((r) => r.shortcut).map((r) => [r.shortcut!.toLowerCase(), r.href])
+	);
 
 	function isActive(href: string, currentPath: string): boolean {
 		const path = currentPath.startsWith(base) ? currentPath.slice(base.length) || '/' : currentPath;
-		if (href === '/graph') return path === '/' || path === '/graph';
-		return path.startsWith(href);
+		if (href === HOME_ROUTE) return path === '/' || path === href;
+		return path === href || path.startsWith(href + '/');
 	}
 
-	let filteredNav = $derived(
-		cmdQuery
-			? nav.filter(n => n.label.toLowerCase().includes(cmdQuery.toLowerCase()))
-			: nav
+	// The command palette searches label + purpose across ALL 20 organs, grouped.
+	let paletteGroups = $derived(
+		routesByGroup()
+			.map((g) => ({
+				group: g.group,
+				routes: cmdQuery
+					? g.routes.filter(
+							(r) =>
+								r.label.toLowerCase().includes(cmdQuery.toLowerCase()) ||
+								r.purpose.toLowerCase().includes(cmdQuery.toLowerCase())
+						)
+					: g.routes
+			}))
+			.filter((g) => g.routes.length > 0)
 	);
+	let paletteFlat = $derived(paletteGroups.flatMap((g) => g.routes));
 
 	function cmdNavigate(href: string) {
 		showCommandPalette = false;
@@ -154,161 +139,131 @@
 	}
 </script>
 
-{#if isMarketingRoute || isImmersiveRoute}
-	{@render children()}
-{:else}
-	<!-- Ambient background orbs -->
-	<div class="ambient-orb ambient-orb-1" aria-hidden="true"></div>
-	<div class="ambient-orb ambient-orb-2" aria-hidden="true"></div>
-	<div class="ambient-orb ambient-orb-3" aria-hidden="true"></div>
+<!-- Organs always render FULL-BLEED (they own the viewport as fixed-inset
+     WebGPU canvases). The OS shell floats OVER them, so it never fights the
+     canvas layout the way the old flex-sidebar did. -->
+{@render children()}
 
-	<!-- Desktop: sidebar + content -->
-	<!-- Mobile: content + bottom nav -->
-	<div class="flex flex-col md:flex-row h-screen overflow-hidden bg-void relative z-[1]">
-		<!-- Desktop Sidebar (hidden on mobile) -->
-		<nav class="hidden md:flex w-16 lg:w-56 flex-shrink-0 glass-sidebar flex-col">
-			<!-- Logo -->
-			<a href="{base}/graph" class="logo-link flex items-center gap-3 px-4 py-5 border-b border-synapse/10">
-				<div class="logo-mark w-8 h-8 rounded-lg bg-gradient-to-br from-dream to-synapse flex items-center justify-center text-bright shadow-lg shadow-synapse/20">
-					<Icon name="logo" size={18} strokeWidth={1.8} />
-				</div>
-				<span class="hidden lg:block text-sm font-semibold text-bright tracking-[0.18em]">VESTIGE</span>
+{#if showShell}
+	<!-- ── Persistent desktop dock (floating, left edge) ──────────────────────
+	     Every route can reach every organ + ⌘K. No canvas page is an island. -->
+	<nav
+		class="os-dock hidden md:flex"
+		aria-label="VestigeOS navigation"
+	>
+		<a
+			href="{base}{HOME_ROUTE}"
+			class="os-dock-logo"
+			title="Palace — home"
+			aria-label="Palace, VestigeOS home"
+		>
+			<Icon name="logo" size={18} strokeWidth={1.8} />
+		</a>
+
+		<div class="os-dock-items">
+			{#each DOCK_ROUTES as item}
+				{@const active = isActive(item.href, $page.url.pathname)}
+				<a
+					href="{base}{item.href}"
+					class="os-dock-link {active ? 'os-dock-active' : ''}"
+					title="{item.label} — {item.purpose}"
+					aria-current={active ? 'page' : undefined}
+				>
+					<span class="os-dock-icon"><Icon name={item.icon} size={20} /></span>
+					<span class="os-dock-label">{item.label}</span>
+					{#if item.shortcut}<span class="os-dock-key">{item.shortcut}</span>{/if}
+				</a>
+			{/each}
+
+			<!-- Command / More — the doorway to all 20 organs. -->
+			<button
+				class="os-dock-link os-dock-command"
+				onclick={() => { showCommandPalette = true; cmdQuery = ''; requestAnimationFrame(() => cmdInput?.focus()); }}
+				title="Command palette (⌘K) — jump to any organ"
+			>
+				<span class="os-dock-icon"><Icon name="command" size={20} /></span>
+				<span class="os-dock-label">Command</span>
+				<span class="os-dock-key">⌘K</span>
+			</button>
+		</div>
+
+		<div class="os-dock-footer">
+			<div class="os-dock-status" title={$isConnected ? 'Live' : 'Offline'}>
+				<span class="os-dot {$isConnected ? 'os-dot-live' : 'os-dot-off'}"></span>
+				<span class="os-dock-label os-dock-status-text">{$isConnected ? 'Live' : 'Offline'}</span>
+			</div>
+			<div class="os-dock-theme"><ThemeToggle /></div>
+		</div>
+	</nav>
+
+	<!-- ── Mobile bottom bar (primary organs + More→palette) ──────────────── -->
+	<nav class="os-mobilebar md:hidden safe-bottom" aria-label="VestigeOS navigation">
+		{#each DOCK_ROUTES.slice(0, 5) as item}
+			{@const active = isActive(item.href, $page.url.pathname)}
+			<a
+				href="{base}{item.href}"
+				class="os-mobile-link {active ? 'os-mobile-active' : ''}"
+				aria-current={active ? 'page' : undefined}
+			>
+				<Icon name={item.icon} size={20} />
+				<span class="os-mobile-label">{item.label}</span>
 			</a>
-
-			<!-- Nav items -->
-			<div class="flex-1 min-h-0 overflow-y-auto py-3 flex flex-col gap-1 px-2">
-				{#each nav as item}
-					{@const active = isActive(item.href, $page.url.pathname)}
-					<a
-						href="{base}{item.href}"
-						class="nav-link group flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 text-sm
-							{active
-								? 'bg-synapse/15 text-synapse-glow border border-synapse/30 shadow-[0_0_12px_rgba(99,102,241,0.15)] nav-active-border'
-								: 'text-dim hover:text-text hover:bg-white/[0.03] border border-transparent'}"
-					>
-						<span class="nav-icon w-5 flex justify-center transition-transform duration-200 group-hover:scale-110">
-							<Icon name={item.icon} size={18} />
-						</span>
-						<span class="hidden lg:block">{item.label}</span>
-						<span class="hidden lg:block ml-auto text-[10px] text-muted/50 font-mono">{item.shortcut}</span>
-					</a>
-				{/each}
-			</div>
-
-			<!-- Quick action -->
-			<div class="px-2 pb-2">
-				<button
-					onclick={() => { showCommandPalette = true; cmdQuery = ''; requestAnimationFrame(() => cmdInput?.focus()); }}
-					class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-muted hover:text-dim hover:bg-white/[0.03] transition border border-subtle/15"
-				>
-					<Icon name="command" size={14} />
-					<span class="hidden lg:block">Command</span>
-					<span class="hidden lg:block ml-auto text-[10px] font-mono bg-white/[0.04] px-1.5 py-0.5 rounded">⌘K</span>
-				</button>
-			</div>
-
-			<!-- Status footer -->
-			<div class="px-3 py-4 border-t border-synapse/10 space-y-2">
-				<div class="flex items-center gap-2 text-xs">
-					<div class="w-2 h-2 rounded-full {$isConnected ? 'bg-recall animate-pulse-glow' : 'bg-decay'}"></div>
-					<span class="hidden lg:block text-dim">{$isConnected ? 'Connected' : 'Offline'}</span>
-					<div class="ml-auto">
-						<ThemeToggle />
-					</div>
-				</div>
-				<div class="hidden lg:block text-xs text-muted space-y-0.5">
-					<div>{$memoryCount} memories</div>
-					<div>{($avgRetention * 100).toFixed(0)}% retention</div>
-					<!-- v2.0.7: surface uptime_secs from the Heartbeat event. Fires
-						 every 30s so this self-refreshes. "up 3d 4h" format. -->
-					{#if $uptimeSeconds > 0}
-						<div title="MCP server uptime">up {formatUptime($uptimeSeconds)}</div>
-					{/if}
-				</div>
-				{#if $suppressedCount > 0}
-					<div class="hidden lg:block pt-1">
-						<ForgettingIndicator />
-					</div>
-				{/if}
-			</div>
-		</nav>
-
-		<!-- Main content -->
-		<main class="flex-1 flex flex-col min-h-0 pb-16 md:pb-0">
-			<AmbientAwarenessStrip />
-			<VerdictBar />
-			<div class="flex-1 min-h-0 overflow-y-auto">
-				{@render children()}
-			</div>
-		</main>
-
-		<!-- Mobile Bottom Nav (hidden on desktop) -->
-		<nav class="md:hidden fixed bottom-0 inset-x-0 glass border-t border-synapse/10 z-40 safe-bottom">
-			<div class="flex items-center justify-around px-2 py-1">
-				{#each mobileNav as item}
-					{@const active = isActive(item.href, $page.url.pathname)}
-					<a
-						href="{base}{item.href}"
-						class="flex flex-col items-center gap-0.5 px-3 py-2 rounded-lg transition-all min-w-[3.5rem]
-							{active ? 'text-synapse-glow' : 'text-muted'}"
-					>
-						<Icon name={item.icon} size={20} />
-						<span class="text-[9px]">{item.label}</span>
-					</a>
-				{/each}
-				<!-- More button opens command palette on mobile -->
-				<button
-					onclick={() => { showCommandPalette = true; cmdQuery = ''; requestAnimationFrame(() => cmdInput?.focus()); }}
-					class="flex flex-col items-center gap-0.5 px-3 py-2 rounded-lg text-muted min-w-[3.5rem]"
-				>
-					<span class="text-lg">⋯</span>
-					<span class="text-[9px]">More</span>
-				</button>
-			</div>
-		</nav>
-	</div>
+		{/each}
+		<button
+			class="os-mobile-link"
+			onclick={() => { showCommandPalette = true; cmdQuery = ''; requestAnimationFrame(() => cmdInput?.focus()); }}
+			aria-label="More organs"
+		>
+			<Icon name="command" size={20} />
+			<span class="os-mobile-label">More</span>
+		</button>
+	</nav>
 
 	<!-- v2.2 Pulse — InsightToast overlay (floating, fixed) -->
 	<InsightToast />
 {/if}
 
-<!-- Command Palette overlay -->
-{#if showCommandPalette && !isMarketingRoute && !isImmersiveRoute}
+<!-- ── Command palette — ALL 20 organs, grouped, searchable, everywhere ──── -->
+{#if showCommandPalette && showShell}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
-		class="fixed inset-0 z-50 flex items-start justify-center pt-[10vh] md:pt-[15vh] px-4 bg-void/60 backdrop-blur-sm"
+		class="fixed inset-0 z-[100] flex items-start justify-center pt-[10vh] md:pt-[14vh] px-4 bg-void/70 backdrop-blur-md"
 		onkeydown={(e) => { if (e.key === 'Escape') showCommandPalette = false; }}
 		onclick={(e) => { if (e.target === e.currentTarget) showCommandPalette = false; }}
 	>
-		<div class="w-full max-w-lg glass-panel rounded-xl shadow-2xl shadow-synapse/10 overflow-hidden">
+		<div class="w-full max-w-xl glass-panel rounded-xl shadow-2xl shadow-synapse/10 overflow-hidden">
 			<div class="flex items-center gap-3 px-4 py-3 border-b border-synapse/10">
 				<span class="text-synapse"><Icon name="search" size={16} /></span>
 				<input
 					bind:this={cmdInput}
 					bind:value={cmdQuery}
 					type="text"
-					placeholder="Navigate to..."
+					placeholder="Jump to any organ…"
 					class="flex-1 bg-transparent text-text text-sm placeholder:text-muted focus:outline-none"
 					onkeydown={(e) => {
-						if (e.key === 'Enter' && filteredNav.length > 0) {
-							cmdNavigate(filteredNav[0].href);
-						}
+						if (e.key === 'Enter' && paletteFlat.length > 0) cmdNavigate(paletteFlat[0].href);
 					}}
 				/>
 				<span class="text-[10px] text-muted font-mono bg-white/[0.04] px-1.5 py-0.5 rounded">esc</span>
 			</div>
-			<div class="max-h-72 overflow-y-auto py-1">
-				{#each filteredNav as item}
-					<button
-						onclick={() => cmdNavigate(item.href)}
-						class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-dim hover:text-text hover:bg-white/[0.04] transition"
-					>
-						<span class="w-5 flex justify-center"><Icon name={item.icon} size={17} /></span>
-						<span>{item.label}</span>
-						<span class="ml-auto text-[10px] text-muted/50 font-mono hidden md:block">{item.shortcut}</span>
-					</button>
+			<div class="max-h-[60vh] overflow-y-auto py-1">
+				{#each paletteGroups as grp}
+					<div class="px-4 pt-3 pb-1 text-[10px] uppercase tracking-[0.16em] text-muted/70 font-mono">{grp.group}</div>
+					{#each grp.routes as item}
+						<button
+							onclick={() => cmdNavigate(item.href)}
+							class="w-full flex items-center gap-3 px-4 py-2 text-left text-sm text-dim hover:text-text hover:bg-white/[0.05] transition"
+						>
+							<span class="w-5 flex justify-center text-synapse/80"><Icon name={item.icon} size={17} /></span>
+							<span class="flex-1 min-w-0">
+								<span class="block">{item.label}</span>
+								<span class="block text-[11px] text-muted/60 truncate">{item.purpose}</span>
+							</span>
+							{#if item.shortcut}<span class="ml-auto text-[10px] text-muted/50 font-mono hidden md:block">{item.shortcut}</span>{/if}
+						</button>
+					{/each}
 				{/each}
-				{#if filteredNav.length === 0}
+				{#if paletteFlat.length === 0}
 					<div class="px-4 py-6 text-center text-sm text-muted">No matches</div>
 				{/if}
 			</div>
@@ -321,24 +276,206 @@
 		padding-bottom: env(safe-area-inset-bottom, 0px);
 	}
 
-	/* Logo breathes a faint synapse glow on hover — the mark feels live. */
-	.logo-mark {
-		transition:
-			transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
-			box-shadow 0.3s ease;
+	/* ── Floating desktop dock ─────────────────────────────────────────────
+	   Overlays the full-bleed canvas at the left edge. Collapsed to icons by
+	   default; expands to labels on hover so it never steals canvas real
+	   estate but stays one glance away. */
+	.os-dock {
+		position: fixed;
+		top: 50%;
+		left: 0.75rem;
+		transform: translateY(-50%);
+		z-index: 60;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 0.35rem;
+		max-height: calc(100dvh - 1.5rem);
+		padding: 0.5rem 0.4rem;
+		border-radius: 1rem;
+		border: 1px solid rgba(129, 140, 248, 0.16);
+		background: rgba(6, 8, 14, 0.72);
+		backdrop-filter: blur(16px);
+		-webkit-backdrop-filter: blur(16px);
+		box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+		width: 3.4rem;
+		transition: width 0.18s ease;
+		overflow: hidden;
 	}
-	.logo-link:hover .logo-mark {
-		transform: rotate(-6deg) scale(1.08);
-		box-shadow:
-			0 0 0 1px rgba(129, 140, 248, 0.4),
-			0 0 22px rgba(99, 102, 241, 0.5);
+	.os-dock:hover,
+	.os-dock:focus-within {
+		width: 13.5rem;
+	}
+	.os-dock-logo {
+		display: grid;
+		place-items: center;
+		width: 2.6rem;
+		height: 2.6rem;
+		margin: 0 auto 0.35rem;
+		border-radius: 0.7rem;
+		background: linear-gradient(135deg, var(--dream, #818cf8), var(--synapse, #6366f1));
+		color: #fff;
+		flex-shrink: 0;
+		box-shadow: 0 0 18px rgba(99, 102, 241, 0.35);
+		transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+	}
+	.os-dock-logo:hover {
+		transform: rotate(-6deg) scale(1.06);
+	}
+	.os-dock-items {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+		overflow-y: auto;
+		min-height: 0;
+		flex: 1;
+	}
+	.os-dock-link {
+		display: flex;
+		align-items: center;
+		gap: 0.7rem;
+		width: 100%;
+		padding: 0.55rem 0.6rem;
+		border-radius: 0.6rem;
+		color: #9aa7c2;
+		font-size: 0.85rem;
+		white-space: nowrap;
+		border: 1px solid transparent;
+		background: none;
+		cursor: pointer;
+		text-align: left;
+	}
+	.os-dock-link:hover {
+		color: #e8ecf1;
+		background: rgba(255, 255, 255, 0.04);
+	}
+	.os-dock-active {
+		color: #a5b4fc;
+		background: rgba(99, 102, 241, 0.15);
+		border-color: rgba(99, 102, 241, 0.3);
+	}
+	.os-dock-icon {
+		width: 1.4rem;
+		display: grid;
+		place-items: center;
+		flex-shrink: 0;
+	}
+	.os-dock-active .os-dock-icon :global(svg) {
+		filter: drop-shadow(0 0 6px rgba(129, 140, 248, 0.6));
+	}
+	.os-dock-label {
+		flex: 1;
+		opacity: 0;
+		transition: opacity 0.12s ease;
+	}
+	.os-dock:hover .os-dock-label,
+	.os-dock:focus-within .os-dock-label {
+		opacity: 1;
+	}
+	.os-dock-key {
+		font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+		font-size: 0.65rem;
+		color: rgba(154, 167, 194, 0.5);
+		opacity: 0;
+	}
+	.os-dock:hover .os-dock-key,
+	.os-dock:focus-within .os-dock-key {
+		opacity: 1;
+	}
+	.os-dock-command {
+		margin-top: 0.25rem;
+		border-top: 1px solid rgba(129, 140, 248, 0.1);
+		border-radius: 0.6rem;
+		color: #7c8aa8;
+	}
+	.os-dock-footer {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.4rem 0.6rem 0.1rem;
+		margin-top: 0.3rem;
+		border-top: 1px solid rgba(129, 140, 248, 0.1);
+	}
+	.os-dock-status {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		font-size: 0.72rem;
+		color: #7c8aa8;
+	}
+	.os-dot {
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: 999px;
+		flex-shrink: 0;
+	}
+	.os-dot-live {
+		background: #29f2a9;
+		box-shadow: 0 0 8px #29f2a9;
+	}
+	.os-dot-off {
+		background: #ff6b6b;
+	}
+	.os-dock-status-text {
+		opacity: 0;
+	}
+	.os-dock:hover .os-dock-status-text,
+	.os-dock:focus-within .os-dock-status-text {
+		opacity: 1;
+	}
+	.os-dock-theme {
+		margin-left: auto;
+		opacity: 0;
+	}
+	.os-dock:hover .os-dock-theme,
+	.os-dock:focus-within .os-dock-theme {
+		opacity: 1;
 	}
 
-	/* The active nav item's icon picks up a soft drop-shadow glow so the
-	   current location reads at a glance even in the collapsed (icon-only)
-	   sidebar. */
-	.nav-link.text-synapse-glow .nav-icon :global(svg),
-	.nav-active-border .nav-icon :global(svg) {
-		filter: drop-shadow(0 0 6px rgba(129, 140, 248, 0.55));
+	/* ── Mobile bottom bar ───────────────────────────────────────────────── */
+	.os-mobilebar {
+		position: fixed;
+		bottom: 0;
+		left: 0;
+		right: 0;
+		z-index: 60;
+		display: flex;
+		align-items: center;
+		justify-content: space-around;
+		padding: 0.3rem 0.4rem;
+		border-top: 1px solid rgba(129, 140, 248, 0.14);
+		background: rgba(6, 8, 14, 0.9);
+		backdrop-filter: blur(14px);
+		-webkit-backdrop-filter: blur(14px);
+	}
+	.os-mobile-link {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.15rem;
+		min-width: 3.2rem;
+		min-height: 2.75rem;
+		padding: 0.35rem 0.5rem;
+		border-radius: 0.6rem;
+		color: #7c8aa8;
+		background: none;
+		border: none;
+		cursor: pointer;
+	}
+	.os-mobile-active {
+		color: #a5b4fc;
+	}
+	.os-mobile-label {
+		font-size: 0.6rem;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.os-dock,
+		.os-dock-label,
+		.os-dock-key,
+		.os-dock-logo,
+		.os-dock-theme,
+		.os-dock-status-text {
+			transition: none;
+		}
 	}
 </style>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { websocket, eventFeed, isConnected, isReconnecting } from '$stores/websocket';
+	import { eventFeed, isConnected, isReconnecting } from '$stores/websocket';
 	import type { VestigeEvent } from '$types';
 	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
 	import type { ObservatoryEngine } from '$lib/observatory/engine';
@@ -20,6 +20,9 @@
 
 	let textPass: TextLayerPass | null = null;
 	let focusedRun: string | null = null;
+	// Tracked when the user picks a feed event from the canvas. Selection only —
+	// no API call. Inspect panels can read this state; the live feed stays intact.
+	let selectedEventId: string | null = $state(null);
 	// engine handle captured in the pass factory so buildTextItems can read the live
 	// viewport aspect (params[6]/[7]) for portrait-only event-line shortening.
 	let engineHandle: ObservatoryEngine | null = null;
@@ -40,6 +43,14 @@
 
 	$effect(() => {
 		textPass?.setText(buildTextItems($eventFeed, $isConnected, $isReconnecting));
+	});
+
+	// Selection state surfaces to the renderer: a chosen event is highlighted
+	// through the same run-depth channel the hover handler uses, but persistently
+	// (until the next pick). This is a pure SELECT, no API call.
+	$effect(() => {
+		if (!textPass) return;
+		textPass.setRunDepth(selectedEventId, 1);
 	});
 
 	function createFeedPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
@@ -444,7 +455,13 @@
 	}
 
 	function handleRoutePick(pick: RoutePick) {
-		if (pick.kind === 'feed-event') websocket.clearEvents();
+		// Plain click on a feed event must SELECT/INSPECT only — never mutate.
+		// Tracking the focused run here (without destroying the live feed) lets
+		// the renderer highlight the chosen event. clearEvents() is reserved
+		// for an explicit, separately-labeled "Clear" control, not a generic pick.
+		if (pick.kind === 'feed-event') {
+			selectedEventId = pick.id;
+		}
 	}
 </script>
 
