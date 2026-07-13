@@ -83,6 +83,7 @@ type GpuResources = {
 	cellBuffer: GPUBuffer;
 	blurHBuffer: GPUBuffer;
 	blurVBuffer: GPUBuffer;
+	optsBuffer: GPUBuffer;
 	splatBindGroup: GPUBindGroup;
 	cellBindGroup: GPUBindGroup;
 	blurHBindGroup: GPUBindGroup;
@@ -99,6 +100,15 @@ export class LivingFieldPass implements FramePass {
 	private engine: ObservatoryEngine;
 	private cells: LivingCell[] = [];
 	private scalars: LivingFieldScalars = {};
+	// 0..1 field intensity — how bright the whole field renders. Text-heavy organs
+	// set this LOW (~0.2) so the field is a dim backdrop the labels read over;
+	// pure-visual organs (graph/timeline) keep it high. Default is a calm backdrop,
+	// NOT a full-brightness blast, because most organs carry readable text.
+	private intensity = 0.28;
+	// Reading well (NDC rect) — the field dims inside it so text reads. hw<=0 = off.
+	private well = { x: 0, y: 0, hw: -1, hh: 0, floor: 0.1, soft: 0.22 };
+	// Portrait well-reflow: last aspect bucket, so compute() only re-writes opts on change.
+	private lastAspectBucket = -999;
 	private resources: GpuResources | null = null;
 	private sampler: GPUSampler | null = null;
 	private splatBindLayout: GPUBindGroupLayout | null = null;
@@ -112,6 +122,19 @@ export class LivingFieldPass implements FramePass {
 
 	constructor(engine: ObservatoryEngine) {
 		this.engine = engine;
+	}
+
+	/**
+	 * Set the field intensity (0..1). LOW (~0.15-0.28) = dim backdrop for text
+	 * organs; HIGH (~0.6-1.0) = the field is the hero (graph/timeline). Call
+	 * before setCells (it's baked into the uploaded cells).
+	 */
+	setIntensity(v: number): void {
+		this.intensity = Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0.28));
+		const d = this.engine.gpuDevice;
+		if (d) this.writeOpts(d); // membrane picks it up immediately
+		// cells read intensity from extra.z, so re-bake the cell buffer too
+		if (this.cells.length) this.setCells(this.cells, this.scalars);
 	}
 
 	/** Upload a fresh set of cells (a data change). Rebuilds the GPU buffer. */
@@ -132,12 +155,14 @@ export class LivingFieldPass implements FramePass {
 		const membraneModule = diagShader(device, 'living-field-membrane', FIELD_MEMBRANE_WGSL);
 		const cellModule = diagShader(device, 'living-field-cell', FIELD_CELL_WGSL);
 
-		// splat + cell share: uniform params (0) + storage cells (1)
+		// splat + cell share: uniform params (0) + storage cells (1) + FieldOpts (2).
+		// (fs_splat ignores binding 2; the cell shader reads it for intensity+well.)
 		this.splatBindLayout = device.createBindGroupLayout({
 			label: 'living-field-splat-layout',
 			entries: [
 				{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
-				{ binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } }
+				{ binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+				{ binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }
 			]
 		});
 		this.blurBindLayout = device.createBindGroupLayout({
@@ -152,6 +177,7 @@ export class LivingFieldPass implements FramePass {
 			label: 'living-field-membrane-layout',
 			entries: [
 				{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+				{ binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
 				{ binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
 				{ binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } }
 			]
@@ -203,6 +229,7 @@ export class LivingFieldPass implements FramePass {
 		let cellBuffer = this.resources?.cellBuffer;
 		let blurHBuffer = this.resources?.blurHBuffer;
 		let blurVBuffer = this.resources?.blurVBuffer;
+		let optsBuffer = this.resources?.optsBuffer;
 		if (!cellBuffer) cellBuffer = device.createBuffer({ label: 'living-field-cells', size: MAX_CELLS * CELL_FLOATS * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
 		if (!blurHBuffer) {
 			blurHBuffer = device.createBuffer({ label: 'living-field-blur-h', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -211,6 +238,10 @@ export class LivingFieldPass implements FramePass {
 		if (!blurVBuffer) {
 			blurVBuffer = device.createBuffer({ label: 'living-field-blur-v', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 			device.queue.writeBuffer(blurVBuffer, 0, new Float32Array([0, 1, 0, 0]));
+		}
+		if (!optsBuffer) {
+			// FieldOpts: intensity + reading-well rect. 8 floats = 32 bytes.
+			optsBuffer = device.createBuffer({ label: 'living-field-opts', size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 		}
 		if (!needsTextures && this.resources) return;
 		this.resources?.fieldA.destroy();
@@ -225,7 +256,8 @@ export class LivingFieldPass implements FramePass {
 			layout: this.splatBindLayout,
 			entries: [
 				{ binding: 0, resource: { buffer: this.engine.paramsBuffer } },
-				{ binding: 1, resource: { buffer: cellBuffer } }
+				{ binding: 1, resource: { buffer: cellBuffer } },
+				{ binding: 2, resource: { buffer: optsBuffer } }
 			]
 		});
 		const cellBindGroup = device.createBindGroup({
@@ -233,13 +265,103 @@ export class LivingFieldPass implements FramePass {
 			layout: this.splatBindLayout,
 			entries: [
 				{ binding: 0, resource: { buffer: this.engine.paramsBuffer } },
-				{ binding: 1, resource: { buffer: cellBuffer } }
+				{ binding: 1, resource: { buffer: cellBuffer } },
+				{ binding: 2, resource: { buffer: optsBuffer } }
 			]
 		});
 		const blurHBindGroup = device.createBindGroup({ label: 'living-field-blur-h-bind', layout: this.blurBindLayout, entries: [{ binding: 0, resource: this.sampler }, { binding: 1, resource: fieldAView }, { binding: 2, resource: { buffer: blurHBuffer } }] });
 		const blurVBindGroup = device.createBindGroup({ label: 'living-field-blur-v-bind', layout: this.blurBindLayout, entries: [{ binding: 0, resource: this.sampler }, { binding: 1, resource: fieldBView }, { binding: 2, resource: { buffer: blurVBuffer } }] });
-		const membraneBindGroup = device.createBindGroup({ label: 'living-field-membrane-bind', layout: this.membraneBindLayout, entries: [{ binding: 0, resource: { buffer: this.engine.paramsBuffer } }, { binding: 3, resource: this.sampler }, { binding: 4, resource: fieldAView }] });
-		this.resources = { cellBuffer, blurHBuffer, blurVBuffer, splatBindGroup, cellBindGroup, blurHBindGroup, blurVBindGroup, membraneBindGroup, fieldA, fieldB, fieldAView, fieldBView, fieldSize: [w, h] };
+		const membraneBindGroup = device.createBindGroup({ label: 'living-field-membrane-bind', layout: this.membraneBindLayout, entries: [{ binding: 0, resource: { buffer: this.engine.paramsBuffer } }, { binding: 2, resource: { buffer: optsBuffer } }, { binding: 3, resource: this.sampler }, { binding: 4, resource: fieldAView }] });
+		this.resources = { cellBuffer, blurHBuffer, blurVBuffer, optsBuffer, splatBindGroup, cellBindGroup, blurHBindGroup, blurVBindGroup, membraneBindGroup, fieldA, fieldB, fieldAView, fieldBView, fieldSize: [w, h] };
+		this.writeOpts(device);
+	}
+
+	/** Write the FieldOpts uniform (intensity + reading-well rect). */
+	private writeOpts(device: GPUDevice): void {
+		if (!this.resources) return;
+		// Portrait: the text layer recentres x and reclaims vertical spread on a
+		// phone (TextLayerPass.portraitAdapt). Apply the SAME transform to the
+		// reading well so the dimmed region still sits under the reflowed text,
+		// driven entirely by the live viewport aspect — nothing hardcoded per page.
+		const well = this.portraitWell();
+		device.queue.writeBuffer(
+			this.resources.optsBuffer,
+			0,
+			new Float32Array([
+				this.intensity,
+				well.x,
+				well.y,
+				well.hw,
+				well.hh,
+				well.floor,
+				well.soft,
+				0
+			])
+		);
+	}
+
+	/** Coarse aspect bucket (matches TextLayerPass) so we only re-write on change. */
+	private aspectBucket(): number {
+		let vw = this.engine.params[6] || 0;
+		let vh = this.engine.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return -999;
+		return Math.round((vw / vh) * 8);
+	}
+
+	/** Mirror TextLayerPass.portraitAdapt's x-recentre + y-reclaim on the well. */
+	private portraitWell(): {
+		x: number;
+		y: number;
+		hw: number;
+		hh: number;
+		floor: number;
+		soft: number;
+	} {
+		if (this.well.hw <= 0) return this.well;
+		let vw = this.engine.params[6] || 0;
+		let vh = this.engine.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return this.well;
+		const aspect = vw / vh;
+		if (aspect >= 0.85) return this.well;
+		const portraitness = clamp01((0.85 - aspect) / (0.85 - 0.46));
+		const xPull = 0.42 * portraitness;
+		const yReclaim = 1 + (1 / Math.max(aspect, 0.2) - 1) * (0.72 * portraitness);
+		// Widen the well to cover the whole narrow column + a little slack.
+		const widen = 1 + 0.25 * portraitness;
+		return {
+			x: this.well.x * (1 - xPull),
+			y: clamp(this.well.y * yReclaim, -0.98, 0.98),
+			hw: Math.min(1.1, this.well.hw * widen),
+			hh: Math.min(1.1, this.well.hh * yReclaim),
+			floor: this.well.floor,
+			soft: this.well.soft
+		};
+	}
+
+	/**
+	 * Set a "reading well": the field emits LESS inside this NDC rectangle so text
+	 * on top reads clearly. hw<=0 (default) disables it → field renders full. Call
+	 * with the region your MSDF text occupies (e.g. the left instrument column).
+	 */
+	setReadingWell(r: { x: number; y: number; hw: number; hh: number; floor?: number; soft?: number }): void {
+		this.well = {
+			x: finite(r.x),
+			y: finite(r.y),
+			hw: finite(r.hw, -1),
+			hh: finite(r.hh),
+			floor: clamp01(r.floor ?? 0.1),
+			soft: Math.max(0.02, finite(r.soft ?? 0.22, 0.22))
+		};
+		const d = this.engine.gpuDevice;
+		if (d) this.writeOpts(d);
 	}
 
 	private uploadBuffers(device: GPUDevice): void {
@@ -276,7 +398,7 @@ export class LivingFieldPass implements FramePass {
 			data[o + 11] = finite(c.spin ?? 1, 1);
 			data[o + 12] = i;
 			data[o + 13] = finite(c.seed ?? phase * 97.13);
-			data[o + 14] = 0;
+			data[o + 14] = this.intensity; // extra.z — per-field intensity the shader dims by
 			data[o + 15] = 0;
 		}
 		// NOTE: do NOT write engine.params[2] (node_count) here. That lane is SHARED
@@ -291,6 +413,14 @@ export class LivingFieldPass implements FramePass {
 		const device = this.engine.gpuDevice;
 		if (!device || !this.resources || !this.splatPipeline || !this.blurPipeline) return;
 		this.ensureResources(device);
+		// Re-write the reading-well opts when the viewport aspect crosses a bucket
+		// (phone rotate / window resize) so the portrait-adapted well tracks the
+		// reflowed text. Cheap (one 32-byte write) and only fires on real changes.
+		const bucket = this.aspectBucket();
+		if (bucket !== this.lastAspectBucket) {
+			this.lastAspectBucket = bucket;
+			this.writeOpts(device);
+		}
 		const res = this.resources;
 		const splat = encoder.beginRenderPass({ label: 'living-field-splat-pass', colorAttachments: [{ view: res.fieldAView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }] });
 		splat.setPipeline(this.splatPipeline);
@@ -354,6 +484,7 @@ export class LivingFieldPass implements FramePass {
 		this.resources?.cellBuffer.destroy();
 		this.resources?.blurHBuffer.destroy();
 		this.resources?.blurVBuffer.destroy();
+		this.resources?.optsBuffer.destroy();
 		this.resources?.fieldA.destroy();
 		this.resources?.fieldB.destroy();
 		this.resources = null;
@@ -362,6 +493,10 @@ export class LivingFieldPass implements FramePass {
 
 function clamp01(v: number): number {
 	return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+	return Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
 }
 
 /** Coerce a value to a finite number so no NaN/Infinity reaches the GPU buffer. */

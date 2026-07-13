@@ -79,6 +79,29 @@ fn orbit(base: vec2f, phase01: f32, spin_scale: f32) -> vec2f {
 	let rr = radius * (1.0 + 0.016 * sin(params.time * 1.1 + phase01 * TAU));
 	return vec2f(cos(ang), sin(ang)) * rr;
 }
+
+// Per-field options (a small field-local uniform, NOT the shared Params). Carries
+// the global intensity + a "reading well" rectangle: the field emits LESS inside
+// the well so text renders on a dim, readable substrate. hw<=0 disables the well.
+struct FieldOpts {
+	intensity: f32,   // 0..1 global field scale (membrane); cells also honor extra.z
+	well_x: f32,      // reading-well rect center, NDC x
+	well_y: f32,      // reading-well rect center, NDC y
+	well_hw: f32,     // half-width NDC (<=0 disables -> factor 1.0)
+	well_hh: f32,     // half-height NDC
+	well_floor: f32,  // min multiplier inside the well (e.g. 0.10)
+	well_soft: f32,   // edge softness NDC (e.g. 0.22)
+	_pad: f32,
+};
+
+// 1.0 outside the well, ramping down to well_floor inside it (a soft rectangle).
+fn reading_well(uv_ndc: vec2f, o: FieldOpts) -> f32 {
+	if (o.well_hw <= 0.0) { return 1.0; }
+	let dx = max(0.0, abs(uv_ndc.x - o.well_x) - o.well_hw);
+	let dy = max(0.0, abs(uv_ndc.y - o.well_y) - o.well_hh);
+	let outside = length(vec2f(dx, dy)) / max(o.well_soft, 0.001);
+	return mix(o.well_floor, 1.0, clamp(outside, 0.0, 1.0));
+}
 `;
 
 // Pass 1 — additive splat of every cell into the low-res density field
@@ -172,6 +195,7 @@ export const FIELD_MEMBRANE_WGSL = /* wgsl */ `
 ${FIELD_COMMON_WGSL}
 
 @group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(2) var<uniform> fopts: FieldOpts;
 @group(0) @binding(3) var field_sampler: sampler;
 @group(0) @binding(4) var field_tex: texture_2d<f32>;
 
@@ -205,16 +229,22 @@ fn fs_membrane(in: VSOut) -> @location(0) vec4f {
 	let membrane = smoothstep(0.05, 0.62, density) * (1.0 - smoothstep(2.0, 4.0, density));
 	let edge = smoothstep(0.008, 0.11, grad) * membrane;
 	let breath = 0.72 + 0.55 * params.pulse;
+	// Cold blue-black substrate: the fullscreen plasma is desaturated + dimmed hard
+	// so it reads as a deep breathing floor, NOT a neon-green wash over text.
 	let blackwater = vec3f(0.006, 0.012, 0.015);
-	let amber = vec3f(0.86, 0.42, 0.12);
-	let oxygen_col = vec3f(0.66, 1.0, 0.37);
-	let scarlet = vec3f(1.0, 0.23, 0.18);
-	var color = blackwater * (0.35 + density * 0.14);
-	color = color + mix(amber, oxygen_col, clamp(oxygen / max(density, 0.001), 0.0, 1.0)) * density * 0.34 * breath;
-	color = color + vec3f(0.91, 1.0, 0.72) * edge * (0.85 + 0.5 * params.pulse);
-	color = color + scarlet * scar * (0.6 + 0.4 * params.pulse);
+	let amber = vec3f(0.70, 0.38, 0.14);
+	let oxygen_col = vec3f(0.42, 0.70, 0.40); // desaturated (was neon 0.66,1.0,0.37)
+	let scarlet = vec3f(0.85, 0.22, 0.18);
+	var color = blackwater * (0.30 + density * 0.10);
+	color = color + mix(amber, oxygen_col, clamp(oxygen / max(density, 0.001), 0.0, 1.0)) * density * 0.10 * breath;
+	color = color + vec3f(0.55, 0.62, 0.50) * edge * (0.28 + 0.18 * params.pulse);
+	color = color + scarlet * scar * (0.28 + 0.18 * params.pulse);
 	let vignette = smoothstep(1.02, 0.10, distance(in.uv, vec2f(0.5)));
-	return vec4f(color * (0.5 + 0.5 * vignette) * params.brightness, 1.0);
+	// Reading well: the field emits LESS where text lives, so labels read. Plus the
+	// per-page intensity. Deeper vignette floor pushes frame edges toward void.
+	let uv_ndc = vec2f(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
+	let well = reading_well(uv_ndc, fopts);
+	return vec4f(color * (0.35 + 0.65 * vignette) * params.brightness * fopts.intensity * well, 1.0);
 }
 `;
 
@@ -225,6 +255,7 @@ ${FIELD_COMMON_WGSL}
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> cells: array<LivingCellGpu>;
+@group(0) @binding(2) var<uniform> fopts: FieldOpts;
 
 const QUAD = array<vec2f, 6>(
 	vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
@@ -236,6 +267,10 @@ struct VSOut {
 	@location(0) uv: vec2f,
 	@location(1) @interpolate(flat) hue_energy: vec4f,
 	@location(2) @interpolate(flat) info: vec4f,
+	// x = field intensity (0..1, extra.z), y = twinkle seed (extra.y)
+	@location(3) @interpolate(flat) extra: vec4f,
+	// the cell's orbited center in NDC, so the reading well is evaluated per cell
+	@location(4) @interpolate(flat) center_ndc: vec2f,
 };
 
 @vertex
@@ -253,6 +288,8 @@ fn vs_cell(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
 	out.uv = corner;
 	out.hue_energy = c.hue_energy;
 	out.info = c.phase_flags;
+	out.extra = c.extra;
+	out.center_ndc = center;
 	return out;
 }
 
@@ -260,21 +297,35 @@ fn vs_cell(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
 fn fs_cell(in: VSOut) -> @location(0) vec4f {
 	let d = length(in.uv);
 	if (d > 1.0) { discard; }
+	// Field intensity (extra.z) dims the WHOLE cell so the field is a backdrop the
+	// text reads over. Text organs set this low; visual organs keep it high.
+	let intensity = clamp(in.extra.x, 0.05, 1.0);
 	let hue = in.hue_energy.rgb;
 	let energy = clamp(in.hue_energy.w, 0.0, 1.0);
 	let flags = in.info.y;
-	let metric2 = clamp(in.info.z, 0.0, 1.0);
 	let selected = select(0.0, 1.0, flags == 1.0 || flags == 3.0 || flags == 5.0 || flags == 7.0);
 	let scar = select(0.0, 1.0, (flags >= 2.0 && flags < 4.0) || flags >= 6.0);
 	let phase = in.info.x;
-	let twinkle = 0.6 + 0.8 * (0.5 + 0.5 * sin(params.time * 2.1 + phase * 26.0));
-	let body = exp(-d * d * 2.7) * (0.55 + energy * 1.7) * twinkle;
+	// twinkle tamed to 0.85..1.05 (amp 0.10) — cells breathe, never strobe over text.
+	let twinkle = 0.85 + 0.10 * (0.5 + 0.5 * sin(params.time * 2.1 + phase * 26.0));
+	// tighter core (d*d*3.2), low amplitude, then a soft-knee ceiling so even a
+	// max-energy selected cell + bloom cannot spike into the text luminance range.
+	var body = exp(-d * d * 3.2) * (0.10 + energy * 0.42) * twinkle;
+	body = body / (1.0 + body * 0.9);
+	// cool the hue toward a cold substrate so raw green/amber can't run away and
+	// beat cyan/ivory text (green channel near-white after threshold-free bloom).
+	let cool = vec3f(0.16, 0.22, 0.30);
+	let tinted = mix(cool, hue, 0.55);
 	let rim = smoothstep(0.98, 0.72, d) * (1.0 - smoothstep(0.72, 0.40, d));
-	let scarlet = vec3f(1.0, 0.23, 0.18);
-	let ivory = vec3f(0.95, 1.0, 0.86);
-	var color = hue * body;
-	color = color + ivory * rim * (0.9 + selected * 1.6);
-	color = color + scarlet * scar * smoothstep(0.16, 0.0, abs(d - 0.74)) * 1.5;
-	return vec4f(color, 1.0);
+	let scarlet = vec3f(0.85, 0.22, 0.18);
+	let ivory = vec3f(0.90, 0.96, 0.86);
+	var color = tinted * body;
+	// rim is a SELECTED-ONLY affordance now (no global white shimmer over text).
+	color = color + ivory * rim * selected * 0.5;
+	color = color + scarlet * scar * smoothstep(0.16, 0.0, abs(d - 0.74)) * 0.35;
+	// selected/scar stay a touch brighter than the dimmed backdrop so meaning survives.
+	let keep = max(intensity, (selected + scar) * 0.7);
+	let well = reading_well(in.center_ndc, fopts);
+	return vec4f(color * keep * well, 1.0);
 }
 `;

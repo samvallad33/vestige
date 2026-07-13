@@ -177,6 +177,10 @@
 	function createRecorderPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
 		const field = new LivingFieldPass(engine);
 		runsField = field;
+		// Text-heavy organ: the field is a DIM backdrop, and the centered content
+		// column (max-w-6xl) needs a wide reading well so labels/values stay legible.
+		field.setIntensity(0.24);
+		field.setReadingWell({ x: 0, y: 0, hw: 0.66, hh: 0.85, floor: 0.08, soft: 0.25 });
 		field.setCells(buildRunCells());
 		const fieldWrapper: RouteFramePass = {
 			compute: (encoder) => field.compute(encoder),
@@ -210,7 +214,7 @@
 	onpick={handleRoutePick}
 />
 
-<div class="relative z-10 mx-auto max-w-6xl px-5 py-6">
+<div class="blackbox-shell relative z-10 mx-auto max-w-6xl px-5 py-6">
 	<PageHeader
 		icon="blackbox"
 		title="Agent Black Box"
@@ -394,7 +398,7 @@
 					<!-- Pulse set: the memories touched so far -->
 					<div class="pulse glass" use:reveal>
 						<h3 class="panel-title">
-							Memory pulse <span class="text-dim">— touched this run</span>
+							Memory pulse <span class="text-dim">· touched this run</span>
 						</h3>
 						{#if pulsedIds.length === 0}
 							<p class="empty">No memories touched yet.</p>
@@ -409,7 +413,7 @@
 
 					<!-- Producer status — honest about what's live vs. off-by-default -->
 					<div class="producers glass" use:reveal>
-						<h3 class="panel-title">Event producers <span class="text-dim">— this run</span></h3>
+						<h3 class="panel-title">Event producers <span class="text-dim">· this run</span></h3>
 						<ul class="producer-list">
 							<li class="producer ok">
 								<span class="p-dot"></span> mcp.call · memory.write · memory.retrieve · memory.suppress
@@ -440,7 +444,7 @@
 					{#if receipts.length}
 						<div class="receipts-panel glass" use:reveal>
 							<h3 class="panel-title">
-								Receipts <span class="text-dim">— proof behind retrievals</span>
+								Receipts <span class="text-dim">· proof behind retrievals</span>
 							</h3>
 							<div class="receipts-grid">
 								{#each receipts.slice(0, 2) as r (r.receipt_id)}
@@ -501,6 +505,63 @@
 </div>
 
 <style>
+	/* ░░ PORTRAIT / NARROW REFLOW ░░
+	   Gated on viewport aspect (not a hardcoded phone width) to mirror the
+	   engine's aspect<0.85 portrait branch, so the 1440px desktop render is
+	   byte-identical. On a phone the shared PageHeader lays the title block and
+	   the action pills on one non-wrapping row that is wider than the screen —
+	   the Export pill clips off the right edge and the subtitle gets crushed into
+	   a thin column beside the icon rail. Here we stack the header: full-width
+	   title/subtitle on top, the pills wrapping to their own left-aligned row
+	   below so every label is fully readable and reachable. */
+	@media (max-aspect-ratio: 85/100) {
+		.blackbox-shell :global(header) {
+			flex-direction: column;
+			align-items: stretch;
+			gap: 0.85rem;
+		}
+		/* Title block reclaims the full width so the subtitle reads as a sentence,
+		   not a 1-2-word vertical ribbon. */
+		.blackbox-shell :global(header > div:first-child) {
+			min-width: 0;
+		}
+		/* Action pills: their own row, left-aligned, allowed to wrap so the
+		   Export pill can never overflow the right screen edge. */
+		.blackbox-shell :global(header > div:last-child) {
+			flex: 0 0 auto;
+			flex-wrap: wrap;
+			justify-content: flex-start;
+		}
+		/* Let the wide Export pill shrink its own box and wrap its label instead
+		   of running off-screen. */
+		.export-btn {
+			max-width: 100%;
+			white-space: normal;
+			text-align: left;
+		}
+		/* The shared (app) shell is a fixed 100dvh overflow-hidden box (required so
+		   the zero-DOM WebGPU organs' absolute-inset canvases get a real height).
+		   That means this DOM content column cannot scroll with the page — so make
+		   the blackbox shell itself the scroll container on portrait, and pad its
+		   bottom so the lowest content clears the fixed MobileNav FAB. */
+		.blackbox-shell {
+			height: 100dvh;
+			overflow-y: auto;
+			overflow-x: hidden;
+			-webkit-overflow-scrolling: touch;
+			padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+		}
+		/* On portrait the two-column grid collapses to one column, so the Runs
+		   aside no longer needs its own sticky + max-height:100vh + internal scroll
+		   box (which parked its lowest rows behind the FAB). Let it flow inside the
+		   shell scroller instead. */
+		.blackbox-shell .runs {
+			position: static;
+			max-height: none;
+			overflow-y: visible;
+		}
+	}
+
 	.mode-toggle,
 	.export-btn {
 		display: inline-flex;

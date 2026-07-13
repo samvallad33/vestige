@@ -7,6 +7,7 @@
 	 * (Increment 3 gate, spec §4).
 	 */
 	import { onMount, onDestroy } from 'svelte';
+	import { base } from '$app/paths';
 	import { ObservatoryEngine, type EngineStatus } from '$lib/observatory/engine';
 	import type { DemoMode } from '$lib/observatory/types';
 
@@ -65,13 +66,19 @@
 ></canvas>
 
 {#if status.state === 'unsupported' || status.state === 'error'}
-	<!-- Readable fallback — never a crash (spec §4 Increment 3 gate). -->
+	<!-- Readable fallback — never a crash (spec §4 Increment 3 gate). Not a dead
+	     end: the classic Graph view is pure SVG and renders your REAL memory
+	     graph without WebGPU, so we route the user straight there. The DOM
+	     MobileNav (bottom FAB) also stays reachable, so navigation never breaks. -->
 	<div class="fallback" role="alert">
-		<div class="fallback-title">MEMORY FIELD OFFLINE</div>
-		<div class="fallback-reason">{status.reason}</div>
+		<div class="fallback-title">LIVE FIELD NEEDS WEBGPU</div>
+		<div class="fallback-reason">
+			This device can&rsquo;t render the animated memory field yet.
+		</div>
+		<a class="fallback-cta" href="{base}/graph">OPEN THE GRAPH VIEW →</a>
 		<div class="fallback-hint">
-			WebGPU is required for the Observatory. Chrome 113+, Edge 113+, or Safari 18+ —
-			the classic <a href="./graph">Graph view</a> works everywhere.
+			The Graph is pure SVG and shows your real memories on any browser. For the
+			full living field, use Chrome&nbsp;121+, Edge&nbsp;121+, or Safari&nbsp;18+.
 		</div>
 	</div>
 {/if}
@@ -116,16 +123,26 @@
 		opacity: 0.85;
 	}
 
+	.fallback-cta {
+		margin-top: 0.35rem;
+		padding: 0.7rem 1.2rem;
+		border-radius: 999px;
+		border: 1px solid rgba(0, 245, 212, 0.45);
+		background: rgba(0, 245, 212, 0.1);
+		color: #7fe6c0;
+		font-size: 0.82rem;
+		letter-spacing: 0.14em;
+		text-decoration: none;
+		text-shadow: 0 0 18px rgba(0, 245, 212, 0.35);
+	}
+	.fallback-cta:active {
+		background: rgba(0, 245, 212, 0.2);
+	}
+
 	.fallback-hint {
 		color: #7c8a97;
 		font-size: 0.75rem;
 		max-width: 34rem;
 		line-height: 1.6;
-	}
-
-	.fallback-hint a {
-		color: #cfe9ff;
-		text-decoration: underline;
-		text-underline-offset: 3px;
 	}
 </style>

@@ -15,8 +15,32 @@
 	type ActivationTextItem = TextLayerItem & { memoryId?: string };
 
 	const CYAN = [...rgb01('#22C7DE'), 1] satisfies [number, number, number, number];
+	const TITLE = [...rgb01('#EAF3FF'), 0.96] satisfies [number, number, number, number];
+	const HEADER = [...rgb01('#7FA0B8'), 0.72] satisfies [number, number, number, number];
 	const ROW_LIMIT = 36;
+	// Phone shows fewer result rows so each gets real breathing room.
+	const ROW_LIMIT_PORTRAIT = 16;
 	const SEARCH_LIMIT = 40;
+	// Pre-revealed anchor: the shared reveal ages every glyph by a GLOBAL index, so a
+	// long list ages past the ~720-frame wrapped clock and all but the first rows
+	// never appear. Anchor deeply negative so every row is revealed on frame 0.
+	const REVEAL_ANCHOR = -100000;
+
+	let engineRef: ObservatoryEngine | null = null;
+
+	// Portrait / narrow viewport from the LIVE engine aspect (params[6]/[7]) with a
+	// window fallback — the same signal TextLayerPass.portraitAdapt uses. Nothing is
+	// hardcoded to a phone width; desktop (aspect>=0.85) is untouched.
+	function isPortrait(): boolean {
+		let vw = engineRef?.params[6] || 0;
+		let vh = engineRef?.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return false;
+		return vw / vh < 0.85;
+	}
 
 	let results = $state<Memory[]>([]);
 	let total = $state(0);
@@ -84,33 +108,78 @@
 		return clamp01(memory.retentionStrength ?? relevance(memory));
 	}
 
-	function activationLine(memory: Memory): string {
+	function activationLine(memory: Memory, portrait: boolean): string {
+		if (portrait) {
+			// Phone: drop the id column and keep the primary content + the ONE headline
+			// metric (relevance %). 'title  92%' reads at a glance; full detail on tap.
+			const snippet = sanitizeAscii(memory.content).replace(/\s+/g, ' ').trim().slice(0, 34);
+			return sanitizeAscii(`${snippet}  ${Math.round(relevance(memory) * 100)}%`);
+		}
 		const snippet = sanitizeAscii(memory.content).replace(/\s+/g, ' ').trim().slice(0, 54);
 		const score = Math.round(relevance(memory) * 100);
 		return sanitizeAscii(`${snippet} | ${memory.id.slice(0, 8)} | ${score}%`);
 	}
 
 	function buildTextItems(): ActivationTextItem[] {
-		const rows = results.slice(0, ROW_LIMIT);
-		const top = 0.72;
-		const rowStep = 1.5 / Math.max(1, ROW_LIMIT - 1);
-		return rows.map((memory, i) => ({
-			id: `activation:${memory.id}`,
-			kind: 'activation-result',
-			memoryId: memory.id,
-			text: activationLine(memory),
-			x: -0.88,
-			y: top - i * rowStep,
-			size: 0.026,
-			color: CYAN,
-			depth: relevance(memory),
-			weight: retentionOrScore(memory),
-			startFrame: i * 2,
-			revealSpan: 20,
-			maxWidthEm: 46,
+		const portrait = isPortrait();
+		const rowLimit = portrait ? ROW_LIMIT_PORTRAIT : ROW_LIMIT;
+		const rows = results.slice(0, rowLimit);
+		// Phone gets a title + column header and a shorter, generously spaced list;
+		// desktop keeps the dense edge-to-edge result log exactly as authored.
+		const top = portrait ? 0.6 : 0.72;
+		const span = portrait ? 1.28 : 1.5;
+		const rowStep = span / Math.max(1, rowLimit - 1);
+		const items: ActivationTextItem[] = [];
+
+		if (portrait) {
+			items.push({
+				id: 'activation:title',
+				kind: 'activation-title',
+				text: 'ACTIVATION',
+				x: -0.62,
+				y: 0.86,
+				size: 0.06,
+				color: TITLE,
+				depth: 1,
+				weight: 0.9,
+				startFrame: REVEAL_ANCHOR,
+				revealSpan: 1
+			});
+			items.push({
+				id: 'activation:header',
+				kind: 'activation-header',
+				text: `MEMORY / RELEVANCE  (${Math.min(results.length, rowLimit)})`,
+				x: -0.62,
+				y: 0.74,
+				size: 0.03,
+				color: HEADER,
+				depth: 0.9,
+				weight: 0.5,
+				startFrame: REVEAL_ANCHOR,
+				revealSpan: 1
+			});
+		}
+
+		rows.forEach((memory, i) => {
+			items.push({
+				id: `activation:${memory.id}`,
+				kind: 'activation-result',
+				memoryId: memory.id,
+				text: activationLine(memory, portrait),
+				x: portrait ? -0.62 : -0.88,
+				y: top - i * rowStep,
+				size: portrait ? 0.03 : 0.026,
+				color: CYAN,
+				depth: portrait ? Math.max(0.7, relevance(memory)) : relevance(memory),
+				weight: retentionOrScore(memory),
+				startFrame: portrait ? REVEAL_ANCHOR + i * 2 : i * 2,
+				revealSpan: portrait ? 1 : 20,
+				maxWidthEm: 46,
 				hitPadX: 0.03,
 				hitPadY: 0.015
-		}));
+			});
+		});
+		return items;
 	}
 
 	let activationScene: RouteSceneModel = $derived({
@@ -149,6 +218,16 @@
 		private field: LivingFieldPass;
 		constructor(engine: ObservatoryEngine) {
 			this.field = new LivingFieldPass(engine);
+			// Landscape/desktop: the field is the hero (bright spread). Portrait: the
+			// same 0.75 field becomes a blinding wall of blobs the result rows can't be
+			// read over, so DIM it and open a reading well behind the label column so
+			// the text sits on a calm backdrop. Both derive from the live aspect only.
+			if (isPortrait()) {
+				this.field.setIntensity(0.24);
+				this.field.setReadingWell({ x: -0.3, y: -0.03, hw: 0.7, hh: 0.9, floor: 0.08, soft: 0.25 });
+			} else {
+				this.field.setIntensity(0.75);
+			}
 		}
 		uploadScene(scene: RouteSceneModel): void {
 			const nodes = scene.nodes as RouteNode[];
@@ -182,6 +261,7 @@
 	}
 
 	function createActivationPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		engineRef = engine;
 		// Field FIRST (renders behind the MSDF labels), then the readable text rows.
 		const field = new ActivationFieldPass(engine);
 		field.uploadScene(scene);

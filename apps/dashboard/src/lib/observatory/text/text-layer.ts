@@ -65,9 +65,48 @@ export class TextLayerPass implements FramePass {
 	private runs: TextRunRect[] = [];
 	private runDepths = new Map<string, number>();
 	private initPromise: Promise<void> | null = null;
+	// Portrait reflow re-lays text when the viewport aspect changes (rotate/resize).
+	private onResize: (() => void) | null = null;
+	private resizeRaf = 0;
+	private lastAspectBucket = -1;
 
 	constructor(engine: ObservatoryEngine) {
 		this.engine = engine;
+		this.installResizeReflow();
+	}
+
+	/**
+	 * Re-lay the text when the viewport aspect crosses a portrait bucket (e.g. the
+	 * user rotates the phone, or the window is resized narrow). Bucketed + rAF-
+	 * debounced so a continuous drag doesn't thrash the glyph buffer.
+	 */
+	private installResizeReflow(): void {
+		if (typeof window === 'undefined') return;
+		this.onResize = () => {
+			if (this.resizeRaf) return;
+			this.resizeRaf = requestAnimationFrame(() => {
+				this.resizeRaf = 0;
+				const bucket = this.aspectBucket();
+				if (bucket !== this.lastAspectBucket && this.pendingItems.length) {
+					this.lastAspectBucket = bucket;
+					this.uploadItems(this.pendingItems);
+				}
+			});
+		};
+		window.addEventListener('resize', this.onResize);
+		window.addEventListener('orientationchange', this.onResize);
+	}
+
+	/** Coarse aspect bucket so tiny resizes don't trigger a re-layout. */
+	private aspectBucket(): number {
+		let vw = this.engine.params[6] || 0;
+		let vh = this.engine.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return -1;
+		return Math.round((vw / vh) * 8);
 	}
 
 	async init(): Promise<void> {
@@ -116,10 +155,138 @@ export class TextLayerPass implements FramePass {
 		});
 	}
 
-	private uploadItems(items: TextLayerItem[]): void {
+	/**
+	 * Portrait reflow — the ONE place mobile layout is handled, driven entirely by
+	 * the live viewport aspect (params[6]/[7]); NOTHING is hardcoded per page.
+	 *
+	 * The MSDF shader keeps glyphs square by doing `pos.y *= min(aspect,1)` in
+	 * portrait (aspect<1), which crushes a full-height text column into a thin
+	 * central band and leaves glyphs phone-tiny. Layouts are authored in landscape
+	 * NDC (x≈-0.9 left column, y spanning ±0.86, size 0.02–0.05). On a phone we:
+	 *   1. reclaim vertical spread: pre-divide y by aspect so `y/a * a == y` net,
+	 *      then gently compress so the tallest item still fits the safe band;
+	 *   2. pull wide left-anchored columns toward centre so they don't overflow the
+	 *      narrow width after the size boost;
+	 *   3. boost glyph size (capped) so small labels are readable at 375px, and
+	 *      tighten maxWidthEm so long lines wrap instead of running off-screen.
+	 * Landscape (aspect>=~0.85) passes through untouched — desktop is unchanged.
+	 */
+	private portraitAdapt(items: TextLayerItem[]): TextLayerItem[] {
+		// Live viewport from the engine params (canvas px). params[6]/[7] are written
+		// inside the frame loop, so on the very first setText (during handleReady,
+		// before frame 0) they can be 0 — fall back to the window, which for these
+		// fixed-inset fullscreen organs has the same aspect as the canvas.
+		let vw = this.engine.params[6] || 0;
+		let vh = this.engine.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return items;
+		const aspect = vw / vh;
+		// Only reflow genuinely portrait / narrow viewports. Desktop + landscape
+		// tablet are left byte-for-byte identical.
+		if (aspect >= 0.85) return items;
+
+		// The MSDF shader keeps glyphs square by `pos.y *= aspect` (portrait) and
+		// scales on-screen glyph height by the same aspect. So BOTH the vertical
+		// layout AND the visual size get crushed by `aspect` before hitting the
+		// screen. To place a row at a chosen SCREEN y (and render it at a chosen
+		// SCREEN size), the layout value must be pre-divided by aspect — that's the
+		// exact inverse of what the shader does, so the net screen result is the
+		// value we chose. Everything here is derived from the live aspect; nothing
+		// is hardcoded per page.
+		const inv = 1 / Math.max(aspect, 0.2); // shader-inverse (portrait: >1)
+
+		// Vertical: reclaim the FULL authored spread. y_layout = y_screen / aspect,
+		// and we want y_screen == the authored y (it already fits the safe band).
+		const yReclaim = inv;
+
+		// Size: a label authored at size s renders at on-screen height s*aspect in
+		// portrait — phone-tiny. Target ~1.25x the desktop on-screen height for
+		// touch legibility, i.e. screen size = s*1.25, so layout size = s*1.25*inv.
+		const sizeWant = 1.25 * inv;
+
+		// Horizontal: width is now the TIGHT axis (full ±1, no aspect help). Pull
+		// wide left-anchored columns (x≈-0.9) toward centre and give a small left
+		// margin so the bigger glyphs don't run off either edge.
+		const portraitness = clamp01((0.85 - aspect) / (0.85 - 0.46));
+		const xPull = 0.5 * portraitness;
+		// Usable NDC width for a line starting at the (pulled) left anchor. In
+		// portrait the shader does NOT compress x, so this is full-scale NDC.
+		const LEFT_MARGIN = -0.9;
+		const RIGHT_MARGIN = 0.96;
+		// Empirical NDC advance per em of layout size. The MSDF atlas is roughly
+		// monospace; measured against real vitals lines the effective advance is
+		// ~0.62 (a touch wider than the nominal 0.55), so use that to keep long
+		// lines from bleeding off the right edge.
+		const EM_ADVANCE = 0.62;
+
+		// Navigation + fixed HUD chrome own their OWN mobile layout (nav-layer builds
+		// a touch dock at the true edge; RouteStage pins the pause/telemetry corners).
+		// Recentering/reclaiming them like body content would drag the edge dock into
+		// the page or push the corners off-screen — so pass all chrome through with
+		// only a modest size bump for touch legibility.
+		const isChrome = (k?: string) =>
+			!!k &&
+			(k.startsWith('route-nav') || k === 'route-chrome' || k === 'route-telemetry' || k === 'route-status' || k === 'route-status-pulse');
+
+		return items.map((item) => {
+			if (isChrome(item.kind)) {
+				// Only grow slightly (touch legibility) — keep the authored x/y so the
+				// nav dock and HUD corners stay exactly where nav-layer/RouteStage put
+				// them for mobile. Clamp size growth so corners don't overlap.
+				const s = (item.size ?? 0.03) * Math.min(1.5, 1.1 * inv);
+				return { ...item, size: s };
+			}
+			const baseSize = item.size ?? 0.075;
+			// Start from the desired boosted size, then cap it so the WHOLE line fits
+			// the usable width without needing per-character wrapping. A line of N
+			// chars at layout size s spans ~N*s*EM_ADVANCE in NDC-x.
+			const chars = Math.max(1, item.text.length);
+			const usableW = RIGHT_MARGIN - Math.max(LEFT_MARGIN, item.x * (1 - xPull));
+			const fitSize = usableW / (chars * EM_ADVANCE);
+			// Never shrink below the authored size (desktop was already legible); never
+			// grow past what fits. This keeps long vitals on ONE line and readable.
+			const size = Math.max(baseSize, Math.min(baseSize * sizeWant, fitSize));
+			// Keep the left anchor inside the margin after the centre-pull.
+			const x = Math.max(LEFT_MARGIN, item.x * (1 - xPull));
+			// Clamp the reclaimed y so a row near the authored edge (±0.9) still maps
+			// to an on-screen y inside the safe band (±0.92 screen → ±0.92*inv layout).
+			const maxYLayout = 0.92 * inv;
+			let y = item.y * yReclaim;
+			if (y > maxYLayout) y = maxYLayout;
+			else if (y < -maxYLayout) y = -maxYLayout;
+			// Wrap paragraph-style items (those that opted into maxWidthEm) at a width
+			// that fits the screen; leave single-line vitals alone (fitSize keeps them
+			// on one line). Convert the fit width into an em cap for the chosen size.
+			// Floor at 14 em so we NEVER wrap down toward one-character-per-line (the
+			// stray vertical letter column bug) — better to slightly overflow a long
+			// unbreakable token than to stack it vertically.
+			const emThatFit = Math.floor(usableW / (size * EM_ADVANCE));
+			const maxWidthEm =
+				item.maxWidthEm != null ? Math.max(14, Math.min(item.maxWidthEm, emThatFit)) : item.maxWidthEm;
+			const adapted = { ...item, x, y, size, maxWidthEm };
+			if (typeof window !== 'undefined' && window.location?.search.includes('dbg=1')) {
+				(window as unknown as { __adaptDbg?: unknown[] }).__adaptDbg ??= [];
+				(window as unknown as { __adaptDbg: unknown[] }).__adaptDbg.push({
+					id: item.id,
+					text: item.text?.slice(0, 24),
+					x: +x.toFixed(3),
+					y: +y.toFixed(3),
+					size: +size.toFixed(4),
+					maxWidthEm
+				});
+			}
+			return adapted;
+		});
+	}
+
+	private uploadItems(rawItems: TextLayerItem[]): void {
 		const device = this.engine.gpuDevice;
 		if (!device || !this.engine.paramsBuffer || !this.atlas) return;
 		this.ensurePipeline(device);
+		const items = this.portraitAdapt(rawItems);
 		const packed: number[] = [];
 		const runs: TextRunRect[] = [];
 		let glyphIndex = 0;
@@ -242,6 +409,13 @@ export class TextLayerPass implements FramePass {
 	}
 
 	dispose(): void {
+		if (this.onResize && typeof window !== 'undefined') {
+			window.removeEventListener('resize', this.onResize);
+			window.removeEventListener('orientationchange', this.onResize);
+		}
+		this.onResize = null;
+		if (this.resizeRaf) cancelAnimationFrame(this.resizeRaf);
+		this.resizeRaf = 0;
 		this.glyphBuffer?.destroy();
 		this.glyphBuffer = null;
 		this.atlas?.dispose();

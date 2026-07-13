@@ -44,6 +44,9 @@
 	let error: string | null = $state(null);
 	let selectedRecordId: string | null = $state(null);
 	let dormantPool: Memory[] = $state([]);
+	// Real pool size (whole store, not just the sampled 80) — the dormant screen's
+	// secondary stat: "N memories waiting to be replayed". Straight off /memories total.
+	let dormantTotal = $state(0);
 
 	const dreamScene = $derived.by<DreamScene>(() => normalizeDreamScene(dreamResult, selectedRecordId, loading));
 
@@ -55,7 +58,17 @@
 			.list({ limit: '80' })
 			.then((res) => {
 				dormantPool = res.memories;
-				fieldPass?.setCells(buildFieldCells());
+				// /memories total is the returned page size, not the whole store — fall
+				// back to it, but prefer the real store count from /stats below.
+				dormantTotal = Number(res.total ?? res.memories.length) || res.memories.length;
+				fieldPass?.setCells(buildFieldCells(fieldEngine));
+			})
+			.catch(() => {});
+		// Real store size for the dormant-pool line ("N memories waiting to be replayed").
+		void api
+			.stats()
+			.then((s) => {
+				if (Number.isFinite(s.totalMemories) && s.totalMemories > 0) dormantTotal = s.totalMemories;
 			})
 			.catch(() => {});
 	});
@@ -66,7 +79,7 @@
 		error = null;
 		try {
 			dreamResult = await api.dream();
-			fieldPass?.setCells(buildFieldCells(), { ambient: 0.5 });
+			fieldPass?.setCells(buildFieldCells(fieldEngine), { ambient: 0.5 });
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -75,13 +88,15 @@
 	}
 
 	let fieldPass: LivingFieldPass | null = null;
+	// Cached so setCells calls after a dream run can re-derive the live viewport aspect.
+	let fieldEngine: ObservatoryEngine | null = null;
 
 	/**
 	 * Dormant → storm. At rest: the memory pool as slow dim cells (the mind
 	 * asleep). After a dream: the insight nodes light up bright (consolidation
 	 * storm). Both map to REAL data (memories list / dream insights).
 	 */
-	function buildFieldCells() {
+	function buildFieldCells(engine: ObservatoryEngine | null = null) {
 		const insights = dreamResult?.insights ?? [];
 		let data: FieldDatum[];
 		if (insights.length > 0) {
@@ -112,7 +127,29 @@
 				} satisfies FieldDatum;
 			});
 		}
-		return layoutGalaxy(data, { maxRadius: 0.92, minCellR: 0.014, maxCellR: 0.052 });
+		const cells = layoutGalaxy(data, { maxRadius: 0.92, minCellR: 0.014, maxCellR: 0.052 });
+
+		// Portrait dormant screen only. The galaxy disc renders as a wide-but-short
+		// band in a tall viewport, and the field is authored dim (0.26) for the
+		// desktop two-column read — so the phone shows a black void around one bit of
+		// centred text. Two portrait-gated (aspect < 0.85) tweaks, both derived from
+		// the LIVE viewport aspect so desktop stays byte-identical:
+		//   1. stretch the dormant substrate to fill the whole tall screen, and
+		//   2. drop a soft focal glow-pill behind the RUN control so the bracket-text
+		//      reads as a lit, tappable button. Both use only real dormant cells.
+		if (dreamResult || dormantPool.length === 0) return cells;
+		const aspect = viewportAspect(engine);
+		if (aspect >= 0.85) return cells;
+		// The cell shader maps NDC y -> clip y 1:1 (no aspect divide), so a disc of
+		// radius 0.92 already spans the height; nudge the vertical spread wider so the
+		// substrate reaches the top and bottom thirds instead of hugging the middle.
+		for (const c of cells) {
+			c.y = Math.max(-0.98, Math.min(0.98, c.y * 1.35));
+		}
+		// The button chrome (a framed pill) is drawn in the TEXT layer instead of the
+		// field — the text pass shares the label's exact vertical mapping, so a dashed
+		// over/under-rule lines up perfectly, where a cross-layer field glow never did.
+		return cells;
 	}
 
 	function sanitizeAscii(value: string): string {
@@ -294,10 +331,129 @@
 		};
 	}
 
-	function buildDreamItems(scene: RouteSceneModel): DreamTextItem[] {
+	/**
+	 * Live viewport aspect, derived from the engine params (canvas px) with a
+	 * window fallback — the SAME source TextLayerPass.portraitAdapt reads. Nothing
+	 * is hardcoded to a phone width; the portrait branch keys off aspect < 0.85
+	 * exactly like the shared adapter, so the desktop (aspect >= 0.85) render is
+	 * byte-identical.
+	 */
+	function viewportAspect(engine: ObservatoryEngine | null): number {
+		let vw = engine?.params[6] ?? 0;
+		let vh = engine?.params[7] ?? 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return 1;
+		return vw / vh;
+	}
+
+	function buildDreamItems(scene: RouteSceneModel, engine: ObservatoryEngine | null = null): DreamTextItem[] {
 		const dream = scene as DreamScene;
 		const records = dream.records.slice(0, ROW_LIMIT);
 		const items: DreamTextItem[] = [];
+		// Portrait: the reading column jams every row into the top ~30% and leaves
+		// the lower two-thirds an empty void, and the bare "[ RUN DREAM CYCLE ]"
+		// reads as a heading, not a tappable control. On a phone (aspect < 0.85)
+		// pull the dormant hero into ONE centred focal point with an explicit tap
+		// affordance, so a first-timer both SEES the void filled and KNOWS the
+		// primary action. Landscape/desktop keep the authored top-anchored layout.
+		const portrait = viewportAspect(engine) < 0.85;
+
+		if (portrait && !dream.raw) {
+			// Single centred focal group, vertically balanced in the viewport instead of
+			// stacked at the top. portraitAdapt preserves authored SCREEN-y, so these are
+			// on-screen positions. A soft glow-pill (built in buildFieldCells at the SAME
+			// screen y) sits behind the RUN label so the bracket-text reads as a lit,
+			// tappable button. Above it: a title. Below it: real pool stats + what a
+			// cycle does — so the phone shows readable content, not a void.
+			let hy = 0.5;
+			items.push(
+				textItem('dreams:title', 'dream-detail', 'DREAM ENGINE', hy, {
+					x: -0.62,
+					size: 0.03,
+					color: MUTED,
+					weight: 0.7
+				})
+			);
+			// Button chrome — a dashed over/under-rule framing the label into a pill so
+			// the bracket-text unmistakably reads as a tappable control. Drawn in the
+			// TEXT layer at the SAME x/size as the label (monospace ⇒ exact width match),
+			// so alignment is guaranteed on any portrait viewport. Same size as the label
+			// so the dash-count spans the same width; dimmer oxygen so it frames, not
+			// competes. The rules share the run's kind so a tap on the frame also fires.
+			const runLabel = dream.busy ? '[  DREAMING...  ]' : '[  RUN DREAM CYCLE  ]';
+			const rule = '-'.repeat(runLabel.length);
+			const runY = 0.16;
+			items.push(
+				textItem('dreams:run-top', 'dream-action', rule, runY + 0.075, {
+					x: -0.62,
+					size: 0.05,
+					color: dream.busy ? MUTED : OXYGEN,
+					weight: 0.6
+				})
+			);
+			hy = runY;
+			items.push(
+				textItem('dreams:run', 'dream-action', runLabel, hy, {
+					x: -0.62,
+					size: 0.05,
+					color: dream.busy ? MUTED : OXYGEN,
+					weight: 0.95,
+					depth: 1,
+					hitPadX: 0.34,
+					hitPadY: 0.11
+				})
+			);
+			items.push(
+				textItem('dreams:run-bot', 'dream-action', rule, runY - 0.03, {
+					x: -0.62,
+					size: 0.05,
+					color: dream.busy ? MUTED : OXYGEN,
+					weight: 0.6
+				})
+			);
+			hy -= 0.11;
+			items.push(
+				textItem('dreams:run-tap', 'dream-detail', dream.busy ? 'consolidating memory...' : 'tap the panel above to begin a cycle', hy, {
+					x: -0.62,
+					color: MUTED,
+					size: 0.026
+				})
+			);
+			hy -= 0.09;
+			// Real secondary content: the actual dormant pool size off /memories total.
+			const poolLine =
+				dormantTotal > 0
+					? `${dormantTotal} memories in the pool, waiting to be replayed`
+					: 'loading the dormant memory pool...';
+			items.push(
+				textItem('dreams:pool', 'dream-detail', poolLine, hy, {
+					x: -0.62,
+					color: CYAN,
+					size: 0.024
+				})
+			);
+			hy -= 0.06;
+			items.push(
+				textItem('dreams:run-note', 'dream-detail', 'a cycle replays them, strengthens the strong,', hy, {
+					x: -0.62,
+					color: MUTED,
+					size: 0.022
+				})
+			);
+			hy -= 0.05;
+			items.push(
+				textItem('dreams:run-note2', 'dream-detail', 'and persists the new connections it finds', hy, {
+					x: -0.62,
+					color: MUTED,
+					size: 0.022
+				})
+			);
+			return items;
+		}
+
 		let y = 0.76;
 		items.push(
 			textItem('dreams:run', 'dream-action', dream.busy ? '[ DREAMING... ]' : '[ RUN DREAM CYCLE ]', y, {
@@ -408,12 +564,12 @@
 			this.engine = engine;
 			this.scene = scene;
 			this.text = new TextLayerPass(engine);
-			void this.text.init().then(() => this.text.setText(buildDreamItems(this.scene)));
+			void this.text.init().then(() => this.text.setText(buildDreamItems(this.scene, this.engine)));
 		}
 
 		uploadScene(scene: RouteSceneModel): void {
 			this.scene = scene;
-			this.text.setText(buildDreamItems(scene));
+			this.text.setText(buildDreamItems(scene, this.engine));
 		}
 
 		render(pass: GPURenderPassEncoder): void {
@@ -433,7 +589,29 @@
 	function createDreamPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
 		const field = new LivingFieldPass(engine);
 		fieldPass = field;
-		field.setCells(buildFieldCells());
+		fieldEngine = engine;
+		// Portrait dormant screen ran near-black: intensity 0.26 + a wide reading well
+		// left the whole phone void unlit. Gate off the LIVE viewport aspect (< 0.85)
+		// so the phone gets a visibly-lit dream substrate + a tight well around only the
+		// centred focal group, while desktop (aspect >= 0.85) keeps the exact authored
+		// dim two-column backdrop below. Nothing hardcoded to a pixel width.
+		const portrait = viewportAspect(engine) < 0.85;
+		if (portrait && !dreamResult) {
+			// Fill the tall void with a visibly-lit dim substrate. NO reading well here:
+			// the well multiplies every cell (incl. the focal glow-pill) and would kill
+			// the button chrome. The bright MSDF text (ivory/cyan) sits ON TOP and stays
+			// legible over a 0.42 substrate; the pill cells are marked selected so they
+			// punch a clear lit panel behind the RUN label.
+			field.setIntensity(0.42);
+			field.setReadingWell({ x: 0, y: 0, hw: -1, hh: 0 });
+		} else {
+			// Desktop can carry a richer dormant/storm field because the reading well
+			// protects the complete left rows and centre inspector. Keep this branch
+			// aspect-gated away from portrait, whose verified 0.42 substrate is unchanged.
+			field.setIntensity(portrait ? 0.26 : 0.72);
+			field.setReadingWell({ x: -0.35, y: -0.05, hw: 0.72, hh: 0.9, floor: 0.06, soft: 0.22 });
+		}
+		field.setCells(buildFieldCells(engine));
 		const fieldWrapper: RouteFramePass = {
 			compute: (encoder) => field.compute(encoder),
 			render: (pass) => field.render(pass),

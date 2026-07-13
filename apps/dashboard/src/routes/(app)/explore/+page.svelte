@@ -66,10 +66,44 @@
 		engineRef = null;
 	});
 
+	// Live viewport aspect (canvas px) — same source portraitAdapt reads, never a
+	// hardcoded phone width. Falls back to the window before frame 0, then 1.
+	function viewportAspect(): number {
+		const vw = engineRef?.params[6] || 0;
+		const vh = engineRef?.params[7] || 0;
+		if (vw > 0 && vh > 0) return vw / vh;
+		if (typeof window !== 'undefined' && window.innerHeight > 0) {
+			return window.innerWidth / window.innerHeight;
+		}
+		return 1;
+	}
+
+	// Field brightness for the CURRENT viewport. On desktop the neighborhood is the
+	// hero (0.75). On a phone the same intensity blooms into a blinding blob behind
+	// the text and destroys contrast — so portrait drops it to the documented dim-
+	// backdrop range (~0.26). Gated on the LIVE aspect; desktop is unchanged.
+	function fieldIntensity(): number {
+		return viewportAspect() < 0.85 ? 0.24 : 0.75;
+	}
+
+	// On portrait the neighborhood column sits dead-center over the field's bright
+	// selected-cell bloom, killing text contrast. Carve a reading well over the
+	// text band so the field dims there (the pass auto-reflows the well for
+	// portrait). Desktop gets NO well (hw<=0 disables it) → byte-identical render.
+	function applyReadingWell(field: LivingFieldPass) {
+		if (viewportAspect() < 0.85) {
+			field.setReadingWell({ x: 0, y: 0, hw: 1.05, hh: 0.95, floor: 0.08, soft: 0.3 });
+		} else {
+			field.setReadingWell({ x: 0, y: 0, hw: -1, hh: 0 });
+		}
+	}
+
 	async function handleReady(engine: ObservatoryEngine) {
 		engineRef = engine;
 		const field = new LivingFieldPass(engine);
 		fieldPass = field;
+		field.setIntensity(fieldIntensity());
+		applyReadingWell(field);
 		field.setCells(buildFieldCells());
 		engine.addPass(field);
 		const pass = new TextLayerPass(engine);
@@ -153,6 +187,10 @@
 				loading = false;
 				walkingFrom = null; // only the owning generation clears the label
 				textPass?.setText(buildTextItems());
+				// Re-assert intensity for the current aspect (a rotate between load and
+				// now would otherwise keep the stale desktop bloom on a phone).
+				fieldPass?.setIntensity(fieldIntensity());
+				if (fieldPass) applyReadingWell(fieldPass);
 				fieldPass?.setCells(buildFieldCells());
 				engineRef?.demoClock.reset();
 			}
@@ -203,10 +241,21 @@
 		return clamp01(scalar(memory.retention, memory.retentionStrength));
 	}
 
-	function resultLine(memory: SearchMemory): string {
-		const snippet = sanitizeAscii(memory.content).replace(/\s+/g, ' ').trim().slice(0, 52);
+	// Trim to a cap on a word boundary near the cap so a portrait row never ends
+	// mid-token; hard-slice fallback for a single unbroken token.
+	function trimSnippet(text: string, cap: number): string {
+		const s = sanitizeAscii(text).replace(/\s+/g, ' ').trim();
+		if (s.length <= cap) return s;
+		const hard = s.slice(0, cap);
+		const lastSpace = hard.lastIndexOf(' ');
+		return lastSpace > cap * 0.6 ? hard.slice(0, lastSpace) : hard;
+	}
+
+	function resultLine(memory: SearchMemory, portrait: boolean): string {
+		const sim = `${Math.round(similarity(memory) * 100)}%`;
+		if (portrait) return sanitizeAscii(`${trimSnippet(memory.content, 28)}  ${sim}`);
 		return sanitizeAscii(
-			`${snippet} | ${memory.id.slice(0, 8)} | ${Math.round(similarity(memory) * 100)}% | ${Math.round(retention(memory) * 100)}%`
+			`${trimSnippet(memory.content, 52)} | ${memory.id.slice(0, 8)} | ${sim} | ${Math.round(retention(memory) * 100)}%`
 		);
 	}
 
@@ -247,6 +296,58 @@
 			return [statusItem(emptyText, MUTED)];
 		}
 
+		const aspect = viewportAspect();
+		const portrait = aspect < 0.85;
+
+		if (portrait) {
+			// Phone plan: ONE short focal header + a well-spaced, short-line column
+			// that fits the screen band with real negative space. Row count/spacing
+			// derive from the live aspect (never a fixed phone number). portraitAdapt
+			// maps authored-y straight to screen-y, so we author in screen NDC.
+			const portraitness = clamp01((0.85 - aspect) / (0.85 - 0.42));
+			const rowCount = Math.max(9, Math.round(12 - 3 * portraitness));
+			const rows = results.slice(0, rowCount);
+			const header: ExploreTextItem = {
+				id: 'explore:origin',
+				kind: 'explore-origin',
+				text: sanitizeAscii(
+					seededFrom ? `NEIGHBORHOOD OF ${seededFrom}  TAP TO WALK` : `NEIGHBORHOOD  ${rows.length} THOUGHTS  TAP TO WALK`
+				),
+				x: -0.82,
+				y: 0.8,
+				size: 0.028,
+				color: MUTED,
+				depth: 0.85,
+				weight: 0.6,
+				startFrame: REVEAL_ANCHOR,
+				revealSpan: 24,
+				maxWidthEm: 30
+			};
+			const top = 0.62;
+			const bottom = -0.72;
+			const rowStep = rows.length > 1 ? (top - bottom) / (rows.length - 1) : 0;
+			return [
+				header,
+				...rows.map((memory, i) => ({
+					id: `explore:${memory.id}`,
+					kind: 'explore-neighbor',
+					memoryId: memory.id,
+					text: resultLine(memory, true),
+					x: -0.82,
+					y: top - i * rowStep,
+					size: 0.03,
+					color: CYAN,
+					depth: similarity(memory),
+					weight: retention(memory),
+					startFrame: REVEAL_ANCHOR + i * 2,
+					revealSpan: 20,
+					maxWidthEm: 34,
+					hitPadX: 0.04,
+					hitPadY: 0.03
+				}) satisfies ExploreTextItem)
+			];
+		}
+
 		const rows = results.slice(0, ROW_LIMIT);
 		const top = 0.72;
 		const rowStep = 1.5 / Math.max(1, ROW_LIMIT - 1);
@@ -273,7 +374,7 @@
 			id: `explore:${memory.id}`,
 			kind: 'explore-neighbor',
 			memoryId: memory.id,
-			text: resultLine(memory),
+			text: resultLine(memory, false),
 			x: -0.88,
 			y: top - i * rowStep,
 			size: 0.026,

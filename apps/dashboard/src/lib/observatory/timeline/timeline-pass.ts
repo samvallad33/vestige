@@ -51,6 +51,26 @@ struct TimelineRingGpu {
 	// ('meta' is a WGSL reserved keyword — see GOD-TIER §9 / it broke Blackbox too)
 	stats: vec4f,
 };
+
+// Portrait legibility: on a phone the growth-ring field is the whole screen and
+// its HDR bloom becomes a BLINDING blob that drowns the MSDF HUD/receipt text.
+// Derive a dim factor from the LIVE viewport aspect (viewport_w/viewport_h) —
+// nothing is hardcoded per device. Landscape/desktop (aspect >= 0.85) is left at
+// full brightness (1.0); portrait scales down toward ~0.34 as it narrows so the
+// field becomes a DIM backdrop and the overlay text wins the contrast fight.
+fn portrait_field_dim() -> f32 {
+	let a = params.viewport_w / max(params.viewport_h, 1.0);
+	// portraitness: 0 at aspect 0.85 (landscape edge) -> 1 at aspect 0.46 (tall phone)
+	let p = clamp((0.85 - a) / (0.85 - 0.46), 0.0, 1.0);
+	// The ring/membrane colors are pushed HARD into HDR (peak accumulated ~5-8x via
+	// additive blend) specifically so the post-chain bloom flares them. A 0.2 dim
+	// still leaves ~1.0-1.6 — above the bloom knee, so it stayed a blinding blob on
+	// a phone. Pull it down to ~0.07 at full portrait so even the accumulated HDR
+	// peak lands well below the bloom threshold and the field reads as a true DIM
+	// backdrop the MSDF HUD/receipt text can win against. Aspect-derived, no per-
+	// device constant; landscape/desktop (aspect>=0.85) stays untouched at 1.0.
+	return mix(1.0, 0.07, p);
+}
 `;
 
 const SPLAT_WGSL = /* wgsl */ `
@@ -161,7 +181,7 @@ fn fs_cell(in: VSOut) -> @location(0) vec4f {
 	let rim = smoothstep(0.98, 0.74, d) * (1.0 - smoothstep(0.74, 0.42, d));
 	let seam = smoothstep(0.12, 0.0, abs(d - 0.48)) * rewritten;
 	let scar = smoothstep(0.16, 0.0, abs(d - 0.76)) * suppressed;
-	return vec4f(core * body + vec3f(0.91, 1.0, 0.72) * rim * 1.1 + indigo * seam * 1.3 + scarlet * scar * 1.5, 1.0);
+	return vec4f((core * body + vec3f(0.91, 1.0, 0.72) * rim * 1.1 + indigo * seam * 1.3 + scarlet * scar * 1.5) * portrait_field_dim(), 1.0);
 }
 
 @vertex
@@ -212,7 +232,7 @@ fn fs_ring(in: VSOut) -> @location(0) vec4f {
 	color = color + scarlet * suppressed * 1.4;
 	// Bright engraved date ticks flare on selection.
 	color = color + vec3f(0.91, 1.0, 0.72) * tick * (0.14 + selected * 0.6);
-	return vec4f(color, 1.0);
+	return vec4f(color * portrait_field_dim(), 1.0);
 }
 `;
 
@@ -269,7 +289,7 @@ fn fs_membrane(in: VSOut) -> @location(0) vec4f {
 	// Indigo transaction-time seams shimmer with the breath.
 	color = color + indigo * seam * (0.55 + 0.35 * params.pulse);
 	let vignette = smoothstep(0.98, 0.12, distance(in.uv, vec2f(0.5)));
-	return vec4f(color * (0.55 + 0.45 * vignette) * params.brightness, 1.0);
+	return vec4f(color * (0.55 + 0.45 * vignette) * params.brightness * portrait_field_dim(), 1.0);
 }
 `;
 

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import PageHeader from '$components/PageHeader.svelte';
+	import Icon from '$components/Icon.svelte';
 	import { api } from '$stores/api';
 	import { rgb01 } from '$lib/observatory/cognitive-palette';
 	import { assertProvenance, type RouteNode, type RouteSceneModel } from '$lib/observatory/route-scene';
@@ -41,6 +43,21 @@
 	// so the field still passes the discipline test.
 	let poolCells: FieldDatum[] = [];
 	let patternField: PatternFieldPass | null = null;
+
+	// Portrait phones get a legible DOM error/empty state layered over the field —
+	// the zero-DOM WebGPU error text is unreadable on a phone (tiny centered red
+	// glyphs with no title/affordance). Gated to portrait/narrow aspect (< 0.85) so
+	// the desktop-with-data render stays byte-identical to before. Derived from the
+	// LIVE viewport via matchMedia, not a hardcoded width.
+	let isPortrait = $state(false);
+	onMount(() => {
+		if (typeof window === 'undefined') return;
+		const mq = window.matchMedia('(max-aspect-ratio: 85/100)');
+		isPortrait = mq.matches;
+		const onChange = (e: MediaQueryListEvent) => (isPortrait = e.matches);
+		mq.addEventListener('change', onChange);
+		return () => mq.removeEventListener('change', onChange);
+	});
 
 	onMount(() => {
 		void loadPatterns();
@@ -170,8 +187,19 @@
 	class PatternFieldPass implements RouteFramePass {
 		private field: LivingFieldPass;
 		private lastNodes: RouteNode[] = [];
+		private portrait: boolean;
 		constructor(engine: ObservatoryEngine) {
 			this.field = new LivingFieldPass(engine);
+			this.portrait = viewportAspect(engine) < 0.85;
+			// Keep the verified portrait treatment byte-for-byte dim, but let landscape
+			// screens carry a materially richer field outside the reading well. Use the
+			// live engine viewport (with only a pre-frame window fallback), never a
+			// device-width constant.
+			this.field.setIntensity(this.portrait ? 0.24 : 0.62);
+			// Rows anchor at x=-0.88 and run wide (maxWidthEm 58) from y~+0.74 down to
+			// y~-0.74. Quiet the field across that left-weighted reading band so glyphs
+			// stay legible while the rings still breathe in the margins.
+			this.field.setReadingWell({ x: -0.15, y: 0, hw: 0.85, hh: 0.85, floor: 0.08, soft: 0.25 });
 		}
 		uploadScene(scene: RouteSceneModel): void {
 			this.lastNodes = (scene as PatternScene).nodes;
@@ -190,8 +218,8 @@
 					layoutRings(poolCells, (_d, i) => i % 6, {
 						ringCount: 6,
 						maxRadius: 0.92,
-						minCellR: 0.02,
-						maxCellR: 0.05
+						minCellR: this.portrait ? 0.02 : 0.06,
+						maxCellR: this.portrait ? 0.05 : 0.14
 					})
 				);
 				return;
@@ -310,6 +338,16 @@
 			.replace(/[^\x20-\x7E]/g, '?');
 	}
 
+	function viewportAspect(engine: ObservatoryEngine): number {
+		let vw = engine.params[6] || 0;
+		let vh = engine.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		return vw > 0 && vh > 0 ? vw / vh : 1.6;
+	}
+
 	function finite(value: number): number {
 		return Number.isFinite(value) ? value : 0;
 	}
@@ -332,3 +370,62 @@
 	error={error}
 	onpick={handleRoutePick}
 />
+
+<!--
+	Portrait-only DOM chrome. On a phone the WebGPU-only error/empty state is a
+	blank near-black screen with unreadable centered red glyphs and no title. This
+	overlay gives portrait users a legible title (so they know this is Patterns) and
+	a proper card for the error / empty / loading states with a Retry affordance —
+	mirroring the contradictions organ. Gated to portrait (aspect < 0.85) so the
+	desktop-with-data render is byte-identical. pointer-events pass through to the
+	field except on the interactive card.
+-->
+{#if isPortrait}
+	<div class="pointer-events-none fixed inset-0 z-10 flex flex-col p-6">
+		<div class="pointer-events-auto">
+			<PageHeader
+				icon="patterns"
+				title="Cross-Project Patterns"
+				accent="recall"
+			>
+				<span class="text-dim text-sm tabular-nums">
+					{visiblePatterns.length} {visiblePatterns.length === 1 ? 'pattern' : 'patterns'}
+				</span>
+			</PageHeader>
+		</div>
+
+		{#if error}
+			<div class="pointer-events-auto mt-2 flex flex-1 items-center justify-center">
+				<div class="glass-panel flex w-full max-w-md flex-col items-center gap-3 rounded-2xl p-8 text-center">
+					<div class="text-sm text-decay">Couldn't load patterns</div>
+					<div class="max-w-sm text-xs text-muted">{error}</div>
+					<button
+						type="button"
+						onclick={loadPatterns}
+						class="mt-2 rounded-lg bg-recall/20 px-4 py-2 text-xs font-medium text-recall transition hover:bg-recall/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-recall/60"
+					>
+						Retry
+					</button>
+				</div>
+			</div>
+		{:else if loading}
+			<div class="pointer-events-auto mt-2 flex flex-1 items-center justify-center">
+				<div class="glass-subtle shimmer h-32 w-full max-w-md rounded-2xl"></div>
+			</div>
+		{:else if visiblePatterns.length === 0}
+			<div class="pointer-events-auto mt-2 flex flex-1 items-center justify-center">
+				<div class="glass-panel flex w-full max-w-md flex-col items-center gap-3 rounded-2xl p-8 text-center">
+					<div class="flex h-14 w-14 items-center justify-center rounded-2xl border border-recall/25 bg-recall/10 text-recall">
+						<Icon name="patterns" size={26} draw />
+					</div>
+					<div class="text-sm font-medium text-bright">
+						No cross-project patterns standing today.
+					</div>
+					<div class="max-w-sm text-xs text-muted">
+						Patterns appear here when a solved approach in one project transfers to another.
+					</div>
+				</div>
+			</div>
+		{/if}
+	</div>
+{/if}

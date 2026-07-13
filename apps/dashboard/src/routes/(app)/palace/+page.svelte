@@ -118,8 +118,24 @@
 		];
 	}
 
+	// Live viewport aspect (canvas px), same source portraitAdapt reads — never a
+	// hardcoded phone width. Falls back to the window before frame 0, then 1.
+	function viewportAspect(): number {
+		const vw = engineRef?.params[6] || 0;
+		const vh = engineRef?.params[7] || 0;
+		if (vw > 0 && vh > 0) return vw / vh;
+		if (typeof window !== 'undefined' && window.innerHeight > 0) {
+			return window.innerWidth / window.innerHeight;
+		}
+		return 1;
+	}
+
 	function buildAllText(): TextLayerItem[] {
-		const labels = buildOrganLabels(toOrganPositions(), { hoveredHref, dimUnhovered: !!hoveredHref });
+		const labels = buildOrganLabels(toOrganPositions(), {
+			hoveredHref,
+			dimUnhovered: !!hoveredHref,
+			aspect: viewportAspect()
+		});
 		return [...hudLines(), ...labels];
 	}
 

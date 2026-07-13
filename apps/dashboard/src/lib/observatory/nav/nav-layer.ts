@@ -86,11 +86,31 @@ class TextNavLayer implements NavLayerPass {
 	private hoverHref: string | null = null;
 	private expanded = false;
 	private ready = false;
+	private readonly engine: ObservatoryEngine;
 
 	constructor(engine: ObservatoryEngine, opts: NavLayerOptions) {
+		this.engine = engine;
 		this.text = new TextLayerPass(engine);
 		this.routes = opts.routes ?? COGNITIVE_OS_ROUTES;
 		this.activePath = opts.activePath ?? '';
+	}
+
+	/**
+	 * Touch/portrait phones have NO hover, so the desktop hover-to-expand rail can
+	 * never open and the organ becomes un-navigable. On a narrow viewport we switch
+	 * to a directly-TAPPABLE dock: always-visible shortcut letters at the true left
+	 * edge, each its own pick target so one tap navigates. Derived from the live
+	 * viewport aspect — nothing hardcoded, and desktop is untouched.
+	 */
+	private isMobile(): boolean {
+		let vw = this.engine.params[6] || 0;
+		let vh = this.engine.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return false;
+		return vw / vh < 0.85;
 	}
 
 	async init(): Promise<void> {
@@ -106,6 +126,10 @@ class TextNavLayer implements NavLayerPass {
 	}
 
 	setHoverFromNdc(ndcX: number, ndcY: number): NavPick | null {
+		// Mobile dock is always-visible + directly tappable — there is no hover-to-
+		// expand. Just report whether a marker is under the point (for cursor state)
+		// without any rebuild.
+		if (this.isMobile()) return this.pickAt(ndcX, ndcY);
 		// 1. Decide expand/collapse from the cursor ZONE (with hysteresis) BEFORE
 		//    picking, so that on the first move into the edge the labels are built
 		//    and immediately hoverable in this same call (no dead pointermove).
@@ -159,6 +183,15 @@ class TextNavLayer implements NavLayerPass {
 
 	private rebuild(): void {
 		if (!this.ready) return;
+		// On mobile the in-canvas rail is SUPPRESSED entirely: a global DOM MobileNav
+		// (rendered by the (app) shell) is the single, reliable tap-to-navigate
+		// surface for phones — it works on every stage type AND on devices with no
+		// WebGPU, which this in-canvas rail cannot. Rendering nothing here avoids a
+		// confusing double nav. Desktop keeps the full hover-to-expand rail.
+		if (this.isMobile()) {
+			this.text.setText([]);
+			return;
+		}
 		this.text.setText(this.expanded ? this.buildExpanded() : this.buildCollapsed());
 	}
 

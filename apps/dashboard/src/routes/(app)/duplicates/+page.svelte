@@ -41,6 +41,20 @@
 	let selectedCluster: DuplicateFusionCluster | null = $state(null);
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+	// PORTRAIT GATE — on a phone (aspect<0.85) the fixed slider-track + value row
+	// can't fit small-Android width (the value clips past the right edge), so we
+	// stack the slider label. Desktop (landscape) keeps the original inline row and
+	// stays byte-identical. Threshold matches TextLayerPass.portraitAdapt.
+	let isPortrait = $state(false);
+	onMount(() => {
+		const update = () => {
+			isPortrait = window.innerWidth / Math.max(1, window.innerHeight) < 0.85;
+		};
+		update();
+		window.addEventListener('resize', update);
+		return () => window.removeEventListener('resize', update);
+	});
+
 	async function detect() {
 		loading = true;
 		error = null;
@@ -144,8 +158,8 @@
 	<!-- Header -->
 	<PageHeader
 		icon="duplicates"
-		title="Memory Hygiene — Duplicate Detection"
-		subtitle="Cosine-similarity clustering over embeddings. Oversized similarity components are quarantined for review — they chain through pairwise similarity and are not safe to merge. Dismissed clusters are hidden for this session only."
+		title="Memory Hygiene: Duplicate Detection"
+		subtitle="Cosine-similarity clustering over embeddings. Oversized similarity components are quarantined for review because they chain through pairwise similarity and are not safe to merge. Dismissed clusters are hidden for this session only."
 		accent="synapse"
 	>
 		<span
@@ -159,58 +173,85 @@
 
 	<!-- Controls panel -->
 	<div class="glass-panel pointer-events-auto flex flex-wrap items-center gap-5 rounded-2xl p-4">
-		<!-- Threshold slider -->
-		<label class="flex flex-1 min-w-64 items-center gap-3 text-xs text-dim">
-			<span class="whitespace-nowrap">Similarity threshold</span>
-			<input
-				type="range"
-				min="0.70"
-				max="0.95"
-				step="0.01"
-				bind:value={threshold}
-				oninput={onThresholdChange}
-				class="flex-1 accent-synapse"
-				aria-label="Similarity threshold"
-			/>
-			<span class="w-14 text-right font-mono text-sm text-bright">
-				{(threshold * 100).toFixed(0)}%
-			</span>
-		</label>
-
-		<!-- Results pill -->
-		<div
-			class="flex items-center gap-2 rounded-full border border-synapse/20 bg-synapse/10 px-3 py-1.5 text-xs text-text"
-			role="status"
-			aria-live="polite"
-		>
-			{#if loading}
-				<span class="breathe h-2 w-2 rounded-full bg-synapse-glow text-synapse-glow"></span>
-				<span>Detecting…</span>
-			{:else if error}
-				<span class="h-2 w-2 rounded-full bg-decay"></span>
-				<span class="text-decay">Error</span>
-			{:else}
-				<span class="breathe h-2 w-2 rounded-full bg-synapse-glow text-synapse-glow"></span>
-				<span class="tabular-nums">
-					{#if visibleClusters.length < apiTotal}
-						<AnimatedNumber value={visibleClusters.length} /> visible of {apiTotal} clusters
-					{:else}
-						<AnimatedNumber value={visibleClusters.length} />
-						{visibleClusters.length === 1 ? 'cluster' : 'clusters'}
-					{/if}
-					· <AnimatedNumber value={totalImplicated} /> memories implicated
+		<!-- Threshold slider. PORTRAIT: stack (label + value on top row, full-width
+		     track below) so the value never clips a narrow phone. LANDSCAPE: original
+		     inline row — desktop byte-identical. -->
+		{#if isPortrait}
+			<label class="flex w-full flex-col gap-2 text-xs text-dim">
+				<span class="flex items-baseline justify-between gap-3">
+					<span class="whitespace-nowrap">Similarity threshold</span>
+					<span class="font-mono text-sm text-bright">{(threshold * 100).toFixed(0)}%</span>
 				</span>
-			{/if}
-		</div>
+				<input
+					type="range"
+					min="0.70"
+					max="0.95"
+					step="0.01"
+					bind:value={threshold}
+					oninput={onThresholdChange}
+					class="w-full accent-synapse"
+					aria-label="Similarity threshold"
+				/>
+			</label>
+		{:else}
+			<label class="flex flex-1 min-w-64 items-center gap-3 text-xs text-dim">
+				<span class="whitespace-nowrap">Similarity threshold</span>
+				<input
+					type="range"
+					min="0.70"
+					max="0.95"
+					step="0.01"
+					bind:value={threshold}
+					oninput={onThresholdChange}
+					class="flex-1 accent-synapse"
+					aria-label="Similarity threshold"
+				/>
+				<span class="w-14 text-right font-mono text-sm text-bright">
+					{(threshold * 100).toFixed(0)}%
+				</span>
+			</label>
+		{/if}
 
-		<button
-			type="button"
-			onclick={detect}
-			disabled={loading}
-			class="rounded-lg bg-white/[0.04] px-3 py-1.5 text-xs text-dim transition hover:bg-white/[0.08] hover:text-text disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60"
-		>
-			Rerun
-		</button>
+		<!-- Results pill + Rerun. On a phone in the ERROR state these are suppressed so
+		     the standalone error card below is the SINGLE error affordance (message +
+		     Retry) instead of also showing an "Error" pill + "Rerun" here — redundant
+		     messaging wastes scarce vertical space. Desktop (landscape) keeps both and
+		     stays byte-identical. -->
+		{#if !(error && isPortrait)}
+			<div
+				class="flex items-center gap-2 rounded-full border border-synapse/20 bg-synapse/10 px-3 py-1.5 text-xs text-text"
+				role="status"
+				aria-live="polite"
+			>
+				{#if loading}
+					<span class="breathe h-2 w-2 rounded-full bg-synapse-glow text-synapse-glow"></span>
+					<span>Detecting…</span>
+				{:else if error}
+					<span class="h-2 w-2 rounded-full bg-decay"></span>
+					<span class="text-decay">Error</span>
+				{:else}
+					<span class="breathe h-2 w-2 rounded-full bg-synapse-glow text-synapse-glow"></span>
+					<span class="tabular-nums">
+						{#if visibleClusters.length < apiTotal}
+							<AnimatedNumber value={visibleClusters.length} /> visible of {apiTotal} clusters
+						{:else}
+							<AnimatedNumber value={visibleClusters.length} />
+							{visibleClusters.length === 1 ? 'cluster' : 'clusters'}
+						{/if}
+						· <AnimatedNumber value={totalImplicated} /> memories implicated
+					</span>
+				{/if}
+			</div>
+
+			<button
+				type="button"
+				onclick={detect}
+				disabled={loading}
+				class="rounded-lg bg-white/[0.04] px-3 py-1.5 text-xs text-dim transition hover:bg-white/[0.08] hover:text-text disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60"
+			>
+				Rerun
+			</button>
+		{/if}
 	</div>
 
 	<!-- Field pick inspector -->

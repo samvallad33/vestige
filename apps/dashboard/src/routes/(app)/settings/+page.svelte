@@ -26,6 +26,7 @@
 	import type {
 		ConsolidationResult,
 		DreamResult,
+		HealthCheck,
 		RetentionDistribution,
 		SystemStats
 	} from '$types';
@@ -50,15 +51,15 @@
 	const REVEAL = 1;
 	const READ_DEPTH = 0.95;
 
-	const DEMO_NODE_TYPES = ['fact', 'concept', 'pattern', 'decision', 'person', 'place'];
-
 	// ── Live console state ──────────────────────────────────────────────────────
 	let stats = $state<SystemStats | null>(null);
+	// Real backend version + health, from GET /health (CARGO_PKG_VERSION). Never
+	// hardcode the version — it must reflect the actual running binary.
+	let health = $state<HealthCheck | null>(null);
 	let retention = $state<RetentionDistribution | null>(null);
 	let consolidation = $state<ConsolidationResult | null>(null);
 	let dream = $state<DreamResult | null>(null);
 	let busy = $state<null | 'consolidate' | 'dream' | 'refresh'>(null);
-	let birthCount = $state(0);
 	let statusLine = $state('READY');
 	let loading = $state(true);
 
@@ -120,17 +121,43 @@
 
 	onMount(() => {
 		void loadData();
+		// Rebuild the console when the viewport crosses the portrait threshold (rotate
+		// / resize) so the stacked-vs-columns layout switches. rAF-debounced + bucketed
+		// so a continuous drag doesn't thrash. buildConsoleItems reads the live aspect.
+		let raf = 0;
+		let lastPortrait = isPortrait();
+		const onResize = () => {
+			if (raf) return;
+			raf = requestAnimationFrame(() => {
+				raf = 0;
+				const p = isPortrait();
+				if (p !== lastPortrait) {
+					lastPortrait = p;
+					consolePass?.refresh();
+					consoleField?.setCells(buildConsoleCells());
+				}
+			});
+		};
+		window.addEventListener('resize', onResize);
+		window.addEventListener('orientationchange', onResize);
+		return () => {
+			if (raf) cancelAnimationFrame(raf);
+			window.removeEventListener('resize', onResize);
+			window.removeEventListener('orientationchange', onResize);
+		};
 	});
 
 	async function loadData(): Promise<void> {
 		loading = true;
 		try {
-			const [s, r] = await Promise.all([
+			const [s, r, h] = await Promise.all([
 				api.stats().catch(() => null),
-				api.retentionDistribution().catch(() => null)
+				api.retentionDistribution().catch(() => null),
+				api.health().catch(() => null)
 			]);
 			stats = s;
 			retention = r;
+			health = h;
 		} finally {
 			loading = false;
 		}
@@ -144,9 +171,6 @@
 				break;
 			case 'settings:action:dream':
 				await runDream();
-				break;
-			case 'settings:action:birth':
-				fireBirth();
 				break;
 			case 'settings:action:refresh':
 				await runRefresh();
@@ -184,21 +208,6 @@
 		}
 	}
 
-	function fireBirth(): void {
-		const type = DEMO_NODE_TYPES[birthCount % DEMO_NODE_TYPES.length];
-		birthCount++;
-		websocket.injectEvent({
-			type: 'MemoryCreated',
-			data: {
-				id: `demo-birth-${Date.now()}`,
-				content: `Demo memory #${birthCount} - ${type}`,
-				node_type: type,
-				tags: ['demo', 'v2.3-birth-ritual'],
-				retention: 0.9
-			}
-		});
-		statusLine = `BIRTH ORB INJECTED - ${type.toUpperCase()} (SEE GRAPH)`;
-	}
 
 	async function runRefresh(): Promise<void> {
 		busy = 'refresh';
@@ -214,9 +223,36 @@
 	function createSettingsPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
 		const field = new LivingFieldPass(engine);
 		consoleField = field;
+		// Preserve the verified dim portrait treatment exactly. On desktop, enrich
+		// the tissue outside a tighter reading well: the well keeps every MSDF row
+		// crisp while the otherwise empty perimeter becomes a living backdrop.
+		// Branch from the engine's live viewport rather than a device-width constant.
+		let portraitBucket: boolean | null = null;
+		const applyFieldTreatment = () => {
+			const width = engine.params[6];
+			const height = engine.params[7];
+			if (width <= 0 || height <= 0) return;
+			const portrait = width / height < 0.85;
+			if (portrait === portraitBucket) return;
+			portraitBucket = portrait;
+			if (portrait) {
+				field.setIntensity(0.18);
+				field.setReadingWell({ x: -0.2, y: 0, hw: 0.85, hh: 0.92, floor: 0.06, soft: 0.22 });
+			} else {
+				field.setIntensity(1.0);
+				field.setReadingWell({ x: -0.2, y: 0, hw: 0.62, hh: 0.72, floor: 0.12, soft: 0.14 });
+			}
+		};
+		// Creation precedes the engine's first viewport uniform write, so start with
+		// the portrait-safe values and resolve the live aspect in compute().
+		field.setIntensity(0.18);
+		field.setReadingWell({ x: -0.2, y: 0, hw: 0.85, hh: 0.92, floor: 0.06, soft: 0.22 });
 		field.setCells(buildConsoleCells());
 		const fieldWrapper: RouteFramePass = {
-			compute: (encoder) => field.compute(encoder),
+			compute: (encoder) => {
+				applyFieldTreatment();
+				field.compute(encoder);
+			},
 			render: (renderPass) => field.render(renderPass),
 			dispose: () => {
 				field.dispose();
@@ -276,8 +312,20 @@
 		}
 	}
 
+	// Live viewport aspect (canvas px, window fallback) — the SAME source of truth
+	// portraitAdapt uses. Portrait = narrow phone; drives a single stacked column so
+	// the side-by-side desktop vitals/actions never overprint at ~390px.
+	function isPortrait(): boolean {
+		if (typeof window === 'undefined') return false;
+		const vw = window.innerWidth;
+		const vh = window.innerHeight;
+		if (vw <= 0 || vh <= 0) return false;
+		return vw / vh < 0.85;
+	}
+
 	// ── Layout: build the whole console as MSDF items ───────────────────────────
 	function buildConsoleItems(): TextLayerItem[] {
+		if (isPortrait()) return buildConsoleItemsPortrait();
 		const items: TextLayerItem[] = [];
 
 		// Masthead ----------------------------------------------------------------
@@ -311,7 +359,7 @@
 			base('settings:v-ws', 'settings-vital', online ? 'ONLINE' : 'OFFLINE', 0.04, 0.6, 0.05, online ? RECALL : SCARLET)
 		);
 		items.push(base('settings:v-ver-l', 'settings-vital', 'VESTIGE', 0.5, 0.66, 0.024, FLOW));
-		items.push(base('settings:v-ver', 'settings-vital', `v${stats ? '2.2.0' : '?'}`, 0.5, 0.6, 0.05, LUCIFERIN));
+		items.push(base('settings:v-ver', 'settings-vital', `v${health?.version ?? '?'}`, 0.5, 0.6, 0.05, LUCIFERIN));
 		items.push(
 			base('settings:v-cov', 'settings-vital', `EMBEDDING COVERAGE ${cov.toFixed(0)}%`, -0.9, 0.53, 0.02, FLOW)
 		);
@@ -354,12 +402,11 @@
 				busy === 'dream' ? AMBER : RECALL
 			)
 		);
-		items.push(actionItem('settings:action:birth', '[ TRIGGER BIRTH ]', 0.06, actionY, LUCIFERIN));
 		items.push(
 			actionItem(
 				'settings:action:refresh',
 				busy === 'refresh' ? '[ REFRESHING... ]' : '[ REFRESH ]',
-				0.56,
+				0.2,
 				actionY,
 				busy === 'refresh' ? AMBER : FLOW
 			)
@@ -394,6 +441,110 @@
 				0.018,
 				FLOW,
 				88
+			)
+		);
+
+		return items;
+	}
+
+	// ── Portrait console: ONE left-anchored vertical stack ─────────────────────
+	// The desktop layout packs vitals into 4 side-by-side x-columns and the actions
+	// into 3 — which overprint into garbage at phone width. In portrait we lay every
+	// line on its OWN y in a single column at x=-0.9 (portraitAdapt reclaims the full
+	// authored y-spread to the screen and caps size to fit width), so each vital,
+	// histogram row, and action reads as its own line. Nothing here is a phone-width
+	// magic number: the ONLY gate is the live aspect (isPortrait), and the y-spread is
+	// the same authored ±0.86 the landscape layout uses.
+	function buildConsoleItemsPortrait(): TextLayerItem[] {
+		const items: TextLayerItem[] = [];
+		const X = -0.9;
+		let y = 0.86;
+		const step = 0.066; // one line per row across the reclaimed portrait height
+		const row = () => {
+			const cur = y;
+			y -= step;
+			return cur;
+		};
+
+		// Masthead
+		items.push(base('settings:title', 'settings-title', 'SETTINGS & SYSTEM', X, row(), 0.05, LUCIFERIN));
+		items.push(
+			base('settings:subtitle', 'settings-sub', 'TUNE THE COGNITIVE ENGINE. RUN THE RITUALS.', X, row(), 0.026, FLOW, 40)
+		);
+		y -= step * 0.4;
+
+		// Vitals — each on its OWN line as "LABEL  value" so nothing overprints.
+		const mem = stats?.totalMemories ?? 0;
+		const ret = stats?.averageRetention ?? 0;
+		const cov = stats?.embeddingCoverage ?? 0;
+		const online = $isConnected;
+		items.push(base('settings:v-mem', 'settings-vital', `MEMORIES  ${mem.toLocaleString()}`, X, row(), 0.03, CYAN, 40));
+		items.push(
+			base('settings:v-ret', 'settings-vital', `AVG RETENTION  ${(ret * 100).toFixed(1)}%`, X, row(), 0.03, retentionColor(ret), 40)
+		);
+		items.push(
+			base('settings:v-ws', 'settings-vital', `WEBSOCKET  ${online ? 'ONLINE' : 'OFFLINE'}`, X, row(), 0.03, online ? RECALL : SCARLET, 40)
+		);
+		items.push(base('settings:v-ver', 'settings-vital', `VESTIGE  v${health?.version ?? '?'}`, X, row(), 0.03, LUCIFERIN, 40));
+		items.push(base('settings:v-cov', 'settings-vital', `EMBEDDING COVERAGE  ${cov.toFixed(0)}%`, X, row(), 0.026, FLOW, 40));
+		y -= step * 0.4;
+
+		// Retention distribution — short bars (portrait is width-tight) with the count
+		// on the SAME line so the bar can never overprint the value.
+		items.push(base('settings:hist-h', 'settings-hist', 'RETENTION DISTRIBUTION', X, row(), 0.028, LUCIFERIN, 40));
+		const dist = retention?.distribution ?? [];
+		const maxCount = Math.max(1, ...dist.map((b) => b.count));
+		dist.forEach((bucket, i) => {
+			const bandLo = i * 10;
+			const barLen = Math.round((bucket.count / maxCount) * 10); // short: fits phone width
+			const bar = '#'.repeat(Math.max(bucket.count > 0 ? 1 : 0, barLen));
+			const label = `${String(bandLo).padStart(3, ' ')}% ${bar.padEnd(10, ' ')} ${bucket.count.toLocaleString()}`;
+			items.push(base(`settings:hist-${i}`, 'settings-hist', label, X, row(), 0.022, histColor(i), 40));
+		});
+		y -= step * 0.4;
+
+		// Action buttons — STACKED so each is its own tappable target, not overlapped.
+		items.push(
+			actionItem(
+				'settings:action:consolidate',
+				busy === 'consolidate' ? '[ CONSOLIDATING... ]' : '[ CONSOLIDATE ]',
+				X,
+				row(),
+				busy === 'consolidate' ? AMBER : CYAN
+			)
+		);
+		items.push(
+			actionItem('settings:action:dream', busy === 'dream' ? '[ DREAMING... ]' : '[ DREAM ]', X, row(), busy === 'dream' ? AMBER : RECALL)
+		);
+		items.push(
+			actionItem('settings:action:refresh', busy === 'refresh' ? '[ REFRESHING... ]' : '[ REFRESH ]', X, row(), busy === 'refresh' ? AMBER : FLOW)
+		);
+		y -= step * 0.3;
+
+		// Status + results
+		items.push(base('settings:status', 'settings-status', `> ${statusLine}`, X, row(), 0.024, LUCIFERIN, 40));
+		if (consolidation) {
+			const c = consolidation;
+			const line = `PROCESSED ${c.nodesProcessed}  DECAYED ${c.decayApplied}  MERGED ${c.duplicatesMerged}  ${c.durationMs}MS`;
+			items.push(base('settings:res-c', 'settings-result', line, X, row(), 0.02, RECALL, 40));
+		}
+		if (dream) {
+			const d = dream;
+			const line = `REPLAYED ${d.memoriesReplayed}  CONNECTIONS ${d.connectionsPersisted}  INSIGHTS ${d.insights?.length ?? 0}`;
+			items.push(base('settings:res-d', 'settings-result', line, X, row(), 0.02, RECALL, 40));
+		}
+
+		// Footer — readable size (the desktop 0.018 renders illegibly tiny on a phone).
+		items.push(
+			base(
+				'settings:about',
+				'settings-about',
+				'RUST + AXUM + SVELTEKIT + WEBGPU  |  FSRS-6  |  NOMIC v1.5  |  LOCAL-FIRST',
+				X,
+				-0.9,
+				0.02,
+				FLOW,
+				40
 			)
 		);
 

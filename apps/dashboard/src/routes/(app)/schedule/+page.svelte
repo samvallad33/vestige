@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
 	import { api } from '$stores/api';
 	import type { Memory } from '$types';
@@ -29,9 +29,37 @@
 	let memories: Memory[] = $state([]);
 	let loading = $state(true);
 	let error: string | null = $state(null);
+	let engineRef: ObservatoryEngine | null = null;
+
+	// Live viewport aspect (canvas px) — same signal TextLayerPass.portraitAdapt
+	// reads (engine.params[6]/[7]), with a window fallback for the pre-frame-0
+	// pass. NEVER a hardcoded phone width; desktop (aspect>=0.85) is untouched.
+	function viewportAspect(): number {
+		let vw = engineRef?.params[6] || 0;
+		let vh = engineRef?.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return 1;
+		return vw / vh;
+	}
+
+	// Trim to a cap on a word boundary so a portrait row never ends mid-token.
+	function trimSnippet(text: string, cap: number): string {
+		const s = sanitizeAscii(text).replace(/\s+/g, ' ').trim();
+		if (s.length <= cap) return s;
+		const hard = s.slice(0, cap);
+		const lastSpace = hard.lastIndexOf(' ');
+		return lastSpace > cap * 0.6 ? hard.slice(0, lastSpace) : hard;
+	}
 
 	onMount(() => {
 		void loadSchedule();
+	});
+
+	onDestroy(() => {
+		engineRef = null;
 	});
 
 	async function loadSchedule() {
@@ -102,14 +130,19 @@
 		return clamp01(1 - days / 30);
 	}
 
-	function scheduleLine(memory: Memory, nowMs: number): string {
-		const snippet = sanitizeAscii(memory.content).replace(/\s+/g, ' ').trim().slice(0, 48);
+	function scheduleLine(memory: Memory, nowMs: number, portrait = false): string {
 		const next = dueAt(memory);
 		const days = Number.isFinite(next) ? Math.ceil((next - nowMs) / 86_400_000) : 9999;
 		const due = days < 0 ? `${Math.abs(days)}D OVER` : days === 0 ? 'DUE 0D' : `DUE ${days}D`;
-		return sanitizeAscii(
-			`${snippet} | ${memory.id.slice(0, 8)} | ${due} | ${Math.round(memory.retentionStrength * 100)}%`
-		);
+		const pct = `${Math.round(memory.retentionStrength * 100)}%`;
+		// Portrait: drop the id column and shorten the snippet so the row fits the
+		// narrow width on one readable line — never edge-to-edge, never truncated
+		// mid-word. Desktop keeps the full, byte-identical row.
+		if (portrait) {
+			return sanitizeAscii(`${trimSnippet(memory.content, 26)}  ${due} ${pct}`);
+		}
+		const snippet = sanitizeAscii(memory.content).replace(/\s+/g, ' ').trim().slice(0, 48);
+		return sanitizeAscii(`${snippet} | ${memory.id.slice(0, 8)} | ${due} | ${pct}`);
 	}
 
 	function dueMemories(source: Memory[]): Memory[] {
@@ -161,9 +194,101 @@
 	);
 
 	function buildTextItems(routeScene: RouteSceneModel): ScheduleTextItem[] {
+		const nodes = routeScene.nodes;
+		const portrait = viewportAspect() < 0.85;
+
+		if (portrait) {
+			// Phone plan: ONE focal header + a short, well-spaced column with real
+			// negative space instead of a 40-deep edge-to-edge wall. Row count derives
+			// from the LIVE aspect (taller/narrower -> fewer rows), never a fixed phone
+			// number. Rows carry a short, word-boundary-trimmed label so they never run
+			// off the right edge or truncate mid-word. Desktop is untouched.
+			const aspect = viewportAspect();
+			const portraitness = clamp01((0.85 - aspect) / (0.85 - 0.42));
+			const rowCount = Math.max(9, Math.round(12 - 3 * portraitness));
+			const rows = nodes.slice(0, rowCount);
+			if (rows.length === 0) {
+				return [
+					{
+						id: 'schedule:header',
+						kind: 'schedule-header',
+						text: 'REVIEW SCHEDULE',
+						x: -0.6,
+						y: 0.82,
+						size: 0.032,
+						color: CYAN,
+						depth: 0.9,
+						weight: 0.6,
+						startFrame: -100000,
+						revealSpan: 1,
+						maxWidthEm: 26
+					},
+					{
+						id: 'schedule:empty',
+						kind: 'schedule-header',
+						text: 'Nothing due for review',
+						x: -0.62,
+						y: 0.1,
+						size: 0.03,
+						color: AMBER,
+						depth: 0.85,
+						weight: 0.5,
+						startFrame: -100000,
+						revealSpan: 1,
+						maxWidthEm: 28
+					}
+				];
+			}
+			const nowMs = Date.now();
+			const memById = new Map(memories.map((memory) => [memory.id, memory]));
+			const header: ScheduleTextItem = {
+				id: 'schedule:header',
+				kind: 'schedule-header',
+				text: `REVIEW SCHEDULE  ${scheduled.length} DUE`,
+				x: -0.72,
+				y: 0.82,
+				size: 0.03,
+				color: CYAN,
+				depth: 0.9,
+				weight: 0.6,
+				startFrame: -100000,
+				revealSpan: 1,
+				maxWidthEm: 30
+			};
+			const top = 0.6;
+			const bottom = -0.72;
+			const rowStep = rows.length > 1 ? (top - bottom) / (rows.length - 1) : 0;
+			return [
+				header,
+				...rows.map((node, i) => {
+					const memory = memById.get(node.source.id);
+					const text = memory
+						? scheduleLine(memory, nowMs, true)
+						: sanitizeAscii(node.label).slice(0, 34);
+					return {
+						id: `schedule:${node.source.id}`,
+						kind: 'schedule-memory',
+						memoryId: node.source.id,
+						text,
+						x: -0.82,
+						y: top - i * rowStep,
+						size: 0.03,
+						color: urgencyByNode(node.activation ?? 0, node.retention),
+						depth: clamp01(0.7 + (node.activation ?? 0) * 0.3),
+						weight: clamp01(node.retention),
+						startFrame: -100000,
+						revealSpan: 1,
+						maxWidthEm: 34,
+						hitPadX: 0.05,
+						hitPadY: 0.03
+					} satisfies ScheduleTextItem;
+				})
+			];
+		}
+
 		const top = 0.74;
 		const rowStep = 1.52 / Math.max(1, ROW_LIMIT - 1);
-		return routeScene.nodes.slice(0, ROW_LIMIT).map((node, i) => ({
+		return nodes.slice(0, ROW_LIMIT).map((node, i) => ({
 			id: `schedule:${node.source.id}`,
 			kind: 'schedule-memory',
 			memoryId: node.source.id,
@@ -234,7 +359,17 @@
 
 	class ScheduleFieldPass implements RouteFramePass {
 		private field: LivingFieldPass;
-		constructor(engine: ObservatoryEngine) { this.field = new LivingFieldPass(engine); }
+		constructor(engine: ObservatoryEngine) {
+			this.field = new LivingFieldPass(engine);
+			// TEXT-HEAVY organ: field is a DIM backdrop, never a blob that drowns
+			// the 40-row due list. Intensity 0.22 keeps it a living whisper.
+			this.field.setIntensity(0.22);
+			// The schedule rows are anchored in a tall LEFT column: x from -0.9
+			// extending right, y from +0.74 down to ~-0.78 (top=0.74, 40 rows @
+			// rowStep). Carve a reading well over that column so the labels/values
+			// stay crisp against the field.
+			this.field.setReadingWell({ x: -0.35, y: -0.02, hw: 0.72, hh: 0.86, floor: 0.06, soft: 0.24 });
+		}
 		uploadScene(scene: RouteSceneModel): void {
 			const data: FieldDatum[] = scene.nodes.map((node) => ({
 				id: node.source.id,
@@ -255,6 +390,7 @@
 	}
 
 	function createSchedulePasses(engine: ObservatoryEngine, initialScene: RouteSceneModel): RouteFramePass[] {
+		engineRef = engine;
 		const field = new ScheduleFieldPass(engine);
 		field.uploadScene(initialScene);
 		return [field, new ScheduleTextPass(engine, initialScene)];

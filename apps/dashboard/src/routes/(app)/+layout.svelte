@@ -1,4 +1,5 @@
 <script lang="ts">
+	import MobileNav from '$lib/components/MobileNav.svelte';
 	let { children } = $props();
 </script>
 
@@ -12,4 +13,5 @@
 -->
 <div class="relative h-[100dvh] w-full overflow-hidden">
 	{@render children()}
+	<MobileNav />
 </div>

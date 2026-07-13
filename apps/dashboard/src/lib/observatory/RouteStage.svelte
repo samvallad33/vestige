@@ -171,48 +171,72 @@
 			.replace(/[^\x20-\x7E]/g, '?');
 	}
 
+	// Portrait/phone check — same live-aspect signal the text + field layers use
+	// (engine.params[6]/[7], window fallback). On a phone the in-canvas HUD chrome
+	// (dev telemetry + the floating PAUSE) is SUPPRESSED: it has fixed landscape
+	// NDC anchors that overprint the reflowed content, the telemetry is debug-only
+	// noise a real user shouldn't see, and the DOM MobileNav already owns the
+	// bottom-thumb zone. Desktop keeps the full chrome unchanged.
+	function isPortrait(): boolean {
+		let vw = engine?.params[6] || 0;
+		let vh = engine?.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return false;
+		return vw / vh < 0.85;
+	}
+
 	function makeChromeItems(frame = frameCount, fps = fpsEstimate): TextLayerItem[] {
-		const items: TextLayerItem[] = [
-			{
-				id: 'route-chrome:pause',
-				kind: 'route-chrome',
-				text: paused ? '> RESUME' : '|| PAUSE',
-				x: 0.66,
-				y: -0.86,
-				size: 0.034,
-				color: paused ? AMBER : CYAN,
-				revealSpan: 1
-			},
-			{
-				id: 'route-chrome:telemetry',
-				kind: 'route-telemetry',
-				text: `${organ.toUpperCase()} - ${frame}F - ${fps}FPS`,
-				x: 0.44,
-				y: 0.88,
-				size: 0.022,
-				color: DIM_GREEN,
-				revealSpan: 1
-			}
-		];
+		const portrait = isPortrait();
+		// Desktop: floating PAUSE + dev telemetry. Phone: neither (see isPortrait).
+		const items: TextLayerItem[] = portrait
+			? []
+			: [
+					{
+						id: 'route-chrome:pause',
+						kind: 'route-chrome',
+						text: paused ? '> RESUME' : '|| PAUSE',
+						x: 0.66,
+						y: -0.86,
+						size: 0.034,
+						color: paused ? AMBER : CYAN,
+						revealSpan: 1
+					},
+					{
+						id: 'route-chrome:telemetry',
+						kind: 'route-telemetry',
+						text: `${organ.toUpperCase()} - ${frame}F - ${fps}FPS`,
+						x: 0.44,
+						y: 0.88,
+						size: 0.022,
+						color: DIM_GREEN,
+						revealSpan: 1
+					}
+				];
 
 		if (loading) {
 			items.push({
 				id: 'route-chrome:loading',
 				kind: 'route-status',
 				text: 'REPLAYING COGNITIVE RECEIPT...',
-				x: -0.23,
+				x: portrait ? -0.82 : -0.23,
 				y: 0.02,
-				size: 0.046,
+				size: portrait ? 0.03 : 0.046,
 				color: OXYGEN,
 				startFrame: Math.max(0, frame - 90),
-				revealSpan: 72
+				revealSpan: 72,
+				maxWidthEm: portrait ? 26 : undefined
 			});
 		} else if (error) {
 			items.push(
 				{
 					id: 'route-chrome:error-pulse',
 					kind: 'route-status-pulse',
-					text: '!!!!!!!!!!!!!!!!!!!!!!!!',
+					// The '!!!' pulse bar is a landscape flourish; drop it on a phone
+					// (it overprints the error text once the field reflows narrow).
+					text: portrait ? '' : '!!!!!!!!!!!!!!!!!!!!!!!!',
 					x: -0.36,
 					y: -0.035,
 					size: 0.025,
@@ -223,12 +247,12 @@
 					id: 'route-chrome:error',
 					kind: 'route-status',
 					text: asciiSafe(`ERROR - ${error}`).slice(0, 72),
-					x: -0.54,
+					x: portrait ? -0.82 : -0.54,
 					y: 0.025,
-					size: 0.032,
+					size: portrait ? 0.028 : 0.032,
 					color: SCARLET,
 					revealSpan: 14,
-					maxWidthEm: 48
+					maxWidthEm: portrait ? 24 : 48
 				}
 			);
 		} else if (!currentScene.alive) {
@@ -236,9 +260,9 @@
 				id: 'route-chrome:empty',
 				kind: 'route-status',
 				text: asciiSafe(emptyLabel),
-				x: -0.36,
+				x: portrait ? -0.82 : -0.36,
 				y: 0.02,
-				size: 0.034,
+				size: portrait ? 0.03 : 0.034,
 				color: DIM_GREEN,
 				revealSpan: 24,
 				maxWidthEm: 48

@@ -20,6 +20,21 @@
 
 	let textPass: TextLayerPass | null = null;
 	let focusedRun: string | null = null;
+	// engine handle captured in the pass factory so buildTextItems can read the live
+	// viewport aspect (params[6]/[7]) for portrait-only event-line shortening.
+	let engineHandle: ObservatoryEngine | null = null;
+
+	// Live viewport aspect, same source (and window fallback) TextLayerPass.portraitAdapt
+	// uses. On a phone a full 138-char event line can't be size-boosted (it already
+	// fills the width), so portrait renders a SHORTER line that portraitAdapt can grow
+	// to a readable size. NOTHING is hardcoded per width — it scales with aspect.
+	function isPortrait(): boolean {
+		const vw = engineHandle?.params[6] || 0;
+		const vh = engineHandle?.params[7] || 0;
+		if (vw > 0 && vh > 0) return vw / vh < 0.85;
+		if (typeof window !== 'undefined' && window.innerHeight > 0) return window.innerWidth / window.innerHeight < 0.85;
+		return false;
+	}
 
 	let feedScene: RouteSceneModel = $derived(buildFeedScene($eventFeed));
 
@@ -28,6 +43,7 @@
 	});
 
 	function createFeedPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		engineHandle = engine;
 		const field = new FeedFieldPass(engine);
 		field.uploadScene(scene);
 		const pass = new TextLayerPass(engine);
@@ -65,19 +81,56 @@
 		private field: LivingFieldPass;
 		constructor(engine: ObservatoryEngine) {
 			this.field = new LivingFieldPass(engine);
+			const vw = engine.params[6] || (typeof window !== 'undefined' ? window.innerWidth : 0);
+			const vh = engine.params[7] || (typeof window !== 'undefined' ? window.innerHeight : 1);
+			const portrait = vw / Math.max(1, vh) < 0.85;
+			// Preserve the verified portrait substrate exactly; desktop has enough room
+			// for a richer field while the reading well protects every feed row.
+			this.field.setIntensity(portrait ? 0.22 : 0.9);
+			// Feed rows are left-anchored (x=-0.9) but stream rightward as wide lines
+			// (maxWidthEm 58 ~= full width), stacked from y=+0.72 down to y=-0.78. A
+			// left-column-only well would leave the right half of every row drowning,
+			// so the reading well spans the whole text band the rows occupy. Desktop's
+			// higher floor lets structure breathe through without competing with glyphs.
+			this.field.setReadingWell({
+				x: portrait ? 0 : -0.08,
+				y: portrait ? -0.02 : 0.62,
+				hw: portrait ? 0.94 : 0.62,
+				hh: portrait ? 0.84 : 0.24,
+				floor: 0.06,
+				soft: 0.22
+			});
 		}
 		uploadScene(scene: RouteSceneModel): void {
-			const events = scene.nodes.map((node, index) => ({ node, event: $eventFeed[index] })).filter((item) => item.event);
-			const data: FieldDatum[] = events.map(({ node, event }) => ({
-				id: node.source.id,
-				score: node.retention,
-				hue: eventImpulse01(event.type),
-				energy: node.activation,
-				metric2: node.trust,
-				scar: event.type.includes('Deleted') || event.type.includes('Demoted') || event.type.includes('Verdict'),
-				kind: 'feed-event',
-				payload: event
-			}));
+			const data: FieldDatum[] = scene.nodes.map((node, index) => {
+				const event = $eventFeed[index];
+				return {
+					id: node.source.id,
+					score: node.retention,
+					hue: event ? eventImpulse01(event.type) : [CYAN[0], CYAN[1], CYAN[2]],
+					energy: node.activation,
+					metric2: node.trust,
+					scar: node.type.includes('Deleted') || node.type.includes('Demoted') || node.type.includes('Verdict'),
+					kind: 'feed-event',
+					payload: event
+				};
+			});
+			const portrait = isPortrait();
+			// A desktop feed can legitimately be quiet at the exact sampling instant.
+			// Anchor that real connection state as the ambient cell so the substrate
+			// stays alive without changing the verified empty portrait treatment.
+			if (data.length === 0 && !portrait) {
+				const connected = scene.scalars.connected > 0;
+				data.push({
+					id: 'feed:stream-state',
+					score: connected ? 0.72 : 0.48,
+					hue: [CYAN[0], CYAN[1], CYAN[2]],
+					energy: scene.scalars.reconnecting > 0 ? 0.82 : 0.56,
+					metric2: connected ? 0.76 : 0.42,
+					kind: 'feed-stream-state',
+					payload: { connected, reconnecting: scene.scalars.reconnecting > 0 }
+				});
+			}
 			// A quiet live stream may contain only a couple real events — give those a
 			// broad shockwave so the field still fills. But a busy stream (up to
 			// ROW_LIMIT events) needs SMALL cells or they overlap into one blob; scale
@@ -86,9 +139,10 @@
 			this.field.setCells(
 				layoutGalaxy(data, {
 					maxRadius: sparse ? 0.78 : 0.92,
-					minCellR: sparse ? 0.24 : 0.018,
-					maxCellR: sparse ? 0.32 : 0.06
-				})
+					minCellR: sparse ? (portrait ? 0.24 : 0.62) : 0.018,
+					maxCellR: sparse ? (portrait ? 0.32 : 0.78) : 0.06
+				}),
+				portrait ? undefined : { ambient: 0.5 }
 			);
 		}
 		compute(encoder: GPUCommandEncoder): void { this.field.compute(encoder); }
@@ -131,6 +185,11 @@
 
 	function buildTextItems(events: VestigeEvent[], connected: boolean, reconnecting: boolean): FeedTextItem[] {
 		const rows = events.slice(0, ROW_LIMIT);
+		// Every new-in-this-fix item is gated to portrait so the 1440px desktop render
+		// stays byte-identical (the desktop path below is the ORIGINAL feed layout).
+		if (isPortrait()) return buildPortraitItems(rows, connected, reconnecting);
+
+		// ── DESKTOP (unchanged): empty -> connection status; populated -> wide rows ──
 		if (rows.length === 0) {
 			return [statusItem(connectionPayload(connected, reconnecting), reconnecting ? AMBER : connected ? MUTED : SCARLET)];
 		}
@@ -163,6 +222,108 @@
 		});
 	}
 
+	// ── PORTRAIT: content-first, readable feed for a phone. A first-time visitor gets
+	// a real title, a plain-English status, and either a legible empty state or short
+	// event rows sized to fit. All of this is portrait-only; desktop keeps its layout.
+	function buildPortraitItems(rows: VestigeEvent[], connected: boolean, reconnecting: boolean): FeedTextItem[] {
+		const items: FeedTextItem[] = [];
+		items.push({
+			id: 'feed:title',
+			kind: 'feed-title',
+			text: 'LIVE FEED',
+			x: -0.94,
+			y: 0.9,
+			size: 0.04,
+			color: CYAN,
+			depth: 1,
+			weight: 0.9,
+			revealSpan: 12
+		});
+		items.push({
+			id: 'feed:status',
+			kind: 'feed-state',
+			text: connectionLine(connected, reconnecting, rows.length),
+			x: -0.94,
+			y: 0.82,
+			size: 0.022,
+			color: reconnecting ? AMBER : connected ? MUTED : SCARLET,
+			depth: 0.85,
+			weight: 0.62,
+			revealSpan: 18,
+			maxWidthEm: 40
+		});
+
+		if (rows.length === 0) {
+			// Legible empty state — explain what will appear here instead of a black void.
+			items.push({
+				id: 'feed:empty-1',
+				kind: 'feed-empty',
+				text: connected ? 'WAITING FOR LIVE ACTIVITY' : 'STREAM OFFLINE',
+				x: -0.7,
+				y: 0.12,
+				size: 0.03,
+				color: connected ? CYAN : SCARLET,
+				depth: 0.7,
+				weight: 0.7,
+				revealSpan: 20,
+				maxWidthEm: 40
+			});
+			items.push({
+				id: 'feed:empty-2',
+				kind: 'feed-empty',
+				text: connected
+					? 'Recalls, ingests and consolidations stream here as they happen.'
+					: 'Reconnecting to the live event stream...',
+				x: -0.7,
+				y: 0.02,
+				size: 0.02,
+				color: MUTED,
+				depth: 0.55,
+				weight: 0.5,
+				revealSpan: 24,
+				maxWidthEm: 40
+			});
+			return items;
+		}
+
+		// A full 138-char line already fills the phone width, so portraitAdapt can't
+		// grow it and it renders phone-tiny. Render a SHORT line (type + summary, no id),
+		// fewer rows, at a larger authored size that fits and reads.
+		const visible = rows.slice(0, 12);
+		const top = 0.68;
+		const rowStep = 0.13;
+		visible.forEach((event, index) => {
+			const key = eventKey(event, index);
+			items.push({
+				id: `feed:${key}`,
+				kind: 'feed-event',
+				event,
+				eventKey: key,
+				text: eventLineShort(event),
+				x: -0.9,
+				y: top - index * rowStep,
+				size: 0.03,
+				color: eventColor(event),
+				depth: 0.6 + 0.4 * recencyDepth(visible, event, index),
+				weight: eventEnergy(event),
+				startFrame: 0,
+				revealSpan: 1,
+				maxWidthEm: 34,
+				hitPadX: 0.03,
+				hitPadY: 0.013
+			});
+		});
+		return items;
+	}
+
+	// Human-readable status line — never a raw ISO timestamp (it overflowed the phone
+	// edge) and never JSON. Short, self-explanatory, and count-aware.
+	function connectionLine(connected: boolean, reconnecting: boolean, count: number): string {
+		const state = reconnecting ? 'RECONNECTING' : connected ? 'CONNECTED' : 'OFFLINE';
+		const suffix = count > 0 ? `${count} EVENT${count === 1 ? '' : 'S'}` : 'LIVE';
+		return sanitizeAscii(`${state} - ${suffix}`);
+	}
+
 	function statusItem(text: string, color: [number, number, number, number]): FeedTextItem {
 		return {
 			id: 'feed:connection-state',
@@ -179,9 +340,20 @@
 		};
 	}
 
+	function connectionPayload(connected: boolean, reconnecting: boolean): string {
+		return JSON.stringify({ connected, reconnecting, events: 0 });
+	}
+
 	function eventLine(event: VestigeEvent, key: string): string {
 		const summary = payloadSummary(event.data);
 		return sanitizeAscii(`${event.type} | ${key.slice(0, 24)} | ${summary}`.slice(0, 138));
+	}
+
+	// Portrait row: short enough that portraitAdapt can size-boost it to a readable
+	// height on a phone. Event type + a compact payload summary, no id column.
+	function eventLineShort(event: VestigeEvent): string {
+		const summary = payloadSummary(event.data);
+		return sanitizeAscii(`${event.type} - ${summary}`.slice(0, 46));
 	}
 
 	function payloadSummary(data: Record<string, unknown>): string {
@@ -206,10 +378,6 @@
 			d.at ??
 			`${event.type}:${index}`;
 		return sanitizeAscii(String(raw));
-	}
-
-	function connectionPayload(connected: boolean, reconnecting: boolean): string {
-		return JSON.stringify({ connected, reconnecting, events: 0 });
 	}
 
 	function eventEnergy(event: VestigeEvent): number {
@@ -291,6 +459,6 @@
 	passes={createFeedPasses}
 	loading={false}
 	error={null}
-	emptyLabel={connectionPayload($isConnected, $isReconnecting)}
+	emptyLabel=""
 	onpick={handleRoutePick}
 />

@@ -57,9 +57,37 @@
 	function clampGraph(v: number): number {
 		return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
 	}
+	// Field intensity derived from the LIVE viewport aspect (engine params, window
+	// fallback) — nothing hardcoded per phone width. Desktop/landscape (aspect>=0.85)
+	// keeps the field as the hero at 0.8. On portrait phones the field is a blinding
+	// blob behind the DOM controls (bottom stats, top chips); dim it toward a
+	// backdrop the tighter the aspect gets, so the foreground UI reads.
+	function fieldIntensityForAspect(engine: ObservatoryEngine): number {
+		let vw = engine.params[6] || 0;
+		let vh = engine.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return 0.8;
+		const aspect = vw / vh;
+		if (aspect >= 0.85) return 0.8;
+		// portraitness 0 at aspect 0.85 -> 1 at aspect 0.46 (narrow phone). Ramp the
+		// hero 0.8 down to a dim ~0.34 backdrop so the bright bloom core stops
+		// competing with the DOM controls and reads as a backdrop, not a blob.
+		const portraitness = Math.min(1, Math.max(0, (0.85 - aspect) / (0.85 - 0.46)));
+		return 0.8 - 0.46 * portraitness;
+	}
+
 	function handleFieldReady(engine: ObservatoryEngine) {
 		const field = new LivingFieldPass(engine);
 		graphFieldPass = field;
+		// Visual organ: the field IS the content (the living memory galaxy), so on
+		// desktop keep it the hero at high intensity. No reading well — nothing to
+		// protect for legibility; the graph cells are the thing to read. On portrait
+		// the intensity is dimmed (aspect-derived) so the blinding core stops fighting
+		// the DOM controls.
+		field.setIntensity(fieldIntensityForAspect(engine));
 		field.setCells(buildGraphFieldCells());
 		engine.addPass(field);
 	}
@@ -177,8 +205,11 @@
 
 	onMount(() => {
 		// Renderer choice: honor the saved preference, defaulting to the WebGPU
-		// field wherever the GPU exists. No WebGPU → classic, always.
-		const hasWebGpu = typeof navigator !== 'undefined' && 'gpu' in navigator;
+		// field wherever the GPU exists. No WebGPU → classic, always. NOTE: check
+		// navigator.gpu is TRUTHY, not just `'gpu' in navigator` — the key can exist
+		// while the value is undefined (feature present but disabled), which would
+		// otherwise send us into field mode straight to the offline card.
+		const hasWebGpu = typeof navigator !== 'undefined' && !!navigator.gpu;
 		let saved: string | null = null;
 		try {
 			saved = localStorage.getItem(RENDERER_KEY);
@@ -349,7 +380,7 @@ disown</code>
 			<div class="text-center space-y-4 max-w-md px-8 enter">
 				<div class="mx-auto w-fit text-synapse-glow opacity-50 breathe"><Icon name="graph" size={52} strokeWidth={1.2} /></div>
 				<h2 class="text-xl text-bright text-aurora">Your Mind Awaits</h2>
-				<p class="text-dim text-sm">No memories yet — the moment Vestige starts remembering, your constellation will bloom here.</p>
+				<p class="text-dim text-sm">No memories yet. The moment Vestige starts remembering, your constellation will bloom here.</p>
 			</div>
 		</div>
 	{:else if error}
@@ -425,7 +456,7 @@ disown</code>
 					aria-checked={renderMode === 'field'}
 					onclick={() => setRenderMode('field')}
 					class="min-h-9 px-3 py-1.5 rounded-lg transition {renderMode === 'field' ? 'bg-[#5dcaa5]/25 text-[#7fe6c0]' : 'text-dim hover:text-text'}"
-					title="Raw-WebGPU living memory field — visuals to the max"
+					title="Raw-WebGPU living memory field: visuals to the max"
 				>
 					✦ Field
 				</button>
@@ -435,7 +466,7 @@ disown</code>
 					aria-checked={renderMode === 'classic'}
 					onclick={() => setRenderMode('classic')}
 					class="min-h-9 px-3 py-1.5 rounded-lg transition {renderMode === 'classic' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
-					title="Classic 3D inspector — node picking, colour modes, temporal scrubbing"
+					title="Classic 3D inspector: node picking, colour modes, temporal scrubbing"
 				>
 					Classic
 				</button>
@@ -706,3 +737,18 @@ disown</code>
 		{/key}
 	</div>
 {/if}
+
+<style>
+	/* Phone/narrow layout: the global MobileNav FAB (bottom-centre, fixed) shows at
+	   <=820px and owns the bottom-centre thumb band. The graph stats pill defaults to
+	   bottom-left, but its text runs wide enough to slide under the centred FAB — the
+	   node/edge/depth counts get clipped and the FAB overprints them. Lift the pill
+	   clear ABOVE the FAB band so both read. The offset clears the FAB's own
+	   rem-based height (not a viewport-derived constant); it tracks the same 820px
+	   breakpoint the FAB uses to appear, so desktop stays byte-identical. */
+	@media (max-width: 820px) {
+		:global(.graph-stats-pill) {
+			bottom: calc(max(1rem, env(safe-area-inset-bottom)) + 4.25rem);
+		}
+	}
+</style>

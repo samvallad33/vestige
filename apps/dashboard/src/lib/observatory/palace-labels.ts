@@ -123,10 +123,30 @@ function clamp01(v: number): number {
  */
 export function buildOrganLabels(
 	positions: OrganScreenPos[],
-	opts: { hoveredHref?: string | null; dimUnhovered?: boolean } = {}
+	opts: { hoveredHref?: string | null; dimUnhovered?: boolean; aspect?: number } = {}
 ): TextLayerItem[] {
 	const hovered = opts.hoveredHref ?? null;
 	const dim = opts.dimUnhovered ?? true;
+
+	// ── Portrait title-guard. On a phone the fixed title HUD ("THE MEMORY PALACE"
+	// + subtitle) lives in the top screen band (authored screen-y ≈ 0.78..0.90),
+	// while the orbital projection lands the top-arc organs (TIMELINE / GRAPH /
+	// MEMORIES) in that SAME band — the labels pile onto the title and it becomes
+	// unreadable. portraitAdapt preserves authored screen-y, so a label projected
+	// into that band renders on top of the title. The cure is to pull every
+	// orbital label DOWN out of the reserved title band. Derived entirely from the
+	// live aspect: the narrower/taller the viewport, the more the top band must be
+	// protected. Landscape/desktop (aspect ≥ 0.85) keeps the authored projection
+	// byte-for-byte, so this is purely a portrait reflow.
+	const aspect = opts.aspect ?? 1;
+	const portrait = aspect < 0.85;
+	// Portraitness 0→1 as aspect narrows from 0.85 to ~0.46 (tall phones). The
+	// title band's lower edge in authored screen-y: on a wide-ish portrait the
+	// subtitle sits at ~0.79, on a tall phone the title needs a touch more room.
+	const portraitness = portrait ? clamp01((0.85 - aspect) / (0.85 - 0.46)) : 0;
+	// Any label whose projected screen-y is above this ceiling gets folded down
+	// below it, keeping the top band clear for the title HUD.
+	const titleCeil = 0.7 - 0.06 * portraitness;
 
 	let n = 0;
 	// Per-frame placed-label rects for greedy de-confliction (deterministic order
@@ -148,6 +168,15 @@ export function buildOrganLabels(
 		const clear = OFFSET_FLOOR + depth * RADIUS_CLEAR;
 		let x = p.ndcX + clear * OFFSET_RIGHT;
 		let y = p.ndcY + clear * OFFSET_UP;
+
+		// Portrait title-guard: fold any label out of the reserved title band so
+		// it never overprints "THE MEMORY PALACE" / the subtitle. Reflect it down
+		// below the ceiling (mirror across titleCeil) so a top-arc orb's caption
+		// still reads, just underneath the title instead of on top of it. The
+		// de-confliction pass below then keeps folded labels from stacking.
+		if (portrait && y > titleCeil) {
+			y = titleCeil - (y - titleCeil);
+		}
 
 		// Size + brightness ride depth; hover overrides to a hot readout.
 		let size = lerp(SIZE_FAR, SIZE_NEAR, depth);

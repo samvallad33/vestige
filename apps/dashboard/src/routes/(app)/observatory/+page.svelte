@@ -58,6 +58,28 @@
 		// of the recall-path scene. Then the MSDF text HUD on top of that.
 		const field = new LivingFieldPass(engine);
 		fieldPass = field;
+		// The "living nervous system" home: the field stays ALIVE (0.60) but a reading
+		// well dims it under the instrument overlay so the nav labels + HUD read. The
+		// well covers the left nav column (RECALL/ENGRAM/... at x=-0.91) and the
+		// right telemetry (NODES/EDGES at x~0.4), the two text regions.
+		//
+		// Portrait phones: the HUD collapses to ONE centred vertical stack
+		// (buildPortraitItems), so the desktop left-side well would miss it and the
+		// bright bloom core would sit right behind the text. On portrait, dim the
+		// whole field harder (backdrop, not a blob) and centre a tall well over the
+		// stack. Everything derives from the live aspect — desktop is untouched.
+		const aspect = portraitAspect();
+		if (aspect !== null) {
+			const portraitness = clamp01((0.85 - aspect) / (0.85 - 0.46));
+			field.setIntensity(0.32 - 0.1 * portraitness);
+			// The centred stack's labels run left-anchored to the right, so bias the
+			// well slightly right and widen it to cover the full label extent — the
+			// recall wavefront sweeping the right side must stay UNDER the text.
+			field.setReadingWell({ x: 0.05, y: 0.05, hw: 0.82, hh: 0.95, floor: 0.04, soft: 0.3 });
+		} else {
+			field.setIntensity(0.6);
+			field.setReadingWell({ x: -0.55, y: 0.1, hw: 0.5, hh: 0.75, floor: 0.08, soft: 0.25 });
+		}
 		field.setCells(buildFieldCells());
 		engine.addPass(field);
 		const pass = new TextLayerPass(engine);
@@ -151,7 +173,131 @@
 		};
 	}
 
+	/**
+	 * Live viewport aspect from the engine params (canvas px) with a window
+	 * fallback — the SAME source TextLayerPass.portraitAdapt reads. Returns the
+	 * aspect only when genuinely portrait/narrow (aspect < 0.85); null otherwise.
+	 * Nothing is hardcoded per phone width; the whole portrait layout scales off
+	 * this one live number, so desktop (>=0.85) is byte-identical.
+	 */
+	function portraitAspect(): number | null {
+		let vw = engineRef?.params[6] || 0;
+		let vh = engineRef?.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return null;
+		const aspect = vw / vh;
+		return aspect < 0.85 ? aspect : null;
+	}
+
+	/**
+	 * Portrait HUD: the desktop layout is FOUR competing columns (nav at x=-0.91,
+	 * receipts at x=-0.67, telemetry at x=0.39, exit at x=0.75). On a phone the
+	 * shared portraitAdapt pulls them all toward centre, so they overprint (the
+	 * "DENTER"/FIREWALL collisions). Instead, author ONE readable vertical stack:
+	 * a centred demo-mode list, a compact telemetry block below it, and EXIT
+	 * pinned top — no side-by-side columns, no dense receipt lines running off the
+	 * right edge. Everything is authored centred (x~0) so portraitAdapt's x-pull
+	 * barely moves it; the y bands are spaced so nothing shares a row.
+	 */
+	function buildPortraitItems(aspect: number): ObservatoryTextItem[] {
+		const items: ObservatoryTextItem[] = [];
+		const graph = graphData;
+		const nodeDepth = graph ? graphMetric(graph.nodeCount, Math.max(1, graph.nodes.length, 200)) : 0.5;
+		const edgeWeight = graph ? graphMetric(graph.edgeCount, Math.max(1, graph.nodeCount * 8)) : 0.5;
+
+		// MSDF labels are LEFT-anchored at their x, so an x of 0 sits the column
+		// right-of-centre. Left-shift the whole stack by a portraitness-scaled
+		// amount (bigger shift on the narrowest phones) so the longest label
+		// ("CENTER c5a42e31-c5f") reads visually centred. portraitAdapt scales x by
+		// (1-xPull); pre-divide so the on-screen anchor lands where we want.
+		const portraitness = clamp01((0.85 - aspect) / (0.85 - 0.46));
+		const anchorX = -0.34 - 0.06 * portraitness;
+
+		// EXIT — top of the stack.
+		items.push({
+			id: 'observatory:exit',
+			kind: 'observatory-exit',
+			action: 'exit',
+			text: sanitizeAscii('EXIT'),
+			x: anchorX,
+			y: 0.86,
+			size: 0.03,
+			color: AMBER,
+			depth: 1,
+			weight: edgeWeight,
+			revealSpan: 10,
+			maxWidthEm: 12,
+			hitPadX: 0.08,
+			hitPadY: 0.05
+		});
+
+		// Demo-mode list — the primary interactive column, centred, generously
+		// spaced so touch targets don't crowd. This is the ONE focal point.
+		const navTop = 0.66;
+		const navStep = 0.15;
+		DEMO_MODES.forEach((mode, i) => {
+			items.push({
+				id: `observatory:demo:${mode}`,
+				kind: 'observatory-demo',
+				action: 'demo',
+				demo: mode,
+				text: demoLabel(mode),
+				x: anchorX,
+				y: navTop - i * navStep,
+				size: 0.032,
+				color: mode === demo ? OXYGEN : GREEN,
+				depth: mode === demo ? 1 : nodeDepth,
+				weight: mode === demo ? 0.9 : edgeWeight,
+				startFrame: i * 2,
+				revealSpan: 14,
+				maxWidthEm: 18,
+				hitPadX: 0.14,
+				hitPadY: 0.05
+			});
+		});
+
+		if (loading) return [...items, statusItem('LOADING MEMORY FIELD...', CYAN)];
+		if (error) return [...items, statusItem(`ERROR - ${error}`.slice(0, 60), SCARLET)];
+		if (!graph || graph.nodeCount === 0) return [...items, statusItem('NO MEMORIES IN FIELD', GREEN)];
+
+		// Telemetry — a compact block BELOW the nav list (not a right-hand column),
+		// so it never shares a row with anything. Short labels only; the long
+		// receipt lines that overflowed the right edge on desktop are dropped on
+		// portrait (desktop density a phone can't read).
+		const telemetry = [
+			`NODES ${graph.nodeCount}`,
+			`EDGES ${graph.edgeCount}`,
+			`DEPTH ${graph.depth}`,
+			`CENTER ${graph.center_id.slice(0, 12)}`
+		];
+		const telTop = navTop - DEMO_MODES.length * navStep - 0.06;
+		const telStep = 0.075;
+		telemetry.forEach((text, i) => {
+			items.push({
+				id: `observatory:telemetry:${i}`,
+				kind: 'observatory-telemetry',
+				text: sanitizeAscii(text),
+				x: anchorX,
+				y: telTop - i * telStep,
+				size: 0.024,
+				color: CYAN,
+				depth: 0.9,
+				weight: edgeWeight,
+				startFrame: 8 + i * 2,
+				revealSpan: 10,
+				maxWidthEm: 24
+			});
+		});
+		return items;
+	}
+
 	function buildTextItems(): ObservatoryTextItem[] {
+		const aspect = portraitAspect();
+		if (aspect !== null) return buildPortraitItems(aspect);
+
 		const items: ObservatoryTextItem[] = [];
 		const graph = graphData;
 		const nodeDepth = graph ? graphMetric(graph.nodeCount, Math.max(1, graph.nodes.length, 200)) : 0.5;

@@ -65,12 +65,47 @@ const SETTLE_MS = 3200;
 // than a static field, so it gets an extended settle before we sample.
 const SLOW_ORGANS: Record<string, number> = { reasoning: 12_000 };
 
-// The liveness bar: the mission requires every organ to be a full-bleed MOVING
-// field (fill >= 35% at full res). The gate samples a 96x96 decode of a real
-// compositor screenshot; a genuinely-filled field (60-89% at full res) reads
-// >= 35% here, while a sparse text-on-black organ reads < 18%. 30% cleanly
-// separates alive from sparse with headroom for settle/downsample variance.
-const MIN_FILL_PCT = 30;
+// The liveness bar. TWO tiers, matching the SHIPPED design direction (Sam's
+// Jul 2026 correction: "the field is COMPLETELY OVERPOWERING THE TEXT" — the
+// field must be a DIM, legible BACKDROP on text-heavy organs, and the hero
+// only on the visual organs).
+//
+//   VISUAL organs (palace, graph, observatory, memories, activation, explore,
+//   timeline, blackbox): the field IS the hero — it fills the screen. High bar.
+//
+//   TEXT-HEAVY organs (stats, settings, reasoning, feed, schedule, importance,
+//   contradictions, patterns, intentions, dreams, memory-prs, duplicates): the
+//   field is a DIM breathing backdrop behind a reading well so the MSDF text
+//   wins the contrast fight (each carries setIntensity ~0.18-0.26 + a reading
+//   well). fill% legitimately reads LOW here BY DESIGN — a high fill would mean
+//   the blinding-blob bug is back. The bar is still "lit + structured + moving,
+//   not black", just a lower fill floor.
+//
+// The gate samples a 96x96 decode of a real compositor screenshot.
+const MIN_FILL_PCT_VISUAL = 30; // field is the hero → must be full-bleed
+const MIN_FILL_PCT_TEXT = 6; // dim backdrop by design → lit but not blob
+
+// Organs where the field is the HERO (full-bleed expected). Everything else is
+// a text-heavy instrument with a dim backdrop.
+const VISUAL_ORGANS = new Set([
+	'palace',
+	'graph',
+	'observatory',
+	'memories',
+	'activation',
+	'explore',
+	'timeline',
+	'blackbox'
+]);
+
+function minFillFor(label: string): number {
+	// label is like "/stats" or "dived organ .../stats" or "palace hub" — match
+	// the organ name loosely so both smoke and tour callers resolve correctly.
+	for (const organ of VISUAL_ORGANS) {
+		if (label.includes(organ)) return MIN_FILL_PCT_VISUAL;
+	}
+	return MIN_FILL_PCT_TEXT;
+}
 
 /** Assert a genuinely-lit, MOVING, error-free field on the current route. */
 async function assertLiveField(
@@ -85,9 +120,11 @@ async function assertLiveField(
 	const s = await sampleCanvas(page);
 	expect(s.avgLum, `${label} avgLum (field must not be black)`).toBeGreaterThan(3);
 	expect(s.variance, `${label} variance (field must have structure)`).toBeGreaterThan(6);
-	expect(s.fillPct, `${label} fill% (field must be full-bleed, not text-on-black)`).toBeGreaterThan(
-		MIN_FILL_PCT
-	);
+	const minFill = minFillFor(label);
+	expect(
+		s.fillPct,
+		`${label} fill% (field must be lit + structured; visual organs full-bleed, text organs a dim backdrop)`
+	).toBeGreaterThan(minFill);
 	return { avgLum: s.avgLum, variance: s.variance, fillPct: s.fillPct };
 }
 

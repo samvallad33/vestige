@@ -90,6 +90,11 @@
 		private field: LivingFieldPass;
 		constructor(engine: ObservatoryEngine) {
 			this.field = new LivingFieldPass(engine);
+			// Text-heavy organ: the field is a DIM backdrop, not the star.
+			this.field.setIntensity(0.22);
+			// Vitals labels run down the left column (x=-0.82, y from +0.68 to -0.68).
+			// Suppress the field there so every metric row stays legible.
+			this.field.setReadingWell({ x: -0.5, y: 0, hw: 0.6, hh: 0.85, floor: 0.08, soft: 0.25 });
 		}
 		uploadScene(scene: RouteSceneModel): void {
 			const receipts = scene.receipts as VitalReceipt[];
@@ -180,7 +185,10 @@
 					y: top - i * step,
 					size: i < 4 ? 0.036 : 0.027,
 					color: vitalColor(receipt.metric, magnitude),
-					depth: magnitude,
+					// Depth drives brightness, but floor it so a low-magnitude vital
+					// (e.g. an older newestMemory timestamp) never fades to unreadable —
+					// every stat must be legible; magnitude still varies the glow above it.
+					depth: Math.max(0.55, magnitude),
 					weight: Math.max(0.18, Math.sqrt(magnitude)),
 					startFrame: i * 2,
 					revealSpan: 22,
@@ -250,7 +258,13 @@
 			if (Number.isInteger(value)) return value.toLocaleString();
 			return value.toFixed(3);
 		}
-		if (typeof value === 'string') return value;
+		if (typeof value === 'string') {
+			// Compact an ISO timestamp to "YYYY-MM-DD HH:MM" so the full value fits on
+			// one line (the raw ISO string with ms + timezone overruns and truncates).
+			const parsed = Date.parse(value);
+			if (Number.isFinite(parsed)) return value.slice(0, 16).replace('T', ' ');
+			return value;
+		}
 		return String(value);
 	}
 

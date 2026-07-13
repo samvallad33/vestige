@@ -71,6 +71,7 @@
 		// glowing cell, retention = oxygen. The cursor-parallax text field rides on top.
 		const field = new LivingFieldPass(engine);
 		fieldPass = field;
+		field.setIntensity(0.8);
 		field.setCells(buildFieldCells());
 		engine.addPass(field);
 		const pass = new TextLayerPass(engine);
@@ -127,11 +128,39 @@
 			.replace(/[^\x20-\x7E]/g, '?');
 	}
 
-	function memoryLine(memory: Memory): string {
-		const snippet = sanitizeAscii(memory.content).replace(/\s+/g, ' ').trim().slice(0, 52);
-		return sanitizeAscii(
-			`${snippet} | ${memory.id.slice(0, 8)} | ${Math.round(memory.retentionStrength * 100)}%`
-		);
+	// Live viewport aspect (canvas px) — same source portraitAdapt reads, never a
+	// hardcoded phone width. Falls back to the window before frame 0, then 1.
+	function viewportAspect(): number {
+		const vw = engineRef?.params[6] || 0;
+		const vh = engineRef?.params[7] || 0;
+		if (vw > 0 && vh > 0) return vw / vh;
+		if (typeof window !== 'undefined' && window.innerHeight > 0) {
+			return window.innerWidth / window.innerHeight;
+		}
+		return 1;
+	}
+
+	// Portrait rows must READ, not dump. A phone can only fit ~10-12 rows with the
+	// generous spacing the taste bar demands, and long lines would shrink to
+	// illegible to fit width. So on portrait we shorten each line (drop the id
+	// column, tighten the snippet) so it never runs edge-to-edge, and the caller
+	// caps the row count. Everything is gated on the LIVE aspect — desktop keeps
+	// the full id column and long snippet, byte-identical.
+	// Trim a snippet to a cap, breaking on the last word boundary near the cap so a
+	// portrait row never ends mid-token ("Jul 202"); falls back to a hard slice for
+	// a single unbroken token.
+	function trimSnippet(text: string, cap: number): string {
+		const s = sanitizeAscii(text).replace(/\s+/g, ' ').trim();
+		if (s.length <= cap) return s;
+		const hard = s.slice(0, cap);
+		const lastSpace = hard.lastIndexOf(' ');
+		return lastSpace > cap * 0.6 ? hard.slice(0, lastSpace) : hard;
+	}
+
+	function memoryLine(memory: Memory, portrait: boolean): string {
+		const pct = `${Math.round(memory.retentionStrength * 100)}%`;
+		if (portrait) return sanitizeAscii(`${trimSnippet(memory.content, 28)}  ${pct}`);
+		return sanitizeAscii(`${trimSnippet(memory.content, 52)} | ${memory.id.slice(0, 8)} | ${pct}`);
 	}
 
 	function clamp01(value: number): number {
@@ -159,6 +188,64 @@
 		if (error) return [statusItem(`ERROR - ${error}`.slice(0, 72), SCARLET)];
 		if (memories.length === 0) return [statusItem('EMPTY MEMORY FIELD', MUTED)];
 
+		const aspect = viewportAspect();
+		const portrait = aspect < 0.85;
+
+		if (portrait) {
+			// Phone plan: ONE focal header + a short, well-spaced column that fits the
+			// screen band with real negative space. Row count and spacing derive from
+			// the live aspect (taller/narrower → fewer rows), never a fixed phone
+			// number. portraitAdapt maps authored-y straight to screen-y (its inv
+			// reclaim and the shader's aspect crush cancel), so we author in screen NDC.
+			const portraitness = clamp01((0.85 - aspect) / (0.85 - 0.42));
+			// 12 rows at the wide-portrait edge, down to 9 on the tallest phones —
+			// enough to be a real list, few enough to breathe and never collide.
+			const rowCount = Math.max(9, Math.round(12 - 3 * portraitness));
+			const rows = memories.slice(0, rowCount);
+			const headerY = 0.8;
+			const top = 0.62;
+			const bottom = -0.72;
+			const rowStep = rows.length > 1 ? (top - bottom) / (rows.length - 1) : 0;
+			const header: MemoryTextItem = {
+				id: 'memories:header',
+				kind: 'memory-header',
+				text: `MEMORY FIELD  ${total} TRACES`,
+				x: -0.82,
+				y: headerY,
+				size: 0.03,
+				color: MUTED,
+				depth: 0.85,
+				weight: 0.6,
+				startFrame: REVEAL_ANCHOR,
+				revealSpan: 24,
+				maxWidthEm: 30
+			};
+			return [
+				header,
+				...rows.map((memory, i) => {
+					const retrieval = clamp01(memory.retrievalStrength);
+					const retention = clamp01(memory.retentionStrength);
+					return {
+						id: `mem:${memory.id}`,
+						kind: 'memory',
+						memoryId: memory.id,
+						text: memoryLine(memory, true),
+						x: -0.82,
+						y: top - i * rowStep,
+						size: 0.03,
+						color: CYAN,
+						depth: Math.max(MIN_VISIBLE_DEPTH, retrieval),
+						weight: retention,
+						startFrame: REVEAL_ANCHOR + i * 2,
+						revealSpan: 20,
+						maxWidthEm: 34,
+						hitPadX: 0.04,
+						hitPadY: 0.03
+					} satisfies MemoryTextItem;
+				})
+			];
+		}
+
 		const rows = memories.slice(0, ROW_LIMIT);
 		const top = 0.72;
 		const rowStep = 1.5 / Math.max(1, ROW_LIMIT - 1);
@@ -169,7 +256,7 @@
 				id: `mem:${memory.id}`,
 				kind: 'memory',
 				memoryId: memory.id,
-				text: memoryLine(memory),
+				text: memoryLine(memory, false),
 				x: -0.88,
 				y: top - i * rowStep,
 				size: 0.026,

@@ -57,9 +57,18 @@ struct FusionNeck {
 const SPLAT_WGSL = /* wgsl */ `
 ${COMMON_WGSL}
 
+// FieldOpts mirrors the membrane's: x=intensity, yz=well center NDC, w=well
+// half-w; then well half-h, floor, soft, pad. Cells/necks dim by the same amount
+// so nothing blows out under the centered text overlay.
+struct FieldOpts {
+	intensity_wx_wy_hw: vec4f,
+	hh_floor_soft_pad: vec4f,
+};
+
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> cells: array<FusionCell>;
 @group(0) @binding(2) var<storage, read> necks: array<FusionNeck>;
+@group(0) @binding(5) var<uniform> opts: FieldOpts;
 
 const QUAD = array<vec2f, 6>(
 	vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
@@ -70,10 +79,28 @@ struct VSOut {
 	@builtin(position) clip: vec4f,
 	@location(0) uv: vec2f,
 	@location(1) @interpolate(flat) misc: vec4f,
+	@location(2) @interpolate(flat) home: vec2f,
 };
 
 fn similarity_neck(similarity: f32) -> f32 {
 	return smoothstep(0.78, 0.98, similarity);
+}
+
+// Reading-well multiplier at an NDC point (1.0 outside, →floor inside). hw<=0 off.
+fn field_dim(ndc: vec2f) -> f32 {
+	let intensity = clamp(opts.intensity_wx_wy_hw.x, 0.0, 1.0);
+	let hw = opts.intensity_wx_wy_hw.w;
+	if (hw <= 0.0) { return intensity; }
+	let center = opts.intensity_wx_wy_hw.yz;
+	let hh = opts.hh_floor_soft_pad.x;
+	let floor_v = opts.hh_floor_soft_pad.y;
+	let soft = max(0.02, opts.hh_floor_soft_pad.z);
+	let d = abs(ndc - center) - vec2f(hw, hh);
+	let outside = length(max(d, vec2f(0.0)));
+	let inside = min(max(d.x, d.y), 0.0);
+	let sd = outside + inside;
+	let t = smoothstep(-soft, 0.0, sd);
+	return intensity * mix(floor_v, 1.0, t);
 }
 
 @vertex
@@ -88,6 +115,7 @@ fn vs_splat(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) ->
 		out.clip = vec4f(c.pos_retention.xy + corner * radius, 0.0, 1.0);
 		out.uv = corner;
 		out.misc = vec4f(c.pos_retention.z, c.cluster_meta.x, c.visual_meta.x, merge_gate);
+		out.home = c.pos_retention.xy;
 	} else {
 		let n = necks[ii - cell_count];
 		let a = n.a.xy;
@@ -102,6 +130,7 @@ fn vs_splat(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) ->
 		out.clip = vec4f(pos, 0.0, 1.0);
 		out.uv = vec2f(corner.x, corner.y / max(0.001, thickness));
 		out.misc = vec4f(n.signals.x, fused, n.signals.z, n.signals.w);
+		out.home = center;
 	}
 	return out;
 }
@@ -119,7 +148,9 @@ fn fs_splat(frag: VSOut) -> @location(0) vec4f {
 	let cell_rim = smoothstep(0.24, 0.02, abs(d - (0.58 + retention * 0.16))) * (0.2 + similarity * 0.55);
 	let neck_body = exp(-frag.uv.y * frag.uv.y * 4.0) * smoothstep(1.05, 0.82, abs(frag.uv.x)) * (0.35 + similarity * 0.9);
 	let density = max(cell_body + cell_rim, neck_body * (0.4 + similarity));
-	// r=density, g=retention/luciferin, b=mismatch amber, a reserved. No storage textures.
+	// The splat writes the density FIELD (blurred into the membrane). It must NOT
+	// be dimmed here — the membrane fragment applies intensity + reading well once,
+	// so dimming both would double-darken. r=density, g=retention, b=mismatch amber.
 	return vec4f(density, density * (0.35 + retention * 0.65), mismatch * (0.18 + merge_gate * 0.12), 1.0);
 }
 
@@ -133,6 +164,7 @@ fn vs_cell(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
 	out.clip = vec4f(c.pos_retention.xy + corner * radius, 0.0, 1.0);
 	out.uv = corner;
 	out.misc = vec4f(c.pos_retention.z, c.cluster_meta.x, c.visual_meta.x, winner);
+	out.home = c.pos_retention.xy;
 	return out;
 }
 
@@ -153,7 +185,10 @@ fn fs_cell(frag: VSOut) -> @location(0) vec4f {
 	let rim = smoothstep(0.98, 0.72, d) * (1.0 - smoothstep(0.72, 0.22, d));
 	let body = exp(-d*d*3.2) * (0.20 + retention * 0.44 + winner * 0.16);
 	let mismatch_ring = smoothstep(0.16, 0.0, abs(d - 0.80)) * mismatch;
-	return vec4f(core * body + ivory * rim * (0.16 + similarity * 0.52) + amber * mismatch_ring * 0.34, 1.0);
+	let color = core * body + ivory * rim * (0.16 + similarity * 0.52) + amber * mismatch_ring * 0.34;
+	// Sharp cells draw on TOP of the membrane, so dim them by the same field
+	// intensity + reading well or they'd punch through the centered text.
+	return vec4f(color * field_dim(frag.home), 1.0);
 }
 
 @vertex
@@ -175,6 +210,7 @@ fn vs_neck(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
 	out.clip = vec4f(pos + normal * side * thickness, 0.0, 1.0);
 	out.uv = vec2f(t, side);
 	out.misc = vec4f(n.signals.x, n.signals.y, n.signals.z, distance(pos, midpoint));
+	out.home = midpoint;
 	return out;
 }
 
@@ -189,16 +225,27 @@ fn fs_neck(frag: VSOut) -> @location(0) vec4f {
 	let amber = vec3f(1.0, 0.69, 0.08);
 	let pull = smoothstep(-0.08, 0.20, similarity - threshold);
 	let color = mix(bridge, luciferin, pull) + amber * mismatch * pulse * 0.34;
-	return vec4f(color * (0.14 + similarity * 0.55 + mismatch * 0.18), 1.0);
+	// Necks draw on TOP of the membrane too — dim by field intensity + reading well.
+	return vec4f(color * (0.14 + similarity * 0.55 + mismatch * 0.18) * field_dim(frag.home), 1.0);
 }
 `;
 
 const MEMBRANE_WGSL = /* wgsl */ `
 ${COMMON_WGSL}
 
+// FieldOpts: x=intensity (0..1 overall dim), yz=well center NDC, w=well half-w,
+// then well half-h, floor (min emission inside well), soft (edge falloff), pad.
+// Lets a text-heavy organ dim the whole field AND carve a reading well under the
+// centered DOM overlay so the labels/values read. hw<=0 disables the well.
+struct FieldOpts {
+	intensity_wx_wy_hw: vec4f,
+	hh_floor_soft_pad: vec4f,
+};
+
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(3) var field_sampler: sampler;
 @group(0) @binding(4) var field_tex: texture_2d<f32>;
+@group(0) @binding(5) var<uniform> opts: FieldOpts;
 
 const QUAD = array<vec2f, 6>(
 	vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
@@ -214,6 +261,25 @@ fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> VSOut {
 	out.clip = vec4f(p, 0.0, 1.0);
 	out.uv = p * 0.5 + vec2f(0.5);
 	return out;
+}
+
+// Reading-well multiplier at an NDC point: 1.0 outside the well, falling toward
+// the floor value inside it (smooth edge of width soft). Disabled when hw<=0.
+fn reading_well(ndc: vec2f) -> f32 {
+	let hw = opts.intensity_wx_wy_hw.w;
+	if (hw <= 0.0) { return 1.0; }
+	let center = opts.intensity_wx_wy_hw.yz;
+	let hh = opts.hh_floor_soft_pad.x;
+	let floor_v = opts.hh_floor_soft_pad.y;
+	let soft = max(0.02, opts.hh_floor_soft_pad.z);
+	let d = abs(ndc - center) - vec2f(hw, hh);
+	// signed distance to rect edge: <0 inside, >0 outside
+	let outside = length(max(d, vec2f(0.0)));
+	let inside = min(max(d.x, d.y), 0.0);
+	let sd = outside + inside;
+	// sd<=-soft → fully inside (floor); sd>=0 → outside (1.0)
+	let t = smoothstep(-soft, 0.0, sd);
+	return mix(floor_v, 1.0, t);
 }
 
 @fragment
@@ -232,7 +298,9 @@ fn fs_membrane(frag: VSOut) -> @location(0) vec4f {
 	color = color + bridge * density * 0.055 + luciferin * retention * 0.080;
 	color = color + ivory * membrane * 0.22 + amber * mismatch * (0.20 + 0.08 * params.pulse);
 	let vignette = smoothstep(0.96, 0.18, distance(frag.uv, vec2f(0.5)));
-	return vec4f(color * (0.35 + 0.65 * vignette) * params.brightness, 1.0);
+	let ndc = frag.uv * 2.0 - vec2f(1.0);
+	let dim = clamp(opts.intensity_wx_wy_hw.x, 0.0, 1.0) * reading_well(ndc);
+	return vec4f(color * (0.35 + 0.65 * vignette) * params.brightness * dim, 1.0);
 }
 `;
 
@@ -272,6 +340,7 @@ type GpuResources = {
 	neckBuffer: GPUBuffer;
 	blurHBuffer: GPUBuffer;
 	blurVBuffer: GPUBuffer;
+	optsBuffer: GPUBuffer;
 	splatBindGroup: GPUBindGroup;
 	blurHBindGroup: GPUBindGroup;
 	blurVBindGroup: GPUBindGroup;
@@ -328,10 +397,65 @@ export class DuplicatesPass implements FramePass {
 	private neckCount = 0;
 	private cellGeometry: CellGeometry[] = [];
 	private neckGeometry: NeckGeometry[] = [];
+	// 0..1 overall field intensity — text-heavy /duplicates dims to a calm backdrop
+	// so the centered DOM overlay (cluster cards, threshold, counts) stays legible.
+	private intensity = 0.22;
+	// Reading well (NDC rect): the field emits LESS inside it so the centered text
+	// column reads. hw<=0 disables it.
+	private well = { x: 0, y: 0, hw: -1, hh: 0, floor: 0.1, soft: 0.22 };
 
 	constructor(engine: ObservatoryEngine, scene: RouteSceneModel) {
 		this.engine = engine;
 		this.uploadScene(scene);
+	}
+
+	/**
+	 * Set the overall field intensity (0..1). LOW (~0.22) = dim backdrop for this
+	 * text-heavy organ; HIGH = the field is the hero. Picked up immediately by the
+	 * membrane + on-top cell/neck shaders via the shared FieldOpts uniform.
+	 */
+	setIntensity(v: number): void {
+		this.intensity = Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0.22));
+		const d = this.engine.gpuDevice;
+		if (d) this.writeOpts(d);
+	}
+
+	/**
+	 * Set a "reading well": the field emits LESS inside this NDC rectangle so the
+	 * DOM text on top reads. hw<=0 disables it. /duplicates renders its overlay in a
+	 * centered `mx-auto max-w-5xl` column, so the well is centered, not a left rail.
+	 */
+	setReadingWell(r: { x: number; y: number; hw: number; hh: number; floor?: number; soft?: number }): void {
+		const finiteN = (v: number, fb = 0) => (Number.isFinite(v) ? v : fb);
+		this.well = {
+			x: finiteN(r.x),
+			y: finiteN(r.y),
+			hw: finiteN(r.hw, -1),
+			hh: finiteN(r.hh),
+			floor: Math.min(1, Math.max(0, finiteN(r.floor ?? 0.1, 0.1))),
+			soft: Math.max(0.02, finiteN(r.soft ?? 0.22, 0.22))
+		};
+		const d = this.engine.gpuDevice;
+		if (d) this.writeOpts(d);
+	}
+
+	/** Write the FieldOpts uniform (intensity + reading-well rect). 8 floats. */
+	private writeOpts(device: GPUDevice): void {
+		if (!this.resources) return;
+		device.queue.writeBuffer(
+			this.resources.optsBuffer,
+			0,
+			new Float32Array([
+				this.intensity,
+				this.well.x,
+				this.well.y,
+				this.well.hw,
+				this.well.hh,
+				this.well.floor,
+				this.well.soft,
+				0
+			])
+		);
 	}
 
 	uploadScene(scene: RouteSceneModel): void {
@@ -354,7 +478,9 @@ export class DuplicatesPass implements FramePass {
 			entries: [
 				{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
 				{ binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
-				{ binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } }
+				{ binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+				// FieldOpts (intensity + reading well) — read in fs_cell/fs_neck only.
+				{ binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }
 			]
 		});
 		this.blurBindLayout = device.createBindGroupLayout({
@@ -370,7 +496,9 @@ export class DuplicatesPass implements FramePass {
 			entries: [
 				{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
 				{ binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-				{ binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } }
+				{ binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+				// FieldOpts (intensity + reading well) — dims the full-bleed membrane.
+				{ binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }
 			]
 		});
 		const splatLayout = device.createPipelineLayout({ label: 'duplicates-fusion-splat-layout', bindGroupLayouts: [this.splatBindLayout] });
@@ -424,6 +552,7 @@ export class DuplicatesPass implements FramePass {
 		let neckBuffer = this.resources?.neckBuffer;
 		let blurHBuffer = this.resources?.blurHBuffer;
 		let blurVBuffer = this.resources?.blurVBuffer;
+		let optsBuffer = this.resources?.optsBuffer;
 		if (!cellBuffer) cellBuffer = device.createBuffer({ label: 'duplicates-cells', size: MAX_CELLS * CELL_FLOATS * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
 		if (!neckBuffer) neckBuffer = device.createBuffer({ label: 'duplicates-necks', size: MAX_NECKS * NECK_FLOATS * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
 		if (!blurHBuffer) {
@@ -434,7 +563,16 @@ export class DuplicatesPass implements FramePass {
 			blurVBuffer = device.createBuffer({ label: 'duplicates-blur-v-dir', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 			device.queue.writeBuffer(blurVBuffer, 0, new Float32Array([0, 1, 0, 0]));
 		}
-		if (!needsTextures && this.resources) return;
+		if (!optsBuffer) {
+			// FieldOpts: intensity + reading-well rect. 8 floats = 32 bytes.
+			optsBuffer = device.createBuffer({ label: 'duplicates-field-opts', size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+		}
+		if (!needsTextures && this.resources) {
+			// Buffers already exist; the caller may have just changed intensity/well.
+			this.resources.optsBuffer = optsBuffer;
+			this.writeOpts(device);
+			return;
+		}
 		this.resources?.fieldA.destroy();
 		this.resources?.fieldB.destroy();
 		const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
@@ -448,7 +586,8 @@ export class DuplicatesPass implements FramePass {
 			entries: [
 				{ binding: 0, resource: { buffer: this.engine.paramsBuffer } },
 				{ binding: 1, resource: { buffer: cellBuffer } },
-				{ binding: 2, resource: { buffer: neckBuffer } }
+				{ binding: 2, resource: { buffer: neckBuffer } },
+				{ binding: 5, resource: { buffer: optsBuffer } }
 			]
 		});
 		const blurHBindGroup = device.createBindGroup({
@@ -475,10 +614,12 @@ export class DuplicatesPass implements FramePass {
 			entries: [
 				{ binding: 0, resource: { buffer: this.engine.paramsBuffer } },
 				{ binding: 3, resource: this.sampler },
-				{ binding: 4, resource: fieldAView }
+				{ binding: 4, resource: fieldAView },
+				{ binding: 5, resource: { buffer: optsBuffer } }
 			]
 		});
-		this.resources = { cellBuffer, neckBuffer, blurHBuffer, blurVBuffer, splatBindGroup, blurHBindGroup, blurVBindGroup, membraneBindGroup, fieldA, fieldB, fieldAView, fieldBView, fieldSize: [w, h] };
+		this.resources = { cellBuffer, neckBuffer, blurHBuffer, blurVBuffer, optsBuffer, splatBindGroup, blurHBindGroup, blurVBindGroup, membraneBindGroup, fieldA, fieldB, fieldAView, fieldBView, fieldSize: [w, h] };
+		this.writeOpts(device);
 	}
 
 	private buildGeometry(): void {
@@ -719,6 +860,7 @@ export class DuplicatesPass implements FramePass {
 		this.resources?.neckBuffer.destroy();
 		this.resources?.blurHBuffer.destroy();
 		this.resources?.blurVBuffer.destroy();
+		this.resources?.optsBuffer.destroy();
 		this.resources?.fieldA.destroy();
 		this.resources?.fieldB.destroy();
 		this.resources = null;
@@ -757,5 +899,12 @@ export function createDuplicatesPasses(engine: ObservatoryEngine, scene: RouteSc
 	void rgb01(RETENTION.recall);
 	void rgb01(RETENTION.luciferin);
 	void rgb01(IMMUNE.trustMembrane);
-	return [new DuplicatesPass(engine, scene)];
+	const pass = new DuplicatesPass(engine, scene);
+	// /duplicates is a TEXT-HEAVY organ: the DOM overlay (cluster cards, threshold,
+	// counts) is the content, the synaptic-fusion field is a DIM backdrop. Drop the
+	// field to 0.22 and carve a centered reading well under the `mx-auto max-w-5xl`
+	// column so every label/value reads (mirrors observatory's setIntensity+well).
+	pass.setIntensity(0.22);
+	pass.setReadingWell({ x: 0, y: 0, hw: 0.6, hh: 0.85, floor: 0.08, soft: 0.25 });
+	return [pass];
 }

@@ -41,6 +41,27 @@
 	let error = $state<string | null>(null);
 	let selectedSynapsePair = $state<ImmuneSynapsePair | null>(null);
 
+	// Portrait phones: the full descriptive subtitle wraps to 6-7 lines, eating the
+	// top ~40% before the focal card and pushing its last line into the WebGPU
+	// telemetry band (the green "CONTRADICTIONS - NNNf" chrome sits at y~0.88). A
+	// compact one-line subtitle clears that band and restores a single focal point.
+	// Gated to portrait/narrow aspect (< 0.85) from the LIVE viewport via matchMedia
+	// so the desktop render stays byte-identical. Not a hardcoded phone width.
+	let isPortrait = $state(false);
+	onMount(() => {
+		if (typeof window === 'undefined') return;
+		const mq = window.matchMedia('(max-aspect-ratio: 85/100)');
+		isPortrait = mq.matches;
+		const onChange = (e: MediaQueryListEvent) => (isPortrait = e.matches);
+		mq.addEventListener('change', onChange);
+		return () => mq.removeEventListener('change', onChange);
+	});
+	const subtitle = $derived(
+		isPortrait
+			? 'Contradictory memories face off across a scarlet seam.'
+			: 'Contradictory memories face each other across a scarlet trust-weighted seam. Click a fracture for the receipt.'
+	);
+
 	async function load() {
 		loading = true;
 		error = null;
@@ -102,6 +123,25 @@
 	function createArenaPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
 		const field = new LivingFieldPass(engine);
 		tissueField = field;
+		// Preserve the verified portrait treatment exactly. On desktop the DOM's
+		// glass panels already protect the dense reading surfaces, so let the immune
+		// tissue breathe more strongly around a tighter well instead of leaving the
+		// remaining viewport near-black. Derive the branch from the engine's live
+		// viewport (never a device-width constant).
+		let viewportWidth = engine.params[6];
+		let viewportHeight = engine.params[7];
+		if ((viewportWidth <= 0 || viewportHeight <= 0) && typeof window !== 'undefined') {
+			viewportWidth = window.innerWidth;
+			viewportHeight = window.innerHeight;
+		}
+		const aspect = viewportWidth / Math.max(1, viewportHeight);
+		if (aspect < 0.85) {
+			field.setIntensity(0.24);
+			field.setReadingWell({ x: 0, y: 0, hw: 0.9, hh: 0.85, floor: 0.08, soft: 0.28 });
+		} else {
+			field.setIntensity(1.3);
+			field.setReadingWell({ x: 0, y: 0, hw: 0.55, hh: 0.58, floor: 0.1, soft: 0.18 });
+		}
 		field.setCells(buildTissueCells());
 		const fieldWrapper: RouteFramePass = {
 			compute: (encoder) => field.compute(encoder),
@@ -257,7 +297,7 @@
 	<PageHeader
 		icon="contradictions"
 		title="Immune Synapse Arena"
-		subtitle="Contradictory memories face each other across a scarlet trust-weighted seam. Click a fracture for the receipt."
+		{subtitle}
 		accent="warning"
 	>
 		<span class="text-dim text-sm tabular-nums inline-flex items-center gap-1.5">

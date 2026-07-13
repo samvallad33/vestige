@@ -247,7 +247,17 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 		color = color + vec3<f32>(1.0, 1.0, 1.0) * core * 0.6;
 	}
 
-	return vec4<f32>(color * params.brightness, 1.0);
+	// Portrait dim: on a phone the packed additive halos bloom into one blinding
+	// white blob that swallows the lower field and steals contrast from the STATS/
+	// SETTINGS labels. Fold the whole field down to a DIM backdrop when the live
+	// viewport is portrait (aspect < 0.85), scaling with how narrow it is. Derived
+	// purely from viewport_w/viewport_h — landscape/desktop (aspect >= 0.85) gets
+	// an exact 1.0 multiplier, so the desktop render is byte-identical.
+	let aspect = params.viewport_w / max(params.viewport_h, 1.0);
+	let portraitness = clamp((0.85 - aspect) / (0.85 - 0.46), 0.0, 1.0);
+	let portrait_dim = 1.0 - 0.62 * portraitness;
+
+	return vec4<f32>(color * params.brightness * portrait_dim, 1.0);
 }
 `;
 

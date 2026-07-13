@@ -20,10 +20,29 @@
 	const SCARLET = [...rgb01('#FF3B30'), 0.92] satisfies [number, number, number, number];
 	const MUTED = [...rgb01('#29F2A9'), 0.62] satisfies [number, number, number, number];
 	const AMBER = [...rgb01('#FFB020'), 0.86] satisfies [number, number, number, number];
+	const TITLE = [...rgb01('#EAF3FF'), 0.96] satisfies [number, number, number, number];
+	const HEADER = [...rgb01('#7FA0B8'), 0.72] satisfies [number, number, number, number];
 	const MEMORY_LIMIT = 36;
 	const ROW_LIMIT = 30;
+	// Phone shows fewer rows so each gets real vertical breathing room instead of a
+	// 30-deep crushed wall of tiny text.
+	const ROW_LIMIT_PORTRAIT = 16;
 	const REVEAL_ANCHOR = -100000;
 	const MIN_VISIBLE_DEPTH = 0.62;
+
+	// Portrait / narrow viewport, derived from the LIVE engine aspect (params[6]/[7])
+	// with a window fallback — same signal TextLayerPass.portraitAdapt uses. Nothing
+	// is hardcoded to a phone width; desktop (aspect>=0.85) is untouched.
+	function isPortrait(): boolean {
+		let vw = engineRef?.params[6] || 0;
+		let vh = engineRef?.params[7] || 0;
+		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
+			vw = window.innerWidth;
+			vh = window.innerHeight;
+		}
+		if (vw <= 0 || vh <= 0) return false;
+		return vw / vh < 0.85;
+	}
 
 	let hostEl: HTMLDivElement | null = $state(null);
 	let engineRef: ObservatoryEngine | null = null;
@@ -67,6 +86,11 @@
 		stopReducedMotion = initReducedMotion(engine);
 		const field = new LivingFieldPass(engine);
 		fieldPass = field;
+		// Text-heavy organ: keep the field a DIM backdrop so 30 rows of MSDF text
+		// read cleanly. Rows anchor at x=-0.9 and run rightward (~54em), y from 0.72
+		// down to ~-0.78, so the reading well covers the whole left+center column.
+		field.setIntensity(0.22);
+		field.setReadingWell({ x: -0.3, y: -0.03, hw: 0.7, hh: 0.88, floor: 0.08, soft: 0.25 });
 		field.setCells(buildFieldCells());
 		engine.addPass(field);
 		const pass = new TextLayerPass(engine);
@@ -129,8 +153,19 @@
 			.replace(/[^\x20-\x7E]/g, '?');
 	}
 
-	function importanceLine(record: ImportanceRecord): string {
+	function importanceLine(record: ImportanceRecord, portrait: boolean): string {
 		const { memory, score } = record;
+		if (portrait) {
+			// Phone: drop the id/retention/recommendation/channel columns that turn the
+			// row into an unreadable wall. Keep the primary content (a longer title
+			// budget) and the ONE headline metric — composite score — right-aligned by
+			// the header. `title  92%` reads at a glance; the full detail lives on tap.
+			const snippet = sanitizeAscii(memory.content ?? '')
+				.replace(/\s+/g, ' ')
+				.trim()
+				.slice(0, 34);
+			return sanitizeAscii(`${snippet}  ${Math.round(score.composite * 100)}%`);
+		}
 		const snippet = sanitizeAscii(memory.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 44);
 		const strongest = strongestChannel(score);
 		return sanitizeAscii(
@@ -168,22 +203,58 @@
 		if (error) return [statusItem(`ERROR - ${error}`.slice(0, 72), SCARLET)];
 		if (records.length === 0) return [statusItem('EMPTY IMPORTANCE FIELD', MUTED)];
 
-		const rows = records.slice(0, ROW_LIMIT);
-		const top = 0.72;
-		const rowStep = 1.5 / Math.max(1, ROW_LIMIT - 1);
-		return rows.map((record, i) => {
+		const portrait = isPortrait();
+		const rowLimit = portrait ? ROW_LIMIT_PORTRAIT : ROW_LIMIT;
+		const rows = records.slice(0, rowLimit);
+		// Phone gets a title + column header and a shorter, more generously spaced
+		// list; desktop keeps the dense edge-to-edge log exactly as authored.
+		const top = portrait ? 0.6 : 0.72;
+		const span = portrait ? 1.28 : 1.5;
+		const rowStep = span / Math.max(1, rowLimit - 1);
+		const items: ImportanceTextItem[] = [];
+
+		if (portrait) {
+			items.push({
+				id: 'importance:title',
+				kind: 'importance-title',
+				text: 'IMPORTANCE',
+				x: -0.62,
+				y: 0.86,
+				size: 0.06,
+				color: TITLE,
+				depth: 1,
+				weight: 0.9,
+				startFrame: REVEAL_ANCHOR,
+				revealSpan: 1
+			});
+			items.push({
+				id: 'importance:header',
+				kind: 'importance-header',
+				text: `MEMORY / SCORE  (${records.length})`,
+				x: -0.62,
+				y: 0.74,
+				size: 0.03,
+				color: HEADER,
+				depth: 0.9,
+				weight: 0.5,
+				startFrame: REVEAL_ANCHOR,
+				revealSpan: 1
+			});
+		}
+
+		rows.forEach((record, i) => {
 			// depth = crispness/forward channel — floor it or the DOF blur + dim glow
 			// makes low-composite rows invisible (composite is low for most memories).
 			const depth = Math.max(MIN_VISIBLE_DEPTH, clamp01(record.score.composite));
 			const weight = clamp01(record.memory.retentionStrength);
-			return {
+			items.push({
 				id: `importance:${record.memory.id}`,
 				kind: 'importance',
 				memoryId: record.memory.id,
-				text: importanceLine(record),
-				x: -0.9,
+				text: importanceLine(record, portrait),
+				x: portrait ? -0.62 : -0.9,
 				y: top - i * rowStep,
-				size: 0.025,
+				size: portrait ? 0.03 : 0.025,
 				color: record.score.recommendation === 'save' ? CYAN : AMBER,
 				depth,
 				weight,
@@ -196,8 +267,9 @@
 				maxWidthEm: 54,
 				hitPadX: 0.03,
 				hitPadY: 0.018
-			};
+			});
 		});
+		return items;
 	}
 
 	function pointerToNdc(e: PointerEvent | MouseEvent): { x: number; y: number } | null {

@@ -21,6 +21,9 @@
 	const OXYGEN = [...rgb01('#A8FF5E'), 0.92] satisfies [number, number, number, number];
 	const SCARLET = [...rgb01('#FF3B30'), 0.92] satisfies [number, number, number, number];
 	const MUTED = [...rgb01('#29F2A9'), 0.6] satisfies [number, number, number, number];
+	// Portrait-only: the small captions sit over the (dimmed) ring band, so a 0.6-alpha
+	// MUTED green washes out. A full-alpha brighter mint lifts them clear of the field.
+	const LABEL_HI = [...rgb01('#8AF7D0'), 1] satisfies [number, number, number, number];
 
 	const RANGE_CYCLE = [7, 14, 30, 90, 365] as const;
 
@@ -37,6 +40,9 @@
 	// text pass handle (owned by the route pass factory below)
 	let textPass: TextLayerPass | null = null;
 	let focusedRun: string | null = null;
+	// engine handle captured in the pass factory so buildTextItems can read the live
+	// viewport aspect (params[6]/[7]) for portrait-only vital-sign stacking.
+	let engineHandle: ObservatoryEngine | null = null;
 
 	onMount(() => loadTimeline());
 
@@ -126,6 +132,18 @@
 		return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0.5));
 	}
 
+	// Live viewport aspect, same source (and window fallback) TextLayerPass.portraitAdapt
+	// uses. Portrait (aspect < 0.85) needs its own vital-sign stacking so the big
+	// numbers don't collide with their captions and the receipt doesn't overrun the
+	// HUD column. NOTHING here is hardcoded per phone width — it scales with aspect.
+	function viewportAspect(): number {
+		const vw = engineHandle?.params[6] || 0;
+		const vh = engineHandle?.params[7] || 0;
+		if (vw > 0 && vh > 0) return vw / vh;
+		if (typeof window !== 'undefined' && window.innerHeight > 0) return window.innerWidth / window.innerHeight;
+		return 1.6;
+	}
+
 	function line(
 		id: string,
 		kind: string,
@@ -191,14 +209,58 @@
 			[`${timeline.length}`, 'CALENDAR SLICES', CYAN],
 			[`${Math.round(avgRetention * 100)}%`, 'AVERAGE RETENTION OXYGEN', OXYGEN]
 		];
+
+		// Portrait: the big number (size 0.05, boosted ~2.7x by portraitAdapt) grows
+		// TALLER than the authored 0.05 num->label gap, so it lands on top of its own
+		// caption; and the right-hand receipt column (x=0.3) gets center-pulled into
+		// the HUD column and collides. So in portrait we author a single left column:
+		// smaller numbers with a wider caption gap, then the receipt STACKED below the
+		// vitals instead of beside them. Landscape/desktop keeps the exact old layout.
+		const portrait = viewportAspect() < 0.85;
+
+		if (portrait) {
+			// Portrait bind: each big number and its caption must read as ONE unit, and
+			// every unit must be clearly separated from the next. The old layout had the
+			// caption gap (0.09) nearly equal to the leftover pitch (0.155-0.09=0.065), so
+			// a number floated ambiguously between its own label and the next number — the
+			// last vital ('AVERAGE RETENTION OXYGEN') looked label-only because its number
+			// had drifted up beside the previous caption. Fix: a SMALL number->label gap
+			// (tight caption) and a LARGE row pitch (clear break) so binding is unambiguous.
+			// portraitAdapt multiplies every y by inv (>1 in portrait), so these authored
+			// gaps scale with the live aspect — nothing here is a hardcoded phone width.
+			const vTop = 0.66;
+			const vGap = 0.052; // number -> its own caption (tight)
+			const vPitch = 0.17; // row -> next row (loose, > 2x the caption gap)
+			vitals.forEach(([value, label, color], i) => {
+				const y = vTop - i * vPitch;
+				items.push(line(`tl:vital-num:${i}`, 'tl-vital', value, -0.92, y, 0.03, color, { depth: 0.9, weight: 0.85 }));
+				items.push(line(`tl:vital-lbl:${i}`, 'tl-vital-lbl', label, -0.92, y - vGap, 0.016, LABEL_HI, { depth: 0.7, weight: 0.7, maxWidthEm: 30 }));
+			});
+			// Receipt/hint below the last caption. Bigger header + hint text so the
+			// 'CLICK A GROWTH RING...' subtext is readable on a phone (bumped in
+			// buildReceiptItems via the portrait flag, not a magic size here).
+			buildReceiptItems(items, -0.92, vTop - vitals.length * vPitch - 0.02, 0.028, LABEL_HI, true);
+			return items;
+		}
+
 		vitals.forEach(([value, label, color], i) => {
 			const y = 0.72 - i * 0.11;
 			items.push(line(`tl:vital-num:${i}`, 'tl-vital', value, -0.92, y, 0.05, color, { depth: 0.9, weight: 0.85 }));
 			items.push(line(`tl:vital-lbl:${i}`, 'tl-vital-lbl', label, -0.92, y - 0.05, 0.017, MUTED, { depth: 0.5 }));
 		});
 
-		// ── RECEIPT (right column) — real /memories/:id/audit + bitemporal state ──
-		items.push(line('tl:receipt-hdr', 'tl-receipt-hdr', 'TIME-SLICE RECEIPT', 0.3, 0.9, 0.022, INDIGO, { depth: 0.85 }));
+		buildReceiptItems(items, 0.3, 0.9, 0.022);
+
+		return items;
+	}
+
+	// Receipt / audit block. `rx` is the left anchor, `ry0` the header baseline, and
+	// `hdrSize` the header size — desktop pins it to the right column (0.3, 0.9), but
+	// portrait stacks it below the vitals in the single left column. Everything below
+	// the header is authored relative to ry0 so both layouts share one code path.
+	function buildReceiptItems(items: TextLayerItem[], rx: number, ry0: number, hdrSize: number, muted = MUTED, portrait = false): void {
+		items.push(line('tl:receipt-hdr', 'tl-receipt-hdr', 'TIME-SLICE RECEIPT', rx, ry0, hdrSize, INDIGO, { depth: 0.85 }));
+		const rowTop = ry0 - 0.08;
 
 		if (selectedCell && selectedMemory) {
 			const c = selectedCell;
@@ -212,18 +274,18 @@
 				[`retain ${Math.round(c.retention * 100)}%   state ${state}`, state === 'suppressed' ? SCARLET : OXYGEN]
 			];
 			rows.forEach(([t, color], i) => {
-				items.push(line(`tl:receipt:${i}`, 'tl-receipt', t, 0.3, 0.82 - i * 0.06, 0.018, color, { revealSpan: 10, startFrame: i * 2 }));
+				items.push(line(`tl:receipt:${i}`, 'tl-receipt', t, rx, rowTop - i * 0.06, 0.018, color, { revealSpan: 10, startFrame: i * 2 }));
 			});
 
 			// real audit events (memoryAudit)
-			const auditY0 = 0.82 - rows.length * 0.06 - 0.04;
-			items.push(line('tl:audit-hdr', 'tl-audit-hdr', auditLoading ? 'MEMORY-AUDIT (loading...)' : 'MEMORY-AUDIT', 0.3, auditY0, 0.016, MUTED, { depth: 0.5 }));
+			const auditY0 = rowTop - rows.length * 0.06 - 0.04;
+			items.push(line('tl:audit-hdr', 'tl-audit-hdr', auditLoading ? 'MEMORY-AUDIT (loading...)' : 'MEMORY-AUDIT', rx, auditY0, 0.016, MUTED, { depth: 0.5 }));
 			selectedAudit.slice(0, 10).forEach((ev, i) => {
 				const t = `${ev.action}  ${String(ev.timestamp).slice(0, 19)}`;
-				items.push(line(`tl:audit:${i}`, 'tl-audit', t, 0.3, auditY0 - 0.03 - i * 0.045, 0.015, CYAN, { revealSpan: 8, startFrame: i * 2, depth: 0.6 }));
+				items.push(line(`tl:audit:${i}`, 'tl-audit', t, rx, auditY0 - 0.03 - i * 0.045, 0.015, CYAN, { revealSpan: 8, startFrame: i * 2, depth: 0.6 }));
 			});
 			if (!auditLoading && selectedAudit.length === 0) {
-				items.push(line('tl:audit-empty', 'tl-audit', 'no audit events returned', 0.3, auditY0 - 0.03, 0.015, MUTED));
+				items.push(line('tl:audit-empty', 'tl-audit', 'no audit events returned', rx, auditY0 - 0.03, 0.015, MUTED));
 			}
 		} else if (selectedRing) {
 			const r = selectedRing;
@@ -236,28 +298,38 @@
 				['click a cell for its audit receipt', MUTED]
 			];
 			rows.forEach(([t, color], i) => {
-				items.push(line(`tl:ring:${i}`, 'tl-receipt', t, 0.3, 0.82 - i * 0.06, 0.017, color, { revealSpan: 10, startFrame: i * 2 }));
+				items.push(line(`tl:ring:${i}`, 'tl-receipt', t, rx, rowTop - i * 0.06, 0.017, color, { revealSpan: 10, startFrame: i * 2 }));
 			});
 		} else {
+			// The idle hint is the only call-to-action when nothing is selected, so on a
+			// phone it must be readable, not a dim whisper. portraitAdapt caps a line's
+			// size to fit its full char count on ONE line (it can't see the wrap), so a
+			// 90-char hint is forced tiny no matter the authored size. In portrait we use
+			// a SHORTER hint (fewer chars -> the size boost isn't capped away) at a larger
+			// authored size and full-alpha LABEL_HI (passed in as `muted`) so it lifts
+			// clear of the dimmed ring field. Desktop keeps the exact old long hint/size.
+			const hintText = portrait
+				? 'TAP A RING FOR ITS DATE SLICE'
+				: 'CLICK A GROWTH RING FOR ITS DATE SLICE, OR A CELL FOR ITS VALID-TIME VS TRANSACTION-TIME RECEIPT';
+			const hintSize = portrait ? 0.026 : 0.017;
 			items.push(
 				line(
 					'tl:receipt-hint',
 					'tl-receipt',
-					'CLICK A GROWTH RING FOR ITS DATE SLICE, OR A CELL FOR ITS VALID-TIME VS TRANSACTION-TIME RECEIPT',
-					0.3,
-					0.8,
-					0.017,
-					MUTED,
-					{ maxWidthEm: 34, revealSpan: 20 }
+					hintText,
+					rx,
+					rowTop - 0.02,
+					hintSize,
+					muted,
+					{ maxWidthEm: portrait ? 22 : 34, revealSpan: 20 }
 				)
 			);
 		}
-
-		return items;
 	}
 
 	// ── the route pass factory: growth-rings organ + MSDF HUD/receipt, zero DOM ──
 	function createTimelineOrganPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		engineHandle = engine;
 		const ringPasses = createTimelinePasses(engine, scene);
 		const text = new TextLayerPass(engine);
 		textPass = text;

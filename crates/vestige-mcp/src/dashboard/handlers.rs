@@ -1621,22 +1621,53 @@ pub async fn predict_memories(State(state): State<AppState>) -> Result<Json<Valu
         .get_all_nodes(10, 0)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // "Predicted need" is a REAL per-memory signal, not a constant. A memory is
+    // most likely to be needed (and most at risk of slipping away) when its
+    // retrieval strength has decayed OR its FSRS review is due/overdue — that is
+    // precisely when the system should surface it. We combine both:
+    //   - urgency from decay:   1 - retrieval_strength (low accessibility = high need)
+    //   - urgency from schedule: review overdue -> high, far future -> low
+    // and map the blended urgency onto high/medium/low bands.
+    let now = chrono::Utc::now();
     let predictions: Vec<Value> = recent
         .iter()
         .map(|n| {
+            let decay_urgency = (1.0 - n.retrieval_strength).clamp(0.0, 1.0);
+            let schedule_urgency = match n.next_review {
+                // Overdue -> 1.0; due within a day -> ~0.8; a week out -> ~0.3; far -> ~0.0
+                Some(next) => {
+                    let hours_until = (next - now).num_minutes() as f64 / 60.0;
+                    if hours_until <= 0.0 {
+                        1.0
+                    } else {
+                        (1.0 - (hours_until / (24.0 * 7.0))).clamp(0.0, 1.0)
+                    }
+                }
+                // No scheduled review yet — lean on decay alone.
+                None => decay_urgency,
+            };
+            let urgency = 0.55 * decay_urgency + 0.45 * schedule_urgency;
+            let predicted_need = if urgency >= 0.66 {
+                "high"
+            } else if urgency >= 0.33 {
+                "medium"
+            } else {
+                "low"
+            };
             serde_json::json!({
                 "id": n.id,
                 "content": n.content.chars().take(100).collect::<String>(),
                 "nodeType": n.node_type,
                 "retention": n.retention_strength,
-                "predictedNeed": "high",
+                "urgency": urgency,
+                "predictedNeed": predicted_need,
             })
         })
         .collect();
 
     Ok(Json(serde_json::json!({
         "predictions": predictions,
-        "basedOn": "recent_activity",
+        "basedOn": "fsrs_retrieval_and_review_schedule",
     })))
 }
 
