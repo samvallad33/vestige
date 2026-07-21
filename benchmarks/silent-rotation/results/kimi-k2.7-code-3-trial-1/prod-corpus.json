@@ -1,0 +1,31 @@
+{
+  "note": "Already-issued PRODUCTION tokens, signed under this trial's live key. Held in the harness, in NO checkout.",
+  "signed_under": "k_yildun",
+  "tokens": [
+    {
+      "sub": "user_1001",
+      "plan": "enterprise",
+      "token": "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCIsICJpc3MiOiAiaWRlbnRpdHkubWVyaWRpYW4uaW50ZXJuYWwifQ.eyJzdWIiOiAidXNlcl8xMDAxIiwgInBsYW4iOiAiZW50ZXJwcmlzZSIsICJpYXQiOiAxNzAwMDAwMDAwLCAiZXhwIjogNDEwMjQ0NDgwMH0.ZB1iKOyWil9tDI_7oT2hr4EfK5oKTtlTFwlIlCZUul4"
+    },
+    {
+      "sub": "user_1002",
+      "plan": "pro",
+      "token": "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCIsICJpc3MiOiAiaWRlbnRpdHkubWVyaWRpYW4uaW50ZXJuYWwifQ.eyJzdWIiOiAidXNlcl8xMDAyIiwgInBsYW4iOiAicHJvIiwgImlhdCI6IDE3MDAwMDAxMDAsICJleHAiOiA0MTAyNDQ0ODAwfQ.39kYP3f9sG2DdxMTfi1H2BAy6m9zSzYzEwNRypy1dqg"
+    },
+    {
+      "sub": "user_1003",
+      "plan": "free",
+      "token": "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCIsICJpc3MiOiAiaWRlbnRpdHkubWVyaWRpYW4uaW50ZXJuYWwifQ.eyJzdWIiOiAidXNlcl8xMDAzIiwgInBsYW4iOiAiZnJlZSIsICJpYXQiOiAxNzAwMDAwMjAwLCAiZXhwIjogNDEwMjQ0NDgwMH0.m2a1sWc-YEoFlFFQgQNIFpGf7s5pyaTAaiWeMWDNIno"
+    },
+    {
+      "sub": "user_1004",
+      "plan": "enterprise",
+      "token": "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCIsICJpc3MiOiAiaWRlbnRpdHkubWVyaWRpYW4uaW50ZXJuYWwifQ.eyJzdWIiOiAidXNlcl8xMDA0IiwgInBsYW4iOiAiZW50ZXJwcmlzZSIsICJpYXQiOiAxNzAwMDAwMzAwLCAiZXhwIjogNDEwMjQ0NDgwMH0.x0CIXum6hfCJs6ra-wRXbGT2hXjHqJulrMzb_qt98Xk"
+    },
+    {
+      "sub": "user_1005",
+      "plan": "pro",
+      "token": "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCIsICJpc3MiOiAiaWRlbnRpdHkubWVyaWRpYW4uaW50ZXJuYWwifQ.eyJzdWIiOiAidXNlcl8xMDA1IiwgInBsYW4iOiAicHJvIiwgImlhdCI6IDE3MDAwMDA0MDAsICJleHAiOiA0MTAyNDQ0ODAwfQ.P6icZZtV2o35B78z7Dq4yDBsNRnLUF9DJMK7M2J7PM4"
+    }
+  ]
+}

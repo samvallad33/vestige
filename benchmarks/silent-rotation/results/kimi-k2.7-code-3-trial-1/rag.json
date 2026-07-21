@@ -1,0 +1,162 @@
+{
+  "mode": "rag",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "moonshotai/kimi-k2.7-code",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 127830,
+    "output": 7827,
+    "total": 135657
+  },
+  "fleet_cost_usd": 0.119432,
+  "cost_rate": {
+    "input_per_mtok": 0.72,
+    "output_per_mtok": 3.5
+  },
+  "fleet_wall_clock_seconds": 126.85,
+  "fleet_iterations_total": 24,
+  "agents_local_pass": 2,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "transcripts": [
+    "transcript-rag-a0.json",
+    "transcript-rag-a1.json",
+    "transcript-rag-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 0,
+    "other": 3
+  },
+  "fleet_verdict": "failed_merge_conflict",
+  "integrated_tests_pass": false,
+  "prod_replay_pass": null,
+  "production_replay": {
+    "ran": false,
+    "reason": "integrated tree is red"
+  },
+  "merge_conflict_count": 2,
+  "merge_conflicts": [
+    {
+      "file": "identity-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1"
+        ]
+      }
+    },
+    {
+      "file": "ledger-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1"
+        ]
+      }
+    }
+  ],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid_unset",
+    "a1": "kid_unset",
+    "a2": "kid_unset"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "rag",
+      "tokens": {
+        "input": 58960,
+        "output": 4895,
+        "total": 63855
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 125.96,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/package.json",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [
+        "ledger-service/package.json"
+      ],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "rag",
+      "tokens": {
+        "input": 46922,
+        "output": 2288,
+        "total": 49210
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 52.11,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/package.json",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [
+        "ledger-service/package.json"
+      ],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "The end-to-end charge test failed because both identity-service and ledger-service had empty key ids after the externalize-secrets refactor, despite comments saying the values should be injected from the environment. I updated identity-service/src/config.ts to read MERIDIAN_ACTIVE_KID from process.env and ledger-service/src/config.ts to read MERIDIAN_TRUSTED_KID from process.env. I then set both variables to the shared keyring key k_wezen (the historical staging key noted in team memory) in the ledger-service test script so the signer and verifier use the same key. The test now passes.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "rag",
+      "tokens": {
+        "input": 21948,
+        "output": 644,
+        "total": 22592
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 15.38,
+      "status": "looped",
+      "local_tests_pass": false,
+      "files_written": [],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-17T10:29:57Z"
+}

@@ -1,0 +1,154 @@
+{
+  "mode": "anarchy",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "moonshotai/kimi-k2.7-code",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 143129,
+    "output": 5603,
+    "total": 148732
+  },
+  "fleet_cost_usd": 0.122663,
+  "cost_rate": {
+    "input_per_mtok": 0.72,
+    "output_per_mtok": 3.5
+  },
+  "fleet_wall_clock_seconds": 47.97,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "transcripts": [
+    "transcript-anarchy-a0.json",
+    "transcript-anarchy-a1.json",
+    "transcript-anarchy-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_yildun",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_pavo",
+    "a1": "kid:k_pavo",
+    "a2": "kid:k_pavo"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 54134,
+        "output": 2088,
+        "total": 56222
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 44.29,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 51827,
+        "output": 1865,
+        "total": 53692
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 46.93,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 37168,
+        "output": 1650,
+        "total": 38818
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 29.54,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-anarchy-amjvym51/agent-2/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-anarchy-amjvym51/agent-2/ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-anarchy-amjvym51/agent-2/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-anarchy-amjvym51/agent-2/ledger-service/src/config.ts"
+      ],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "finish_summary": "The end-to-end charge test failed because both identity-service and ledger-service had empty key selections (activeKid and trustedKid). I set both to \"k_pavo\" (the first key in the shared keyring), so the issuer can sign and the ledger can verify tokens end-to-end. The test now passes.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-17T10:36:46Z"
+}
