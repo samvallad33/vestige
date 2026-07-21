@@ -136,6 +136,17 @@ def main():
 
     rows, docs = load_corpus(path)
     n = len(docs)
+    if n == 0:
+        print(f"  ERROR: no retrievable memories found in {path}")
+        print()
+        print("  This is almost certainly the wrong input file. You want the")
+        print("  memory-layer export, named corpus-export.json:")
+        print()
+        print("      python3 tests/bm25_baseline.py results/runA-trial-1/corpus-export.json --no-dense")
+        print()
+        print("  prod-corpus.json, which sits in every results/ directory, is a")
+        print("  DIFFERENT artifact: it is the production replay oracle, not a corpus.")
+        sys.exit(2)
     causes = sum(d["is_cause"] for d in docs)
     keys = sorted({w.strip(".,;:\"'()") for d in docs for w in d["body"].split() if w.startswith("k_")})
 
