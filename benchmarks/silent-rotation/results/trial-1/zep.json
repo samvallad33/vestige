@@ -1,0 +1,193 @@
+{
+  "mode": "zep",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 142864,
+    "output": 7036,
+    "total": 149900
+  },
+  "fleet_cost_usd": 0.534132,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 135.28,
+  "fleet_iterations_total": 24,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "zep_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 520.1
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 13,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-zep-a0.json",
+    "transcript-zep-a1.json",
+    "transcript-zep-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 2,
+    "wrong": 1,
+    "other": 0
+  },
+  "fleet_verdict": "failed_merge_conflict",
+  "integrated_tests_pass": false,
+  "prod_replay_pass": null,
+  "production_replay": {
+    "ran": false,
+    "reason": "integrated tree is red"
+  },
+  "merge_conflict_count": 2,
+  "merge_conflicts": [
+    {
+      "file": "identity-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1",
+          "a2"
+        ]
+      }
+    },
+    {
+      "file": "ledger-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1",
+          "a2"
+        ]
+      }
+    }
+  ],
+  "cross_file_divergence": true,
+  "fix_directions": {
+    "a0": "kid:k_antares",
+    "a1": "kid:k_nashira",
+    "a2": "kid:k_nashira"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "zep",
+      "tokens": {
+        "input": 48899,
+        "output": 2785,
+        "total": 51684
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 134.02,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "zep_search",
+      "retrieval_ok_count": 3,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "zep",
+      "tokens": {
+        "input": 46282,
+        "output": 1735,
+        "total": 48017
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 134.76,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "zep_search",
+      "retrieval_ok_count": 6,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\": an \"externalize secrets\" refactor had blanked the key id in both identity-service/src/config.ts (activeKid) and ledger-service/src/config.ts (trustedKid). Team memory (Zep) established the direction: (a) identity and ledger now read the key id from environment variables rather than a hardcoded value, and (b) k_antares (the older OPS-522 value) has been DECOMMISSIONED \u2014 k_nashira is the current live signer (k_vela is only pre-provisioned for a future cutover). Fix: restored both configs to select the key id from env vars (IDENTITY_ACTIVE_KID / LEDGER_TRUSTED_KID) with a fallback default of \"k_nashira\" on both sides, so issuer and verifier use the same key and the config works out-of-the-box while remaining env-overridable per the externalize-secrets decision. Canonical digest implementations on both sides already matched, and the gateway passes the token verbatim, so no other changes were needed. run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "zep",
+      "tokens": {
+        "input": 47683,
+        "output": 2516,
+        "total": 50199
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 113.12,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "zep_search",
+      "retrieval_ok_count": 4,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Restored key selection in identity and ledger configs: both now read the kid from env (IDENTITY_ACTIVE_KID / LEDGER_TRUSTED_KID) and default to k_nashira, the live signer (k_antares was decommissioned per team memory). Test passes (exit 0).",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T07:11:37Z"
+}

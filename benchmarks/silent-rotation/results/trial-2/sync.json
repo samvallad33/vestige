@@ -1,0 +1,162 @@
+{
+  "mode": "sync",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 125623,
+    "output": 5473,
+    "total": 131096
+  },
+  "fleet_cost_usd": 0.458964,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 140.86,
+  "fleet_iterations_total": 21,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "memory_tool": "vestige_backfill",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.4
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 3,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-sync-a0.json",
+    "transcript-sync-a1.json",
+    "transcript-sync-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_regulus",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_regulus",
+    "a1": "kid:k_regulus",
+    "a2": "kid:k_regulus"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync",
+      "tokens": {
+        "input": 40609,
+        "output": 1822,
+        "total": 42431
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 94.81,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the externalize-secrets refactor blanked activeKid in identity-service/src/config.ts and trustedKid in ledger-service/src/config.ts, so signSession threw \"no active signing key selected\". Per the Q3 rotation runbook (surfaced via vestige_backfill), the live signing key is k_regulus. Fix: set activeKid=\"k_regulus\" in identity-service config and trustedKid=\"k_regulus\" in ledger-service config (each with a MERIDIAN_SIGNING_KID env override for production/KMS), keeping both sides on the same shared-keyring entry. Canonical digest logic and gateway pass-through were already consistent; no changes needed there. run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync",
+      "tokens": {
+        "input": 36587,
+        "output": 1751,
+        "total": 38338
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 103.96,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the externalize-secrets refactor blanked the key-id selections in both identity-service (activeKid) and ledger-service (trustedKid), so signSession threw \"no active signing key selected\" and no token could be minted/verified. Per the Q3 rotation runbook (surfaced via vestige_backfill), the live signer is k_regulus. Fix: set activeKid=\"k_regulus\" in identity-service/src/config.ts and trustedKid=\"k_regulus\" in ledger-service/src/config.ts (both sides must select the same keyring entry). Canonical digest recipes and gateway pass-through were already consistent and untouched. Direction logged to shared memory for fleet convergence.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync",
+      "tokens": {
+        "input": 48427,
+        "output": 1900,
+        "total": 50327
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 140.0,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize-secrets\" refactor blanked the signing-key selection in both identity-service (config.activeKid = \"\") and ledger-service (ledgerConfig.trustedKid = \"\"), so signSession threw \"no active signing key selected\" and verification had no trusted key. A retroactive backfill surfaced the Q3 rotation runbook identifying k_regulus as the platform's live signing key. Fix: set activeKid = \"k_regulus\" in identity-service/src/config.ts and trustedKid = \"k_regulus\" in ledger-service/src/config.ts (signer and verifier must select the same key). No changes to keyring material, canonical digest, signer, or verifier logic. The end-to-end charge test now passes (exit 0). Direction published to shared fleet memory via vestige_log so peers converge on the same change.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T07:18:59Z"
+}

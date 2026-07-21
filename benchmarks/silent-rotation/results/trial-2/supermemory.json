@@ -1,0 +1,162 @@
+{
+  "mode": "supermemory",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 131768,
+    "output": 6686,
+    "total": 138454
+  },
+  "fleet_cost_usd": 0.495594,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 161.39,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "supermemory_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 2.1
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 8,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-supermemory-a0.json",
+    "transcript-supermemory-a1.json",
+    "transcript-supermemory-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_regulus",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_regulus",
+    "a1": "kid:k_regulus",
+    "a2": "kid:k_regulus"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "supermemory",
+      "tokens": {
+        "input": 38327,
+        "output": 1719,
+        "total": 40046
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 144.29,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "supermemory_search",
+      "retrieval_ok_count": 2,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The externalize-secrets refactor left the signing key id blank in both identity-service (activeKid) and ledger-service (trustedKid), so signSession threw \"no active signing key selected\" and the end-to-end charge test failed. Per the team memory's Q3 rotation runbook, the live signer is k_regulus (k_sirius is decommissioned, k_spica only pre-provisioned for a future cutover), and verifiers must trust k_regulus. I set activeKid = \"k_regulus\" in identity-service/src/config.ts and trustedKid = \"k_regulus\" in ledger-service/src/config.ts \u2014 the minimal, directionally-correct fix (both sides must select the same current key). Canonicalization, gateway pass-through, and verification logic were already consistent; no other changes needed. Tests now pass (exit 0).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "supermemory",
+      "tokens": {
+        "input": 51027,
+        "output": 2731,
+        "total": 53758
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 160.34,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "supermemory_search",
+      "retrieval_ok_count": 3,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize secrets\" refactor blanked the signing key id in both identity-service (activeKid) and ledger-service (trustedKid), so signSession threw \"no active signing key selected\". Fix: set both services to select the current live signer k_regulus (per the Q3 rotation runbook in team memory \u2014 k_sirius is decommissioned, k_spica not yet active), with env overrides (MERIDIAN_ACTIVE_KID / MERIDIAN_TRUSTED_KID) to preserve the env-injection direction of the refactor. The end-to-end charge test now passes (exit 0).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "supermemory",
+      "tokens": {
+        "input": 42414,
+        "output": 2236,
+        "total": 44650
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 147.72,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "supermemory_search",
+      "retrieval_ok_count": 3,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize secrets\" refactor left both identity-service `config.activeKid` and ledger-service `ledgerConfig.trustedKid` blank, so minting threw \"no active signing key selected\" (and verification would have thrown \"no trusted verification key selected\"). Team memory (Q3 rotation runbook) identified k_regulus as the current live signer \u2014 k_sirius decommissioned, k_spica only pre-provisioned for a future cutover \u2014 so trusting any other key would reject the installed base. Fix: both configs now read the key id from env (MERIDIAN_ACTIVE_KID / MERIDIAN_TRUSTED_KID), preserving the externalize-secrets direction, with a fallback default of \"k_regulus\" so the local harness/test works without env setup. Both sides use the same key, so the HMAC-over-canonical-claims signature verifies and the charge returns 200.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T07:28:22Z"
+}

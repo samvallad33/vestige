@@ -1,0 +1,156 @@
+{
+  "mode": "mem0",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 158050,
+    "output": 9052,
+    "total": 167102
+  },
+  "fleet_cost_usd": 0.60993,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 200.44,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 1,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "mem0_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 183.5
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 19,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-mem0-a0.json",
+    "transcript-mem0-a1.json",
+    "transcript-mem0-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 1,
+    "wrong": 0,
+    "other": 2
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_regulus",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_regulus",
+    "a1": "kid_unset",
+    "a2": "kid_unset"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "mem0",
+      "tokens": {
+        "input": 45550,
+        "output": 3959,
+        "total": 49509
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 190.53,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 3,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Fixed the failing end-to-end charge test. Root cause: the \"externalize secrets\" refactor left the signing key id blank in both identity-service/src/config.ts (activeKid: \"\") and ledger-service/src/config.ts (trustedKid: \"\"), so signSession threw \"no active signing key selected\". Per team memory (Q3 rotation runbook), the current live signer is k_regulus (k_sirius is decommissioned; k_spica is only pre-provisioned for a future cutover). Both configs now resolve the key id as process.env.MERIDIAN_ACTIVE_KID ?? \"k_regulus\", honoring the env-injection design while defaulting issuer and verifier to the same live key in lockstep. run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "mem0",
+      "tokens": {
+        "input": 51417,
+        "output": 1626,
+        "total": 53043
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 121.93,
+      "status": "looped",
+      "local_tests_pass": false,
+      "files_written": [],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 9,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "mem0",
+      "tokens": {
+        "input": 61083,
+        "output": 3467,
+        "total": 64550
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 199.44,
+      "status": "looped",
+      "local_tests_pass": false,
+      "files_written": [],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 7,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T07:25:30Z"
+}

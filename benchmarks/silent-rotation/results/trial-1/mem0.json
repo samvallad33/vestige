@@ -1,0 +1,193 @@
+{
+  "mode": "mem0",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 128615,
+    "output": 6863,
+    "total": 135478
+  },
+  "fleet_cost_usd": 0.48879,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 154.25,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "mem0_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 272.8
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 7,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-mem0-a0.json",
+    "transcript-mem0-a1.json",
+    "transcript-mem0-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 2,
+    "wrong": 1,
+    "other": 0
+  },
+  "fleet_verdict": "failed_merge_conflict",
+  "integrated_tests_pass": false,
+  "prod_replay_pass": null,
+  "production_replay": {
+    "ran": false,
+    "reason": "integrated tree is red"
+  },
+  "merge_conflict_count": 2,
+  "merge_conflicts": [
+    {
+      "file": "identity-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1",
+          "a2"
+        ]
+      }
+    },
+    {
+      "file": "ledger-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1",
+          "a2"
+        ]
+      }
+    }
+  ],
+  "cross_file_divergence": true,
+  "fix_directions": {
+    "a0": "kid:k_antares",
+    "a1": "kid:k_nashira",
+    "a2": "kid:k_nashira"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "mem0",
+      "tokens": {
+        "input": 45009,
+        "output": 2094,
+        "total": 47103
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 153.29,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 2,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed because the \"externalize secrets\" refactor left identity-service's activeKid and ledger-service's trustedKid blank (\"\"), so signSession threw \"no active signing key selected\" and the ledger had no trusted verification key. Guided by team memory (OPS-522 and the externalize-secrets refactor note), I set both services to read the key id from a shared env override MERIDIAN_SIGNING_KID with a fallback to \"k_antares\" \u2014 the platform's shipped key id \u2014 ensuring issuer and verifier always select the same key. Test suite now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "mem0",
+      "tokens": {
+        "input": 40135,
+        "output": 2198,
+        "total": 42333
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 140.83,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 2,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize-secrets\" refactor blanked out both the identity issuer's `activeKid` and the ledger's `trustedKid`, so `signSession` threw \"no active signing key selected\" during token minting in the e2e charge test. Fix: set both `identity-service/src/config.ts` and `ledger-service/src/config.ts` to select the current live signing key from the rotation runbook (k_nashira \u2014 per team memory, k_antares is decommissioned and k_vela is only pre-provisioned for a future cutover), while honoring the refactor's intent by reading an optional `MERIDIAN_SIGNING_KID` env override on both sides. Signing/verification logic (canonical digest, HMAC over claims, verbatim gateway forwarding) was already consistent and untouched. End-to-end charge test now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "mem0",
+      "tokens": {
+        "input": 43471,
+        "output": 2571,
+        "total": 46042
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 150.89,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 3,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T06:55:26Z"
+}

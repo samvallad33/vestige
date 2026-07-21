@@ -1,0 +1,162 @@
+{
+  "mode": "rag",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 114130,
+    "output": 6083,
+    "total": 120213
+  },
+  "fleet_cost_usd": 0.433635,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 133.72,
+  "fleet_iterations_total": 20,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "rag_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.4
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 7,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-rag-a0.json",
+    "transcript-rag-a1.json",
+    "transcript-rag-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_regulus",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_regulus",
+    "a1": "kid:k_regulus",
+    "a2": "kid:k_regulus"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "rag",
+      "tokens": {
+        "input": 44473,
+        "output": 2137,
+        "total": 46610
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 132.76,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 2,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize-secrets\" refactor left both key-id fields blank \u2014 identity-service `config.activeKid` was empty (causing signSession to throw \"no active signing key selected\") and ledger-service `ledgerConfig.trustedKid` was empty (which would have failed verification). Team memory confirmed the authoritative key: per the Q3 rotation runbook, the live signer is `k_regulus` (k_sirius is the decommissioned launch signer \u2014 the OPS-522 staging note was a red herring \u2014 and k_spica is only pre-provisioned for a future cutover). Fix: set `activeKid` in identity-service/src/config.ts and `trustedKid` in ledger-service/src/config.ts to `k_regulus`, each overridable via env (IDENTITY_ACTIVE_KID / LEDGER_TRUSTED_KID) to honor the env-injection direction of the refactor. Both sides now sign and verify with the same key, the canonical digests already matched, and the end-to-end charge test returns 200. run_tests exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "rag",
+      "tokens": {
+        "input": 37783,
+        "output": 1528,
+        "total": 39311
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 100.58,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 3,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Both identity-service (activeKid) and ledger-service (trustedKid) had blank key ids left by the externalize-secrets refactor. Per the Q3 rotation runbook in team memory, the live signer is k_regulus (k_sirius decommissioned, k_spica only pre-provisioned), so I set both configs to k_regulus. Test passes.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "rag",
+      "tokens": {
+        "input": 31874,
+        "output": 2418,
+        "total": 34292
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 112.85,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 2,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The externalize-secrets refactor left identity-service config.activeKid and ledger-service ledgerConfig.trustedKid blank, so signSession threw \"no active signing key selected\" and the e2e charge test failed at token minting. Fixed by making both configs read the kid from env (MERIDIAN_ACTIVE_KID / MERIDIAN_TRUSTED_KID) with a shared default of \"k_regulus\" \u2014 the current live signer per the Q3 rotation runbook in team memory (k_sirius is the decommissioned launch signer from the OPS-522 staging incident; k_spica is pre-provisioned for a future cutover that hasn't happened). Signer and verifier now agree on the same key, so mint \u2192 forward \u2192 verify \u2192 charge succeeds and run_tests exits 0.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T07:16:30Z"
+}

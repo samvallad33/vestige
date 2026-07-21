@@ -1,0 +1,162 @@
+{
+  "mode": "sync",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 137208,
+    "output": 5346,
+    "total": 142554
+  },
+  "fleet_cost_usd": 0.491814,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 137.29,
+  "fleet_iterations_total": 22,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "memory_tool": "vestige_backfill",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.4
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 3,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-sync-a0.json",
+    "transcript-sync-a1.json",
+    "transcript-sync-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_nashira",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_nashira",
+    "a1": "kid:k_nashira",
+    "a2": "kid:k_nashira"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync",
+      "tokens": {
+        "input": 54492,
+        "output": 1799,
+        "total": 56291
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 119.96,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the externalize-secrets refactor left identity-service config.activeKid and ledger-service ledgerConfig.trustedKid blank, so signSession threw \"no active signing key selected\" and the ledger had no trusted verification key. The vestige backfill surfaced the Q3 rotation runbook: the live signer since the cutover is k_nashira (old material aged out). Fix: set activeKid=\"k_nashira\" in identity-service/src/config.ts and trustedKid=\"k_nashira\" in ledger-service/src/config.ts so the issuer and verifier agree on the same keyring entry. Canonical digest recipes, gateway pass-through, and verify logic were already consistent and untouched. run_tests now exits 0 (the e2e charge returns 200, chargedTo user_42, amount 1999). Fix direction published to shared memory for fleet convergence.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync",
+      "tokens": {
+        "input": 49016,
+        "output": 1903,
+        "total": 50919
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 136.42,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The e2e charge test failed with \"no active signing key selected\": the externalize-secrets refactor had blanked the key id in both identity-service/src/config.ts (activeKid) and ledger-service/src/config.ts (trustedKid). vestige_backfill surfaced the Q3 rotation runbook identifying k_nashira as the live signer since the cutover. Fix: set activeKid and trustedKid to \"k_nashira\" in the two config files (no code changes to signer/verify/canonical, which were already consistent). run_tests now exits 0; direction published to shared memory via vestige_log.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync",
+      "tokens": {
+        "input": 33700,
+        "output": 1644,
+        "total": 35344
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 81.18,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\" because the externalize-secrets refactor had blanked the key-id selection in both identity-service/src/config.ts (activeKid: \"\") and ledger-service/src/config.ts (trustedKid: \"\"). A retroactive backfill surfaced the Q3 rotation runbook identifying k_nashira as the live signing key. Fix: set activeKid = \"k_nashira\" in the identity config and trustedKid = \"k_nashira\" in the ledger config, keeping issuer and verifier on the same key. Test suite now exits 0. Direction logged to shared team memory.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T06:48:11Z"
+}

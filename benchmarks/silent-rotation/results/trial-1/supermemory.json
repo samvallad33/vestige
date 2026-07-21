@@ -1,0 +1,162 @@
+{
+  "mode": "supermemory",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 132812,
+    "output": 7562,
+    "total": 140374
+  },
+  "fleet_cost_usd": 0.511866,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 143.81,
+  "fleet_iterations_total": 22,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "supermemory_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.5
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 7,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-supermemory-a0.json",
+    "transcript-supermemory-a1.json",
+    "transcript-supermemory-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_nashira",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_nashira",
+    "a1": "kid:k_nashira",
+    "a2": "kid:k_nashira"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "supermemory",
+      "tokens": {
+        "input": 46342,
+        "output": 1774,
+        "total": 48116
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 114.89,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "supermemory_search",
+      "retrieval_ok_count": 3,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "supermemory",
+      "tokens": {
+        "input": 52450,
+        "output": 2736,
+        "total": 55186
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 137.84,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "supermemory_search",
+      "retrieval_ok_count": 2,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize-secrets\" refactor left the key id blank in both identity-service/src/config.ts (activeKid) and ledger-service/src/config.ts (trustedKid), so signSession threw \"no active signing key selected\" and the end-to-end charge test failed. Fix: both configs now read the key id from env (MERIDIAN_ACTIVE_KID / MERIDIAN_TRUSTED_KID) with a required fallback of \"k_nashira\" \u2014 the live signer since the Q3 rotation per the team runbook. Memory note: k_antares (the launch signer, per closed ticket OPS-522) is DECOMMISSIONED and was a red herring; trusting it would turn away the installed base. k_vela is pre-provisioned for a future cutover, not yet live. The end-to-end charge test now passes (exit 0).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "supermemory",
+      "tokens": {
+        "input": 34020,
+        "output": 3052,
+        "total": 37072
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 142.84,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "supermemory_search",
+      "retrieval_ok_count": 2,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize secrets\" refactor blanked both `identity-service/src/config.ts` (activeKid) and `ledger-service/src/config.ts` (trustedKid), so signSession threw \"no active signing key selected\" before any token could be minted (and the ledger would have failed verification next). Team memory was decisive on the correct key: the Q3 rotation runbook made k_nashira the live signer (k_antares is decommissioned, k_vela is only pre-provisioned for a future cutover), and the installed base of credentials carries the k_nashira fingerprint. Fix: set both configs to default to k_nashira while preserving env injection via MERIDIAN_SIGNING_KID. Both services must select the same kid since tokens carry no kid header and the signature covers the canonical claim digest with the configured key. Test now passes (200 charge, exit 0).",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T06:57:58Z"
+}
