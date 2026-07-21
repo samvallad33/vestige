@@ -42,15 +42,15 @@ ships. Loud. You find out immediately.
 Converged wrong: every agent agrees, on the decoy. Tests go green. The merge is
 clean. Production breaks. This is the one that ships.
 
-Across 5 models and 22 trials:
+Across 6 models and 25 trials:
 
     arm                 converged CORRECT   converged WRONG   split
-    no memory                0/22               16/22          6/22
-    dense cosine RAG         4/21               10/21          7/21
-    Vestige                 19/21                0/21          2/21
+    no memory                0/25               21/25          4/25
+    dense cosine RAG         4/23               12/23          7/23
+    Vestige                 20/23                0/23          3/23
 
 The middle column is the finding. A memoryless fleet marched confidently off a
-cliff 16 times out of 22. Dense cosine did it 10 times out of 21.
+cliff 21 times out of 25. Dense cosine did it 12 times out of 23.
 
 **The agents were not reasoning badly.** GPT-5.6 Sol, committing to the wrong key:
 
@@ -133,7 +133,7 @@ from temporal lifecycle. A reviewer can fairly argue I won by removing query
 variability alone. That is the next experiment.
 
 And I built the benchmark, the harness, and one of the products in it. Which is
-why all 210 agent transcripts ship with it rather than a summary table.
+why all 246 agent transcripts ship with it rather than a summary table.
 
 ---
 

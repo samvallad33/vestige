@@ -151,7 +151,7 @@ configured one. Fixed and re-run: mem0 converged correctly in `runB-trial-3` and
 
 **It proves:** at turn zero an agent knows only the symptom, so it queries the symptom. In this incident
 class the symptom query returns a document that resembles the failure and buries the one that explains
-it, and that holds under dense cosine and BM25 alike. Across 5 models and 22 trials, a query-based arm's
+it, and that holds under dense cosine and BM25 alike. Across 6 models and 25 trials, a query-based arm's
 first memory call surfaced the deciding fact 6 times out of 87. Anchoring on the failure event instead
 of a query did it 56 out of 56. In a fleet, that first-call gap becomes either a merge conflict or a
 unanimous wrong answer that passes tests and breaks production.

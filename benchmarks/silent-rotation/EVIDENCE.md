@@ -17,15 +17,15 @@ it the right one?**
 
 | arm | converged on the CORRECT key | converged on a WRONG key | split, no consensus | n |
 |---|---|---|---|---|
-| anarchy (no memory) | 0/22 | **16/22** | 6/22 | 22 |
-| rag (dense cosine) | 4/21 | **10/21** | 7/21 | 21 |
-| **sync (Vestige)** | **19/21** | **0/21** | 2/21 | 21 |
-| supermemory | 4/5 | 0/5 | 1/5 | 5 |
-| mem0 | 0/5 | 1/5 | 4/5 | 5 |
-| hindsight | 0/5 | 0/5 | 5/5 | 5 |
-| zep | 0/4 | 2/4 | 2/4 | 4 |
+| anarchy (no memory) | 0/25 | **21/25** | 4/25 | 25 |
+| rag (dense cosine) | 4/23 | **12/23** | 7/23 | 23 |
+| **sync (Vestige)** | **20/23** | **0/23** | 3/23 | 23 |
+| supermemory | 5/6 | 0/6 | 1/6 | 6 |
+| mem0 | 2/5 | 1/5 | 2/5 | 5 |
+| hindsight | 0/3 | 0/3 | 3/3 | 3 |
+| zep | 0/2 | 1/2 | 1/2 | 2 |
 
-Models: Kimi K3, MiniMax M3, GLM 5.2, GPT-5.6 Sol, DeepSeek V4 Flash.
+Models: Kimi K3, Kimi K2.7-code, MiniMax M3, GLM 5.2, GPT-5.6 Sol, DeepSeek V4 Flash.
 Reproduce: read `fix_directions` and `correct_kid` out of every `trial-*/{arm}.json` and `manifest.json`.
 
 ### There are two failure modes and only one of them is visible
