@@ -71,7 +71,7 @@ two failed queries:
 It concluded the memory layer had nothing and went to the source. It needed six queries in total and
 first surfaced the correct key on call four.
 
-This is what a 6.9% first-call hit rate feels like from inside the agent.
+This is what a 6.1% first-call hit rate feels like from inside the agent.
 
 ---
 
@@ -152,8 +152,8 @@ configured one. Fixed and re-run: mem0 converged correctly in `runB-trial-3` and
 **It proves:** at turn zero an agent knows only the symptom, so it queries the symptom. In this incident
 class the symptom query returns a document that resembles the failure and buries the one that explains
 it, and that holds under dense cosine and BM25 alike. Across 6 models and 25 trials, a query-based arm's
-first memory call surfaced the deciding fact 6 times out of 87. Anchoring on the failure event instead
-of a query did it 56 out of 56. In a fleet, that first-call gap becomes either a merge conflict or a
+first memory call surfaced the deciding fact 7 times out of 114. Anchoring on the failure event instead
+of a query did it 65 out of 65. In a fleet, that first-call gap becomes either a merge conflict or a
 unanimous wrong answer that passes tests and breaks production.
 
 **It does not prove:** that Vestige discovers causal relationships. The edge it traverses is authored by

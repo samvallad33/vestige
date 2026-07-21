@@ -26,6 +26,25 @@ it the right one?**
 | zep | 0/2 | 1/2 | 1/2 | 2 |
 
 Models: Kimi K3, Kimi K2.7-code, MiniMax M3, GLM 5.2, GPT-5.6 Sol, DeepSeek V4 Flash.
+
+### First memory call
+
+For every agent, the FIRST memory-tool call it made: did the returned payload contain the trial's
+correct key? This isolates the memory substrate from the model's ability to recover on later turns.
+
+| arm | first call correct | n | rate |
+|---|---|---|---|
+| **sync (Vestige, no query)** | **65** | **65** | **100%** |
+| rag (dense cosine) | 6 | 66 | 9.1% |
+| supermemory | 1 | 18 | 5.6% |
+| mem0 | 0 | 15 | 0% |
+| hindsight | 0 | 9 | 0% |
+| zep | 0 | 6 | 0% |
+| **all query-based combined** | **7** | **114** | **6.1%** |
+
+The `anarchy` arm has no memory tool and is excluded. Reproduce: for each
+`results/*/transcript-*.json`, walk `turns[].tool_results[]`, take the first entry whose `name` is a
+memory tool, and test whether `manifest.json`'s `correct_kid` appears in its `output`.
 Reproduce: read `fix_directions` and `correct_kid` out of every `trial-*/{arm}.json` and `manifest.json`.
 
 ### There are two failure modes and only one of them is visible
