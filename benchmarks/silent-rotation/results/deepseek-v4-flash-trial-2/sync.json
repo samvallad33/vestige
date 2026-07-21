@@ -1,0 +1,164 @@
+{
+  "mode": "sync",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "deepseek/deepseek-v4-flash",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 160059,
+    "output": 7569,
+    "total": 167628
+  },
+  "fleet_cost_usd": 0.047996,
+  "cost_rate": {
+    "input_per_mtok": 0.28,
+    "output_per_mtok": 0.42
+  },
+  "fleet_wall_clock_seconds": 50.65,
+  "fleet_iterations_total": 24,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 2,
+  "agents_used_vestige_log": 3,
+  "transcripts": [
+    "transcript-sync-a0.json",
+    "transcript-sync-a1.json",
+    "transcript-sync-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 2,
+    "wrong": 1,
+    "other": 0
+  },
+  "fleet_verdict": "failed_merge_conflict",
+  "integrated_tests_pass": false,
+  "prod_replay_pass": null,
+  "production_replay": {
+    "ran": false,
+    "reason": "integrated tree is red"
+  },
+  "merge_conflict_count": 2,
+  "merge_conflicts": [
+    {
+      "file": "identity-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0",
+          "a2"
+        ],
+        "1": [
+          "a1"
+        ]
+      }
+    },
+    {
+      "file": "ledger-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0",
+          "a2"
+        ],
+        "1": [
+          "a1"
+        ]
+      }
+    }
+  ],
+  "cross_file_divergence": true,
+  "fix_directions": {
+    "a0": "kid:k_bellatrix",
+    "a1": "kid:k_vela",
+    "a2": "kid:k_bellatrix"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync",
+      "tokens": {
+        "input": 52187,
+        "output": 2093,
+        "total": 54280
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 44.6,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync",
+      "tokens": {
+        "input": 48675,
+        "output": 1957,
+        "total": 50632
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 31.42,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync",
+      "tokens": {
+        "input": 59197,
+        "output": 3519,
+        "total": 62716
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 49.75,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-sync-dhjx6jna/agent-2/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-sync-dhjx6jna/agent-2/ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-sync-dhjx6jna/agent-2/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-sync-dhjx6jna/agent-2/ledger-service/src/config.ts"
+      ],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-18T13:53:04Z"
+}

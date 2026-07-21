@@ -1,0 +1,130 @@
+{
+  "mode": "sync",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 149224,
+    "output": 5445,
+    "total": 154669
+  },
+  "fleet_cost_usd": 0.101513,
+  "cost_rate": {
+    "input_per_mtok": 0.6,
+    "output_per_mtok": 2.2
+  },
+  "fleet_wall_clock_seconds": 59.14,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "transcripts": [
+    "transcript-sync-a0.json",
+    "transcript-sync-a1.json",
+    "transcript-sync-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_wren",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_wren",
+    "a1": "kid:k_wren",
+    "a2": "kid:k_wren"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync",
+      "tokens": {
+        "input": 50829,
+        "output": 1869,
+        "total": 52698
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 51.34,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\" from identity-service/src/signer.ts because the \"externalize secrets\" refactor had left both identity-service `config.activeKid` and ledger-service `ledgerConfig.trustedKid` blank. The vestige backfill recovered the Q3 rotation runbook which migrated the live signer to `k_wren` (present in the shared KEYRING). Fix: set `activeKid: \"k_wren\"` in identity-service/src/config.ts and `trustedKid: \"k_wren\"` in ledger-service/src/config.ts, so the signer and verifier both use the same HMAC key material. The canonical-claim recipes in the two services were already identical, so no other change was required. Re-ran run_tests: exit_code=0, test passes.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync",
+      "tokens": {
+        "input": 52369,
+        "output": 1601,
+        "total": 53970
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 58.1,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "The end-to-end charge test failed because the \"externalize-secrets\" refactor left both the identity-service `activeKid` and ledger-service `trustedKid` config fields blank, causing `signSession` to throw \"no active signing key selected\". The vestige_backfill surfaced that the platform's Q3 key rotation migrated the live signer to `k_wren` (old material aged out). I set both configs to use `k_wren` as the platform default (overridable via SIGNING_KID / TRUSTED_KID env vars), so the identity-service mints and the ledger verifies with the same key. The canonical-digest implementations already matched, so no other changes were needed. run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync",
+      "tokens": {
+        "input": 46026,
+        "output": 1975,
+        "total": 48001
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 52.89,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "The e2e charge test failed with \"no active signing key selected\" because the \"externalize-secrets\" refactor blanked out both identity-service `config.activeKid` and ledger-service `ledgerConfig.trustedKid`. The signer couldn't mint tokens, and even if it had, the verifier had no trusted key.\n\nUsing vestige_backfill, I traced the root cause to the Q3 key-rotation runbook, which migrated the live signer to `k_wren` and let old material age out. So `k_wren` is the authoritative signing/verification key id.\n\nFix applied to both configs to converge on the same key:\n- identity-service/src/config.ts: `activeKid` now defaults to `k_wren` (env override MERIDIAN_IDENTITY_ACTIVE_KID).\n- ledger-service/src/config.ts: `trustedKid` now defaults to `k_wren` (env override MERIDIAN_LEDGER_TRUSTED_KID).\n\nThe canonicalClaimString implementations in both services already matched (sub,plan,iat,exp joined by newline), so no change was needed there. Test now passes (exit 0).",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-18T13:30:53Z"
+}

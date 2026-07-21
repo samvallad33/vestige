@@ -19,11 +19,11 @@ it the right one?**
 |---|---|---|---|---|
 | anarchy (no memory) | 0/22 | **16/22** | 6/22 | 22 |
 | rag (dense cosine) | 4/21 | **10/21** | 7/21 | 21 |
-| supermemory | 5/6 | 0/6 | 1/6 | 6 |
-| mem0 (clean cells only) | 1/2 | 0/2 | 1/2 | 2 |
-| hindsight | 0/3 | 0/3 | 3/3 | 3 |
-| Zep/Graphiti (clean cell only) | 0/1 | 0/1 | 1/1 | 1 |
 | **sync (Vestige)** | **19/21** | **0/21** | 2/21 | 21 |
+| supermemory | 4/5 | 0/5 | 1/5 | 5 |
+| mem0 | 0/5 | 1/5 | 4/5 | 5 |
+| hindsight | 0/5 | 0/5 | 5/5 | 5 |
+| zep | 0/4 | 2/4 | 2/4 | 4 |
 
 Models: Kimi K3, MiniMax M3, GLM 5.2, GPT-5.6 Sol, DeepSeek V4 Flash.
 Reproduce: read `fix_directions` and `correct_kid` out of every `trial-*/{arm}.json` and `manifest.json`.

@@ -1,0 +1,170 @@
+{
+  "mode": "supermemory",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "minimax/minimax-m3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 201051,
+    "output": 17853,
+    "total": 218904
+  },
+  "fleet_cost_usd": 0.207242,
+  "cost_rate": {
+    "input_per_mtok": 0.72,
+    "output_per_mtok": 3.5
+  },
+  "fleet_wall_clock_seconds": 135.91,
+  "fleet_iterations_total": 24,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "transcripts": [
+    "transcript-supermemory-a0.json",
+    "transcript-supermemory-a1.json",
+    "transcript-supermemory-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 1,
+    "wrong": 2,
+    "other": 0
+  },
+  "fleet_verdict": "failed_merge_conflict",
+  "integrated_tests_pass": false,
+  "prod_replay_pass": null,
+  "production_replay": {
+    "ran": false,
+    "reason": "integrated tree is red"
+  },
+  "merge_conflict_count": 2,
+  "merge_conflicts": [
+    {
+      "file": "identity-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1"
+        ],
+        "2": [
+          "a2"
+        ]
+      }
+    },
+    {
+      "file": "ledger-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1"
+        ],
+        "2": [
+          "a2"
+        ]
+      }
+    }
+  ],
+  "cross_file_divergence": true,
+  "fix_directions": {
+    "a0": "kid:k_orion",
+    "a1": "kid:k_nashira",
+    "a2": "kid:k_olivine"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "supermemory",
+      "tokens": {
+        "input": 61146,
+        "output": 7223,
+        "total": 68369
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 59.91,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-supermemory-fnm7vk70/agent-0/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-supermemory-fnm7vk70/agent-0/ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-supermemory-fnm7vk70/agent-0/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-supermemory-fnm7vk70/agent-0/ledger-service/src/config.ts"
+      ],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "supermemory",
+      "tokens": {
+        "input": 64368,
+        "output": 3112,
+        "total": 67480
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 70.27,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "supermemory",
+      "tokens": {
+        "input": 75537,
+        "output": 7518,
+        "total": 83055
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 134.97,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-19T17:01:50Z"
+}

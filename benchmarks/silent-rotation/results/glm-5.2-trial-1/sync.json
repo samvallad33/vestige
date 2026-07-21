@@ -1,0 +1,130 @@
+{
+  "mode": "sync",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 124944,
+    "output": 3900,
+    "total": 128844
+  },
+  "fleet_cost_usd": 0.083546,
+  "cost_rate": {
+    "input_per_mtok": 0.6,
+    "output_per_mtok": 2.2
+  },
+  "fleet_wall_clock_seconds": 47.17,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "transcripts": [
+    "transcript-sync-a0.json",
+    "transcript-sync-a1.json",
+    "transcript-sync-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_yildun",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_yildun",
+    "a1": "kid:k_yildun",
+    "a2": "kid:k_yildun"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync",
+      "tokens": {
+        "input": 42933,
+        "output": 1306,
+        "total": 44239
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 42.98,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "The e2-end charge test failed with \"no active signing key selected\" because the \"externalize-secrets\" refactor left both identity-service/config.activeKid and ledger-service/config.trustedKid blank. The vestige_backfill surfaced the Q3 rotation runbook memory: the platform's active signer is k_yildun (old material aged out). Fix: set activeKid=\"k_yildun\" in identity-service/src/config.ts and trustedKid=\"k_yildun\" in ledger-service/src/config.ts so the issuer and verifier agree on the same keyring key. The canonical digest recipes already matched between services, so no other changes were needed. run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync",
+      "tokens": {
+        "input": 32805,
+        "output": 1002,
+        "total": 33807
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 36.48,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync",
+      "tokens": {
+        "input": 49206,
+        "output": 1592,
+        "total": 50798
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 46.17,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "The e2e charge test failed with \"no active signing key selected\" because the externalize-secrets refactor blanked the key id in both identity-service/src/config.ts (activeKid) and ledger-service/src/config.ts (trustedKid). The vestige_backfill surfaced the Q3 rotation runbook which migrated the live signer to k_yildun and aged out the old material. Fixed by setting both configs' kid default to \"k_yildun\" (overridable via IDENTITY_ACTIVE_KID / LEDGER_TRUSTED_KID env vars). The canonical claim digest implementations in both services already matched, so no other changes were needed. Test now exits 0.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-18T13:25:10Z"
+}

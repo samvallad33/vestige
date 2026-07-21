@@ -1,0 +1,162 @@
+{
+  "mode": "sync",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 139200,
+    "output": 5365,
+    "total": 144565
+  },
+  "fleet_cost_usd": 0.498075,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 97.98,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "memory_tool": "vestige_backfill",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.7
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 3,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-sync-a0.json",
+    "transcript-sync-a1.json",
+    "transcript-sync-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_orion",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_orion",
+    "a1": "kid:k_orion",
+    "a2": "kid:k_orion"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync",
+      "tokens": {
+        "input": 43588,
+        "output": 2142,
+        "total": 45730
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 96.9,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The externalize-secrets refactor left the key-id selection blank in both identity-service (activeKid) and ledger-service (trustedKid). Per the Q3 rotation runbook (surfaced via vestige_backfill), the live signer is k_orion. Set both configs to \"k_orion\" so the issuer signs with and the ledger verifies against the same keyring key. The end-to-end charge test now passes (run_tests exit_code=0), and the fix direction was published to shared team memory for fleet convergence.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync",
+      "tokens": {
+        "input": 50899,
+        "output": 1757,
+        "total": 52656
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 71.46,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\" because the externalize-secrets refactor left both key ids blank. Using vestige_backfill I recovered the Q3 rotation runbook decision: the platform's live signer was migrated to k_orion. Fix: set activeKid=\"k_orion\" in identity-service/src/config.ts and trustedKid=\"k_orion\" in ledger-service/src/config.ts so both sides select the same shared-keyring key. The canonical-digest and HMAC logic were already consistent and untouched. run_tests now exits 0. Published the fix direction to shared team memory for fleet convergence.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync",
+      "tokens": {
+        "input": 44713,
+        "output": 1466,
+        "total": 46179
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 71.96,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T12:16:19Z"
+}

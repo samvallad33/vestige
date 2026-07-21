@@ -1,0 +1,133 @@
+{
+  "mode": "sync",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "deepseek/deepseek-v4-flash",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 169689,
+    "output": 6955,
+    "total": 176644
+  },
+  "fleet_cost_usd": 0.050434,
+  "cost_rate": {
+    "input_per_mtok": 0.28,
+    "output_per_mtok": 0.42
+  },
+  "fleet_wall_clock_seconds": 177.98,
+  "fleet_iterations_total": 24,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "transcripts": [
+    "transcript-sync-a0.json",
+    "transcript-sync-a1.json",
+    "transcript-sync-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_dorado",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_dorado",
+    "a1": "kid:k_dorado",
+    "a2": "kid:k_dorado"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync",
+      "tokens": {
+        "input": 53548,
+        "output": 1845,
+        "total": 55393
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 177.06,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync",
+      "tokens": {
+        "input": 63109,
+        "output": 2917,
+        "total": 66026
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 65.57,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-sync-f5fvked1/agent-1/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-sync-f5fvked1/agent-1/ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-sync-f5fvked1/agent-1/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-sync-f5fvked1/agent-1/ledger-service/src/config.ts"
+      ],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "Fixed the failing end-to-end charge test by setting both `activeKid` (identity-service) and `trustedKid` (ledger-service) to `\"k_dorado\"` \u2014 the same key ID from the shared keyring. The \"externalize-secrets\" refactor had blanked both configs, so the signer threw \"no active signing key selected\" and the verifier would have thrown \"no trusted verification key selected\". Using `k_dorado` ensures HMAC signing and verification use the same key material, which the Q3 rotation runbook had already converged on.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync",
+      "tokens": {
+        "input": 53032,
+        "output": 2193,
+        "total": 55225
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 42.38,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-18T14:03:34Z"
+}

@@ -1,0 +1,196 @@
+{
+  "mode": "hindsight",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 119548,
+    "output": 5646,
+    "total": 125194
+  },
+  "fleet_cost_usd": 0.443334,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 93.11,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "hindsight_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 2.6
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 7,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-hindsight-a0.json",
+    "transcript-hindsight-a1.json",
+    "transcript-hindsight-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 1,
+    "wrong": 2,
+    "other": 0
+  },
+  "fleet_verdict": "failed_merge_conflict",
+  "integrated_tests_pass": false,
+  "prod_replay_pass": null,
+  "production_replay": {
+    "ran": false,
+    "reason": "integrated tree is red"
+  },
+  "merge_conflict_count": 2,
+  "merge_conflicts": [
+    {
+      "file": "identity-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1",
+          "a2"
+        ]
+      }
+    },
+    {
+      "file": "ledger-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1",
+          "a2"
+        ]
+      }
+    }
+  ],
+  "cross_file_divergence": true,
+  "fix_directions": {
+    "a0": "kid:k_nashira",
+    "a1": "kid:k_antares",
+    "a2": "kid:k_antares"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "hindsight",
+      "tokens": {
+        "input": 39186,
+        "output": 1969,
+        "total": 41155
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 87.05,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-hindsight-iw8iffox/agent-0/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-hindsight-iw8iffox/agent-0/ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-hindsight-iw8iffox/agent-0/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-hindsight-iw8iffox/agent-0/ledger-service/src/config.ts"
+      ],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "hindsight_search",
+      "retrieval_ok_count": 5,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "hindsight",
+      "tokens": {
+        "input": 39652,
+        "output": 1563,
+        "total": 41215
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 92.17,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "hindsight_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "hindsight",
+      "tokens": {
+        "input": 40710,
+        "output": 2114,
+        "total": 42824
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 88.99,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "hindsight_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The externalize-secrets refactor left activeKid (identity-service) and trustedKid (ledger-service) blank, so minting threw \"no active signing key selected\" and verification would have 500'd next. Guided by Hindsight memory OPS-522 (platform's shipped key id is k_antares), I set both configs to select k_antares from the shared keyring \u2014 with env override preserved (MERIDIAN_SIGNING_KID / MERIDIAN_TRUSTED_KID) \u2014 keeping issuer and verifier on the same HMAC key. Canonical digest recipes already matched; no changes to signer/verifier logic. Test suite now exits 0.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T10:28:04Z"
+}

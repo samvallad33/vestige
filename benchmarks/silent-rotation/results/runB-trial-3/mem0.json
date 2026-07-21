@@ -1,0 +1,165 @@
+{
+  "mode": "mem0",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 135566,
+    "output": 6036,
+    "total": 141602
+  },
+  "fleet_cost_usd": 0.497238,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 93.43,
+  "fleet_iterations_total": 24,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "mem0_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 227.0
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 13,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-mem0-a0.json",
+    "transcript-mem0-a1.json",
+    "transcript-mem0-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_orion",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_orion",
+    "a1": "kid:k_orion",
+    "a2": "kid:k_orion"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "mem0",
+      "tokens": {
+        "input": 42722,
+        "output": 1953,
+        "total": 44675
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 92.34,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 3,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "mem0",
+      "tokens": {
+        "input": 50880,
+        "output": 2056,
+        "total": 52936
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 89.98,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-mem0-syk87cfx/agent-1/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-mem0-syk87cfx/agent-1/ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-mem0-syk87cfx/agent-1/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-mem0-syk87cfx/agent-1/ledger-service/src/config.ts"
+      ],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 6,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "mem0",
+      "tokens": {
+        "input": 41964,
+        "output": 2027,
+        "total": 43991
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 87.19,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 4,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T12:21:48Z"
+}

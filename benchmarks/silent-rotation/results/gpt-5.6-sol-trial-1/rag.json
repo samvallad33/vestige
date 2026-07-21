@@ -1,0 +1,151 @@
+{
+  "mode": "rag",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "openai/gpt-5.6-sol",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 113707,
+    "output": 3531,
+    "total": 117238
+  },
+  "fleet_cost_usd": 0.674465,
+  "cost_rate": {
+    "input_per_mtok": 5.0,
+    "output_per_mtok": 30.0
+  },
+  "fleet_wall_clock_seconds": 35.89,
+  "fleet_iterations_total": 22,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "transcripts": [
+    "transcript-rag-a0.json",
+    "transcript-rag-a1.json",
+    "transcript-rag-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_yildun",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_wezen",
+    "a1": "kid:k_wezen",
+    "a2": "kid:k_wezen"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "rag",
+      "tokens": {
+        "input": 34498,
+        "output": 1063,
+        "total": 35561
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 25.3,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "Restored the platform-selected signing key ID `k_wezen` in both identity-service (`activeKid`) and ledger-service (`trustedKid`), keeping minting and verification aligned per the prior OPS-522 resolution. The end-to-end identity \u2192 gateway \u2192 ledger charge test now passes with HTTP 200; `npm test` exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "rag",
+      "tokens": {
+        "input": 43979,
+        "output": 1384,
+        "total": 45363
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 34.99,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "Restored the authoritative active platform key selection (`k_wezen`, per OPS-522 memory) in both identity-service and ledger-service configs. Identity can now mint tokens and ledger verifies them with the matching key. The end-to-end charge test passes (1/1).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "rag",
+      "tokens": {
+        "input": 35230,
+        "output": 1084,
+        "total": 36314
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 27.92,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "Restored the platform's authoritative active signing key (`k_wezen`) in both identity-service and ledger-service runtime configs. Freshly minted tokens now use the same provisioned key the ledger trusts, and the end-to-end charge test passes (1/1).",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-19T06:04:30Z"
+}

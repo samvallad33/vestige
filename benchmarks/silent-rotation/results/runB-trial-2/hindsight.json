@@ -1,0 +1,193 @@
+{
+  "mode": "hindsight",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 132786,
+    "output": 6967,
+    "total": 139753
+  },
+  "fleet_cost_usd": 0.502863,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 118.15,
+  "fleet_iterations_total": 21,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "hindsight_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 73.6
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 8,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-hindsight-a0.json",
+    "transcript-hindsight-a1.json",
+    "transcript-hindsight-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 2,
+    "wrong": 1,
+    "other": 0
+  },
+  "fleet_verdict": "failed_merge_conflict",
+  "integrated_tests_pass": false,
+  "prod_replay_pass": null,
+  "production_replay": {
+    "ran": false,
+    "reason": "integrated tree is red"
+  },
+  "merge_conflict_count": 2,
+  "merge_conflicts": [
+    {
+      "file": "identity-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0",
+          "a1"
+        ],
+        "1": [
+          "a2"
+        ]
+      }
+    },
+    {
+      "file": "ledger-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0",
+          "a1"
+        ],
+        "1": [
+          "a2"
+        ]
+      }
+    }
+  ],
+  "cross_file_divergence": true,
+  "fix_directions": {
+    "a0": "kid:k_regulus",
+    "a1": "kid:k_regulus",
+    "a2": "kid:k_sirius"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "hindsight",
+      "tokens": {
+        "input": 50866,
+        "output": 2312,
+        "total": 53178
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 115.0,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "hindsight_search",
+      "retrieval_ok_count": 5,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize secrets\" refactor left identity-service's `activeKid` and ledger-service's `trustedKid` blank, so `signSession()` threw \"no active signing key selected\" and the end-to-end charge test failed before reaching the ledger.\n\nFix: restored the key id both services select from the shared keyring. Hindsight's Q3 rotation runbook was decisive on WHICH kid is authoritative: the live signer is `k_regulus` (k_sirius was the launch signer, now decommissioned \u2014 the OPS-522 staging note referencing k_sirius was a red herring; k_spica is pre-provisioned for a future cutover that hasn't happened). Set `activeKid = \"k_regulus\"` in identity-service/src/config.ts and `trustedKid = \"k_regulus\"` in ledger-service/src/config.ts, keeping signer and verifier on the same key (the token header carries no kid, so ledger must trust exactly what identity signs with). Canonical digest formats already matched, and gateway forwards the token verbatim, so no other changes were needed. `npm test` now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "hindsight",
+      "tokens": {
+        "input": 49836,
+        "output": 3005,
+        "total": 52841
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 117.17,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "hindsight_search",
+      "retrieval_ok_count": 2,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Fixed the failing end-to-end charge test by restoring the signing/verification key selection that the \"externalize secrets\" refactor had blanked: set activeKid=\"k_regulus\" in identity-service/src/config.ts and trustedKid=\"k_regulus\" in ledger-service/src/config.ts. The key id was chosen from team memory (Q3 rotation runbook: k_regulus is the live signer; k_sirius decommissioned, k_spica only pre-provisioned), and the direction aligns issuer and verifier on the same key. run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "hindsight",
+      "tokens": {
+        "input": 32084,
+        "output": 1650,
+        "total": 33734
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 60.73,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "hindsight_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize secrets\" refactor left the key-id selectors blank in both identity-service (activeKid: \"\") and ledger-service (trustedKid: \"\"), so signSession threw \"no active signing key selected\" and, even if minting had worked, the ledger would have failed with \"no trusted verification key selected\". Guided by Hindsight memory (closed ticket OPS-522: the platform's shipped/expected key id is k_sirius), I restored both configs to select k_sirius from the shared keyring \u2014 identity-service/src/config.ts activeKid = \"k_sirius\" and ledger-service/src/config.ts trustedKid = \"k_sirius\" \u2014 keeping signer and verifier on the same key. The canonical-claim digest logic, gateway pass-through, and server were all already correct and untouched. run_tests now exits 0 (200 charge verified end-to-end).",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T11:56:23Z"
+}

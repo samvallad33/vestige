@@ -1,0 +1,154 @@
+{
+  "mode": "rag",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "deepseek/deepseek-v4-flash",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 138654,
+    "output": 7344,
+    "total": 145998
+  },
+  "fleet_cost_usd": 0.041908,
+  "cost_rate": {
+    "input_per_mtok": 0.28,
+    "output_per_mtok": 0.42
+  },
+  "fleet_wall_clock_seconds": 37.86,
+  "fleet_iterations_total": 21,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "transcripts": [
+    "transcript-rag-a0.json",
+    "transcript-rag-a1.json",
+    "transcript-rag-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_yildun",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_wezen",
+    "a1": "kid:k_wezen",
+    "a2": "kid:k_wezen"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "rag",
+      "tokens": {
+        "input": 47625,
+        "output": 2407,
+        "total": 50032
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 36.92,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "Fixed failing end-to-end charge test by setting both identity-service signer config (activeKid) and ledger-service verifier config (trustedKid) to \"k_wezen\", a valid key from the shared keyring. Previously both were empty strings after the \"externalize secrets\" refactor, causing \"no active signing key selected\" error when minting tokens.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "rag",
+      "tokens": {
+        "input": 45813,
+        "output": 2661,
+        "total": 48474
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 30.33,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-rag-hdz08c2m/agent-1/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-rag-hdz08c2m/agent-1/ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-rag-hdz08c2m/agent-1/identity-service/src/config.ts",
+        "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/fleet-rag-hdz08c2m/agent-1/ledger-service/src/config.ts"
+      ],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "Fixed the failing end-to-end charge test by setting the signing/verification key IDs in both configs. Both identity-service/src/config.ts (activeKid) and ledger-service/src/config.ts (trustedKid) had been left blank during an \"externalize secrets\" refactor. Set both to \"k_wezen\" \u2014 the key historically used by the platform per team memory (OPS-522) \u2014 which exists in the shared keyring. This enables signSession() to mint tokens and verifyToken() to validate them, letting the end-to-end charge flow complete successfully.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "rag",
+      "tokens": {
+        "input": 45216,
+        "output": 2276,
+        "total": 47492
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 31.75,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "Fixed end-to-end charge test failure: both identity-service and ledger-service configs had blank key IDs (activeKid: \"\", trustedKid: \"\") from the externalize-secrets refactor. Set both to \"k_wezen\", a valid HMAC key in the shared keyring, consistent with prior team practice (OPS-522). The test now passes.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-18T13:46:37Z"
+}

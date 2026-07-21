@@ -1,0 +1,191 @@
+{
+  "mode": "hindsight",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 187158,
+    "output": 7410,
+    "total": 194568
+  },
+  "fleet_cost_usd": 0.672624,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 2867.45,
+  "fleet_iterations_total": 24,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "hindsight_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": false,
+    "error": "ERROR: Hindsight retrieval unavailable (TimeoutError: ). Is the hindsight-api server running at http://127.0.0.1:8899 and Ollama up for retain()?",
+    "seconds": 371.0
+  },
+  "agents_memory_alive": 0,
+  "retrieval_ok_total": 0,
+  "retrieval_err_total": 9,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [
+    "ERROR: Hindsight retrieval unavailable (TimeoutError: ). Is the hindsight-api server running at http://127.0.0.1:8899 and Ollama up for retain()?"
+  ],
+  "memory_layer_alive": false,
+  "memory_unavailable": true,
+  "transcripts": [
+    "transcript-hindsight-a0.json",
+    "transcript-hindsight-a1.json",
+    "transcript-hindsight-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_orion",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_tucana",
+    "a1": "kid:k_tucana",
+    "a2": "kid:k_tucana"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "hindsight",
+      "tokens": {
+        "input": 57378,
+        "output": 2118,
+        "total": 59496
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 1370.98,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "hindsight_search",
+      "retrieval_ok_count": 0,
+      "retrieval_err_count": 2,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [
+        "ERROR: Hindsight retrieval unavailable (TimeoutError: ). Is the hindsight-api server running at http://127.0.0.1:8899 and Ollama up for retain()?"
+      ],
+      "memory_layer_alive": false,
+      "finish_summary": "The \"externalize secrets\" refactor left both key-id configs blank: identity-service/src/config.ts `activeKid: \"\"` (causing signSession to throw \"no active signing key selected\") and ledger-service/src/config.ts `trustedKid: \"\"`. The canonical digest implementations on both sides were already byte-identical, and the gateway copies the token verbatim, so the only defect was the missing key selection. Fix: set both configs to the same shared keyring entry, `k_tucana` \u2014 the first/initial entry in shared/src/keyring.ts, consistent with the truncated config comment \"the platform shipped with\". Both issuer and verifier now select the same HMAC key, so the e2e identity \u2192 gateway \u2192 ledger charge path returns 200. Direction note for integration: the important invariant is that activeKid === trustedKid and points at a valid keyring entry; k_tucana chosen as the platform's original/default key. (Hindsight memory service was unreachable during this task.)",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "hindsight",
+      "tokens": {
+        "input": 71840,
+        "output": 2742,
+        "total": 74582
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 2866.52,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "hindsight_search",
+      "retrieval_ok_count": 0,
+      "retrieval_err_count": 4,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [
+        "ERROR: Hindsight retrieval unavailable (TimeoutError: ). Is the hindsight-api server running at http://127.0.0.1:8899 and Ollama up for retain()?"
+      ],
+      "memory_layer_alive": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "hindsight",
+      "tokens": {
+        "input": 57940,
+        "output": 2550,
+        "total": 60490
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 2569.32,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "hindsight_search",
+      "retrieval_ok_count": 0,
+      "retrieval_err_count": 3,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [
+        "ERROR: Hindsight retrieval unavailable (TimeoutError: ). Is the hindsight-api server running at http://127.0.0.1:8899 and Ollama up for retain()?"
+      ],
+      "memory_layer_alive": false,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T13:17:43Z"
+}

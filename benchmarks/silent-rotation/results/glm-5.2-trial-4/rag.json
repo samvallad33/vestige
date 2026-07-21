@@ -1,0 +1,151 @@
+{
+  "mode": "rag",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 132967,
+    "output": 5662,
+    "total": 138629
+  },
+  "fleet_cost_usd": 0.092237,
+  "cost_rate": {
+    "input_per_mtok": 0.6,
+    "output_per_mtok": 2.2
+  },
+  "fleet_wall_clock_seconds": 76.32,
+  "fleet_iterations_total": 22,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "transcripts": [
+    "transcript-rag-a0.json",
+    "transcript-rag-a1.json",
+    "transcript-rag-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 2,
+    "other": 1
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_indus",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_draco",
+    "a1": "kid_unset",
+    "a2": "kid:k_draco"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "rag",
+      "tokens": {
+        "input": 33931,
+        "output": 1599,
+        "total": 35530
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 62.91,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "The end-to-end charge test failed because the \"externalize secrets\" refactor left both identity-service's `config.activeKid` and ledger-service's `ledgerConfig.trustedKid` blank. With no active signing key, signSession() threw \"no active signing key selected\" before a token could even be minted; and the verifier would likewise refuse (\"no trusted verification key selected\"). Per team memory (OPS-522: reset the key id to k_draco and verification recovered), I restored the platform's shipped key `k_draco` in both configs, keeping them environment-overridable (preserving the externalize-secrets intent) while defaulting to the working local value. Both services now select the same key from the shared keyring, and the canonical-claim recipes already agree (sub, plan, iat, exp), so mint \u2192 forward \u2192 verify \u2192 charge round-trips with a 200. run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "rag",
+      "tokens": {
+        "input": 51688,
+        "output": 1995,
+        "total": 53683
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 56.69,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\" because the \"externalize secrets\" refactor left both identity-service's `config.activeKid` and ledger-service's `ledgerConfig.trustedKid` blank. With no key selected, identity-service could not mint a token, and the ledger would not have verified one either.\n\nPer the team memory (OPS-522) the platform ships with the `k_draco` signing key. I restored that shipped default in BOTH configs while preserving the externalize-secrets intent by keeping an env override (`MERIDIAN_ACTIVE_KID` / `MERIDIAN_TRUSTED_KID`) for production. This keeps minting and verifying on the same key, which is required for the signature to validate end-to-end.\n\nFiles changed:\n- identity-service/src/config.ts: default activeKid = \"k_draco\" (env override preserved).\n- ledger-service/src/config.ts: default trustedKid = \"k_draco\" (env override preserved); kept the alg field that verify.ts relies on.\n\nrun_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "rag",
+      "tokens": {
+        "input": 47348,
+        "output": 2068,
+        "total": 49416
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 75.37,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "Fixed the failing end-to-end charge test. Root cause: the \"externalize secrets\" refactor left both `identity-service/src/config.ts` (`activeKid`) and `ledger-service/src/config.ts` (`trustedKid`) blank, so `signSession` threw \"no active signing key selected\" before the token was even minted.\n\nThe token signature is an HMAC over a canonical claim digest, and the verifier independently recomputes that same canonical digest and HMACs it. Both canonical recipes already matched field-for-field (sub, plan, iat, exp, joined by newlines) across the two services, so the only missing piece was the key selection \u2014 both sides must pick the SAME key id from the shared keyring. Team memory (OPS-522) records that the platform ships with key id `k_draco` (\"on-call reset the key id to k_draco and verification recovered\").\n\nFix: set `activeKid = \"k_draco\"` in identity-service config and `trustedKid = \"k_draco\"` in ledger-service config, with comments documenting that the two must mirror each other. Verified run_tests exits 0 \u2014 the freshly-minted token now charges successfully (200) with chargedTo=user_42, amountCents=1999.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-18T13:33:35Z"
+}

@@ -1,0 +1,183 @@
+{
+  "mode": "anarchy",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 148512,
+    "output": 7015,
+    "total": 155527
+  },
+  "fleet_cost_usd": 0.550761,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 149.92,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": null,
+  "memory_prewarm": {
+    "attempted": false,
+    "ok": true,
+    "error": "",
+    "seconds": 0.0
+  },
+  "agents_memory_alive": 0,
+  "retrieval_ok_total": 0,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": false,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-anarchy-a0.json",
+    "transcript-anarchy-a1.json",
+    "transcript-anarchy-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_regulus",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_helios",
+    "a1": "kid:k_helios",
+    "a2": "kid:k_helios"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 58818,
+        "output": 2005,
+        "total": 60823
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 97.65,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": null,
+      "retrieval_ok_count": 0,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": false,
+      "finish_summary": "The end-to-end charge test failed because both identity-service (`activeKid: \"\"`) and ledger-service (`trustedKid: \"\"`) had their signing/verification key ids blanked by the \"externalize secrets\" refactor, so signSession threw \"no active signing key selected\". Fixed by restoring a concrete key selection from the shared keyring: set `activeKid = \"k_helios\"` in identity-service/src/config.ts (the comment \"entry the platform shipped with\" pointed to the first keyring entry) and `trustedKid = \"k_helios\"` in ledger-service/src/config.ts, keeping issuer and verifier on the same HMAC key. No changes to canonicalization, signing, or verification logic were needed \u2014 both canonical.ts implementations already agree. Test now passes (exit 0).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 37937,
+        "output": 1676,
+        "total": 39613
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 85.74,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": null,
+      "retrieval_ok_count": 0,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": false,
+      "finish_summary": "Root cause: the \"externalize secrets\" refactor left both key-id selections blank \u2014 identity-service/src/config.ts had `activeKid: \"\"` (causing signSession to throw \"no active signing key selected\") and ledger-service/src/config.ts had `trustedKid: \"\"` (which would have caused verification to fail next). Everything else (canonical digest recipe, HMAC scheme, gateway pass-through) was already consistent across services. Fix: selected the same shared-keyring key, `k_helios` (the first keyring entry the platform shipped with, per the config comment), in both services, with env-var overrides (MERIDIAN_ACTIVE_KID / MERIDIAN_TRUSTED_KID) preserved so the externalized-secrets direction still works. End-to-end charge test now passes (exit 0).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 51757,
+        "output": 3334,
+        "total": 55091
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 148.72,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": null,
+      "retrieval_ok_count": 0,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": false,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T11:41:25Z"
+}

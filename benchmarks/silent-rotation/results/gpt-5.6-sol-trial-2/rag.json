@@ -1,0 +1,151 @@
+{
+  "mode": "rag",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "openai/gpt-5.6-sol",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 112669,
+    "output": 3298,
+    "total": 115967
+  },
+  "fleet_cost_usd": 0.662285,
+  "cost_rate": {
+    "input_per_mtok": 5.0,
+    "output_per_mtok": 30.0
+  },
+  "fleet_wall_clock_seconds": 30.94,
+  "fleet_iterations_total": 22,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "transcripts": [
+    "transcript-rag-a0.json",
+    "transcript-rag-a1.json",
+    "transcript-rag-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_bellatrix",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_atlas",
+    "a1": "kid:k_atlas",
+    "a2": "kid:k_atlas"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "rag",
+      "tokens": {
+        "input": 45384,
+        "output": 1058,
+        "total": 46442
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 29.18,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "Restored the current provisioned signing key selection (`k_atlas`) in both identity-service and ledger-service configs. This aligns token minting and verification without changing the keyring or gateway behavior. The end-to-end charge test now passes (1/1).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "rag",
+      "tokens": {
+        "input": 32131,
+        "output": 1126,
+        "total": 33257
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 29.12,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "Restored the authoritative platform key id `k_atlas` in both identity-service signing config and ledger-service verification config. This aligns minting and verification for tokens that do not carry a `kid`. The end-to-end charge test now passes (1/1).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "rag",
+      "tokens": {
+        "input": 35154,
+        "output": 1114,
+        "total": 36268
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 30.01,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "Restored the authoritative provisioned key selection `k_atlas` in both identity-service and ledger-service configs. Identity can now mint tokens and ledger verifies them with the matching key. The end-to-end charge test passes (1/1).",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-19T06:06:30Z"
+}

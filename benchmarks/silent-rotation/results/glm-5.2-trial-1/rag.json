@@ -1,0 +1,151 @@
+{
+  "mode": "rag",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 96689,
+    "output": 3761,
+    "total": 100450
+  },
+  "fleet_cost_usd": 0.066288,
+  "cost_rate": {
+    "input_per_mtok": 0.6,
+    "output_per_mtok": 2.2
+  },
+  "fleet_wall_clock_seconds": 40.68,
+  "fleet_iterations_total": 18,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "transcripts": [
+    "transcript-rag-a0.json",
+    "transcript-rag-a1.json",
+    "transcript-rag-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_yildun",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_wezen",
+    "a1": "kid:k_wezen",
+    "a2": "kid:k_wezen"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "rag",
+      "tokens": {
+        "input": 30793,
+        "output": 1148,
+        "total": 31941
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 36.66,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "The end-to-end charge test failed because the \"externalize secrets\" refactor left both `identity-service` (`config.activeKid`) and `ledger-service` (`ledgerConfig.trustedKid`) key-id selectors blank, so `signSession` threw \"no active signing key selected\" and the ledger verifier would similarly reject tokens. Per team memory (OPS-522, which named `k_wezen` as the platform's signing key id), I set both selectors to default to `k_wezen` (still overridable via SIGNING_KID / TRUSTED_KID env vars). This keeps the signer and verifier on the same key from the shared keyring so a freshly-minted token's canonical-digest HMAC signature verifies end-to-end. The test now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "rag",
+      "tokens": {
+        "input": 33528,
+        "output": 1262,
+        "total": 34790
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 36.35,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\" (from identity-service/src/signer.ts). Root cause: an \"externalize-secrets\" refactor left both identity-service `activeKid` and ledger-service `trustedKid` blank. Since the token header carries no key id, the verifier must independently select the same key the issuer used. Per team memory (ticket OPS-522: \"reset the key id to k_wezen and verification recovered\"), the platform's shipped default key is `k_wezen` (present in the shared keyring). Fixed by setting identity-service/src/config.ts `activeKid` = \"k_wezen\" and ledger-service/src/config.ts `trustedKid` = \"k_wezen\", restoring the matching mint/verify key pair. run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "rag",
+      "tokens": {
+        "input": 32368,
+        "output": 1351,
+        "total": 33719
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 39.71,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "finish_summary": "Fixed the failing end-to-end charge test. Root cause: the \"externalize-secrets\" refactor left both key-id configs blank \u2014 `identity-service/src/config.ts` (activeKid) and `ledger-service/src/config.ts` (trustedKid) \u2014 so signSession() crashed with \"no active signing key selected\" before a token could be minted. Per team memory (OPS-522: on-call reset the key id to k_wezen and verification recovered), set both the issuer's activeKid and the ledger's trustedKid to \"k_wezen\" (with an env-var override to preserve the KMS-injection path for production). Both sides now select the same shared keyring entry, so the minted signature matches the recomputed canonical digest on verification and the charge returns 200.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-18T13:24:15Z"
+}

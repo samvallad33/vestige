@@ -1,0 +1,162 @@
+{
+  "mode": "rag",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 134519,
+    "output": 7096,
+    "total": 141615
+  },
+  "fleet_cost_usd": 0.509997,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 121.24,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "rag_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.8
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 8,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-rag-a0.json",
+    "transcript-rag-a1.json",
+    "transcript-rag-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_orion",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_orion",
+    "a1": "kid:k_orion",
+    "a2": "kid:k_orion"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "rag",
+      "tokens": {
+        "input": 41452,
+        "output": 2869,
+        "total": 44321
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 120.08,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 2,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The e2e charge test failed with \"no active signing key selected\" because the \"externalize-secrets\" refactor left both key-id configs blank: identity-service/src/config.ts had activeKid: \"\" and ledger-service/src/config.ts had trustedKid: \"\". Per team memory (Q3 rotation runbook), the platform's live signer is k_orion \u2014 every credential minted since the cutover carries that fingerprint; k_antares (launch signer) is decommissioned and k_tucana is only pre-provisioned. Fix: set activeKid: \"k_orion\" in identity-service config and trustedKid: \"k_orion\" in ledger-service config so minting and verification agree on the same keyring entry. Canonical digest recipes, alg pinning, and gateway passthrough were already consistent; no other changes needed. run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "rag",
+      "tokens": {
+        "input": 48534,
+        "output": 2084,
+        "total": 50618
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 89.48,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 3,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize-secrets\" refactor blanked both key-id configs \u2014 identity-service's activeKid (caused the \"no active signing key selected\" throw at mint) and ledger-service's trustedKid (would have failed verification next). Team memory was decisive: the Q3 rotation runbook says the live signer was migrated to k_orion and every credential since the cutover carries that fingerprint, while k_antares (the launch signer, which a stale staging-only ticket suggested) is decommissioned, and k_tucana is only pre-provisioned for a future cutover. Fix: set both services to k_orion \u2014 identity-service/src/config.ts activeKid = process.env.MERIDIAN_SIGNING_KID ?? \"k_orion\", ledger-service/src/config.ts trustedKid = process.env.MERIDIAN_VERIFY_KID ?? \"k_orion\" \u2014 preserving the env-injection direction of the refactor while defaulting to the current live key so signer and verifier agree. End-to-end charge test now passes (exit 0).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "rag",
+      "tokens": {
+        "input": 44533,
+        "output": 2143,
+        "total": 46676
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 111.78,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 3,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T12:14:32Z"
+}

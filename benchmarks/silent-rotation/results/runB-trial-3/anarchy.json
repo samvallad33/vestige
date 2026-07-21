@@ -1,0 +1,183 @@
+{
+  "mode": "anarchy",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 158638,
+    "output": 6456,
+    "total": 165094
+  },
+  "fleet_cost_usd": 0.572754,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 112.23,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": null,
+  "memory_prewarm": {
+    "attempted": false,
+    "ok": true,
+    "error": "",
+    "seconds": 0.0
+  },
+  "agents_memory_alive": 0,
+  "retrieval_ok_total": 0,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": false,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-anarchy-a0.json",
+    "transcript-anarchy-a1.json",
+    "transcript-anarchy-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_orion",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_tucana",
+    "a1": "kid:k_tucana",
+    "a2": "kid:k_tucana"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 55401,
+        "output": 2218,
+        "total": 57619
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 103.49,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": null,
+      "retrieval_ok_count": 0,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 49969,
+        "output": 1697,
+        "total": 51666
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 79.23,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": null,
+      "retrieval_ok_count": 0,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": false,
+      "finish_summary": "The e2e charge test failed with \"no active signing key selected\": the externalize-secrets refactor had blanked out `activeKid` in identity-service/src/config.ts and `trustedKid` in ledger-service/src/config.ts, so the issuer couldn't sign and the ledger couldn't verify. Fix: restored the platform's signing key id `k_tucana` (the keyring's first/shipped entry, per the config comment) into both configs so the issuer signs and the ledger verifies with the same HMAC key. The canonical digest recipes already match, so no other changes were needed. Test suite now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 53268,
+        "output": 2541,
+        "total": 55809
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 111.0,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": null,
+      "retrieval_ok_count": 0,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": false,
+      "finish_summary": "Root cause: the \"externalize secrets\" refactor left identity-service's `activeKid` and ledger-service's `trustedKid` blank, so signSession threw \"no active signing key selected\" (and even if it hadn't, the ledger would have had no key to verify with). Fix: both services now select the same shared keyring entry \u2014 `k_tucana`, the first key the platform shipped with \u2014 as their default signing/verification key, while still allowing override via a common `MERIDIAN_SIGNING_KID` env var (honoring the env-injection intent of the refactor). With signer and verifier using the same key and the already byte-identical canonical claim strings on both sides, the end-to-end charge path now returns 200. Verified: `npm test` exits 0.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T12:12:20Z"
+}

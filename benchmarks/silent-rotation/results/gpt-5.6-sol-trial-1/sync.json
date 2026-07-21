@@ -1,0 +1,130 @@
+{
+  "mode": "sync",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "openai/gpt-5.6-sol",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 123597,
+    "output": 3376,
+    "total": 126973
+  },
+  "fleet_cost_usd": 0.719265,
+  "cost_rate": {
+    "input_per_mtok": 5.0,
+    "output_per_mtok": 30.0
+  },
+  "fleet_wall_clock_seconds": 31.25,
+  "fleet_iterations_total": 20,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "transcripts": [
+    "transcript-sync-a0.json",
+    "transcript-sync-a1.json",
+    "transcript-sync-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_yildun",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_yildun",
+    "a1": "kid:k_yildun",
+    "a2": "kid:k_yildun"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync",
+      "tokens": {
+        "input": 34025,
+        "output": 1031,
+        "total": 35056
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 23.73,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "Restored the Q3-rotated key selection in both authoritative service configs: identity now signs with k_yildun and ledger trusts k_yildun. The end-to-end identity \u2192 gateway \u2192 ledger charge test now passes with HTTP 200; npm test exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync",
+      "tokens": {
+        "input": 44370,
+        "output": 1186,
+        "total": 45556
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 28.54,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "Restored the current rotated key selector (`k_yildun`) in both identity-service and ledger-service configs, keeping token signing and verification aligned. The end-to-end charge test now passes (1/1).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync",
+      "tokens": {
+        "input": 45202,
+        "output": 1159,
+        "total": 46361
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 30.34,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "Restored the current rotated key selection (`k_yildun`) in both identity-service (`activeKid`) and ledger-service (`trustedKid`), keeping issuer and verifier aligned. The end-to-end identity \u2192 gateway \u2192 ledger charge test now passes with HTTP 200; `npm test` exits 0.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-19T06:05:09Z"
+}

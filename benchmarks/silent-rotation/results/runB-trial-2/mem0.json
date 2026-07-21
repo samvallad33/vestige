@@ -1,0 +1,193 @@
+{
+  "mode": "mem0",
+  "fleet_size": 3,
+  "provider": "moonshot",
+  "model": "kimi-k3",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 146588,
+    "output": 7391,
+    "total": 153979
+  },
+  "fleet_cost_usd": 0.550629,
+  "cost_rate": {
+    "input_per_mtok": 3.0,
+    "output_per_mtok": 15.0
+  },
+  "fleet_wall_clock_seconds": 129.45,
+  "fleet_iterations_total": 24,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "memory_tool": "mem0_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 202.6
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 7,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-mem0-a0.json",
+    "transcript-mem0-a1.json",
+    "transcript-mem0-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 2,
+    "wrong": 1,
+    "other": 0
+  },
+  "fleet_verdict": "failed_merge_conflict",
+  "integrated_tests_pass": false,
+  "prod_replay_pass": null,
+  "production_replay": {
+    "ran": false,
+    "reason": "integrated tree is red"
+  },
+  "merge_conflict_count": 2,
+  "merge_conflicts": [
+    {
+      "file": "identity-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1",
+          "a2"
+        ]
+      }
+    },
+    {
+      "file": "ledger-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0"
+        ],
+        "1": [
+          "a1",
+          "a2"
+        ]
+      }
+    }
+  ],
+  "cross_file_divergence": true,
+  "fix_directions": {
+    "a0": "kid:k_sirius",
+    "a1": "kid:k_regulus",
+    "a2": "kid:k_regulus"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "mem0",
+      "tokens": {
+        "input": 48925,
+        "output": 1746,
+        "total": 50671
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 94.99,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 2,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "mem0",
+      "tokens": {
+        "input": 46782,
+        "output": 2383,
+        "total": 49165
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 95.7,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 3,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize secrets\" refactor left `activeKid` (identity-service/src/config.ts) and `trustedKid` (ledger-service/src/config.ts) blank, so signSession threw \"no active signing key selected\" and the ledger had no trusted verification key. Fix: set both configs to the same key id `k_regulus` from the shared keyring \u2014 the live signer per the Q3 rotation runbook retrieved from team memory (k_sirius was the decommissioned launch signer used only in a staging incident; k_spica is merely pre-provisioned for a future cutover). Setting both sides to the matching current key ensures tokens minted by identity verify at the ledger. Verified: `npm test` exits 0 \u2014 the end-to-end identity \u2192 gateway \u2192 ledger charge returns 200 with ok=true, chargedTo=user_42, amountCents=1999.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "mem0",
+      "tokens": {
+        "input": 50881,
+        "output": 3262,
+        "total": 54143
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 128.53,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "memory_tool_used": "mem0_search",
+      "retrieval_ok_count": 2,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize secrets\" refactor left both key-id configs blank \u2014 identity-service config.activeKid was \"\" (threw \"no active signing key selected\" at mint time) and ledger-service ledgerConfig.trustedKid was \"\" (would throw at verify time). Team memory resolved which key id is authoritative: the older OPS-522 note pointing at k_sirius is SUPERSEDED by the Q3 rotation runbook \u2014 the live signer migrated to k_regulus and k_sirius was decommissioned. Fix: set activeKid = process.env.MERIDIAN_ACTIVE_KID ?? \"k_regulus\" in identity-service/src/config.ts and trustedKid = process.env.MERIDIAN_TRUSTED_KID ?? \"k_regulus\" in ledger-service/src/config.ts, keeping env injection per the refactor while defaulting both sides to the current live signer so they agree. run_tests now exits 0 (end-to-end charge returns 200). No changes needed to canonical digest code (identical on both sides) or gateway (passes token verbatim).",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-21T11:50:30Z"
+}

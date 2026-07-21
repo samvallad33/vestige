@@ -1,0 +1,130 @@
+{
+  "mode": "sync",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 152177,
+    "output": 5094,
+    "total": 157271
+  },
+  "fleet_cost_usd": 0.102513,
+  "cost_rate": {
+    "input_per_mtok": 0.6,
+    "output_per_mtok": 2.2
+  },
+  "fleet_wall_clock_seconds": 60.75,
+  "fleet_iterations_total": 24,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "transcripts": [
+    "transcript-sync-a0.json",
+    "transcript-sync-a1.json",
+    "transcript-sync-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_bellatrix",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_bellatrix",
+    "a1": "kid:k_bellatrix",
+    "a2": "kid:k_bellatrix"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync",
+      "tokens": {
+        "input": 51362,
+        "output": 1561,
+        "total": 52923
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 50.48,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "The failing end-to-end charge test was caused by the \"externalize-secrets\" refactor blanking out the selected signing key id in both identity-service/src/config.ts (activeKid=\"\") and ledger-service/src/config.ts (trustedKid=\"\"), so signSession threw \"no active signing key selected\". A vestige_backfill surfaced the Q3 rotation runbook memory confirming the live signer was migrated to k_bellatrix. Fix: set both activeKid and trustedKid to \"k_bellatrix\" (a key present in the shared keyring), defaulting from env vars IDENTITY_ACTIVE_KID / LEDGER_TRUSTED_KID so minting and verification use the same HMAC key. The canonical digest recipes in both services already match byte-for-byte, so once the same key is selected the end-to-end signature verifies. run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync",
+      "tokens": {
+        "input": 50853,
+        "output": 1954,
+        "total": 52807
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 59.82,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "The e2e charge test failed with \"no active signing key selected\". Root cause: the externalize-secrets refactor blanked both identity-service `config.activeKid` and ledger-service `ledgerConfig.trustedKid` to \"\" with no platform default, so signSession threw before minting a token (and the ledger would likewise have refused to verify). The shared Q3-rotation runbook memory confirmed the live signer migrated to `k_bellatrix` (present in the shared keyring). Fix: set `activeKid` (identity-service/src/config.ts) and `trustedKid` (ledger-service/src/config.ts) both to `k_bellatrix` as env-overridable defaults (IDENTITY_ACTIVE_KID / LEDGER_TRUSTED_KID). Both services must use the same key id for the canonical-digest HMAC to round-trip; the canonical recipes on both sides already matched (sub,plan,iat,exp newline-joined). run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync",
+      "tokens": {
+        "input": 49962,
+        "output": 1579,
+        "total": 51541
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 49.22,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "The end-to-end charge test failed because the \"externalize-secrets\" refactor blanked out the signing key ids in both identity-service (activeKid) and ledger-service (trustedKid), causing signSession to throw \"no active signing key selected\". The Q3 rotation runbook (surfaced via vestige_backfill) showed the live signer was migrated to k_bellatrix. Fix: restored k_bellatrix as the default in BOTH configs (kept env overrides IDENTITY_ACTIVE_KID / LEDGER_TRUSTED_KID) so minting and verifying use identical key material. Verified run_tests exits 0.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-18T13:27:59Z"
+}

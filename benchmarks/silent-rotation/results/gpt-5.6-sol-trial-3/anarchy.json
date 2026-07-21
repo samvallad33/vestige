@@ -1,0 +1,154 @@
+{
+  "mode": "anarchy",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "openai/gpt-5.6-sol",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 148696,
+    "output": 5739,
+    "total": 154435
+  },
+  "fleet_cost_usd": 0.91565,
+  "cost_rate": {
+    "input_per_mtok": 5.0,
+    "output_per_mtok": 30.0
+  },
+  "fleet_wall_clock_seconds": 61.54,
+  "fleet_iterations_total": 21,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 0,
+  "transcripts": [
+    "transcript-anarchy-a0.json",
+    "transcript-anarchy-a1.json",
+    "transcript-anarchy-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 2,
+    "other": 1
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_wren",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid_unset",
+    "a1": "kid:k_lyra",
+    "a2": "kid:k_lyra"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 52685,
+        "output": 2491,
+        "total": 55176
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 60.62,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts",
+        "shared/src/index.ts"
+      ],
+      "out_of_bounds_writes": [
+        "shared/src/index.ts"
+      ],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 52938,
+        "output": 1430,
+        "total": 54368
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 27.66,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "finish_summary": "Configured identity and ledger to select the same provisioned development signing key by default, with a shared MERIDIAN_SIGNING_KID environment override and startup validation for unknown key IDs. The end-to-end charge test now passes (1/1).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "anarchy",
+      "tokens": {
+        "input": 43073,
+        "output": 1818,
+        "total": 44891
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 39.61,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": false,
+      "used_rag_search": false,
+      "finish_summary": "Configured identity-service and ledger-service to select the same provisioned shared key (`k_lyra`) for token signing and verification. The end-to-end identity \u2192 gateway \u2192 ledger charge test now passes with HTTP 200; `npm test` exits 0.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-19T06:08:15Z"
+}

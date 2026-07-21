@@ -1,0 +1,130 @@
+{
+  "mode": "sync",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "openai/gpt-5.6-sol",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 118853,
+    "output": 3337,
+    "total": 122190
+  },
+  "fleet_cost_usd": 0.694375,
+  "cost_rate": {
+    "input_per_mtok": 5.0,
+    "output_per_mtok": 30.0
+  },
+  "fleet_wall_clock_seconds": 29.79,
+  "fleet_iterations_total": 22,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "transcripts": [
+    "transcript-sync-a0.json",
+    "transcript-sync-a1.json",
+    "transcript-sync-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_indus",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_indus",
+    "a1": "kid:k_indus",
+    "a2": "kid:k_indus"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync",
+      "tokens": {
+        "input": 31372,
+        "output": 1000,
+        "total": 32372
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 26.39,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "Restored the current k_indus signing-key selection in both identity-service and ledger-service, matching the recorded platform rotation. The end-to-end identity \u2192 gateway \u2192 ledger charge test now passes with HTTP 200; npm test exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync",
+      "tokens": {
+        "input": 42246,
+        "output": 1136,
+        "total": 43382
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 27.44,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "Selected the authoritative rotated key k_indus in both identity-service config.activeKid and ledger-service ledgerConfig.trustedKid. This keeps minting and verification aligned for the current token format, which has no kid header. The end-to-end charge test now passes (1/1).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync",
+      "tokens": {
+        "input": 45235,
+        "output": 1201,
+        "total": 46436
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 28.87,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "Restored the current rotated key selection (`k_indus`) in both identity-service (`activeKid`) and ledger-service (`trustedKid`), keeping signer and verifier aligned. The end-to-end charge test now passes with HTTP 200; `npm test` exits 0.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-19T06:11:25Z"
+}

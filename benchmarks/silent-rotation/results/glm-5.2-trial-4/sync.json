@@ -1,0 +1,130 @@
+{
+  "mode": "sync",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "<REPO_ROOT>/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 168436,
+    "output": 13203,
+    "total": 181639
+  },
+  "fleet_cost_usd": 0.130108,
+  "cost_rate": {
+    "input_per_mtok": 0.6,
+    "output_per_mtok": 2.2
+  },
+  "fleet_wall_clock_seconds": 149.03,
+  "fleet_iterations_total": 22,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "transcripts": [
+    "transcript-sync-a0.json",
+    "transcript-sync-a1.json",
+    "transcript-sync-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 3,
+    "wrong": 0,
+    "other": 0
+  },
+  "fleet_verdict": "fixed_correctly",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": true,
+  "production_replay": {
+    "ok": true,
+    "verified": 5,
+    "total": 5,
+    "failures": [],
+    "signed_under": "k_indus",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_indus",
+    "a1": "kid:k_indus",
+    "a2": "kid:k_indus"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync",
+      "tokens": {
+        "input": 62263,
+        "output": 5095,
+        "total": 67358
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 147.98,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "Fixed the failing end-to-end charge test. Root cause: the \"externalize-secrets\" refactor blanked the concrete key id out of both identity-service/src/config.ts (activeKid) and ledger-service/src/config.ts (trustedKid) without wiring up env injection, so signSession threw \"no active signing key selected\". A backward backfill surfaced a Q3 rotation runbook memory stating the live signer was migrated to k_indus (rank #6 \u2014 invisible to plain code/vector search). Fix: restored the default key id to \"k_indus\" in BOTH configs (signer and verifier must share the same key material), with env override hooks (MERIDIAN_SIGNING_KID / MERIDIAN_TRUSTED_KID) preserving the externalize-secrets intent and fail-fast guards at import time. The canonical digest recipe (sub/plan/iat/exp joined by newlines) and alg (HS256) already agreed across services, so the key id was the only broken link. Verified: run_tests now exits 0, \"a freshly-minted token charges successfully (expects 200)\" passes. Published the k_indus direction to shared memory so the fleet converges and avoids signer/verifier key mismatch on integration.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync",
+      "tokens": {
+        "input": 55169,
+        "output": 2545,
+        "total": 57714
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 66.09,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync",
+      "tokens": {
+        "input": 51004,
+        "output": 5563,
+        "total": 56567
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 142.18,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "finish_summary": "Fixed the failing end-to-end charge test. Root cause: the \"externalize-secrets\" refactor blanked out the signing key ids in both identity-service/src/config.ts (activeKid=\"\") and ledger-service/src/config.ts (trustedKid=\"\"), causing \"no active signing key selected\" at signSession time (and a downstream \"no trusted verification key selected\" had signing been reached). vestige_backfill reached back 4 days to a quiet Q3 rotation-runbook memory revealing the live signer was migrated to key id `k_indus` (present in shared/src/keyring.ts). Fix: set both activeKid and trustedKid to `k_indus` as the shipped default (with optional env override IDENTITY_SIGNING_KID / LEDGER_TRUSTED_KID to honor the refactor's intent). Both must be the same key id because identity signs with it and ledger verifies against it; the two canonicalClaimString implementations already match byte-for-byte, so signature verification succeeds. Published the fix direction to team memory via vestige_log so peer agents converge on `k_indus`. Verified: run_tests exits 0.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-18T13:36:12Z"
+}
