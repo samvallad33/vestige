@@ -136,8 +136,7 @@ These are stated at greater length in `FINDING.md`, and none of them are hidden.
   alone. That is the next experiment.
 - On Kimi K3 the dense cosine baseline never converged wrong (3 correct, 2 split of 5) and it
   costs less per run. Across all 23 shared trials it is 4 correct to Vestige's 20, so the gap
-  is model-dependent rather than uniform.
-  is no "beats RAG on outcomes" claim here to defend.
+  is model-dependent rather than uniform. There is no "beats RAG on outcomes" claim here to defend.
 - I initially broke the mem0 and Zep arms by failing to flush state between
   trials, which disadvantaged them. The harnesses are fixed and those arms were
   re-run clean. Both the broken and the repaired cells are published.

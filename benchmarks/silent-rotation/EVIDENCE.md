@@ -237,9 +237,14 @@ Number of times each model's dense-cosine agents re-queried before committing:
 reformulate.** Ask once and accept the answer, and you get the decoy. Kimi K3 re-queries twice on
 average and sometimes escapes.
 
-Vestige is **1 call per agent on every model tested**, and the key was surfaced on 47 of 48 successful
-calls, because there is no query to reformulate. `vestige_backfill` takes no query argument. It anchors
-on the failure event and walks the causal edge backward.
+Vestige is **1 call per agent on every model tested**, and the key was surfaced on all 65 successful
+calls across all six models, because there is no query to reformulate. `vestige_backfill` takes no
+query argument. It anchors on the failure event and walks the causal edge backward.
+
+To recount: parse every `results/*/transcript-sync-a*.json`, take each `tool_results` entry named
+`vestige_backfill`, and test its output against that trial's `manifest.json` `correct_kid`. Per model
+that is 15/15 GLM 5.2, 15/15 GPT-5.6 Sol, 14/14 DeepSeek V4 Flash, 12/12 Kimi K3, 6/6 Kimi K2.7 Code,
+3/3 MiniMax M3. Zero empty results and zero errors.
 
 So the honest cross-model statement is not "this works everywhere." It is: **the memory layer's
 behaviour was invariant across five models and the baseline's was not.**
@@ -292,7 +297,7 @@ found by attacking our own work today.
 ```
 harness/                 the runner, the fleet driver, the trial generator
 tests/bm25_baseline.py   reproduces the ranking table, no API key needed
-results/trial-1/         all 7 arms, all 21 agent transcripts
+results/runA-trial-1/    all 7 arms, all 21 agent transcripts
 ```
 
 Start here if you are auditing: every arm JSON carries `memory_layer_alive` and `retrieval_err_total`.

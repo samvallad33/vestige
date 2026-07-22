@@ -4,7 +4,7 @@
 
 Trial 1 of the Silent Rotation benchmark. Kimi K3, seven memory configurations, one randomized secret.
 Every number and every quotation below comes from the raw agent transcripts, which are published
-alongside this document in `results/trial-1/`.
+alongside this document in `results/runA-trial-1/`.
 
 ---
 
@@ -289,13 +289,13 @@ Everything needed to check this is in the repository.
 ```
 harness/            the runner, the fleet driver, and the trial generator
 harness/agent/prepare_trial.py     seeds the corpus and randomizes the key
-results/trial-1/    all 7 arm results and all 21 agent transcripts
+results/runA-trial-1/              all 7 arm results and all 21 agent transcripts
 tests/              the arm liveness gate
 ```
 
-The claims above map to files. The outcome table is `results/trial-1/{arm}.json`, field
+The claims above map to files. The outcome table is `results/runA-trial-1/{arm}.json`, field
 `fleet_verdict`. The per-agent key choices are `fix_directions` in the same files. Every quotation is in
-`results/trial-1/transcript-{arm}-a{n}.json` under `turns[].reasoning` and `turns[].tool_results`.
+`results/runA-trial-1/transcript-{arm}-a{n}.json` under `turns[].reasoning` and `turns[].tool_results`.
 
 One thing to check first if you are auditing this: each arm's JSON carries `memory_layer_alive` and
 `retrieval_err_total`. An arm whose backend never answered is not a retrieval loss, it is a missing
