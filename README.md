@@ -7,7 +7,7 @@ Local-first long-term memory for AI agents, delivered over MCP. Vestige remember
 [![Binary](https://img.shields.io/badge/binary-25MB_single_file-informational)](https://github.com/samvallad33/vestige/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6)](LICENSE)
 
-[What it is](#what-vestige-is) · [Install](#install) · [First interaction](#your-first-real-interaction) · [vs RAG](#how-it-differs-from-rag) · [Backward reach](#backward-reach-the-backfill-feature) · [Benchmark](#causebench-a-reproducible-benchmark) · [Science](#the-science) · [Tools](#the-13-tools) · [Dashboard](#the-dashboard) · [Integrations](#works-with-every-agent) · [Docs](#go-deeper)
+[What it is](#what-vestige-is) · [Install](#install) · [First interaction](#your-first-real-interaction) · [vs RAG](#how-it-differs-from-rag) · [Backward reach](#backward-reach-the-backfill-feature) · [Benchmark](#silent-rotation-a-reproducible-benchmark) · [Science](#the-science) · [Tools](#the-13-tools) · [Dashboard](#the-dashboard) · [Integrations](#works-with-every-agent) · [Docs](#go-deeper)
 
 ---
 
@@ -125,31 +125,36 @@ In practice you run `vestige backfill --contrast`. Vestige returns the earlier m
 
 ---
 
-## CauseBench: a reproducible benchmark
+## Silent Rotation: a reproducible benchmark
 
-The claim above is testable, and I ship the test in the repo.
+The claim above is testable, and the test ships with every transcript it produced.
 
-**CauseBench** lives at [`benchmarks/causebench/`](benchmarks/causebench/). It is deterministic and offline: fixed seed `424242`, Python standard library only, no API keys, no network. One command reproduces every number:
+**Silent Rotation** lives at [`benchmarks/silent-rotation/`](https://github.com/samvallad33/vestige/tree/benchmark/silent-rotation/benchmarks/silent-rotation). Three coding agents fix one failing end-to-end test in a TypeScript monorepo. The fix needs the currently live signing key id, which is randomized per trial from a 50-key keyring and appears in no file the agents can read. It exists only in the memory layer.
+
+Reproduce the central result in two seconds. Python standard library only, no API keys, no network:
 
 ```bash
-bash benchmarks/causebench/run.sh
+git clone -b benchmark/silent-rotation --depth 1 https://github.com/samvallad33/vestige.git
+cd vestige/benchmarks/silent-rotation
+python3 tests/bm25_baseline.py results/runA-trial-1/corpus-export.json --no-dense
 ```
 
-**What it measures.** Each task hides an older memory that caused a later failure, where the cause and the symptom do not share vocabulary. To make the test honest and hard, text-resemblance baselines are adversarially handed a lookalike memory that resembles the failure but did not cause it. A retriever that ranks by text similarity walks straight into the decoy.
+**What it measures.** A fleet either converges on the correct key, converges on a planted decoy, or splits and fails to merge. The second outcome is the dangerous one: tests pass, the merge is clean, and production breaks.
 
-**The numbers.**
+**The numbers.** 6 models, 25 trials, 246 published agent transcripts.
 
-| Method | recall@1 (synthetic) | recall@1 (real) |
-|---|---|---|
-| Pure-vector / text-similarity baselines | 0% | 0% |
-| Vestige causal bridge | 60% | 50% |
+| Arm | Converged correct | Converged **wrong** | Split |
+|---|---|---|---|
+| No memory | 0/25 | **21/25** | 4/25 |
+| Dense cosine RAG | 4/23 | **12/23** | 7/23 |
+| Vestige | 20/23 | **0/23** | 3/23 |
 
 Two separate claims, kept separate on purpose:
 
 1. **The theorem (DeepMind).** Single-vector retrieval is mathematically incapable of these relevance gaps ([arXiv:2508.21038](https://arxiv.org/abs/2508.21038), ICLR 2026). This is a fundamental limit of vector search.
-2. **The measurement (mine).** On CauseBench, text baselines score 0% recall@1 while Vestige's causal bridge scores 60% synthetic and 50% real.
+2. **The measurement (mine).** On the verbatim queries the agents actually typed, the causal memory ranks 7th of 8 under both dense cosine *and* BM25, while the decoy ranks 1st.
 
-The theorem says why similarity search must fail on this shape of problem. CauseBench is the runnable measurement showing that Vestige does not.
+The caveats are published alongside the results, including the trials where a plain cosine baseline ties Vestige and the trial Vestige loses.
 
 ---
 
@@ -274,8 +279,7 @@ Storage internals and encryption: [docs/STORAGE.md](docs/STORAGE.md).
 | [Storage](docs/STORAGE.md) | Storage format and encryption |
 | [Agent Memory Protocol](docs/AGENT-MEMORY-PROTOCOL.md) | Teaching an agent to use memory automatically |
 | [Intel Mac install](docs/INSTALL-INTEL-MAC.md) | Notes for older Macs |
-| [CauseBench](benchmarks/causebench/) | The reproducible benchmark |
-| [The spoken pitch](demo/PITCH-FINAL-spoken.md) | The 60-second version I give in person |
+| [Silent Rotation](https://github.com/samvallad33/vestige/tree/benchmark/silent-rotation/benchmarks/silent-rotation) | The reproducible benchmark |
 | [Changelog](CHANGELOG.md) | Release history |
 
 ---
