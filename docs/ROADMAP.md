@@ -146,7 +146,7 @@ that are deliberately *not* shipped half-done.
   Security boundary; unsafe half-done, and depends on ACL Memory primitives that
   don't exist yet. Deferred post-dashboard.
 - **ComposeBench** (was #86) — Reliability benchmark across 8 scenarios. Will reuse
-  the existing `benchmarks/causebench/` harness pattern; the ACL scenario is gated
+  the existing `benchmarks/silent-rotation/` harness pattern; the ACL scenario is gated
   on ACL Memory. Deferred.
 
 ### B. Access & Governance boundary
