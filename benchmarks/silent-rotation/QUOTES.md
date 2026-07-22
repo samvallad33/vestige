@@ -158,7 +158,7 @@ unanimous wrong answer that passes tests and breaks production.
 
 **It does not prove:** that Vestige discovers causal relationships. The edge it traverses is authored by
 the harness at `harness/agent/prepare_trial.py:187`. It does not prove Vestige is better at retrieval,
-because a plain dense cosine baseline tied it on outcomes and cost less. It does not prove anything at
+because a plain dense cosine baseline costs less per run and, on Kimi K3, never converged wrong. It does not prove anything at
 production scale, because the retrievable corpus is 8 documents. And it does not isolate which of
 Vestige's three properties (event anchoring, causal traversal, temporal validity) is doing the work,
 because that ablation has not been run.

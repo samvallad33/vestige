@@ -259,7 +259,7 @@ Stated plainly, because the interesting result is worth more than an overclaim.
    and `:198` tags the failure `active_key,crash`. None of the seven distractors carry it. Remove that
    string and backfill returns `causes: []`. This measures traversal, not discovery.
 2. **The outcome column does not separate the winners.** rag, sync and supermemory all scored
-   `fixed_correctly`. Plain dense cosine over eight documents tied the memory products, and it was the
+   `fixed_correctly`. Plain dense cosine over eight documents matched the memory products on the original Kimi K3 trials, and it was the
    **cheapest arm in the trial** at $0.4429. There is no "Vestige beats RAG" result here to defend.
 3. **The retrievable corpus is eight documents.** Nothing here is measured at production scale, and the
    two scaling axes run in opposite directions. More documents can only push a cause that already ranks

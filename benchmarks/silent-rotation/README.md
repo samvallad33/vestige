@@ -123,7 +123,9 @@ These are stated at greater length in `FINDING.md`, and none of them are hidden.
 - No ablation separates event anchoring from causal traversal from temporal
   validity. You can fairly argue the result comes from removing query variance
   alone. That is the next experiment.
-- A dense cosine baseline tied Vestige on the Kimi K3 trials and cost less. There
+- On Kimi K3 the dense cosine baseline never converged wrong (3 correct, 2 split of 5) and it
+  costs less per run. Across all 23 shared trials it is 4 correct to Vestige's 20, so the gap
+  is model-dependent rather than uniform.
   is no "beats RAG on outcomes" claim here to defend.
 - I initially broke the mem0 and Zep arms by failing to flush state between
   trials, which disadvantaged them. The harnesses are fixed and those arms were

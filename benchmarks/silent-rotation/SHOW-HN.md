@@ -5,7 +5,7 @@
 **1. Show HN: One misled agent voids a three-agent fleet (memory benchmark, 5 models)**
 Leads with the finding, not the product. States a concrete falsifiable claim. 79 chars.
 
-2. Show HN: I benchmarked 6 agent-memory systems and a plain cosine baseline tied mine
+2. Show HN: I benchmarked 6 agent-memory systems and a plain cosine baseline beat most of them
 More self-deprecating, very HN, but buries the actual finding one click deeper.
 
 3. Show HN: Retrieval quality was not the problem. The access primitive was.
@@ -99,7 +99,7 @@ answer to all three, on every model tested.
 
 **Now the parts that argue against me, because you would find them anyway.**
 
-The dense cosine baseline tied me. rag, Vestige and supermemory all passed both
+The dense cosine baseline matched me on the first two Kimi K3 trials. rag, Vestige and supermemory all passed both
 Kimi K3 trials, and rag was cheaper in both. There is no "Vestige beats RAG"
 outcome here to defend. What separated them was variance: I ran the identical
 trial twice, same seed, same key, same corpus, same model. rag passed the first

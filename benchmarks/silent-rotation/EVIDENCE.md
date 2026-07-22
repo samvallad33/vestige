@@ -27,6 +27,27 @@ it the right one?**
 
 Models: Kimi K3, Kimi K2.7-code, MiniMax M3, GLM 5.2, GPT-5.6 Sol, DeepSeek V4 Flash.
 
+### Paired comparison, same trials only
+
+The arms were not all run on the same trials. The `anarchy`, `rag` and `sync` arms ran on all 25;
+the other memory systems were integrated later and ran only on the 6 earliest trials. Comparing a
+23-trial arm against a 2-trial arm across different trial sets is not a fair comparison, so here is
+the like-for-like table: for each opponent, only the trials where BOTH that arm and Vestige ran.
+
+| Opponent | shared trials | their correct | their wrong | their split | Vestige correct | Vestige wrong | Vestige split |
+|---|---|---|---|---|---|---|---|
+| no memory | 23 | 0 | 20 | 3 | **20** | **0** | 3 |
+| dense cosine RAG | 23 | 4 | 12 | 7 | **20** | **0** | 3 |
+| supermemory | 6 | 5 | 0 | 1 | **6** | **0** | 0 |
+| mem0 | 5 | 2 | 1 | 2 | **5** | **0** | 0 |
+| hindsight | 3 | 0 | 0 | 3 | **3** | **0** | 0 |
+| Zep/Graphiti | 2 | 0 | 1 | 1 | **2** | **0** | 0 |
+
+Note that the asymmetry works against Vestige, not for it. Vestige is 20/23 (87%) overall but
+perfect on every trial where a competitor was also run, because both trials it lost were in the
+solo sweep. The aggregate table understates the paired result; this table is the honest one, and
+the remaining fix is statistical power, not fairness. Deepening the thin arms is the next run.
+
 ### First memory call
 
 For every agent, the FIRST memory-tool call it made: did the returned payload contain the trial's
