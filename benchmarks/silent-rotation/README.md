@@ -11,6 +11,17 @@ supermemory, hindsight, and Zep/Graphiti.
 I built this benchmark and I also built one of the arms in it. That is why all
 246 raw agent transcripts ship here instead of a summary table.
 
+
+## Pre-registration
+
+The next experiment is an ablation designed to test whether the result survives without Vestige. The
+arms, the thresholds, and the interpretation of every outcome — including the ones that demote my own
+system — are committed in [`PREREGISTRATION.md`](PREREGISTRATION.md) **before the experiment runs**.
+
+Check `git log` on that file against the results commit. If the interpretation was chosen after the
+numbers came back, the commit order will show it.
+
+
 ---
 
 ## Reproduce the central claim in two seconds
