@@ -1,0 +1,11 @@
+# Pin the toolchain so CI, release builds, and contributors all compile and lint
+# against the same Rust. Without this, CI floats to whatever stable is newest and
+# a Rust release can turn main red with no code change: 1.97.0 landed on 2026-07-09
+# with a stricter `clippy::for_kv_map` and broke CI on a line that had been in the
+# tree since v1.0.0.
+#
+# Bump this deliberately, and run `cargo clippy --workspace --all-targets -- -D warnings`
+# when you do.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

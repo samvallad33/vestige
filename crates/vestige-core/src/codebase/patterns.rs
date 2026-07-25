@@ -449,7 +449,7 @@ impl PatternDetector {
     pub fn delete_pattern(&mut self, pattern_id: &str) -> Result<()> {
         if self.patterns.remove(pattern_id).is_some() {
             // Clean up indexes
-            for (_, ids) in self.patterns_by_language.iter_mut() {
+            for ids in self.patterns_by_language.values_mut() {
                 ids.retain(|id| id != pattern_id);
             }
             self.pattern_keywords.remove(pattern_id);
