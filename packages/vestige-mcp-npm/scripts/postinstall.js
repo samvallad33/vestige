@@ -60,6 +60,9 @@ const checksumPath = path.join(targetDir, `${archiveName}.sha256`);
 const expectedArchiveMembers = new Set(
   ['vestige-mcp', 'vestige', 'vestige-restore'].map((name) => (isWindows ? `${name}.exe` : name))
 );
+// Docs that some release archives legitimately include alongside the binaries
+// (e.g. the x86_64-apple-darwin tarball ships INSTALL-INTEL-MAC.md).
+const optionalArchiveMembers = new Set(['INSTALL-INTEL-MAC.md']);
 
 function isWorkspaceCheckout() {
   const packageRoot = path.resolve(__dirname, '..');
@@ -183,7 +186,7 @@ function validateArchiveEntries(archivePath) {
 
   for (const entry of entries) {
     const normalized = normalizeArchiveEntry(entry);
-    if (!expectedArchiveMembers.has(normalized)) {
+    if (!expectedArchiveMembers.has(normalized) && !optionalArchiveMembers.has(normalized)) {
       throw new Error(`Unexpected archive entry: ${entry}`);
     }
   }
