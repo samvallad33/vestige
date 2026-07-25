@@ -18,6 +18,29 @@ use super::sqlite::SqliteMemoryStore;
 use super::{Result, StorageError};
 use crate::trace::{MemoryPr, MemoryPrAction, MemoryPrStatus, MemoryTraceEvent, Receipt};
 
+/// Trace retention window used when `VESTIGE_TRACE_RETENTION_DAYS` is unset or
+/// unusable.
+const DEFAULT_TRACE_RETENTION_DAYS: i64 = 30;
+
+/// Upper bound on the configurable trace retention window (100 years). Beyond
+/// this the window is meaningless — `0` is the documented "keep forever" — and
+/// unbounded values overflow the `chrono::Duration` the sweep builds from them,
+/// which panics (and the release profile aborts on panic).
+const MAX_TRACE_RETENTION_DAYS: i64 = 36_500;
+
+/// Parse the `VESTIGE_TRACE_RETENTION_DAYS` value into a usable retention
+/// window. Unset, empty, negative, and malformed values fall back to
+/// [`DEFAULT_TRACE_RETENTION_DAYS`]; values above
+/// [`MAX_TRACE_RETENTION_DAYS`] are clamped. Split out from
+/// [`SqliteMemoryStore::prune_agent_traces`] so the parsing rules are testable
+/// without touching process-global environment state.
+fn resolve_trace_retention_days(raw: Option<&str>) -> i64 {
+    raw.and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|d| *d >= 0)
+        .map(|d| d.min(MAX_TRACE_RETENTION_DAYS))
+        .unwrap_or(DEFAULT_TRACE_RETENTION_DAYS)
+}
+
 /// A roll-up summary of one agent run, for the Black Box run list.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct AgentRunSummary {
@@ -216,15 +239,13 @@ impl SqliteMemoryStore {
     ///
     /// Retention defaults to 30 days. `VESTIGE_TRACE_RETENTION_DAYS` overrides
     /// it; `0` keeps traces forever (sweep disabled); unset, empty, negative,
-    /// or malformed values fall back to the default. Returns the number of
-    /// trace events deleted.
+    /// or malformed values fall back to the default, and absurdly large values
+    /// are clamped to [`MAX_TRACE_RETENTION_DAYS`]. Returns the number of trace
+    /// events deleted.
     pub fn prune_agent_traces(&self) -> Result<i64> {
-        const DEFAULT_TRACE_RETENTION_DAYS: i64 = 30;
-        let days = std::env::var("VESTIGE_TRACE_RETENTION_DAYS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i64>().ok())
-            .filter(|d| *d >= 0)
-            .unwrap_or(DEFAULT_TRACE_RETENTION_DAYS);
+        let days = resolve_trace_retention_days(
+            std::env::var("VESTIGE_TRACE_RETENTION_DAYS").ok().as_deref(),
+        );
         self.prune_agent_traces_older_than_days(days)
     }
 
@@ -234,7 +255,18 @@ impl SqliteMemoryStore {
         if days == 0 {
             return Ok(0);
         }
-        let cutoff_ms = (Utc::now() - chrono::Duration::days(days)).timestamp_millis();
+        // Belt and braces against an out-of-range window: `Duration::days`
+        // panics on overflow and the release profile is panic = "abort", so an
+        // unclamped value would hard-kill the process from inside the periodic
+        // consolidation sweep. Skip the sweep instead — a cutoff that far back
+        // could not have deleted anything anyway.
+        let Some(cutoff) = chrono::Duration::try_days(days)
+            .and_then(|window| Utc::now().checked_sub_signed(window))
+        else {
+            tracing::warn!("Trace retention of {days} days is out of range; skipping trace sweep");
+            return Ok(0);
+        };
+        let cutoff_ms = cutoff.timestamp_millis();
         let writer = self
             .writer
             .lock()
@@ -640,6 +672,89 @@ mod tests {
         );
         assert_eq!(s.get_trace("run_new").unwrap().len(), 1);
         assert!(s.get_agent_run("run_new").unwrap().is_some());
+    }
+
+    /// Retention parsing must survive hostile / fat-fingered env values. The
+    /// upper bound is the load-bearing one: an unclamped huge value overflows
+    /// the `chrono::Duration` the sweep builds, and `panic = "abort"` in the
+    /// release profile turns that into a hard process kill.
+    #[test]
+    fn trace_retention_env_value_is_clamped_and_never_overflows() {
+        // Sane values pass through untouched.
+        assert_eq!(resolve_trace_retention_days(Some("7")), 7);
+        assert_eq!(resolve_trace_retention_days(Some(" 90 ")), 90);
+        // 0 stays 0: the documented "keep forever" switch.
+        assert_eq!(resolve_trace_retention_days(Some("0")), 0);
+        // Unset / empty / malformed / negative fall back to the default.
+        for raw in [None, Some(""), Some("   "), Some("forever"), Some("-5")] {
+            assert_eq!(
+                resolve_trace_retention_days(raw),
+                DEFAULT_TRACE_RETENTION_DAYS,
+                "unusable value {raw:?} must fall back to the default"
+            );
+        }
+        // Absurdly large values are clamped instead of overflowing.
+        for raw in ["999999999999", "9223372036854775807"] {
+            assert_eq!(
+                resolve_trace_retention_days(Some(raw)),
+                MAX_TRACE_RETENTION_DAYS,
+                "{raw} must be clamped, not passed through"
+            );
+        }
+    }
+
+    /// End-to-end: a hostile `VESTIGE_TRACE_RETENTION_DAYS` must not panic the
+    /// process, and must not sweep anything (the clamped window is 100 years,
+    /// far older than any trace). Also exercises the raw sweep at `i64::MAX` to
+    /// prove the second line of defence inside
+    /// `prune_agent_traces_older_than_days` holds even if a caller bypasses the
+    /// env clamp.
+    #[test]
+    fn prune_agent_traces_survives_hostile_retention_value() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        const KEY: &str = "VESTIGE_TRACE_RETENTION_DAYS";
+
+        let s = store();
+        s.append_trace_event(&MemoryTraceEvent::McpCall {
+            run_id: "run_hostile".into(),
+            tool: "search".into(),
+            args_hash: "h".into(),
+            at: Utc::now().timestamp_millis(),
+        })
+        .unwrap();
+
+        // Direct call: no clamp in play, so this is the overflow path itself.
+        assert_eq!(
+            s.prune_agent_traces_older_than_days(i64::MAX).unwrap(),
+            0,
+            "an out-of-range window must skip the sweep, not panic"
+        );
+
+        // Env path: process env is global and unsafe to mutate under Rust 2024,
+        // so serialize on a local lock and restore the previous value.
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::env::var_os(KEY);
+        unsafe { std::env::set_var(KEY, "999999999999") };
+        let deleted = s.prune_agent_traces();
+        unsafe {
+            match previous {
+                Some(prev) => std::env::set_var(KEY, prev),
+                None => std::env::remove_var(KEY),
+            }
+        }
+
+        assert_eq!(
+            deleted.unwrap(),
+            0,
+            "a 100-year clamped window sweeps nothing"
+        );
+        assert_eq!(
+            s.get_trace("run_hostile").unwrap().len(),
+            1,
+            "the fresh trace must survive"
+        );
     }
 
     #[test]
