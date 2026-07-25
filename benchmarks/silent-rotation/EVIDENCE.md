@@ -3,7 +3,7 @@
 Companion to `FINDING.md`. Each row states a claim and the file that proves it. All transcripts are in
 `results/`. Nothing below is summarized from memory; every number was read out of the JSON.
 
-Five models. Twenty-two trials. Two hundred and ten agent transcripts.
+Six models. Twenty-five trials. Two hundred and forty-six agent transcripts.
 
 ---
 
@@ -247,7 +247,7 @@ that is 15/15 GLM 5.2, 15/15 GPT-5.6 Sol, 14/14 DeepSeek V4 Flash, 12/12 Kimi K3
 3/3 MiniMax M3. Zero empty results and zero errors.
 
 So the honest cross-model statement is not "this works everywhere." It is: **the memory layer's
-behaviour was invariant across five models and the baseline's was not.**
+behaviour was invariant across six models and the baseline's was not.**
 
 ---
 

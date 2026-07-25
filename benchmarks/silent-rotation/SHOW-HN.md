@@ -2,7 +2,7 @@
 
 ## Titles, ranked
 
-**1. Show HN: One misled agent voids a three-agent fleet (memory benchmark, 5 models)**
+**1. Show HN: One misled agent voids a three-agent fleet (memory benchmark, 6 models)**
 Leads with the finding, not the product. States a concrete falsifiable claim. 79 chars.
 
 2. Show HN: I benchmarked 6 agent-memory systems and a plain cosine baseline beat most of them
