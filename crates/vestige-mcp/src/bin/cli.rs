@@ -26,6 +26,9 @@ use vestige_core::{IngestInput, PortableImportMode, Storage};
 #[command(
     long_about = "Vestige is a cognitive memory system based on 130 years of memory research.\n\nIt implements FSRS-6, spreading activation, synaptic tagging, and more."
 )]
+#[command(
+    after_help = "Vestige Pro: your memory on every machine, end-to-end encrypted. $19/mo -> https://github.com/samvallad33/vestige#vestige-pro"
+)]
 struct Cli {
     /// Use a specific Vestige data directory for this command.
     #[arg(long, global = true, value_name = "DIR")]
@@ -1751,6 +1754,15 @@ fn run_health() -> anyhow::Result<()> {
         println!("  {} {}", icon, text);
     }
 
+    println!();
+    println!(
+        "{} {}",
+        "Pro:".cyan().bold(),
+        "sync this memory across machines, end-to-end encrypted ($19/mo) — \
+         https://github.com/samvallad33/vestige#vestige-pro"
+            .white()
+    );
+
     Ok(())
 }
 
@@ -2323,8 +2335,10 @@ fn run_sync_cloud(endpoint: Option<String>) -> anyhow::Result<()> {
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "no cloud endpoint: pass --endpoint or set VESTIGE_CLOUD_ENDPOINT \
-                 (e.g. https://sync.vestige.dev)"
+                "Vestige Pro syncs your agent's memory across machines, end-to-end encrypted \
+                 ($19/month).\n  Subscribe: https://github.com/samvallad33/vestige#vestige-pro\n  \
+                 Already subscribed? Pass --endpoint or set VESTIGE_CLOUD_ENDPOINT from your \
+                 welcome email."
             )
         })?;
     let sync_key = std::env::var("VESTIGE_CLOUD_SYNC_KEY")
@@ -2332,35 +2346,37 @@ fn run_sync_cloud(endpoint: Option<String>) -> anyhow::Result<()> {
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "no sync key: set VESTIGE_CLOUD_SYNC_KEY (issued when you subscribe to \
-                 Vestige Cloud)"
+                "no sync key set. Your local memory is free forever; syncing it across machines \
+                 is Vestige Pro ($19/month, zero-knowledge encrypted).\n  Subscribe: \
+                 https://github.com/samvallad33/vestige#vestige-pro\n  Already subscribed? Set \
+                 VESTIGE_CLOUD_SYNC_KEY from your welcome email."
             )
         })?;
 
-    // Optional zero-knowledge encryption passphrase. Never sent to the server.
+    // Required zero-knowledge encryption passphrase. Never sent to the server.
     let encryption_key = std::env::var("VESTIGE_CLOUD_ENCRYPTION_KEY")
         .ok()
-        .filter(|s| !s.trim().is_empty());
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no encryption key: set VESTIGE_CLOUD_ENCRYPTION_KEY to a strong passphrase. \
+                 Vestige Pro refuses plaintext cloud sync. Use the same passphrase on every \
+                 device; it cannot be recovered by Vestige."
+            )
+        })?;
 
     println!("{}", "=== Vestige Cloud Sync ===".cyan().bold());
     println!();
     println!("{}: {}", "Endpoint".white().bold(), endpoint);
-    if encryption_key.is_some() {
-        println!(
-            "{}: {}",
-            "Encryption".white().bold(),
-            "zero-knowledge (XChaCha20-Poly1305) — your data is encrypted before upload".green()
-        );
-    } else {
-        println!(
-            "{}: {}",
-            "Encryption".white().bold(),
-            "OFF — set VESTIGE_CLOUD_ENCRYPTION_KEY for zero-knowledge sync".yellow()
-        );
-    }
+    println!(
+        "{}: {}",
+        "Encryption".white().bold(),
+        "zero-knowledge (XChaCha20-Poly1305) — your data is encrypted before upload".green()
+    );
 
     let storage = open_storage()?;
-    let report = storage.sync_portable_archive_cloud(&endpoint, &sync_key, encryption_key)?;
+    let report =
+        storage.sync_portable_archive_cloud(&endpoint, &sync_key, Some(encryption_key))?;
     print_sync_report(&report);
     Ok(())
 }
@@ -2368,8 +2384,9 @@ fn run_sync_cloud(endpoint: Option<String>) -> anyhow::Result<()> {
 #[cfg(not(feature = "cloud-sync"))]
 fn run_sync_cloud(_endpoint: Option<String>) -> anyhow::Result<()> {
     anyhow::bail!(
-        "this build was compiled without the `cloud-sync` feature; rebuild with \
-         --features cloud-sync to use Vestige Cloud"
+        "this build was compiled without the `cloud-sync` feature. Official binaries from \
+         v2.3.0 include it: run `vestige update` or `npm update -g vestige-mcp-server`, \
+         then retry. Building from source? Add --features cloud-sync."
     )
 }
 
@@ -2592,6 +2609,21 @@ fn run_ingest(
     };
 
     let storage = open_storage()?;
+
+    // Warm up the embedding model so smart_ingest's is_ready() gate passes and
+    // real vector search runs (instead of silently falling back to keyword-only
+    // regular ingest). is_ready() is side-effect free by design, so a fresh CLI
+    // process must init explicitly. Non-fatal: fall back to keyword on failure.
+    #[cfg(feature = "embeddings")]
+    {
+        if let Err(e) = storage.init_embeddings() {
+            eprintln!(
+                "  {} Embeddings unavailable: {} (ingest will use keyword-only)",
+                "!".yellow(),
+                e
+            );
+        }
+    }
 
     // Try smart_ingest (PE Gating) if available, otherwise regular ingest
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]

@@ -262,6 +262,9 @@ async function main() {
     console.log('  2. Restart your MCP client.');
     console.log('  3. Test with: "remember that my preferred editor is VS Code"');
     console.log('');
+    console.log('Local memory is free forever. Vestige Pro syncs it across machines,');
+    console.log('end-to-end encrypted ($19/mo): https://github.com/samvallad33/vestige#vestige-pro');
+    console.log('');
 
   } catch (err) {
     console.error('');
