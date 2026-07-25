@@ -68,6 +68,34 @@ fn supported_protocol_versions() -> &'static [&'static str] {
     &["2024-11-05", "2025-03-26", "2025-06-18", MCP_VERSION]
 }
 
+/// Whether `VESTIGE_TRACE` enables Black Box trace recording. ON by default:
+/// unset, empty, or any malformed value → true (fail-open to the documented
+/// default); only an explicit `0` / `false` / `off` / `no` turns it off.
+/// Parsed exactly like the sibling `VESTIGE_AUTO_CONSOLIDATE_MERGE` gate.
+fn parse_trace_enabled(value: Option<&str>) -> bool {
+    match value {
+        Some(v) => {
+            let v = v.trim();
+            !(v.eq_ignore_ascii_case("false")
+                || v.eq_ignore_ascii_case("off")
+                || v.eq_ignore_ascii_case("no")
+                || v == "0")
+        }
+        None => true,
+    }
+}
+
+/// OPT-OUT (Black Box trace recorder): every MCP tool call writes trace rows
+/// (`agent_traces`/`agent_runs`) to the user's DB. A consumer that does not
+/// want per-call persistence can turn it off with `VESTIGE_TRACE=0` (or
+/// false/off/no). Read ONCE per process (the recorder sits on the hot path of
+/// every tool call), so flipping the env mid-process has no effect.
+fn trace_enabled() -> bool {
+    static TRACE_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRACE_ENABLED
+        .get_or_init(|| parse_trace_enabled(std::env::var("VESTIGE_TRACE").ok().as_deref()))
+}
+
 /// MCP Server implementation
 pub struct McpServer {
     storage: Arc<Storage>,
@@ -476,13 +504,15 @@ impl McpServer {
         // can attach the downstream memory events (retrieve/suppress/veto) to the
         // same run.
         let trace_run_id = crate::trace_recorder::run_id_for(&saved_args);
-        crate::trace_recorder::record_call(
-            &self.storage,
-            self.event_tx.as_ref(),
-            &trace_run_id,
-            &request.name,
-            &saved_args,
-        );
+        if trace_enabled() {
+            crate::trace_recorder::record_call(
+                &self.storage,
+                self.event_tx.as_ref(),
+                &trace_run_id,
+                &request.name,
+                &saved_args,
+            );
+        }
 
         let result = match request.name.as_str() {
             // ================================================================
@@ -1146,13 +1176,15 @@ impl McpServer {
             // downstream memory events (retrieve/suppress/veto/dream) under the
             // same run_id as the opening mcp.call, so /api/traces, /api/receipts
             // and the trace:// resource are actually populated.
-            crate::trace_recorder::record_result(
-                &self.storage,
-                self.event_tx.as_ref(),
-                &trace_run_id,
-                &request.name,
-                content,
-            );
+            if trace_enabled() {
+                crate::trace_recorder::record_result(
+                    &self.storage,
+                    self.event_tx.as_ref(),
+                    &trace_run_id,
+                    &request.name,
+                    content,
+                );
+            }
         }
 
         let response = match result {
@@ -1747,6 +1779,26 @@ mod tests {
                 "version": "1.0.0"
             }
         })
+    }
+
+    // ========================================================================
+    // TRACE GATE TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_parse_trace_enabled_defaults_on_and_honors_opt_out() {
+        // Default ON: unset, empty, or malformed values all fail open.
+        assert!(parse_trace_enabled(None));
+        assert!(parse_trace_enabled(Some("")));
+        assert!(parse_trace_enabled(Some("1")));
+        assert!(parse_trace_enabled(Some("true")));
+        assert!(parse_trace_enabled(Some("banana")));
+        // Explicit opt-out only: 0/false/off/no (case-insensitive, trimmed).
+        assert!(!parse_trace_enabled(Some("0")));
+        assert!(!parse_trace_enabled(Some("false")));
+        assert!(!parse_trace_enabled(Some("FALSE")));
+        assert!(!parse_trace_enabled(Some("OFF")));
+        assert!(!parse_trace_enabled(Some(" no ")));
     }
 
     // ========================================================================

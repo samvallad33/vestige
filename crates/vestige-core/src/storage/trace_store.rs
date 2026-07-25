@@ -206,6 +206,55 @@ impl SqliteMemoryStore {
         })
     }
 
+    /// Prune old Black Box trace events (bounded retention).
+    ///
+    /// The trace recorder appends rows on every MCP tool call, so without a
+    /// sweep `agent_traces` grows without bound. Called from the periodic
+    /// consolidation cycle (mirroring `prune_access_log`): deletes trace
+    /// events older than the retention window, then drops any `agent_runs`
+    /// roll-up left with no events (orphaned).
+    ///
+    /// Retention defaults to 30 days. `VESTIGE_TRACE_RETENTION_DAYS` overrides
+    /// it; `0` keeps traces forever (sweep disabled); unset, empty, negative,
+    /// or malformed values fall back to the default. Returns the number of
+    /// trace events deleted.
+    pub fn prune_agent_traces(&self) -> Result<i64> {
+        const DEFAULT_TRACE_RETENTION_DAYS: i64 = 30;
+        let days = std::env::var("VESTIGE_TRACE_RETENTION_DAYS")
+            .ok()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .filter(|d| *d >= 0)
+            .unwrap_or(DEFAULT_TRACE_RETENTION_DAYS);
+        self.prune_agent_traces_older_than_days(days)
+    }
+
+    /// Env-independent core of [`Self::prune_agent_traces`], so tests can
+    /// exercise retention deterministically. `days == 0` means keep forever.
+    pub(crate) fn prune_agent_traces_older_than_days(&self, days: i64) -> Result<i64> {
+        if days == 0 {
+            return Ok(0);
+        }
+        let cutoff_ms = (Utc::now() - chrono::Duration::days(days)).timestamp_millis();
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let deleted = writer.execute(
+            "DELETE FROM agent_traces WHERE at < ?1",
+            params![cutoff_ms],
+        )? as i64;
+        if deleted > 0 {
+            // Drop run roll-ups whose every event was just swept, so the Black
+            // Box run list never shows runs that can no longer be replayed.
+            writer.execute(
+                "DELETE FROM agent_runs
+                 WHERE run_id NOT IN (SELECT DISTINCT run_id FROM agent_traces)",
+                [],
+            )?;
+        }
+        Ok(deleted)
+    }
+
     // ========================================================================
     // MEMORY RECEIPTS
     // ========================================================================
@@ -553,6 +602,44 @@ mod tests {
         let runs = s.list_agent_runs(10).unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].run_id, run);
+    }
+
+    #[test]
+    fn prune_agent_traces_sweeps_old_events_and_orphaned_runs() {
+        let s = store();
+        let now_ms = Utc::now().timestamp_millis();
+        let old_ms = now_ms - 40 * 24 * 60 * 60 * 1000; // 40 days ago
+
+        s.append_trace_event(&MemoryTraceEvent::McpCall {
+            run_id: "run_old".into(),
+            tool: "search".into(),
+            args_hash: "h".into(),
+            at: old_ms,
+        })
+        .unwrap();
+        s.append_trace_event(&MemoryTraceEvent::McpCall {
+            run_id: "run_new".into(),
+            tool: "search".into(),
+            args_hash: "h".into(),
+            at: now_ms,
+        })
+        .unwrap();
+
+        // 0 = keep forever: the sweep is disabled entirely.
+        assert_eq!(s.prune_agent_traces_older_than_days(0).unwrap(), 0);
+        assert_eq!(s.list_agent_runs(10).unwrap().len(), 2);
+
+        // 30-day sweep: the old event goes, and its now-orphaned run roll-up
+        // goes with it; the fresh run is untouched.
+        let deleted = s.prune_agent_traces_older_than_days(30).unwrap();
+        assert_eq!(deleted, 1, "exactly the 40-day-old event is deleted");
+        assert!(s.get_trace("run_old").unwrap().is_empty());
+        assert!(
+            s.get_agent_run("run_old").unwrap().is_none(),
+            "orphaned run roll-up must be swept with its events"
+        );
+        assert_eq!(s.get_trace("run_new").unwrap().len(), 1);
+        assert!(s.get_agent_run("run_new").unwrap().is_some());
     }
 
     #[test]

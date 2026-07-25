@@ -3687,6 +3687,11 @@ impl SqliteMemoryStore {
         // 6. Prune old access log entries (keep 90 days)
         let _ = self.prune_access_log();
 
+        // 6.5. Prune old Black Box trace events (keep 30 days by default;
+        // VESTIGE_TRACE_RETENTION_DAYS overrides, 0 = keep forever). Best-effort
+        // like the access-log sweep: a failure never blocks consolidation.
+        let _ = self.prune_agent_traces();
+
         // 7. Optimize w20 if enough usage data
         let w20_optimized = self.optimize_w20_if_ready().unwrap_or(None);
 
@@ -9984,8 +9989,11 @@ impl SqliteMemoryStore {
         // same system (e.g. github repos octocat/repoA and octocat/repoB, or two
         // Redmine instances) reuse bare per-project ids ("5"), so keying on
         // (source_system, source_id) alone made repoB's issue #5 overwrite
-        // repoA's row in place. `IS NOT DISTINCT FROM` matches NULL==NULL so
-        // legacy rows without a project still resolve.
+        // repoA's row in place. The lookup MUST use the exact same
+        // COALESCE(source_project, '') semantics as the V19 unique index, which
+        // buckets NULL and '' together: a plain `IS ?3` lookup missed a legacy
+        // NULL-project row when the envelope carried Some(""), so the fall-through
+        // INSERT then hit the UNIQUE constraint on that very bucket.
         let source_project = env.source_project.clone();
         let now = Utc::now();
 
@@ -9999,7 +10007,7 @@ impl SqliteMemoryStore {
                 .query_row(
                     "SELECT id, content_hash FROM knowledge_nodes \
                      WHERE source_system = ?1 AND source_id = ?2 \
-                       AND source_project IS ?3 LIMIT 1",
+                       AND COALESCE(source_project, '') = COALESCE(?3, '') LIMIT 1",
                     params![source_system, source_id, source_project],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
                 )
@@ -10526,6 +10534,121 @@ mod tests {
                 .contains(&created.node_id),
             "Unchanged branch must also clear superseded_by"
         );
+    }
+
+    /// Build a `source_input` whose envelope carries an explicit project.
+    fn source_input_in_project(
+        id: &str,
+        content: &str,
+        hash: &str,
+        project: Option<&str>,
+    ) -> IngestInput {
+        let mut input = source_input(id, content, hash);
+        input.source_envelope.as_mut().unwrap().source_project = project.map(str::to_string);
+        input
+    }
+
+    #[test]
+    fn upsert_by_source_scopes_key_by_project() {
+        // V19: two sources of the same system reuse bare per-project ids, so
+        // the same (system, id) under DIFFERENT projects must yield two
+        // distinct nodes, and re-syncing each must hit its own row (Unchanged).
+        let store = create_test_storage();
+
+        let a = store
+            .upsert_by_source(source_input_in_project(
+                "5",
+                "repoA issue 5",
+                "hA",
+                Some("octocat/repoA"),
+            ))
+            .unwrap();
+        let b = store
+            .upsert_by_source(source_input_in_project(
+                "5",
+                "repoB issue 5",
+                "hB",
+                Some("octocat/repoB"),
+            ))
+            .unwrap();
+        assert_eq!(a.outcome, SourceUpsertOutcome::Created);
+        assert_eq!(b.outcome, SourceUpsertOutcome::Created);
+        assert_ne!(a.node_id, b.node_id, "projects must not share a row");
+        assert_eq!(node_count(&store), 2);
+
+        // Re-sync both records with unchanged hashes → each resolves to ITS row.
+        let ra = store
+            .upsert_by_source(source_input_in_project(
+                "5",
+                "repoA issue 5",
+                "hA",
+                Some("octocat/repoA"),
+            ))
+            .unwrap();
+        assert_eq!(ra.outcome, SourceUpsertOutcome::Unchanged);
+        assert_eq!(ra.node_id, a.node_id);
+        let rb = store
+            .upsert_by_source(source_input_in_project(
+                "5",
+                "repoB issue 5",
+                "hB",
+                Some("octocat/repoB"),
+            ))
+            .unwrap();
+        assert_eq!(rb.outcome, SourceUpsertOutcome::Unchanged);
+        assert_eq!(rb.node_id, b.node_id);
+        assert_eq!(node_count(&store), 2, "resync must not duplicate");
+    }
+
+    #[test]
+    fn upsert_by_source_matches_legacy_null_project_row_with_empty_string() {
+        // Regression: the V19 unique index buckets NULL and '' together via
+        // COALESCE(source_project, ''), but the lookup used `source_project IS
+        // ?3`, which treats NULL and '' as distinct. A legacy NULL-project row
+        // plus an ''-project envelope for the same (system, id) made the lookup
+        // miss, and the fall-through INSERT then hit the UNIQUE constraint.
+        let store = create_test_storage();
+        let created = store
+            .upsert_by_source(source_input("41", "legacy body", "h-legacy"))
+            .unwrap();
+        assert_eq!(created.outcome, SourceUpsertOutcome::Created);
+
+        // Simulate a pre-V19 legacy row: source_project stored as NULL.
+        {
+            let writer = store.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET source_project = NULL WHERE id = ?1",
+                    params![created.node_id],
+                )
+                .unwrap();
+        }
+
+        // New connector run sends Some("") for the same (system, id). Must
+        // UPDATE the legacy row in place — not error on the unique index.
+        let res = store
+            .upsert_by_source(source_input_in_project(
+                "41",
+                "legacy body edited",
+                "h-new",
+                Some(""),
+            ))
+            .expect("''-project envelope must resolve the NULL-project row, not UNIQUE-fail");
+        assert_eq!(res.outcome, SourceUpsertOutcome::Updated);
+        assert_eq!(res.node_id, created.node_id, "must reuse the legacy row");
+        assert_eq!(node_count(&store), 1, "no duplicate row in the NULL bucket");
+
+        // And the Unchanged path resolves through the same bucket too.
+        let res2 = store
+            .upsert_by_source(source_input_in_project(
+                "41",
+                "legacy body edited",
+                "h-new",
+                Some(""),
+            ))
+            .unwrap();
+        assert_eq!(res2.outcome, SourceUpsertOutcome::Unchanged);
+        assert_eq!(res2.node_id, created.node_id);
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
