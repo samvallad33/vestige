@@ -96,6 +96,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # rust-toolchain.toml pins the toolchain, so cargo runs the pinned version
+      # rather than the stable one the action installed. Add the cross-compile
+      # target to the pinned toolchain too, or the build fails with
+      # "can't find crate for `core`".
+      - name: Add target to the pinned toolchain
+        run: rustup target add ${{ matrix.target }}
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
