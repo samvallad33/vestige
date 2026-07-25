@@ -11,7 +11,6 @@
 		severityColor,
 		severityLabel,
 		truncate,
-		uniqueMemoryCount,
 		avgTrustDelta as avgTrustDeltaFn,
 	} from '$components/contradiction-helpers';
 
@@ -22,6 +21,10 @@
 	// System-wide count from the backend, vs. the derived stats below which
 	// reflect only the pairs the page holds.
 	let totalDetected = $state(0);
+	// How many memories the backend actually scanned — it only analyzes the
+	// most recent `limit` memories, so the stat copy must say so instead of
+	// implying a whole-corpus sweep.
+	let memoriesAnalyzed = $state(0);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
@@ -32,10 +35,12 @@
 			const res = await api.contradictions();
 			contradictions = res.contradictions;
 			totalDetected = res.total;
+			memoriesAnalyzed = res.memoriesAnalyzed;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load contradictions';
 			contradictions = [];
 			totalDetected = 0;
+			memoriesAnalyzed = 0;
 		} finally {
 			loading = false;
 		}
@@ -114,10 +119,10 @@
 		focusedPairIndex = i;
 	}
 
-	// --- Stats. `totalDetected` is the backend's system-wide count; everything
-	// else is derived from the pairs the page actually holds so the numbers are
+	// --- Stats. `totalDetected` + `memoriesAnalyzed` come from the backend
+	// (which scans only the most recent `limit` memories); everything else is
+	// derived from the pairs the page actually holds so the numbers are
 	// self-consistent with what the user sees. ---
-	const totalMemoriesInvolved = $derived(uniqueMemoryCount(contradictions));
 	const avgTrustDelta = $derived(avgTrustDeltaFn(contradictions));
 
 	// Map filtered index -> original index in `contradictions` so the
@@ -194,7 +199,7 @@
 				<AnimatedNumber value={totalDetected} />
 			</div>
 			<div class="text-xs text-dim mt-1">
-				contradictions across {totalMemoriesInvolved.toLocaleString()} memories
+				contradictions among the {memoriesAnalyzed.toLocaleString()} most recent memories
 			</div>
 		</div>
 		<div use:reveal={{ delay: 60, y: 12 }} class="p-4 glass rounded-xl lift">
