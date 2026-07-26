@@ -1267,17 +1267,36 @@ impl McpServer {
                 if !opened.is_empty()
                     && let Some(obj) = content.as_object_mut()
                 {
-                    // Tell the calling agent its write is held, so it does not
-                    // assume the memory is live and act on it.
+                    // Tell the calling agent exactly what happened. A held write
+                    // is quarantined until the PR is decided; a destructive write
+                    // (or a failed suppression) is NOT held — the PR is an audit
+                    // record of something that already happened. Saying
+                    // "quarantined" for those would be false.
+                    let held = opened
+                        .iter()
+                        .filter(|o| o.get("held").and_then(|v| v.as_bool()) == Some(true))
+                        .count();
+                    let recorded = opened.len() - held;
+                    let mut parts = Vec::new();
+                    if held > 0 {
+                        parts.push(format!(
+                            "{held} write(s) quarantined until their Memory PR is decided"
+                        ));
+                    }
+                    if recorded > 0 {
+                        parts.push(format!(
+                            "{recorded} write(s) already applied but recorded for review \
+                             (destructive or unsuppressable — nothing is held)"
+                        ));
+                    }
                     obj.insert("memoryPrs".to_string(), serde_json::json!(opened));
                     obj.insert(
                         "memoryPrNotice".to_string(),
                         serde_json::json!(format!(
-                            "{} write(s) were held for review under review mode '{}' and are \
-                             quarantined until decided. Review them in the dashboard under \
-                             Memory PRs, or via GET /api/memory-prs.",
-                            opened.len(),
-                            mode.as_str()
+                            "Review mode '{}': {}. Review in the dashboard under Memory PRs \
+                             or via GET /api/memory-prs.",
+                            mode.as_str(),
+                            parts.join("; ")
                         )),
                     );
                 }
@@ -1954,6 +1973,62 @@ mod tests {
         assert!(
             text.contains("memoryPrNotice"),
             "response must carry the human-readable notice: {text}"
+        );
+        // Truthfulness: this was a normal (non-destructive) write, so it must
+        // report held=true and the notice must say quarantined.
+        assert!(
+            text.contains("\"held\":true"),
+            "a suppressed write must report held=true: {text}"
+        );
+        assert!(
+            text.contains("quarantined until"),
+            "notice for a held write must say quarantined: {text}"
+        );
+    }
+
+    /// The third leg of the mode matrix: Fast mode must open NO Memory PR
+    /// through the real tool path — every write auto-commits.
+    #[tokio::test]
+    async fn fast_mode_opens_no_memory_pr() {
+        use vestige_core::MemoryPrStatus;
+
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"fast"}"#,
+        )
+        .unwrap();
+
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "smart_ingest",
+                    "arguments": { "content": "Fast mode write that must auto-commit." }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none());
+
+        assert_eq!(
+            storage
+                .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+                .unwrap()
+                .len(),
+            0,
+            "Fast mode must never open a Memory PR"
+        );
+        let text = serde_json::to_string(&response.result).unwrap();
+        assert!(
+            !text.contains("memoryPrNotice"),
+            "Fast mode must not attach a gating notice: {text}"
         );
     }
 

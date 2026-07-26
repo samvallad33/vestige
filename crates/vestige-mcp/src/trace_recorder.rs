@@ -203,9 +203,20 @@ pub fn gate_writes(
         // Quarantine the just-written node so it's held out of retrieval until
         // the PR is decided. For a destructive write there's no live node to
         // suppress — the PR records the action for review/audit instead.
-        if node.is_some() {
-            let _ = storage.suppress_memory(&id);
-        }
+        // `held` is reported truthfully to the caller: a destructive write is
+        // NOT held (it already happened), and a failed suppression must not be
+        // announced as a quarantine.
+        let held = if node.is_some() {
+            match storage.suppress_memory(&id) {
+                Ok(_) => true,
+                Err(e) => {
+                    tracing::warn!("memory PR gate: quarantine of {id} failed: {e}");
+                    false
+                }
+            }
+        } else {
+            false
+        };
 
         let kind = match decision.as_str() {
             "supersede" | "replace" | "superseded" => MemoryPrKind::MemorySuperseded,
@@ -273,6 +284,10 @@ pub fn gate_writes(
             "title": pr.title,
             "signals": signals,
             "subjectId": id,
+            // true: node suppressed until the PR is decided. false: nothing is
+            // held — either the write was destructive (already applied, PR is
+            // an audit record) or suppression failed.
+            "held": held,
         }));
     }
 
