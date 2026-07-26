@@ -1,0 +1,26 @@
+[package]
+name = "vestige-longmemeval"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "LongMemEval retrieval harness for Vestige (retrieval-only, no API key required)"
+
+# Standalone: kept out of the main workspace so the benchmark never affects the
+# release build or the workspace gates.
+[workspace]
+
+[dependencies]
+vestige-core = { path = "../../crates/vestige-core", default-features = false, features = [
+    "embeddings",
+    "ort-download",
+    "vector-search",
+    "bundled-sqlite",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+tempfile = "3"
+
+[[bin]]
+name = "lme-retrieval"
+path = "src/main.rs"

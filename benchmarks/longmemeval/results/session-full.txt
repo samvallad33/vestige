@@ -1,0 +1,20 @@
+
+=== LongMemEval retrieval-only results ===
+granularity=session scored=500 skipped=0
+
+overall:
+  recall@1     71.6%   (358/500)
+  recall@3     84.6%   (423/500)
+  recall@5     88.4%   (442/500)
+  recall@10    92.6%   (463/500)
+
+by question type:
+  knowledge-update           n=78   @1=79%  @3=92%  @5=94%  @10=97%
+  multi-session              n=133  @1=73%  @3=88%  @5=92%  @10=95%
+  single-session-assistant   n=56   @1=98%  @3=100%  @5=100%  @10=100%
+  single-session-preference  n=30   @1=70%  @3=83%  @5=87%  @10=93%
+  single-session-user        n=70   @1=44%  @3=63%  @5=70%  @10=79%
+  temporal-reasoning         n=133  @1=69%  @3=82%  @5=86%  @10=91%
+
+NOTE: these are retrieval recall numbers, NOT end-to-end QA accuracy.
+Do not report as a bare "LongMemEval score".
