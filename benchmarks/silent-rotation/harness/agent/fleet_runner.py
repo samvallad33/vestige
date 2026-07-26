@@ -82,19 +82,25 @@ import runner  # noqa: E402  (local module)
 # guard and the argparse choices so a new arm is added in exactly ONE place.
 # anarchy/rag/sync are the originals; mem0 is the mem0ai competitor arm. Add
 # zep/hindsight/supermemory here as each arm's service is stood up + verified.
-FLEET_MODES = ("anarchy", "rag", "sync", "mem0", "supermemory", "hindsight", "zep")
+FLEET_MODES = ("anarchy", "rag", "sync", "mem0", "supermemory", "hindsight", "zep",
+               # Pre-registered ablation arms (PREREGISTRATION.md). Each isolates
+               # ONE axis of the sync arm's three-way bundle:
+               "rag-bus",       # typed query, no edge, bus ON  (pure coordination)
+               "sync-noedge",   # event anchor, EDGE STRIPPED, bus ON
+               "anchor-dense")  # event anchor, no edge, no bus (competitor stack)
 
 # Every arm's memory-retrieval tool, in one place. Used for arm-agnostic
 # retrieval telemetry so a dead competitor backend can never again be scored as
 # a substantive retrieval loss. anarchy has no entry by design (it is the
 # no-memory control).
 MEMORY_TOOL_NAMES = (
-    "vestige_backfill",   # sync (Vestige)
-    "rag_search",         # rag
+    "vestige_backfill",   # sync, sync-noedge (Vestige)
+    "rag_search",         # rag, rag-bus
     "mem0_search",        # mem0
     "supermemory_search",  # supermemory
     "hindsight_search",   # hindsight
     "zep_search",         # zep
+    "anchor_dense_search",  # anchor-dense (ablation: event anchor on cosine stack)
 )
 
 def _classify_retrieval(output: str) -> tuple[str, str]:
@@ -147,6 +153,10 @@ ARM_MEMORY_TOOL = {
     "supermemory": "supermemory_search",
     "hindsight": "hindsight_search",
     "zep": "zep_search",
+    # Pre-registered ablation arms.
+    "rag-bus": "rag_search",
+    "sync-noedge": "vestige_backfill",
+    "anchor-dense": "anchor_dense_search",
 }
 
 # How many agents in the fleet. 3 is the demo default (enough to diverge).
@@ -284,6 +294,14 @@ class SharedBus:
     def __init__(self, data_dir: str, vestige_bin: str) -> None:
         self.data_dir = data_dir
         self.vestige_bin = vestige_bin
+        # In-process record of every finding published this run. Needed by the
+        # rag-bus ablation arm: _rag_load_facts caches the corpus once per
+        # process, so a finding ingested into the DB would NEVER surface in a
+        # later rag_search -- the bus would be write-only, silently rigging the
+        # reviewer's arm to lose. rag-bus reads coordinate through this list
+        # (every retrieval appends the findings verbatim), which makes its
+        # coordination at least as strong as sync's, never weaker.
+        self.findings: list[str] = []
         import threading
 
         self._lock = threading.Lock()
@@ -315,6 +333,7 @@ class SharedBus:
                 return f"ERROR logging to shared bus: {exc}"
         if proc.returncode != 0:
             return f"vestige ingest exit={proc.returncode}\n{proc.stderr[:1000]}"
+        self.findings.append(body)
         return "logged to shared memory (other agents can now recall this)."
 
 
@@ -388,8 +407,12 @@ def _build_agent_tools(mode: str, agent_id: str, bus: SharedBus | None):
         # (anarchy PLUS a temporal-knowledge-graph memory tool).
         z_fn, z_desc, z_schema = runner.ZEP_TOOL["zep_search"]
         tools["zep_search"] = (z_fn, z_desc, z_schema)
-    elif mode == "sync":
+    elif mode in ("sync", "sync-noedge"):
         # Read side: the same backfill tool the single-agent vestige mode uses.
+        # sync-noedge is byte-identical at the TOOL level -- its ablation lives
+        # entirely in the seed (the cause's shared entity tag is stripped, see
+        # prepare_trial.py), so any difference in outcome is attributable to the
+        # hand-authored causal edge and nothing else.
         b_fn, b_desc, b_schema = runner.VESTIGE_TOOL["vestige_backfill"]
         tools["vestige_backfill"] = (_bus_backfill_tool(bus), b_desc, b_schema)
         # Write side: coordination. Lets an agent publish a finding for peers.
@@ -405,6 +428,45 @@ def _build_agent_tools(mode: str, agent_id: str, bus: SharedBus | None):
                 "required": ["finding"],
             },
         )
+    elif mode == "rag-bus":
+        # ABLATION (PREREGISTRATION.md arm 1): pure coordination. Same typed-
+        # query cosine retrieval as rag, PLUS the same write bus as sync. The
+        # read path appends every peer finding verbatim to each retrieval
+        # result, because the cached corpus cannot surface post-seed ingests --
+        # see SharedBus.findings. Coordination here is therefore at least as
+        # visible to agents as sync's, by construction.
+        r_fn, r_desc, r_schema = runner.RAG_TOOL["rag_search"]
+
+        def _rag_bus_search(repo: Path, args: dict, _fn=r_fn, _bus=bus) -> str:
+            out = _fn(repo, args)
+            if _bus is not None and _bus.findings:
+                notes = "\n".join(f"- {f}" for f in _bus.findings)
+                out = (
+                    out
+                    + "\n\nTEAM FINDINGS (published by your fleet peers so far):\n"
+                    + notes
+                )
+            return out[:8000]
+
+        tools["rag_search"] = (_rag_bus_search, r_desc, r_schema)
+        tools["vestige_log"] = (
+            _bus_log_tool(bus, agent_id),
+            "Publish a short finding to the SHARED team memory so the other "
+            "agents in the fleet can see it in their retrieval results and "
+            "avoid duplicating or colliding with your work. Use it to record "
+            "the fix direction you concluded and why.",
+            {
+                "type": "object",
+                "properties": {"finding": {"type": "string"}},
+                "required": ["finding"],
+            },
+        )
+    elif mode == "anchor-dense":
+        # ABLATION (PREREGISTRATION.md arm 3): event-anchoring alone, on the
+        # competitor's retrieval stack. No Vestige, no edge, no bus. The tool
+        # takes no query; the failure event is the query.
+        a_fn, a_desc, a_schema = runner.ANCHOR_DENSE_TOOL["anchor_dense_search"]
+        tools["anchor_dense_search"] = (a_fn, a_desc, a_schema)
     specs = [
         {"name": name, "description": desc, "input_schema": schema}
         for name, (_fn, desc, schema) in tools.items()
@@ -426,7 +488,7 @@ def _agent_system_prompt(mode: str, agent_id: str) -> str:
         "edits of the other agents into one shared codebase, so the DIRECTION of "
         "your fix matters, not just whether your local copy passes."
     )
-    if mode == "sync":
+    if mode in ("sync", "sync-noedge"):
         base += (
             " You are NOT working blind: you share a team memory with the rest of "
             "the fleet. Call vestige_backfill to reach backward from the failure "
@@ -435,6 +497,28 @@ def _agent_system_prompt(mode: str, agent_id: str) -> str:
             "call vestige_log to publish the fix DIRECTION you conclude so your "
             "peers converge on the same change instead of colliding. Consult the "
             "shared memory BEFORE deciding which file is authoritative."
+        )
+    elif mode == "rag-bus":
+        base += (
+            " You are NOT working blind: you have a team memory of past notes, "
+            "incidents, and decisions. Call rag_search to retrieve the most "
+            "relevant memories about this failure (the cause may live in a past "
+            "decision in a different service that the current code does not "
+            "reveal); its results also include any findings your fleet peers "
+            "have published. Call vestige_log to publish the fix DIRECTION you "
+            "conclude so your peers converge on the same change instead of "
+            "colliding. Consult that memory BEFORE deciding which file is "
+            "authoritative."
+        )
+    elif mode == "anchor-dense":
+        base += (
+            " You are NOT working blind: you have a team memory of past notes, "
+            "incidents, and decisions. Call anchor_dense_search (it takes no "
+            "arguments; the current failure itself is the query) to retrieve the "
+            "memories most similar to the failure event (the cause may live in a "
+            "past decision in a different service that the current code does not "
+            "reveal). Consult that memory BEFORE deciding which file is "
+            "authoritative."
         )
     elif mode == "rag":
         base += (
@@ -1290,6 +1374,7 @@ def _prewarm_memory_layer(mode: str) -> dict:
         "supermemory_search": getattr(runner, "SUPERMEMORY_TOOL", {}),
         "hindsight_search": getattr(runner, "HINDSIGHT_TOOL", {}),
         "zep_search": getattr(runner, "ZEP_TOOL", {}),
+        "anchor_dense_search": getattr(runner, "ANCHOR_DENSE_TOOL", {}),
     }.get(tool_name, {})
     entry = registry.get(tool_name)
     if not entry:
@@ -1297,9 +1382,13 @@ def _prewarm_memory_layer(mode: str) -> dict:
                 "error": f"no tool registered for {tool_name}", "seconds": 0.0}
 
     fn = entry[0]
-    # vestige_backfill takes no query (empty schema); every competitor tool
-    # requires one.
-    call_args: dict = {} if tool_name == "vestige_backfill" else {"query": _PREWARM_QUERY}
+    # vestige_backfill and anchor_dense_search take no query (empty schema);
+    # every other competitor tool requires one.
+    call_args: dict = (
+        {}
+        if tool_name in ("vestige_backfill", "anchor_dense_search")
+        else {"query": _PREWARM_QUERY}
+    )
 
     _log(f"   pre-warming {mode} memory layer via {tool_name} ...")
     started = time.time()
@@ -1413,11 +1502,11 @@ def run_fleet(mode: str, base_repo: Path, out_path: Path) -> None:
         runner.fail("base repo test run timed out during the pre-flight check.")
 
     bus: SharedBus | None = None
-    if mode == "sync":
+    if mode in ("sync", "sync-noedge", "rag-bus"):
         data_dir = os.environ.get("VESTIGE_DATA_DIR", "")
         vbin = os.environ.get("VESTIGE_BIN", "vestige")
         if not data_dir:
-            runner.fail("sync mode needs VESTIGE_DATA_DIR (the shared bus DB).")
+            runner.fail(f"{mode} mode needs VESTIGE_DATA_DIR (the shared bus DB).")
         bus = SharedBus(data_dir, vbin)
 
     work_root = Path(tempfile.mkdtemp(prefix=f"fleet-{mode}-"))
@@ -1429,8 +1518,8 @@ def run_fleet(mode: str, base_repo: Path, out_path: Path) -> None:
     # answer must come ONLY from the vestige_backfill tool (sync) or nowhere
     # (anarchy) -- never from a file it could read/grep/cat.
     _CHECKOUT_IGNORE = shutil.ignore_patterns(
-        ".vestige-seed.sh", ".vestige-demo-db", ".vestige-demo-data",
-        ".repo-snapshot", ".fixtures", "prod-corpus", "*.db",
+        ".vestige-seed.sh", ".vestige-seed-noedge.sh", ".vestige-demo-db",
+        ".vestige-demo-data", ".repo-snapshot", ".fixtures", "prod-corpus", "*.db",
     )
     for i in range(FLEET_SIZE):
         co = work_root / f"agent-{i}"

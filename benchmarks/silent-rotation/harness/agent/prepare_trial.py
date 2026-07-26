@@ -111,7 +111,8 @@ def make_keyring_ts(keys: dict[str, str]) -> str:
     )
 
 
-def make_seed_sh(correct_kid: str, decoys: list[str], vestige_bin_default: str) -> str:
+def make_seed_sh(correct_kid: str, decoys: list[str], vestige_bin_default: str,
+                 strip_cause_edge: bool = False) -> str:
     d0, d1 = decoys[0], decoys[1]
     # The memory names the TRIAL's correct kid + decoys. This is the ONLY place
     # the answer exists; it lives in the Vestige DB, never in the agent checkout.
@@ -183,8 +184,8 @@ DATA_DIR="${{VESTIGE_DATA_DIR:-$(cd "$(dirname "$0")" && pwd)/.vestige-demo-db}}
 if [[ ! -x "$VESTIGE_BIN" ]]; then echo "vestige binary not found at $VESTIGE_BIN" >&2; exit 1; fi
 rm -rf "$DATA_DIR"; mkdir -p "$DATA_DIR"
 V() {{ "$VESTIGE_BIN" --data-dir "$DATA_DIR" "$@"; }}
-# CAUSE — natural runbook, distant vocabulary, shares active_key, names {correct_kid}
-V ingest {json.dumps(cause)} --node-type decision --ago-days 4 --tags "keyring_rotation,active_key" --source "shared/src/keyring.ts"
+# CAUSE — natural runbook, distant vocabulary, {"EDGE STRIPPED (ablation: no shared active_key tag)" if strip_cause_edge else "shares active_key"}, names {correct_kid}
+V ingest {json.dumps(cause)} --node-type decision --ago-days 4 --tags {json.dumps("keyring_rotation" if strip_cause_edge else "keyring_rotation,active_key")} --source "shared/src/keyring.ts"
 # 5 realistic same-neighborhood distractors (NOT the cause, none tagged active_key)
 V ingest {json.dumps(d_ops)} --node-type event --ago-days 12 --tags "ops,staging,config" --source "ops/runbook"
 V ingest {json.dumps(d_verify)} --node-type event --ago-days 9 --tags "ledger_service,verify" --source "ledger-service/src/verify.ts"
@@ -260,6 +261,19 @@ def prepare_trial(repo: Path, trial: int, master_seed: int, corpus_out: Path,
     snap_seed = repo / ".repo-snapshot" / ".vestige-seed.sh"
     if snap_seed.parent.exists():
         snap_seed.write_text(seed_sh)
+
+    # ABLATION VARIANT (PREREGISTRATION.md, sync-noedge arm): byte-identical
+    # corpus except the cause's shared `active_key` tag is stripped, so the
+    # hand-authored causal edge does not exist. Written EVERY trial, from the
+    # SAME deterministic content, so the noedge arm runs on the same trial set
+    # with exactly one variable changed. run-sync-noedge.sh seeds from this
+    # file; every other arm seeds from .vestige-seed.sh.
+    seed_noedge = make_seed_sh(correct_kid, decoy_kids, vestige_bin,
+                               strip_cause_edge=True)
+    (repo / ".vestige-seed-noedge.sh").write_text(seed_noedge)
+    snap_noedge = repo / ".repo-snapshot" / ".vestige-seed-noedge.sh"
+    if snap_noedge.parent.exists():
+        snap_noedge.write_text(seed_noedge)
 
     # 6. Ensure configs are BLANK (RED base). Neutralize decoy-hint comments so a
     #    fixed decoy name isn't baked in (the hints named atlas/cirrus originally).

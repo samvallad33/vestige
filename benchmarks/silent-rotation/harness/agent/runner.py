@@ -523,6 +523,114 @@ RAG_TOOL = {
 }
 
 
+# --- anchor-dense arm (pre-registered ablation) ------------------------------
+#
+# PREREGISTRATION.md arm 3: "embeds the failure event and takes top-3 cosine --
+# no Vestige, no edge, no bus. If it matches sync, the finding belongs to nobody
+# and is larger for it." This isolates EVENT-ANCHORING alone on the competitor
+# retrieval stack: the anchor is the failure memory's own text (the same event
+# vestige_backfill anchors on), the index is the same shared corpus every arm
+# retrieves over, the ranking is the same cosine as rag_search. The ONLY
+# difference from rag is that no agent ever types a query -- so per-agent query
+# variance is removed while everything Vestige-specific (the causal join, the
+# shared write bus) is absent.
+
+_ANCHOR_CACHE: dict = {}
+
+
+def _load_failure_text() -> str:
+    """Load the failure memory's own content from the seeded DB. This is the
+    anchor text. The retrievable corpus (_rag_load_facts) deliberately EXCLUDES
+    this row -- a memory layer indexes prior history, not the live error -- so
+    the anchor is used only as the query vector, never as a retrievable doc."""
+    if _ANCHOR_CACHE.get("failure"):
+        return _ANCHOR_CACHE["failure"]
+    if not VESTIGE_DATA_DIR:
+        raise RuntimeError("anchor-dense needs VESTIGE_DATA_DIR (the seeded DB).")
+    import tempfile  # noqa: PLC0415
+
+    last_err = ""
+    for _attempt in range(3):
+        out = Path(tempfile.mktemp(suffix=".json"))
+        try:
+            proc = subprocess.run(
+                [VESTIGE_BIN, "--data-dir", VESTIGE_DATA_DIR, "export",
+                 "--format", "json", str(out)],
+                capture_output=True, text=True, timeout=RAG_EXPORT_TIMEOUT_S,
+            )
+            if proc.returncode != 0:
+                last_err = f"vestige export exit {proc.returncode}: {proc.stderr[:200]}"
+            elif not out.exists():
+                last_err = "vestige export wrote no file"
+            else:
+                raw = json.loads(out.read_text())
+                rows = raw if isinstance(raw, list) else raw.get(
+                    "memories", raw.get("nodes", [])
+                )
+                for m in rows:
+                    body = m.get("content") or m.get("body") or ""
+                    if "PRODUCTION OUTAGE" in body:
+                        _ANCHOR_CACHE["failure"] = body
+                        return body
+                last_err = "no failure memory (PRODUCTION OUTAGE) in export"
+        except (subprocess.SubprocessError, json.JSONDecodeError, OSError) as exc:
+            last_err = f"{type(exc).__name__}: {exc}"[:200]
+        finally:
+            try:
+                out.unlink()
+            except OSError:
+                pass
+    raise RuntimeError(f"anchor-dense could not load the failure anchor ({last_err})")
+
+
+def tool_anchor_dense_search(_repo: Path, _args: dict) -> str:
+    """Event-anchored dense retrieval: embed the FAILURE EVENT itself (no query
+    argument) and return the top-K most cosine-similar memories from the same
+    shared corpus rag_search uses. Registered only in --mode anchor-dense."""
+    try:
+        anchor = _load_failure_text()
+        facts = _rag_load_facts()
+    except Exception as exc:  # noqa: BLE001
+        return f"ERROR: anchor-dense index unavailable ({exc}). Is ollama running?"
+    if not facts:
+        return "(RAG index empty -- no memories to retrieve.)"
+    embs = _RAG_CACHE["embs"]
+
+    def _cos(a: list, b: list) -> float:
+        dot = sum(x * y for x, y in zip(a, b))
+        na = sum(x * x for x in a) ** 0.5
+        nb = sum(x * x for x in b) ** 0.5
+        return dot / (na * nb) if na and nb else 0.0
+
+    qv = _rag_embed(anchor)
+    ranked = sorted(
+        ((_cos(qv, e), f) for e, f in zip(embs, facts)),
+        key=lambda t: t[0], reverse=True,
+    )[:RAG_TOPK]
+    lines = [
+        f"[{i}] (similarity {score:.3f}) {body}"
+        for i, (score, body) in enumerate(ranked, 1)
+    ]
+    header = (
+        f"Top-{RAG_TOPK} memories by semantic similarity to the FAILURE EVENT "
+        f"itself (anchor-dense, no query; cosine, {RAG_EMBED_MODEL}):\n"
+    )
+    return (header + "\n".join(lines))[:6000]
+
+
+ANCHOR_DENSE_TOOL = {
+    "anchor_dense_search": (
+        tool_anchor_dense_search,
+        "Event-anchored memory search: retrieves the memories most similar to "
+        "the CURRENT FAILURE EVENT itself. Takes no arguments -- you never type "
+        "a query; the failure is the query. Use it to find prior context that "
+        "explains the failure -- the cause may live in an earlier change in a "
+        "different service.",
+        {"type": "object", "properties": {}},
+    ),
+}
+
+
 # ============================================================================
 # mem0 arm: mem0ai OSS v2.0.12, FULLY LOCAL (Ollama LLM + Ollama embeddings +
 # Chroma on-disk). The fair competitor to "isn't Vestige just a memory layer?".
