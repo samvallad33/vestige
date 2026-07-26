@@ -2343,14 +2343,12 @@ fn review_mode_path(state: &AppState) -> PathBuf {
 }
 
 /// Read the persisted review mode, defaulting to RiskGated.
+///
+/// Delegates to [`crate::trace_recorder::read_review_mode`] so the dashboard and
+/// the MCP write path read the mode through exactly one implementation. If these
+/// ever diverged, the UI could report "Paranoid" while writes were auto-landing.
 pub fn read_review_mode(state: &AppState) -> vestige_core::ReviewMode {
-    let path = review_mode_path(state);
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| v.get("mode").and_then(|m| m.as_str()).map(String::from))
-        .map(|s| vestige_core::ReviewMode::from_label(&s))
-        .unwrap_or_default()
+    crate::trace_recorder::read_review_mode(&state.storage)
 }
 
 // ============================================================================

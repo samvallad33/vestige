@@ -98,6 +98,27 @@ fn is_write_decision(label: &str) -> bool {
     )
 }
 
+/// Read the persisted [`vestige_core::ReviewMode`] for this brain.
+///
+/// The mode lives in `<data_dir>/review_mode.json` and is written by the
+/// dashboard (`POST /api/memory-prs/mode`). Anything missing, unreadable, or
+/// unrecognised falls back to the default [`vestige_core::ReviewMode::RiskGated`],
+/// so a corrupt file can never silently disable gating.
+///
+/// This is the single source of truth: the dashboard handler delegates here so
+/// the MCP write path and the dashboard can never disagree about the mode.
+pub fn read_review_mode(storage: &Storage) -> vestige_core::ReviewMode {
+    std::fs::read_to_string(storage.data_dir().join("review_mode.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| {
+            v.get("mode")
+                .and_then(|m| m.as_str())
+                .map(vestige_core::ReviewMode::from_label)
+        })
+        .unwrap_or_default()
+}
+
 /// Risk-gate the writes in a tool result. For each write the tool just made,
 /// build a [`vestige_core::WriteContext`], classify it under the active
 /// [`vestige_core::ReviewMode`], and — if risky — quarantine the just-written
