@@ -1,0 +1,193 @@
+{
+  "mode": "sync-noedge",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "/Users/entity002/vestige-launch-private/flagship-demo/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 149908,
+    "output": 5475,
+    "total": 155383
+  },
+  "fleet_cost_usd": 0.127096,
+  "cost_rate": {
+    "input_per_mtok": 0.72,
+    "output_per_mtok": 3.5
+  },
+  "fleet_wall_clock_seconds": 45.22,
+  "fleet_iterations_total": 23,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "memory_tool": "vestige_backfill",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.5
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 3,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-sync-noedge-a0.json",
+    "transcript-sync-noedge-a1.json",
+    "transcript-sync-noedge-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "failed_merge_conflict",
+  "integrated_tests_pass": false,
+  "prod_replay_pass": null,
+  "production_replay": {
+    "ran": false,
+    "reason": "integrated tree is red"
+  },
+  "merge_conflict_count": 2,
+  "merge_conflicts": [
+    {
+      "file": "identity-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0",
+          "a2"
+        ],
+        "1": [
+          "a1"
+        ]
+      }
+    },
+    {
+      "file": "ledger-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0",
+          "a2"
+        ],
+        "1": [
+          "a1"
+        ]
+      }
+    }
+  ],
+  "cross_file_divergence": true,
+  "fix_directions": {
+    "a0": "kid:k_lyra",
+    "a1": "kid:k_sirius",
+    "a2": "kid:k_lyra"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync-noedge",
+      "tokens": {
+        "input": 52293,
+        "output": 1852,
+        "total": 54145
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 40.5,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The failing end-to-end charge test was caused by both identity-service/src/config.ts (activeKid) and ledger-service/src/config.ts (trustedKid) being blanked to \"\" during the \"externalize-secrets\" refactor. The identity-service signer threw \"no active signing key selected\" before a token could even be minted.\n\nFix: Set both activeKid (identity-service) and trustedKid (ledger-service) to \"k_lyra\" \u2014 the first entry in the shared keyring. Both must use the same key id so that the HMAC signature computed at mint time matches the HMAC recomputed at verification time. The canonical claim string implementations in both services already agreed (sub, plan, iat, exp joined by newline), so only the key id selection needed fixing. Both defaults can be overridden via environment variables (MERIDIAN_SIGNING_KID / MERIDIAN_TRUSTED_KID) for production KMS injection.\n\nVerified: run_tests exits 0, the charge test passes with a 200 response.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync-noedge",
+      "tokens": {
+        "input": 52642,
+        "output": 1815,
+        "total": 54457
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 44.3,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The failing end-to-end charge test was caused by the \"externalize-secrets\" refactor blanking out the key-id selection in both identity-service/src/config.ts (activeKid=\"\") and ledger-service/src/config.ts (trustedKid=\"\"), with no env/KMS injection in the test harness. As a result signSession() threw \"no active signing key selected\" before any HTTP request was made.\n\nFix: restored a shipped default key id (\"k_sirius\") from the shared keyring in BOTH configs (same kid in both so the HMAC minted by identity matches the one the ledger recomputes), while still allowing override via IDENTITY_ACTIVE_KID / LEDGER_TRUSTED_KID env vars for the externalize-secrets intent. This is a config-only change; the canonical digest recipes on both sides already agree, and the gateway passes the token verbatim. Verified with run_tests \u2014 exit code 0, the freshly-minted token now charges successfully (200).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync-noedge",
+      "tokens": {
+        "input": 44973,
+        "output": 1808,
+        "total": 46781
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 40.91,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The failing e2-end charge test failed because the \"externalize-secrets\" refactor had blanked both identity-service's `config.activeKid` and ledger-service's `ledgerConfig.trustedKid`, causing `signSession` to throw \"no active signing key selected\" (and the ledger would likewise refuse to verify any token). \n\nFix: restored a concrete default key id (`k_lyra`, the first provisioned key in the shared keyring) in BOTH configs, set to the SAME value so signing and verification use the same HMAC key. Both remain overridable via `MERIDIAN_ACTIVE_KID` / `MERIDIAN_TRUSTED_KID` env vars so production can still inject from the KMS. The canonical digest implementations in both services already matched byte-for-byte, and the gateway copies the token verbatim, so with the key ids aligned the full identity \u2192 gateway \u2192 ledger charge path now returns 200. Verified with run_tests (exit_code=0). Published the fix direction to shared memory so peer agents converge on keeping activeKid === trustedKid.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-26T05:21:47Z"
+}
