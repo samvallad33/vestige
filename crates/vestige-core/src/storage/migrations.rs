@@ -99,6 +99,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Scope the source idempotency key by source_project so same-system sources with overlapping ids no longer clobber each other",
         up: MIGRATION_V19_UP,
     },
+    Migration {
+        version: 20,
+        description: "Finish the V19 repair: clear connector sync cursors so the next source_sync re-scans from scratch and re-keys every clobbered record",
+        up: MIGRATION_V20_UP,
+    },
 ];
 
 /// A database migration
@@ -1155,6 +1160,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_source_key
 UPDATE schema_version SET version = 19, applied_at = datetime('now');
 "#;
 
+/// V20: make the V19 repair actually happen instead of asking the user to do it.
+///
+/// V19 fixed the idempotency *key* going forward, but every record that had
+/// already been clobbered under the old `(source_system, source_id)` key stays
+/// clobbered until the connector re-fetches it. Re-running `source_sync` does
+/// NOT re-fetch it: `run_sync` resumes from the saved per-(system, scope)
+/// cursor minus only `CURSOR_OVERLAP_SECS` (see
+/// [`crate::connectors::run_sync`]), so any record not touched upstream since
+/// the last pre-upgrade sync falls outside the `since` window forever — while
+/// the `SyncReport` still looks clean.
+///
+/// Clearing the checkpoints makes the next sync start from `since = None`, i.e.
+/// a full re-scan that re-upserts every record under the corrected key.
+/// `upsert_by_source` is idempotent (Created / Updated / Unchanged, keyed by
+/// `content_hash`), so the re-scan costs bandwidth and nothing else: untouched
+/// records come back `Unchanged`.
+///
+/// This is a NEW migration rather than an edit to V19 on purpose — a database
+/// that already has V19 applied would never re-run it.
+const MIGRATION_V20_UP: &str = r#"
+-- Drop every incremental-sync checkpoint. `get_connector_cursor` returns a
+-- zeroed cursor when no row exists, so the next run starts from the beginning
+-- and re-keys the rows V19 could only protect going forward. Only sync
+-- bookkeeping lives here (cursor / last-synced / reconcile / counters), so no
+-- memory content is touched.
+DELETE FROM connector_cursors;
+
+UPDATE schema_version SET version = 20, applied_at = datetime('now');
+"#;
+
 /// Apply pending migrations
 ///
 /// Each migration is applied inside an explicit transaction so its schema
@@ -1611,6 +1646,131 @@ mod tests {
             version,
             MIGRATIONS.last().unwrap().version,
             "schema_version must be latest after replay"
+        );
+    }
+
+    /// Apply every migration up to and including `through`, mirroring the
+    /// per-version ALTER TABLE handling `apply_migrations` does for V14/V16/V17.
+    /// Lets a test build a database that is genuinely *at* an older schema
+    /// version rather than rewinding `schema_version` on a current one.
+    fn apply_migrations_through(conn: &rusqlite::Connection, through: u32) {
+        for migration in MIGRATIONS {
+            if migration.version > through {
+                break;
+            }
+            if migration.version == 14 {
+                add_column_if_missing(
+                    conn,
+                    "ALTER TABLE knowledge_nodes ADD COLUMN protected INTEGER NOT NULL DEFAULT 0",
+                )
+                .expect("V14 protected column");
+                add_column_if_missing(
+                    conn,
+                    "ALTER TABLE knowledge_nodes ADD COLUMN superseded_by TEXT",
+                )
+                .expect("V14 superseded_by column");
+            }
+            if migration.version == 16 {
+                for stmt in MIGRATION_V16_ALTER_COLUMNS {
+                    add_column_if_missing(conn, stmt).expect("V16 alter column");
+                }
+            }
+            if migration.version == 17 {
+                for stmt in MIGRATION_V17_ALTER_COLUMNS {
+                    add_column_if_missing(conn, stmt).expect("V17 alter column");
+                }
+            }
+            conn.execute_batch(migration.up).expect("apply migration");
+        }
+    }
+
+    fn cursor_row_count(conn: &rusqlite::Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM connector_cursors", [], |row| row.get(0))
+            .expect("count connector_cursors")
+    }
+
+    fn seed_connector_cursor(conn: &rusqlite::Connection, system: &str, scope: &str) {
+        conn.execute(
+            "INSERT INTO connector_cursors \
+                (source_system, scope, cursor_updated_at, last_synced_at, records_seen) \
+             VALUES (?1, ?2, '2026-07-01T00:00:00+00:00', '2026-07-01T00:00:00+00:00', 42)",
+            [system, scope],
+        )
+        .expect("seed connector cursor");
+    }
+
+    /// V20 must empty `connector_cursors` on a database that is already at V19,
+    /// so the next `source_sync` starts from `since = None` and re-upserts every
+    /// record under the project-scoped key. Without this, records not touched
+    /// upstream since the last pre-upgrade sync stay clobbered forever — the
+    /// changelog's "just re-run source_sync" advice cannot work on its own,
+    /// because `run_sync` resumes from the saved cursor.
+    #[test]
+    fn v20_clears_connector_cursors_on_a_v19_database() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 19);
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            19,
+            "test fixture must be a genuine V19 database"
+        );
+
+        // Pre-upgrade sync state: checkpoints that would otherwise pin the next
+        // run's `since` window past the clobbered records.
+        seed_connector_cursor(&conn, "github", "octocat/repoA");
+        seed_connector_cursor(&conn, "github", "octocat/repoB");
+        assert_eq!(cursor_row_count(&conn), 2);
+
+        let applied = apply_migrations(&conn).expect("V20 applies on a V19 database");
+        assert_eq!(applied, 1, "exactly V20 should apply on a V19 database");
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            MIGRATIONS.last().unwrap().version
+        );
+        assert_eq!(
+            cursor_row_count(&conn),
+            0,
+            "V20 must clear every connector cursor so the next sync full re-scans"
+        );
+    }
+
+    /// Fresh database: all migrations apply cleanly through V20 and the cursor
+    /// table exists and is empty (nothing to clear, no error).
+    #[test]
+    fn v20_applies_cleanly_on_a_fresh_database() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("fresh migrations succeed through V20");
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            20,
+            "latest migration must be V20"
+        );
+        assert_eq!(cursor_row_count(&conn), 0);
+    }
+
+    /// V20 is replayable: re-running it after new cursors were saved simply
+    /// clears them again, and a no-op `apply_migrations` on a current DB leaves
+    /// live cursors alone.
+    #[test]
+    fn v20_is_replayable_and_does_not_touch_cursors_when_already_applied() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("first apply");
+
+        // A post-upgrade sync saves a fresh checkpoint.
+        seed_connector_cursor(&conn, "github", "octocat/repoA");
+
+        // Already-current DB: no migration runs, so the live cursor survives.
+        assert_eq!(apply_migrations(&conn).expect("no-op replay"), 0);
+        assert_eq!(cursor_row_count(&conn), 1);
+
+        // Forced replay from V19 clears it again without erroring.
+        conn.execute("UPDATE schema_version SET version = 19", [])
+            .expect("rewind to 19");
+        apply_migrations(&conn).expect("V20 replay must be idempotent");
+        assert_eq!(cursor_row_count(&conn), 0);
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            MIGRATIONS.last().unwrap().version
         );
     }
 

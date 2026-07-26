@@ -22,6 +22,29 @@ This refreshes the binaries only. Optional Claude Code Cognitive Sandwich
 companion files are refreshed with `vestige update --sandwich-companion` or
 `vestige sandwich install`.
 
+## Vestige Pro — your memory on every machine
+
+The entire cognitive engine is free forever, local, and never metered. Vestige
+Pro is for when that memory needs to follow you:
+
+- **End-to-end encrypted continuity** across every machine you work on: your
+  memory graph plus your accountability history (Black Box traces, receipts,
+  memory PRs).
+- **Zero-knowledge by construction**: your passphrase never leaves your machine.
+  The server only ever stores ciphertext. The client refuses to sync without
+  encryption.
+- **$19/month.** No annual lock-in, no lifetime gimmicks.
+
+```bash
+npm update -g vestige-mcp-server   # get the Pro-capable client (v2.3.0+)
+vestige sync --cloud               # walks you through the rest
+```
+
+Subscribe: [github.com/samvallad33/vestige#vestige-pro](https://github.com/samvallad33/vestige#vestige-pro)
+
+One passphrase, chosen by you, for every device. Vestige never receives it. A
+lost passphrase means the encrypted data is unrecoverable — that is the point.
+
 ### What gets installed
 
 | Command | Description |

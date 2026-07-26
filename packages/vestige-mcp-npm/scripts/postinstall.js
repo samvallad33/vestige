@@ -60,6 +60,9 @@ const checksumPath = path.join(targetDir, `${archiveName}.sha256`);
 const expectedArchiveMembers = new Set(
   ['vestige-mcp', 'vestige', 'vestige-restore'].map((name) => (isWindows ? `${name}.exe` : name))
 );
+// Docs that some release archives legitimately include alongside the binaries
+// (e.g. the x86_64-apple-darwin tarball ships INSTALL-INTEL-MAC.md).
+const optionalArchiveMembers = new Set(['INSTALL-INTEL-MAC.md']);
 
 function isWorkspaceCheckout() {
   const packageRoot = path.resolve(__dirname, '..');
@@ -183,7 +186,7 @@ function validateArchiveEntries(archivePath) {
 
   for (const entry of entries) {
     const normalized = normalizeArchiveEntry(entry);
-    if (!expectedArchiveMembers.has(normalized)) {
+    if (!expectedArchiveMembers.has(normalized) && !optionalArchiveMembers.has(normalized)) {
       throw new Error(`Unexpected archive entry: ${entry}`);
     }
   }
@@ -261,6 +264,9 @@ async function main() {
     console.log('     OpenCode:    npx @vestige/init, or add mcp.vestige to ~/.config/opencode/opencode.json');
     console.log('  2. Restart your MCP client.');
     console.log('  3. Test with: "remember that my preferred editor is VS Code"');
+    console.log('');
+    console.log('Local memory is free forever. Vestige Pro syncs it across machines,');
+    console.log('end-to-end encrypted ($19/mo): https://github.com/samvallad33/vestige#vestige-pro');
     console.log('');
 
   } catch (err) {

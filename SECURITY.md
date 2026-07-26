@@ -4,8 +4,10 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 2.1.x   | :white_check_mark: |
-| 2.0.x   | Critical fixes only |
+| 2.3.x   | :white_check_mark: |
+| 2.2.x   | Critical fixes only |
+| 2.1.x   | Critical fixes only |
+| 2.0.x   | :x:                |
 | 1.x     | :x:                |
 
 ## Reporting a Vulnerability
@@ -70,10 +72,38 @@ All MCP tool inputs are validated:
 
 ### Dependencies
 
-We use well-maintained dependencies and run `cargo audit` regularly. Current status:
+We use well-maintained dependencies and run `cargo audit` as part of the release gate. Status as of the v2.3.0 audit (2026-07-25, 564 crate dependencies scanned):
 
 - **Vulnerabilities**: 0
-- **Warnings**: 2 (unmaintained transitive dependencies with no known CVEs)
+- **Warnings**: 9 (3 unmaintained, 5 unsound, 1 yanked), all transitive, none with a known exploit path in Vestige
+
+That zero is not the default state. The 2.3.0 lockfile carried 5 vulnerabilities
+until three transitive dependencies were updated. Resolved for this release:
+
+| Advisory | Crate | Issue | Resolved by |
+|---|---|---|---|
+| RUSTSEC-2026-0185 (7.5 high) | `quinn-proto` | Remote memory exhaustion from unbounded out-of-order stream reassembly | 0.11.14 -> 0.11.16 |
+| RUSTSEC-2026-0104 | `rustls-webpki` | Reachable panic parsing a certificate revocation list | 0.103.11 -> 0.103.13 |
+| RUSTSEC-2026-0098 | `rustls-webpki` | Name constraints for URI names incorrectly accepted | 0.103.11 -> 0.103.13 |
+| RUSTSEC-2026-0099 | `rustls-webpki` | Name constraints accepted for certificates asserting a wildcard name | 0.103.11 -> 0.103.13 |
+| RUSTSEC-2026-0204 | `crossbeam-epoch` | Invalid pointer dereference in the `fmt::Pointer` impl | 0.9.18 -> 0.9.20 |
+
+`rustls-webpki` is the certificate validation path that Vestige Pro cloud sync
+depends on, so these versions are pinned forward in `Cargo.lock` and a downgrade
+is a release blocker, not a lockfile detail.
+
+The 9 remaining warnings are not vulnerabilities and have no available fix we can
+apply, because each is pulled in transitively by `fastembed`, `candle`,
+`usearch`, or `git2`:
+
+- **Unmaintained**: `core2` (RUSTSEC-2026-0105, also yanked), `number_prefix`
+  (RUSTSEC-2025-0119), `paste` (RUSTSEC-2024-0436)
+- **Unsound**: `anyhow` (RUSTSEC-2026-0190), `cxx` (RUSTSEC-2026-0202), `git2`
+  (RUSTSEC-2026-0183, RUSTSEC-2026-0184), `memmap2` (RUSTSEC-2026-0186)
+
+We track these and will pull the fixes through as soon as our direct
+dependencies publish releases that carry them. We would rather print the real
+number here than a zero.
 
 ## Security Checklist
 

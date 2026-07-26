@@ -2,7 +2,9 @@
   DuplicateCluster — renders a single cosine-similarity cluster from the
   `find_duplicates` MCP tool. Shows similarity bar (color-coded by severity),
   stacked memory cards with type/retention/tags/date, and action controls
-  (Merge all → highest-retention winner, Review → expand, Dismiss → hide).
+  (Review → expand, Dismiss → hide). The "Merge all → winner" button renders
+  ONLY when the host wires `onMerge` to a real merge action — today the merge
+  itself lives in the MCP `dedup` tool, so the dashboard page omits it.
 
   Pure helpers live in `./duplicates-helpers.ts` and are unit-tested there.
   Keep this file focused on rendering + glue.
@@ -160,17 +162,20 @@
 			{/each}
 		</div>
 
-		<!-- Actions — native <button> elements, fully keyboard-accessible. -->
+		<!-- Actions — native <button> elements, fully keyboard-accessible.
+		     Merge renders only when the host actually performs a merge. -->
 		<div class="flex flex-wrap items-center gap-2 pt-1">
-			<button
-				type="button"
-				onclick={handleMerge}
-				aria-label="Merge all memories into the highest-retention winner"
-				class="rounded-lg bg-recall/20 px-3 py-1.5 text-xs font-medium text-recall transition hover:bg-recall/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-recall/60"
-				title="Merge all into highest-retention memory ({(winner.retention * 100).toFixed(0)}%)"
-			>
-				Merge all → winner
-			</button>
+			{#if onMerge}
+				<button
+					type="button"
+					onclick={handleMerge}
+					aria-label="Merge all memories into the highest-retention winner"
+					class="rounded-lg bg-recall/20 px-3 py-1.5 text-xs font-medium text-recall transition hover:bg-recall/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-recall/60"
+					title="Merge all into highest-retention memory ({(winner.retention * 100).toFixed(0)}%)"
+				>
+					Merge all → winner
+				</button>
+			{/if}
 			<button
 				type="button"
 				onclick={() => (expanded = !expanded)}

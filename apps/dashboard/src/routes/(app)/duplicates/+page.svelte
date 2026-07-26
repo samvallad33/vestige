@@ -2,8 +2,10 @@
   Memory Hygiene — Duplicate Detection
   Dashboard exposure of the `find_duplicates` MCP tool. Threshold slider
   (0.70-0.95) reruns cosine-similarity clustering. Each cluster renders as a
-  DuplicateCluster with similarity bar, stacked memory cards, and merge /
-  review / dismiss actions.
+  DuplicateCluster with similarity bar, stacked memory cards, and review /
+  dismiss actions. This page is inspection-only: the actual merge lives in
+  the MCP `dedup` tool, so no onMerge is wired here (the merge button only
+  renders when a host provides a real merge action).
 -->
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
@@ -58,14 +60,6 @@
 		dismissed = next;
 	}
 
-	function mergeCluster(key: string, winnerId: string, loserIds: string[]) {
-		// TODO: POST /api/duplicates/merge { winner, losers } when backend ships.
-		// For now we optimistically dismiss the cluster so the UI reflects the
-		// action and rerun counts stay consistent.
-		console.log('Merge cluster', key, { winnerId, loserIds });
-		dismissCluster(key);
-	}
-
 	const visibleClusters = $derived(
 		clusters
 			.map((c) => ({ c, key: clusterKey(c.memories) }))
@@ -92,7 +86,7 @@
 	<PageHeader
 		icon="duplicates"
 		title="Memory Hygiene — Duplicate Detection"
-		subtitle="Cosine-similarity clustering over embeddings. Merges reinforce the winner's FSRS state; losers inherit into the merged node. Dismissed clusters are hidden for this session only."
+		subtitle="Cosine-similarity clustering over embeddings. Inspect each cluster, expand to review, and dismiss false positives (hidden for this session only). To actually merge a cluster, run the MCP dedup tool — it keeps the highest-retention winner."
 		accent="synapse"
 	>
 		<span
@@ -218,7 +212,6 @@
 							memories={c.memories}
 							suggestedAction={c.suggestedAction}
 							onDismiss={() => dismissCluster(key)}
-							onMerge={(winnerId, loserIds) => mergeCluster(key, winnerId, loserIds)}
 						/>
 					</div>
 				</div>

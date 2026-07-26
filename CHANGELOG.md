@@ -5,9 +5,150 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.0] - 2026-07-26 — "Cognitive Observatory + Zero-Knowledge Sync"
 
-### Fixed — Auto-consolidation merge: opt-out lever + protected pins honored (#142)
+Two audits (39 verified fixes), three dormant features brought to life, a
+raw-WebGPU dashboard, and the first Vestige Pro surface — a cloud-sync client
+that refuses to sync anything it hasn't encrypted first.
+
+### Added — Cognitive Observatory: a raw-WebGPU living memory field
+
+The dashboard gains a full-bleed, zero-library WebGPU surface that renders the
+memory graph as a living cognitive field: GPU force simulation, HDR bloom, and
+a recall wavefront sweeping the **real** memory graph. Five deterministic demo
+moments are driven by a URL contract (`?demo=<name>&seed=...&frame=N`):
+recall-path, engram-birth, salience-rescue, forgetting-horizon, firewall —
+capture mode (`?frame=N`) freezes the sim so the same URL produces identical
+pixels. No Three.js, no chart library: bare-metal WebGPU engine, WGSL shaders,
+DOM as instrument overlays only. The Observatory is also embedded in the main
+graph page (an Observatory button beside Dream and Memory Cinema takes over
+full-bleed; Esc exits), and the field is clickable — GPU picking opens the
+same Memory Detail inspector Classic's picking drove.
+
+### Added — Vestige Pro: zero-knowledge cloud-sync client + CLI/npm upgrade surfaces
+
+The public client for the hosted Vestige Cloud managed-sync service lands
+behind the optional `cloud-sync` cargo feature, and encryption is mandatory:
+**the client refuses plaintext sync**. The portable archive is encrypted
+on-device before upload (Argon2id KDF → XChaCha20-Poly1305 AEAD, a
+self-describing `VSTGENC1` envelope) under a passphrase
+(`VESTIGE_CLOUD_ENCRYPTION_KEY`) that is **never sent to the server** and is
+independent of the bearer sync key — the hosted service only ever stores
+ciphertext, so "we hold no keys" is literally true, and a lost passphrase means
+the synced blob is unrecoverable by design (we cannot reset what we never
+have). The refusal cuts both ways: the client will not upload an unencrypted
+archive, and it rejects a plaintext blob on download instead of quietly
+accepting it. The transport is the existing pull-merge-push portable-sync
+engine over HTTP with ETag/`If-Match` optimistic concurrency, so two devices
+converge without lost updates. The Pro upgrade surfaces that ship with it are
+**CLI and npm only** — the `vestige sync --cloud` subscribe wall, the `--help`
+and `vestige health` footers, the npm README, and the postinstall banner. The
+dashboard gains no Pro surface in this release. **The hosted service is optional
+and paid; local-first stays free** — the default `vestige-core` library build
+links no HTTP client at all, and in the shipped server binary (whose default
+features do include `connectors` and `cloud-sync`, so it links `reqwest`) the
+cloud client is inert unless you set `VESTIGE_CLOUD_ENDPOINT`,
+`VESTIGE_CLOUD_SYNC_KEY`, and `VESTIGE_CLOUD_ENCRYPTION_KEY` and explicitly run
+`vestige sync --cloud`.
+
+### Changed — The living field is now the main graph renderer
+
+The main graph page defaults to the Observatory engine wherever WebGPU exists.
+A new **Field | Classic** toggle in the control bar keeps the Three.js view one
+click away and untouched (picking, colour modes, temporal scrubbing and legends
+remain Classic features); a missing or non-functional WebGPU stack forces
+Classic automatically — including the case where `'gpu' in navigator` is true
+but `requestAdapter()` returns null, `requestDevice()` throws, or the device is
+lost mid-session — and the choice persists in `localStorage` (the automatic
+fallback deliberately does not persist, so a machine whose GPU recovers gets
+the field back next session). Dream, Observatory takeover, Memory Cinema,
+and Reload work in both modes.
+
+### Changed — `smart_ingest` batch mode honors an explicit `forceCreate: false`
+
+**Write-semantics change for existing clients.** Batch mode has defaulted to
+`batchMergePolicy: "force_create"` since v2.1.23 — but under that default, an
+explicit per-call `forceCreate: false` was silently inverted into a
+force-create. An explicit `forceCreate` is now authoritative in both policies:
+pass `forceCreate: false` and batch items go through Prediction Error Gating
+(merge/update/create against existing memories) even under the default policy.
+Callers that were sending `forceCreate: false` while relying on the old
+always-create behavior will now see merges and updates instead of new nodes —
+drop the parameter (or send `true`) to keep the old behavior.
+
+### Fixed — 29 bugs from the full-backend adversarial audit (#139)
+
+A backend-wide audit (18 feature areas, each finding adversarially re-verified)
+surfaced 31 real bugs; this release fixes 29. Highlights: **migrations now run
+in a transaction** (a mid-migration failure no longer bricks the DB),
+`decide_memory_pr` rejects re-deciding a finalized PR, `suppress` reverse is a
+true inverse (was leaving stability permanently halved), `update_node_content`
+regenerates a stale embedding when the embedder wasn't ready, `plan_merge`
+validates `survivor_id` (was an unchecked-unwrap panic), the contradiction
+heuristic requires a real polarity flip (was demoting correct memories on
+benign "do not" notes), and hybrid-search relevance is the min-max-normalized
+RRF fused score. Full workspace stayed green (1556 tests, clippy `-D warnings`
+clean).
+
+### Fixed — Three dormant features wired live (#117, #124, #137 via #140)
+
+Honesty first: each of these is now genuinely producing data, and none of the
+three is 100% finished. The remaining edges are stated per item.
+
+- **Agent Black Box records traces for real (#117)**: the trace recorder had
+  zero production callers, so `agent_traces` never populated.
+  `handle_tools_call` now records the opening `mcp.call` event before dispatch
+  and the memory events after, under a shared `run_id` — including in pure
+  stdio mode (was gated on a dashboard socket). **Tracing is on by default**
+  and writes rows to your local database on every MCP tool call; set
+  `VESTIGE_TRACE=0` (or `false`/`off`/`no`) to turn the recorder off. **Traces
+  are pruned after 30 days by default** — the consolidation cycle sweeps
+  `agent_traces` older than the retention window and drops any `agent_runs`
+  roll-up left with no events. Override with `VESTIGE_TRACE_RETENTION_DAYS`;
+  `0` keeps traces forever (sweep disabled). **Not yet wired**: the receipts
+  and memory-PR producers — those Black Box surfaces still have no production
+  writer and stay empty for now.
+- **Recurring intentions re-arm (#124)**: `mark_triggered` advances a
+  recurring trigger's `next_occurrence` and returns it to Active (was firing
+  once and staying Triggered forever). **Not yet done**: the re-arm logic is
+  fixed, but recurring intentions are not yet hydrated into the live engine,
+  so a re-armed intention is not automatically picked up by the running
+  trigger loop.
+- **Co-access prediction is live (#137)**: `search_unified` feeds retrieved
+  sets to the speculative retriever, so co-access patterns populate (were
+  permanently empty). **Partially wired**: #137's remaining speculative
+  channels are still only partially connected to production callers.
+
+### Fixed — 10 more bugs from the second full-codebase audit (#141)
+
+A second adversarial pass over areas the first under-covered. Majors: the FTS5
+sanitizer leaked bare operators on doubled input ("foo AND AND AND"), aborting
+MATCH or silently flipping AND→OR; unbounded MCP `hours_back`/`hours_forward`
+and an unclamped `limit` could panic the server (DoS); and the connector
+idempotency key omitted `source_project`, so two repos with overlapping issue
+ids clobbered each other's memories — **migration V19** adds the project to the
+key and unique index. Minors: `list_memories` honors `node_type`/`tag` on the
+search path, HTTP Accept handles `*/*` wildcards, Bearer matches
+case-insensitively (RFC 7235), dream insights no longer fabricate a
+TemporalTrend from sentinel dates, the dashboard WebSocket can't resurrect
+itself after `disconnect()`, and Redmine thread truncation keeps the newest
+journals. 1559 tests + clippy clean; dashboard check green.
+
+### Fixed — Dashboard mock data replaced with real APIs
+
+The `/duplicates`, `/contradictions`, and `/patterns` routes shipped hardcoded
+mock data — and `/duplicates` rendered a "Live" badge over it. The three mocks
+are replaced (`898bd33`) with real dashboard HTTP endpoints backed by existing
+core capabilities: `GET /api/duplicates` (dedup cluster detection),
+`GET /api/contradictions` (trust-weighted contradiction analysis), and
+`GET /api/patterns/cross-project` (cross-project pattern transfer). The "Live"
+badge is now truthful. Two more honesty fixes on the same routes: `/duplicates`
+loses its no-op "Merge all" button (the copy now points at the `dedup` MCP
+tool, which actually performs previewable, reversible merges), and the
+`/contradictions` stat card reports the number of memories actually analyzed
+instead of an inflated total.
+
+### Fixed — Auto-consolidation merge: opt-out lever + protected pins honored (#142, via #143)
 
 The background consolidation cycle's auto-dedup pass silently concat-merges
 near-duplicate memories (cosine ≥ 0.85): it keeps the strongest node, folds the
@@ -21,7 +162,68 @@ available for on-demand, previewable, reversible merges regardless. Second,
 unattended, contradicting the interactive contract that a protected node may only
 survive a merge, never be absorbed. A protected node is now never an anchor, never
 a cluster member, and thus never merged into or deleted, whether the lever is on
-or off.
+or off. To be plain about what did **not** change: when the pass is enabled,
+its merges are still hard-deletes with no reversible trail — the lever and the
+pin exclusion narrow the blast radius, they do not add a reflog. Thanks
+@Vrakoss for the report and the fix.
+
+### Docs — README rewrite; CauseBench replaced by Silent Rotation
+
+The README is rewritten for clarity, with stale facts and a dead link fixed.
+The advertised CauseBench benchmark is withdrawn: `benchmarks/causebench/` no
+longer exists, so its link and repro command 404'd, and its published numbers
+are retracted. It is replaced by **Silent Rotation**, which is real and
+auditable — three coding agents, one failing end-to-end test, a signing key
+that exists only in the memory layer, and 246 raw agent transcripts published
+instead of a summary table. The headline metric is the converged-wrong column:
+a no-memory fleet agrees on a planted decoy 21 times in 25; dense cosine 12 in
+23. The repro is three verbatim commands verified from a fresh clone. The
+ComposeBench roadmap note now points at the silent-rotation harness.
+
+### Upgrade notes
+
+- **BREAKING for 2.2.x cloud-sync users: encryption is no longer optional.**
+  In 2.2.x, `VESTIGE_CLOUD_ENCRYPTION_KEY` was optional and `vestige sync
+  --cloud` would upload a plaintext archive when it was unset. 2.3.0 makes
+  zero-knowledge encryption mandatory in **both** directions: it refuses to
+  start a cloud sync without a passphrase, and on download it **hard-rejects a
+  plaintext remote archive** ("refusing plaintext cloud archive") rather than
+  quietly accepting it. So if you synced plaintext under 2.2.x, 2.3.0 will not
+  read that blob. Recovery: on the machine that **still holds the local data**,
+  set `VESTIGE_CLOUD_ENCRYPTION_KEY` to a strong passphrase and re-run `vestige
+  sync --cloud` to re-upload an encrypted archive, then set that same
+  passphrase on every other device. Vestige never receives the passphrase and
+  cannot reset it for you.
+
+- **Black Box tracing is on by default and writes to your database.** Every MCP
+  tool call now records trace rows (`agent_traces` / `agent_runs`). Set
+  `VESTIGE_TRACE=0` (or `false`/`off`/`no`) to opt out. **Retention changed
+  too**: traces older than **30 days** are pruned during the consolidation
+  cycle; tune with `VESTIGE_TRACE_RETENTION_DAYS`, where `0` keeps them
+  forever.
+
+- **Migrations V19 and V20 run automatically.** V19 adds `source_project` to
+  the connector idempotency key and unique index. If you synced **two or more
+  projects of the same source system** (e.g. two GitHub repos) under 2.2.x,
+  their overlapping issue ids clobbered each other's memories. V20 then clears
+  the connector sync cursors, so the next `source_sync` for each project does a
+  full re-scan and repairs the clobbered rows **automatically** — there is no
+  manual step beyond running your normal sync. One caveat for large projects: a
+  single `source_sync` run is bounded by `max_pages`, which defaults to `10`, so
+  a big backlog may take more than one call (or one call with a higher
+  `max_pages`) before the re-scan is complete.
+
+### Credits
+
+This release was again driven in part by the community:
+
+- **@Vrakoss** reported the silent auto-consolidation merge behavior (#142)
+  with a precise write-up of the missing opt-out and the ignored `dedup
+  protect` pins, and contributed the basis of the fix itself — the
+  `VESTIGE_AUTO_CONSOLIDATE_MERGE` lever and the protected-pin exclusion
+  shipped as they built them (PR #143, co-authored in `f7a782d`).
+
+Thank you.
 
 ## [2.2.1] - 2026-07-02 — "Windows embeddings + backfill safety"
 

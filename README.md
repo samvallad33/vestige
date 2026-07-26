@@ -7,7 +7,7 @@ Local-first long-term memory for AI agents, delivered over MCP. Vestige remember
 [![Binary](https://img.shields.io/badge/binary-25MB_single_file-informational)](https://github.com/samvallad33/vestige/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6)](LICENSE)
 
-[What it is](#what-vestige-is) · [Install](#install) · [First interaction](#your-first-real-interaction) · [vs RAG](#how-it-differs-from-rag) · [Backward reach](#backward-reach-the-backfill-feature) · [Benchmark](#silent-rotation-a-reproducible-benchmark) · [Science](#the-science) · [Tools](#the-13-tools) · [Dashboard](#the-dashboard) · [Integrations](#works-with-every-agent) · [Docs](#go-deeper)
+[What it is](#what-vestige-is) · [Install](#install) · [First interaction](#your-first-real-interaction) · [vs RAG](#how-it-differs-from-rag) · [Backward reach](#backward-reach-the-backfill-feature) · [Benchmark](#silent-rotation-a-reproducible-benchmark) · [Science](#the-science) · [Tools](#the-13-tools) · [Dashboard](#the-dashboard) · [Integrations](#works-with-every-agent) · [Pro](#vestige-pro) · [Docs](#go-deeper)
 
 ---
 
@@ -245,6 +245,26 @@ By default your agent calls the tools when it decides to. If you want memory to 
 - Claude-specific setup and templates: [docs/CLAUDE-SETUP.md](docs/CLAUDE-SETUP.md)
 
 This is opt-in. Vestige works fine with no protocol at all.
+
+---
+
+## Vestige Pro
+
+Everything above is free forever and never metered. The engine runs on your machine, with no account, no quota, and no upsell inside the product.
+
+Vestige Pro is for when that memory needs to follow you. It is managed, end-to-end encrypted continuity of your memory graph and your accountability history (Black Box traces, receipts, memory PRs) across every machine you work on. You record a decision on the laptop, and the agent on the desktop already knows it.
+
+| | Detail |
+|---|---|
+| Price | $19/month |
+| What syncs | Your memory graph plus your accountability history |
+| Encryption | XChaCha20-Poly1305, applied on your machine before anything is uploaded |
+| Key derivation | Argon2id over a passphrase you choose |
+| What the server holds | Ciphertext only |
+
+Zero-knowledge is the design, not a setting. You pick one passphrase, you use the same one on every device, and it never leaves your machine. The server stores bytes it cannot read, and the client refuses to sync anything in plaintext. If you lose that passphrase, the encrypted data is unrecoverable, by me and by anyone else. That is the property you are paying for, not a gap in it.
+
+**Availability.** Checkout is not open yet, so there is nothing to buy today and no payment link here pretending otherwise. The client half already ships in this release, which is why `vestige sync --cloud` exists and tells you what it needs. Subscriptions open shortly. To catch the announcement, watch [Releases](https://github.com/samvallad33/vestige/releases) or follow [Discussions](https://github.com/samvallad33/vestige/discussions).
 
 ---
 

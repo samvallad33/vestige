@@ -20,7 +20,7 @@
 	import RescueVerdict from '$lib/observatory/overlays/RescueVerdict.svelte';
 	import ObservatoryCanvas from '$lib/components/ObservatoryCanvas.svelte';
 	import { DEMO_MODES, type DemoMode } from '$lib/observatory/types';
-	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import type { EngineStatus, ObservatoryEngine } from '$lib/observatory/engine';
 	import { NodeRenderer } from '$lib/observatory/node-renderer';
 	import { BirthRenderer } from '$lib/observatory/birth-renderer';
 	import { RescueRenderer } from '$lib/observatory/rescue-renderer';
@@ -62,6 +62,14 @@
 		 * back with its memory id (the host opens its inspector panel).
 		 */
 		onpick?: (memoryId: string) => void;
+		/**
+		 * Fired when the WebGPU engine cannot run — `'gpu' in navigator` was
+		 * true but requestAdapter() returned null, requestDevice() threw, or
+		 * the device was lost (Linux/VM/blocklisted GPU). Hosts with a
+		 * non-WebGPU renderer switch to it instead of stranding the user on
+		 * the offline panel.
+		 */
+		onfallback?: (reason: string) => void;
 	}
 
 	let {
@@ -74,7 +82,8 @@
 		onexit,
 		embedded = false,
 		chrome = 'full',
-		onpick
+		onpick,
+		onfallback
 	}: Props = $props();
 
 	// GPU picking — screen px → NDC → NodeRenderer.pickAt (one readback/click).
@@ -167,6 +176,13 @@
 		uploaded = false;
 		engine = e;
 		renderer = new NodeRenderer(e);
+	}
+
+	// Adapter/device boot failure or a lost device — let the host swap to a
+	// renderer that works here (the graph page flips to the classic Three.js
+	// inspector) instead of leaving a dead field on screen.
+	function handleStatus(s: EngineStatus) {
+		if (s.state === 'unsupported' || s.state === 'error') onfallback?.(s.reason);
 	}
 
 	// Upload the memory field once the engine AND the graph are both ready.
@@ -299,6 +315,7 @@
 			{freezeFrame}
 			onframe={handleFrame}
 			onready={handleReady}
+			onstatus={handleStatus}
 		/>
 	</div>
 

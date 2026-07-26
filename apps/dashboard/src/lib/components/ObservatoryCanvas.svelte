@@ -7,6 +7,7 @@
 	 * (Increment 3 gate, spec §4).
 	 */
 	import { onMount, onDestroy } from 'svelte';
+	import { base } from '$app/paths';
 	import { ObservatoryEngine, type EngineStatus } from '$lib/observatory/engine';
 	import type { DemoMode } from '$lib/observatory/types';
 
@@ -19,9 +20,15 @@
 		onframe?: (frame: number, fps: number) => void;
 		/** Fired when the engine is running (the route uploads the graph here). */
 		onready?: (engine: ObservatoryEngine) => void;
+		/**
+		 * Fired on every engine status change. Hosts use this to auto-fallback
+		 * when WebGPU boot fails (requestAdapter null / requestDevice throw /
+		 * device lost) even though `'gpu' in navigator` was true.
+		 */
+		onstatus?: (status: EngineStatus) => void;
 	}
 
-	let { demo, seed, freezeFrame = null, onframe, onready }: Props = $props();
+	let { demo, seed, freezeFrame = null, onframe, onready, onstatus }: Props = $props();
 
 	let canvasEl: HTMLCanvasElement;
 	let engine: ObservatoryEngine | null = null;
@@ -38,7 +45,10 @@
 			maxDpr: 2,
 			onFrame: (frame, fps) => onframe?.(frame, fps)
 		});
-		unsubStatus = engine.onStatus((s) => (status = s));
+		unsubStatus = engine.onStatus((s) => {
+			status = s;
+			onstatus?.(s);
+		});
 
 		// Keep the drawing buffer in lockstep with layout size (DPR-clamped).
 		resizeObserver = new ResizeObserver(() => engine?.resize());
@@ -71,7 +81,7 @@
 		<div class="fallback-reason">{status.reason}</div>
 		<div class="fallback-hint">
 			WebGPU is required for the Observatory. Chrome 113+, Edge 113+, or Safari 18+ —
-			the classic <a href="./graph">Graph view</a> works everywhere.
+			the classic <a href="{base}/graph">Graph view</a> works everywhere.
 		</div>
 	</div>
 {/if}

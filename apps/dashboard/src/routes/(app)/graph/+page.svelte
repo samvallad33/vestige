@@ -80,6 +80,18 @@
 		}
 	}
 
+	// `'gpu' in navigator` only proves the API exists — requestAdapter() can
+	// still return null and requestDevice() can still throw (Linux/VM/
+	// blocklisted GPU). The engine reports that through onfallback: switch to
+	// the classic Three.js renderer automatically instead of stranding the
+	// user on a dead "MEMORY FIELD OFFLINE" panel. Deliberately NOT persisted
+	// to localStorage — a machine whose GPU works next session gets the field
+	// back by default.
+	function handleFieldFallback(reason: string) {
+		console.warn(`[graph] WebGPU field unavailable (${reason}) — using the classic renderer.`);
+		renderMode = 'classic';
+	}
+
 	// Filtered graph data based on temporal mode
 	let displayNodes = $derived.by((): GraphNode[] => {
 		if (!graphData) return [];
@@ -324,6 +336,7 @@ disown</code>
 					demo="recall-path"
 					showSwitcher={false}
 					onpick={onNodeSelect}
+					onfallback={handleFieldFallback}
 				/>
 			</div>
 		{:else}
@@ -652,6 +665,12 @@ disown</code>
 				demo={obsDemo}
 				ondemochange={(d) => (obsDemo = d)}
 				onexit={() => (showObservatory = false)}
+				onfallback={(reason) => {
+					// WebGPU boot failed inside the takeover: close it (its offline
+					// panel would link back to this very page) and drop to classic.
+					showObservatory = false;
+					handleFieldFallback(reason);
+				}}
 			/>
 		{/key}
 	</div>

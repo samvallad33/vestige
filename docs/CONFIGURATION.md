@@ -47,8 +47,28 @@ Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the stand
 | `VESTIGE_CONSOLIDATION_INTERVAL_HOURS` | `6` | FSRS-6 decay cycle cadence |
 | `VESTIGE_BACKFILL_AUTOFIRE` | `on` | Retroactive Salience Backfill auto-fire during consolidation. On by default; set `0`/`false`/`off`/`no` to disable. The manual `backfill` tool + CLI stay available either way. When on, promotion is bounded (`stability = MIN(stability * 1.5, stability + 365)`) |
 | `VESTIGE_AUTO_CONSOLIDATE_MERGE` | `on` | Auto concat-merge of near-duplicate memories during consolidation (keeps the strongest, folds the rest in as `[MERGED]` blocks, deletes the originals). On by default; set `0`/`false`/`off`/`no` to disable. Protected (`dedup protect`) memories are never absorbed or deleted by this pass, on or off. |
+| `VESTIGE_TRACE` | `on` | Agent Black Box trace recording. **On by default**: every MCP tool call writes rows to `agent_traces`/`agent_runs` in your local database. Set `0`/`false`/`off`/`no` to turn the recorder off. Read once per process, so changing it mid-process has no effect |
+| `VESTIGE_TRACE_RETENTION_DAYS` | `30` | How long Black Box traces are kept. The consolidation cycle deletes trace events older than this and drops any `agent_runs` roll-up left with no events. `0` keeps traces forever (sweep disabled); unset, empty, negative, or malformed values fall back to `30` |
+| `VESTIGE_DISABLE_VECTOR_SEARCH` | unset (vector search on) | Kill switch for the HNSW vector index. Set to `1`/`true`/`yes`/`on`/`enable`/`enabled` to force semantic/vector search off and fall back to keyword search. Useful on older x86 CPUs — the index also disables itself automatically when AVX2+FMA are missing |
 
 > **Storage location precedence:** `--data-dir <path>` wins over `VESTIGE_DATA_DIR`; if neither is set, Vestige uses your OS's per-user data directory: `~/Library/Application Support/com.vestige.core/` on macOS, `~/.local/share/vestige/core/` on Linux, `%APPDATA%\vestige\core\` on Windows. Custom paths are directories, are created if missing, expand a leading `~`, and store the database at `<dir>/vestige.db`.
+
+### Vestige Pro (hosted cloud sync)
+
+These are read only by `vestige sync --cloud`. Leave them unset and Vestige stays fully local — nothing is uploaded and no network call is made.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VESTIGE_CLOUD_ENDPOINT` | unset | Hosted managed-sync endpoint, issued when you subscribe. `--endpoint` on `vestige sync --cloud` takes precedence |
+| `VESTIGE_CLOUD_SYNC_KEY` | unset | Per-user bearer key for the hosted service, issued when you subscribe. Authenticates the transport only — it is **not** the encryption passphrase |
+| `VESTIGE_CLOUD_ENCRYPTION_KEY` | unset (**required** for cloud sync) | Passphrase for client-side zero-knowledge encryption (Argon2id KDF → XChaCha20-Poly1305, `VSTGENC1` envelope). Use the same passphrase on every device |
+
+> **The passphrase never leaves your machine.** The archive is encrypted on-device
+> before upload and decrypted after download, so the hosted service only ever
+> stores ciphertext. Vestige has no copy of `VESTIGE_CLOUD_ENCRYPTION_KEY` and
+> **cannot reset or recover it** — if you lose it, the synced blob is
+> unrecoverable by design. Encryption is mandatory: the client refuses to upload
+> an unencrypted archive and rejects a plaintext archive on download.
 
 ---
 
@@ -165,6 +185,7 @@ vestige portable-export <file>         # Exact Vestige-to-Vestige archive
 vestige portable-import <file>         # Import exact archive into an empty database
 vestige portable-import <file> --merge # Merge exact archive into this database
 vestige sync <file>                    # Pull/merge/push through a file backend
+vestige sync --cloud                   # Pull/merge/push through Vestige Pro (see cloud env vars)
 ```
 
 ---

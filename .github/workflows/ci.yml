@@ -59,6 +59,9 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      - name: Test paid cloud-sync path
+        run: cargo test --locked --package vestige-core --features cloud-sync cloud --lib
+
   release-build:
     name: Release Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -81,7 +84,7 @@ jobs:
           # runtime linking is a user concern documented in INSTALL-INTEL-MAC.md.
           - os: macos-14
             target: x86_64-apple-darwin
-            cargo_flags: "--no-default-features --features ort-dynamic,vector-search"
+            cargo_flags: "--no-default-features --features ort-dynamic,vector-search,cloud-sync"
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             cargo_flags: ""
@@ -92,6 +95,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      # rust-toolchain.toml pins the toolchain, so cargo runs the pinned version
+      # rather than the stable one the action installed. Add the cross-compile
+      # target to the pinned toolchain too, or the build fails with
+      # "can't find crate for `core`".
+      - name: Add target to the pinned toolchain
+        run: rustup target add ${{ matrix.target }}
 
       - name: Cache cargo
         uses: actions/cache@v4
