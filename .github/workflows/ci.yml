@@ -11,6 +11,32 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  retracted-claims-tripwire:
+    name: Retracted-claims tripwire
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if retracted CauseBench figures reappear
+        run: |
+          # CauseBench was withdrawn and its numbers retracted (CHANGELOG,
+          # v2.2.x). This job fails if any retracted figure reappears outside
+          # the files that legitimately QUOTE it inside a retraction notice.
+          set -u
+          PATTERNS='root-cause recall@1|Vestige 60%|vector search 0%|on CauseBench'
+          ALLOW='^(CHANGELOG\.md|docs/launch/causal-brain-demo\.html|docs/launch/backward-trace-animation-storyboard\.md|\.github/workflows/ci\.yml)'
+          HITS=$(grep -rInE "$PATTERNS" \
+            --include='*.md' --include='*.html' --include='*.rs' \
+            --include='*.ts' --include='*.svelte' --include='*.js' \
+            --exclude-dir=node_modules --exclude-dir=target \
+            --exclude-dir=build . 2>/dev/null \
+            | sed 's|^\./||' | grep -vE "$ALLOW" || true)
+          if [ -n "$HITS" ]; then
+            echo "::error::Retracted CauseBench figures found — these numbers were withdrawn and must not be republished:"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "clean: no retracted figures outside retraction notices"
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

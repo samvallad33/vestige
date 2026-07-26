@@ -608,8 +608,9 @@ NO solid panels. Instruments float, glow faintly, and never block the canvas
 `causal-brain-demo.html` IS Moment C (salience-rescue / backward-trace) as a 2D canvas
 proof: brain point cloud (two lobes, center-dense), a failure flare on the deep right, a
 vector-search stall on confounders, then a BACKWARD arrow tracing to the dormant cause on
-the deep-left which **ignites**, then a verdict card ("Vestige 60% · vector search 0%"),
-then the VESTIGE wordmark. Beat clock: brain forms 0-1.5s, fail fades in ~0.3s, vector
+the deep-left which **ignites**, then a verdict card (scene-derived cause label + receipt
+line, as `RescueVerdict.svelte` ships it — never a benchmark figure: the old CauseBench
+"60% / 0%" stat is retracted, see CHANGELOG), then the VESTIGE wordmark. Beat clock: brain forms 0-1.5s, fail fades in ~0.3s, vector
 stalls 4-6.5s, backward trace fires 6.5-10.5s, verdict 10.5-13s, signature 13-15s, loop.
 The Observatory's `?demo=salience-rescue` must reproduce this exact narrative in real
 WebGPU with real memory nodes. Study its `spectral`, `seedBrain`, `glow`, and beat
