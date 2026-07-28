@@ -1,5 +1,7 @@
 # Vestige
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.samvallad33%2Fvestige.svg)](https://mcptoplist.com/server/io.github.samvallad33%2Fvestige)
+
 Local-first long-term memory for AI agents, delivered over MCP. Vestige remembers your decisions, catches contradictions before they cost you, and traces a failure back to the older memory that actually caused it. One 25MB Rust binary. No cloud. Your data never leaves your machine.
 
 [![Release](https://img.shields.io/github/v/release/samvallad33/vestige?color=06b6d4)](https://github.com/samvallad33/vestige/releases/latest)
