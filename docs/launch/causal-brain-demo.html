@@ -40,10 +40,17 @@
 <div id="stage"><canvas id="c"></canvas></div>
 <div class="layer">
   <div class="cap mono" id="cap"></div>
+  <!--
+    The CauseBench figures that used to sit here ("root-cause recall@1 /
+    Vestige 60% - vector search 0%") were RETRACTED; see CHANGELOG.md under
+    v2.2.x. Do not reinstate them anywhere. Replaced with Silent Rotation,
+    which is pre-registered and reproducible:
+    https://github.com/samvallad33/vestige/tree/benchmark/silent-rotation
+  -->
   <div class="verdict" id="verdict">
-    <div class="k">root-cause recall@1</div>
-    <div class="v">Vestige 60% &middot; vector search 0%</div>
-    <div class="s">on CauseBench &middot; reproducible</div>
+    <div class="k">converged on the wrong cause</div>
+    <div class="v">Vestige 0/23 &middot; no memory 21/25</div>
+    <div class="s">dense cosine 12/23 &middot; on Silent Rotation &middot; pre-registered</div>
   </div>
   <div class="wordmark" id="wordmark">VESTIGE</div>
 </div>

@@ -1,5 +1,17 @@
 # Backward-Trace Animation — Storyboard ("The X Rocket")
 
+> ⚠️ **The CauseBench numbers this storyboard was written around are RETRACTED.**
+> CauseBench was withdrawn and its published figures retracted (see `CHANGELOG.md`,
+> v2.2.x). **Do not publish `root-cause recall@1`, `Vestige 60%`, `vector search 0%`,
+> or any other CauseBench figure**, from this document or anywhere else.
+>
+> The animation *design* below is still good and is kept for that reason. Where a
+> stat is called for, use the pre-registered, reproducible
+> [Silent Rotation](https://github.com/samvallad33/vestige/tree/benchmark/silent-rotation)
+> result instead: **no memory 21/25 converged wrong, dense cosine 12/23, Vestige 0/23**.
+> The stat lines below have already been updated; the surrounding prose still
+> describes the incident *shape*, which remains accurate.
+
 **Purpose:** the single most shareable launch artifact. A ~15s looping clip,
 pinned to the top of the launch thread on X and used as the Show HN demo. It
 shows the ONE thing nothing else does: when a failure hits, Vestige's arrow
@@ -13,12 +25,18 @@ pitch.
 
 ---
 
-## The case shown (canonical CauseBench archetype)
+## The case shown (canonical root-cause archetype)
 
-Uses the exact incident SHAPE the benchmark is built on (see
-`benchmarks/causebench/data/real/*.meta.json`: a config/limit/cert/migration/flag
-change that shares an *entity* with a later failure but *none of its words*, with
-a more-recent confounder planted to defeat naive recency).
+Uses the incident SHAPE that makes causal recall hard: a
+config/limit/cert/migration/flag change that shares an *entity* with a later
+failure but *none of its words*, with a more-recent confounder planted to defeat
+naive recency.
+
+(This shape was originally drawn from the CauseBench fixtures. That benchmark and
+its numbers are retracted and `benchmarks/causebench/` no longer exists, but the
+incident shape itself is unchanged and is the same one
+[Silent Rotation](https://github.com/samvallad33/vestige/tree/benchmark/silent-rotation)
+exercises.)
 
 Timeline of stored memories (left = 3 weeks ago, right = today):
 
@@ -63,8 +81,10 @@ pool-size change to #1.
 
 **Beat 4 — 10.5s to 13.0s · THE VERDICT**
 - The promoted cause card shows a teal `#1` badge; the vector `#7` badge greys beside it for contrast.
-- Two-line stat, big: `root-cause recall@1` / `Vestige 60% · vector search 0%`
-- Small honest sub-label: `on CauseBench · reproducible`
+- Two-line stat, big: `converged on the wrong cause` / `Vestige 0/23 · no memory 21/25`
+- Small honest sub-label: `dense cosine 12/23 · on Silent Rotation · pre-registered`
+- Keep the big line at roughly 30 characters. `.v` renders up to 72px in
+  `causal-brain-demo.html`; longer strings overflow the card.
 
 **Beat 5 — 13.0s to 15.0s · SIGNATURE + LOOP RESET**
 - Wordmark `vestige` fades in bottom-left, tiny. Tagline: `memory that finds the cause, not the resemblance.`
@@ -84,9 +104,10 @@ pool-size change to #1.
   sans for captions. No narration — captions carry it, so it works muted in a
   feed (most X video autoplays silent).
 - **Honesty guardrails (non-negotiable, same as the chart):** the stat frame
-  must say `60%` with `on CauseBench` attached, and pair it with `vector search
-  0%`. Never imply an industry benchmark. Never show the FALSE cross-session
-  claim.
+  must name `Silent Rotation` and keep the competitor arms beside Vestige's
+  number, never Vestige's alone. Never imply an industry benchmark. Never show
+  the FALSE cross-session claim. Never reinstate any CauseBench figure: that
+  benchmark was withdrawn and its numbers retracted.
 - **Loop length:** 15s is the sweet spot for X autoplay + a clean GIF under
   ~8MB. If the GIF is too heavy, cut Beat 1 to 2s and land at 13s total.
 
@@ -100,7 +121,8 @@ pool-size change to #1.
 > But a root cause never looks like the bug it creates.
 >
 > So I built memory that reaches *backward in time* to the change that actually
-> caused it. 60% root-cause recall where vector search scores 0%. 🧵👇
+> caused it. In a pre-registered test, agents with no memory converged on the
+> wrong cause 21 times out of 25. With Vestige, 0 out of 23. 🧵👇
 >
 > [pinned: the 15s clip]
 
