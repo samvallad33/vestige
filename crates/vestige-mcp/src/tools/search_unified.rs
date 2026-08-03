@@ -2,7 +2,8 @@
 //!
 //! Merges recall, semantic_search, and hybrid_search into a single `search` tool.
 //! Always uses hybrid search internally (keyword + semantic + RRF fusion).
-//! Implements Testing Effect (Roediger & Karpicke 2006) by auto-strengthening memories on access.
+//! Records retrieval telemetry without reinforcing memories. Positive feedback
+//! through `memory(action="promote")` is the explicit strengthening signal.
 //!
 //! v1.5.0: Enhanced 7-stage cognitive pipeline:
 //!   1. Reranker (over-fetch 3x, rerank down)
@@ -190,7 +191,7 @@ struct SearchArgs {
 ///   6. Spreading activation (find associated memories)
 ///   7. Side effects: predictive memory recording + reconsolidation labile marking
 ///
-/// Also applies Testing Effect (Roediger & Karpicke 2006) by auto-strengthening on access.
+/// Retrieval is audit-only; callers explicitly promote memories that proved useful.
 pub async fn execute(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
@@ -267,9 +268,8 @@ pub async fn execute(
             )
             .map_err(|e| e.to_string())?;
 
-        // Apply tag_prefix post-filter BEFORE strengthen-on-access so
-        // results the caller did not actually receive do not get a
-        // testing-effect boost.
+        // Apply post-filters before formatting the response. Retrieval
+        // telemetry is recorded later, after the final budget selection.
         let filtered_results: Vec<&vestige_core::SearchResult> = results
             .iter()
             .filter(|r| match args.tag_prefix.as_deref() {
@@ -279,12 +279,6 @@ pub async fn execute(
             .filter(|r| node_matches_source(&r.node, &source_filter))
             .take(limit as usize)
             .collect();
-
-        let ids: Vec<&str> = filtered_results
-            .iter()
-            .map(|r| r.node.id.as_str())
-            .collect();
-        let _ = storage.strengthen_batch_on_access(&ids);
 
         let mut formatted: Vec<Value> = filtered_results
             .iter()
@@ -316,6 +310,14 @@ pub async fn execute(
             budget_tokens_used = Some(used / 4);
             formatted = budgeted;
         }
+
+        // Audit only memories that are actually present in the response, not
+        // candidates removed by retention or token-budget filtering.
+        let shown_ids: Vec<&str> = formatted
+            .iter()
+            .filter_map(|result| result.get("id").and_then(|id| id.as_str()))
+            .collect();
+        let _ = storage.record_batch_retrieval(&shown_ids);
 
         let mut response = serde_json::json!({
             "query": args.query,
@@ -736,15 +738,6 @@ pub async fn execute(
         vec![]
     };
 
-    // ====================================================================
-    // Auto-strengthen on access (Testing Effect)
-    // ====================================================================
-    let ids: Vec<&str> = filtered_results
-        .iter()
-        .map(|r| r.node.id.as_str())
-        .collect();
-    let _ = storage.strengthen_batch_on_access(&ids);
-
     // Drop storage lock before acquiring cognitive for side effects
 
     // ====================================================================
@@ -828,6 +821,14 @@ pub async fn execute(
         budget_tokens_used = Some(used / 4);
         formatted = budgeted;
     }
+
+    // Audit only memories that are actually present in the response, not
+    // internal candidates removed by a token budget.
+    let shown_ids: Vec<&str> = formatted
+        .iter()
+        .filter_map(|result| result.get("id").and_then(|id| id.as_str()))
+        .collect();
+    let _ = storage.record_batch_retrieval(&shown_ids);
 
     // Check learning mode via attention signal
     let learning_mode = cognitive

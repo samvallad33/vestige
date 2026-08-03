@@ -40,9 +40,9 @@ retrieval. Written in Rust, 100% local, single 22MB binary.
   accessible right now, decays over time). A memory can be well-stored but hard
   to retrieve, like a name on the tip of your tongue.
 
-- **Testing Effect** — every search automatically strengthens matching memories.
-  Using memory makes it stronger. This is one of the most robust findings in
-  cognitive psychology (Roediger & Karpicke, 2006).
+- **Testing Effect** — retrieval is audit-only; explicit positive feedback
+  strengthens memories that proved useful. This applies a robust cognitive
+  finding (Roediger & Karpicke, 2006) without pinning stale results.
 
 - **Synaptic Tagging** (Frey & Morris, 1997) — when something important happens,
   it retroactively strengthens memories from the surrounding time window (default:
@@ -112,7 +112,8 @@ critical context from yesterday, both equally retrievable. Over time your
 retrieval quality degrades because the signal-to-noise ratio gets worse.
 
 Vestige uses FSRS-6 (the same algorithm as Anki's best spaced repetition mode)
-to model forgetting curves. Memories you use get stronger (Testing Effect).
+to model forgetting curves. Memories explicitly confirmed useful get stronger
+(Testing Effect).
 Memories you ignore fade (power-law decay). Important events retroactively
 strengthen nearby memories (Synaptic Tagging).
 
@@ -184,7 +185,7 @@ decay predicts memories fall off a cliff, while power-law decay predicts a long
 tail where old memories can still be retrieved.
 
 For an AI memory system, this means old but important memories don't vanish.
-They fade slowly and can be revived by accessing them (the Testing Effect).
+They fade slowly and can be revived with explicit positive feedback (the Testing Effect).
 ```
 
 ### Q: "Does this work with models other than Claude?"
@@ -457,8 +458,8 @@ algorithms:
 - **Prediction Error Gating**: On ingest, compares new content against existing
   memories. Creates/merges/reinforces based on novelty. Prevents bloat.
 
-- **Testing Effect**: Searching for a memory automatically strengthens it.
-  Memory improves through use.
+- **Testing Effect**: Explicit positive feedback strengthens a memory after it
+  proves useful. Retrieval alone never pins stale information.
 
 - **Dual-strength model**: Storage strength (how well-encoded, never decreases)
   vs. retrieval strength (how accessible now, decays over time). Mimics the

@@ -79,7 +79,7 @@ Accessibility is calculated as:
 accessibility = 0.5 × retention + 0.3 × retrieval_strength + 0.2 × storage_strength
 ```
 
-Memories are never deleted automatically. They fade from relevance but can be revived if accessed again.
+Memories are never deleted automatically. They fade from relevance but can be revived through explicit positive feedback after they prove useful.
 
 ---
 
@@ -90,7 +90,7 @@ Based on **Bjork & Bjork's New Theory of Disuse (1992)**, every memory has two s
 | Strength | What It Means | How It Changes |
 |----------|---------------|----------------|
 | **Storage Strength** | How well-encoded the memory is | Only increases, never decreases |
-| **Retrieval Strength** | How accessible the memory is now | Decays over time, restored by access |
+| **Retrieval Strength** | How accessible the memory is now | Decays over time, restored by explicit positive feedback |
 
 **Why it matters**: A memory can be well-stored but hard to retrieve (like a name on the tip of your tongue).
 
@@ -100,12 +100,9 @@ Based on **Bjork & Bjork's New Theory of Disuse (1992)**, every memory has two s
 
 The **Testing Effect** (Roediger & Karpicke, 2006) is the finding that retrieving information strengthens memory more than re-studying it.
 
-In Vestige: **Every search automatically strengthens matching memories.** When Claude recalls something:
-- Storage strength increases slightly
-- Retrieval strength increases
-- The memory becomes easier to find next time
+In Vestige, retrieval is deliberately **audit-only**: a result being shown is not proof that it was correct or useful. After a recalled memory proves valuable, an explicit `memory(action="promote")` signal strengthens it and records that usefulness.
 
-This is why the unified `search` tool is so powerful—using memories makes them stronger.
+This preserves the Testing Effect without letting stale-but-relevant results become self-reinforcing.
 
 ---
 

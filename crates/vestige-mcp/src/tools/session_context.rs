@@ -131,6 +131,7 @@ pub async fn execute(
     // 1. Search queries — extract first sentence per result, dedup by ID
     // ====================================================================
     let mut seen_ids = HashSet::new();
+    let mut shown_ids = Vec::new();
     let mut memory_lines: Vec<String> = Vec::new();
 
     for query in &queries {
@@ -155,15 +156,17 @@ pub async fn execute(
                 expandable_ids.push(r.node.id.clone());
             } else {
                 memory_lines.push(line);
+                shown_ids.push(r.node.id.clone());
                 char_count += line_len;
             }
             seen_ids.insert(r.node.id.clone());
         }
     }
 
-    // Auto-strengthen accessed memories (Testing Effect)
-    let accessed_ids: Vec<&str> = seen_ids.iter().map(|s| s.as_str()).collect();
-    let _ = storage.strengthen_batch_on_access(&accessed_ids);
+    // Context inclusion is telemetry, not positive feedback. Skip candidates
+    // omitted by the session token budget.
+    let accessed_ids: Vec<&str> = shown_ids.iter().map(|s| s.as_str()).collect();
+    let _ = storage.record_batch_retrieval(&accessed_ids);
 
     if !memory_lines.is_empty() {
         context_parts.push(format!("**Memories:**\n{}", memory_lines.join("\n")));

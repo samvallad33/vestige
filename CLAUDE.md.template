@@ -26,7 +26,7 @@ Before answering any non-trivial question:
 
 **Use `detail_level: "brief"` for broad searches** (saves tokens). Only fetch full content for the 2-3 most relevant results.
 
-Every search strengthens memory (Testing Effect). Search liberally.
+Search is audit-only. After a recalled memory proves correct and useful, promote it explicitly to reinforce it.
 
 ---
 
@@ -267,8 +267,8 @@ Tags: ["study", "subject", "topic"]
 ### Spaced Repetition
 Vestige's FSRS-6 handles this automatically:
 - Memories decay naturally over time
-- Searching a memory strengthens it (Testing Effect)
-- Regularly search for study topics to maintain retention
+- Explicit positive feedback strengthens a memory (Testing Effect)
+- Review topics, then promote the memories that proved useful
 - Run `consolidate` weekly to update retention scores
 
 ### Progress Tracking
@@ -349,4 +349,4 @@ Examples: favorite restaurants, music taste, travel preferences, dietary restric
 2. **Smart ingest over raw ingest** — `smart_ingest` deduplicates automatically
 3. **Save outcomes, not transcripts** — "We decided X" beats a 500-word discussion summary
 4. **Small and frequent beats large and rare** — save throughout the conversation, not just at the end
-5. **Your memory fades like a human's** — use it or lose it. Search strengthens recall.
+5. **Your memory fades like a human's** — use it or lose it. Explicit positive feedback reinforces memories that proved useful.

@@ -71,7 +71,7 @@ Context windows are now 1M tokens (Claude Opus 4.6, GPT-5.4). But bigger context
 
 Memory systems need to be SMARTER, not just bigger. That's what Vestige does — 29 cognitive modules implementing real neuroscience:
 
-- **FSRS-6** — memories naturally decay when unused, strengthen when accessed (21 parameters trained on 700M+ reviews)
+- **FSRS-6** — memories naturally decay when unused, strengthen after explicit positive feedback (21 parameters trained on 700M+ reviews)
 - **Prediction Error Gating** — only stores what's genuinely new (no duplicates)
 - **Dream consolidation** — replays memories to discover hidden connections (yes, like sleep)
 - **Spreading activation** — search for "auth bug" and find the related JWT update from last week

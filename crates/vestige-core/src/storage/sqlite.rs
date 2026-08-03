@@ -1636,10 +1636,12 @@ impl SqliteMemoryStore {
             _ => self.keyword_search(&input.query, input.limit, input.min_retention)?,
         };
 
-        // Auto-strengthen memories on access (Testing Effect - Roediger & Karpicke 2006)
-        // This implements "use it or lose it" - accessed memories get stronger
+        // Retrieval is evidence that a memory was shown, not evidence that it
+        // was correct or useful. Preserve the telemetry without changing its
+        // ranking or FSRS state; callers must send explicit positive feedback
+        // to reinforce a memory.
         let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
-        let _ = self.strengthen_batch_on_access(&ids); // Ignore errors, don't fail recall
+        let _ = self.record_batch_retrieval(&ids); // Ignore errors, don't fail recall
 
         Ok(nodes)
     }
@@ -1769,8 +1771,12 @@ impl SqliteMemoryStore {
             .ok_or_else(|| StorageError::NotFound(id.to_string()))
     }
 
-    /// Passively strengthen a memory when it's accessed (recalled/searched).
-    /// Implements the Testing Effect (Roediger & Karpicke 2006) + v1.4.0
+    /// Reinforce a memory after an intentional confirmation of relevance.
+    ///
+    /// Ordinary retrieval must use [`Self::record_batch_retrieval`] instead:
+    /// being shown in search is not evidence that a memory was correct or
+    /// useful. This helper remains for explicit duplicate/reinforcement flows.
+    /// It implements the Testing Effect (Roediger & Karpicke 2006) + v1.4.0
     /// content-aware cross-memory reinforcement: semantically similar neighbors
     /// receive a diminished boost proportional to cosine similarity.
     pub fn strengthen_on_access(&self, id: &str) -> Result<()> {
@@ -1798,8 +1804,8 @@ impl SqliteMemoryStore {
             )?;
         }
 
-        // Log access for ACT-R activation computation
-        let _ = self.log_access(id, "search_hit");
+        // This is a deliberate reinforcement, not a passive search hit.
+        let _ = self.log_access(id, "reinforce");
 
         // Content-aware cross-memory reinforcement: boost semantically similar neighbors
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -1842,13 +1848,27 @@ impl SqliteMemoryStore {
         Ok(())
     }
 
-    /// Batch strengthen multiple memories on access
+    /// Batch-strengthen memories after an intentional confirmation of relevance.
     pub fn strengthen_batch_on_access(&self, ids: &[&str]) -> Result<()> {
         for id in ids {
             self.strengthen_on_access(id)?;
             // Also record access in memory_states for audit trail (Bug #1 fix)
             let _ = self.record_memory_access(id);
         }
+        Ok(())
+    }
+
+    /// Record that a memory was returned to a caller without reinforcing it.
+    ///
+    /// A search hit is not proof of correctness or usefulness. We retain only
+    /// access-log evidence for auditability, leaving node state and every
+    /// learning/ranking signal untouched. Call [`Self::promote_memory`] or
+    /// [`Self::mark_memory_useful`] only after an explicit positive signal.
+    pub fn record_batch_retrieval(&self, ids: &[&str]) -> Result<()> {
+        for id in ids {
+            self.log_access(id, "retrieval_shown")?;
+        }
+
         Ok(())
     }
 
@@ -1875,7 +1895,7 @@ impl SqliteMemoryStore {
         Ok(())
     }
 
-    /// Log a memory access event for ACT-R activation computation
+    /// Log a memory interaction for audit and explicit-feedback learning.
     fn log_access(&self, node_id: &str, access_type: &str) -> Result<()> {
         let writer = self
             .writer
@@ -1895,7 +1915,8 @@ impl SqliteMemoryStore {
     pub fn promote_memory(&self, id: &str) -> Result<KnowledgeNode> {
         let now = Utc::now();
 
-        // Strong boost: +0.2 retrieval, +0.1 retention
+        // Explicit positive feedback: boost strength and record that this
+        // memory proved useful to the caller.
         {
             let writer = self
                 .writer
@@ -1906,7 +1927,13 @@ impl SqliteMemoryStore {
                     last_accessed = ?1,
                     retrieval_strength = MIN(1.0, retrieval_strength + 0.20),
                     retention_strength = MIN(1.0, retention_strength + 0.10),
-                    stability = stability * 1.5
+                    stability = stability * 1.5,
+                    times_useful = COALESCE(times_useful, 0) + 1,
+                    utility_score = CASE
+                        WHEN COALESCE(times_retrieved, 0) > 0
+                        THEN MIN(1.0, CAST(COALESCE(times_useful, 0) + 1 AS REAL) / COALESCE(times_retrieved, 0))
+                        ELSE 1.0
+                    END
                 WHERE id = ?2",
                 params![now.to_rfc3339(), id],
             )?;
@@ -3874,6 +3901,11 @@ impl SqliteMemoryStore {
     pub fn run_consolidation(&self) -> Result<ConsolidationResult> {
         let start = std::time::Instant::now();
 
+        // Before decay, remove residual recency supplied only by the legacy
+        // passive-search behavior. Otherwise a memory last shown just before
+        // the upgrade would incorrectly avoid its first post-upgrade decay.
+        let _ = self.repair_legacy_passive_retrieval_state();
+
         // v1.5.0: Use SleepConsolidation for structured consolidation
         let sleep = crate::SleepConsolidation::new();
 
@@ -4478,11 +4510,61 @@ impl SqliteMemoryStore {
         Ok(merged_count)
     }
 
+    /// Restore the last meaningful interaction for memories whose most recent
+    /// `last_accessed` value came from the old passive-search behavior.
+    ///
+    /// Pre-2.3.0 `search_hit` rows updated `last_accessed`, which also fed the
+    /// recency ranker and FSRS decay. `retrieval_shown` is intentionally not
+    /// included: the new event never writes node state. A passive event is
+    /// logged immediately after the old update, so we repair only nodes whose
+    /// timestamp is no later than their latest legacy hit. An unlogged FSRS
+    /// review updates `updated_at`, making it a safe fallback before
+    /// `created_at` when no explicit interaction is recorded.
+    fn repair_legacy_passive_retrieval_state(&self) -> Result<i64> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let repaired = writer.execute(
+            "UPDATE knowledge_nodes AS node
+             SET last_accessed = MAX(
+                 COALESCE(
+                     (
+                         SELECT MAX(explicit.accessed_at)
+                         FROM memory_access_log AS explicit
+                         WHERE explicit.node_id = node.id
+                           AND explicit.access_type NOT IN ('search_hit', 'retrieval_shown')
+                     ),
+                     node.created_at
+                 ),
+                 node.updated_at
+             )
+             WHERE EXISTS (
+                 SELECT 1
+                 FROM memory_access_log AS passive
+                 WHERE passive.node_id = node.id
+                   AND passive.access_type = 'search_hit'
+             )
+               AND node.last_accessed <= (
+                 SELECT MAX(passive.accessed_at)
+                 FROM memory_access_log AS passive
+                 WHERE passive.node_id = node.id
+                   AND passive.access_type = 'search_hit'
+             )",
+            [],
+        )?;
+        Ok(repaired as i64)
+    }
+
     /// Compute ACT-R base-level activation for all nodes from access history.
     /// B_i = ln(Σ t_j^(-d)) where t_j = days since j-th access, d = 0.5
     fn compute_act_r_activations(&self) -> Result<i64> {
         const ACT_R_DECAY: f64 = 0.5;
         let now = Utc::now();
+
+        // This also protects direct callers that compute ACT-R without using
+        // the full consolidation cycle.
+        self.repair_legacy_passive_retrieval_state()?;
 
         let node_ids: Vec<String> = {
             let reader = self
@@ -4490,15 +4572,14 @@ impl SqliteMemoryStore {
                 .lock()
                 .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
             reader
-                .prepare("SELECT DISTINCT node_id FROM memory_access_log")?
+                .prepare(
+                    "SELECT DISTINCT node_id FROM memory_access_log
+                     WHERE access_type NOT IN ('search_hit', 'retrieval_shown')",
+                )?
                 .query_map([], |row| row.get(0))?
                 .filter_map(|r| r.ok())
                 .collect()
         };
-
-        if node_ids.is_empty() {
-            return Ok(0);
-        }
 
         let mut count = 0i64;
         let mut writer = self
@@ -4507,11 +4588,28 @@ impl SqliteMemoryStore {
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
         let tx = writer.transaction()?;
 
+        // Discard residual activation from legacy search-hit rows as well as
+        // new retrieval-only telemetry. Otherwise historical passive reads
+        // would keep influencing rank after the behavior changes.
+        tx.execute(
+            "UPDATE knowledge_nodes SET activation = 0.0
+             WHERE id NOT IN (
+                SELECT DISTINCT node_id FROM memory_access_log
+                WHERE access_type NOT IN ('search_hit', 'retrieval_shown')
+             )",
+            [],
+        )?;
+
+        if node_ids.is_empty() {
+            tx.commit()?;
+            return Ok(0);
+        }
+
         for node_id in &node_ids {
             let timestamps: Vec<String> = tx
                 .prepare(
                     "SELECT accessed_at FROM memory_access_log
-                     WHERE node_id = ?1
+                     WHERE node_id = ?1 AND access_type NOT IN ('search_hit', 'retrieval_shown')
                      ORDER BY accessed_at DESC
                      LIMIT 500",
                 )?
@@ -4571,9 +4669,12 @@ impl SqliteMemoryStore {
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
 
         let access_count: i64 = reader
-            .query_row("SELECT COUNT(*) FROM memory_access_log", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM memory_access_log
+                 WHERE access_type NOT IN ('search_hit', 'retrieval_shown')",
+                [],
+                |row| row.get(0),
+            )
             .unwrap_or(0);
 
         if access_count < 100 {
@@ -4586,6 +4687,7 @@ impl SqliteMemoryStore {
             .prepare(
                 "SELECT mal.node_id, mal.access_type, mal.accessed_at
                  FROM memory_access_log mal
+                 WHERE mal.access_type NOT IN ('search_hit', 'retrieval_shown')
                  ORDER BY mal.accessed_at ASC
                  LIMIT 1000",
             )?
@@ -7965,12 +8067,13 @@ impl SqliteMemoryStore {
         Ok(deleted)
     }
 
-    /// Check for auto-promote candidates: memories accessed 3+ times in last 24h
+    /// Check for auto-promote candidates: memories explicitly promoted 3+ times in 24h.
     pub fn auto_promote_frequent_access(&self) -> Result<i64> {
         let twenty_four_hours_ago = (Utc::now() - Duration::hours(24)).to_rfc3339();
         let now = Utc::now().to_rfc3339();
 
-        // Find memories with 3+ accesses in last 24h
+        // A search hit is not evidence of correctness. Only repeated explicit
+        // positive feedback is eligible for this optional extra boost.
         let candidates: Vec<String> = {
             let reader = self
                 .reader
@@ -7979,7 +8082,7 @@ impl SqliteMemoryStore {
             let mut stmt = reader.prepare(
                 "SELECT node_id, COUNT(*) as access_count
                  FROM memory_access_log
-                 WHERE accessed_at >= ?1
+                 WHERE accessed_at >= ?1 AND access_type = 'promote'
                  GROUP BY node_id
                  HAVING access_count >= 3",
             )?;
@@ -11296,6 +11399,241 @@ mod tests {
         let results = storage.search("mitochondria", 10).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].content.contains("mitochondria"));
+    }
+
+    #[test]
+    fn passive_recall_records_telemetry_without_reinforcing() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "current version is 2.0.12 as of 2026-03-04".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let before = storage.get_node(&node.id).unwrap().unwrap();
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET activation = 0.73 WHERE id = ?1",
+                    params![&node.id],
+                )
+                .unwrap();
+        }
+
+        for _ in 0..3 {
+            let recalled = storage
+                .recall(RecallInput {
+                    query: "current version".to_string(),
+                    limit: 10,
+                    min_retention: 0.0,
+                    search_mode: SearchMode::Keyword,
+                    valid_at: None,
+                })
+                .unwrap();
+            assert_eq!(recalled.len(), 1);
+        }
+
+        let after = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(after.retrieval_strength, before.retrieval_strength);
+        assert_eq!(after.retention_strength, before.retention_strength);
+        assert_eq!(after.stability, before.stability);
+        assert_eq!(after.last_accessed, before.last_accessed);
+        assert_eq!(after.reps, before.reps);
+        assert_eq!(after.next_review, before.next_review);
+        assert_eq!(after.times_retrieved, before.times_retrieved);
+        assert_eq!(after.times_useful, before.times_useful);
+        assert_eq!(after.utility_score, before.utility_score);
+        assert_eq!(storage.auto_promote_frequent_access().unwrap(), 0);
+        storage.compute_act_r_activations().unwrap();
+
+        let reader = storage.reader.lock().unwrap();
+        let retrievals_shown: i64 = reader
+            .query_row(
+                "SELECT COUNT(*) FROM memory_access_log WHERE node_id = ?1 AND access_type = 'retrieval_shown'",
+                params![&node.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retrievals_shown, 3);
+        let activation: f64 = reader
+            .query_row(
+                "SELECT activation FROM knowledge_nodes WHERE id = ?1",
+                params![&node.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(activation, 0.0);
+    }
+
+    #[test]
+    fn explicit_promotion_marks_a_retrieved_memory_useful() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "A memory that needs explicit positive feedback".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        storage.demote_memory(&node.id).unwrap();
+        let before = storage.get_node(&node.id).unwrap().unwrap();
+
+        storage.record_batch_retrieval(&[&node.id]).unwrap();
+        let promoted = storage.promote_memory(&node.id).unwrap();
+
+        assert!(promoted.retrieval_strength > before.retrieval_strength);
+        assert!(promoted.retention_strength > before.retention_strength);
+        assert_eq!(promoted.times_retrieved.unwrap_or_default(), 0);
+        assert_eq!(promoted.times_useful.unwrap_or_default(), 1);
+        assert_eq!(promoted.utility_score.unwrap_or_default(), 1.0);
+    }
+
+    #[test]
+    fn legacy_search_hits_cannot_reinforce_or_reactivate_a_memory() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "legacy dated current version claim".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes
+                     SET retrieval_strength = 0.50, retention_strength = 0.40, activation = 0.73
+                     WHERE id = ?1",
+                    params![&node.id],
+                )
+                .unwrap();
+            for _ in 0..3 {
+                writer
+                    .execute(
+                        "INSERT INTO memory_access_log (node_id, access_type, accessed_at)
+                         VALUES (?1, 'search_hit', ?2)",
+                        params![&node.id, Utc::now().to_rfc3339()],
+                    )
+                    .unwrap();
+            }
+        }
+        let before = storage.get_node(&node.id).unwrap().unwrap();
+
+        assert_eq!(storage.auto_promote_frequent_access().unwrap(), 0);
+        storage.compute_act_r_activations().unwrap();
+
+        let after = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(after.retrieval_strength, before.retrieval_strength);
+        assert_eq!(after.retention_strength, before.retention_strength);
+        assert_eq!(after.last_accessed, before.last_accessed);
+
+        let reader = storage.reader.lock().unwrap();
+        let activation: f64 = reader
+            .query_row(
+                "SELECT activation FROM knowledge_nodes WHERE id = ?1",
+                params![&node.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(activation, 0.0);
+    }
+
+    #[test]
+    fn legacy_search_hits_cannot_preserve_recency_or_delay_decay() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "a legacy passive search must not preserve freshness".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let created_at = Utc::now() - Duration::days(30);
+        let passive_at = Utc::now();
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET
+                        created_at = ?1,
+                        updated_at = ?1,
+                        last_accessed = ?2,
+                        retrieval_strength = 1.0,
+                        retention_strength = 1.0
+                     WHERE id = ?3",
+                    params![
+                        created_at.to_rfc3339(),
+                        passive_at.to_rfc3339(),
+                        &node.id
+                    ],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_access_log (node_id, access_type, accessed_at)
+                     VALUES (?1, 'search_hit', ?2)",
+                    params![&node.id, passive_at.to_rfc3339()],
+                )
+                .unwrap();
+        }
+
+        storage.compute_act_r_activations().unwrap();
+        let repaired = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(repaired.last_accessed, created_at);
+
+        storage.apply_decay().unwrap();
+        let decayed = storage.get_node(&node.id).unwrap().unwrap();
+        assert!(decayed.retrieval_strength < 1.0);
+        assert!(decayed.retention_strength < 1.0);
+    }
+
+    #[test]
+    fn legacy_recency_repair_preserves_reviewed_memories() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "a reviewed memory must not be reset by passive logs".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        storage.promote_memory(&node.id).unwrap();
+        let reviewed = storage.mark_reviewed(&node.id, Rating::Good).unwrap();
+
+        // New telemetry never changed state, so it must never trigger a
+        // legacy-state repair.
+        storage.record_batch_retrieval(&[&node.id]).unwrap();
+        storage.compute_act_r_activations().unwrap();
+        let after_new_telemetry = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(after_new_telemetry.last_accessed, reviewed.last_accessed);
+
+        // If an old search-hit row was recorded after a review, restore the
+        // review timestamp from updated_at rather than falling back to create.
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET last_accessed = ?1 WHERE id = ?2",
+                    params![Utc::now().to_rfc3339(), &node.id],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_access_log (node_id, access_type, accessed_at)
+                     VALUES (?1, 'search_hit', ?2)",
+                    params![&node.id, Utc::now().to_rfc3339()],
+                )
+                .unwrap();
+        }
+        storage.compute_act_r_activations().unwrap();
+        let restored = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(restored.last_accessed, reviewed.last_accessed);
     }
 
     #[test]

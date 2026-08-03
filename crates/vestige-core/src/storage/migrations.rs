@@ -479,7 +479,7 @@ const MIGRATION_V5_UP: &str = r#"
 -- ACCESS HISTORY (For ACT-R Activation + Parameter Training)
 -- ============================================================================
 
--- Logs every search hit, promote, demote for ACT-R activation computation
+-- Logs retrieval telemetry plus explicit feedback for audit and learning.
 CREATE TABLE IF NOT EXISTS memory_access_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     node_id TEXT NOT NULL,
@@ -1819,4 +1819,3 @@ mod tests {
         assert_eq!(domain_scores, "{}");
     }
 }
-

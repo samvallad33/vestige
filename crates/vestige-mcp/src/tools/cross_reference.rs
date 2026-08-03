@@ -901,7 +901,11 @@ pub async fn execute(
         format!(
             "CAUTION: your claim conflicts with {} stored memor{}. Do NOT treat this as resolved — review the conflicting memory(ies) below before acting.",
             claim_conflicts.len(),
-            if claim_conflicts.len() == 1 { "y" } else { "ies" }
+            if claim_conflicts.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            }
         )
     } else if let Some(rec) = recommended {
         if contradictions.is_empty() {
@@ -922,9 +926,9 @@ pub async fn execute(
         "No strong evidence found. Verify with external sources.".to_string()
     };
 
-    // Auto-strengthen accessed memories (Testing Effect)
+    // Evidence shown to a caller is not automatically evidence of usefulness.
     let ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
-    let _ = storage.strengthen_batch_on_access(&ids);
+    let _ = storage.record_batch_retrieval(&ids);
 
     // Generate reasoning chain (the key differentiator — no LLM needed)
     let reasoning_chain = if let Some(rec) = recommended {
