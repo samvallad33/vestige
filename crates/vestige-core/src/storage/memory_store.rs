@@ -43,6 +43,9 @@ pub enum MemoryStoreError {
 
     #[error("initialization error: {0}")]
     Init(String),
+
+    #[error("probable credential rejected: {0}")]
+    SecretDetected(String),
 }
 
 impl From<crate::storage::StorageError> for MemoryStoreError {
@@ -54,6 +57,7 @@ impl From<crate::storage::StorageError> for MemoryStoreError {
             S::Io(e) => MemoryStoreError::Backend(e.to_string()),
             S::InvalidTimestamp(s) => MemoryStoreError::Backend(format!("invalid timestamp: {s}")),
             S::Init(s) => MemoryStoreError::Init(s),
+            S::SecretDetected { kinds } => MemoryStoreError::SecretDetected(kinds.join(", ")),
         }
     }
 }

@@ -22,7 +22,8 @@ use tokio::sync::Mutex;
 
 use crate::cognitive::CognitiveEngine;
 use vestige_core::{
-    ContentType, ImportanceContext, ImportanceEvent, ImportanceEventType, IngestInput, Storage,
+    ContentType, ImportanceContext, ImportanceEvent, ImportanceEventType, IngestInput,
+    SecretPolicy, Storage, StorageError, scan_secrets,
 };
 
 /// Input schema for smart_ingest tool
@@ -55,6 +56,11 @@ pub fn schema() -> Value {
             "forceCreate": {
                 "type": "boolean",
                 "description": "Force creation of a new memory even if similar content exists",
+                "default": false
+            },
+            "allowSecrets": {
+                "type": "boolean",
+                "description": "Allow a detected credential to be stored for this single item. Dangerous: normally redact the value or store a secret-manager reference instead.",
                 "default": false
             },
             "batchMergePolicy": {
@@ -92,6 +98,11 @@ pub fn schema() -> Value {
                             "type": "boolean",
                             "description": "Force creation of this item even if similar content exists",
                             "default": false
+                        },
+                        "allowSecrets": {
+                            "type": "boolean",
+                            "description": "Allow a detected credential for this item only. Defaults to false; do not use for ordinary session summaries.",
+                            "default": false
                         }
                     },
                     "required": ["content"]
@@ -110,6 +121,7 @@ struct SmartIngestArgs {
     tags: Option<Vec<String>>,
     source: Option<String>,
     force_create: Option<bool>,
+    allow_secrets: Option<bool>,
     batch_merge_policy: Option<String>,
     items: Option<Vec<BatchItem>>,
 }
@@ -124,6 +136,7 @@ struct BatchItem {
     node_type: Option<String>,
     source: Option<String>,
     force_create: Option<bool>,
+    allow_secrets: Option<bool>,
 }
 
 pub async fn execute(
@@ -166,6 +179,12 @@ pub async fn execute(
     let content = args.content.ok_or(
         "Missing 'content' field. Provide 'content' for single mode or 'items' for batch mode.",
     )?;
+    let secret_policy = if args.allow_secrets.unwrap_or(false) {
+        SecretPolicy::AllowExplicitly
+    } else {
+        SecretPolicy::Reject
+    };
+    let input_has_secret_finding = !scan_secrets(&content).is_empty();
 
     // Validate content
     if content.trim().is_empty() {
@@ -226,7 +245,9 @@ pub async fn execute(
 
     // Check if force_create is enabled
     if args.force_create.unwrap_or(false) {
-        let node = storage.ingest(input).map_err(|e| e.to_string())?;
+        let node = storage
+            .ingest_with_secret_policy(input, secret_policy)
+            .map_err(|e| e.to_string())?;
         let node_id = node.id.clone();
         let node_content = node.content.clone();
         let node_type = node.node_type.clone();
@@ -256,11 +277,23 @@ pub async fn execute(
     // Use smart ingest with prediction error gating
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     {
-        let result = storage.smart_ingest(input).map_err(|e| e.to_string())?;
+        let result = storage
+            .smart_ingest_with_secret_policy(input, secret_policy)
+            .map_err(|e| e.to_string())?;
         let node_id = result.node.id.clone();
         let node_content = result.node.content.clone();
         let node_type = result.node.node_type.clone();
         let has_embedding = result.node.has_embedding.unwrap_or(false);
+        let previous_content = if input_has_secret_finding {
+            Some("[redacted: credential-bearing ingest]".to_string())
+        } else {
+            result.previous_content.clone()
+        };
+        let merge_preview = if input_has_secret_finding {
+            Some("[redacted: credential-bearing ingest]".to_string())
+        } else {
+            result.merge_preview.clone()
+        };
 
         // Post-ingest cognitive side effects
         run_post_ingest(
@@ -280,9 +313,9 @@ pub async fn execute(
             "similarity": result.similarity,
             "predictionError": result.prediction_error,
             "supersededId": result.superseded_id,
-            "previousContent": result.previous_content,
+            "previousContent": previous_content,
             "mergedFrom": result.merged_from,
-            "mergePreview": result.merge_preview,
+            "mergePreview": merge_preview,
             "importanceScore": importance_composite,
             "reason": result.reason,
             "explanation": match result.decision.as_str() {
@@ -300,7 +333,9 @@ pub async fn execute(
 
     #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
     {
-        let node = storage.ingest(input).map_err(|e| e.to_string())?;
+        let node = storage
+            .ingest_with_secret_policy(input, secret_policy)
+            .map_err(|e| e.to_string())?;
         let node_id = node.id.clone();
         let node_content = node.content.clone();
         let node_type = node.node_type.clone();
@@ -380,6 +415,12 @@ async fn execute_batch(
 
         // Extract per-item force_create before consuming other fields
         let item_force_create = item.force_create.unwrap_or(false);
+        let secret_policy = if item.allow_secrets.unwrap_or(false) {
+            SecretPolicy::AllowExplicitly
+        } else {
+            SecretPolicy::Reject
+        };
+        let input_has_secret_finding = !scan_secrets(&item.content).is_empty();
 
         // ================================================================
         // COGNITIVE PRE-INGEST (per item)
@@ -427,7 +468,7 @@ async fn execute_batch(
         // Check force_create: global flag OR per-item flag
         let item_force = global_force_create || item_force_create;
         if item_force {
-            match storage.ingest(input) {
+            match storage.ingest_with_secret_policy(input, secret_policy) {
                 Ok(node) => {
                     let node_id = node.id.clone();
                     let node_content = node.content.clone();
@@ -456,7 +497,7 @@ async fn execute_batch(
                     errors += 1;
                     results.push(serde_json::json!({
                         "index": i,
-                        "status": "error",
+                        "status": if matches!(&e, StorageError::SecretDetected { .. }) { "rejected" } else { "error" },
                         "reason": e.to_string()
                     }));
                 }
@@ -466,11 +507,25 @@ async fn execute_batch(
 
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         {
-            match storage.smart_ingest_excluding(input, &batch_created_node_ids) {
+            match storage.smart_ingest_excluding_with_secret_policy(
+                input,
+                &batch_created_node_ids,
+                secret_policy,
+            ) {
                 Ok(result) => {
                     let node_id = result.node.id.clone();
                     let node_content = result.node.content.clone();
                     let node_type = result.node.node_type.clone();
+                    let previous_content = if input_has_secret_finding {
+                        Some("[redacted: credential-bearing ingest]".to_string())
+                    } else {
+                        result.previous_content.clone()
+                    };
+                    let merge_preview = if input_has_secret_finding {
+                        Some("[redacted: credential-bearing ingest]".to_string())
+                    } else {
+                        result.merge_preview.clone()
+                    };
 
                     match result.decision.as_str() {
                         "create" | "supersede" | "merge" => {
@@ -498,9 +553,9 @@ async fn execute_batch(
                         "similarity": result.similarity,
                         "predictionError": result.prediction_error,
                         "supersededId": result.superseded_id,
-                        "previousContent": result.previous_content,
+                        "previousContent": previous_content,
                         "mergedFrom": result.merged_from,
-                        "mergePreview": result.merge_preview,
+                        "mergePreview": merge_preview,
                         "importanceScore": importance_composite,
                         "reason": result.reason
                     }));
@@ -509,7 +564,7 @@ async fn execute_batch(
                     errors += 1;
                     results.push(serde_json::json!({
                         "index": i,
-                        "status": "error",
+                        "status": if matches!(&e, StorageError::SecretDetected { .. }) { "rejected" } else { "error" },
                         "reason": e.to_string()
                     }));
                 }
@@ -518,7 +573,7 @@ async fn execute_batch(
 
         #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
         {
-            match storage.ingest(input) {
+            match storage.ingest_with_secret_policy(input, secret_policy) {
                 Ok(node) => {
                     let node_id = node.id.clone();
                     let node_content = node.content.clone();
@@ -547,7 +602,7 @@ async fn execute_batch(
                     errors += 1;
                     results.push(serde_json::json!({
                         "index": i,
-                        "status": "error",
+                        "status": if matches!(&e, StorageError::SecretDetected { .. }) { "rejected" } else { "error" },
                         "reason": e.to_string()
                     }));
                 }
@@ -673,6 +728,56 @@ mod tests {
                     .as_str()
                     .unwrap()
                     .contains("Embeddings not available")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_smart_ingest_rejects_secret_even_when_force_created() {
+        let (storage, _dir) = test_storage().await;
+        let secret = format!("ghp_{}", "A".repeat(36));
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": format!("Store this token: {secret}"),
+                "forceCreate": true
+            })),
+        )
+        .await;
+
+        let err = result.unwrap_err();
+        assert!(err.contains("Refused to store probable credential"));
+        assert!(
+            !err.contains(&secret),
+            "MCP errors must not echo the rejected credential"
+        );
+        assert_eq!(
+            storage.get_stats().unwrap().total_nodes,
+            0,
+            "forceCreate must not bypass the credential guard"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_explicit_secret_override_does_not_echo_content_in_response() {
+        let (storage, _dir) = test_storage().await;
+        let secret = format!("ghp_{}", "A".repeat(36));
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": format!("intentional local credential: {secret}"),
+                "forceCreate": true,
+                "allowSecrets": true
+            })),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response["success"], true);
+        assert!(
+            !serde_json::to_string(&response).unwrap().contains(&secret),
+            "the override response must not copy the credential into an MCP transcript"
         );
     }
 
@@ -855,6 +960,42 @@ mod tests {
         assert_eq!(value["mode"], "batch");
         assert_eq!(value["batchMergePolicy"], "force_create");
         assert_eq!(value["summary"]["total"], 2);
+    }
+
+    #[tokio::test]
+    async fn test_batch_ingest_saves_safe_item_and_rejects_secret_item() {
+        let (storage, _dir) = test_storage().await;
+        let secret = format!("ghp_{}", "A".repeat(36));
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "items": [
+                    { "content": "safe batch memory" },
+                    { "content": format!("batch credential: {secret}") }
+                ]
+            })),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result["mode"], "batch");
+        assert_eq!(result["results"][0]["status"], "saved");
+        assert_eq!(result["results"][1]["status"], "rejected");
+        assert!(
+            !result["results"][1]["reason"]
+                .as_str()
+                .unwrap()
+                .contains(&secret),
+            "batch result must not echo the rejected credential"
+        );
+        assert_eq!(result["summary"]["created"], 1);
+        assert_eq!(result["summary"]["errors"], 1);
+        assert_eq!(
+            storage.get_stats().unwrap().total_nodes,
+            1,
+            "safe batch entries may persist while rejected entries never do"
+        );
     }
 
     #[tokio::test]

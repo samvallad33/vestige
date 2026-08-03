@@ -88,6 +88,7 @@ pub mod embedder;
 pub mod fsrs;
 pub mod fts;
 pub mod memory;
+pub mod security;
 pub mod storage;
 
 /// Agent Black Box, Memory Receipts & Memory PRs — the cognitive flight
@@ -143,6 +144,9 @@ pub use memory::{
     TableIntrospection,
     TemporalRange,
 };
+
+// Local secret-detection primitives used by every memory write boundary.
+pub use security::{SecretConfidence, SecretFinding, SecretKind, SecretPolicy, scan_secrets};
 
 // FSRS-6 algorithm
 pub use fsrs::{

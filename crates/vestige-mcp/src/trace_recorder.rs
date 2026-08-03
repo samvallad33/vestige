@@ -179,10 +179,8 @@ pub fn gate_writes(
         // secret, and the PR row is read by the dashboard and may be exported).
         // Store a short, redacted preview + a content hash instead. The preview
         // is dropped entirely when the write was gated for a sensitive topic.
-        let sensitive = signals
-            .iter()
-            .any(|s| s.code == "sensitive_topic" || s.code == "sensitive_node_type");
         let raw_content = node.as_ref().map(|n| n.content.as_str()).unwrap_or("");
+        let sensitive = is_sensitive_pr_content(raw_content, &signals);
         let preview = content_preview(raw_content, sensitive);
         let content_hash = hash_content(raw_content);
 
@@ -294,9 +292,7 @@ pub fn gate_pending_memory_mutation(
         return Ok(None);
     }
 
-    let sensitive = signals
-        .iter()
-        .any(|s| s.code == "sensitive_topic" || s.code == "sensitive_node_type");
+    let sensitive = is_sensitive_pr_content(&node.content, &signals);
     let preview = content_preview(&node.content, sensitive);
     let content_hash = hash_content(&node.content);
     let kind = MemoryPrKind::NodeDecayed;
@@ -438,6 +434,29 @@ fn is_destructive_decision(label: &str) -> bool {
         label,
         "purge" | "purged" | "delete" | "deleted" | "forget" | "forgotten"
     )
+}
+
+/// Whether content must be fully redacted from a Memory PR.
+///
+/// Risk signals cover the broad policy categories (auth, money, identity,
+/// etc.), but credential detection is intentionally stricter: a legacy or
+/// explicitly allowed node can still hold a provider-shaped secret even when
+/// its surrounding prose did not trigger a sensitive-topic signal.  Both PR
+/// creation paths use this helper so neither can turn that secret into a
+/// title, preview, or diff field.
+fn is_sensitive_pr_content(content: &str, signals: &[vestige_core::RiskSignal]) -> bool {
+    signals
+        .iter()
+        .any(|s| s.code == "sensitive_topic" || s.code == "sensitive_node_type")
+        || has_blocking_secret(content)
+}
+
+/// Match the storage boundary's blocking credential policy without retaining
+/// the detector output or the matched value.
+fn has_blocking_secret(content: &str) -> bool {
+    vestige_core::scan_secrets(content)
+        .iter()
+        .any(vestige_core::SecretFinding::blocks_ingestion)
 }
 
 /// A short, privacy-preserving preview of memory content for a Memory PR.
@@ -591,6 +610,51 @@ pub fn hash_args(args: &Option<Value>) -> String {
     format!("{:016x}", hash)
 }
 
+/// Fixed trace marker used when `smart_ingest` rejects credential-shaped
+/// content.  Hashing those arguments, even without storing the raw JSON,
+/// leaves a stable value derived from a rejected secret that can be brute
+/// forced for low-entropy values.  The marker records only that redaction
+/// happened; it is intentionally independent of every argument byte.
+const REDACTED_SMART_INGEST_SECRET_ARGS_HASH: &str = "redacted_secret_input";
+
+fn trace_args_hash(tool: &str, args: &Option<Value>) -> String {
+    if tool == "smart_ingest" && smart_ingest_has_blocking_secret(args) {
+        return REDACTED_SMART_INGEST_SECRET_ARGS_HASH.to_string();
+    }
+    hash_args(args)
+}
+
+/// Detect the fields `smart_ingest` passes to the credential-aware storage
+/// boundary. This mirrors its single and batch request shapes, so a rejected
+/// item cannot leave a raw-derived fingerprint behind in the opening trace.
+fn smart_ingest_has_blocking_secret(args: &Option<Value>) -> bool {
+    let Some(args) = args.as_ref() else {
+        return false;
+    };
+
+    smart_ingest_input_has_blocking_secret(args)
+        || args
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flat_map(|items| items.iter())
+            .any(smart_ingest_input_has_blocking_secret)
+}
+
+fn smart_ingest_input_has_blocking_secret(input: &Value) -> bool {
+    let scalar_fields = ["content", "source"]
+        .into_iter()
+        .filter_map(|field| input.get(field).and_then(Value::as_str));
+    let tags = input
+        .get("tags")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flat_map(|tags| tags.iter())
+        .filter_map(Value::as_str);
+
+    scalar_fields.chain(tags).any(has_blocking_secret)
+}
+
 /// Persist one trace event and broadcast it to the dashboard. Best-effort:
 /// storage failures are logged, never propagated.
 pub fn record(
@@ -630,7 +694,7 @@ pub fn record_call(
         MemoryTraceEvent::McpCall {
             run_id: run_id.to_string(),
             tool: tool.to_string(),
-            args_hash: hash_args(args),
+            args_hash: trace_args_hash(tool, args),
             at: 0,
         },
     );
@@ -1010,6 +1074,51 @@ mod tests {
     }
 
     #[test]
+    fn rejected_smart_ingest_secret_uses_fixed_non_derived_trace_marker() {
+        let s = store();
+        let secret = format!("ghp_{}", "A".repeat(36));
+        let args = Some(serde_json::json!({
+            "content": format!("{secret}"),
+            "runId": "run_secret_rejection"
+        }));
+
+        // `record_call` runs before smart_ingest dispatches and rejects the
+        // credential, so this is the persistence boundary that must redact.
+        record_call(&s, None, "run_secret_rejection", "smart_ingest", &args);
+
+        let trace = s.get_trace("run_secret_rejection").unwrap();
+        assert_eq!(trace.len(), 1);
+        let MemoryTraceEvent::McpCall { args_hash, .. } = &trace[0] else {
+            panic!("opening trace event must be mcp.call");
+        };
+        assert_eq!(args_hash, REDACTED_SMART_INGEST_SECRET_ARGS_HASH);
+        assert_ne!(args_hash, &hash_args(&args));
+
+        let persisted = serde_json::to_string(&trace).unwrap();
+        assert!(
+            !persisted.contains(&secret),
+            "rejected credential must not be persisted in the trace"
+        );
+    }
+
+    #[test]
+    fn rejected_smart_ingest_batch_secret_uses_fixed_trace_marker() {
+        let secret = format!("ghp_{}", "B".repeat(36));
+        let args = Some(serde_json::json!({
+            "items": [
+                { "content": "safe item" },
+                { "content": format!("{secret}") }
+            ]
+        }));
+
+        assert_eq!(
+            trace_args_hash("smart_ingest", &args),
+            REDACTED_SMART_INGEST_SECRET_ARGS_HASH,
+            "one rejected batch item must redact the whole call fingerprint"
+        );
+    }
+
+    #[test]
     fn extract_retrieved_from_search_shape() {
         let r = serde_json::json!({
             "results": [
@@ -1253,6 +1362,81 @@ mod tests {
         );
         // A content hash is present so reviewers can still correlate.
         assert!(pr.diff["node"]["contentHash"].as_str().is_some());
+    }
+
+    #[test]
+    fn gate_redacts_detected_secret_without_sensitive_topic_signal() {
+        let s = store();
+        let secret = format!("ghp_{}", "C".repeat(36));
+        let node = s
+            .ingest_with_secret_policy(
+                vestige_core::IngestInput {
+                    content: secret.clone(),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                },
+                vestige_core::SecretPolicy::AllowExplicitly,
+            )
+            .unwrap();
+        let result = serde_json::json!({ "decision": "create", "nodeId": node.id });
+
+        // Paranoid mode opens a PR even though a bare token has no topic signal;
+        // credential detection itself must still force full redaction.
+        let opened = gate_writes(
+            &s,
+            None,
+            "run_detected_secret",
+            "smart_ingest",
+            &result,
+            vestige_core::ReviewMode::Paranoid,
+        );
+        assert_eq!(opened.len(), 1);
+
+        let pr = &s
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap()[0];
+        let serialized = serde_json::to_string(pr).unwrap();
+        assert!(!serialized.contains(&secret));
+        assert!(serialized.contains("redacted"));
+    }
+
+    #[test]
+    fn pre_gate_redacts_detected_secret_without_sensitive_topic_signal() {
+        let s = store();
+        let secret = format!("ghp_{}", "D".repeat(36));
+        let node = s
+            .ingest_with_secret_policy(
+                vestige_core::IngestInput {
+                    content: secret.clone(),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                },
+                vestige_core::SecretPolicy::AllowExplicitly,
+            )
+            .unwrap();
+        let args = Some(serde_json::json!({
+            "action": "purge",
+            "id": node.id,
+            "confirm": true
+        }));
+
+        let response = gate_pending_memory_mutation(
+            &s,
+            None,
+            "run_pending_detected_secret",
+            "memory",
+            &args,
+            vestige_core::ReviewMode::RiskGated,
+        )
+        .unwrap();
+        assert!(response.is_some());
+
+        let pr = &s
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap()[0];
+        let serialized = serde_json::to_string(pr).unwrap();
+        assert!(!serialized.contains(&secret));
+        assert!(serialized.contains("redacted"));
     }
 
     #[test]

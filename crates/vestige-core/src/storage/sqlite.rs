@@ -27,6 +27,7 @@ use crate::memory::{
 };
 #[cfg(all(feature = "embeddings", feature = "vector-search"))]
 use crate::memory::{EmbeddingResult, SimilarityResult};
+use crate::security::{SecretFinding, SecretPolicy, scan_secrets};
 use crate::storage::portable::{
     PORTABLE_ARCHIVE_FORMAT, PortableArchive, PortableImportMode, PortableImportReport,
     PortableTable, PortableValue, encode_hex,
@@ -66,6 +67,11 @@ pub enum StorageError {
     /// Initialization error
     #[error("Initialization error: {0}")]
     Init(String),
+    /// A likely credential was detected before any write side effect.
+    #[error(
+        "Refused to store probable credential(s): {kinds:?}. Secret bytes were not stored, logged, or returned. Redact the value or use an explicit allow-secrets override only when intentional."
+    )]
+    SecretDetected { kinds: Vec<String> },
 }
 
 /// Storage result type
@@ -384,8 +390,9 @@ impl SqliteMemoryStore {
         &self,
         input: IngestInput,
         reason: impl Into<String>,
+        policy: SecretPolicy,
     ) -> Result<SmartIngestResult> {
-        let node = self.ingest(input)?;
+        let node = self.ingest_with_secret_policy(input, policy)?;
         Ok(SmartIngestResult {
             decision: "create".to_string(),
             node,
@@ -663,8 +670,189 @@ impl SqliteMemoryStore {
         Ok(())
     }
 
-    /// Ingest a new memory
+    fn secret_findings_for_input(input: &IngestInput) -> Vec<SecretFinding> {
+        let mut findings = scan_secrets(&input.content);
+        let mut scan_field = |value: &str| {
+            for finding in scan_secrets(value) {
+                if !findings.contains(&finding) {
+                    findings.push(finding);
+                }
+            }
+        };
+
+        if let Some(source) = input.source.as_deref() {
+            scan_field(source);
+        }
+        for tag in &input.tags {
+            scan_field(tag);
+        }
+        if let Some(envelope) = input.source_envelope.as_ref() {
+            for value in [
+                envelope.source_url.as_deref(),
+                envelope.source_project.as_deref(),
+                envelope.source_type.as_deref(),
+                envelope.source_author.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                scan_field(value);
+            }
+        }
+        findings
+    }
+
+    fn enforce_secret_policy_for_input(input: &IngestInput, policy: SecretPolicy) -> Result<()> {
+        if policy == SecretPolicy::AllowExplicitly {
+            return Ok(());
+        }
+
+        let kinds: Vec<String> = Self::secret_findings_for_input(input)
+            .into_iter()
+            .filter(SecretFinding::blocks_ingestion)
+            .map(|finding| finding.kind.as_str().to_string())
+            .collect();
+        if kinds.is_empty() {
+            Ok(())
+        } else {
+            Err(StorageError::SecretDetected { kinds })
+        }
+    }
+
+    fn enforce_secret_policy_for_content(content: &str, policy: SecretPolicy) -> Result<()> {
+        if policy == SecretPolicy::AllowExplicitly {
+            return Ok(());
+        }
+        let kinds: Vec<String> = scan_secrets(content)
+            .into_iter()
+            .filter(SecretFinding::blocks_ingestion)
+            .map(|finding| finding.kind.as_str().to_string())
+            .collect();
+        if kinds.is_empty() {
+            Ok(())
+        } else {
+            Err(StorageError::SecretDetected { kinds })
+        }
+    }
+
+    fn enforce_secret_policy_for_record(
+        record: &crate::storage::memory_store::MemoryRecord,
+        policy: SecretPolicy,
+    ) -> Result<()> {
+        if policy == SecretPolicy::AllowExplicitly {
+            return Ok(());
+        }
+
+        // `MemoryStoreSend::insert` persists this selected set of record
+        // fields directly. Keep it on the same default-deny policy as
+        // `IngestInput`; otherwise a credential-shaped tag or source bypasses
+        // the public ingest choke point.
+        let mut findings = scan_secrets(&record.content);
+        let mut scan_field = |value: &str| {
+            for finding in scan_secrets(value) {
+                if !findings.contains(&finding) {
+                    findings.push(finding);
+                }
+            }
+        };
+        scan_field(&record.node_type);
+        for tag in &record.tags {
+            scan_field(tag);
+        }
+        for domain in &record.domains {
+            scan_field(domain);
+        }
+        if let Some(source) = record
+            .metadata
+            .get("source")
+            .and_then(|value| value.as_str())
+        {
+            scan_field(source);
+        }
+
+        let kinds: Vec<String> = findings
+            .into_iter()
+            .filter(SecretFinding::blocks_ingestion)
+            .map(|finding| finding.kind.as_str().to_string())
+            .collect();
+        if kinds.is_empty() {
+            Ok(())
+        } else {
+            Err(StorageError::SecretDetected { kinds })
+        }
+    }
+
+    fn enforce_secret_policy_for_portable_archive(
+        archive: &PortableArchive,
+        policy: SecretPolicy,
+    ) -> Result<()> {
+        if policy == SecretPolicy::AllowExplicitly {
+            return Ok(());
+        }
+
+        let mut kinds = Vec::new();
+        for table in archive
+            .tables
+            .iter()
+            .filter(|table| table.name == "knowledge_nodes")
+        {
+            for field in [
+                "content",
+                "source",
+                "tags",
+                "source_url",
+                "source_project",
+                "source_type",
+                "source_author",
+            ] {
+                let Some(index) = table.columns.iter().position(|column| column == field) else {
+                    continue;
+                };
+                for row in &table.rows {
+                    let Some(PortableValue::Text(value)) = row.get(index) else {
+                        continue;
+                    };
+                    for finding in scan_secrets(value)
+                        .into_iter()
+                        .filter(SecretFinding::blocks_ingestion)
+                    {
+                        let kind = finding.kind.as_str().to_string();
+                        if !kinds.contains(&kind) {
+                            kinds.push(kind);
+                        }
+                    }
+                }
+            }
+        }
+
+        if kinds.is_empty() {
+            Ok(())
+        } else {
+            Err(StorageError::SecretDetected { kinds })
+        }
+    }
+
+    /// Ingest a new memory, rejecting likely credentials by default.
     pub fn ingest(&self, input: IngestInput) -> Result<KnowledgeNode> {
+        self.ingest_with_secret_policy(input, SecretPolicy::Reject)
+    }
+
+    /// Ingest a new memory using an explicit credential-storage policy.
+    ///
+    /// Callers should use [`SecretPolicy::AllowExplicitly`] only for a direct,
+    /// intentional user action. Connector and background writers must retain
+    /// the default rejection policy.
+    pub fn ingest_with_secret_policy(
+        &self,
+        input: IngestInput,
+        policy: SecretPolicy,
+    ) -> Result<KnowledgeNode> {
+        Self::enforce_secret_policy_for_input(&input, policy)?;
+        self.ingest_unchecked(input)
+    }
+
+    /// Raw insert after a caller has completed the credential preflight.
+    fn ingest_unchecked(&self, input: IngestInput) -> Result<KnowledgeNode> {
         let now = Utc::now();
         let id = Uuid::new_v4().to_string();
 
@@ -778,7 +966,17 @@ impl SqliteMemoryStore {
     /// This solves the "bad vs good similar memory" problem.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     pub fn smart_ingest(&self, input: IngestInput) -> Result<SmartIngestResult> {
-        self.smart_ingest_excluding(input, &[])
+        self.smart_ingest_with_secret_policy(input, SecretPolicy::Reject)
+    }
+
+    /// Smart ingest with an explicit credential-storage policy.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest_with_secret_policy(
+        &self,
+        input: IngestInput,
+        policy: SecretPolicy,
+    ) -> Result<SmartIngestResult> {
+        self.smart_ingest_excluding_with_secret_policy(input, &[], policy)
     }
 
     /// Smart ingest with caller-provided candidate exclusions.
@@ -792,15 +990,35 @@ impl SqliteMemoryStore {
         input: IngestInput,
         excluded_node_ids: &[String],
     ) -> Result<SmartIngestResult> {
+        self.smart_ingest_excluding_with_secret_policy(
+            input,
+            excluded_node_ids,
+            SecretPolicy::Reject,
+        )
+    }
+
+    /// Smart ingest with exclusions and an explicit credential-storage policy.
+    /// The credential preflight happens before embedding, candidate selection,
+    /// or any possible supersede/demotion side effect.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest_excluding_with_secret_policy(
+        &self,
+        input: IngestInput,
+        excluded_node_ids: &[String],
+        policy: SecretPolicy,
+    ) -> Result<SmartIngestResult> {
         use crate::advanced::prediction_error::{
             CandidateMemory, GateDecision, PredictionErrorGate, UpdateType,
         };
+
+        Self::enforce_secret_policy_for_input(&input, policy)?;
 
         // Generate embedding for new content
         if !self.embedding_service.is_ready() {
             return self.regular_ingest_result(
                 input,
                 "Embeddings not available, falling back to regular ingest",
+                policy,
             );
         }
 
@@ -808,6 +1026,7 @@ impl SqliteMemoryStore {
             return self.regular_ingest_result(
                 input,
                 "Vector search unavailable, falling back to regular ingest",
+                policy,
             );
         }
 
@@ -859,7 +1078,7 @@ impl SqliteMemoryStore {
                 ..
             } => {
                 // Create new memory
-                let node = self.ingest(input)?;
+                let node = self.ingest_with_secret_policy(input, policy)?;
                 Ok(SmartIngestResult {
                     decision: "create".to_string(),
                     node,
@@ -919,7 +1138,11 @@ impl SqliteMemoryStore {
                             input.content
                         );
 
-                        self.update_node_content(&target_id, &merged_content)?;
+                        self.update_node_content_with_secret_policy(
+                            &target_id,
+                            &merged_content,
+                            policy,
+                        )?;
                         self.strengthen_on_access(&target_id)?;
 
                         let node = self
@@ -945,7 +1168,11 @@ impl SqliteMemoryStore {
                             .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
                         let previous_content = existing.content;
 
-                        self.update_node_content(&target_id, &input.content)?;
+                        self.update_node_content_with_secret_policy(
+                            &target_id,
+                            &input.content,
+                            policy,
+                        )?;
                         let node = self
                             .get_node(&target_id)?
                             .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
@@ -972,7 +1199,11 @@ impl SqliteMemoryStore {
                         let merged_content =
                             format!("{}\n\n---\nContext: {}", previous_content, input.content);
 
-                        self.update_node_content(&target_id, &merged_content)?;
+                        self.update_node_content_with_secret_policy(
+                            &target_id,
+                            &merged_content,
+                            policy,
+                        )?;
                         let node = self
                             .get_node(&target_id)?
                             .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
@@ -1098,8 +1329,24 @@ impl SqliteMemoryStore {
         Ok(None)
     }
 
-    /// Update the content of an existing node
+    /// Update the content of an existing node, rejecting likely credentials by
+    /// default.
     pub fn update_node_content(&self, id: &str, new_content: &str) -> Result<()> {
+        self.update_node_content_with_secret_policy(id, new_content, SecretPolicy::Reject)
+    }
+
+    /// Update node content using an explicit credential-storage policy.
+    pub fn update_node_content_with_secret_policy(
+        &self,
+        id: &str,
+        new_content: &str,
+        policy: SecretPolicy,
+    ) -> Result<()> {
+        Self::enforce_secret_policy_for_content(new_content, policy)?;
+        self.update_node_content_unchecked(id, new_content)
+    }
+
+    fn update_node_content_unchecked(&self, id: &str, new_content: &str) -> Result<()> {
         let now = Utc::now();
 
         {
@@ -6524,6 +6771,19 @@ impl SqliteMemoryStore {
         archive: &PortableArchive,
         mode: PortableImportMode,
     ) -> Result<PortableImportReport> {
+        self.import_portable_archive_with_secret_policy(archive, mode, SecretPolicy::Reject)
+    }
+
+    /// Import an exact archive using an explicit credential-storage policy.
+    ///
+    /// The archive is preflighted before a writer or transaction is opened, so
+    /// a rejected archive cannot partially import safe sibling rows.
+    pub fn import_portable_archive_with_secret_policy(
+        &self,
+        archive: &PortableArchive,
+        mode: PortableImportMode,
+        policy: SecretPolicy,
+    ) -> Result<PortableImportReport> {
         if archive.archive_format != PORTABLE_ARCHIVE_FORMAT {
             return Err(StorageError::Init(format!(
                 "Unsupported portable archive format '{}'",
@@ -6536,6 +6796,8 @@ impl SqliteMemoryStore {
                 archive.mode
             )));
         }
+
+        Self::enforce_secret_policy_for_portable_archive(archive, policy)?;
 
         let mut seen_tables = std::collections::HashSet::new();
         let mut tables_by_name = std::collections::HashMap::new();
@@ -9134,6 +9396,8 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         record: &crate::storage::memory_store::MemoryRecord,
     ) -> crate::storage::memory_store::MemoryStoreResult<uuid::Uuid> {
         use crate::storage::memory_store::{MemoryStoreError, ModelSignature};
+        Self::enforce_secret_policy_for_record(record, SecretPolicy::Reject)
+            .map_err(MemoryStoreError::from)?;
         // Enforce model registry if embedding is provided
         if let Some(vec) = &record.embedding {
             // Derive a signature from metadata if present, or use a generic sentinel
@@ -9971,11 +10235,23 @@ impl SqliteMemoryStore {
     /// the input's `source_envelope`; otherwise this falls back to a plain
     /// `ingest` (an un-keyed record can't be deduplicated).
     pub fn upsert_by_source(&self, input: IngestInput) -> Result<SourceUpsertResult> {
+        self.upsert_by_source_with_secret_policy(input, SecretPolicy::Reject)
+    }
+
+    /// Upsert source content using an explicit credential-storage policy.
+    /// Connectors must retain the default reject policy; this escape hatch is
+    /// reserved for an explicit, trusted local import.
+    pub fn upsert_by_source_with_secret_policy(
+        &self,
+        input: IngestInput,
+        policy: SecretPolicy,
+    ) -> Result<SourceUpsertResult> {
+        Self::enforce_secret_policy_for_input(&input, policy)?;
         let env = match input.source_envelope.clone() {
             Some(e) if e.has_key() => e,
             // No idempotency key — behave like a normal create.
             _ => {
-                let node = self.ingest(input)?;
+                let node = self.ingest_with_secret_policy(input, policy)?;
                 return Ok(SourceUpsertResult {
                     outcome: SourceUpsertOutcome::Created,
                     node_id: node.id,
@@ -10017,7 +10293,7 @@ impl SqliteMemoryStore {
         let Some((node_id, stored_hash)) = existing else {
             // First time we've seen this record — plain insert carries the
             // envelope through the existing ingest path.
-            let node = self.ingest(input)?;
+            let node = self.ingest_with_secret_policy(input, policy)?;
             return Ok(SourceUpsertResult {
                 outcome: SourceUpsertOutcome::Created,
                 node_id: node.id,
@@ -10311,6 +10587,140 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap()
+    }
+
+    // ===================== Secret-ingest policy (#154) ==================
+
+    #[test]
+    fn ingest_rejects_probable_github_secret_without_persisting_or_echoing_it() {
+        let store = create_test_storage();
+        let secret = format!("ghp_{}", "A".repeat(36));
+
+        let err = store
+            .ingest(IngestInput {
+                content: format!("The temporary token is {secret}"),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, StorageError::SecretDetected { .. }));
+        assert!(
+            !err.to_string().contains(&secret),
+            "rejection must not echo the credential"
+        );
+        assert_eq!(
+            store.get_stats().unwrap().total_nodes,
+            0,
+            "rejection must happen before creating a node"
+        );
+    }
+
+    #[test]
+    fn update_node_content_rejects_probable_github_secret_without_mutating_node() {
+        let store = create_test_storage();
+        let node = store
+            .ingest(IngestInput {
+                content: "safe original content".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let secret = format!("ghp_{}", "A".repeat(36));
+
+        let err = store
+            .update_node_content(&node.id, &format!("replacement includes {secret}"))
+            .unwrap_err();
+
+        assert!(matches!(err, StorageError::SecretDetected { .. }));
+        assert!(
+            !err.to_string().contains(&secret),
+            "rejection must not echo the credential"
+        );
+        assert_eq!(
+            store.get_node(&node.id).unwrap().unwrap().content,
+            "safe original content",
+            "rejection must leave existing content intact"
+        );
+    }
+
+    #[test]
+    fn connector_upsert_rejects_probable_github_secret_without_mutating_existing_record() {
+        let store = create_test_storage();
+        let created = store
+            .upsert_by_source(source_input(
+                "secret-policy",
+                "safe connector body",
+                "safe-hash",
+            ))
+            .unwrap();
+        let secret = format!("ghp_{}", "A".repeat(36));
+
+        let err = store
+            .upsert_by_source(source_input(
+                "secret-policy",
+                &format!("updated connector body includes {secret}"),
+                "secret-hash",
+            ))
+            .unwrap_err();
+
+        assert!(matches!(err, StorageError::SecretDetected { .. }));
+        assert!(
+            !err.to_string().contains(&secret),
+            "rejection must not echo the credential"
+        );
+        let stored = store.get_node(&created.node_id).unwrap().unwrap();
+        assert_eq!(stored.content, "safe connector body");
+        assert_eq!(
+            stored
+                .source_envelope
+                .as_ref()
+                .and_then(|envelope| envelope.content_hash.as_deref()),
+            Some("safe-hash"),
+            "preflight rejection must happen before connector metadata changes"
+        );
+    }
+
+    #[test]
+    fn portable_import_rejects_secret_archive_atomically_before_safe_rows_import() {
+        let source_dir = tempdir().unwrap();
+        let target_dir = tempdir().unwrap();
+        let source = create_test_storage_at(&source_dir, "source.db");
+        source
+            .ingest(IngestInput {
+                content: "safe portable memory".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let secret = format!("ghp_{}", "A".repeat(36));
+        source
+            .ingest_with_secret_policy(
+                IngestInput {
+                    content: format!("intentionally archived credential {secret}"),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                },
+                SecretPolicy::AllowExplicitly,
+            )
+            .unwrap();
+        let archive = source.export_portable_archive().unwrap();
+
+        let target = create_test_storage_at(&target_dir, "target.db");
+        let err = target
+            .import_portable_archive(&archive, PortableImportMode::EmptyOnly)
+            .unwrap_err();
+
+        assert!(matches!(err, StorageError::SecretDetected { .. }));
+        assert!(
+            !err.to_string().contains(&secret),
+            "rejection must not echo the credential"
+        );
+        assert_eq!(
+            target.get_stats().unwrap().total_nodes,
+            0,
+            "archive preflight must prevent a partial import of safe sibling rows"
+        );
     }
 
     #[test]
@@ -13843,6 +14253,27 @@ mod tests {
                 s.insert(&rec).await.unwrap();
             }
             assert_eq!(s.count().await.unwrap(), 5);
+        });
+    }
+
+    #[test]
+    fn trait_insert_rejects_secret_shaped_tags_and_source_without_a_row() {
+        let s = create_test_storage();
+        let credential = format!("ghp_{}", "A".repeat(36));
+        let rt = rt();
+        rt.block_on(async {
+            let mut tagged = make_record("safe direct trait insert");
+            tagged.tags = vec![credential.clone()];
+            let err = s.insert(&tagged).await.unwrap_err();
+            assert!(matches!(err, MemoryStoreError::SecretDetected(_)));
+            assert!(!err.to_string().contains(&credential));
+            assert_eq!(s.count().await.unwrap(), 0);
+
+            let mut sourced = make_record("another safe direct trait insert");
+            sourced.metadata = serde_json::json!({ "source": credential });
+            let err = s.insert(&sourced).await.unwrap_err();
+            assert!(matches!(err, MemoryStoreError::SecretDetected(_)));
+            assert_eq!(s.count().await.unwrap(), 0);
         });
     }
 

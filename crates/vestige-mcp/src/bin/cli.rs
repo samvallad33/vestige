@@ -15,7 +15,9 @@ use anyhow::Context;
 use chrono::{NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
 use colored::Colorize;
-use vestige_core::{IngestInput, PortableImportMode, Storage};
+use vestige_core::{
+    IngestInput, PortableImportMode, SecretConfidence, SecretPolicy, Storage, scan_secrets,
+};
 
 /// Vestige - Cognitive Memory System CLI
 #[derive(Parser)]
@@ -243,6 +245,23 @@ enum Commands {
         /// Backdate this memory N days in the past (for demos / seeding history)
         #[arg(long)]
         ago_days: Option<i64>,
+        /// Deliberately allow a detected credential to be stored. Prefer a
+        /// secret-manager reference; this disables the default safety guard.
+        #[arg(long)]
+        allow_secrets: bool,
+    },
+
+    /// Read-only audit for credential-shaped values already in the local store.
+    ScanSecrets {
+        /// Include high-entropy review candidates as well as blocking matches.
+        #[arg(long)]
+        include_suspected: bool,
+        /// Emit a machine-readable JSON report. No memory content is printed.
+        #[arg(long)]
+        json: bool,
+        /// Stop after this many findings (default: scan the entire store).
+        #[arg(long)]
+        limit: Option<usize>,
     },
 
     /// Retroactive Salience Backfill — reach BACKWARD from a failure and surface
@@ -376,7 +395,13 @@ fn main() -> anyhow::Result<()> {
             node_type,
             source,
             ago_days,
-        } => run_ingest(content, tags, node_type, source, ago_days),
+            allow_secrets,
+        } => run_ingest(content, tags, node_type, source, ago_days, allow_secrets),
+        Commands::ScanSecrets {
+            include_suspected,
+            json,
+            limit,
+        } => run_scan_secrets(include_suspected, json, limit),
         Commands::Backfill {
             failure_id,
             manual,
@@ -2581,6 +2606,7 @@ fn run_ingest(
     node_type: String,
     source: Option<String>,
     ago_days: Option<i64>,
+    allow_secrets: bool,
 ) -> anyhow::Result<()> {
     if content.trim().is_empty() {
         anyhow::bail!("Content cannot be empty");
@@ -2609,6 +2635,11 @@ fn run_ingest(
     };
 
     let storage = open_storage()?;
+    let secret_policy = if allow_secrets {
+        SecretPolicy::AllowExplicitly
+    } else {
+        SecretPolicy::Reject
+    };
 
     // Warm up the embedding model so smart_ingest's is_ready() gate passes and
     // real vector search runs (instead of silently falling back to keyword-only
@@ -2628,7 +2659,7 @@ fn run_ingest(
     // Try smart_ingest (PE Gating) if available, otherwise regular ingest
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     {
-        let result = storage.smart_ingest(input)?;
+        let result = storage.smart_ingest_with_secret_policy(input, secret_policy)?;
         if let Some(days) = ago_days {
             // Duration::days panics on overflow for extreme inputs; try_days
             // returns None instead. The subtraction itself can ALSO overflow the
@@ -2657,17 +2688,20 @@ fn run_ingest(
         }
         println!("{}: {}", "Reason".white().bold(), result.reason);
         println!();
-        println!(
-            "{}",
+        let confirmation = if allow_secrets {
+            format!(
+                "Memory {} with explicit credential override (content redacted)",
+                result.decision
+            )
+        } else {
             format!("Memory {} ({})", result.decision, truncate(&content, 60))
-                .green()
-                .bold()
-        );
+        };
+        println!("{}", confirmation.green().bold());
     }
 
     #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
     {
-        let node = storage.ingest(input)?;
+        let node = storage.ingest_with_secret_policy(input, secret_policy)?;
         if let Some(days) = ago_days {
             // Duration::days panics on overflow for extreme inputs; try_days
             // returns None instead. The subtraction itself can ALSO overflow the
@@ -2686,12 +2720,126 @@ fn run_ingest(
         println!("{}: create", "Decision".white().bold());
         println!("{}: {}", "Node ID".white().bold(), node.id);
         println!();
+        let confirmation = if allow_secrets {
+            "Memory created with explicit credential override (content redacted)".to_string()
+        } else {
+            format!("Memory created ({})", truncate(&content, 60))
+        };
+        println!("{}", confirmation.green().bold());
+    }
+
+    Ok(())
+}
+
+/// Read-only audit of already-persisted memory text for credential shapes.
+///
+/// Deliberately emits IDs, detector classes, and short fingerprints only. It
+/// never prints the matching content, source, or surrounding context.
+fn run_scan_secrets(
+    include_suspected: bool,
+    json_output: bool,
+    limit: Option<usize>,
+) -> anyhow::Result<()> {
+    let storage = open_storage()?;
+    let mut offset = 0_i32;
+    let mut scanned = 0_usize;
+    let mut hits = Vec::new();
+
+    loop {
+        let nodes = storage.get_all_nodes(100, offset)?;
+        if nodes.is_empty() {
+            break;
+        }
+        offset += nodes.len() as i32;
+
+        for node in nodes {
+            scanned += 1;
+            let mut findings = scan_secrets(&node.content);
+            if let Some(source) = node.source.as_deref() {
+                for finding in scan_secrets(source) {
+                    if !findings.contains(&finding) {
+                        findings.push(finding);
+                    }
+                }
+            }
+            for tag in &node.tags {
+                for finding in scan_secrets(tag) {
+                    if !findings.contains(&finding) {
+                        findings.push(finding);
+                    }
+                }
+            }
+            if let Some(envelope) = node.source_envelope.as_ref() {
+                for value in [
+                    envelope.source_url.as_deref(),
+                    envelope.source_project.as_deref(),
+                    envelope.source_type.as_deref(),
+                    envelope.source_author.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    for finding in scan_secrets(value) {
+                        if !findings.contains(&finding) {
+                            findings.push(finding);
+                        }
+                    }
+                }
+            }
+            findings.retain(|finding| {
+                include_suspected || finding.confidence == SecretConfidence::Blocking
+            });
+            if findings.is_empty() {
+                continue;
+            }
+
+            hits.push(serde_json::json!({
+                "nodeId": node.id,
+                "createdAt": node.created_at.to_rfc3339(),
+                "findings": findings.into_iter().map(|finding| serde_json::json!({
+                    "kind": finding.kind.as_str(),
+                    "confidence": finding.confidence.to_string(),
+                    "fingerprint": finding.fingerprint,
+                })).collect::<Vec<_>>(),
+            }));
+            if limit.is_some_and(|max| hits.len() >= max) {
+                break;
+            }
+        }
+
+        if limit.is_some_and(|max| hits.len() >= max) {
+            break;
+        }
+    }
+
+    if json_output {
         println!(
             "{}",
-            format!("Memory created ({})", truncate(&content, 60))
-                .green()
-                .bold()
+            serde_json::to_string_pretty(&serde_json::json!({
+                "scanned": scanned,
+                "hits": hits,
+                "truncated": limit.is_some_and(|max| hits.len() >= max),
+            }))?
         );
+    } else if hits.is_empty() {
+        println!("No potential credentials found across {scanned} memories.");
+    } else {
+        println!(
+            "Potential credentials found in {} of {scanned} scanned memories:",
+            hits.len()
+        );
+        for hit in &hits {
+            let node_id = hit["nodeId"].as_str().unwrap_or("unknown");
+            for finding in hit["findings"].as_array().into_iter().flatten() {
+                println!(
+                    "{node_id} | {} | {} | {}",
+                    finding["kind"].as_str().unwrap_or("unknown"),
+                    finding["confidence"].as_str().unwrap_or("unknown"),
+                    finding["fingerprint"].as_str().unwrap_or("unknown"),
+                );
+            }
+        }
+        println!("Rotate live credentials, then remove or replace affected memories manually.");
     }
 
     Ok(())
