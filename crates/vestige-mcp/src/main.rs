@@ -281,6 +281,10 @@ async fn main() {
         .with_writer(io::stderr)
         .with_target(false)
         .with_ansi(false)
+        // MCP stdio clients can close stderr before stdin.  The formatter's
+        // default fallback tries `eprintln!` after a failed stderr write,
+        // which panics on that same closed descriptor during shutdown.
+        .log_internal_errors(false)
         .init();
 
     info!(
