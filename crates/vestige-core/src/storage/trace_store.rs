@@ -11,7 +11,7 @@
 //! map rows back through a small closure.
 
 use chrono::Utc;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
 use super::sqlite::SqliteMemoryStore;
@@ -29,9 +29,7 @@ const DEFAULT_TRACE_RETENTION_DAYS: i64 = 30;
 const MAX_TRACE_RETENTION_DAYS: i64 = 36_500;
 
 fn is_receipt_local_slot(id: &str) -> bool {
-    id.starts_with("candidate_")
-        || id.starts_with("redacted_")
-        || id.starts_with("purged_")
+    id.starts_with("candidate_") || id.starts_with("redacted_") || id.starts_with("purged_")
 }
 
 /// Parse the `VESTIGE_TRACE_RETENTION_DAYS` value into a usable retention
@@ -167,9 +165,8 @@ impl SqliteMemoryStore {
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-        let mut stmt = reader.prepare(
-            "SELECT payload FROM agent_traces WHERE run_id = ?1 ORDER BY seq ASC",
-        )?;
+        let mut stmt = reader
+            .prepare("SELECT payload FROM agent_traces WHERE run_id = ?1 ORDER BY seq ASC")?;
         let rows = stmt.query_map(params![run_id], |row| {
             let payload: String = row.get(0)?;
             Ok(payload)
@@ -292,7 +289,9 @@ impl SqliteMemoryStore {
     /// events deleted.
     pub fn prune_agent_traces(&self) -> Result<i64> {
         let days = resolve_trace_retention_days(
-            std::env::var("VESTIGE_TRACE_RETENTION_DAYS").ok().as_deref(),
+            std::env::var("VESTIGE_TRACE_RETENTION_DAYS")
+                .ok()
+                .as_deref(),
         );
         self.prune_agent_traces_older_than_days(days)
     }
@@ -319,10 +318,8 @@ impl SqliteMemoryStore {
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let deleted = writer.execute(
-            "DELETE FROM agent_traces WHERE at < ?1",
-            params![cutoff_ms],
-        )? as i64;
+        let deleted =
+            writer.execute("DELETE FROM agent_traces WHERE at < ?1", params![cutoff_ms])? as i64;
         if deleted > 0 {
             // Drop run roll-ups whose every event was just swept, so the Black
             // Box run list never shows runs that can no longer be replayed.
@@ -419,9 +416,8 @@ impl SqliteMemoryStore {
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-        let mut stmt = reader.prepare(
-            "SELECT payload FROM memory_receipts ORDER BY created_at DESC LIMIT ?1",
-        )?;
+        let mut stmt = reader
+            .prepare("SELECT payload FROM memory_receipts ORDER BY created_at DESC LIMIT ?1")?;
         let rows = stmt.query_map(params![limit as i64], |row| {
             let p: String = row.get(0)?;
             Ok(p)
@@ -689,10 +685,11 @@ impl SqliteMemoryStore {
             .unwrap_or(crate::trace::MemoryPrKind::NewFact);
         let status = serde_json::from_value(serde_json::Value::String(status_s))
             .unwrap_or(MemoryPrStatus::Pending);
-        let diff: serde_json::Value = serde_json::from_str(&diff_s).unwrap_or(serde_json::json!({}));
+        let diff: serde_json::Value =
+            serde_json::from_str(&diff_s).unwrap_or(serde_json::json!({}));
         let signals = serde_json::from_str(&signals_s).unwrap_or_default();
-        let decision = decision_s
-            .and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok());
+        let decision =
+            decision_s.and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok());
 
         Ok(MemoryPr {
             id: row.get("id")?,
@@ -713,11 +710,11 @@ impl SqliteMemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IngestInput;
     use crate::trace::{
         DecayRisk, MemoryPrKind, MemoryTraceEvent, Receipt, RiskSignal, SuppressReason,
         SuppressedReceiptEntry,
     };
-    use crate::IngestInput;
 
     fn store() -> SqliteMemoryStore {
         // Temp-file store for isolated, fast tests (mirrors the existing
@@ -1080,9 +1077,7 @@ mod tests {
         // Promote = release. (The action releases_memory() == true; the handler
         // calls release_quarantine on the subject.)
         assert!(crate::MemoryPrAction::Promote.releases_memory());
-        let released = s
-            .release_quarantine(&node.id)
-            .expect("release quarantine");
+        let released = s.release_quarantine(&node.id).expect("release quarantine");
         assert_eq!(
             released.suppression_count, 0,
             "promoting the PR must release the memory — not leave it suppressed"
@@ -1154,9 +1149,10 @@ mod tests {
             decision: None,
         };
         s.save_memory_pr(&pr).unwrap();
-        assert!(s
-            .decide_memory_pr("pr_2", MemoryPrAction::AskAgentWhy)
-            .is_err());
+        assert!(
+            s.decide_memory_pr("pr_2", MemoryPrAction::AskAgentWhy)
+                .is_err()
+        );
         // Still pending.
         assert_eq!(s.count_pending_memory_prs().unwrap(), 1);
     }

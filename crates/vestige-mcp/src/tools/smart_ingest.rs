@@ -22,9 +22,9 @@ use tokio::sync::Mutex;
 
 use crate::cognitive::CognitiveEngine;
 use vestige_core::{
-    ContentType, ImportanceContext, ImportanceEventType, IngestInput, SecretPolicy, Storage,
-    StorageError, SynapticCapturePolicy, SynapticCaptureRequest, SynapticTag,
-    SynapticTaggingConfig, scan_secrets,
+    ContentType, ImportanceContext, IngestInput, SecretPolicy, Storage, StorageError,
+    SynapticCapturePolicy, SynapticImportanceEvent, SynapticIngestRequest, SynapticSignalSnapshot,
+    SynapticTag, SynapticTaggingConfig, scan_secrets,
 };
 
 /// Input schema for smart_ingest tool
@@ -200,6 +200,13 @@ pub async fn execute(
     // COGNITIVE PRE-INGEST: importance scoring + intent detection + content analysis
     // ====================================================================
     let mut importance_composite = 0.0_f64;
+    let mut importance_snapshot = SynapticSignalSnapshot {
+        novelty: 0.0,
+        arousal: 0.0,
+        reward: 0.0,
+        attention: 0.0,
+        composite: 0.0,
+    };
     let mut tags = args.tags.unwrap_or_default();
 
     if let Ok(cog) = cognitive.try_lock() {
@@ -209,6 +216,13 @@ pub async fn execute(
             .importance_signals
             .compute_importance(&content, &context);
         importance_composite = importance.composite;
+        importance_snapshot = SynapticSignalSnapshot {
+            novelty: importance.novelty,
+            arousal: importance.arousal,
+            reward: importance.reward,
+            attention: importance.attention,
+            composite: importance.composite,
+        };
 
         // 4B. Intent detection → auto-tag
         let intent_result = cog.intent_detector.detect_intent();
@@ -255,13 +269,14 @@ pub async fn execute(
         let has_embedding = node.has_embedding.unwrap_or(false);
 
         // Post-ingest cognitive side effects
-        let synaptic_capture = run_post_ingest(
+        let synaptic_capture = run_post_ingest_with_snapshot(
             storage,
             cognitive,
             &node_id,
             &node_content,
             &node_type,
             importance_composite,
+            importance_snapshot.clone(),
         );
 
         return Ok(serde_json::json!({
@@ -299,13 +314,14 @@ pub async fn execute(
         };
 
         // Post-ingest cognitive side effects
-        let synaptic_capture = run_post_ingest(
+        let synaptic_capture = run_post_ingest_with_snapshot(
             storage,
             cognitive,
             &node_id,
             &node_content,
             &node_type,
             importance_composite,
+            importance_snapshot.clone(),
         );
 
         Ok(serde_json::json!({
@@ -345,13 +361,14 @@ pub async fn execute(
         let node_content = node.content.clone();
         let node_type = node.node_type.clone();
 
-        let synaptic_capture = run_post_ingest(
+        let synaptic_capture = run_post_ingest_with_snapshot(
             storage,
             cognitive,
             &node_id,
             &node_content,
             &node_type,
             importance_composite,
+            importance_snapshot,
         );
 
         Ok(serde_json::json!({
@@ -433,6 +450,13 @@ async fn execute_batch(
         // COGNITIVE PRE-INGEST (per item)
         // ================================================================
         let mut importance_composite = 0.0_f64;
+        let mut importance_snapshot = SynapticSignalSnapshot {
+            novelty: 0.0,
+            arousal: 0.0,
+            reward: 0.0,
+            attention: 0.0,
+            composite: 0.0,
+        };
         let mut tags = item.tags.unwrap_or_default();
 
         if let Ok(cog) = cognitive.try_lock() {
@@ -441,6 +465,13 @@ async fn execute_batch(
                 .importance_signals
                 .compute_importance(&item.content, &context);
             importance_composite = importance.composite;
+            importance_snapshot = SynapticSignalSnapshot {
+                novelty: importance.novelty,
+                arousal: importance.arousal,
+                reward: importance.reward,
+                attention: importance.attention,
+                composite: importance.composite,
+            };
 
             let intent_result = cog.intent_detector.detect_intent();
             if intent_result.confidence > 0.5 {
@@ -483,13 +514,14 @@ async fn execute_batch(
 
                     created += 1;
                     batch_created_node_ids.push(node_id.clone());
-                    let synaptic_capture = run_post_ingest(
+                    let synaptic_capture = run_post_ingest_with_snapshot(
                         storage,
                         cognitive,
                         &node_id,
                         &node_content,
                         &node_type,
                         importance_composite,
+                        importance_snapshot.clone(),
                     );
 
                     results.push(serde_json::json!({
@@ -546,13 +578,14 @@ async fn execute_batch(
                     }
 
                     // Post-ingest cognitive side effects
-                    let synaptic_capture = run_post_ingest(
+                    let synaptic_capture = run_post_ingest_with_snapshot(
                         storage,
                         cognitive,
                         &node_id,
                         &node_content,
                         &node_type,
                         importance_composite,
+                        importance_snapshot.clone(),
                     );
 
                     results.push(serde_json::json!({
@@ -592,13 +625,14 @@ async fn execute_batch(
 
                     created += 1;
                     batch_created_node_ids.push(node_id.clone());
-                    let synaptic_capture = run_post_ingest(
+                    let synaptic_capture = run_post_ingest_with_snapshot(
                         storage,
                         cognitive,
                         &node_id,
                         &node_content,
                         &node_type,
                         importance_composite,
+                        importance_snapshot.clone(),
                     );
 
                     results.push(serde_json::json!({
@@ -646,6 +680,7 @@ async fn execute_batch(
 /// content — so purge remains authoritative and suppressed memories stay out.
 ///
 /// Uses try_lock() for non-blocking access. If cognitive is locked, side effects are skipped.
+#[cfg(test)]
 fn run_post_ingest(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
@@ -653,6 +688,40 @@ fn run_post_ingest(
     content: &str,
     node_type: &str,
     importance_composite: f64,
+) -> Option<Value> {
+    let result = run_post_ingest_with_snapshot(
+        storage,
+        cognitive,
+        node_id,
+        content,
+        node_type,
+        importance_composite,
+        SynapticSignalSnapshot {
+            novelty: importance_composite,
+            arousal: 0.0,
+            reward: 0.0,
+            attention: 0.0,
+            composite: importance_composite,
+        },
+    );
+    // Preserve the pre-V22 private helper contract used by focused tests:
+    // ordinary ingests persist a tag but do not claim a capture result.
+    if importance_composite <= 0.7 {
+        None
+    } else {
+        result
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_post_ingest_with_snapshot(
+    storage: &Arc<Storage>,
+    cognitive: &Arc<Mutex<CognitiveEngine>>,
+    node_id: &str,
+    content: &str,
+    node_type: &str,
+    importance_composite: f64,
+    importance_snapshot: SynapticSignalSnapshot,
 ) -> Option<Value> {
     let config = cognitive
         .try_lock()
@@ -664,53 +733,14 @@ fn run_post_ingest(
     });
     let mut synaptic_capture = None;
     let mut persisted_tag = None;
-    let mut tag_persisted = None;
+    let mut tag_persisted = false;
+    let mut tag_active_after_commit = false;
 
     // 4C. Durable synaptic tagging for retroactive capture. The SQLite
     // transaction is authoritative; CognitiveEngine is only a live projection.
     // Evaluate the trigger before recording its own tag so self-capture is
     // impossible even when smart ingest updates an existing node id.
     if importance_composite > 0.3 && trigger_is_eligible {
-        if importance_composite > 0.7 {
-            let radius = ImportanceEventType::NoveltySpike.capture_radius_multiplier();
-            let policy = SynapticCapturePolicy {
-                backward_hours: config.capture_window.backward_hours * radius,
-                forward_hours: config.capture_window.forward_hours * radius,
-                tag_lifetime_hours: config.tag_lifetime_hours,
-                minimum_tag_strength: config.min_tag_strength,
-                maximum_captures: config.max_cluster_size,
-                decay_function: config.capture_window.decay_function,
-            };
-            let occurred_at = node
-                .as_ref()
-                .map(|node| node.updated_at)
-                .unwrap_or_else(Utc::now);
-            match storage.capture_synaptic_event(&SynapticCaptureRequest {
-                trigger_memory_id: node_id.to_string(),
-                event_type: "novelty_spike".into(),
-                occurred_at,
-                strength: importance_composite,
-                policy,
-            }) {
-                Ok(capture) => {
-                    synaptic_capture = Some(serde_json::json!({
-                        "receiptId": capture.receipt.receipt_id,
-                        "receipt": capture.receipt,
-                        "eventId": capture.event_id,
-                        "capturedCount": capture.captured_count,
-                        "reusedExisting": capture.reused_existing
-                    }));
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "durable synaptic capture transaction failed");
-                    synaptic_capture = Some(serde_json::json!({
-                        "durable": false,
-                        "error": "Synaptic capture was not committed; no capture success is claimed."
-                    }));
-                }
-            }
-        }
-
         if let Some(node) = &node {
             let tag = SynapticTag {
                 memory_id: node_id.to_string(),
@@ -722,37 +752,82 @@ fn run_post_ingest(
                 captured_at: None,
                 encoding_context: Some(node.node_type.clone()),
             };
-            match storage.save_synaptic_tag(&tag) {
-                Ok(_) => {
+            let (event_type, radius) = dominant_importance_event(&importance_snapshot);
+            let policy = SynapticCapturePolicy {
+                backward_hours: config.capture_window.backward_hours * radius,
+                forward_hours: config.capture_window.forward_hours * radius,
+                tag_lifetime_hours: config.tag_lifetime_hours,
+                minimum_tag_strength: config.min_tag_strength,
+                maximum_captures: config.max_cluster_size,
+                decay_function: config.capture_window.decay_function,
+            };
+            let event = (importance_composite > 0.7).then(|| SynapticImportanceEvent {
+                event_type: event_type.into(),
+                occurred_at: node.updated_at,
+                strength: importance_composite,
+                policy,
+                signal_snapshot: importance_snapshot,
+            });
+            match storage.process_synaptic_ingest(&SynapticIngestRequest {
+                memory_id: node_id.to_string(),
+                tag: Some(tag.clone()),
+                event,
+            }) {
+                Ok(outcome) => {
                     persisted_tag = Some(tag);
-                    tag_persisted = Some(true);
+                    tag_persisted = outcome.tag_persisted;
+                    tag_active_after_commit = outcome.tag_active;
+                    let forward_receipts: Vec<Value> = outcome
+                        .forward_receipts
+                        .into_iter()
+                        .map(|pair| {
+                            serde_json::json!({
+                                "receiptId": pair.receipt.receipt_id,
+                                "receipt": pair.receipt,
+                                "eventId": pair.event_id,
+                                "disposition": pair.disposition,
+                                "reusedExisting": pair.reused_existing
+                            })
+                        })
+                        .collect();
+                    let mut capture = serde_json::Map::from_iter([
+                        ("durable".into(), Value::Bool(true)),
+                        ("tagPersisted".into(), Value::Bool(outcome.tag_persisted)),
+                        ("tagActive".into(), Value::Bool(outcome.tag_active)),
+                        (
+                            "algorithmVersion".into(),
+                            Value::String("vestige.synaptic_capture.v2".into()),
+                        ),
+                        ("forwardReceipts".into(), Value::Array(forward_receipts)),
+                    ]);
+                    if let Some(root) = outcome.event {
+                        capture.insert(
+                            "receiptId".into(),
+                            Value::String(root.receipt.receipt_id.clone()),
+                        );
+                        capture.insert(
+                            "receipt".into(),
+                            serde_json::to_value(root.receipt).unwrap_or(Value::Null),
+                        );
+                        capture.insert("eventId".into(), Value::String(root.event_id));
+                        capture.insert(
+                            "capturedCount".into(),
+                            serde_json::json!(root.captured_count),
+                        );
+                        capture.insert("reusedExisting".into(), Value::Bool(root.reused_existing));
+                    }
+                    synaptic_capture = Some(Value::Object(capture));
                 }
                 Err(error) => {
-                    tag_persisted = Some(false);
-                    tracing::warn!(%error, "durable synaptic tag save failed");
-                    synaptic_capture.get_or_insert_with(|| {
-                        serde_json::json!({
-                            "durable": false,
-                            "error": "Synaptic tag was not persisted; restart-safe eligibility is not claimed."
-                        })
-                    });
+                    tracing::warn!(%error, "atomic synaptic ingest transaction failed");
+                    synaptic_capture = Some(serde_json::json!({
+                        "durable": false,
+                        "tagPersisted": false,
+                        "algorithmVersion": "vestige.synaptic_capture.v2",
+                        "error": "Synaptic event/tag transaction was not committed; no capture or restart-safe tag is claimed."
+                    }));
                 }
             }
-        }
-    }
-
-    if let (Some(Value::Object(capture)), Some(tag_persisted)) =
-        (&mut synaptic_capture, tag_persisted)
-    {
-        capture.insert("tagPersisted".into(), Value::Bool(tag_persisted));
-        if !tag_persisted {
-            capture.insert(
-                "tagError".into(),
-                Value::String(
-                    "The trigger's future-capture tag was not persisted; restart-safe eligibility is not claimed."
-                        .into(),
-                ),
-            );
         }
     }
 
@@ -763,9 +838,25 @@ fn run_post_ingest(
                     cog.synaptic_tagging.remove_tag(id);
                 }
             }
+            if let Some(forward) = capture["forwardReceipts"].as_array() {
+                for pair in forward {
+                    if let Some(retrieved) = pair["receipt"]["retrieved"].as_array() {
+                        for id in retrieved.iter().filter_map(Value::as_str) {
+                            cog.synaptic_tagging.remove_tag(id);
+                        }
+                    }
+                }
+            }
         }
-        if let Some(tag) = persisted_tag {
-            cog.synaptic_tagging.restore_tag(tag);
+        if tag_persisted && let Some(tag) = persisted_tag {
+            // The SQLite result is authoritative. A new tag may have been
+            // atomically captured by an event that was already open, so never
+            // restore merely because its row was persisted.
+            if tag_active_after_commit {
+                cog.synaptic_tagging.restore_tag(tag);
+            } else {
+                cog.synaptic_tagging.remove_tag(&tag.memory_id);
+            }
         }
 
         // 4E. Update novelty model with new content
@@ -786,6 +877,20 @@ fn run_post_ingest(
     }
 
     synaptic_capture
+}
+
+fn dominant_importance_event(snapshot: &SynapticSignalSnapshot) -> (&'static str, f64) {
+    let channels = [
+        ("novelty_spike", snapshot.novelty, 0.7),
+        ("emotional_content", snapshot.arousal, 1.5),
+        ("reward_signal", snapshot.reward, 1.0),
+        ("attention_spike", snapshot.attention, 1.0),
+    ];
+    channels
+        .into_iter()
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+        .map(|(kind, _, radius)| (kind, radius))
+        .unwrap_or(("novelty_spike", 0.7))
 }
 
 // ============================================================================
@@ -1025,6 +1130,82 @@ mod tests {
         assert_eq!(capture["receipt"]["retrieved"][0], earlier.id);
         let after = storage.get_node(&earlier.id).unwrap().unwrap();
         assert!(after.retrieval_strength > before.retrieval_strength);
+    }
+
+    #[tokio::test]
+    async fn live_projection_does_not_restore_tag_consumed_by_open_forward_event() {
+        let (storage, _dir) = test_storage().await;
+        let cognitive = test_cognitive();
+        let trigger = storage
+            .ingest(IngestInput {
+                content: "Database retry policy caused a production incident.".to_string(),
+                node_type: "event".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        storage
+            .process_synaptic_ingest(&SynapticIngestRequest {
+                memory_id: trigger.id,
+                tag: None,
+                event: Some(SynapticImportanceEvent {
+                    event_type: "novelty_spike".into(),
+                    occurred_at: Utc::now() - chrono::Duration::seconds(1),
+                    strength: 0.95,
+                    policy: SynapticCapturePolicy {
+                        backward_hours: 9.0,
+                        forward_hours: 2.0,
+                        tag_lifetime_hours: 12.0,
+                        minimum_tag_strength: 0.3,
+                        maximum_captures: 50,
+                        decay_function: vestige_core::DecayFunction::Exponential,
+                    },
+                    signal_snapshot: SynapticSignalSnapshot {
+                        novelty: 0.95,
+                        arousal: 0.1,
+                        reward: 0.1,
+                        attention: 0.8,
+                        composite: 0.95,
+                    },
+                }),
+            })
+            .unwrap();
+
+        let candidate = storage
+            .ingest(IngestInput {
+                content: "Database retry policy decision recorded for deployment.".to_string(),
+                node_type: "decision".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            run_post_ingest(
+                &storage,
+                &cognitive,
+                &candidate.id,
+                &candidate.content,
+                &candidate.node_type,
+                0.5,
+            )
+            .is_none(),
+            "ordinary ingests retain their pre-V22 helper contract"
+        );
+
+        assert!(
+            !storage
+                .load_active_synaptic_tags()
+                .unwrap()
+                .iter()
+                .any(|tag| tag.memory_id == candidate.id),
+            "the durable V22 tag was captured by the already-open event"
+        );
+        assert!(
+            !cognitive
+                .lock()
+                .await
+                .synaptic_tagging
+                .has_active_tag(&candidate.id),
+            "the live projection must use the authoritative post-commit tag state"
+        );
     }
 
     #[tokio::test]

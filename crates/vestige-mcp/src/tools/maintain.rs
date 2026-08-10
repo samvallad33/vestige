@@ -65,7 +65,9 @@ pub async fn execute(
         .as_ref()
         .and_then(|a| a.get("action"))
         .and_then(|v| v.as_str())
-        .ok_or("Missing 'action'. Use consolidate|dream|gc|importance_score|backup|export|restore.")?
+        .ok_or(
+            "Missing 'action'. Use consolidate|dream|gc|importance_score|backup|export|restore.",
+        )?
         .to_string();
 
     match action.as_str() {
@@ -121,7 +123,11 @@ mod tests {
             .get("dryRun")
             .or(r.get("dry_run"))
             .and_then(|v| v.as_bool());
-        assert_eq!(dry, Some(true), "gc must default to dry_run=true via maintain");
+        assert_eq!(
+            dry,
+            Some(true),
+            "gc must default to dry_run=true via maintain"
+        );
     }
 
     #[tokio::test]

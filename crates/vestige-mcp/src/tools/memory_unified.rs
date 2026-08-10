@@ -61,7 +61,7 @@ pub fn schema() -> Value {
             },
             "confirm": {
                 "type": "boolean",
-                "description": "Required for action='purge' and action='delete'. Purge/delete permanently removes memory content and embeddings; only a non-content tombstone remains.",
+                "description": "Required for action='purge' and action='delete'. Purge/delete removes canonical content and embeddings. Legacy sync/audit tombstones retain an identifier and limited metadata, so this action is not verified-local machine unlearning.",
                 "default": false
             },
             "content": {
@@ -119,6 +119,7 @@ pub async fn execute(
         "delete" => {
             execute_purge(
                 storage,
+                cognitive,
                 &id,
                 args.reason,
                 args.confirm.unwrap_or(false),
@@ -129,6 +130,7 @@ pub async fn execute(
         "purge" => {
             execute_purge(
                 storage,
+                cognitive,
                 &id,
                 args.reason,
                 args.confirm.unwrap_or(false),
@@ -233,6 +235,7 @@ async fn execute_get_batch(storage: &Arc<Storage>, ids: &[String]) -> Result<Val
 /// Permanently purge a memory and return cleanup details.
 async fn execute_purge(
     storage: &Arc<Storage>,
+    cognitive: &Arc<Mutex<CognitiveEngine>>,
     id: &str,
     reason: Option<String>,
     confirm: bool,
@@ -249,12 +252,25 @@ async fn execute_purge(
         .purge_node(id, reason.as_deref())
         .map_err(|e| e.to_string())?;
 
+    // A successful purge must not leave a stale in-process cognitive projection
+    // able to retrieve the removed id. Replacing the entire engine is safer
+    // than attempting to discover and edit every module-local cache, and the
+    // new engine hydrates only surviving durable state.
+    let runtime_rebuilt = if report.deleted {
+        let mut rebuilt = CognitiveEngine::new();
+        rebuilt.hydrate(storage);
+        *cognitive.lock().await = rebuilt;
+        true
+    } else {
+        false
+    };
+
     Ok(serde_json::json!({
         "action": action,
         "success": report.deleted,
         "nodeId": id,
         "message": if report.deleted {
-            "Memory purged permanently; content and embeddings removed. Non-content tombstone retained for sync/audit."
+            "Memory purged; content and embeddings removed. Legacy sync/audit tombstones retain an identifier and limited metadata, so this is not a verified-local unlearning result."
         } else {
             "Memory not found"
         },
@@ -263,6 +279,18 @@ async fn execute_purge(
         "insightsRewritten": report.insights_rewritten,
         "insightsDeleted": report.insights_deleted,
         "childrenOrphaned": report.children_orphaned,
+        "unlearning": {
+            "scope": report.unlearning_scope,
+            "verdict": report.unlearning_verdict,
+            "claimBoundary": report.unlearning_claim_boundary,
+            "exclusions": report.unlearning_scope.exclusions(),
+            "runtimeRebuilt": runtime_rebuilt,
+            "runtimeHydrationAttempted": runtime_rebuilt,
+            // `CognitiveEngine::hydrate` currently logs individual load
+            // failures instead of returning a Result, so the public response
+            // must not convert an attempted hydration into a verified claim.
+            "runtimeHydrationVerified": false,
+        },
     }))
 }
 
@@ -659,6 +687,14 @@ mod tests {
         let value = result.unwrap();
         assert_eq!(value["success"], false);
         assert!(value["message"].as_str().unwrap().contains("not found"));
+        assert_eq!(
+            value["unlearning"]["verdict"],
+            serde_json::json!("incomplete")
+        );
+        assert_eq!(
+            value["unlearning"]["runtimeRebuilt"],
+            serde_json::json!(false)
+        );
     }
 
     #[tokio::test]
@@ -690,13 +726,26 @@ mod tests {
     async fn test_purge_existing_memory() {
         let (storage, _dir) = test_storage().await;
         let id = ingest_memory(&storage).await;
+        let cognitive = test_cognitive();
+        {
+            let mut engine = cognitive.lock().await;
+            engine.activation_network.add_edge(
+                id.clone(),
+                "runtime-only-neighbor".to_string(),
+                vestige_core::LinkType::Semantic,
+                1.0,
+            );
+            engine.synaptic_tagging.tag_memory(&id);
+            assert!(engine.synaptic_tagging.has_active_tag(&id));
+            assert!(!engine.activation_network.activate(&id, 1.0).is_empty());
+        }
         let args = serde_json::json!({
             "action": "purge",
             "id": id,
             "confirm": true,
             "reason": "test cleanup"
         });
-        let result = execute(&storage, &test_cognitive(), Some(args)).await;
+        let result = execute(&storage, &cognitive, Some(args)).await;
         assert!(result.is_ok());
         let value = result.unwrap();
         assert_eq!(value["action"], "purge");
@@ -705,10 +754,39 @@ mod tests {
             value["message"]
                 .as_str()
                 .unwrap()
-                .contains("purged permanently")
+                .contains("Legacy sync/audit tombstones")
         );
         assert_eq!(value["edgesPruned"], 0);
         assert!(storage.get_node(&id).unwrap().is_none());
+        assert_eq!(
+            value["unlearning"]["scope"],
+            serde_json::json!("legacy_audited_purge")
+        );
+        assert_eq!(
+            value["unlearning"]["verdict"],
+            serde_json::json!("incomplete")
+        );
+        assert_eq!(
+            value["unlearning"]["runtimeRebuilt"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            value["unlearning"]["runtimeHydrationAttempted"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            value["unlearning"]["runtimeHydrationVerified"],
+            serde_json::json!(false)
+        );
+        assert!(
+            value["unlearning"]["claimBoundary"]
+                .as_str()
+                .unwrap()
+                .contains("does not establish complete machine unlearning")
+        );
+        let mut rebuilt = cognitive.lock().await;
+        assert!(!rebuilt.synaptic_tagging.has_active_tag(&id));
+        assert!(rebuilt.activation_network.activate(&id, 1.0).is_empty());
     }
 
     #[tokio::test]

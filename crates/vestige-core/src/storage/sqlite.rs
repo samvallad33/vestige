@@ -77,6 +77,117 @@ pub enum StorageError {
 /// Storage result type
 pub type Result<T> = std::result::Result<T, StorageError>;
 
+/// Environment variable selecting the SQLite commit-durability policy.
+pub const VESTIGE_SQLITE_DURABILITY_ENV: &str = "VESTIGE_SQLITE_DURABILITY";
+
+/// SQLite durability policy for persistent Vestige databases.
+///
+/// `Hardened` is the default and acknowledges a commit only after SQLite has
+/// used its FULL WAL synchronization path. `Balanced` preserves the historical
+/// WAL + NORMAL behavior for operators who explicitly accept the power-loss
+/// window in exchange for lower write latency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SqliteDurabilityProfile {
+    /// WAL + FULL, with macOS full-fsync requests enabled.
+    Hardened,
+    /// WAL + NORMAL, preserving the pre-hardening performance profile.
+    Balanced,
+}
+
+impl Default for SqliteDurabilityProfile {
+    fn default() -> Self {
+        Self::Hardened
+    }
+}
+
+impl SqliteDurabilityProfile {
+    /// Stable lowercase profile name used in status output and configuration.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hardened => "hardened",
+            Self::Balanced => "balanced",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "hardened" => Ok(Self::Hardened),
+            "balanced" => Ok(Self::Balanced),
+            _ => Err(StorageError::Init(format!(
+                "Invalid {VESTIGE_SQLITE_DURABILITY_ENV} value '{value}'; expected hardened|balanced"
+            ))),
+        }
+    }
+
+    fn from_env() -> Result<Self> {
+        match std::env::var(VESTIGE_SQLITE_DURABILITY_ENV) {
+            Ok(value) => Self::parse(&value),
+            Err(std::env::VarError::NotPresent) => Ok(Self::default()),
+            Err(std::env::VarError::NotUnicode(_)) => Err(StorageError::Init(format!(
+                "{VESTIGE_SQLITE_DURABILITY_ENV} must be valid UTF-8 and one of hardened|balanced"
+            ))),
+        }
+    }
+}
+
+/// Effective SQLite PRAGMAs read back from one live connection.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteConnectionPragmas {
+    pub journal_mode: String,
+    pub synchronous: i64,
+    pub synchronous_label: String,
+    pub fullfsync_enabled: bool,
+    pub fullfsync_meaningful_on_this_platform: bool,
+    pub checkpoint_fullfsync_enabled: bool,
+    pub wal_autocheckpoint_pages: i64,
+    pub foreign_keys_enabled: bool,
+    pub busy_timeout_ms: i64,
+}
+
+/// Result of integrity and V21 receipt-consistency checks at one startup phase.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteIntegrityStatus {
+    pub quick_check: String,
+    pub foreign_key_violations: u64,
+    pub synaptic_checks_applied: bool,
+    pub synaptic_consistency_violations: u64,
+}
+
+/// SQLite WAL checkpoint mode exposed for explicit lifecycle operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalCheckpointMode {
+    /// Checkpoint as many frames as possible without blocking active readers.
+    Passive,
+    /// Checkpoint and truncate the WAL after application writes have stopped.
+    Truncate,
+}
+
+/// Raw `wal_checkpoint` counters reported by SQLite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WalCheckpointStatus {
+    pub busy: i64,
+    pub log_frames: i64,
+    pub checkpointed_frames: i64,
+}
+
+/// Verified startup durability and recovery state retained by the store.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteDurabilityStatus {
+    pub profile: SqliteDurabilityProfile,
+    pub writer: SqliteConnectionPragmas,
+    pub reader: SqliteConnectionPragmas,
+    pub before_migrations: SqliteIntegrityStatus,
+    pub after_migrations: SqliteIntegrityStatus,
+    pub startup_checkpoint: WalCheckpointStatus,
+    pub commit_acknowledgement: String,
+    pub claim_boundary: String,
+}
+
 /// Result of smart ingest with prediction error gating
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -244,6 +355,14 @@ pub struct PurgeReport {
     pub insights_deleted: i64,
     /// Number of temporal-summary children detached from this parent.
     pub children_orphaned: i64,
+    /// This established purge path audits legacy local cleanup only.  It does
+    /// not claim the post-V25 lineage coverage required for verified local
+    /// machine unlearning.
+    pub unlearning_scope: crate::storage::UnlearningScope,
+    /// Legacy purge is intentionally never labeled `VerifiedWithinScope`.
+    pub unlearning_verdict: crate::storage::UnlearningVerdict,
+    /// Fixed boundary shown by MCP callers rather than a free-form guarantee.
+    pub unlearning_claim_boundary: &'static str,
 }
 
 // ============================================================================
@@ -309,6 +428,7 @@ const VESTIGE_DISABLE_VECTOR_SEARCH: &str = "VESTIGE_DISABLE_VECTOR_SEARCH";
 /// so the MCP layer can use `Arc<Storage>` instead of `Arc<Mutex<Storage>>`.
 pub struct SqliteMemoryStore {
     db_path: PathBuf,
+    durability_status: SqliteDurabilityStatus,
     // `pub(crate)` so the sibling `trace_store` module (Black Box / Receipts /
     // Memory PRs CRUD) can lock the same writer/reader connections and follow
     // the established store idiom without duplicating connection management.
@@ -470,8 +590,12 @@ impl SqliteMemoryStore {
         Self::prepare_data_dir(proj_dirs.data_dir().to_path_buf())
     }
 
-    /// Apply PRAGMAs and optional encryption to a connection
-    fn configure_connection(conn: &Connection) -> Result<()> {
+    /// Apply PRAGMAs and optional encryption to a connection.
+    fn configure_connection(
+        conn: &Connection,
+        profile: SqliteDurabilityProfile,
+        writer: bool,
+    ) -> Result<()> {
         // Apply encryption key if SQLCipher is enabled and key is provided
         #[cfg(feature = "encryption")]
         {
@@ -482,24 +606,385 @@ impl SqliteMemoryStore {
             }
         }
 
-        // Configure SQLite for performance
+        // WAL is persistent database state, so only the writer requests the
+        // transition. Every connection still receives its own synchronous,
+        // foreign-key, timeout, and full-fsync settings.
+        if writer {
+            conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+        }
+
+        let durability_pragmas = match profile {
+            SqliteDurabilityProfile::Hardened => {
+                "PRAGMA synchronous = FULL;
+                 PRAGMA fullfsync = ON;
+                 PRAGMA checkpoint_fullfsync = ON;"
+            }
+            SqliteDurabilityProfile::Balanced => {
+                "PRAGMA synchronous = NORMAL;
+                 PRAGMA fullfsync = OFF;
+                 PRAGMA checkpoint_fullfsync = OFF;"
+            }
+        };
+        conn.execute_batch(durability_pragmas)?;
         conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
-             PRAGMA cache_size = -64000;
+            "PRAGMA cache_size = -64000;
              PRAGMA temp_store = MEMORY;
              PRAGMA foreign_keys = ON;
              PRAGMA busy_timeout = 5000;
              PRAGMA mmap_size = 268435456;
-             PRAGMA journal_size_limit = 67108864;
-             PRAGMA optimize = 0x10002;",
+             PRAGMA wal_autocheckpoint = 1000;
+             PRAGMA journal_size_limit = 67108864;",
         )?;
 
         Ok(())
     }
 
+    fn read_effective_pragmas(conn: &Connection) -> Result<SqliteConnectionPragmas> {
+        let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+        let synchronous: i64 = conn.query_row("PRAGMA synchronous", [], |row| row.get(0))?;
+        let fullfsync: i64 = conn.query_row("PRAGMA fullfsync", [], |row| row.get(0))?;
+        let checkpoint_fullfsync: i64 =
+            conn.query_row("PRAGMA checkpoint_fullfsync", [], |row| row.get(0))?;
+        let wal_autocheckpoint_pages: i64 =
+            conn.query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))?;
+        let foreign_keys: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+        let busy_timeout_ms: i64 = conn.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?;
+        let synchronous_label = match synchronous {
+            0 => "off",
+            1 => "normal",
+            2 => "full",
+            3 => "extra",
+            _ => "unknown",
+        }
+        .to_string();
+
+        Ok(SqliteConnectionPragmas {
+            journal_mode: journal_mode.to_ascii_lowercase(),
+            synchronous,
+            synchronous_label,
+            fullfsync_enabled: fullfsync != 0,
+            fullfsync_meaningful_on_this_platform: cfg!(target_os = "macos"),
+            checkpoint_fullfsync_enabled: checkpoint_fullfsync != 0,
+            wal_autocheckpoint_pages,
+            foreign_keys_enabled: foreign_keys != 0,
+            busy_timeout_ms,
+        })
+    }
+
+    fn verify_effective_pragmas(
+        profile: SqliteDurabilityProfile,
+        role: &str,
+        pragmas: &SqliteConnectionPragmas,
+    ) -> Result<()> {
+        if !pragmas.foreign_keys_enabled {
+            return Err(StorageError::Init(format!(
+                "SQLite {role} connection refused foreign_keys=ON"
+            )));
+        }
+        if profile == SqliteDurabilityProfile::Hardened {
+            if pragmas.journal_mode != "wal" {
+                return Err(StorageError::Init(format!(
+                    "Hardened SQLite startup refused durability downgrade: {role} journal_mode is '{}' instead of WAL",
+                    pragmas.journal_mode
+                )));
+            }
+            if pragmas.synchronous != 2 {
+                return Err(StorageError::Init(format!(
+                    "Hardened SQLite startup refused durability downgrade: {role} synchronous is '{}' instead of FULL",
+                    pragmas.synchronous_label
+                )));
+            }
+            #[cfg(target_os = "macos")]
+            if !pragmas.fullfsync_enabled || !pragmas.checkpoint_fullfsync_enabled {
+                return Err(StorageError::Init(format!(
+                    "Hardened SQLite startup refused durability downgrade: {role} fullfsync={} checkpoint_fullfsync={} instead of both enabled",
+                    pragmas.fullfsync_enabled, pragmas.checkpoint_fullfsync_enabled
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+        let exists: i64 = conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2
+             )",
+            params![table, column],
+            |row| row.get(0),
+        )?;
+        Ok(exists != 0)
+    }
+
+    fn run_integrity_checks(conn: &Connection, phase: &str) -> Result<SqliteIntegrityStatus> {
+        let mut quick_rows = Vec::new();
+        {
+            let mut stmt = conn.prepare("PRAGMA quick_check")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            for row in rows {
+                quick_rows.push(row?);
+            }
+        }
+        let quick_check = quick_rows.join("; ");
+        if quick_rows.len() != 1 || quick_rows.first().map(String::as_str) != Some("ok") {
+            return Err(StorageError::Init(format!(
+                "SQLite {phase} quick_check failed: {quick_check}"
+            )));
+        }
+
+        let foreign_key_violations = {
+            let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+            let mut rows = stmt.query([])?;
+            let mut count = 0_u64;
+            while rows.next()?.is_some() {
+                count += 1;
+            }
+            count
+        };
+        if foreign_key_violations != 0 {
+            return Err(StorageError::Init(format!(
+                "SQLite {phase} foreign_key_check found {foreign_key_violations} violation(s)"
+            )));
+        }
+
+        let synaptic_tables = [
+            "synaptic_tags",
+            "synaptic_events",
+            "synaptic_capture_items",
+            "memory_receipts",
+        ];
+        let mut synaptic_checks_applied = true;
+        for table in synaptic_tables {
+            if !Self::table_exists(conn, table)? {
+                synaptic_checks_applied = false;
+                break;
+            }
+        }
+
+        let synaptic_consistency_violations = if synaptic_checks_applied {
+            let missing_receipts: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM synaptic_events e
+                 LEFT JOIN memory_receipts r ON r.receipt_id = e.receipt_id
+                 WHERE e.receipt_id IS NULL OR r.receipt_id IS NULL",
+                [],
+                |row| row.get(0),
+            )?;
+            let invalid_event_receipt_predicates =
+                if Self::table_has_column(conn, "synaptic_events", "public_event_id")? {
+                    conn.query_row(
+                        "SELECT COUNT(*)
+                     FROM synaptic_events e
+                     JOIN memory_receipts r ON r.receipt_id = e.receipt_id
+                     WHERE CASE json_extract(r.payload, '$.evidence.predicate.schemaVersion')
+                         WHEN 1 THEN
+                                json_extract(r.payload, '$.evidence.kind')
+                                    IS NOT 'synaptic_capture'
+                             OR e.algorithm_version IS NOT 'vestige.synaptic_capture.v1'
+                             OR e.public_event_id IS NULL
+                             OR json_extract(r.payload, '$.evidence.predicate.algorithmVersion')
+                                    IS NOT 'vestige.synaptic_capture.v1'
+                             OR json_type(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT 'text'
+                             OR json_extract(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT e.public_event_id
+                         WHEN 2 THEN
+                                json_extract(r.payload, '$.evidence.kind')
+                                    IS NOT 'synaptic_capture'
+                             OR e.algorithm_version IS NOT 'vestige.synaptic_capture.v2'
+                             OR e.public_event_id IS NULL
+                             OR json_extract(r.payload, '$.evidence.predicate.algorithmVersion')
+                                    IS NOT 'vestige.synaptic_capture.v2'
+                             OR json_extract(r.payload, '$.evidence.predicate.receiptRole')
+                                    IS NOT 'root'
+                             OR json_type(
+                                    r.payload,
+                                    '$.evidence.predicate.parentReceiptId'
+                                ) IS NOT NULL
+                             OR json_type(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT 'text'
+                             OR json_extract(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT e.public_event_id
+                         ELSE 1
+                     END",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?
+                } else {
+                    0
+                };
+            let invalid_items: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM synaptic_capture_items i
+                 LEFT JOIN synaptic_events e ON e.event_id = i.event_id
+                 LEFT JOIN synaptic_tags t ON t.tag_id = i.tag_id
+                 LEFT JOIN memory_receipts r ON r.receipt_id = i.receipt_id
+                 WHERE e.event_id IS NULL OR t.tag_id IS NULL OR r.receipt_id IS NULL
+                    OR i.memory_id IS NOT t.memory_id",
+                [],
+                |row| row.get(0),
+            )?;
+            // V21 stores one root receipt id on both the event and every item.
+            // V22 may store a per-pair child receipt on an item, so the startup
+            // invariant becomes predicate-version aware once the V22 columns
+            // exist. Preparing this SQL conditionally keeps pre-V22 databases
+            // valid during checks that run before pending migrations.
+            let invalid_item_receipt_predicates = if Self::table_has_column(
+                conn,
+                "synaptic_events",
+                "public_event_id",
+            )? && Self::table_has_column(
+                conn,
+                "synaptic_capture_items",
+                "evaluation_direction",
+            )? {
+                conn.query_row(
+                    "SELECT COUNT(*)
+                     FROM synaptic_capture_items i
+                     JOIN synaptic_events e ON e.event_id = i.event_id
+                     JOIN memory_receipts r ON r.receipt_id = i.receipt_id
+                     WHERE CASE json_extract(r.payload, '$.evidence.predicate.schemaVersion')
+                         WHEN 1 THEN
+                                i.receipt_id <> e.receipt_id
+                             OR i.evaluation_direction IS NOT 'backward'
+                             OR i.algorithm_version IS NOT 'vestige.synaptic_capture.v1'
+                         WHEN 2 THEN
+                                json_extract(r.payload, '$.evidence.kind') IS NOT 'synaptic_capture'
+                             OR i.algorithm_version IS NOT 'vestige.synaptic_capture.v2'
+                             OR i.evaluation_direction NOT IN ('backward', 'forward')
+                             OR json_extract(r.payload, '$.evidence.predicate.algorithmVersion')
+                                    IS NOT 'vestige.synaptic_capture.v2'
+                             OR CASE i.evaluation_direction
+                                  WHEN 'backward' THEN
+                                         i.receipt_id <> e.receipt_id
+                                      OR json_extract(r.payload, '$.evidence.predicate.receiptRole')
+                                             IS NOT 'root'
+                                      OR json_type(
+                                             r.payload,
+                                             '$.evidence.predicate.parentReceiptId'
+                                         ) IS NOT NULL
+                                  WHEN 'forward' THEN
+                                         i.receipt_id = e.receipt_id
+                                      OR json_extract(r.payload, '$.evidence.predicate.receiptRole')
+                                             IS NOT 'pair'
+                                      OR json_extract(r.payload, '$.evidence.predicate.parentReceiptId')
+                                             IS NOT e.receipt_id
+                                  ELSE 1
+                                END
+                             OR e.public_event_id IS NULL
+                             OR json_type(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT 'text'
+                             OR json_extract(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT e.public_event_id
+                             OR json_extract(r.payload, '$.evidence.predicate.evaluationDirection')
+                                    IS NOT i.evaluation_direction
+                             OR json_array_length(
+                                    json_extract(r.payload, '$.evidence.predicate.candidates')
+                                ) IS NOT 1
+                             OR json_extract(
+                                    r.payload,
+                                    '$.evidence.predicate.candidates[0].evidenceSlot'
+                                ) IS NOT i.evidence_slot
+                         ELSE 1
+                     END",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?
+            } else {
+                conn.query_row(
+                    "SELECT COUNT(*)
+                     FROM synaptic_capture_items i
+                     JOIN synaptic_events e ON e.event_id = i.event_id
+                     WHERE i.receipt_id <> e.receipt_id",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?
+            };
+            let duplicate_active_tags: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM (
+                     SELECT memory_id
+                     FROM synaptic_tags
+                     WHERE state = 'active'
+                     GROUP BY memory_id
+                     HAVING COUNT(*) > 1
+                 )",
+                [],
+                |row| row.get(0),
+            )?;
+            let invalid_captured_tags: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM synaptic_tags t
+                 LEFT JOIN synaptic_events e ON e.event_id = t.capture_event_id
+                 LEFT JOIN synaptic_capture_items i
+                   ON i.event_id = t.capture_event_id
+                  AND i.tag_id = t.tag_id
+                  AND i.disposition = 'captured'
+                 WHERE (t.state = 'captured' AND (
+                           t.capture_event_id IS NULL
+                        OR t.captured_at_ms IS NULL
+                        OR e.event_id IS NULL
+                        OR i.tag_id IS NULL
+                       ))
+                    OR (t.state <> 'captured' AND (
+                           t.capture_event_id IS NOT NULL
+                        OR t.captured_at_ms IS NOT NULL
+                       ))",
+                [],
+                |row| row.get(0),
+            )?;
+            (missing_receipts
+                + invalid_event_receipt_predicates
+                + invalid_items
+                + invalid_item_receipt_predicates
+                + duplicate_active_tags
+                + invalid_captured_tags) as u64
+        } else {
+            0
+        };
+        if synaptic_consistency_violations != 0 {
+            return Err(StorageError::Init(format!(
+                "SQLite {phase} synaptic receipt consistency checks found {synaptic_consistency_violations} violation(s)"
+            )));
+        }
+
+        Ok(SqliteIntegrityStatus {
+            quick_check,
+            foreign_key_violations,
+            synaptic_checks_applied,
+            synaptic_consistency_violations,
+        })
+    }
+
+    fn checkpoint_connection(
+        conn: &Connection,
+        mode: WalCheckpointMode,
+    ) -> Result<WalCheckpointStatus> {
+        let sql = match mode {
+            WalCheckpointMode::Passive => "PRAGMA wal_checkpoint(PASSIVE)",
+            WalCheckpointMode::Truncate => "PRAGMA wal_checkpoint(TRUNCATE)",
+        };
+        let (busy, log_frames, checkpointed_frames) =
+            conn.query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        Ok(WalCheckpointStatus {
+            busy,
+            log_frames,
+            checkpointed_frames,
+        })
+    }
+
     /// Create new storage instance
     pub fn new(db_path: Option<PathBuf>) -> Result<Self> {
+        Self::new_with_durability(db_path, SqliteDurabilityProfile::from_env()?)
+    }
+
+    /// Create storage with an explicit durability policy.
+    ///
+    /// This is primarily useful for controlled benchmarks and embedded callers
+    /// that cannot use process environment configuration.
+    pub fn new_with_durability(
+        db_path: Option<PathBuf>,
+        profile: SqliteDurabilityProfile,
+    ) -> Result<Self> {
         let path = match db_path {
             Some(p) => p,
             None => Self::default_db_path()?,
@@ -516,14 +1001,46 @@ impl SqliteMemoryStore {
             let _ = std::fs::set_permissions(&path, perms);
         }
 
-        Self::configure_connection(&writer_conn)?;
+        Self::configure_connection(&writer_conn, profile, true)?;
+        let writer_pragmas = Self::read_effective_pragmas(&writer_conn)?;
+        Self::verify_effective_pragmas(profile, "writer", &writer_pragmas)?;
+
+        // Opening the database lets SQLite recover a committed WAL. Validate
+        // that recovered state before migrations can change the schema.
+        let before_migrations = Self::run_integrity_checks(&writer_conn, "pre-migration")?;
 
         // Apply migrations on writer only
         super::migrations::apply_migrations(&writer_conn)?;
+        writer_conn.execute_batch("PRAGMA optimize = 0x10002;")?;
+        let after_migrations = Self::run_integrity_checks(&writer_conn, "post-migration")?;
+        let startup_checkpoint =
+            Self::checkpoint_connection(&writer_conn, WalCheckpointMode::Passive)?;
 
         // Open reader connection to same path
         let reader_conn = Connection::open(&path)?;
-        Self::configure_connection(&reader_conn)?;
+        Self::configure_connection(&reader_conn, profile, false)?;
+        let reader_pragmas = Self::read_effective_pragmas(&reader_conn)?;
+        Self::verify_effective_pragmas(profile, "reader", &reader_pragmas)?;
+
+        let durability_status = SqliteDurabilityStatus {
+            profile,
+            writer: writer_pragmas,
+            reader: reader_pragmas,
+            before_migrations,
+            after_migrations,
+            startup_checkpoint,
+            commit_acknowledgement: match profile {
+                SqliteDurabilityProfile::Hardened => {
+                    "tx.commit() returned after SQLite FULL WAL synchronization"
+                }
+                SqliteDurabilityProfile::Balanced => {
+                    "tx.commit() returned under SQLite NORMAL WAL synchronization"
+                }
+            }
+            .to_string(),
+            claim_boundary: "Process-crash tests prove transaction atomicity and recovery at the tested commit boundaries. Power-loss durability still depends on the operating system, filesystem, controller, and storage device honoring completed flush requests; WAL requires local shared-memory and locking semantics."
+                .to_string(),
+        };
 
         #[cfg(feature = "embeddings")]
         let embedding_service = EmbeddingService::new();
@@ -552,6 +1069,7 @@ impl SqliteMemoryStore {
 
         let storage = Self {
             db_path: path,
+            durability_status,
             writer: Mutex::new(writer_conn),
             reader: Mutex::new(reader_conn),
             scheduler: Mutex::new(FSRSScheduler::default()),
@@ -575,6 +1093,34 @@ impl SqliteMemoryStore {
     /// Absolute path of the SQLite database this storage instance uses.
     pub fn db_path(&self) -> &Path {
         &self.db_path
+    }
+
+    /// Verified durability profile and startup-recovery results.
+    pub fn durability_status(&self) -> &SqliteDurabilityStatus {
+        &self.durability_status
+    }
+
+    /// Run an explicit SQLite WAL checkpoint and return SQLite's raw counters.
+    ///
+    /// `Passive` is safe for live status/recovery workflows. `Truncate` should
+    /// be used only after application writers have stopped (for example, at a
+    /// quiesced backup or graceful-shutdown boundary); it is not what makes an
+    /// already-acknowledged hardened commit durable.
+    pub fn checkpoint_wal(&self, mode: WalCheckpointMode) -> Result<WalCheckpointStatus> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        Self::checkpoint_connection(&writer, mode)
+    }
+
+    /// Re-run integrity and V21 consistency checks against the live database.
+    pub fn verify_integrity(&self) -> Result<SqliteIntegrityStatus> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        Self::run_integrity_checks(&reader, "runtime")
     }
 
     /// Data directory containing the SQLite database and sidecar folders.
@@ -2037,11 +2583,12 @@ impl SqliteMemoryStore {
     pub fn suppress_memory(&self, id: &str) -> Result<KnowledgeNode> {
         let now = Utc::now();
         {
-            let writer = self
+            let mut writer = self
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-            writer.execute(
+            let tx = writer.transaction()?;
+            let changed = tx.execute(
                 "UPDATE knowledge_nodes SET
                     last_accessed = ?1,
                     suppression_count = COALESCE(suppression_count, 0) + 1,
@@ -2052,6 +2599,15 @@ impl SqliteMemoryStore {
                 WHERE id = ?2",
                 params![now.to_rfc3339(), id],
             )?;
+            if changed == 0 {
+                return Err(StorageError::NotFound(id.to_string()));
+            }
+            Self::invalidate_replay_evidence_for_memory_in_transaction(
+                &tx,
+                id,
+                crate::storage::ReplayInvalidationReason::Suppressed,
+            )?;
+            tx.commit()?;
         }
 
         let _ = self.log_access(id, "suppress");
@@ -2583,6 +3139,14 @@ impl SqliteMemoryStore {
         let tx = writer.transaction()?;
         if Self::node_exists(&tx, id)? {
             Self::record_sync_tombstone(&tx, "knowledge_nodes", id, "delete_node")?;
+            // Legacy deletion is not the full verified-erasure path, but it
+            // still must not leave a replay capsule active after its source
+            // memory disappears.
+            Self::invalidate_replay_evidence_for_memory_in_transaction(
+                &tx,
+                id,
+                crate::storage::ReplayInvalidationReason::Purged,
+            )?;
         }
         let rows = tx.execute("DELETE FROM knowledge_nodes WHERE id = ?1", params![id])?;
         tx.commit()?;
@@ -2626,6 +3190,9 @@ impl SqliteMemoryStore {
                 insights_rewritten: 0,
                 insights_deleted: 0,
                 children_orphaned: 0,
+                unlearning_scope: crate::storage::UnlearningScope::LegacyAuditedPurge,
+                unlearning_verdict: crate::storage::UnlearningVerdict::Incomplete,
+                unlearning_claim_boundary: "No purge ran because the requested memory was not found; no unlearning audit or verified-local erasure claim was produced.",
             });
         };
 
@@ -2672,6 +3239,15 @@ impl SqliteMemoryStore {
             "UPDATE knowledge_nodes SET summary_parent_id = NULL WHERE summary_parent_id = ?1",
             params![id],
         )? as i64;
+
+        // A purge must erase frozen replay dependency locators and invalidate
+        // every derived replay in the same transaction as the memory removal.
+        // This also upgrades a previously redacted capsule to `purged`.
+        Self::invalidate_replay_evidence_for_memory_in_transaction(
+            &tx,
+            id,
+            crate::storage::ReplayInvalidationReason::Purged,
+        )?;
 
         tx.execute(
             "UPDATE composition_members SET preview = NULL WHERE memory_id = ?1",
@@ -2731,10 +3307,16 @@ impl SqliteMemoryStore {
         // A trigger event otherwise preserves the purged stable id outside the
         // knowledge-node FK graph. Capture-item rows cascade with the event;
         // candidate rows cascade through their synaptic tag on node deletion.
-        // Captured tags keep historical state but must not retain the private
-        // deterministic event fingerprint after its trigger is purged.
+        //
+        // A captured tag is only valid while it is bound to the capture item
+        // and event which prove that state.  Purging the trigger deletes that
+        // proof, so retaining `captured` would leave an invalid durable state
+        // that prevents a later startup integrity check from succeeding.  An
+        // expired tag cannot be recaptured, which preserves the one-promotion
+        // lifecycle without claiming evidence that no longer exists.
         tx.execute(
-            "UPDATE synaptic_tags SET capture_event_id = NULL
+            "UPDATE synaptic_tags
+             SET state = 'expired', capture_event_id = NULL, captured_at_ms = NULL
              WHERE capture_event_id IN (
                  SELECT event_id FROM synaptic_events WHERE trigger_memory_id = ?1
              )",
@@ -2744,6 +3326,18 @@ impl SqliteMemoryStore {
             "DELETE FROM synaptic_events WHERE trigger_memory_id = ?1",
             params![id],
         )?;
+
+        // V24 deliberately keeps the immutable, identity-free DSSE envelope
+        // after erasure, but its private disclosure mapping is deletable. The
+        // FK also covers this when the node delete succeeds; doing it
+        // explicitly keeps the privacy operation visible and makes a schema
+        // regression fail before the canonical row is removed.
+        if Self::table_exists(&tx, "receipt_disclosures")? {
+            tx.execute(
+                "DELETE FROM receipt_disclosures WHERE memory_id = ?1",
+                params![id],
+            )?;
+        }
 
         let tags_json = serde_json::to_string(&node.tags).unwrap_or_else(|_| "[]".to_string());
         tx.execute(
@@ -2793,6 +3387,9 @@ impl SqliteMemoryStore {
             insights_rewritten,
             insights_deleted,
             children_orphaned,
+            unlearning_scope: crate::storage::UnlearningScope::LegacyAuditedPurge,
+            unlearning_verdict: crate::storage::UnlearningVerdict::Incomplete,
+            unlearning_claim_boundary: "Legacy cleanup completed, but this operation has no V25 lineage-completeness proof, full required-surface audit, or anti-resurrection ingress gate. It does not establish complete machine unlearning, erasure of unmanaged copies, media forensics, provider backups, external model weights, or re-ingest prevention.",
         })
     }
 
@@ -3374,10 +3971,11 @@ impl SqliteMemoryStore {
         // 0.2) or importance (up to 0.3) — a fresh, weakly-relevant node could
         // outrank the best match. Min-max normalize relevance across the result
         // set so the best match scores ~1.0 regardless of the weight scaling.
-        let (min_rel, max_rel) = results.iter().fold(
-            (f32::INFINITY, f32::NEG_INFINITY),
-            |(mn, mx), r| (mn.min(r.combined_score), mx.max(r.combined_score)),
-        );
+        let (min_rel, max_rel) = results
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(mn, mx), r| {
+                (mn.min(r.combined_score), mx.max(r.combined_score))
+            });
         let rel_span = (max_rel - min_rel) as f64;
 
         let now = Utc::now();
@@ -4152,8 +4750,7 @@ impl SqliteMemoryStore {
                         .filter(|c| c.id != failure_node.id)
                         .filter(|c| !rb::looks_like_failure(&c.content, &c.tags))
                         .filter_map(|c| {
-                            let age = (failure_node.created_at - c.created_at).num_seconds()
-                                as f64
+                            let age = (failure_node.created_at - c.created_at).num_seconds() as f64
                                 / 86_400.0;
                             if age <= 0.0 {
                                 return None;
@@ -5320,18 +5917,18 @@ impl SqliteMemoryStore {
                 // Semantic-band cosine: lets a pair with NO shared surface tokens but a
                 // related MEANING through the gate (the generative cross-domain combination).
                 #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-                let band_cos: Option<f32> = match (embedding_map.get(&a.id), embedding_map.get(&b.id))
-                {
-                    (Some(ea), Some(eb)) => {
-                        let c = crate::embeddings::cosine_similarity(ea, eb);
-                        if (COMPOSE_BAND_LO..COMPOSE_BAND_HI).contains(&c) {
-                            Some(c)
-                        } else {
-                            None
+                let band_cos: Option<f32> =
+                    match (embedding_map.get(&a.id), embedding_map.get(&b.id)) {
+                        (Some(ea), Some(eb)) => {
+                            let c = crate::embeddings::cosine_similarity(ea, eb);
+                            if (COMPOSE_BAND_LO..COMPOSE_BAND_HI).contains(&c) {
+                                Some(c)
+                            } else {
+                                None
+                            }
                         }
-                    }
-                    _ => None,
-                };
+                        _ => None,
+                    };
                 #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
                 let band_cos: Option<f32> = None;
 
@@ -5357,7 +5954,9 @@ impl SqliteMemoryStore {
                     (shared_tags.len() as f64 * 0.45) + (shared_terms.len().min(5) as f64 * 0.25);
                 // Semantic-band pairs (no surface overlap) get an anchor from cosine so they
                 // clear the cutoff: a mid-band 0.45-0.85 meaning-match is a strong compose signal.
-                let band_anchor = band_cos.map(|c| 1.0 + (c as f64 - 0.45) * 2.0).unwrap_or(0.0);
+                let band_anchor = band_cos
+                    .map(|c| 1.0 + (c as f64 - 0.45) * 2.0)
+                    .unwrap_or(0.0);
                 let prior_outcomes = Self::pair_prior_outcomes(&outcome_map, &a.id, &b.id);
                 let outcome_signal = Self::outcome_signal(&prior_outcomes);
                 let outcome_score_adjustment = Self::outcome_score_adjustment(&prior_outcomes);
@@ -6353,9 +6952,8 @@ impl SqliteMemoryStore {
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-        let mut stmt = reader.prepare(
-            "SELECT * FROM memory_connections ORDER BY created_at DESC LIMIT ?1",
-        )?;
+        let mut stmt =
+            reader.prepare("SELECT * FROM memory_connections ORDER BY created_at DESC LIMIT ?1")?;
         let rows = stmt.query_map([limit as i64], Self::row_to_connection)?;
         let mut result = Vec::new();
         for row in rows {
@@ -10708,6 +11306,10 @@ mod tests {
     use crate::advanced::{MatchClass, MergePolicy};
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+    #[cfg(unix)]
+    use std::process::{Command, Stdio};
+    #[cfg(unix)]
+    use std::sync::mpsc;
     use tempfile::tempdir;
     // The public struct was renamed from Storage to SqliteMemoryStore; this
     // alias keeps all existing tests compiling without modification.
@@ -10724,6 +11326,585 @@ mod tests {
 
     fn create_test_storage_at(dir: &tempfile::TempDir, name: &str) -> Storage {
         Storage::new(Some(dir.path().join(name))).unwrap()
+    }
+
+    // ===================== SQLite durability/recovery ===================
+
+    #[test]
+    fn durability_profile_parser_is_explicit_and_fail_closed() {
+        assert_eq!(
+            SqliteDurabilityProfile::parse("hardened").unwrap(),
+            SqliteDurabilityProfile::Hardened
+        );
+        assert_eq!(
+            SqliteDurabilityProfile::parse(" BALANCED ").unwrap(),
+            SqliteDurabilityProfile::Balanced
+        );
+        let error = SqliteDurabilityProfile::parse("normal").unwrap_err();
+        assert!(
+            error.to_string().contains("expected hardened|balanced"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn hardened_profile_is_verified_before_store_is_returned() {
+        let dir = tempdir().unwrap();
+        let store = Storage::new_with_durability(
+            Some(dir.path().join("hardened.db")),
+            SqliteDurabilityProfile::Hardened,
+        )
+        .unwrap();
+        let status = store.durability_status();
+
+        assert_eq!(status.profile, SqliteDurabilityProfile::Hardened);
+        assert_eq!(status.writer.journal_mode, "wal");
+        assert_eq!(status.writer.synchronous, 2);
+        assert_eq!(status.writer.synchronous_label, "full");
+        assert!(status.writer.fullfsync_enabled);
+        assert!(status.writer.checkpoint_fullfsync_enabled);
+        assert_eq!(status.writer.wal_autocheckpoint_pages, 1000);
+        assert!(status.writer.foreign_keys_enabled);
+        assert_eq!(status.writer.busy_timeout_ms, 5000);
+        assert_eq!(status.reader.journal_mode, "wal");
+        assert_eq!(status.reader.synchronous, 2);
+        assert_eq!(status.before_migrations.quick_check, "ok");
+        assert!(!status.before_migrations.synaptic_checks_applied);
+        assert_eq!(status.after_migrations.quick_check, "ok");
+        assert!(status.after_migrations.synaptic_checks_applied);
+        assert_eq!(status.after_migrations.synaptic_consistency_violations, 0);
+        assert_eq!(store.verify_integrity().unwrap().quick_check, "ok");
+    }
+
+    #[test]
+    fn balanced_profile_preserves_normal_sync_only_when_explicit() {
+        let dir = tempdir().unwrap();
+        let store = Storage::new_with_durability(
+            Some(dir.path().join("balanced.db")),
+            SqliteDurabilityProfile::Balanced,
+        )
+        .unwrap();
+        let status = store.durability_status();
+
+        assert_eq!(status.profile, SqliteDurabilityProfile::Balanced);
+        assert_eq!(status.writer.journal_mode, "wal");
+        assert_eq!(status.writer.synchronous, 1);
+        assert_eq!(status.writer.synchronous_label, "normal");
+        assert!(!status.writer.fullfsync_enabled);
+        assert!(!status.writer.checkpoint_fullfsync_enabled);
+        assert_eq!(status.reader.synchronous, 1);
+    }
+
+    #[test]
+    fn explicit_checkpoint_reports_sqlite_counters() {
+        let dir = tempdir().unwrap();
+        let store = Storage::new_with_durability(
+            Some(dir.path().join("checkpoint.db")),
+            SqliteDurabilityProfile::Hardened,
+        )
+        .unwrap();
+        store
+            .ingest(IngestInput {
+                content: "checkpoint one acknowledged write".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let passive = store.checkpoint_wal(WalCheckpointMode::Passive).unwrap();
+        assert_eq!(passive.busy, 0);
+        assert!(passive.log_frames >= passive.checkpointed_frames);
+
+        let truncate = store.checkpoint_wal(WalCheckpointMode::Truncate).unwrap();
+        assert_eq!(truncate.busy, 0);
+    }
+
+    #[test]
+    fn startup_rejects_corrupt_database_before_migrations() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("corrupt.db");
+        std::fs::write(&path, b"not a sqlite database").unwrap();
+
+        let error = Storage::new_with_durability(Some(path), SqliteDurabilityProfile::Hardened)
+            .err()
+            .expect("corrupt database must not produce a store");
+        assert!(
+            error.to_string().contains("file is not a database")
+                || error.to_string().contains("malformed"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn startup_rejects_v21_event_without_receipt() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("inconsistent-v21.db");
+        {
+            let store =
+                Storage::new_with_durability(Some(path.clone()), SqliteDurabilityProfile::Hardened)
+                    .unwrap();
+            store.checkpoint_wal(WalCheckpointMode::Truncate).unwrap();
+        }
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO synaptic_events
+                     (event_id, trigger_memory_id, event_type, occurred_at_ms,
+                      window_from_ms, window_to_ms, strength, algorithm_version,
+                      receipt_id, recorded_at)
+                 VALUES ('broken-event', 'missing-trigger', 'test', 1, 1, 1,
+                         1.0, 'test', 'missing-receipt', '1970-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let error = Storage::new_with_durability(Some(path), SqliteDurabilityProfile::Hardened)
+            .err()
+            .expect("inconsistent V21 rows must fail startup");
+        assert!(
+            error
+                .to_string()
+                .contains("pre-migration synaptic receipt consistency"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn v22_pair_receipt_bindings_are_version_aware() {
+        let dir = tempdir().unwrap();
+        let store = Storage::new_with_durability(
+            Some(dir.path().join("v22-pair-binding.db")),
+            SqliteDurabilityProfile::Hardened,
+        )
+        .unwrap();
+        let memory = store
+            .ingest(IngestInput {
+                content: "V22 pair binding fixture".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let root_payload = serde_json::json!({
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schemaVersion": 2,
+                    "algorithmVersion": "vestige.synaptic_capture.v2",
+                    "receiptRole": "root",
+                    "trigger": { "eventId": "public-event" },
+                    "candidates": []
+                }
+            }
+        })
+        .to_string();
+        let child_payload = serde_json::json!({
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schemaVersion": 2,
+                    "algorithmVersion": "vestige.synaptic_capture.v2",
+                    "receiptRole": "pair",
+                    "parentReceiptId": "root-receipt",
+                    "evaluationDirection": "forward",
+                    "trigger": { "eventId": "public-event" },
+                    "candidates": [{ "evidenceSlot": "candidate_1" }]
+                }
+            }
+        })
+        .to_string();
+        {
+            let writer = store.writer.lock().unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_receipts(receipt_id, payload, created_at)
+                     VALUES ('root-receipt', ?1, '1970-01-01T00:00:00Z')",
+                    params![root_payload],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_receipts(receipt_id, payload, created_at)
+                     VALUES ('child-receipt', ?1, '1970-01-01T00:00:00Z')",
+                    params![child_payload],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO synaptic_events(
+                         event_id, trigger_memory_id, event_type, occurred_at_ms,
+                         window_from_ms, window_to_ms, strength, algorithm_version,
+                         receipt_id, recorded_at, public_event_id, event_state
+                     ) VALUES (
+                         'private-event', ?1, 'test', 2, 1, 2, 1.0,
+                         'vestige.synaptic_capture.v2', 'root-receipt',
+                         '1970-01-01T00:00:00Z', 'public-event', 'closed'
+                     )",
+                    params![memory.id],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO synaptic_tags(
+                         tag_id, memory_id, created_at_ms, initial_strength,
+                         algorithm_version, state, recorded_at
+                     ) VALUES (
+                         'tag-1', ?1, 1, 1.0, 'vestige.synaptic_capture.v2',
+                         'active', '1970-01-01T00:00:00Z'
+                     )",
+                    params![memory.id],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO synaptic_capture_items(
+                         event_id, tag_id, memory_id, evidence_slot, receipt_id,
+                         encoded_at_ms, temporal_distance_hours, capture_probability,
+                         tag_strength_at_evaluation, capture_score, disposition,
+                         recorded_at, evaluation_direction, algorithm_version
+                     ) VALUES (
+                         'private-event', 'tag-1', ?1, 'candidate_1', 'child-receipt',
+                         1, 0.0, 1.0, 1.0, 1.0, 'below_threshold',
+                         '1970-01-01T00:00:00Z', 'forward',
+                         'vestige.synaptic_capture.v2'
+                     )",
+                    params![memory.id],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            store
+                .verify_integrity()
+                .unwrap()
+                .synaptic_consistency_violations,
+            0
+        );
+
+        let invalid_child_payload = serde_json::json!({
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schemaVersion": 2,
+                    "algorithmVersion": "vestige.synaptic_capture.v2",
+                    "receiptRole": "pair",
+                    "parentReceiptId": "wrong-root",
+                    "evaluationDirection": "forward",
+                    "trigger": { "eventId": "public-event" },
+                    "candidates": [{ "evidenceSlot": "candidate_1" }]
+                }
+            }
+        })
+        .to_string();
+        store
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE memory_receipts SET payload = ?1 WHERE receipt_id = 'child-receipt'",
+                params![invalid_child_payload],
+            )
+            .unwrap();
+        let error = store.verify_integrity().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("synaptic receipt consistency checks found 1"),
+            "unexpected error: {error}"
+        );
+
+        let legacy_child_payload = serde_json::json!({
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schemaVersion": 1,
+                    "algorithmVersion": "vestige.synaptic_capture.v1",
+                    "trigger": { "eventId": "public-event" },
+                    "candidates": [{ "evidenceSlot": "candidate_1" }]
+                }
+            }
+        })
+        .to_string();
+        store
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE memory_receipts SET payload = ?1 WHERE receipt_id = 'child-receipt'",
+                params![legacy_child_payload],
+            )
+            .unwrap();
+        let error = store.verify_integrity().unwrap_err();
+        assert!(
+            error.to_string().contains("synaptic receipt consistency"),
+            "a schema-v1 receipt must not validate a V22 forward item: {error}"
+        );
+
+        // SQL `NULL IS NOT NULL` is false, so an explicit non-null/type guard
+        // is required or a missing event id on both sides becomes fail-open.
+        let missing_event_payload = serde_json::json!({
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schemaVersion": 2,
+                    "algorithmVersion": "vestige.synaptic_capture.v2",
+                    "receiptRole": "root",
+                    "trigger": {},
+                    "candidates": []
+                }
+            }
+        })
+        .to_string();
+        {
+            let writer = store.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE synaptic_events SET public_event_id = NULL
+                     WHERE event_id = 'private-event'",
+                    [],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "UPDATE memory_receipts SET payload = ?1
+                     WHERE receipt_id = 'root-receipt'",
+                    params![missing_event_payload],
+                )
+                .unwrap();
+        }
+        let error = store.verify_integrity().unwrap_err();
+        assert!(
+            error.to_string().contains("synaptic receipt consistency"),
+            "missing V22 event ids must fail closed: {error}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hardened_profile_rejects_missing_fullfsync_readback_on_macos() {
+        let mut pragmas = SqliteConnectionPragmas {
+            journal_mode: "wal".into(),
+            synchronous: 2,
+            synchronous_label: "full".into(),
+            fullfsync_enabled: true,
+            fullfsync_meaningful_on_this_platform: true,
+            checkpoint_fullfsync_enabled: true,
+            wal_autocheckpoint_pages: 1000,
+            foreign_keys_enabled: true,
+            busy_timeout_ms: 5000,
+        };
+        pragmas.fullfsync_enabled = false;
+        assert!(
+            Storage::verify_effective_pragmas(SqliteDurabilityProfile::Hardened, "test", &pragmas)
+                .is_err()
+        );
+        pragmas.fullfsync_enabled = true;
+        pragmas.checkpoint_fullfsync_enabled = false;
+        assert!(
+            Storage::verify_effective_pragmas(SqliteDurabilityProfile::Hardened, "test", &pragmas)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn hardened_writer_refuses_read_only_non_wal_database() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("readonly-delete.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "PRAGMA journal_mode = DELETE;
+                 CREATE TABLE seed(id INTEGER PRIMARY KEY);",
+            )
+            .unwrap();
+        }
+        let conn =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+
+        let error = Storage::configure_connection(&conn, SqliteDurabilityProfile::Hardened, true)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("readonly")
+                || error.to_string().contains("read-only")
+                || error.to_string().contains("attempt to write"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[cfg(unix)]
+    const SQLITE_CRASH_CHILD_SCENARIO: &str = "VESTIGE_SQLITE_CRASH_CHILD_SCENARIO";
+    #[cfg(unix)]
+    const SQLITE_CRASH_CHILD_PATH: &str = "VESTIGE_SQLITE_CRASH_CHILD_PATH";
+    #[cfg(unix)]
+    const SQLITE_CRASH_READY: &str = "VESTIGE_SQLITE_CRASH_READY";
+
+    /// Subprocess-only entry point for the process-crash durability harness.
+    #[cfg(unix)]
+    #[test]
+    fn sqlite_crash_child() {
+        let Ok(scenario) = std::env::var(SQLITE_CRASH_CHILD_SCENARIO) else {
+            return;
+        };
+        let path = PathBuf::from(
+            std::env::var_os(SQLITE_CRASH_CHILD_PATH)
+                .expect("crash child requires a database path"),
+        );
+        let store =
+            Storage::new_with_durability(Some(path), SqliteDurabilityProfile::Hardened).unwrap();
+        let mut writer = store.writer.lock().unwrap();
+        let tx = writer
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        tx.execute(
+            "INSERT INTO durability_probe_transactions(id, value)
+             VALUES ('ack-boundary', 'parent')",
+            [],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO durability_probe_items(transaction_id, item_index, value)
+             VALUES ('ack-boundary', 1, 'first'), ('ack-boundary', 2, 'second')",
+            [],
+        )
+        .unwrap();
+
+        if scenario == "before_commit" {
+            println!("{SQLITE_CRASH_READY}=before_commit");
+            std::io::stdout().flush().unwrap();
+            loop {
+                std::thread::park_timeout(std::time::Duration::from_secs(60));
+            }
+        }
+
+        assert_eq!(scenario, "after_commit");
+        tx.commit().unwrap();
+        drop(writer);
+        println!("{SQLITE_CRASH_READY}=after_commit");
+        std::io::stdout().flush().unwrap();
+        loop {
+            std::thread::park_timeout(std::time::Duration::from_secs(60));
+        }
+    }
+
+    #[cfg(unix)]
+    fn spawn_and_kill_at_commit_boundary(path: &Path, scenario: &str) {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("storage::sqlite::tests::sqlite_crash_child")
+            .arg("--nocapture")
+            .env(SQLITE_CRASH_CHILD_SCENARIO, scenario)
+            .env(SQLITE_CRASH_CHILD_PATH, path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            for line in BufReader::new(stdout)
+                .lines()
+                .map_while(std::result::Result::ok)
+            {
+                if line.contains(SQLITE_CRASH_READY) {
+                    let _ = ready_tx.send(line);
+                    return;
+                }
+            }
+        });
+
+        let marker = ready_rx
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap_or_else(|error| {
+                let _ = child.kill();
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut stderr| {
+                        let mut text = String::new();
+                        let _ = std::io::Read::read_to_string(&mut stderr, &mut text);
+                        text
+                    })
+                    .unwrap_or_default();
+                panic!("crash child did not reach {scenario}: {error}; stderr={stderr}")
+            });
+        assert!(marker.contains(scenario), "unexpected marker: {marker}");
+        child.kill().unwrap();
+        let status = child.wait().unwrap();
+        assert!(
+            !status.success(),
+            "crash child should be killed, not exit cleanly"
+        );
+    }
+
+    #[cfg(unix)]
+    fn prepare_crash_probe(path: &Path) {
+        let store = Storage::new_with_durability(
+            Some(path.to_path_buf()),
+            SqliteDurabilityProfile::Hardened,
+        )
+        .unwrap();
+        store
+            .writer
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE durability_probe_transactions(
+                     id TEXT PRIMARY KEY,
+                     value TEXT NOT NULL
+                 ) STRICT;
+                 CREATE TABLE durability_probe_items(
+                     transaction_id TEXT NOT NULL,
+                     item_index INTEGER NOT NULL,
+                     value TEXT NOT NULL,
+                     PRIMARY KEY(transaction_id, item_index),
+                     FOREIGN KEY(transaction_id)
+                         REFERENCES durability_probe_transactions(id)
+                         ON DELETE CASCADE
+                 ) STRICT;",
+            )
+            .unwrap();
+        store.checkpoint_wal(WalCheckpointMode::Truncate).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn crash_probe_counts(path: &Path) -> (i64, i64) {
+        let store = Storage::new_with_durability(
+            Some(path.to_path_buf()),
+            SqliteDurabilityProfile::Hardened,
+        )
+        .unwrap();
+        assert_eq!(store.verify_integrity().unwrap().quick_check, "ok");
+        let reader = store.reader.lock().unwrap();
+        let transactions = reader
+            .query_row(
+                "SELECT COUNT(*) FROM durability_probe_transactions",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let items = reader
+            .query_row("SELECT COUNT(*) FROM durability_probe_items", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        (transactions, items)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sigkill_before_and_after_commit_respects_atomic_ack_boundary() {
+        let dir = tempdir().unwrap();
+
+        let before_path = dir.path().join("before-commit.db");
+        prepare_crash_probe(&before_path);
+        spawn_and_kill_at_commit_boundary(&before_path, "before_commit");
+        assert_eq!(crash_probe_counts(&before_path), (0, 0));
+
+        let after_path = dir.path().join("after-commit.db");
+        prepare_crash_probe(&after_path);
+        spawn_and_kill_at_commit_boundary(&after_path, "after_commit");
+        assert_eq!(crash_probe_counts(&after_path), (1, 2));
     }
 
     // ===================== Connector sync (#57) =========================
@@ -11634,11 +12815,7 @@ mod tests {
                         retrieval_strength = 1.0,
                         retention_strength = 1.0
                      WHERE id = ?3",
-                    params![
-                        created_at.to_rfc3339(),
-                        passive_at.to_rfc3339(),
-                        &node.id
-                    ],
+                    params![created_at.to_rfc3339(), passive_at.to_rfc3339(), &node.id],
                 )
                 .unwrap();
             writer
@@ -14005,7 +15182,9 @@ mod tests {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn with_auto_merge_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
         const KEY: &str = "VESTIGE_AUTO_CONSOLIDATE_MERGE";
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = std::env::var_os(KEY);
         unsafe {
             match value {
@@ -14160,8 +15339,7 @@ mod tests {
 
             let merged = storage.auto_dedup_consolidation().unwrap();
             assert_eq!(
-                merged,
-                1,
+                merged, 1,
                 "the two unprotected near-dups merge among themselves"
             );
 
@@ -14757,9 +15935,7 @@ mod tests {
                 reps: 3,
                 lapses: 0,
             };
-            MemoryStoreSend::update_scheduling(s, &state)
-                .await
-                .unwrap();
+            MemoryStoreSend::update_scheduling(s, &state).await.unwrap();
         });
     }
 

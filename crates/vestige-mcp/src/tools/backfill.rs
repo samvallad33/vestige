@@ -16,10 +16,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+use vestige_core::advanced::prediction_error::cosine_similarity;
 use vestige_core::advanced::retroactive_backfill::{
     self, BackfillCandidate, FailureEvent, RetroactiveBackfill,
 };
-use vestige_core::advanced::prediction_error::cosine_similarity;
 use vestige_core::{KnowledgeNode, Storage};
 
 pub fn schema() -> Value {
@@ -109,14 +109,13 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             .ok_or_else(|| format!("failure memory '{id}' not found"))?,
         None => {
             // most recent memory that looks like a failure
-            let recent = storage.get_all_nodes(scan_limit, 0).map_err(|e| e.to_string())?;
-            recent
-                .into_iter()
-                .find(looks_like_failure)
-                .ok_or_else(|| {
-                    "no failure-like memory found to backfill from; pass failure_id or manual=true"
-                        .to_string()
-                })?
+            let recent = storage
+                .get_all_nodes(scan_limit, 0)
+                .map_err(|e| e.to_string())?;
+            recent.into_iter().find(looks_like_failure).ok_or_else(|| {
+                "no failure-like memory found to backfill from; pass failure_id or manual=true"
+                    .to_string()
+            })?
         }
     };
 
@@ -125,7 +124,11 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
 
     // surprise/prediction-error proxy: a failure-marked memory is treated as
     // high-salience; otherwise fall back to a neutral value (manual can force).
-    let pe = if looks_like_failure(&failure_node) { 0.9_f32 } else { 0.3_f32 };
+    let pe = if looks_like_failure(&failure_node) {
+        0.9_f32
+    } else {
+        0.3_f32
+    };
 
     let failure = FailureEvent {
         id: failure_node.id.clone(),
@@ -137,7 +140,9 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     };
 
     // 2. Build candidate causes from all OTHER memories (older than the failure).
-    let all = storage.get_all_nodes(scan_limit, 0).map_err(|e| e.to_string())?;
+    let all = storage
+        .get_all_nodes(scan_limit, 0)
+        .map_err(|e| e.to_string())?;
     let mut candidates: Vec<BackfillCandidate> = Vec::new();
     for node in &all {
         if node.id == failure_node.id {
@@ -148,7 +153,10 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         if age <= 0.0 {
             continue;
         }
-        let sim = match (&failure_embedding, storage.get_node_embedding(&node.id).ok().flatten()) {
+        let sim = match (
+            &failure_embedding,
+            storage.get_node_embedding(&node.id).ok().flatten(),
+        ) {
             (Some(f), Some(c)) if f.len() == c.len() => Some(cosine_similarity(f, &c)),
             _ => None,
         };
@@ -271,7 +279,10 @@ mod tests {
             })
             .unwrap();
         storage
-            .set_created_at(&distractor.id, chrono::Utc::now() - chrono::Duration::days(20))
+            .set_created_at(
+                &distractor.id,
+                chrono::Utc::now() - chrono::Duration::days(20),
+            )
             .unwrap();
 
         // 3) The failure, recorded last (most recent) — the "aversive event".
@@ -280,20 +291,25 @@ mod tests {
                 content: "Service crashed: 500 Internal Server Error on the auth endpoint"
                     .to_string(),
                 node_type: "event".to_string(),
-                tags: vec!["auth-service".to_string(), "API_TIMEOUT".to_string(), "crash".to_string()],
+                tags: vec![
+                    "auth-service".to_string(),
+                    "API_TIMEOUT".to_string(),
+                    "crash".to_string(),
+                ],
                 ..Default::default()
             })
             .unwrap();
 
         // Run the backfill tool against the real store (auto-finds the failure).
-        let out = execute(
-            &storage,
-            Some(json!({ "promote": true, "manual": false })),
-        )
-        .await
-        .expect("backfill must run");
+        let out = execute(&storage, Some(json!({ "promote": true, "manual": false })))
+            .await
+            .expect("backfill must run");
 
-        assert_eq!(out["triggered"], json!(true), "the crash must trigger a backfill");
+        assert_eq!(
+            out["triggered"],
+            json!(true),
+            "the crash must trigger a backfill"
+        );
         let causes = out["causes"].as_array().expect("causes array");
         assert!(!causes.is_empty(), "must surface at least one cause");
 
@@ -310,7 +326,11 @@ mod tests {
             "must link via the shared API_TIMEOUT entity, got: {shared:?}"
         );
         // It was actually promoted in the real store.
-        assert_eq!(top["promoted"], json!(true), "the cause must be promoted in storage");
+        assert_eq!(
+            top["promoted"],
+            json!(true),
+            "the cause must be promoted in storage"
+        );
         // Sanity: the failure we ingested is the one that fired.
         assert_eq!(out["failure"]["id"], json!(failure.id));
     }

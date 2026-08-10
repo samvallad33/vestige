@@ -188,6 +188,15 @@ impl Receipt {
 pub enum ReceiptEvidence {
     /// A synaptic-tag capture decision and its measured state transition.
     SynapticCapture(SynapticCaptureEvidence),
+    /// One controlled post-retrieval context-ablation replay. The nested
+    /// result is identity-free and carries the exact non-causal claim boundary.
+    CounterfactualReplay {
+        schema: String,
+        schema_version: u32,
+        replay_id: String,
+        capsule_id: String,
+        result: crate::storage::CounterfactualReplayResult,
+    },
 }
 
 /// Versioned evidence for one durable synaptic-capture evaluation.
@@ -200,6 +209,16 @@ pub struct SynapticCaptureEvidence {
     pub schema_version: u32,
     /// Version of the scoring/mutation policy used for this decision.
     pub algorithm_version: String,
+    /// V2 receipt role: `root` for the event's initial backward decision or
+    /// `pair` for an immutable forward event/tag evaluation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_role: Option<String>,
+    /// Root event receipt referenced by a V2 pair receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_receipt_id: Option<String>,
+    /// Explicit direction copied to the top level for receipt validators.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_direction: Option<String>,
     /// The importance event that opened the capture window.
     pub trigger: SynapticCaptureTrigger,
     /// Frozen policy snapshot used for eligibility and scoring.
@@ -230,8 +249,14 @@ pub struct SynapticCaptureWindow {
     pub forward_hours: f64,
     pub tag_lifetime_hours: f64,
     pub minimum_tag_strength: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_association_score: Option<f64>,
     pub maximum_captures: usize,
     pub decay_function: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_threshold: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_algorithm_version: Option<String>,
 }
 
 /// One evaluated capture candidate.
@@ -248,6 +273,22 @@ pub struct SynapticCaptureCandidate {
     pub capture_probability: f64,
     pub tag_strength_at_evaluation: f64,
     pub capture_score: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_direction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub association_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub competition_rank: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
     pub disposition: SynapticCaptureDisposition,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -261,6 +302,7 @@ pub struct SynapticCaptureCandidate {
 pub enum SynapticCaptureDisposition {
     Captured,
     BelowThreshold,
+    ContextMismatch,
     WithheldSuppressed,
     WithheldInvalid,
     LostCompetition,
@@ -441,5 +483,51 @@ mod tests {
         assert_eq!(json["trust_floor"], 0.62);
         assert!(json["mutations"].as_array().unwrap().is_empty());
         assert!(json.get("evidence").is_none());
+    }
+
+    #[test]
+    fn v1_synaptic_receipt_deserializes_without_v2_optional_fields() {
+        let json = serde_json::json!({
+            "receipt_id": "r_syn_v1",
+            "retrieved": [],
+            "suppressed": [],
+            "activation_path": [],
+            "trust_floor": 0.0,
+            "decay_risk": "high",
+            "mutations": [],
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schema": "https://vestige.dev/schemas/receipt/synaptic-capture/v1",
+                    "schemaVersion": 1,
+                    "algorithmVersion": "vestige.synaptic_capture.v1",
+                    "trigger": {
+                        "eventId": "sevt_public",
+                        "memoryId": "memory_trigger",
+                        "eventType": "novelty_spike",
+                        "occurredAt": "2026-06-22T15:00:00Z",
+                        "importanceScore": 0.9
+                    },
+                    "captureWindow": {
+                        "evaluationDirection": "backward_only",
+                        "backwardHours": 9.0,
+                        "forwardHours": 0.0,
+                        "tagLifetimeHours": 12.0,
+                        "minimumTagStrength": 0.3,
+                        "maximumCaptures": 50,
+                        "decayFunction": "exponential"
+                    },
+                    "candidates": [],
+                    "claimBoundary": "temporal association only"
+                }
+            }
+        });
+        let receipt: Receipt = serde_json::from_value(json).expect("V1 receipt remains readable");
+        let Some(ReceiptEvidence::SynapticCapture(evidence)) = receipt.evidence else {
+            panic!("typed synaptic evidence");
+        };
+        assert_eq!(evidence.schema_version, 1);
+        assert!(evidence.receipt_role.is_none());
+        assert!(evidence.capture_window.context_threshold.is_none());
     }
 }

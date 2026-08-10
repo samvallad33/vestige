@@ -109,6 +109,26 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Durable synaptic capture: restart-safe tags, idempotent events, atomic capture items, and typed receipt evidence",
         up: MIGRATION_V21_UP,
     },
+    Migration {
+        version: 22,
+        description: "Competitive capture epochs: forward reconciliation, contextual gating, and immutable pair receipts",
+        up: MIGRATION_V22_UP,
+    },
+    Migration {
+        version: 23,
+        description: "Controlled replay influence: frozen post-retrieval evidence capsules and idempotent context ablation",
+        up: MIGRATION_V23_UP,
+    },
+    Migration {
+        version: 24,
+        description: "Privacy-safe DSSE receipt attestations: signing-key registry, immutable envelopes, chain heads, and deletable disclosures",
+        up: MIGRATION_V24_UP,
+    },
+    Migration {
+        version: 25,
+        description: "Verified Local Unlearning: fenced lineage closure, content-free erasure ledger, and anti-resurrection tombstones",
+        up: super::unlearning_store::V25_UNLEARNING_STORAGE_SCHEMA_EXPECTATION,
+    },
 ];
 
 /// A database migration
@@ -1275,6 +1295,274 @@ CREATE INDEX IF NOT EXISTS idx_synaptic_capture_items_receipt
 UPDATE schema_version SET version = 21, applied_at = datetime('now');
 "#;
 
+/// V22: production forward capture over durable competitive epochs.
+///
+/// V21 events intentionally evaluated no forward window, so they are migrated
+/// as closed and are never retroactively reopened. New V2 events persist the
+/// complete frozen policy and a random public id separately from the private
+/// deterministic event fingerprint. Pair rows remain uniquely keyed by
+/// `(event_id, tag_id)` and now carry the scalar contextual/competition
+/// evidence used by immutable child receipts.
+const MIGRATION_V22_UP: &str = r#"
+-- Recover the already-public id from the immutable V1 receipt where possible.
+-- The random fallback is deliberately unrelated to the private event
+-- fingerprint, which must never become a correlatable public identifier.
+UPDATE synaptic_events
+SET public_event_id = COALESCE(
+    (SELECT json_extract(r.payload, '$.evidence.predicate.trigger.eventId')
+       FROM memory_receipts r
+      WHERE r.receipt_id = synaptic_events.receipt_id),
+    'sevt_' || lower(hex(randomblob(16)))
+)
+WHERE public_event_id IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_synaptic_events_public_event_id
+    ON synaptic_events(public_event_id);
+CREATE INDEX IF NOT EXISTS idx_synaptic_events_forward_open
+    ON synaptic_events(event_state, window_to_ms, occurred_at_ms, event_id);
+
+UPDATE synaptic_capture_items
+SET evaluation_direction = COALESCE(evaluation_direction, 'backward'),
+    temporal_score = COALESCE(temporal_score, capture_probability),
+    context_score = COALESCE(context_score, 1.0),
+    context_method = COALESCE(context_method, 'v1_ungated'),
+    association_score = COALESCE(association_score, capture_score),
+    algorithm_version = COALESCE(algorithm_version, 'vestige.synaptic_capture.v1'),
+    reason_code = COALESCE(reason_code, disposition);
+
+UPDATE schema_version SET version = 22, applied_at = datetime('now');
+"#;
+
+/// V22 columns are added individually so a schema-version rewind used by
+/// replay/repair tooling cannot fail on duplicate column names.
+pub const MIGRATION_V22_ALTER_COLUMNS: &[&str] = &[
+    "ALTER TABLE synaptic_events ADD COLUMN public_event_id TEXT",
+    "ALTER TABLE synaptic_events ADD COLUMN event_state TEXT NOT NULL DEFAULT 'closed' CHECK (event_state IN ('open', 'closed'))",
+    "ALTER TABLE synaptic_events ADD COLUMN tag_lifetime_hours REAL",
+    "ALTER TABLE synaptic_events ADD COLUMN minimum_tag_strength REAL",
+    "ALTER TABLE synaptic_events ADD COLUMN minimum_association_score REAL",
+    "ALTER TABLE synaptic_events ADD COLUMN maximum_captures INTEGER",
+    "ALTER TABLE synaptic_events ADD COLUMN decay_function TEXT",
+    "ALTER TABLE synaptic_events ADD COLUMN context_threshold REAL",
+    "ALTER TABLE synaptic_events ADD COLUMN context_algorithm_version TEXT",
+    "ALTER TABLE synaptic_events ADD COLUMN signal_snapshot_json TEXT",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN evaluation_direction TEXT",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN temporal_score REAL",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN context_score REAL",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN context_method TEXT",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN association_score REAL",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN competition_rank INTEGER",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN algorithm_version TEXT",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN reason_code TEXT",
+];
+
+/// V23: frozen post-retrieval evidence packs and pure context ablation.
+///
+/// Capsules contain no raw query, prompt, memory text, or model output. Private
+/// memory locators and keyed item digests exist only so current-state and purge
+/// checks can invalidate the historical projection. Public replay results use
+/// receipt-local slots. Suppression/purge nulls result and aggregate
+/// fingerprints rather than preserving perfect historical fidelity.
+const MIGRATION_V23_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS retrieval_replay_capsules (
+    capsule_id                 TEXT PRIMARY KEY,
+    source_receipt_id          TEXT NOT NULL UNIQUE,
+    schema_version             INTEGER NOT NULL,
+    algorithm_version          TEXT NOT NULL,
+    selection_boundary         TEXT NOT NULL,
+    redaction_generation       INTEGER NOT NULL DEFAULT 0 CHECK (redaction_generation >= 0),
+    privacy_state              TEXT NOT NULL CHECK (privacy_state IN ('active', 'redacted', 'purged')),
+    replayable                 INTEGER NOT NULL CHECK (replayable IN (0, 1)),
+    policy_digest              TEXT NOT NULL,
+    baseline_evidence_digest   TEXT,
+    baseline_merkle_root       TEXT,
+    item_count                 INTEGER,
+    total_token_estimate       INTEGER,
+    trust_floor                REAL,
+    decay_risk                 TEXT CHECK (decay_risk IS NULL OR decay_risk IN ('low', 'medium', 'high')),
+    created_at                 TEXT NOT NULL,
+    FOREIGN KEY (source_receipt_id) REFERENCES memory_receipts(receipt_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_replay_capsules_privacy
+    ON retrieval_replay_capsules(privacy_state, replayable, created_at);
+
+CREATE TABLE IF NOT EXISTS retrieval_replay_items (
+    capsule_id       TEXT NOT NULL,
+    ordinal          INTEGER NOT NULL CHECK (ordinal >= 0),
+    evidence_slot    TEXT NOT NULL,
+    memory_id        TEXT,
+    private_digest   TEXT,
+    token_estimate   INTEGER,
+    trust_score      REAL,
+    decay_risk       TEXT CHECK (decay_risk IS NULL OR decay_risk IN ('low', 'medium', 'high')),
+    PRIMARY KEY (capsule_id, ordinal),
+    UNIQUE (capsule_id, evidence_slot),
+    FOREIGN KEY (capsule_id) REFERENCES retrieval_replay_capsules(capsule_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_replay_items_memory
+    ON retrieval_replay_items(memory_id) WHERE memory_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS counterfactual_replays (
+    replay_id              TEXT PRIMARY KEY,
+    idempotency_key        TEXT NOT NULL UNIQUE,
+    capsule_id             TEXT NOT NULL,
+    source_receipt_id      TEXT NOT NULL,
+    receipt_id             TEXT UNIQUE,
+    algorithm_version      TEXT NOT NULL,
+    redaction_generation   INTEGER NOT NULL CHECK (redaction_generation >= 0),
+    withheld_slots_json    TEXT NOT NULL,
+    result_json            TEXT,
+    privacy_state          TEXT NOT NULL CHECK (privacy_state IN ('active', 'redacted', 'purged')),
+    created_at             TEXT NOT NULL,
+    FOREIGN KEY (capsule_id) REFERENCES retrieval_replay_capsules(capsule_id) ON DELETE CASCADE,
+    FOREIGN KEY (source_receipt_id) REFERENCES memory_receipts(receipt_id) ON DELETE CASCADE,
+    FOREIGN KEY (receipt_id) REFERENCES memory_receipts(receipt_id) ON DELETE SET NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_counterfactual_replays_source
+    ON counterfactual_replays(source_receipt_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_counterfactual_replays_privacy
+    ON counterfactual_replays(privacy_state, created_at DESC);
+
+UPDATE schema_version SET version = 23, applied_at = datetime('now');
+"#;
+
+/// V24: privacy-safe, append-only receipt attestations.
+///
+/// Absence from `receipt_envelopes` is the explicit legacy-unsigned state.
+/// Existing V18-V23 receipts are never retro-signed. New signed receipts,
+/// their exact DSSE envelope, disclosure mappings, and chain-head advance are
+/// committed by one V24 storage transaction.
+const MIGRATION_V24_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS receipt_signing_keys (
+    key_id                   TEXT PRIMARY KEY,
+    algorithm                TEXT NOT NULL CHECK (algorithm = 'ed25519'),
+    public_key               BLOB NOT NULL CHECK (length(public_key) = 32),
+    public_key_fingerprint   TEXT NOT NULL UNIQUE
+        CHECK (length(public_key_fingerprint) = 64
+               AND public_key_fingerprint NOT GLOB '*[^0-9a-f]*'),
+    status                   TEXT NOT NULL
+        CHECK (status IN ('active', 'retired', 'revoked', 'disabled')),
+    valid_from               TEXT NOT NULL,
+    valid_until              TEXT,
+    revoked_at               TEXT,
+    created_at               TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_receipt_signing_keys_status
+    ON receipt_signing_keys(status, valid_from);
+
+CREATE TABLE IF NOT EXISTS receipt_envelopes (
+    receipt_id               TEXT PRIMARY KEY,
+    chain_id                 TEXT NOT NULL,
+    sequence                 INTEGER NOT NULL
+        CHECK (sequence >= 0 AND sequence <= 9007199254740991),
+    previous_entry_digest    TEXT,
+    payload_type             TEXT NOT NULL,
+    envelope_json            TEXT NOT NULL CHECK (json_valid(envelope_json)),
+    payload_digest           TEXT NOT NULL
+        CHECK (length(payload_digest) = 64
+               AND payload_digest NOT GLOB '*[^0-9a-f]*'),
+    entry_digest             TEXT NOT NULL UNIQUE
+        CHECK (length(entry_digest) = 64
+               AND entry_digest NOT GLOB '*[^0-9a-f]*'),
+    signing_key_id           TEXT NOT NULL,
+    signer_key_fingerprint   TEXT NOT NULL
+        CHECK (length(signer_key_fingerprint) = 64
+               AND signer_key_fingerprint NOT GLOB '*[^0-9a-f]*'),
+    issued_at                TEXT NOT NULL,
+    stored_at                TEXT NOT NULL,
+    CHECK ((sequence = 0 AND previous_entry_digest IS NULL)
+           OR (sequence > 0
+               AND length(previous_entry_digest) = 64
+               AND previous_entry_digest NOT GLOB '*[^0-9a-f]*')),
+    UNIQUE (chain_id, sequence),
+    FOREIGN KEY (receipt_id) REFERENCES memory_receipts(receipt_id) ON DELETE RESTRICT,
+    FOREIGN KEY (signing_key_id) REFERENCES receipt_signing_keys(key_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_receipt_envelopes_chain
+    ON receipt_envelopes(chain_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_receipt_envelopes_key
+    ON receipt_envelopes(signing_key_id, issued_at);
+
+CREATE TRIGGER IF NOT EXISTS receipt_envelopes_reject_update
+BEFORE UPDATE ON receipt_envelopes
+BEGIN
+    SELECT RAISE(ABORT, 'receipt envelopes are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS receipt_envelopes_reject_delete
+BEFORE DELETE ON receipt_envelopes
+BEGIN
+    SELECT RAISE(ABORT, 'receipt envelopes are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS receipt_chain_state (
+    chain_id                 TEXT PRIMARY KEY,
+    last_sequence            INTEGER NOT NULL
+        CHECK (last_sequence >= 0 AND last_sequence <= 9007199254740991),
+    last_entry_digest        TEXT NOT NULL
+        CHECK (length(last_entry_digest) = 64
+               AND last_entry_digest NOT GLOB '*[^0-9a-f]*'),
+    updated_at               TEXT NOT NULL
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS receipt_chain_state_validate_insert
+BEFORE INSERT ON receipt_chain_state
+WHEN NOT EXISTS (
+    SELECT 1 FROM receipt_envelopes e
+     WHERE e.chain_id = NEW.chain_id
+       AND e.sequence = NEW.last_sequence
+       AND e.entry_digest = NEW.last_entry_digest
+)
+BEGIN
+    SELECT RAISE(ABORT, 'receipt chain head must reference an immutable envelope');
+END;
+
+CREATE TRIGGER IF NOT EXISTS receipt_chain_state_validate_update
+BEFORE UPDATE ON receipt_chain_state
+WHEN NEW.chain_id <> OLD.chain_id
+  OR NEW.last_sequence <> OLD.last_sequence + 1
+  OR NOT EXISTS (
+      SELECT 1 FROM receipt_envelopes e
+       WHERE e.chain_id = NEW.chain_id
+         AND e.sequence = NEW.last_sequence
+         AND e.previous_entry_digest = OLD.last_entry_digest
+         AND e.entry_digest = NEW.last_entry_digest
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'receipt chain head advance is not contiguous');
+END;
+
+CREATE TABLE IF NOT EXISTS receipt_disclosures (
+    receipt_id       TEXT NOT NULL,
+    evidence_slot    TEXT NOT NULL,
+    memory_id        TEXT NOT NULL,
+    nonce            BLOB NOT NULL CHECK (length(nonce) = 32),
+    commitment       TEXT NOT NULL
+        CHECK (length(commitment) = 64
+               AND commitment NOT GLOB '*[^0-9a-f]*'),
+    created_at       TEXT NOT NULL,
+    PRIMARY KEY (receipt_id, evidence_slot),
+    FOREIGN KEY (receipt_id) REFERENCES receipt_envelopes(receipt_id) ON DELETE CASCADE,
+    FOREIGN KEY (memory_id) REFERENCES knowledge_nodes(id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_receipt_disclosures_memory
+    ON receipt_disclosures(memory_id, receipt_id);
+
+CREATE TRIGGER IF NOT EXISTS receipt_disclosures_reject_update
+BEFORE UPDATE ON receipt_disclosures
+BEGIN
+    SELECT RAISE(ABORT, 'receipt disclosures are immutable; delete on erasure');
+END;
+
+UPDATE schema_version SET version = 24, applied_at = datetime('now');
+"#;
+
 /// Apply pending migrations
 ///
 /// Each migration is applied inside an explicit transaction so its schema
@@ -1336,8 +1624,24 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
                     }
                 }
 
+                if migration.version == 22 {
+                    for stmt in MIGRATION_V22_ALTER_COLUMNS {
+                        add_column_if_missing(&tx, stmt)?;
+                    }
+                }
+
                 // Use execute_batch to handle multi-statement SQL including triggers
                 tx.execute_batch(migration.up)?;
+
+                // V25 keeps the reusable schema contract free of the repository's
+                // schema-version bookkeeping so isolated storage tests can apply it
+                // without first bootstrapping `schema_version`.
+                if migration.version == 25 {
+                    tx.execute(
+                        "UPDATE schema_version SET version = 25, applied_at = datetime('now')",
+                        [],
+                    )?;
+                }
 
                 tx.commit()?;
             }
@@ -1765,6 +2069,11 @@ mod tests {
                     add_column_if_missing(conn, stmt).expect("V17 alter column");
                 }
             }
+            if migration.version == 22 {
+                for stmt in MIGRATION_V22_ALTER_COLUMNS {
+                    add_column_if_missing(conn, stmt).expect("V22 alter column");
+                }
+            }
             conn.execute_batch(migration.up).expect("apply migration");
         }
     }
@@ -1809,7 +2118,7 @@ mod tests {
         assert_eq!(cursor_row_count(&conn), 2);
 
         let applied = apply_migrations(&conn).expect("V20+ apply on a V19 database");
-        assert_eq!(applied, 2, "V20 and V21 should apply on a V19 database");
+        assert_eq!(applied, 6, "V20 through V25 should apply on a V19 database");
         assert_eq!(
             get_current_version(&conn).expect("version"),
             MIGRATIONS.last().unwrap().version
@@ -1821,16 +2130,16 @@ mod tests {
         );
     }
 
-    /// Fresh database: all migrations apply cleanly through V21 and the cursor
+    /// Fresh database: all migrations apply cleanly through V25 and the cursor
     /// table exists and is empty (nothing to clear, no error).
     #[test]
     fn v20_applies_cleanly_on_a_fresh_database() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("fresh migrations succeed through V21");
+        apply_migrations(&conn).expect("fresh migrations succeed through V25");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            21,
-            "latest migration must be V21"
+            25,
+            "latest migration must be V25"
         );
         assert_eq!(cursor_row_count(&conn), 0);
     }
@@ -1876,6 +2185,133 @@ mod tests {
                 .expect("query sqlite_master");
             assert_eq!(rows, 1, "V21 must create {table}");
         }
+    }
+
+    #[test]
+    fn v22_closes_v1_events_and_adds_forward_evidence_columns() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 21);
+        conn.execute(
+            "INSERT INTO synaptic_events
+                 (event_id, trigger_memory_id, event_type, occurred_at_ms,
+                  window_from_ms, window_to_ms, strength, algorithm_version,
+                  receipt_id, recorded_at)
+             VALUES ('private-v1', 'missing-is-ok', 'novelty_spike', 1000,
+                     0, 1000, 0.9, 'vestige.synaptic_capture.v1', NULL,
+                     '1970-01-01T00:00:01Z')",
+            [],
+        )
+        .expect("seed V21 event");
+
+        apply_migrations(&conn).expect("apply V22");
+        let (state, public_id): (String, String) = conn
+            .query_row(
+                "SELECT event_state, public_event_id FROM synaptic_events
+                 WHERE event_id = 'private-v1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read migrated event");
+        assert_eq!(state, "closed");
+        assert!(public_id.starts_with("sevt_"));
+
+        let new_columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('synaptic_capture_items')
+                 WHERE name IN ('evaluation_direction', 'context_score',
+                                'association_score', 'reason_code')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query V22 item columns");
+        assert_eq!(new_columns, 4);
+    }
+
+    #[test]
+    fn v23_creates_private_replay_capsules_and_idempotent_branches() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("apply through V23");
+        for table in [
+            "retrieval_replay_capsules",
+            "retrieval_replay_items",
+            "counterfactual_replays",
+        ] {
+            let rows: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("query replay table");
+            assert_eq!(rows, 1, "V23 must create {table}");
+        }
+        let nullable_private_fields: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('retrieval_replay_capsules')
+                 WHERE name IN (
+                    'baseline_evidence_digest', 'baseline_merkle_root', 'item_count',
+                    'total_token_estimate', 'trust_floor', 'decay_risk'
+                 ) AND \"notnull\" = 0",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query privacy-nullable replay fields");
+        assert_eq!(nullable_private_fields, 6);
+    }
+
+    #[test]
+    fn v24_creates_attestation_registry_chain_envelopes_and_disclosures() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("enable foreign keys");
+        apply_migrations(&conn).expect("apply through V24");
+        for table in [
+            "receipt_signing_keys",
+            "receipt_chain_state",
+            "receipt_envelopes",
+            "receipt_disclosures",
+        ] {
+            let rows: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("query V24 table");
+            assert_eq!(rows, 1, "V24 must create {table}");
+        }
+        let immutable_triggers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'trigger' AND name IN (
+                    'receipt_envelopes_reject_update',
+                    'receipt_envelopes_reject_delete',
+                    'receipt_disclosures_reject_update',
+                    'receipt_chain_state_validate_insert',
+                    'receipt_chain_state_validate_update'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query V24 triggers");
+        assert_eq!(immutable_triggers, 5);
+
+        conn.execute(
+            "INSERT INTO memory_receipts(receipt_id, payload, created_at)
+             VALUES ('legacy-receipt', '{}', '2026-08-10T00:00:00Z')",
+            [],
+        )
+        .expect("seed legacy receipt");
+        let signed_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM receipt_envelopes WHERE receipt_id = 'legacy-receipt'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query legacy attestation state");
+        assert_eq!(signed_rows, 0, "legacy receipts must remain unsigned");
     }
 
     #[test]

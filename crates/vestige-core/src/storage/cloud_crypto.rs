@@ -152,7 +152,9 @@ mod tests {
 
     #[test]
     fn plaintext_is_not_misdetected_as_envelope() {
-        assert!(!is_encrypted(b"{\"archiveFormat\":\"vestige.portable.v1\"}"));
+        assert!(!is_encrypted(
+            b"{\"archiveFormat\":\"vestige.portable.v1\"}"
+        ));
         assert!(!is_encrypted(b""));
     }
 
