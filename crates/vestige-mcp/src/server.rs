@@ -514,7 +514,7 @@ impl McpServer {
             );
         }
 
-        let result = match request.name.as_str() {
+        let mut result = match request.name.as_str() {
             // ================================================================
             // UNIFIED TOOLS (v1.1+) - Preferred API
             // ================================================================
@@ -1170,8 +1170,7 @@ impl McpServer {
         // DASHBOARD EVENT EMISSION (v2.0)
         // Emit real-time events to WebSocket clients after successful tool calls.
         // ================================================================
-        if let Ok(ref content) = result {
-            self.emit_tool_event(&request.name, &saved_args, content);
+        if let Ok(ref mut content) = result {
             // Agent Black Box: inspect the successful result and record the
             // downstream memory events (retrieve/suppress/veto/dream) under the
             // same run_id as the opening mcp.call, so /api/traces, /api/receipts
@@ -1184,7 +1183,33 @@ impl McpServer {
                     &request.name,
                     content,
                 );
+                // Persist the receipt for this exact retrieval run, then attach
+                // its stable reference to the structured response. The Black Box
+                // can now answer "why did the agent do that?" from the same
+                // evidence the tool actually used, rather than reconstructing an
+                // explanation after the fact. Non-retrieval tools safely return
+                // None and keep their existing response shape.
+                if let Some(receipt) = crate::trace_recorder::build_and_save_receipt(
+                    &self.storage,
+                    &trace_run_id,
+                    &request.name,
+                    content,
+                ) {
+                    if let Some(obj) = content.as_object_mut() {
+                        let receipt_id = receipt
+                            .get("receipt_id")
+                            .and_then(|value| value.as_str())
+                            .map(String::from);
+                        obj.entry("runId".to_string())
+                            .or_insert_with(|| serde_json::json!(trace_run_id));
+                        obj.insert("receiptId".to_string(), serde_json::json!(receipt_id));
+                        obj.insert("receipt".to_string(), receipt);
+                    }
+                }
             }
+            // Emit after receipt attachment so any listening dashboard opens the
+            // same evidence artifact returned to the calling agent.
+            self.emit_tool_event(&request.name, &saved_args, content);
         }
 
         let response = match result {
@@ -2230,6 +2255,53 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A real retrieval must create one durable receipt that the Black Box can
+    /// fetch by the caller-supplied run id, and return that same receipt inline.
+    #[tokio::test]
+    async fn recall_run_produces_fetchable_decision_receipt() {
+        let (mut server, _dir) = test_server().await;
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let seeded = server
+            .storage
+            .ingest(vestige_core::IngestInput {
+                content: "The dashboard development server runs on port 5199.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let run_id = "run_decision_receipt";
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "recall",
+                    "arguments": { "query": "port 5199", "runId": run_id }
+                })),
+            ))
+            .await
+            .expect("recall response");
+
+        assert!(response.error.is_none(), "recall should succeed");
+        let receipts = server.storage.list_receipts_for_run(run_id, 10).unwrap();
+        assert_eq!(receipts.len(), 1, "one retrieval produces one receipt");
+        assert!(receipts[0].retrieved.contains(&seeded.id));
+
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("structuredContent"))
+            .expect("structured content");
+        assert_eq!(structured["runId"], run_id);
+        assert_eq!(
+            structured["receiptId"],
+            serde_json::json!(receipts[0].receipt_id)
+        );
+        assert!(structured.get("receipt").is_some());
     }
 
     /// v2.2: the 7 tools folded into `maintain` must still dispatch, the new

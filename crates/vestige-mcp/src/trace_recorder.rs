@@ -507,7 +507,7 @@ fn pr_kind_phrase(kind: vestige_core::MemoryPrKind) -> &'static str {
 fn is_retrieval_tool(tool: &str) -> bool {
     matches!(
         tool,
-        "deep_reference" | "cross_reference" | "search" | "explore_connections"
+        "recall" | "deep_reference" | "cross_reference" | "search" | "explore_connections"
     )
 }
 
