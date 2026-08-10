@@ -22,8 +22,8 @@ use tokio::sync::Mutex;
 
 use crate::cognitive::CognitiveEngine;
 use vestige_core::{
-    ContentType, ImportanceContext, ImportanceEvent, ImportanceEventType, IngestInput,
-    SecretPolicy, Storage, StorageError, scan_secrets,
+    CapturedMemory, ContentType, ImportanceContext, ImportanceEvent, ImportanceEventType,
+    IngestInput, Receipt, ReceiptMutation, SecretPolicy, Storage, StorageError, scan_secrets,
 };
 
 /// Input schema for smart_ingest tool
@@ -254,7 +254,8 @@ pub async fn execute(
         let has_embedding = node.has_embedding.unwrap_or(false);
 
         // Post-ingest cognitive side effects
-        run_post_ingest(
+        let synaptic_capture = run_post_ingest(
+            storage,
             cognitive,
             &node_id,
             &node_content,
@@ -270,6 +271,7 @@ pub async fn execute(
             "hasEmbedding": has_embedding,
             "predictionError": 1.0,
             "importanceScore": importance_composite,
+            "synapticCapture": synaptic_capture,
             "reason": "Forced creation - skipped similarity check"
         }));
     }
@@ -296,7 +298,8 @@ pub async fn execute(
         };
 
         // Post-ingest cognitive side effects
-        run_post_ingest(
+        let synaptic_capture = run_post_ingest(
+            storage,
             cognitive,
             &node_id,
             &node_content,
@@ -317,6 +320,7 @@ pub async fn execute(
             "mergedFrom": result.merged_from,
             "mergePreview": merge_preview,
             "importanceScore": importance_composite,
+            "synapticCapture": synaptic_capture,
             "reason": result.reason,
             "explanation": match result.decision.as_str() {
                 "create" => "Created new memory - content was different enough from existing memories",
@@ -340,7 +344,8 @@ pub async fn execute(
         let node_content = node.content.clone();
         let node_type = node.node_type.clone();
 
-        run_post_ingest(
+        let synaptic_capture = run_post_ingest(
+            storage,
             cognitive,
             &node_id,
             &node_content,
@@ -356,6 +361,7 @@ pub async fn execute(
             "hasEmbedding": false,
             "predictionError": 1.0,
             "importanceScore": importance_composite,
+            "synapticCapture": synaptic_capture,
             "reason": "Embeddings not available - used regular ingest"
         }))
     }
@@ -476,7 +482,8 @@ async fn execute_batch(
 
                     created += 1;
                     batch_created_node_ids.push(node_id.clone());
-                    run_post_ingest(
+                    let synaptic_capture = run_post_ingest(
+                        storage,
                         cognitive,
                         &node_id,
                         &node_content,
@@ -490,6 +497,7 @@ async fn execute_batch(
                         "decision": "create",
                         "nodeId": node_id,
                         "importanceScore": importance_composite,
+                        "synapticCapture": synaptic_capture,
                         "reason": "Forced creation - skipped similarity check"
                     }));
                 }
@@ -537,7 +545,8 @@ async fn execute_batch(
                     }
 
                     // Post-ingest cognitive side effects
-                    run_post_ingest(
+                    let synaptic_capture = run_post_ingest(
+                        storage,
                         cognitive,
                         &node_id,
                         &node_content,
@@ -557,6 +566,7 @@ async fn execute_batch(
                         "mergedFrom": result.merged_from,
                         "mergePreview": merge_preview,
                         "importanceScore": importance_composite,
+                        "synapticCapture": synaptic_capture,
                         "reason": result.reason
                     }));
                 }
@@ -581,7 +591,8 @@ async fn execute_batch(
 
                     created += 1;
                     batch_created_node_ids.push(node_id.clone());
-                    run_post_ingest(
+                    let synaptic_capture = run_post_ingest(
+                        storage,
                         cognitive,
                         &node_id,
                         &node_content,
@@ -595,6 +606,7 @@ async fn execute_batch(
                         "decision": "create",
                         "nodeId": node_id,
                         "importanceScore": importance_composite,
+                        "synapticCapture": synaptic_capture,
                         "reason": "Embeddings not available - used regular ingest"
                     }));
                 }
@@ -627,22 +639,52 @@ async fn execute_batch(
 
 /// Cognitive post-ingest side effects: synaptic tagging, novelty update, hippocampal indexing.
 ///
+/// A high-salience ingest can capture nearby *previously tagged* memories. Each
+/// actual capture is promoted and persisted as a normal, fetchable receipt. The
+/// receipt contains ids and measured strength changes only — never copied memory
+/// content — so purge remains authoritative and suppressed memories stay out.
+///
 /// Uses try_lock() for non-blocking access. If cognitive is locked, side effects are skipped.
 fn run_post_ingest(
+    storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     node_id: &str,
     content: &str,
     node_type: &str,
     importance_composite: f64,
-) {
+) -> Option<Value> {
+    let mut synaptic_capture = None;
+
     if let Ok(mut cog) = cognitive.try_lock() {
-        // 4C. Synaptic tagging for retroactive capture
+        // 4C. Synaptic tagging for retroactive capture. Trigger *before* adding
+        // the triggering memory's own tag: a high-salience incident must make
+        // an earlier ordinary decision important, not self-capture at t=0.
         if importance_composite > 0.3 {
-            cog.synaptic_tagging.tag_memory(node_id);
-            if importance_composite > 0.7 {
-                // High importance → trigger PRP for nearby memories
+            let trigger_is_eligible = storage
+                .get_node(node_id)
+                .ok()
+                .flatten()
+                .is_some_and(|node| node.suppression_count == 0);
+
+            if importance_composite > 0.7 && trigger_is_eligible {
+                let window = cog.synaptic_tagging.config().capture_window.clone();
+                let radius = ImportanceEventType::NoveltySpike.capture_radius_multiplier();
                 let event = ImportanceEvent::for_memory(node_id, ImportanceEventType::NoveltySpike);
-                let _capture = cog.synaptic_tagging.trigger_prp(event);
+                let capture = cog.synaptic_tagging.trigger_prp(event);
+                synaptic_capture = persist_synaptic_capture_receipt(
+                    storage,
+                    node_id,
+                    importance_composite,
+                    window.backward_hours * radius,
+                    window.forward_hours * radius,
+                    &capture.captured_memories,
+                );
+            }
+
+            // A just-ingested memory is eligible only for a *future* event.
+            // Do not tag explicitly suppressed memories for later promotion.
+            if trigger_is_eligible {
+                cog.synaptic_tagging.tag_memory(node_id);
             }
         }
 
@@ -662,6 +704,104 @@ fn run_post_ingest(
         cog.cross_project
             .record_project_memory(node_id, "default", None);
     }
+
+    synaptic_capture
+}
+
+/// Persist the observable part of a synaptic capture without copying either
+/// memory's content. Suppressed and purged nodes cannot be promoted; their ids
+/// are surfaced as withheld evidence rather than silently changing them.
+fn persist_synaptic_capture_receipt(
+    storage: &Arc<Storage>,
+    trigger_memory_id: &str,
+    trigger_importance: f64,
+    backward_hours: f64,
+    forward_hours: f64,
+    captures: &[CapturedMemory],
+) -> Option<Value> {
+    let mut retrieved = Vec::new();
+    let mut trust_scores = Vec::new();
+    let mut activation_path = Vec::new();
+    let mut mutations = Vec::new();
+    let mut captured = Vec::new();
+    let mut withheld_suppressed_ids = Vec::new();
+
+    for capture in captures {
+        let Some(before) = storage.get_node(&capture.memory_id).ok().flatten() else {
+            // A concurrently purged memory has no content or strength left to
+            // change, so it cannot be included as evidence.
+            continue;
+        };
+        if before.suppression_count > 0 {
+            withheld_suppressed_ids.push(before.id);
+            continue;
+        }
+
+        let Ok(after) = storage.promote_memory_backfill(&capture.memory_id) else {
+            continue;
+        };
+        retrieved.push(capture.memory_id.clone());
+        trust_scores.push(before.retention_strength);
+        activation_path.push(format!(
+            "{} --[tagged; {:.2}h before event]--> {}",
+            capture.memory_id, capture.temporal_distance_hours, trigger_memory_id
+        ));
+        mutations.push(ReceiptMutation {
+            id: capture.memory_id.clone(),
+            kind: "synaptic_capture".to_string(),
+            note: Some(format!(
+                "Evidence-backed temporal association; capture score {:.2}",
+                capture.consolidated_importance
+            )),
+        });
+        captured.push(serde_json::json!({
+            "memoryId": capture.memory_id,
+            "encodedAt": capture.encoded_at.to_rfc3339(),
+            "temporalDistanceHours": capture.temporal_distance_hours,
+            "captureProbability": capture.capture_probability,
+            "tagStrengthAtCapture": capture.tag_strength_at_capture,
+            "captureImportance": capture.consolidated_importance,
+            "strengthChange": {
+                "retrievalStrength": { "before": before.retrieval_strength, "after": after.retrieval_strength },
+                "retentionStrength": { "before": before.retention_strength, "after": after.retention_strength },
+                "stability": { "before": before.stability, "after": after.stability }
+            }
+        }));
+    }
+
+    if captured.is_empty() {
+        return None;
+    }
+
+    let receipt = Receipt::build(
+        Utc::now(),
+        trigger_memory_id,
+        retrieved,
+        vec![],
+        activation_path,
+        &trust_scores,
+        mutations,
+    );
+    if let Err(error) = storage.save_receipt(&receipt, None, Some("smart_ingest"), None) {
+        tracing::warn!(%error, "synaptic capture receipt save failed");
+    }
+
+    Some(serde_json::json!({
+        "receiptId": receipt.receipt_id,
+        "receipt": receipt,
+        "trigger": {
+            "memoryId": trigger_memory_id,
+            "eventType": "novelty_spike",
+            "importanceScore": trigger_importance
+        },
+        "captureWindow": {
+            "backwardHours": backward_hours,
+            "forwardHours": forward_hours
+        },
+        "captured": captured,
+        "withheldSuppressedIds": withheld_suppressed_ids,
+        "claimBoundary": "Evidence-backed temporal association, not proof that the trigger caused the earlier memory."
+    }))
 }
 
 // ============================================================================
@@ -729,6 +869,115 @@ mod tests {
                     .unwrap()
                     .contains("Embeddings not available")
         );
+    }
+
+    #[tokio::test]
+    async fn high_salience_ingest_promotes_earlier_tag_and_saves_capture_receipt() {
+        let (storage, _dir) = test_storage().await;
+        let cognitive = test_cognitive();
+        let earlier = storage
+            .ingest(IngestInput {
+                content: "We selected the retry policy for the deploy worker.".to_string(),
+                node_type: "decision".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            run_post_ingest(
+                &storage,
+                &cognitive,
+                &earlier.id,
+                &earlier.content,
+                &earlier.node_type,
+                0.5,
+            )
+            .is_none(),
+            "an ordinary decision should be tagged but not self-promoted"
+        );
+        let before = storage.demote_memory(&earlier.id).unwrap();
+
+        let trigger = storage
+            .ingest(IngestInput {
+                content: "Production deployment failed after the retry policy exhausted."
+                    .to_string(),
+                node_type: "event".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let capture = run_post_ingest(
+            &storage,
+            &cognitive,
+            &trigger.id,
+            &trigger.content,
+            &trigger.node_type,
+            0.9,
+        )
+        .expect("high-salience trigger captures the earlier tagged decision");
+
+        let receipt_id = capture["receiptId"].as_str().expect("receipt id");
+        let saved = storage
+            .get_receipt(receipt_id)
+            .unwrap()
+            .expect("persisted receipt");
+        assert_eq!(saved.retrieved, vec![earlier.id.clone()]);
+        assert_eq!(saved.mutations[0].kind, "synaptic_capture");
+        assert!(
+            saved.activation_path[0].contains(&trigger.id),
+            "receipt records the trigger reference"
+        );
+        let after = storage.get_node(&earlier.id).unwrap().unwrap();
+        assert!(after.retrieval_strength > before.retrieval_strength);
+        assert_eq!(capture["captured"][0]["memoryId"], earlier.id);
+        assert_eq!(capture["trigger"]["memoryId"], trigger.id);
+        assert_eq!(
+            capture["claimBoundary"],
+            "Evidence-backed temporal association, not proof that the trigger caused the earlier memory."
+        );
+    }
+
+    #[tokio::test]
+    async fn suppressed_tag_is_not_promoted_or_exposed_in_a_capture_receipt() {
+        let (storage, _dir) = test_storage().await;
+        let cognitive = test_cognitive();
+        let earlier = storage
+            .ingest(IngestInput {
+                content: "An ordinary approval was recorded before the incident.".to_string(),
+                node_type: "decision".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        run_post_ingest(
+            &storage,
+            &cognitive,
+            &earlier.id,
+            &earlier.content,
+            &earlier.node_type,
+            0.5,
+        );
+        let suppressed = storage.suppress_memory(&earlier.id).unwrap();
+
+        let trigger = storage
+            .ingest(IngestInput {
+                content: "A high-salience incident arrived after the approval.".to_string(),
+                node_type: "event".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            run_post_ingest(
+                &storage,
+                &cognitive,
+                &trigger.id,
+                &trigger.content,
+                &trigger.node_type,
+                0.9,
+            )
+            .is_none(),
+            "a capture with only suppressed candidates emits no receipt"
+        );
+        let after = storage.get_node(&earlier.id).unwrap().unwrap();
+        assert_eq!(after.suppression_count, suppressed.suppression_count);
+        assert_eq!(after.retrieval_strength, suppressed.retrieval_strength);
     }
 
     #[tokio::test]
