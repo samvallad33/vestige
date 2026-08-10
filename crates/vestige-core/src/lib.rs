@@ -170,13 +170,17 @@ pub use config::{CONFIG_FILE, OutputConfig, OutputDefaults, OutputProfile, Vesti
 
 // Agent Black Box / Receipts / Memory PRs (the cognitive flight recorder)
 pub use trace::{
-    classify_write, DecayRisk, MemoryPr, MemoryPrAction, MemoryPrKind, MemoryPrStatus,
-    MemoryTraceEvent, Receipt, ReceiptMutation, ReviewMode, RiskClass, RiskSignal, SuppressReason,
-    SuppressedReceiptEntry, WriteContext, WriteSource, HIGH_TRUST_FLOOR, LOW_CONFIDENCE_FLOOR,
+    DecayRisk, HIGH_TRUST_FLOOR, LOW_CONFIDENCE_FLOOR, MemoryPr, MemoryPrAction, MemoryPrKind,
+    MemoryPrStatus, MemoryTraceEvent, Receipt, ReceiptEvidence, ReceiptMutation, ReviewMode,
+    RiskClass, RiskSignal, StrengthDelta, SuppressReason, SuppressedReceiptEntry,
+    SynapticCaptureCandidate, SynapticCaptureDisposition, SynapticCaptureEvidence,
+    SynapticCaptureTrigger, SynapticCaptureWindow, SynapticStrengthChange, WriteContext,
+    WriteSource, classify_write,
 };
 
 // Storage layer
 pub use storage::{
+    AgentRunSummary,
     ClassificationResult,
     CompositionEventRecord,
     CompositionMemberRecord,
@@ -187,6 +191,7 @@ pub use storage::{
     ConsolidationHistoryRecord,
     Domain,
     DreamHistoryRecord,
+    DurableSynapticCapture,
     HealthStatus,
     InsightRecord,
     IntentionRecord,
@@ -205,9 +210,13 @@ pub use storage::{
     PortableSyncReport,
     ReconcileReport,
     Result,
+    SYNAPTIC_CAPTURE_ALGORITHM_V1,
+    SYNAPTIC_CAPTURE_CLAIM_BOUNDARY,
+    SYNAPTIC_CAPTURE_SCHEMA_V1,
+    // Note: storage::SearchResult is intentionally not re-exported here to avoid
+    // collision with memory::SearchResult. Use vestige_core::storage::SearchResult directly.
     SchedulingState,
     SearchQuery,
-    AgentRunSummary,
     SmartIngestResult,
     SourceUpsertOutcome,
     SourceUpsertResult,
@@ -216,8 +225,8 @@ pub use storage::{
     Storage,
     StorageError,
     StoreStats,
-    // Note: storage::SearchResult is intentionally not re-exported here to avoid
-    // collision with memory::SearchResult. Use vestige_core::storage::SearchResult directly.
+    SynapticCapturePolicy,
+    SynapticCaptureRequest,
 };
 
 // Embedder trait and implementations

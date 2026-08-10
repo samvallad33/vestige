@@ -710,6 +710,13 @@ pub fn record_result(
     tool: &str,
     result: &Value,
 ) {
+    // Receipts committed atomically inside write tools do not yet know the
+    // enclosing MCP run id. Link their denormalized Black Box column once the
+    // tool returns, without rewriting the signed/typed payload surface.
+    for receipt_id in extract_embedded_receipt_ids(result) {
+        let _ = storage.link_receipt_to_run(&receipt_id, run_id);
+    }
+
     // --- memory.retrieve: ids + per-id activation ---
     let (ids, activation) = extract_retrieved(result);
     if !ids.is_empty() {
@@ -797,6 +804,28 @@ pub fn record_result(
             },
         );
     }
+}
+
+fn extract_embedded_receipt_ids(result: &Value) -> Vec<String> {
+    fn push_from_item(item: &Value, out: &mut Vec<String>) {
+        if let Some(id) = item
+            .get("synapticCapture")
+            .and_then(|capture| capture.get("receiptId"))
+            .and_then(Value::as_str)
+            && !out.iter().any(|existing| existing == id)
+        {
+            out.push(id.to_string());
+        }
+    }
+
+    let mut out = Vec::new();
+    push_from_item(result, &mut out);
+    if let Some(items) = result.get("results").and_then(Value::as_array) {
+        for item in items {
+            push_from_item(item, &mut out);
+        }
+    }
+    out
 }
 
 /// Pull retrieved memory ids + their activation/score from a search-like or
@@ -1261,6 +1290,21 @@ mod tests {
         assert_eq!(h, hash_content("my secret memory"), "stable");
         assert!(!h.contains("secret"));
         assert_eq!(h.len(), 16);
+    }
+
+    #[test]
+    fn embedded_synaptic_receipts_are_extracted_for_run_linkage() {
+        let result = serde_json::json!({
+            "synapticCapture": { "receiptId": "r_one" },
+            "results": [
+                { "synapticCapture": { "receiptId": "r_two" } },
+                { "synapticCapture": { "receiptId": "r_one" } }
+            ]
+        });
+        assert_eq!(
+            extract_embedded_receipt_ids(&result),
+            vec!["r_one".to_string(), "r_two".to_string()]
+        );
     }
 
     #[test]

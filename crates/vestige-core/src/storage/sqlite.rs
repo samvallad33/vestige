@@ -2678,6 +2678,73 @@ impl SqliteMemoryStore {
             params![id],
         )?;
 
+        // Purge overrides historical receipt fidelity: remove the stable id
+        // from every persisted receipt payload while retaining its evidence
+        // slots, score, disposition, and measured deltas. Public reads also
+        // resolve current state, but this closes the raw V21 audit-row copy.
+        let receipt_refs: Vec<(String, String)> = {
+            let mut stmt = tx
+                .prepare("SELECT receipt_id, payload FROM memory_receipts WHERE payload LIKE ?1")?;
+            let pattern = format!("%{}%", id);
+            stmt.query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .filter_map(|row| row.ok())
+                .collect()
+        };
+        for (receipt_id, payload) in receipt_refs {
+            let Ok(mut receipt) = serde_json::from_str::<crate::trace::Receipt>(&payload) else {
+                continue;
+            };
+            receipt.redact_memory_id(id, "purged_1");
+            let rewritten = serde_json::to_string(&receipt)
+                .map_err(|e| StorageError::Init(format!("receipt redact serialize: {e}")))?;
+            tx.execute(
+                "UPDATE memory_receipts SET payload = ?1 WHERE receipt_id = ?2",
+                params![rewritten, receipt_id],
+            )?;
+        }
+
+        // Black Box traces are public/exportable evidence too. Rewrite every
+        // matching payload inside the purge transaction so the raw trace table
+        // cannot retain the deleted UUID even if a reader bypasses projection.
+        let trace_refs: Vec<(String, String)> = {
+            let mut stmt =
+                tx.prepare("SELECT id, payload FROM agent_traces WHERE payload LIKE ?1")?;
+            let pattern = format!("%{}%", id);
+            stmt.query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .filter_map(|row| row.ok())
+                .collect()
+        };
+        for (trace_id, payload) in trace_refs {
+            let Ok(mut event) = serde_json::from_str::<crate::trace::MemoryTraceEvent>(&payload)
+            else {
+                continue;
+            };
+            event.redact_memory_id(id, "purged_1");
+            let rewritten = serde_json::to_string(&event)
+                .map_err(|e| StorageError::Init(format!("trace redact serialize: {e}")))?;
+            tx.execute(
+                "UPDATE agent_traces SET payload = ?1 WHERE id = ?2",
+                params![rewritten, trace_id],
+            )?;
+        }
+
+        // A trigger event otherwise preserves the purged stable id outside the
+        // knowledge-node FK graph. Capture-item rows cascade with the event;
+        // candidate rows cascade through their synaptic tag on node deletion.
+        // Captured tags keep historical state but must not retain the private
+        // deterministic event fingerprint after its trigger is purged.
+        tx.execute(
+            "UPDATE synaptic_tags SET capture_event_id = NULL
+             WHERE capture_event_id IN (
+                 SELECT event_id FROM synaptic_events WHERE trigger_memory_id = ?1
+             )",
+            params![id],
+        )?;
+        tx.execute(
+            "DELETE FROM synaptic_events WHERE trigger_memory_id = ?1",
+            params![id],
+        )?;
+
         let tags_json = serde_json::to_string(&node.tags).unwrap_or_else(|_| "[]".to_string());
         tx.execute(
             "INSERT INTO deletion_tombstones (

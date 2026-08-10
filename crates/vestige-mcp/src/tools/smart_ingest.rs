@@ -22,8 +22,9 @@ use tokio::sync::Mutex;
 
 use crate::cognitive::CognitiveEngine;
 use vestige_core::{
-    CapturedMemory, ContentType, ImportanceContext, ImportanceEvent, ImportanceEventType,
-    IngestInput, Receipt, ReceiptMutation, SecretPolicy, Storage, StorageError, scan_secrets,
+    ContentType, ImportanceContext, ImportanceEventType, IngestInput, SecretPolicy, Storage,
+    StorageError, SynapticCapturePolicy, SynapticCaptureRequest, SynapticTag,
+    SynapticTaggingConfig, scan_secrets,
 };
 
 /// Input schema for smart_ingest tool
@@ -653,39 +654,118 @@ fn run_post_ingest(
     node_type: &str,
     importance_composite: f64,
 ) -> Option<Value> {
+    let config = cognitive
+        .try_lock()
+        .map(|cog| cog.synaptic_tagging.config().clone())
+        .unwrap_or_else(|_| SynapticTaggingConfig::default());
+    let node = storage.get_node(node_id).ok().flatten();
+    let trigger_is_eligible = node.as_ref().is_some_and(|node| {
+        node.suppression_count == 0 && node.valid_until.is_none_or(|until| until > Utc::now())
+    });
     let mut synaptic_capture = None;
+    let mut persisted_tag = None;
+    let mut tag_persisted = None;
+
+    // 4C. Durable synaptic tagging for retroactive capture. The SQLite
+    // transaction is authoritative; CognitiveEngine is only a live projection.
+    // Evaluate the trigger before recording its own tag so self-capture is
+    // impossible even when smart ingest updates an existing node id.
+    if importance_composite > 0.3 && trigger_is_eligible {
+        if importance_composite > 0.7 {
+            let radius = ImportanceEventType::NoveltySpike.capture_radius_multiplier();
+            let policy = SynapticCapturePolicy {
+                backward_hours: config.capture_window.backward_hours * radius,
+                forward_hours: config.capture_window.forward_hours * radius,
+                tag_lifetime_hours: config.tag_lifetime_hours,
+                minimum_tag_strength: config.min_tag_strength,
+                maximum_captures: config.max_cluster_size,
+                decay_function: config.capture_window.decay_function,
+            };
+            let occurred_at = node
+                .as_ref()
+                .map(|node| node.updated_at)
+                .unwrap_or_else(Utc::now);
+            match storage.capture_synaptic_event(&SynapticCaptureRequest {
+                trigger_memory_id: node_id.to_string(),
+                event_type: "novelty_spike".into(),
+                occurred_at,
+                strength: importance_composite,
+                policy,
+            }) {
+                Ok(capture) => {
+                    synaptic_capture = Some(serde_json::json!({
+                        "receiptId": capture.receipt.receipt_id,
+                        "receipt": capture.receipt,
+                        "eventId": capture.event_id,
+                        "capturedCount": capture.captured_count,
+                        "reusedExisting": capture.reused_existing
+                    }));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "durable synaptic capture transaction failed");
+                    synaptic_capture = Some(serde_json::json!({
+                        "durable": false,
+                        "error": "Synaptic capture was not committed; no capture success is claimed."
+                    }));
+                }
+            }
+        }
+
+        if let Some(node) = &node {
+            let tag = SynapticTag {
+                memory_id: node_id.to_string(),
+                created_at: node.updated_at,
+                tag_strength: 1.0,
+                initial_strength: 1.0,
+                captured: false,
+                capture_event: None,
+                captured_at: None,
+                encoding_context: Some(node.node_type.clone()),
+            };
+            match storage.save_synaptic_tag(&tag) {
+                Ok(_) => {
+                    persisted_tag = Some(tag);
+                    tag_persisted = Some(true);
+                }
+                Err(error) => {
+                    tag_persisted = Some(false);
+                    tracing::warn!(%error, "durable synaptic tag save failed");
+                    synaptic_capture.get_or_insert_with(|| {
+                        serde_json::json!({
+                            "durable": false,
+                            "error": "Synaptic tag was not persisted; restart-safe eligibility is not claimed."
+                        })
+                    });
+                }
+            }
+        }
+    }
+
+    if let (Some(Value::Object(capture)), Some(tag_persisted)) =
+        (&mut synaptic_capture, tag_persisted)
+    {
+        capture.insert("tagPersisted".into(), Value::Bool(tag_persisted));
+        if !tag_persisted {
+            capture.insert(
+                "tagError".into(),
+                Value::String(
+                    "The trigger's future-capture tag was not persisted; restart-safe eligibility is not claimed."
+                        .into(),
+                ),
+            );
+        }
+    }
 
     if let Ok(mut cog) = cognitive.try_lock() {
-        // 4C. Synaptic tagging for retroactive capture. Trigger *before* adding
-        // the triggering memory's own tag: a high-salience incident must make
-        // an earlier ordinary decision important, not self-capture at t=0.
-        if importance_composite > 0.3 {
-            let trigger_is_eligible = storage
-                .get_node(node_id)
-                .ok()
-                .flatten()
-                .is_some_and(|node| node.suppression_count == 0);
-
-            if importance_composite > 0.7 && trigger_is_eligible {
-                let window = cog.synaptic_tagging.config().capture_window.clone();
-                let radius = ImportanceEventType::NoveltySpike.capture_radius_multiplier();
-                let event = ImportanceEvent::for_memory(node_id, ImportanceEventType::NoveltySpike);
-                let capture = cog.synaptic_tagging.trigger_prp(event);
-                synaptic_capture = persist_synaptic_capture_receipt(
-                    storage,
-                    node_id,
-                    importance_composite,
-                    window.backward_hours * radius,
-                    window.forward_hours * radius,
-                    &capture.captured_memories,
-                );
+        if let Some(capture) = &synaptic_capture {
+            if let Some(retrieved) = capture["receipt"]["retrieved"].as_array() {
+                for id in retrieved.iter().filter_map(Value::as_str) {
+                    cog.synaptic_tagging.remove_tag(id);
+                }
             }
-
-            // A just-ingested memory is eligible only for a *future* event.
-            // Do not tag explicitly suppressed memories for later promotion.
-            if trigger_is_eligible {
-                cog.synaptic_tagging.tag_memory(node_id);
-            }
+        }
+        if let Some(tag) = persisted_tag {
+            cog.synaptic_tagging.restore_tag(tag);
         }
 
         // 4E. Update novelty model with new content
@@ -706,102 +786,6 @@ fn run_post_ingest(
     }
 
     synaptic_capture
-}
-
-/// Persist the observable part of a synaptic capture without copying either
-/// memory's content. Suppressed and purged nodes cannot be promoted; their ids
-/// are surfaced as withheld evidence rather than silently changing them.
-fn persist_synaptic_capture_receipt(
-    storage: &Arc<Storage>,
-    trigger_memory_id: &str,
-    trigger_importance: f64,
-    backward_hours: f64,
-    forward_hours: f64,
-    captures: &[CapturedMemory],
-) -> Option<Value> {
-    let mut retrieved = Vec::new();
-    let mut trust_scores = Vec::new();
-    let mut activation_path = Vec::new();
-    let mut mutations = Vec::new();
-    let mut captured = Vec::new();
-    let mut withheld_suppressed_ids = Vec::new();
-
-    for capture in captures {
-        let Some(before) = storage.get_node(&capture.memory_id).ok().flatten() else {
-            // A concurrently purged memory has no content or strength left to
-            // change, so it cannot be included as evidence.
-            continue;
-        };
-        if before.suppression_count > 0 {
-            withheld_suppressed_ids.push(before.id);
-            continue;
-        }
-
-        let Ok(after) = storage.promote_memory_backfill(&capture.memory_id) else {
-            continue;
-        };
-        retrieved.push(capture.memory_id.clone());
-        trust_scores.push(before.retention_strength);
-        activation_path.push(format!(
-            "{} --[tagged; {:.2}h before event]--> {}",
-            capture.memory_id, capture.temporal_distance_hours, trigger_memory_id
-        ));
-        mutations.push(ReceiptMutation {
-            id: capture.memory_id.clone(),
-            kind: "synaptic_capture".to_string(),
-            note: Some(format!(
-                "Evidence-backed temporal association; capture score {:.2}",
-                capture.consolidated_importance
-            )),
-        });
-        captured.push(serde_json::json!({
-            "memoryId": capture.memory_id,
-            "encodedAt": capture.encoded_at.to_rfc3339(),
-            "temporalDistanceHours": capture.temporal_distance_hours,
-            "captureProbability": capture.capture_probability,
-            "tagStrengthAtCapture": capture.tag_strength_at_capture,
-            "captureImportance": capture.consolidated_importance,
-            "strengthChange": {
-                "retrievalStrength": { "before": before.retrieval_strength, "after": after.retrieval_strength },
-                "retentionStrength": { "before": before.retention_strength, "after": after.retention_strength },
-                "stability": { "before": before.stability, "after": after.stability }
-            }
-        }));
-    }
-
-    if captured.is_empty() {
-        return None;
-    }
-
-    let receipt = Receipt::build(
-        Utc::now(),
-        trigger_memory_id,
-        retrieved,
-        vec![],
-        activation_path,
-        &trust_scores,
-        mutations,
-    );
-    if let Err(error) = storage.save_receipt(&receipt, None, Some("smart_ingest"), None) {
-        tracing::warn!(%error, "synaptic capture receipt save failed");
-    }
-
-    Some(serde_json::json!({
-        "receiptId": receipt.receipt_id,
-        "receipt": receipt,
-        "trigger": {
-            "memoryId": trigger_memory_id,
-            "eventType": "novelty_spike",
-            "importanceScore": trigger_importance
-        },
-        "captureWindow": {
-            "backwardHours": backward_hours,
-            "forwardHours": forward_hours
-        },
-        "captured": captured,
-        "withheldSuppressedIds": withheld_suppressed_ids,
-        "claimBoundary": "Evidence-backed temporal association, not proof that the trigger caused the earlier memory."
-    }))
 }
 
 // ============================================================================
@@ -927,11 +911,18 @@ mod tests {
         );
         let after = storage.get_node(&earlier.id).unwrap().unwrap();
         assert!(after.retrieval_strength > before.retrieval_strength);
-        assert_eq!(capture["captured"][0]["memoryId"], earlier.id);
-        assert_eq!(capture["trigger"]["memoryId"], trigger.id);
+        assert_eq!(capture["receipt"]["retrieved"][0], earlier.id);
         assert_eq!(
-            capture["claimBoundary"],
-            "Evidence-backed temporal association, not proof that the trigger caused the earlier memory."
+            capture["receipt"]["evidence"]["predicate"]["trigger"]["memoryId"],
+            trigger.id
+        );
+        assert_eq!(
+            capture["receipt"]["evidence"]["predicate"]["claimBoundary"],
+            "Evidence-backed temporal association with a measured memory-state change; not proof that the trigger caused the earlier memory or a downstream outcome."
+        );
+        assert!(
+            saved.evidence.is_some(),
+            "the complete typed capture predicate must be fetchable"
         );
     }
 
@@ -963,21 +954,77 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
+        let receipt = run_post_ingest(
+            &storage,
+            &cognitive,
+            &trigger.id,
+            &trigger.content,
+            &trigger.node_type,
+            0.9,
+        )
+        .expect("a suppressed-only decision remains auditable");
+        assert_eq!(receipt["capturedCount"], 0);
         assert!(
-            run_post_ingest(
-                &storage,
-                &cognitive,
-                &trigger.id,
-                &trigger.content,
-                &trigger.node_type,
-                0.9,
-            )
-            .is_none(),
-            "a capture with only suppressed candidates emits no receipt"
+            !serde_json::to_string(&receipt)
+                .unwrap()
+                .contains(&earlier.id),
+            "suppressed evidence uses a receipt-local opaque slot"
+        );
+        assert_eq!(
+            receipt["receipt"]["evidence"]["predicate"]["candidates"][0]["disposition"],
+            "withheld_suppressed"
         );
         let after = storage.get_node(&earlier.id).unwrap().unwrap();
         assert_eq!(after.suppression_count, suppressed.suppression_count);
         assert_eq!(after.retrieval_strength, suppressed.retrieval_strength);
+    }
+
+    #[tokio::test]
+    async fn restart_between_tag_and_trigger_preserves_capture_eligibility() {
+        let (storage, _dir) = test_storage().await;
+        let first_process = test_cognitive();
+        let earlier = storage
+            .ingest(IngestInput {
+                content: "A restart-safe decision preceded the incident.".to_string(),
+                node_type: "decision".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        run_post_ingest(
+            &storage,
+            &first_process,
+            &earlier.id,
+            &earlier.content,
+            &earlier.node_type,
+            0.5,
+        );
+        let before = storage.demote_memory(&earlier.id).unwrap();
+
+        // Simulate a fresh process. Hydration is verified separately; capture
+        // itself must use SQLite as its source of truth.
+        drop(first_process);
+        let second_process = test_cognitive();
+        second_process.lock().await.hydrate(&storage);
+        let trigger = storage
+            .ingest(IngestInput {
+                content: "A later high-salience incident arrived after restart.".to_string(),
+                node_type: "event".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let capture = run_post_ingest(
+            &storage,
+            &second_process,
+            &trigger.id,
+            &trigger.content,
+            &trigger.node_type,
+            0.9,
+        )
+        .expect("persisted tag captures after restart");
+
+        assert_eq!(capture["receipt"]["retrieved"][0], earlier.id);
+        let after = storage.get_node(&earlier.id).unwrap().unwrap();
+        assert!(after.retrieval_strength > before.retrieval_strength);
     }
 
     #[tokio::test]

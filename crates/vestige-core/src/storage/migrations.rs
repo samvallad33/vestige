@@ -104,6 +104,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Finish the V19 repair: clear connector sync cursors so the next source_sync re-scans from scratch and re-keys every clobbered record",
         up: MIGRATION_V20_UP,
     },
+    Migration {
+        version: 21,
+        description: "Durable synaptic capture: restart-safe tags, idempotent events, atomic capture items, and typed receipt evidence",
+        up: MIGRATION_V21_UP,
+    },
 ];
 
 /// A database migration
@@ -1190,6 +1195,86 @@ DELETE FROM connector_cursors;
 UPDATE schema_version SET version = 20, applied_at = datetime('now');
 "#;
 
+/// V21: durable source of truth for synaptic tag-and-capture.
+///
+/// `synaptic_tags` survives process restarts. `synaptic_events` gives an
+/// importance event a stable idempotency key and frozen window. Each evaluated
+/// pair is recorded in `synaptic_capture_items`, including rejected/withheld
+/// candidates, so the receipt is a decision predicate rather than a positives-
+/// only story. Promotion, item rows, tag state, and the generic receipt payload
+/// are committed by one writer transaction in `synaptic_store`.
+const MIGRATION_V21_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS synaptic_tags (
+    tag_id              TEXT PRIMARY KEY,
+    memory_id           TEXT NOT NULL,
+    created_at_ms       INTEGER NOT NULL,
+    initial_strength    REAL NOT NULL,
+    encoding_context    TEXT,
+    algorithm_version   TEXT NOT NULL,
+    state               TEXT NOT NULL CHECK (state IN ('active', 'captured', 'expired')),
+    capture_event_id    TEXT,
+    captured_at_ms      INTEGER,
+    recorded_at         TEXT NOT NULL,
+    UNIQUE(memory_id, created_at_ms),
+    FOREIGN KEY (memory_id) REFERENCES knowledge_nodes(id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_synaptic_tags_active_time
+    ON synaptic_tags(state, created_at_ms, tag_id);
+CREATE INDEX IF NOT EXISTS idx_synaptic_tags_memory
+    ON synaptic_tags(memory_id, created_at_ms DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_synaptic_tags_one_active_per_memory
+    ON synaptic_tags(memory_id) WHERE state = 'active';
+
+CREATE TABLE IF NOT EXISTS synaptic_events (
+    event_id            TEXT PRIMARY KEY,
+    trigger_memory_id   TEXT NOT NULL,
+    event_type          TEXT NOT NULL,
+    occurred_at_ms      INTEGER NOT NULL,
+    window_from_ms      INTEGER NOT NULL,
+    window_to_ms        INTEGER NOT NULL,
+    strength            REAL NOT NULL,
+    algorithm_version   TEXT NOT NULL,
+    receipt_id          TEXT UNIQUE,
+    recorded_at         TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_synaptic_events_open_window
+    ON synaptic_events(window_from_ms, window_to_ms, occurred_at_ms, event_id);
+CREATE INDEX IF NOT EXISTS idx_synaptic_events_trigger
+    ON synaptic_events(trigger_memory_id, occurred_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS synaptic_capture_items (
+    event_id                    TEXT NOT NULL,
+    tag_id                      TEXT NOT NULL,
+    memory_id                   TEXT NOT NULL,
+    evidence_slot               TEXT NOT NULL,
+    receipt_id                  TEXT NOT NULL,
+    encoded_at_ms               INTEGER NOT NULL,
+    temporal_distance_hours     REAL NOT NULL,
+    capture_probability         REAL NOT NULL,
+    tag_strength_at_evaluation  REAL NOT NULL,
+    capture_score               REAL NOT NULL,
+    disposition                 TEXT NOT NULL,
+    reason                      TEXT,
+    retrieval_before            REAL,
+    retrieval_after             REAL,
+    retention_before            REAL,
+    retention_after             REAL,
+    stability_before            REAL,
+    stability_after             REAL,
+    recorded_at                 TEXT NOT NULL,
+    PRIMARY KEY(event_id, tag_id),
+    FOREIGN KEY (event_id) REFERENCES synaptic_events(event_id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES synaptic_tags(tag_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_synaptic_capture_items_receipt
+    ON synaptic_capture_items(receipt_id);
+
+UPDATE schema_version SET version = 21, applied_at = datetime('now');
+"#;
+
 /// Apply pending migrations
 ///
 /// Each migration is applied inside an explicit transaction so its schema
@@ -1685,8 +1770,10 @@ mod tests {
     }
 
     fn cursor_row_count(conn: &rusqlite::Connection) -> i64 {
-        conn.query_row("SELECT COUNT(*) FROM connector_cursors", [], |row| row.get(0))
-            .expect("count connector_cursors")
+        conn.query_row("SELECT COUNT(*) FROM connector_cursors", [], |row| {
+            row.get(0)
+        })
+        .expect("count connector_cursors")
     }
 
     fn seed_connector_cursor(conn: &rusqlite::Connection, system: &str, scope: &str) {
@@ -1721,8 +1808,8 @@ mod tests {
         seed_connector_cursor(&conn, "github", "octocat/repoB");
         assert_eq!(cursor_row_count(&conn), 2);
 
-        let applied = apply_migrations(&conn).expect("V20 applies on a V19 database");
-        assert_eq!(applied, 1, "exactly V20 should apply on a V19 database");
+        let applied = apply_migrations(&conn).expect("V20+ apply on a V19 database");
+        assert_eq!(applied, 2, "V20 and V21 should apply on a V19 database");
         assert_eq!(
             get_current_version(&conn).expect("version"),
             MIGRATIONS.last().unwrap().version
@@ -1734,16 +1821,16 @@ mod tests {
         );
     }
 
-    /// Fresh database: all migrations apply cleanly through V20 and the cursor
+    /// Fresh database: all migrations apply cleanly through V21 and the cursor
     /// table exists and is empty (nothing to clear, no error).
     #[test]
     fn v20_applies_cleanly_on_a_fresh_database() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("fresh migrations succeed through V20");
+        apply_migrations(&conn).expect("fresh migrations succeed through V21");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            20,
-            "latest migration must be V20"
+            21,
+            "latest migration must be V21"
         );
         assert_eq!(cursor_row_count(&conn), 0);
     }
@@ -1766,12 +1853,29 @@ mod tests {
         // Forced replay from V19 clears it again without erroring.
         conn.execute("UPDATE schema_version SET version = 19", [])
             .expect("rewind to 19");
-        apply_migrations(&conn).expect("V20 replay must be idempotent");
+        apply_migrations(&conn).expect("V20+ replay must be idempotent");
         assert_eq!(cursor_row_count(&conn), 0);
         assert_eq!(
             get_current_version(&conn).expect("version"),
             MIGRATIONS.last().unwrap().version
         );
+    }
+
+    #[test]
+    fn v21_creates_durable_synaptic_capture_tables() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("apply migrations through V21");
+
+        for table in ["synaptic_tags", "synaptic_events", "synaptic_capture_items"] {
+            let rows: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("query sqlite_master");
+            assert_eq!(rows, 1, "V21 must create {table}");
+        }
     }
 
     #[test]

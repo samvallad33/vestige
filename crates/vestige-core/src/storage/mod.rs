@@ -10,6 +10,7 @@ mod memory_store;
 mod migrations;
 mod portable;
 mod sqlite;
+mod synaptic_store;
 mod trace_store;
 
 #[cfg(feature = "cloud-sync")]
@@ -32,6 +33,10 @@ pub use sqlite::{
     NeverComposedCandidate, PortableSyncBackend, PortableSyncReport, ReconcileReport, Result,
     SmartIngestResult, SourceUpsertOutcome, SourceUpsertResult, SqliteMemoryStore,
     StateTransitionRecord, StorageError,
+};
+pub use synaptic_store::{
+    DurableSynapticCapture, SYNAPTIC_CAPTURE_ALGORITHM_V1, SYNAPTIC_CAPTURE_CLAIM_BOUNDARY,
+    SYNAPTIC_CAPTURE_SCHEMA_V1, SynapticCapturePolicy, SynapticCaptureRequest,
 };
 pub use trace_store::AgentRunSummary;
 
