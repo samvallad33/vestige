@@ -2132,7 +2132,11 @@ fn cosine_unit(left: &[f32], right: &[f32]) -> f64 {
     if left_norm <= f64::EPSILON || right_norm <= f64::EPSILON {
         return 0.0;
     }
-    ((dot / (left_norm.sqrt() * right_norm.sqrt())) + 1.0) / 2.0
+    // The capture threshold is expressed on a non-negative cosine scale:
+    // orthogonal vectors are zero context, and only positively aligned vectors
+    // can qualify. Mapping `[-1, 1]` into `[0, 1]` would make an unrelated
+    // orthogonal pair score 0.5, silently bypassing the 0.25 context gate.
+    (dot / (left_norm.sqrt() * right_norm.sqrt())).clamp(0.0, 1.0)
 }
 
 fn finite_unit(value: f64) -> f64 {
