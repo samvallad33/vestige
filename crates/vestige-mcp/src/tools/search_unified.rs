@@ -22,8 +22,8 @@ use tokio::sync::Mutex;
 
 use crate::cognitive::CognitiveEngine;
 use vestige_core::{
-    CompetitionCandidate, EncodingContext, MemoryLifecycle, MemorySnapshot, MemoryState,
-    OutputConfig, Storage, TopicalContext,
+    CompetitionCandidate, DEFAULT_MEMORY_SCOPE, EncodingContext, MemoryLifecycle, MemorySnapshot,
+    MemoryState, OutputConfig, Storage, TopicalContext,
 };
 
 /// Input schema for unified search tool
@@ -98,6 +98,15 @@ pub fn schema() -> Value {
                 "type": "string",
                 "description": "Optional tag-prefix filter. When set, only results carrying at least one tag whose value starts with this prefix are returned (case-sensitive). Example: tag_prefix=\"meeting:\" matches memories tagged 'meeting:standup', 'meeting:1-on-1', etc. Applied as a post-filter; combine with a larger 'limit' if you expect heavy thinning."
             },
+            "scope": {
+                "type": "string",
+                "description": "Project namespace to search. Defaults to the legacy 'user' namespace, so project memories never bleed into an unscoped recall."
+            },
+            "includeCrossScope": {
+                "type": "boolean",
+                "description": "Search across all project namespaces. Defaults to false; set only when cross-project retrieval is intentional.",
+                "default": false
+            },
             "source_system": {
                 "type": "string",
                 "description": "Investigation filter (#57): only memories ingested from this external system, e.g. 'github' or 'redmine'. Post-filter — non-connector memories are excluded. Combine with a larger 'limit' if thinning is heavy."
@@ -161,6 +170,8 @@ struct SearchArgs {
     concrete: Option<bool>,
     #[serde(alias = "tag_prefix")]
     tag_prefix: Option<String>,
+    scope: Option<String>,
+    include_cross_scope: Option<bool>,
     // #57 Phase 4 — source-aware investigation filters (all post-filters).
     #[serde(alias = "source_system")]
     source_system: Option<String>,
@@ -245,6 +256,7 @@ pub async fn execute(
     // #57 Phase 4 — parse the source-aware investigation filter once (shared by
     // both the concrete and hybrid paths). Hard-errors on malformed input.
     let source_filter = SourceFilter::from_args(&args)?;
+    let scope_filter = ScopeFilter::from_args(&args)?;
 
     let concrete = args
         .concrete
@@ -254,7 +266,10 @@ pub async fn execute(
         // pool so the post-filter has enough headroom to still return ~limit
         // results after thinning. Cap at the same upper bound the underlying
         // SQL path uses elsewhere (100).
-        let concrete_fetch_limit = if args.tag_prefix.is_some() || source_filter.is_active() {
+        let concrete_fetch_limit = if args.tag_prefix.is_some()
+            || source_filter.is_active()
+            || scope_filter.is_restrictive()
+        {
             (limit * 3).min(100)
         } else {
             limit
@@ -270,6 +285,7 @@ pub async fn execute(
 
         // Apply post-filters before formatting the response. Retrieval
         // telemetry is recorded later, after the final budget selection.
+        let results = filter_results_to_scope(storage, results, &scope_filter)?;
         let filtered_results: Vec<&vestige_core::SearchResult> = results
             .iter()
             .filter(|r| match args.tag_prefix.as_deref() {
@@ -326,6 +342,8 @@ pub async fn execute(
             "concrete": true,
             "detailLevel": detail_level,
             "profile": output_config.profile.as_str(),
+            "scope": scope_filter.scope,
+            "includeCrossScope": scope_filter.include_cross_scope,
             "total": formatted.len(),
             "results": formatted,
         });
@@ -376,6 +394,9 @@ pub async fn execute(
         std::collections::HashSet::new();
     let mut keyword_priority_results: Vec<vestige_core::SearchResult> = Vec::new();
     for r in keyword_first_results {
+        if !scope_filter.matches(storage, &r.node.id)? {
+            continue;
+        }
         if r.keyword_score.unwrap_or(0.0) >= keyword_priority_threshold
             && r.node.retention_strength >= min_retention
         {
@@ -395,7 +416,10 @@ pub async fn execute(
     // When a tag_prefix OR source filter is requested, double the overfetch
     // (capped at the same 100 ceiling) so the post-filter has enough headroom
     // to still return ~limit results after thinning.
-    let post_filter_multiplier = if args.tag_prefix.is_some() || source_filter.is_active() {
+    let post_filter_multiplier = if args.tag_prefix.is_some()
+        || source_filter.is_active()
+        || scope_filter.is_restrictive()
+    {
         2
     } else {
         1
@@ -414,6 +438,7 @@ pub async fn execute(
         .map_err(|e| e.to_string())?;
 
     // Filter by min_retention and min_similarity first (cheap filters)
+    let results = filter_results_to_scope(storage, results, &scope_filter)?;
     let mut filtered_results: Vec<_> = results
         .into_iter()
         .filter(|r| {
@@ -843,6 +868,8 @@ pub async fn execute(
         "retrievalMode": retrieval_mode,
         "detailLevel": detail_level,
         "profile": output_config.profile.as_str(),
+        "scope": scope_filter.scope,
+        "includeCrossScope": scope_filter.include_cross_scope,
         "total": formatted.len(),
         "results": formatted,
     });
@@ -929,6 +956,65 @@ fn is_literal_query(query: &str) -> bool {
 /// prefix-search should normalize tags at ingest time.
 fn tags_match_prefix(tags: &[String], prefix: &str) -> bool {
     tags.iter().any(|t| t.starts_with(prefix))
+}
+
+/// Retrieval namespace policy. Every ordinary query is scoped, including a
+/// query that omits `scope`: old clients continue to see their legacy `user`
+/// memories while project memories stay isolated until explicitly named.
+#[derive(Debug, Clone)]
+struct ScopeFilter {
+    scope: String,
+    include_cross_scope: bool,
+}
+
+impl ScopeFilter {
+    fn from_args(args: &SearchArgs) -> Result<Self, String> {
+        let scope = args
+            .scope
+            .as_deref()
+            .unwrap_or(DEFAULT_MEMORY_SCOPE)
+            .trim()
+            .to_string();
+        if scope.is_empty() || scope.len() > 200 || scope.chars().any(char::is_control) {
+            return Err(
+                "Invalid scope: expected a non-empty identifier of at most 200 visible characters"
+                    .to_string(),
+            );
+        }
+        Ok(Self {
+            scope,
+            include_cross_scope: args.include_cross_scope.unwrap_or(false),
+        })
+    }
+
+    fn is_restrictive(&self) -> bool {
+        !self.include_cross_scope
+    }
+
+    fn matches(&self, storage: &Storage, node_id: &str) -> Result<bool, String> {
+        if self.include_cross_scope {
+            Ok(true)
+        } else {
+            storage
+                .node_is_in_scope(node_id, &self.scope)
+                .map_err(|error| error.to_string())
+        }
+    }
+}
+
+fn filter_results_to_scope(
+    storage: &Storage,
+    results: Vec<vestige_core::SearchResult>,
+    scope_filter: &ScopeFilter,
+) -> Result<Vec<vestige_core::SearchResult>, String> {
+    results
+        .into_iter()
+        .try_fold(Vec::new(), |mut kept, result| {
+            if scope_filter.matches(storage, &result.node.id)? {
+                kept.push(result);
+            }
+            Ok(kept)
+        })
 }
 
 /// Validity filter for source-aware search (#57 Phase 4).
@@ -1302,6 +1388,89 @@ mod tests {
         };
         let node = storage.ingest(input).unwrap();
         node.id
+    }
+
+    #[tokio::test]
+    async fn project_scope_prevents_cross_project_retrieval_by_default() {
+        let (storage, _dir) = test_storage().await;
+        let web = storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "backup retention is six daily snapshots for the web app".to_string(),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                },
+                "web-app",
+            )
+            .unwrap();
+        let photo = storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "backup retention is twelve originals for the photo manager"
+                        .to_string(),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                },
+                "photo-manager",
+            )
+            .unwrap();
+
+        let config = OutputConfig::default();
+        let scoped = execute(
+            &storage,
+            &test_cognitive(),
+            &config,
+            Some(serde_json::json!({
+                "query": "backup retention",
+                "concrete": true,
+                "scope": "web-app",
+            })),
+        )
+        .await
+        .expect("scoped recall succeeds");
+        let scoped_ids: Vec<&str> = scoped["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|result| result["id"].as_str())
+            .collect();
+        assert!(scoped_ids.contains(&web.id.as_str()));
+        assert!(!scoped_ids.contains(&photo.id.as_str()));
+
+        let default_scope = execute(
+            &storage,
+            &test_cognitive(),
+            &config,
+            Some(serde_json::json!({ "query": "backup retention", "concrete": true })),
+        )
+        .await
+        .expect("default scoped recall succeeds");
+        assert_eq!(default_scope["scope"], DEFAULT_MEMORY_SCOPE);
+        assert_eq!(
+            default_scope["total"], 0,
+            "unscoped recall must not bleed projects"
+        );
+
+        let cross_scope = execute(
+            &storage,
+            &test_cognitive(),
+            &config,
+            Some(serde_json::json!({
+                "query": "backup retention",
+                "concrete": true,
+                "includeCrossScope": true,
+            })),
+        )
+        .await
+        .expect("explicit cross-scope recall succeeds");
+        let cross_ids: Vec<&str> = cross_scope["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|result| result["id"].as_str())
+            .collect();
+        assert!(cross_ids.contains(&web.id.as_str()));
+        assert!(cross_ids.contains(&photo.id.as_str()));
     }
 
     // ========================================================================

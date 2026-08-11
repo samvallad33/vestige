@@ -56,6 +56,7 @@ impl From<crate::storage::StorageError> for MemoryStoreError {
             S::Database(e) => MemoryStoreError::Backend(e.to_string()),
             S::Io(e) => MemoryStoreError::Backend(e.to_string()),
             S::InvalidTimestamp(s) => MemoryStoreError::Backend(format!("invalid timestamp: {s}")),
+            S::InvalidScope(s) => MemoryStoreError::InvalidInput(s),
             S::Init(s) => MemoryStoreError::Init(s),
             S::SecretDetected { kinds } => MemoryStoreError::SecretDetected(kinds.join(", ")),
         }

@@ -22,9 +22,9 @@ use tokio::sync::Mutex;
 
 use crate::cognitive::CognitiveEngine;
 use vestige_core::{
-    ContentType, ImportanceContext, IngestInput, SecretPolicy, Storage, StorageError,
-    SynapticCapturePolicy, SynapticImportanceEvent, SynapticIngestRequest, SynapticSignalSnapshot,
-    SynapticTag, SynapticTaggingConfig, scan_secrets,
+    ContentType, DEFAULT_MEMORY_SCOPE, ImportanceContext, IngestInput, SecretPolicy, Storage,
+    StorageError, SynapticCapturePolicy, SynapticImportanceEvent, SynapticIngestRequest,
+    SynapticSignalSnapshot, SynapticTag, SynapticTaggingConfig, scan_secrets,
 };
 
 /// Input schema for smart_ingest tool
@@ -53,6 +53,10 @@ pub fn schema() -> Value {
             "source": {
                 "type": "string",
                 "description": "Source or reference for this knowledge"
+            },
+            "scope": {
+                "type": "string",
+                "description": "Project namespace for this memory. Defaults to 'user' for backward compatibility. Recall searches this namespace unless includeCrossScope=true."
             },
             "forceCreate": {
                 "type": "boolean",
@@ -95,6 +99,10 @@ pub fn schema() -> Value {
                             "type": "string",
                             "description": "Source reference"
                         },
+                        "scope": {
+                            "type": "string",
+                            "description": "Project namespace for this item. Overrides the batch scope when supplied."
+                        },
                         "forceCreate": {
                             "type": "boolean",
                             "description": "Force creation of this item even if similar content exists",
@@ -121,6 +129,7 @@ struct SmartIngestArgs {
     node_type: Option<String>,
     tags: Option<Vec<String>>,
     source: Option<String>,
+    scope: Option<String>,
     force_create: Option<bool>,
     allow_secrets: Option<bool>,
     batch_merge_policy: Option<String>,
@@ -136,6 +145,7 @@ struct BatchItem {
     #[serde(alias = "node_type")]
     node_type: Option<String>,
     source: Option<String>,
+    scope: Option<String>,
     force_create: Option<bool>,
     allow_secrets: Option<bool>,
 }
@@ -149,6 +159,9 @@ pub async fn execute(
         Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid arguments: {}", e))?,
         None => return Err("Missing arguments".to_string()),
     };
+    let scope = args
+        .scope
+        .unwrap_or_else(|| DEFAULT_MEMORY_SCOPE.to_string());
 
     // Detect mode: batch (items present) vs single (content present)
     if let Some(items) = args.items {
@@ -173,7 +186,15 @@ pub async fn execute(
             Some(explicit) => explicit,
             None => default_force_create,
         };
-        return execute_batch(storage, cognitive, items, global_force, &batch_merge_policy).await;
+        return execute_batch(
+            storage,
+            cognitive,
+            items,
+            global_force,
+            &batch_merge_policy,
+            &scope,
+        )
+        .await;
     }
 
     // Single mode: content is required
@@ -261,7 +282,7 @@ pub async fn execute(
     // Check if force_create is enabled
     if args.force_create.unwrap_or(false) {
         let node = storage
-            .ingest_with_secret_policy(input, secret_policy)
+            .ingest_in_scope_with_secret_policy(input, &scope, secret_policy)
             .map_err(|e| e.to_string())?;
         let node_id = node.id.clone();
         let node_content = node.content.clone();
@@ -283,6 +304,7 @@ pub async fn execute(
             "success": true,
             "decision": "create",
             "nodeId": node_id,
+            "scope": scope,
             "message": "Memory created (force_create=true)",
             "hasEmbedding": has_embedding,
             "predictionError": 1.0,
@@ -296,7 +318,7 @@ pub async fn execute(
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     {
         let result = storage
-            .smart_ingest_with_secret_policy(input, secret_policy)
+            .smart_ingest_in_scope_with_secret_policy(input, &scope, secret_policy)
             .map_err(|e| e.to_string())?;
         let node_id = result.node.id.clone();
         let node_content = result.node.content.clone();
@@ -328,6 +350,7 @@ pub async fn execute(
             "success": true,
             "decision": result.decision,
             "nodeId": node_id,
+            "scope": scope,
             "message": format!("Smart ingest complete: {}", result.reason),
             "hasEmbedding": has_embedding,
             "similarity": result.similarity,
@@ -355,7 +378,7 @@ pub async fn execute(
     #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
     {
         let node = storage
-            .ingest_with_secret_policy(input, secret_policy)
+            .ingest_in_scope_with_secret_policy(input, &scope, secret_policy)
             .map_err(|e| e.to_string())?;
         let node_id = node.id.clone();
         let node_content = node.content.clone();
@@ -375,6 +398,7 @@ pub async fn execute(
             "success": true,
             "decision": "create",
             "nodeId": node_id,
+            "scope": scope,
             "message": "Memory created (smart ingest requires embeddings feature)",
             "hasEmbedding": false,
             "predictionError": 1.0,
@@ -396,6 +420,7 @@ async fn execute_batch(
     items: Vec<BatchItem>,
     global_force_create: bool,
     batch_merge_policy: &str,
+    default_scope: &str,
 ) -> Result<Value, String> {
     if items.is_empty() {
         return Err("Items array cannot be empty".to_string());
@@ -415,6 +440,10 @@ async fn execute_batch(
     let mut batch_created_node_ids: Vec<String> = Vec::new();
 
     for (i, item) in items.into_iter().enumerate() {
+        let scope = item
+            .scope
+            .clone()
+            .unwrap_or_else(|| default_scope.to_string());
         // Skip empty content
         if item.content.trim().is_empty() {
             results.push(serde_json::json!({
@@ -506,7 +535,7 @@ async fn execute_batch(
         // Check force_create: global flag OR per-item flag
         let item_force = global_force_create || item_force_create;
         if item_force {
-            match storage.ingest_with_secret_policy(input, secret_policy) {
+            match storage.ingest_in_scope_with_secret_policy(input, &scope, secret_policy) {
                 Ok(node) => {
                     let node_id = node.id.clone();
                     let node_content = node.content.clone();
@@ -529,6 +558,7 @@ async fn execute_batch(
                         "status": "saved",
                         "decision": "create",
                         "nodeId": node_id,
+                        "scope": scope,
                         "importanceScore": importance_composite,
                         "synapticCapture": synaptic_capture,
                         "reason": "Forced creation - skipped similarity check"
@@ -548,8 +578,9 @@ async fn execute_batch(
 
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         {
-            match storage.smart_ingest_excluding_with_secret_policy(
+            match storage.smart_ingest_excluding_in_scope_with_secret_policy(
                 input,
+                &scope,
                 &batch_created_node_ids,
                 secret_policy,
             ) {
@@ -593,6 +624,7 @@ async fn execute_batch(
                         "status": "saved",
                         "decision": result.decision,
                         "nodeId": node_id,
+                        "scope": scope,
                         "similarity": result.similarity,
                         "predictionError": result.prediction_error,
                         "supersededId": result.superseded_id,
@@ -617,7 +649,7 @@ async fn execute_batch(
 
         #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
         {
-            match storage.ingest_with_secret_policy(input, secret_policy) {
+            match storage.ingest_in_scope_with_secret_policy(input, &scope, secret_policy) {
                 Ok(node) => {
                     let node_id = node.id.clone();
                     let node_content = node.content.clone();
@@ -640,6 +672,7 @@ async fn execute_batch(
                         "status": "saved",
                         "decision": "create",
                         "nodeId": node_id,
+                        "scope": scope,
                         "importanceScore": importance_composite,
                         "synapticCapture": synaptic_capture,
                         "reason": "Embeddings not available - used regular ingest"
@@ -959,6 +992,27 @@ mod tests {
                     .unwrap()
                     .contains("Embeddings not available")
         );
+    }
+
+    #[tokio::test]
+    async fn smart_ingest_persists_the_requested_project_scope() {
+        let (storage, _dir) = test_storage().await;
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "The web-app backup worker keeps six daily snapshots.",
+                "scope": "web-app",
+                "forceCreate": true,
+            })),
+        )
+        .await
+        .expect("scoped ingest succeeds");
+
+        let id = result["nodeId"].as_str().expect("node id");
+        assert_eq!(result["scope"], "web-app");
+        assert!(storage.node_is_in_scope(id, "web-app").unwrap());
+        assert!(!storage.node_is_in_scope(id, DEFAULT_MEMORY_SCOPE).unwrap());
     }
 
     #[tokio::test]

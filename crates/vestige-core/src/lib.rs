@@ -190,6 +190,7 @@ pub use storage::{
     ConnectorCursor,
     ConsolidationHistoryRecord,
     CounterfactualReplayResult,
+    DEFAULT_MEMORY_SCOPE,
     Domain,
     DreamHistoryRecord,
     DurableCounterfactualReplay,
