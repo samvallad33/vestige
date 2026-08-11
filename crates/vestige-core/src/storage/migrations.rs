@@ -2264,7 +2264,7 @@ mod tests {
         assert_eq!(cursor_row_count(&conn), 2);
 
         let applied = apply_migrations(&conn).expect("V20+ apply on a V19 database");
-        assert_eq!(applied, 7, "V20 through V26 should apply on a V19 database");
+        assert_eq!(applied, 8, "V20 through V27 should apply on a V19 database");
         assert_eq!(
             get_current_version(&conn).expect("version"),
             MIGRATIONS.last().unwrap().version
@@ -2276,16 +2276,16 @@ mod tests {
         );
     }
 
-    /// Fresh database: all migrations apply cleanly through V26 and the cursor
+    /// Fresh database: all migrations apply cleanly through V27 and the cursor
     /// table exists and is empty (nothing to clear, no error).
     #[test]
     fn v20_applies_cleanly_on_a_fresh_database() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("fresh migrations succeed through V26");
+        apply_migrations(&conn).expect("fresh migrations succeed through V27");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            26,
-            "latest migration must be V26"
+            27,
+            "latest migration must be V27"
         );
         assert_eq!(cursor_row_count(&conn), 0);
     }
@@ -2470,7 +2470,7 @@ mod tests {
         )
         .expect("mark V25 fixture current");
 
-        assert_eq!(apply_migrations(&conn).expect("apply V26"), 1);
+        assert_eq!(apply_migrations(&conn).expect("apply V26 and V27"), 2);
         let columns: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('receipt_envelopes')
@@ -2480,7 +2480,7 @@ mod tests {
             )
             .expect("inspect V26 column");
         assert_eq!(columns, 1);
-        assert_eq!(apply_migrations(&conn).expect("V26 replay is a no-op"), 0);
+        assert_eq!(apply_migrations(&conn).expect("V27 replay is a no-op"), 0);
     }
 
     #[test]
