@@ -2032,6 +2032,129 @@ mod tests {
         );
     }
 
+    /// A destructive write is necessarily post-commit in this gate: the node
+    /// has already been purged when the gate observes the result. The response
+    /// must therefore say that it was recorded for review, never that it is
+    /// quarantined or held.
+    #[tokio::test]
+    async fn destructive_write_is_recorded_for_review_not_reported_as_held() {
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"paranoid"}"#,
+        )
+        .unwrap();
+        let node = storage
+            .ingest(vestige_core::IngestInput {
+                content: "Memory scheduled for destructive review.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "memory",
+                    "arguments": {
+                        "action": "purge",
+                        "id": node.id.clone(),
+                        "confirm": true,
+                        "reason": "exercise the post-commit review notice"
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none(), "purge should succeed");
+        assert!(
+            storage.get_node(&node.id).unwrap().is_none(),
+            "the post-commit gate cannot claim to have prevented the purge"
+        );
+
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("structuredContent"))
+            .expect("structured tool result");
+        assert_eq!(structured["memoryPrs"][0]["held"], false);
+        let notice = structured["memoryPrNotice"]
+            .as_str()
+            .expect("destructive write notice");
+        assert!(notice.contains("already applied but recorded for review"));
+        assert!(notice.contains("nothing is held"));
+        assert!(!notice.contains("quarantined until"));
+    }
+
+    /// Dashboard events must not announce a write as landed before the Memory
+    /// PR is opened. The receipt/gate merge seam is deliberately exercised
+    /// through the real MCP dispatch path, not by calling either helper alone.
+    #[tokio::test]
+    async fn memory_pr_event_precedes_memory_created_event() {
+        use crate::dashboard::events::VestigeEvent;
+        use std::time::Duration;
+
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"paranoid"}"#,
+        )
+        .unwrap();
+        let (event_tx, mut events) = tokio::sync::broadcast::channel(16);
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new_with_events(storage, cognitive, event_tx);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "smart_ingest",
+                    "arguments": { "content": "A write whose dashboard order is audited." }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none(), "smart_ingest should succeed");
+
+        let mut observed = Vec::new();
+        for _ in 0..8 {
+            let event = tokio::time::timeout(Duration::from_millis(100), events.recv())
+                .await
+                .expect("expected a queued dashboard event")
+                .expect("dashboard event channel should remain open");
+            match event {
+                VestigeEvent::MemoryPrOpened { .. } => observed.push("memory-pr-opened"),
+                VestigeEvent::MemoryCreated { .. } => {
+                    observed.push("memory-created");
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let opened_at = observed
+            .iter()
+            .position(|event| *event == "memory-pr-opened")
+            .expect("gating must open a Memory PR");
+        let created_at = observed
+            .iter()
+            .position(|event| *event == "memory-created")
+            .expect("emit_tool_event must publish the created memory");
+        assert!(
+            opened_at < created_at,
+            "dashboard must observe the Memory PR before the memory-created event: {observed:?}"
+        );
+    }
+
     /// A corrupt or missing `review_mode.json` must never silently disable
     /// gating: it falls back to the default RiskGated.
     #[tokio::test]
