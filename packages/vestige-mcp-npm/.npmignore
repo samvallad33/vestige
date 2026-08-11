@@ -14,3 +14,4 @@ bin/*.zip
 # Dev files
 *.log
 .DS_Store
+tests/
