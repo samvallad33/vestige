@@ -113,6 +113,17 @@ type RegisteredSigningKeyRow = (
     Option<String>,
 );
 
+type StoredReceiptVerificationRow = (String, String, String, String, i64, String, String, String);
+
+type StoredTrustedSigningKeyRow = (
+    String,
+    Vec<u8>,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
+
 /// Provision a new Ed25519 seed sidecar with crash-safe publication.
 ///
 /// On Unix this creates/validates a `0700` directory, writes a same-directory
@@ -751,7 +762,7 @@ impl SqliteMemoryStore {
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-        let row: Option<(String, String, String, String, i64, String, String, String)> = reader
+        let row: Option<StoredReceiptVerificationRow> = reader
             .query_row(
                 "SELECT r.payload, e.envelope_json, e.payload_digest, e.entry_digest,
                         e.sequence, e.chain_id,
@@ -994,14 +1005,7 @@ fn load_trusted_signing_key(
     connection: &rusqlite::Connection,
     key_id: &str,
 ) -> Result<Option<TrustedSigningKey>> {
-    let row: Option<(
-        String,
-        Vec<u8>,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-    )> = connection
+    let row: Option<StoredTrustedSigningKeyRow> = connection
         .query_row(
             "SELECT key_id, public_key, status, valid_from, valid_until, revoked_at
                FROM receipt_signing_keys WHERE key_id = ?1",

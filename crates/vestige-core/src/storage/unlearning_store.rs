@@ -442,9 +442,9 @@ impl UnlearningStore {
             let (source_kind, source_id, derived_kind, derived_id, relation) = row?;
             edges.push(LineageEdge {
                 source: ArtifactRef::new(parse_artifact_kind(&source_kind)?, source_id)
-                    .map_err(|error| malformed_model(error))?,
+                    .map_err(malformed_model)?,
                 derived: ArtifactRef::new(parse_artifact_kind(&derived_kind)?, derived_id)
-                    .map_err(|error| malformed_model(error))?,
+                    .map_err(malformed_model)?,
                 relation: parse_lineage_relation(&relation)?,
             });
         }

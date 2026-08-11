@@ -86,19 +86,14 @@ pub const VESTIGE_SQLITE_DURABILITY_ENV: &str = "VESTIGE_SQLITE_DURABILITY";
 /// used its FULL WAL synchronization path. `Balanced` preserves the historical
 /// WAL + NORMAL behavior for operators who explicitly accept the power-loss
 /// window in exchange for lower write latency.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SqliteDurabilityProfile {
     /// WAL + FULL, with macOS full-fsync requests enabled.
+    #[default]
     Hardened,
     /// WAL + NORMAL, preserving the pre-hardening performance profile.
     Balanced,
-}
-
-impl Default for SqliteDurabilityProfile {
-    fn default() -> Self {
-        Self::Hardened
-    }
 }
 
 impl SqliteDurabilityProfile {
@@ -3298,7 +3293,7 @@ impl SqliteMemoryStore {
         // every derived replay in the same transaction as the memory removal.
         // This also upgrades a previously redacted capsule to `purged`.
         Self::invalidate_replay_evidence_for_memory_in_transaction(
-            &tx,
+            tx,
             id,
             crate::storage::ReplayInvalidationReason::Purged,
         )?;
@@ -3397,7 +3392,7 @@ impl SqliteMemoryStore {
         // FK also covers this when the node delete succeeds; doing it
         // explicitly keeps the privacy operation visible and makes a schema
         // regression fail before the canonical row is removed.
-        if Self::table_exists(&tx, "receipt_disclosures")? {
+        if Self::table_exists(tx, "receipt_disclosures")? {
             tx.execute(
                 "DELETE FROM receipt_disclosures WHERE memory_id = ?1",
                 params![id],

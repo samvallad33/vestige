@@ -740,93 +740,94 @@ fn run_post_ingest_with_snapshot(
     // transaction is authoritative; CognitiveEngine is only a live projection.
     // Evaluate the trigger before recording its own tag so self-capture is
     // impossible even when smart ingest updates an existing node id.
-    if importance_composite > 0.3 && trigger_is_eligible {
-        if let Some(node) = &node {
-            let tag = SynapticTag {
-                memory_id: node_id.to_string(),
-                created_at: node.updated_at,
-                tag_strength: 1.0,
-                initial_strength: 1.0,
-                captured: false,
-                capture_event: None,
-                captured_at: None,
-                encoding_context: Some(node.node_type.clone()),
-            };
-            let (event_type, radius) = dominant_importance_event(&importance_snapshot);
-            let policy = SynapticCapturePolicy {
-                backward_hours: config.capture_window.backward_hours * radius,
-                forward_hours: config.capture_window.forward_hours * radius,
-                tag_lifetime_hours: config.tag_lifetime_hours,
-                minimum_tag_strength: config.min_tag_strength,
-                maximum_captures: config.max_cluster_size,
-                decay_function: config.capture_window.decay_function,
-            };
-            let event = (importance_composite > 0.7).then(|| SynapticImportanceEvent {
-                event_type: event_type.into(),
-                occurred_at: node.updated_at,
-                strength: importance_composite,
-                policy,
-                signal_snapshot: importance_snapshot,
-            });
-            match storage.process_synaptic_ingest(&SynapticIngestRequest {
-                memory_id: node_id.to_string(),
-                tag: Some(tag.clone()),
-                event,
-            }) {
-                Ok(outcome) => {
-                    persisted_tag = Some(tag);
-                    tag_persisted = outcome.tag_persisted;
-                    tag_active_after_commit = outcome.tag_active;
-                    let forward_receipts: Vec<Value> = outcome
-                        .forward_receipts
-                        .into_iter()
-                        .map(|pair| {
-                            serde_json::json!({
-                                "receiptId": pair.receipt.receipt_id,
-                                "receipt": pair.receipt,
-                                "eventId": pair.event_id,
-                                "disposition": pair.disposition,
-                                "reusedExisting": pair.reused_existing
-                            })
+    if importance_composite > 0.3
+        && trigger_is_eligible
+        && let Some(node) = &node
+    {
+        let tag = SynapticTag {
+            memory_id: node_id.to_string(),
+            created_at: node.updated_at,
+            tag_strength: 1.0,
+            initial_strength: 1.0,
+            captured: false,
+            capture_event: None,
+            captured_at: None,
+            encoding_context: Some(node.node_type.clone()),
+        };
+        let (event_type, radius) = dominant_importance_event(&importance_snapshot);
+        let policy = SynapticCapturePolicy {
+            backward_hours: config.capture_window.backward_hours * radius,
+            forward_hours: config.capture_window.forward_hours * radius,
+            tag_lifetime_hours: config.tag_lifetime_hours,
+            minimum_tag_strength: config.min_tag_strength,
+            maximum_captures: config.max_cluster_size,
+            decay_function: config.capture_window.decay_function,
+        };
+        let event = (importance_composite > 0.7).then(|| SynapticImportanceEvent {
+            event_type: event_type.into(),
+            occurred_at: node.updated_at,
+            strength: importance_composite,
+            policy,
+            signal_snapshot: importance_snapshot,
+        });
+        match storage.process_synaptic_ingest(&SynapticIngestRequest {
+            memory_id: node_id.to_string(),
+            tag: Some(tag.clone()),
+            event,
+        }) {
+            Ok(outcome) => {
+                persisted_tag = Some(tag);
+                tag_persisted = outcome.tag_persisted;
+                tag_active_after_commit = outcome.tag_active;
+                let forward_receipts: Vec<Value> = outcome
+                    .forward_receipts
+                    .into_iter()
+                    .map(|pair| {
+                        serde_json::json!({
+                            "receiptId": pair.receipt.receipt_id,
+                            "receipt": pair.receipt,
+                            "eventId": pair.event_id,
+                            "disposition": pair.disposition,
+                            "reusedExisting": pair.reused_existing
                         })
-                        .collect();
-                    let mut capture = serde_json::Map::from_iter([
-                        ("durable".into(), Value::Bool(true)),
-                        ("tagPersisted".into(), Value::Bool(outcome.tag_persisted)),
-                        ("tagActive".into(), Value::Bool(outcome.tag_active)),
-                        (
-                            "algorithmVersion".into(),
-                            Value::String("vestige.synaptic_capture.v2".into()),
-                        ),
-                        ("forwardReceipts".into(), Value::Array(forward_receipts)),
-                    ]);
-                    if let Some(root) = outcome.event {
-                        capture.insert(
-                            "receiptId".into(),
-                            Value::String(root.receipt.receipt_id.clone()),
-                        );
-                        capture.insert(
-                            "receipt".into(),
-                            serde_json::to_value(root.receipt).unwrap_or(Value::Null),
-                        );
-                        capture.insert("eventId".into(), Value::String(root.event_id));
-                        capture.insert(
-                            "capturedCount".into(),
-                            serde_json::json!(root.captured_count),
-                        );
-                        capture.insert("reusedExisting".into(), Value::Bool(root.reused_existing));
-                    }
-                    synaptic_capture = Some(Value::Object(capture));
+                    })
+                    .collect();
+                let mut capture = serde_json::Map::from_iter([
+                    ("durable".into(), Value::Bool(true)),
+                    ("tagPersisted".into(), Value::Bool(outcome.tag_persisted)),
+                    ("tagActive".into(), Value::Bool(outcome.tag_active)),
+                    (
+                        "algorithmVersion".into(),
+                        Value::String("vestige.synaptic_capture.v2".into()),
+                    ),
+                    ("forwardReceipts".into(), Value::Array(forward_receipts)),
+                ]);
+                if let Some(root) = outcome.event {
+                    capture.insert(
+                        "receiptId".into(),
+                        Value::String(root.receipt.receipt_id.clone()),
+                    );
+                    capture.insert(
+                        "receipt".into(),
+                        serde_json::to_value(root.receipt).unwrap_or(Value::Null),
+                    );
+                    capture.insert("eventId".into(), Value::String(root.event_id));
+                    capture.insert(
+                        "capturedCount".into(),
+                        serde_json::json!(root.captured_count),
+                    );
+                    capture.insert("reusedExisting".into(), Value::Bool(root.reused_existing));
                 }
-                Err(error) => {
-                    tracing::warn!(%error, "atomic synaptic ingest transaction failed");
-                    synaptic_capture = Some(serde_json::json!({
-                        "durable": false,
-                        "tagPersisted": false,
-                        "algorithmVersion": "vestige.synaptic_capture.v2",
-                        "error": "Synaptic event/tag transaction was not committed; no capture or restart-safe tag is claimed."
-                    }));
-                }
+                synaptic_capture = Some(Value::Object(capture));
+            }
+            Err(error) => {
+                tracing::warn!(%error, "atomic synaptic ingest transaction failed");
+                synaptic_capture = Some(serde_json::json!({
+                    "durable": false,
+                    "tagPersisted": false,
+                    "algorithmVersion": "vestige.synaptic_capture.v2",
+                    "error": "Synaptic event/tag transaction was not committed; no capture or restart-safe tag is claimed."
+                }));
             }
         }
     }
