@@ -47,10 +47,14 @@ use serde::{Deserialize, Serialize};
 mod receipt;
 mod review;
 
-pub use receipt::{DecayRisk, Receipt, ReceiptMutation, SuppressedReceiptEntry};
+pub use receipt::{
+    DecayRisk, Receipt, ReceiptEvidence, ReceiptMutation, StrengthDelta, SuppressedReceiptEntry,
+    SynapticCaptureCandidate, SynapticCaptureDisposition, SynapticCaptureEvidence,
+    SynapticCaptureTrigger, SynapticCaptureWindow, SynapticStrengthChange,
+};
 pub use review::{
-    classify_write, MemoryPr, MemoryPrAction, MemoryPrKind, MemoryPrStatus, ReviewMode, RiskClass,
-    RiskSignal, WriteContext, HIGH_TRUST_FLOOR, LOW_CONFIDENCE_FLOOR,
+    HIGH_TRUST_FLOOR, LOW_CONFIDENCE_FLOOR, MemoryPr, MemoryPrAction, MemoryPrKind, MemoryPrStatus,
+    ReviewMode, RiskClass, RiskSignal, WriteContext, classify_write,
 };
 
 // ============================================================================
@@ -223,6 +227,107 @@ impl MemoryTraceEvent {
             }
         }
         self
+    }
+
+    /// Stable memory ids carried by this event, for state-aware public
+    /// redaction. `mcp.call` intentionally has none because its args are stored
+    /// only as a digest.
+    pub(crate) fn referenced_memory_ids(&self) -> Vec<&str> {
+        match self {
+            MemoryTraceEvent::McpCall { .. } => Vec::new(),
+            MemoryTraceEvent::MemoryRetrieve { ids, .. } => {
+                ids.iter().map(String::as_str).collect()
+            }
+            MemoryTraceEvent::ContradictionDetected { ids, winner_id, .. } => {
+                let mut referenced: Vec<&str> = ids.iter().map(String::as_str).collect();
+                if let Some(winner_id) = winner_id
+                    && !referenced.iter().any(|id| *id == winner_id)
+                {
+                    referenced.push(winner_id);
+                }
+                referenced
+            }
+            MemoryTraceEvent::MemorySuppress { id, .. }
+            | MemoryTraceEvent::MemoryWrite { id, .. } => vec![id.as_str()],
+            MemoryTraceEvent::SanhedrinVeto { evidence_ids, .. } => {
+                evidence_ids.iter().map(String::as_str).collect()
+            }
+            // Proposal ids name review artifacts, not knowledge nodes.
+            MemoryTraceEvent::DreamPatch { .. } => Vec::new(),
+        }
+    }
+
+    /// Replace a memory id everywhere it can cross the public trace boundary.
+    /// Purge also applies this to the stored payload so raw exports cannot
+    /// resurrect a deleted stable id.
+    pub fn redact_memory_id(&mut self, memory_id: &str, replacement: &str) {
+        let replace_ids = |ids: &mut Vec<String>| {
+            for id in ids {
+                if id == memory_id {
+                    *id = replacement.to_string();
+                }
+            }
+        };
+        match self {
+            MemoryTraceEvent::McpCall { .. } => {}
+            MemoryTraceEvent::MemoryRetrieve {
+                ids, activation, ..
+            } => {
+                replace_ids(ids);
+                if let Some(value) = activation.remove(memory_id) {
+                    activation.insert(replacement.to_string(), value);
+                }
+            }
+            MemoryTraceEvent::MemorySuppress { id, .. } => {
+                if id == memory_id {
+                    *id = replacement.to_string();
+                }
+            }
+            MemoryTraceEvent::MemoryWrite { id, diff, .. } => {
+                if id == memory_id {
+                    *id = replacement.to_string();
+                }
+                redact_json_string(diff, memory_id, replacement);
+            }
+            MemoryTraceEvent::ContradictionDetected {
+                ids,
+                winner_id,
+                detail,
+                ..
+            } => {
+                replace_ids(ids);
+                if winner_id.as_deref() == Some(memory_id) {
+                    *winner_id = Some(replacement.to_string());
+                }
+                *detail = detail.replace(memory_id, replacement);
+            }
+            MemoryTraceEvent::SanhedrinVeto {
+                claim,
+                evidence_ids,
+                ..
+            } => {
+                replace_ids(evidence_ids);
+                *claim = claim.replace(memory_id, replacement);
+            }
+            MemoryTraceEvent::DreamPatch { proposal_ids, .. } => replace_ids(proposal_ids),
+        }
+    }
+}
+
+fn redact_json_string(value: &mut serde_json::Value, memory_id: &str, replacement: &str) {
+    match value {
+        serde_json::Value::String(text) => *text = text.replace(memory_id, replacement),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                redact_json_string(value, memory_id, replacement);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for value in values.values_mut() {
+                redact_json_string(value, memory_id, replacement);
+            }
+        }
+        _ => {}
     }
 }
 

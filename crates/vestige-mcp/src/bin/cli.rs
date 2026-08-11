@@ -409,7 +409,14 @@ fn main() -> anyhow::Result<()> {
             no_promote,
             contrast,
             json,
-        } => run_backfill(failure_id, manual, lookback_days, !no_promote, contrast, json),
+        } => run_backfill(
+            failure_id,
+            manual,
+            lookback_days,
+            !no_promote,
+            contrast,
+            json,
+        ),
         Commands::Recall { query, depth, json } => run_recall(query, depth, json),
         Commands::Compose { limit, tags, json } => run_compose(limit, tags, json),
         Commands::Serve {
@@ -2024,7 +2031,7 @@ fn fetch_all_nodes(storage: &Storage) -> anyhow::Result<Vec<vestige_core::Knowle
     Ok(all_nodes)
 }
 
-/// Run backup command - copies the SQLite database file
+/// Run backup command using SQLite's consistent-snapshot export.
 fn run_backup(output: PathBuf) -> anyhow::Result<()> {
     println!("{}", "=== Vestige Backup ===".cyan().bold());
     println!();
@@ -2035,26 +2042,6 @@ fn run_backup(output: PathBuf) -> anyhow::Result<()> {
         anyhow::bail!("Database not found at: {}", db_path.display());
     }
 
-    // Open storage to flush WAL before copying
-    println!("Flushing WAL checkpoint...");
-    {
-        let storage = open_storage()?;
-        // get_stats triggers a read so the connection is active, then drop flushes
-        let _ = storage.get_stats()?;
-    }
-
-    // Also flush WAL directly via a separate connection for extra safety. This
-    // is a raw, UN-keyed connection, so on a SQLCipher-encrypted DB it cannot
-    // read the header and the checkpoint fails with "file is not a database".
-    // The keyed `storage` opened above already flushed the WAL on drop, so this
-    // is redundant belt-and-suspenders — make it best-effort instead of letting
-    // it abort the whole backup on encrypted databases.
-    {
-        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-            let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
-        }
-    }
-
     // Create parent directories if needed
     if let Some(parent) = output.parent()
         && !parent.exists()
@@ -2062,19 +2049,15 @@ fn run_backup(output: PathBuf) -> anyhow::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
-    // Copy the database file
-    println!("Copying database...");
+    // `VACUUM INTO` produces a transactionally consistent snapshot, including
+    // committed frames that still live in the source WAL. Do not copy the main
+    // database file directly: a busy checkpoint can otherwise omit those frames
+    // while still making the backup command look successful.
+    println!("Creating a consistent SQLite snapshot...");
     println!("  {} {}", "From:".dimmed(), db_path.display());
     println!("  {}   {}", "To:".dimmed(), output.display());
-
-    std::fs::copy(&db_path, &output)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&output)?.permissions();
-        perms.set_mode(0o600);
-        std::fs::set_permissions(&output, perms)?;
-    }
+    let storage = open_storage()?;
+    storage.backup_to(&output)?;
 
     let file_size = std::fs::metadata(&output)?.len();
     let size_display = if file_size >= 1024 * 1024 {
@@ -2400,8 +2383,7 @@ fn run_sync_cloud(endpoint: Option<String>) -> anyhow::Result<()> {
     );
 
     let storage = open_storage()?;
-    let report =
-        storage.sync_portable_archive_cloud(&endpoint, &sync_key, Some(encryption_key))?;
+    let report = storage.sync_portable_archive_cloud(&endpoint, &sync_key, Some(encryption_key))?;
     print_sync_report(&report);
     Ok(())
 }
@@ -2668,9 +2650,11 @@ fn run_ingest(
             let delta = chrono::Duration::try_days(days).ok_or_else(|| {
                 anyhow::anyhow!("--ago-days value {days} is out of the supported range")
             })?;
-            let when = chrono::Utc::now().checked_sub_signed(delta).ok_or_else(|| {
-                anyhow::anyhow!("--ago-days value {days} is out of the supported range")
-            })?;
+            let when = chrono::Utc::now()
+                .checked_sub_signed(delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("--ago-days value {days} is out of the supported range")
+                })?;
             storage.set_created_at(&result.node.id, when)?;
         }
         println!("{}", "=== Vestige Ingest ===".cyan().bold());
@@ -2710,9 +2694,11 @@ fn run_ingest(
             let delta = chrono::Duration::try_days(days).ok_or_else(|| {
                 anyhow::anyhow!("--ago-days value {days} is out of the supported range")
             })?;
-            let when = chrono::Utc::now().checked_sub_signed(delta).ok_or_else(|| {
-                anyhow::anyhow!("--ago-days value {days} is out of the supported range")
-            })?;
+            let when = chrono::Utc::now()
+                .checked_sub_signed(delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("--ago-days value {days} is out of the supported range")
+                })?;
             storage.set_created_at(&node.id, when)?;
         }
         println!("{}", "=== Vestige Ingest ===".cyan().bold());
@@ -2880,73 +2866,106 @@ fn run_backfill(
     // lookalike it ranks at the top, which is NOT the cause. Same store, same
     // query. Uses semantic (hybrid) search when embeddings exist, else keyword
     // search — either way it ranks by RESEMBLANCE, which is exactly the blind spot.
-    if contrast
-        && let Some(ftext) = &failure_text {
-            // Generic salient-words query: keep alphanumerics, drop a leading
-            // "<word>:" label if present (e.g. "Service crashed:"). No hardcoding.
-            let query = match ftext.split_once(": ") {
-                Some((lead, rest)) if lead.split_whitespace().count() <= 2 => rest,
-                _ => ftext.as_str(),
-            };
+    if contrast && let Some(ftext) = &failure_text {
+        // Generic salient-words query: keep alphanumerics, drop a leading
+        // "<word>:" label if present (e.g. "Service crashed:"). No hardcoding.
+        let query = match ftext.split_once(": ") {
+            Some((lead, rest)) if lead.split_whitespace().count() <= 2 => rest,
+            _ => ftext.as_str(),
+        };
 
-            // Track which engine ACTUALLY ran so the label is honest (the audit's
-            // top finding: never present keyword search as "semantic").
-            let mut engine = "keyword (BM25)";
-            let mut shown = false;
-            #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        // Track which engine ACTUALLY ran so the label is honest (the audit's
+        // top finding: never present keyword search as "semantic").
+        let mut engine = "keyword (BM25)";
+        let mut shown = false;
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        {
+            if storage.is_embedding_ready()
+                && let Ok(hits) = storage.hybrid_search(query, 6, 0.3, 0.7)
             {
-                if storage.is_embedding_ready()
-                    && let Ok(hits) = storage.hybrid_search(query, 6, 0.3, 0.7) {
-                        let others: Vec<_> =
-                            hits.iter().filter(|h| h.node.content != *ftext).take(3).collect();
-                        if !others.is_empty() {
-                            engine = "semantic (vector + BM25 hybrid)";
-                        }
-                    }
-            }
-            println!(
-                "{}",
-                format!("── 1. SIMILARITY SEARCH · {engine} ──").dimmed().bold()
-            );
-            println!("   query: {}", truncate(query, 60).dimmed());
-
-            // best OTHER match (exclude the failure itself, which trivially matches).
-            #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-            {
-                if storage.is_embedding_ready()
-                    && let Ok(hits) = storage.hybrid_search(query, 6, 0.3, 0.7) {
-                        let others: Vec<_> =
-                            hits.iter().filter(|h| h.node.content != *ftext).take(3).collect();
-                        for (i, h) in others.iter().enumerate() {
-                            let tag = if i == 0 { " ← top match".red().bold().to_string() } else { String::new() };
-                            println!("   {}. {}{}", i + 1, truncate(&h.node.content, 60).normal(), tag);
-                            shown = true;
-                        }
-                    }
-            }
-            if !shown {
-                // keyword/BM25 (always works) — still ranks by lexical resemblance.
-                if let Ok(hits) = storage.search(query, 6) {
-                    let others: Vec<_> =
-                        hits.iter().filter(|h| h.content != *ftext).take(3).collect();
-                    for (i, h) in others.iter().enumerate() {
-                        let tag = if i == 0 { " ← top match".red().bold().to_string() } else { String::new() };
-                        println!("   {}. {}{}", i + 1, truncate(&h.content, 60).normal(), tag);
-                        shown = true;
-                    }
+                let others: Vec<_> = hits
+                    .iter()
+                    .filter(|h| h.node.content != *ftext)
+                    .take(3)
+                    .collect();
+                if !others.is_empty() {
+                    engine = "semantic (vector + BM25 hybrid)";
                 }
             }
-            if shown {
-                println!(
-                    "   {}",
-                    "→ ranked by RESEMBLANCE. its top hit is a lookalike, not the cause.".red()
-                );
-            } else {
-                println!("   {}", "(no lookalikes — nothing resembles the crash)".dimmed());
-            }
-            println!();
-            println!("{}", "── 2. POSTDICT (reach backward for the CAUSE) ──".magenta().bold());
         }
+        println!(
+            "{}",
+            format!("── 1. SIMILARITY SEARCH · {engine} ──")
+                .dimmed()
+                .bold()
+        );
+        println!("   query: {}", truncate(query, 60).dimmed());
+
+        // best OTHER match (exclude the failure itself, which trivially matches).
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        {
+            if storage.is_embedding_ready()
+                && let Ok(hits) = storage.hybrid_search(query, 6, 0.3, 0.7)
+            {
+                let others: Vec<_> = hits
+                    .iter()
+                    .filter(|h| h.node.content != *ftext)
+                    .take(3)
+                    .collect();
+                for (i, h) in others.iter().enumerate() {
+                    let tag = if i == 0 {
+                        " ← top match".red().bold().to_string()
+                    } else {
+                        String::new()
+                    };
+                    println!(
+                        "   {}. {}{}",
+                        i + 1,
+                        truncate(&h.node.content, 60).normal(),
+                        tag
+                    );
+                    shown = true;
+                }
+            }
+        }
+        if !shown {
+            // keyword/BM25 (always works) — still ranks by lexical resemblance.
+            if let Ok(hits) = storage.search(query, 6) {
+                let others: Vec<_> = hits
+                    .iter()
+                    .filter(|h| h.content != *ftext)
+                    .take(3)
+                    .collect();
+                for (i, h) in others.iter().enumerate() {
+                    let tag = if i == 0 {
+                        " ← top match".red().bold().to_string()
+                    } else {
+                        String::new()
+                    };
+                    println!("   {}. {}{}", i + 1, truncate(&h.content, 60).normal(), tag);
+                    shown = true;
+                }
+            }
+        }
+        if shown {
+            println!(
+                "   {}",
+                "→ ranked by RESEMBLANCE. its top hit is a lookalike, not the cause.".red()
+            );
+        } else {
+            println!(
+                "   {}",
+                "(no lookalikes — nothing resembles the crash)".dimmed()
+            );
+        }
+        println!();
+        println!(
+            "{}",
+            "── 2. POSTDICT (reach backward for the CAUSE) ──"
+                .magenta()
+                .bold()
+        );
+    }
 
     let args = serde_json::json!({
         "failure_id": failure_id,
@@ -2968,7 +2987,10 @@ fn run_backfill(
         return Ok(());
     }
 
-    println!("{}", "=== Retroactive Salience Backfill ===".magenta().bold());
+    println!(
+        "{}",
+        "=== Retroactive Salience Backfill ===".magenta().bold()
+    );
     println!();
     if result["triggered"] != serde_json::json!(true) {
         println!(
@@ -2982,11 +3004,16 @@ fn run_backfill(
         println!(
             "{} {}",
             "Failure:".red().bold(),
-            f.get("content_preview").and_then(|v| v.as_str()).unwrap_or("")
+            f.get("content_preview")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
         );
     }
     println!();
-    println!("{}", "Reached BACKWARD and surfaced the cause(s) a vector search would miss:".white());
+    println!(
+        "{}",
+        "Reached BACKWARD and surfaced the cause(s) a vector search would miss:".white()
+    );
     println!();
     if let Some(causes) = result["causes"].as_array() {
         for (i, c) in causes.iter().enumerate() {
@@ -3015,7 +3042,10 @@ fn run_backfill(
                 );
             }
             if c["promoted"] == serde_json::json!(true) {
-                println!("     {} promoted — it will resurface next time", "✅".green());
+                println!(
+                    "     {} promoted — it will resurface next time",
+                    "✅".green()
+                );
             }
             println!();
         }
@@ -3169,8 +3199,18 @@ fn run_compose(limit: i32, tags: Option<String>, json: bool) -> anyhow::Result<(
     );
 
     for (i, c) in candidates.iter().enumerate() {
-        let a: String = c.first_preview.replace('\n', " ").chars().take(70).collect();
-        let b: String = c.second_preview.replace('\n', " ").chars().take(70).collect();
+        let a: String = c
+            .first_preview
+            .replace('\n', " ")
+            .chars()
+            .take(70)
+            .collect();
+        let b: String = c
+            .second_preview
+            .replace('\n', " ")
+            .chars()
+            .take(70)
+            .collect();
         let idx = format!("{}.", i + 1).cyan().bold();
         let metrics = format!(
             "{:.2}  (novelty {:.2}, bridge {:.2})",
@@ -3179,7 +3219,12 @@ fn run_compose(limit: i32, tags: Option<String>, json: bool) -> anyhow::Result<(
         println!("{} {} {}", idx, "score".white(), metrics);
         println!("   A: {}", a);
         println!("   B: {}", b);
-        let q: String = c.composition_question.replace('\n', " ").chars().take(120).collect();
+        let q: String = c
+            .composition_question
+            .replace('\n', " ")
+            .chars()
+            .take(120)
+            .collect();
         if !q.is_empty() {
             println!("   {} {}", "?".yellow().bold(), q.yellow());
         }
