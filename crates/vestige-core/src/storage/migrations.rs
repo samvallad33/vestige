@@ -134,6 +134,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "DSSE receipt binding: persist the signed redaction-safe decision projection alongside immutable envelopes",
         up: MIGRATION_V26_UP,
     },
+    Migration {
+        version: 27,
+        description: "Project scopes: normalize legacy scope values to the safe user namespace",
+        up: MIGRATION_V27_UP,
+    },
 ];
 
 /// A database migration
@@ -1597,6 +1602,20 @@ const MIGRATION_V26_UP: &str = r#"
 UPDATE schema_version SET version = 26, applied_at = datetime('now');
 "#;
 
+/// V27: `scope` was introduced as dormant schema in V4.  Existing rows should
+/// remain visible through the legacy `user` namespace once retrieval starts
+/// enforcing that column.  Treat missing or blank values as that namespace
+/// rather than making old memories disappear or fall into every project.
+const MIGRATION_V27_UP: &str = r#"
+UPDATE knowledge_nodes
+SET scope = 'user'
+WHERE scope IS NULL OR trim(scope) = '';
+
+CREATE INDEX IF NOT EXISTS idx_nodes_scope ON knowledge_nodes(scope);
+
+UPDATE schema_version SET version = 27, applied_at = datetime('now');
+"#;
+
 const MIGRATION_V26_ALTER_COLUMNS: &[&str] = &[r#"
 ALTER TABLE receipt_envelopes ADD COLUMN projection_json TEXT CHECK (
     projection_json IS NULL OR json_valid(projection_json)
@@ -2245,7 +2264,7 @@ mod tests {
         assert_eq!(cursor_row_count(&conn), 2);
 
         let applied = apply_migrations(&conn).expect("V20+ apply on a V19 database");
-        assert_eq!(applied, 7, "V20 through V26 should apply on a V19 database");
+        assert_eq!(applied, 8, "V20 through V27 should apply on a V19 database");
         assert_eq!(
             get_current_version(&conn).expect("version"),
             MIGRATIONS.last().unwrap().version
@@ -2257,16 +2276,16 @@ mod tests {
         );
     }
 
-    /// Fresh database: all migrations apply cleanly through V26 and the cursor
+    /// Fresh database: all migrations apply cleanly through V27 and the cursor
     /// table exists and is empty (nothing to clear, no error).
     #[test]
     fn v20_applies_cleanly_on_a_fresh_database() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("fresh migrations succeed through V26");
+        apply_migrations(&conn).expect("fresh migrations succeed through V27");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            26,
-            "latest migration must be V26"
+            27,
+            "latest migration must be V27"
         );
         assert_eq!(cursor_row_count(&conn), 0);
     }
@@ -2451,7 +2470,7 @@ mod tests {
         )
         .expect("mark V25 fixture current");
 
-        assert_eq!(apply_migrations(&conn).expect("apply V26"), 1);
+        assert_eq!(apply_migrations(&conn).expect("apply V26 and V27"), 2);
         let columns: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('receipt_envelopes')
@@ -2461,7 +2480,30 @@ mod tests {
             )
             .expect("inspect V26 column");
         assert_eq!(columns, 1);
-        assert_eq!(apply_migrations(&conn).expect("V26 replay is a no-op"), 0);
+        assert_eq!(apply_migrations(&conn).expect("V27 replay is a no-op"), 0);
+    }
+
+    #[test]
+    fn v27_preserves_legacy_rows_in_the_user_scope() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 26);
+        conn.execute(
+            "INSERT INTO knowledge_nodes (id, content, node_type, created_at, updated_at, last_accessed, scope)
+             VALUES ('null-scope', 'legacy', 'fact', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL),
+                    ('blank-scope', 'legacy', 'fact', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '   ') ",
+            [],
+        )
+        .expect("seed legacy scopes");
+
+        apply_migrations(&conn).expect("apply V27");
+        let scopes: Vec<String> = conn
+            .prepare("SELECT scope FROM knowledge_nodes ORDER BY id")
+            .expect("prepare scope query")
+            .query_map([], |row| row.get(0))
+            .expect("read scopes")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect scopes");
+        assert_eq!(scopes, vec!["user", "user"]);
     }
 
     #[test]

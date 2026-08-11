@@ -72,10 +72,17 @@ pub enum StorageError {
         "Refused to store probable credential(s): {kinds:?}. Secret bytes were not stored, logged, or returned. Redact the value or use an explicit allow-secrets override only when intentional."
     )]
     SecretDetected { kinds: Vec<String> },
+    /// A project namespace must be a short, non-empty identifier.
+    #[error("Invalid memory scope: {0}")]
+    InvalidScope(String),
 }
 
 /// Storage result type
 pub type Result<T> = std::result::Result<T, StorageError>;
+
+/// Namespace used by existing, unscoped callers and by rows written before
+/// project scopes were exposed. Scoped callers must opt into a different value.
+pub const DEFAULT_MEMORY_SCOPE: &str = "user";
 
 /// Environment variable selecting the SQLite commit-durability policy.
 pub const VESTIGE_SQLITE_DURABILITY_ENV: &str = "VESTIGE_SQLITE_DURABILITY";
@@ -515,10 +522,11 @@ impl SqliteMemoryStore {
     fn regular_ingest_result(
         &self,
         input: IngestInput,
+        scope: &str,
         reason: impl Into<String>,
         policy: SecretPolicy,
     ) -> Result<SmartIngestResult> {
-        let node = self.ingest_with_secret_policy(input, policy)?;
+        let node = self.ingest_in_scope_with_secret_policy(input, scope, policy)?;
         Ok(SmartIngestResult {
             decision: "create".to_string(),
             node,
@@ -1287,6 +1295,22 @@ impl SqliteMemoryStore {
         }
     }
 
+    /// Normalize a caller-provided project namespace before it reaches storage.
+    /// Namespaces are identifiers, not user content: blank, oversized, and
+    /// control-character values make audit and operator tooling ambiguous.
+    fn normalize_scope(scope: &str) -> Result<&str> {
+        let normalized = scope.trim();
+        if normalized.is_empty()
+            || normalized.len() > 200
+            || normalized.chars().any(char::is_control)
+        {
+            return Err(StorageError::InvalidScope(
+                "expected a non-empty identifier of at most 200 visible characters".to_string(),
+            ));
+        }
+        Ok(normalized)
+    }
+
     fn enforce_secret_policy_for_record(
         record: &crate::storage::memory_store::MemoryRecord,
         policy: SecretPolicy,
@@ -1386,7 +1410,7 @@ impl SqliteMemoryStore {
 
     /// Ingest a new memory, rejecting likely credentials by default.
     pub fn ingest(&self, input: IngestInput) -> Result<KnowledgeNode> {
-        self.ingest_with_secret_policy(input, SecretPolicy::Reject)
+        self.ingest_in_scope_with_secret_policy(input, DEFAULT_MEMORY_SCOPE, SecretPolicy::Reject)
     }
 
     /// Ingest a new memory using an explicit credential-storage policy.
@@ -1399,12 +1423,27 @@ impl SqliteMemoryStore {
         input: IngestInput,
         policy: SecretPolicy,
     ) -> Result<KnowledgeNode> {
-        Self::enforce_secret_policy_for_input(&input, policy)?;
-        self.ingest_unchecked(input)
+        self.ingest_in_scope_with_secret_policy(input, DEFAULT_MEMORY_SCOPE, policy)
     }
 
-    /// Raw insert after a caller has completed the credential preflight.
-    fn ingest_unchecked(&self, input: IngestInput) -> Result<KnowledgeNode> {
+    /// Ingest a memory into a named project namespace.
+    pub fn ingest_in_scope(&self, input: IngestInput, scope: &str) -> Result<KnowledgeNode> {
+        self.ingest_in_scope_with_secret_policy(input, scope, SecretPolicy::Reject)
+    }
+
+    /// Ingest a memory into a named project namespace with an explicit secret policy.
+    pub fn ingest_in_scope_with_secret_policy(
+        &self,
+        input: IngestInput,
+        scope: &str,
+        policy: SecretPolicy,
+    ) -> Result<KnowledgeNode> {
+        Self::enforce_secret_policy_for_input(&input, policy)?;
+        self.ingest_unchecked_in_scope(input, Self::normalize_scope(scope)?)
+    }
+
+    /// Raw scoped insert after a caller has completed the credential preflight.
+    fn ingest_unchecked_in_scope(&self, input: IngestInput, scope: &str) -> Result<KnowledgeNode> {
         let now = Utc::now();
         let id = Uuid::new_v4().to_string();
 
@@ -1445,7 +1484,7 @@ impl SqliteMemoryStore {
                     sentiment_score, sentiment_magnitude, next_review, scheduled_days,
                     source, tags, valid_from, valid_until, has_embedding, embedding_model,
                     domains, domain_scores,
-                    source_system, source_id, source_url, source_updated_at,
+                    scope, source_system, source_id, source_url, source_updated_at,
                     content_hash, synced_at, source_project, source_type, source_author
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
@@ -1454,8 +1493,8 @@ impl SqliteMemoryStore {
                     ?15, ?16, ?17, ?18,
                     ?19, ?20, ?21, ?22, ?23, ?24,
                     '[]', '{}',
-                    ?25, ?26, ?27, ?28,
-                    ?29, ?30, ?31, ?32, ?33
+                    ?25, ?26, ?27, ?28, ?29,
+                    ?30, ?31, ?32, ?33, ?34
                 )",
                 params![
                     id,
@@ -1485,6 +1524,7 @@ impl SqliteMemoryStore {
                     valid_until_str,
                     0,
                     Option::<String>::None,
+                    scope,
                     env.source_system,
                     env.source_id,
                     env.source_url,
@@ -1518,7 +1558,21 @@ impl SqliteMemoryStore {
     /// This solves the "bad vs good similar memory" problem.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     pub fn smart_ingest(&self, input: IngestInput) -> Result<SmartIngestResult> {
-        self.smart_ingest_with_secret_policy(input, SecretPolicy::Reject)
+        self.smart_ingest_in_scope_with_secret_policy(
+            input,
+            DEFAULT_MEMORY_SCOPE,
+            SecretPolicy::Reject,
+        )
+    }
+
+    /// Smart-ingest a memory while considering candidates only from the same namespace.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest_in_scope(
+        &self,
+        input: IngestInput,
+        scope: &str,
+    ) -> Result<SmartIngestResult> {
+        self.smart_ingest_in_scope_with_secret_policy(input, scope, SecretPolicy::Reject)
     }
 
     /// Smart ingest with an explicit credential-storage policy.
@@ -1528,7 +1582,18 @@ impl SqliteMemoryStore {
         input: IngestInput,
         policy: SecretPolicy,
     ) -> Result<SmartIngestResult> {
-        self.smart_ingest_excluding_with_secret_policy(input, &[], policy)
+        self.smart_ingest_in_scope_with_secret_policy(input, DEFAULT_MEMORY_SCOPE, policy)
+    }
+
+    /// Smart-ingest a memory into a named project namespace with an explicit secret policy.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest_in_scope_with_secret_policy(
+        &self,
+        input: IngestInput,
+        scope: &str,
+        policy: SecretPolicy,
+    ) -> Result<SmartIngestResult> {
+        self.smart_ingest_excluding_in_scope_with_secret_policy(input, scope, &[], policy)
     }
 
     /// Smart ingest with caller-provided candidate exclusions.
@@ -1542,8 +1607,9 @@ impl SqliteMemoryStore {
         input: IngestInput,
         excluded_node_ids: &[String],
     ) -> Result<SmartIngestResult> {
-        self.smart_ingest_excluding_with_secret_policy(
+        self.smart_ingest_excluding_in_scope_with_secret_policy(
             input,
+            DEFAULT_MEMORY_SCOPE,
             excluded_node_ids,
             SecretPolicy::Reject,
         )
@@ -1559,16 +1625,37 @@ impl SqliteMemoryStore {
         excluded_node_ids: &[String],
         policy: SecretPolicy,
     ) -> Result<SmartIngestResult> {
+        self.smart_ingest_excluding_in_scope_with_secret_policy(
+            input,
+            DEFAULT_MEMORY_SCOPE,
+            excluded_node_ids,
+            policy,
+        )
+    }
+
+    /// Scoped smart-ingest with candidate exclusions and an explicit secret policy.
+    /// Candidate selection is scope-bound before the prediction-error gate runs,
+    /// preventing similarly-worded memories in another project from merging.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest_excluding_in_scope_with_secret_policy(
+        &self,
+        input: IngestInput,
+        scope: &str,
+        excluded_node_ids: &[String],
+        policy: SecretPolicy,
+    ) -> Result<SmartIngestResult> {
         use crate::advanced::prediction_error::{
             CandidateMemory, GateDecision, PredictionErrorGate, UpdateType,
         };
 
         Self::enforce_secret_policy_for_input(&input, policy)?;
+        let scope = Self::normalize_scope(scope)?;
 
         // Generate embedding for new content
         if !self.embedding_service.is_ready() {
             return self.regular_ingest_result(
                 input,
+                scope,
                 "Embeddings not available, falling back to regular ingest",
                 policy,
             );
@@ -1577,6 +1664,7 @@ impl SqliteMemoryStore {
         if !self.vector_search_available() {
             return self.regular_ingest_result(
                 input,
+                scope,
                 "Vector search unavailable, falling back to regular ingest",
                 policy,
             );
@@ -1594,6 +1682,9 @@ impl SqliteMemoryStore {
         let mut candidates: Vec<CandidateMemory> = Vec::new();
         for (node_id, _similarity) in similar.iter() {
             if excluded_node_ids.iter().any(|id| id == node_id) {
+                continue;
+            }
+            if !self.node_is_in_scope(node_id, scope)? {
                 continue;
             }
             if let Some(node) = self.get_node(node_id)? {
@@ -1630,7 +1721,7 @@ impl SqliteMemoryStore {
                 ..
             } => {
                 // Create new memory
-                let node = self.ingest_with_secret_policy(input, policy)?;
+                let node = self.ingest_in_scope_with_secret_policy(input, scope, policy)?;
                 Ok(SmartIngestResult {
                     decision: "create".to_string(),
                     node,
@@ -1784,7 +1875,7 @@ impl SqliteMemoryStore {
                 self.demote_memory(&old_memory_id)?;
 
                 // Create the new improved memory
-                let node = self.ingest(input)?;
+                let node = self.ingest_in_scope_with_secret_policy(input, scope, policy)?;
 
                 Ok(SmartIngestResult {
                     decision: "supersede".to_string(),
@@ -1804,7 +1895,7 @@ impl SqliteMemoryStore {
                 strategy,
             } => {
                 // For now, create new and link to existing
-                let node = self.ingest(input)?;
+                let node = self.ingest_in_scope_with_secret_policy(input, scope, policy)?;
 
                 Ok(SmartIngestResult {
                     decision: "merge".to_string(),
@@ -2006,6 +2097,26 @@ impl SqliteMemoryStore {
         Ok(node)
     }
 
+    /// Return whether a node belongs to a namespace. NULL and blank historic
+    /// values are treated as `user`, matching V27's compatibility migration.
+    pub fn node_is_in_scope(&self, id: &str, scope: &str) -> Result<bool> {
+        let scope = Self::normalize_scope(scope)?;
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let present: Option<i32> = reader
+            .query_row(
+                "SELECT 1 FROM knowledge_nodes
+                 WHERE id = ?1
+                   AND COALESCE(NULLIF(trim(scope), ''), 'user') = ?2",
+                params![id, scope],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(present.is_some())
+    }
+
     /// Parse a stored timestamp into a UTC `DateTime`.
     ///
     /// The canonical on-disk format is RFC 3339 (every Rust writer in this
@@ -2166,6 +2277,14 @@ impl SqliteMemoryStore {
 
     /// Recall memories matching a query
     pub fn recall(&self, input: RecallInput) -> Result<Vec<KnowledgeNode>> {
+        self.recall_in_scope(input, DEFAULT_MEMORY_SCOPE)
+    }
+
+    /// Recall only memories from one namespace. This is intentionally the
+    /// safe default for all core recall: callers that need a project must name
+    /// it, and cross-project retrieval is an explicit higher-level operation.
+    pub fn recall_in_scope(&self, input: RecallInput, scope: &str) -> Result<Vec<KnowledgeNode>> {
+        let scope = Self::normalize_scope(scope)?;
         let nodes = match input.search_mode {
             SearchMode::Keyword => {
                 self.keyword_search(&input.query, input.limit, input.min_retention)?
@@ -2192,6 +2311,15 @@ impl SqliteMemoryStore {
         // was correct or useful. Preserve the telemetry without changing its
         // ranking or FSRS state; callers must send explicit positive feedback
         // to reinforce a memory.
+        let nodes: Vec<KnowledgeNode> = nodes
+            .into_iter()
+            .filter_map(|node| match self.node_is_in_scope(&node.id, scope) {
+                Ok(true) => Some(Ok(node)),
+                Ok(false) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
         let _ = self.record_batch_retrieval(&ids); // Ignore errors, don't fail recall
 
