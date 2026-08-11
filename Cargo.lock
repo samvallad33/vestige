@@ -5116,6 +5116,7 @@ dependencies = [
  "clap",
  "colored",
  "directories",
+ "ed25519-dalek",
  "futures-util",
  "include_dir",
  "mime_guess",

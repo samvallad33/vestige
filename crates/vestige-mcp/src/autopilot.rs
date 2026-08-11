@@ -13,9 +13,9 @@
 //!
 //! ## What fires autonomously after v2.0.9
 //!
-//! - **`MemoryCreated`**  → `synaptic_tagging.trigger_prp()` (9h retroactive
-//!   PRP window on every save) + `predictive_memory.record_memory_access()`
-//!   (pattern learning for `predict` tool).
+//! - **`MemoryCreated`**  → `predictive_memory.record_memory_access()`
+//!   (pattern learning for `predict` tool). Durable synaptic capture is owned
+//!   by `smart_ingest`'s V22 SQLite transaction, never by this event consumer.
 //! - **`SearchPerformed`** → `predictive_memory.record_query()` (keeps the
 //!   query-interest model warm without waiting for the next `predict` call).
 //! - **`MemoryPromoted`** → `activation_network.activate()` (spreads a small
@@ -42,7 +42,6 @@ use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, info, warn};
 use vestige_core::Storage;
 use vestige_core::neuroscience::prospective_memory::Context as ProspectiveContext;
-use vestige_core::neuroscience::synaptic_tagging::{ImportanceEvent, ImportanceEventType};
 
 use crate::cognitive::CognitiveEngine;
 use crate::dashboard::events::VestigeEvent;
@@ -239,35 +238,22 @@ async fn handle_event(
             id,
             content_preview,
             tags,
-            timestamp,
             ..
         } => {
-            // Synaptic tagging: every save is a CrossReference event candidate
-            // for Frey & Morris 1997 PRP (retroactive importance within a 9h
-            // window). The system dedups internally, so firing per-save is safe.
-            let ev = ImportanceEvent {
-                event_type: ImportanceEventType::CrossReference,
-                memory_id: Some(id.clone()),
-                timestamp,
-                strength: 0.5,
-                context: None,
-            };
-            let tag_outcome = {
-                let mut cog = cognitive.lock().await;
-                let outcome = cog.synaptic_tagging.trigger_prp(ev);
-                // Predictive memory learns the ingested tags for pattern-match
-                // against future `predict` queries. Method is `&self` (interior
-                // RwLock), so we keep the cognitive mutex guard for ordering
-                // but don't actually need &mut on this call.
-                let _ = cog
-                    .predictive_memory
-                    .record_memory_access(&id, &content_preview, &tags);
-                outcome
-            };
+            // Synaptic capture must stay inside smart_ingest's V22 SQLite
+            // transaction. Calling the legacy in-memory trigger_prp here could
+            // mark a local tag captured without the event, guarded promotion,
+            // or receipt that makes that decision auditable.
+            //
+            // Predictive-memory learning is read-model-local and remains a
+            // legitimate autopilot side effect.
+            let cog = cognitive.lock().await;
+            let _ = cog
+                .predictive_memory
+                .record_memory_access(&id, &content_preview, &tags);
             debug!(
                 memory_id = %id,
-                captured = ?tag_outcome,
-                "Autopilot: MemoryCreated routed to synaptic_tagging + predictive_memory"
+                "Autopilot: MemoryCreated routed to predictive_memory; durable synaptic capture is owned by smart_ingest"
             );
         }
 
@@ -493,5 +479,52 @@ async fn run_prospective_poller(cognitive: Arc<Mutex<CognitiveEngine>>) {
                 warn!(error = %e, "Autopilot: prospective check_triggers failed");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[tokio::test]
+    async fn memory_created_preserves_predictive_learning_without_legacy_capture() {
+        let directory = tempfile::tempdir().expect("temporary database directory");
+        let storage = Arc::new(
+            Storage::new(Some(directory.path().join("autopilot.db"))).expect("test storage"),
+        );
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let (event_tx, _) = broadcast::channel(1);
+        let mut dedup_state = DedupSweepState::new();
+
+        // The old handler called trigger_prp with strength 0.5. That captured
+        // this local tag without a V22 event or receipt. A MemoryCreated event
+        // must now leave capture ownership with smart_ingest/storage.
+        {
+            let mut engine = cognitive.lock().await;
+            engine.synaptic_tagging.tag_memory("durable-tag-owner");
+            assert!(!engine.synaptic_tagging.is_captured("durable-tag-owner"));
+        }
+
+        handle_event(
+            VestigeEvent::MemoryCreated {
+                id: "new-memory".into(),
+                content_preview: "predictive learning remains enabled".into(),
+                node_type: "fact".into(),
+                tags: vec!["project:vestige".into()],
+                timestamp: Utc::now(),
+            },
+            &cognitive,
+            &storage,
+            &event_tx,
+            &mut dedup_state,
+        )
+        .await;
+
+        let engine = cognitive.lock().await;
+        assert!(
+            !engine.synaptic_tagging.is_captured("durable-tag-owner"),
+            "autopilot must not run the unaudited in-memory capture engine"
+        );
     }
 }

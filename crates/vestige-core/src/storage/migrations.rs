@@ -129,6 +129,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Verified Local Unlearning: fenced lineage closure, content-free erasure ledger, and anti-resurrection tombstones",
         up: super::unlearning_store::V25_UNLEARNING_STORAGE_SCHEMA_EXPECTATION,
     },
+    Migration {
+        version: 26,
+        description: "DSSE receipt binding: persist the signed redaction-safe decision projection alongside immutable envelopes",
+        up: MIGRATION_V26_UP,
+    },
 ];
 
 /// A database migration
@@ -233,14 +238,20 @@ INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (1, datetime('
 
 /// V2: Add temporal columns
 const MIGRATION_V2_UP: &str = r#"
-ALTER TABLE knowledge_nodes ADD COLUMN valid_from TEXT;
-ALTER TABLE knowledge_nodes ADD COLUMN valid_until TEXT;
-
 CREATE INDEX IF NOT EXISTS idx_nodes_valid_from ON knowledge_nodes(valid_from);
 CREATE INDEX IF NOT EXISTS idx_nodes_valid_until ON knowledge_nodes(valid_until);
 
 UPDATE schema_version SET version = 2, applied_at = datetime('now');
 "#;
+
+/// V2 columns are split from the batch because an old pre-transaction runner
+/// could have committed an `ADD COLUMN` before recording the schema version.
+/// The current runner makes that impossible going forward, but accepting the
+/// old half-applied shape lets an affected local database recover in place.
+const MIGRATION_V2_ALTER_COLUMNS: &[&str] = &[
+    "ALTER TABLE knowledge_nodes ADD COLUMN valid_from TEXT",
+    "ALTER TABLE knowledge_nodes ADD COLUMN valid_until TEXT",
+];
 
 /// V3: Add persistence tables for neuroscience features
 /// Fixes critical gap: intentions, insights, and activation network were IN-MEMORY ONLY
@@ -931,12 +942,27 @@ UPDATE schema_version SET version = 15, applied_at = datetime('now');
 
 /// Get current schema version from database
 pub fn get_current_version(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
+    // A missing version table is normal only for a genuinely empty database.
+    // Never convert arbitrary read errors or a damaged non-empty database into
+    // version zero: doing so can replay early ALTER migrations over live schema.
+    let has_user_tables: i64 = conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM sqlite_master
+              WHERE type IN ('table', 'view')
+                AND name NOT LIKE 'sqlite_%'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_user_tables == 0 {
+        return Ok(0);
+    }
+
     conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_version",
         [],
         |row| row.get(0),
     )
-    .or(Ok(0))
 }
 
 /// Run an `ALTER TABLE ... ADD COLUMN` statement, treating a "duplicate column
@@ -1563,6 +1589,20 @@ END;
 UPDATE schema_version SET version = 24, applied_at = datetime('now');
 "#;
 
+/// V26: persist the inspectable identity-free projection that is already part
+/// of every newly signed DSSE payload. Existing V24 rows deliberately remain
+/// readable but have no backfilled projection: retroactively inventing one
+/// would defeat the no-retro-signing boundary.
+const MIGRATION_V26_UP: &str = r#"
+UPDATE schema_version SET version = 26, applied_at = datetime('now');
+"#;
+
+const MIGRATION_V26_ALTER_COLUMNS: &[&str] = &[r#"
+ALTER TABLE receipt_envelopes ADD COLUMN projection_json TEXT CHECK (
+    projection_json IS NULL OR json_valid(projection_json)
+)
+"#];
+
 /// Apply pending migrations
 ///
 /// Each migration is applied inside an explicit transaction so its schema
@@ -1574,11 +1614,11 @@ UPDATE schema_version SET version = 24, applied_at = datetime('now');
 /// bricked the DB permanently). VACUUM (V7) cannot run inside a transaction,
 /// so it runs after the transaction commits.
 pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
-    let current_version = get_current_version(conn)?;
+    let initial_version = get_current_version(conn)?;
     let mut applied = 0;
 
     for migration in MIGRATIONS {
-        if migration.version > current_version {
+        if migration.version > initial_version {
             tracing::info!(
                 "Applying migration v{}: {}",
                 migration.version,
@@ -1589,7 +1629,27 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
             // or roll back together. On rollback, schema_version is unchanged so
             // the migration cleanly re-applies next run.
             {
-                let tx = conn.unchecked_transaction()?;
+                // Acquire the writer lock before re-reading the version. A
+                // second process that lost a startup race then observes the
+                // first process's committed schema instead of replaying stale
+                // migrations over it.
+                let tx = rusqlite::Transaction::new_unchecked(
+                    conn,
+                    rusqlite::TransactionBehavior::Immediate,
+                )?;
+                if migration.version <= get_current_version(&tx)? {
+                    tx.commit()?;
+                    continue;
+                }
+
+                // V2 predates transactional migrations. Accept its historic
+                // half-applied shape by adding each column idempotently before
+                // creating indexes and advancing the version.
+                if migration.version == 2 {
+                    for stmt in MIGRATION_V2_ALTER_COLUMNS {
+                        add_column_if_missing(&tx, stmt)?;
+                    }
+                }
 
                 // V14: add the two bitemporal/protect columns BEFORE the batch (the
                 // batch's indexes reference them). SQLite lacks
@@ -1626,6 +1686,11 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
 
                 if migration.version == 22 {
                     for stmt in MIGRATION_V22_ALTER_COLUMNS {
+                        add_column_if_missing(&tx, stmt)?;
+                    }
+                }
+                if migration.version == 26 {
+                    for stmt in MIGRATION_V26_ALTER_COLUMNS {
                         add_column_if_missing(&tx, stmt)?;
                     }
                 }
@@ -1670,53 +1735,93 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+    use std::time::Duration;
+    use tempfile::tempdir;
 
-    /// Regression: a migration that is interrupted after its `ADD COLUMN`
-    /// commits but before `schema_version` advances must NOT permanently brick
-    /// the DB on replay with `duplicate column name`. Because each migration now
-    /// runs in a transaction, an interrupted migration rolls back atomically and
-    /// replays cleanly.
-    ///
-    /// We simulate the pre-fix corrupt state directly: run all migrations, then
-    /// hand-apply one of V2's `ADD COLUMN`s again on a DB whose version we roll
-    /// back, and confirm `apply_migrations` still succeeds (the transaction
-    /// makes the whole migration atomic, so a real interruption can never leave
-    /// the half-applied state the old code could).
+    /// Regression for the historical pre-transaction failure mode: V2 could
+    /// add one temporal column and crash before advancing `schema_version`.
+    /// The new runner must finish that exact shape instead of failing on a
+    /// duplicate column.
     #[test]
-    fn test_interrupted_migration_replays_without_duplicate_column_brick() {
-        // A fresh DB migrates cleanly and reaches the latest version.
+    fn v2_historical_partial_migration_recovers_without_duplicate_column_brick() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("initial migrations succeed");
-        let latest = MIGRATIONS.last().unwrap().version;
-        assert_eq!(get_current_version(&conn).expect("version"), latest);
+        apply_migrations_through(&conn, 1);
+        conn.execute_batch("ALTER TABLE knowledge_nodes ADD COLUMN valid_from TEXT;")
+            .expect("seed the historical V2 partial state");
 
-        // Running apply_migrations again on an already-migrated DB is a no-op and
-        // must never error (idempotent) — the previous brick surfaced here.
-        let applied = apply_migrations(&conn).expect("replay must not brick");
-        assert_eq!(applied, 0, "no migrations should re-apply on a current DB");
-
-        // Directly prove atomicity: an ADD COLUMN inside a rolled-back
-        // transaction leaves no trace, so a retried migration sees a clean slate.
-        let conn2 = rusqlite::Connection::open_in_memory().expect("open in-memory 2");
-        conn2
-            .execute_batch(
-                "CREATE TABLE t (id INTEGER);
-                 CREATE TABLE schema_version (version INTEGER, applied_at TEXT);
-                 INSERT INTO schema_version (version, applied_at) VALUES (0, datetime('now'));",
+        apply_migrations(&conn).expect("V2 partial state must recover");
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            MIGRATIONS.last().unwrap().version
+        );
+        let temporal_columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('knowledge_nodes')
+                 WHERE name IN ('valid_from', 'valid_until')",
+                [],
+                |row| row.get(0),
             )
-            .expect("seed");
-        {
-            let tx = conn2.unchecked_transaction().expect("tx");
-            tx.execute_batch("ALTER TABLE t ADD COLUMN c INTEGER;")
-                .expect("add column in tx");
-            // Simulate mid-migration failure: drop the tx without committing.
-            drop(tx);
+            .expect("read temporal columns");
+        assert_eq!(temporal_columns, 2);
+    }
+
+    #[test]
+    fn missing_schema_version_on_a_nonempty_database_fails_without_replaying_v1() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 2);
+        conn.execute_batch("DROP TABLE schema_version;")
+            .expect("remove version table");
+
+        let error = apply_migrations(&conn).expect_err("damaged DB must fail closed");
+        assert!(
+            error.to_string().contains("schema_version"),
+            "unexpected error: {error}"
+        );
+        let recreated: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query schema version table");
+        assert_eq!(recreated, 0, "failed startup must not mutate the database");
+    }
+
+    #[test]
+    fn concurrent_first_openers_serialize_migration_and_both_succeed() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("concurrent-migrations.db");
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+
+        for _ in 0..2 {
+            let path = path.clone();
+            let barrier = Arc::clone(&barrier);
+            workers.push(thread::spawn(move || {
+                let conn = rusqlite::Connection::open(path).expect("open shared DB");
+                conn.busy_timeout(Duration::from_secs(5))
+                    .expect("set busy timeout");
+                barrier.wait();
+                apply_migrations(&conn)
+            }));
         }
-        // The column must be gone (rolled back), so re-adding it succeeds — the
-        // exact operation that previously failed with "duplicate column name".
-        conn2
-            .execute_batch("ALTER TABLE t ADD COLUMN c INTEGER;")
-            .expect("column must not survive a rolled-back transaction");
+
+        barrier.wait();
+        for worker in workers {
+            worker
+                .join()
+                .expect("migration worker panicked")
+                .expect("concurrent opener must not fail");
+        }
+
+        let conn = rusqlite::Connection::open(&path).expect("reopen shared DB");
+        assert_eq!(
+            get_current_version(&conn).expect("read version"),
+            MIGRATIONS.last().unwrap().version
+        );
     }
 
     /// A fresh in-memory DB must end up at schema_version = highest migration
@@ -2059,6 +2164,11 @@ mod tests {
                 )
                 .expect("V14 superseded_by column");
             }
+            if migration.version == 2 {
+                for stmt in MIGRATION_V2_ALTER_COLUMNS {
+                    add_column_if_missing(conn, stmt).expect("V2 alter column");
+                }
+            }
             if migration.version == 16 {
                 for stmt in MIGRATION_V16_ALTER_COLUMNS {
                     add_column_if_missing(conn, stmt).expect("V16 alter column");
@@ -2072,6 +2182,11 @@ mod tests {
             if migration.version == 22 {
                 for stmt in MIGRATION_V22_ALTER_COLUMNS {
                     add_column_if_missing(conn, stmt).expect("V22 alter column");
+                }
+            }
+            if migration.version == 26 {
+                for stmt in MIGRATION_V26_ALTER_COLUMNS {
+                    add_column_if_missing(conn, stmt).expect("V26 alter column");
                 }
             }
             conn.execute_batch(migration.up).expect("apply migration");
@@ -2118,7 +2233,7 @@ mod tests {
         assert_eq!(cursor_row_count(&conn), 2);
 
         let applied = apply_migrations(&conn).expect("V20+ apply on a V19 database");
-        assert_eq!(applied, 6, "V20 through V25 should apply on a V19 database");
+        assert_eq!(applied, 7, "V20 through V26 should apply on a V19 database");
         assert_eq!(
             get_current_version(&conn).expect("version"),
             MIGRATIONS.last().unwrap().version
@@ -2130,16 +2245,16 @@ mod tests {
         );
     }
 
-    /// Fresh database: all migrations apply cleanly through V25 and the cursor
+    /// Fresh database: all migrations apply cleanly through V26 and the cursor
     /// table exists and is empty (nothing to clear, no error).
     #[test]
     fn v20_applies_cleanly_on_a_fresh_database() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("fresh migrations succeed through V25");
+        apply_migrations(&conn).expect("fresh migrations succeed through V26");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            25,
-            "latest migration must be V25"
+            26,
+            "latest migration must be V26"
         );
         assert_eq!(cursor_row_count(&conn), 0);
     }
@@ -2315,12 +2430,40 @@ mod tests {
     }
 
     #[test]
+    fn v26_adds_replayable_signed_projection_column() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 25);
+        conn.execute(
+            "UPDATE schema_version SET version = 25, applied_at = datetime('now')",
+            [],
+        )
+        .expect("mark V25 fixture current");
+
+        assert_eq!(apply_migrations(&conn).expect("apply V26"), 1);
+        let columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('receipt_envelopes')
+                 WHERE name = 'projection_json'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("inspect V26 column");
+        assert_eq!(columns, 1);
+        assert_eq!(apply_migrations(&conn).expect("V26 replay is a no-op"), 0);
+    }
+
+    #[test]
     fn v16_preserves_existing_rows_from_v15() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
         // Apply up to V15 only, including the V14 ALTER TABLE columns that
         // `apply_migrations` normally runs before the V14 SQL batch.
         for migration in MIGRATIONS {
             if migration.version <= 15 {
+                if migration.version == 2 {
+                    for stmt in MIGRATION_V2_ALTER_COLUMNS {
+                        add_column_if_missing(&conn, stmt).expect("apply V2 temporal column");
+                    }
+                }
                 if migration.version == 14 {
                     add_column_if_missing(
                         &conn,

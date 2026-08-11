@@ -29,7 +29,16 @@ const DEFAULT_TRACE_RETENTION_DAYS: i64 = 30;
 const MAX_TRACE_RETENTION_DAYS: i64 = 36_500;
 
 fn is_receipt_local_slot(id: &str) -> bool {
-    id.starts_with("candidate_") || id.starts_with("redacted_") || id.starts_with("purged_")
+    [
+        "candidate_",
+        "pair_",
+        "evidence_",
+        "trigger_",
+        "redacted_",
+        "purged_",
+    ]
+    .iter()
+    .any(|prefix| id.starts_with(prefix))
 }
 
 /// Parse the `VESTIGE_TRACE_RETENTION_DAYS` value into a usable retention
@@ -721,6 +730,23 @@ mod tests {
         // sqlite.rs test helpers; there is no in-memory constructor).
         let dir = tempfile::tempdir().unwrap();
         SqliteMemoryStore::new(Some(dir.path().join("trace_test.db"))).expect("test store")
+    }
+
+    #[test]
+    fn receipt_local_slots_are_never_resolved_as_memory_ids() {
+        for slot in [
+            "candidate_1",
+            "pair_fedcba98",
+            "evidence_2",
+            "trigger_1",
+            "redacted_3",
+            "purged_1",
+        ] {
+            assert!(is_receipt_local_slot(slot), "{slot} must stay opaque");
+        }
+        assert!(!is_receipt_local_slot(
+            "550e8400-e29b-41d4-a716-446655440000"
+        ));
     }
 
     #[test]

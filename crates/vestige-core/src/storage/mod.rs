@@ -22,8 +22,10 @@ mod unlearning_store;
 pub use cloud_sync::HttpPortableSyncBackend;
 
 pub use attestation_store::{
-    DurableSignedReceipt, ProvisionedReceiptSigningKey, ReceiptAttestationStatus,
-    SignedReceiptWrite, load_receipt_signing_seed, provision_receipt_signing_key_sidecar,
+    DurableSignedReceipt, DurableSignedRetrievalReceipt, ProvisionedReceiptSigningKey,
+    ReceiptAttestationStatus, ReceiptSigningKeyTransition, SignedReceiptWrite,
+    StoredReceiptAttestationVerification, load_receipt_signing_seed,
+    provision_receipt_signing_key_sidecar,
 };
 pub use memory_store::{
     ClassificationResult, Domain, HealthStatus, LocalMemoryStore, MemoryEdge, MemoryRecord,

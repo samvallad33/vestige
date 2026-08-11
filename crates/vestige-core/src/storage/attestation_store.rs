@@ -7,7 +7,8 @@
 //! `legacy_unsigned`; this module has no attach/retro-sign API.
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use std::collections::HashSet;
 #[cfg(unix)]
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -15,14 +16,17 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::receipt_attestation::{
-    DisclosureMapping, DisclosureVerification, DsseEnvelope, ExpectedTerminalHead,
+    ChainEntry, DisclosureMapping, DisclosureVerification, DsseEnvelope, ExpectedTerminalHead,
     MAX_TRUSTED_SIGNING_KEYS, PredecessorExpectation, ReceiptAttestationV1,
-    SignedReceiptAttestation, SigningKeyStatus, TrustedPredecessorAnchor, TrustedSigningKey,
-    VerificationContext, public_key_fingerprint, verify_disclosure, verify_envelope_with_keys,
+    RedactionSafeReceiptBindingV1, SignedReceiptAttestation, SigningKeyStatus,
+    TrustedPredecessorAnchor, TrustedSigningKey, VerificationContext, VerificationReport,
+    public_key_fingerprint, validate_receipt_signing_key_id, verify_disclosure,
+    verify_envelope_with_keys,
 };
+use super::replay_store::{DurableRetrievalReplayCapsule, RetrievalReplayCapsuleDraft};
 use super::sqlite::SqliteMemoryStore;
 use super::{Result, StorageError};
-use crate::trace::Receipt;
+use crate::trace::{Receipt, ReceiptEvidence};
 
 /// Public state of a receipt at the V24 boundary. Absence of an immutable
 /// envelope is deliberately explicit rather than silently treated as valid.
@@ -57,6 +61,28 @@ pub struct DurableSignedReceipt {
     pub signer_key_fingerprint: String,
 }
 
+/// Commit result for a signed retrieval receipt and its frozen replay capsule.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DurableSignedRetrievalReceipt {
+    pub receipt: DurableSignedReceipt,
+    pub replay_capsule: DurableRetrievalReplayCapsule,
+}
+
+/// Locally re-verified stored receipt state. This establishes cryptographic
+/// integrity against the local trusted-key registry and current database rows;
+/// it is not an independently published checkpoint or trusted timestamp.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredReceiptAttestationVerification {
+    pub report: VerificationReport,
+    pub receipt_binding_valid: bool,
+}
+
+impl StoredReceiptAttestationVerification {
+    pub fn is_valid(&self) -> bool {
+        self.report.is_valid() && self.receipt_binding_valid
+    }
+}
+
 /// Result of provisioning an Ed25519 seed sidecar before activating its public
 /// key in SQLite. Secret bytes are never included in this value or its `Debug`
 /// output.
@@ -64,6 +90,18 @@ pub struct DurableSignedReceipt {
 pub struct ProvisionedReceiptSigningKey {
     pub seed_path: PathBuf,
     pub trusted_key: TrustedSigningKey,
+}
+
+/// A monotonic state transition for a registered receipt signing key.
+///
+/// Rotation is deliberately two explicit steps: register the replacement key,
+/// then retire or revoke the old key. A retired key can verify historical
+/// receipts but cannot sign new ones; a revoked or disabled key is terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiptSigningKeyTransition {
+    Retire,
+    Revoke { revoked_at: DateTime<Utc> },
+    Disable,
 }
 
 type RegisteredSigningKeyRow = (
@@ -300,6 +338,64 @@ impl SqliteMemoryStore {
         Ok(true)
     }
 
+    /// Apply one irreversible signing-key lifecycle transition.
+    ///
+    /// Rotation is deliberately two explicit steps: register the replacement
+    /// key, then retire or revoke the old one. Retired keys remain eligible for
+    /// historical verification but cannot sign a new receipt. Revoked and
+    /// disabled keys are terminal.
+    pub fn transition_receipt_signing_key(
+        &self,
+        key_id: &str,
+        transition: ReceiptSigningKeyTransition,
+    ) -> Result<()> {
+        validate_registry_key_id(key_id)?;
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT status FROM receipt_signing_keys WHERE key_id = ?1",
+                params![key_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let current = existing
+            .as_deref()
+            .map(parse_signing_key_status)
+            .transpose()?
+            .ok_or_else(|| StorageError::NotFound(key_id.to_string()))?;
+        let (next, revoked_at) = match (current, transition) {
+            (SigningKeyStatus::Active, ReceiptSigningKeyTransition::Retire) => {
+                (SigningKeyStatus::Retired, None)
+            }
+            (
+                SigningKeyStatus::Active | SigningKeyStatus::Retired,
+                ReceiptSigningKeyTransition::Revoke { revoked_at },
+            ) => (SigningKeyStatus::Revoked, Some(normalized_utc(revoked_at))),
+            (
+                SigningKeyStatus::Active | SigningKeyStatus::Retired,
+                ReceiptSigningKeyTransition::Disable,
+            ) => (SigningKeyStatus::Disabled, None),
+            (_, attempted) => {
+                return Err(StorageError::Init(format!(
+                    "receipt signing key '{key_id}' cannot transition from {} via {attempted:?}",
+                    signing_key_status_label(current),
+                )));
+            }
+        };
+        tx.execute(
+            "UPDATE receipt_signing_keys
+                SET status = ?1, revoked_at = ?2
+              WHERE key_id = ?3",
+            params![signing_key_status_label(next), revoked_at, key_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Commit a brand-new receipt and its V24 attestation as one atomic unit.
     ///
     /// This intentionally uses plain `INSERT`, never `INSERT OR REPLACE`: an
@@ -308,11 +404,50 @@ impl SqliteMemoryStore {
         &self,
         write: SignedReceiptWrite<'_>,
     ) -> Result<DurableSignedReceipt> {
+        self.save_signed_receipt_atomic_inner(write, None)
+            .map(|(receipt, _)| receipt)
+    }
+
+    /// Atomically persist a signed retrieval receipt and the frozen replay
+    /// capsule whose `source_receipt_id` is that same attested receipt id.
+    ///
+    /// There is deliberately no fallback to separate writes: a configured
+    /// signer either yields all durable proof artifacts or no receipt at all.
+    pub fn save_signed_retrieval_receipt_with_replay_capsule_atomic(
+        &self,
+        write: SignedReceiptWrite<'_>,
+        draft: &RetrievalReplayCapsuleDraft,
+    ) -> Result<DurableSignedRetrievalReceipt> {
+        if write.receipt.receipt_id != draft.source_receipt_id {
+            return Err(StorageError::Init(
+                "signed receipt id must equal frozen replay capsule source id".into(),
+            ));
+        }
+        let (receipt, replay_capsule) =
+            self.save_signed_receipt_atomic_inner(write, Some(draft))?;
+        let replay_capsule = replay_capsule.ok_or_else(|| {
+            StorageError::Init("signed retrieval receipt did not persist a replay capsule".into())
+        })?;
+        Ok(DurableSignedRetrievalReceipt {
+            receipt,
+            replay_capsule,
+        })
+    }
+
+    fn save_signed_receipt_atomic_inner(
+        &self,
+        write: SignedReceiptWrite<'_>,
+        replay_capsule: Option<&RetrievalReplayCapsuleDraft>,
+    ) -> Result<(DurableSignedReceipt, Option<DurableRetrievalReplayCapsule>)> {
         validate_signed_write_shape(&write)?;
         let receipt_payload = serde_json::to_string(write.receipt)
             .map_err(|error| StorageError::Init(format!("receipt serialize: {error}")))?;
         let envelope_json = serde_json::to_string(&write.signed.envelope)
             .map_err(|error| StorageError::Init(format!("DSSE envelope serialize: {error}")))?;
+        let projection_json = serde_json::to_string(write.attestation.predicate().projection())
+            .map_err(|error| {
+                StorageError::Init(format!("receipt projection serialize: {error}"))
+            })?;
 
         let mut writer = self
             .writer
@@ -435,12 +570,17 @@ impl SqliteMemoryStore {
                 normalized_utc(write.attestation.issued_at()),
             ],
         )?;
+        let durable_replay_capsule = replay_capsule
+            .map(|draft| {
+                SqliteMemoryStore::save_retrieval_replay_capsule_in_transaction(&tx, draft)
+            })
+            .transpose()?;
         tx.execute(
             "INSERT INTO receipt_envelopes(
                 receipt_id, chain_id, sequence, previous_entry_digest, payload_type,
                 envelope_json, payload_digest, entry_digest, signing_key_id,
-                signer_key_fingerprint, issued_at, stored_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                signer_key_fingerprint, projection_json, issued_at, stored_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 write.receipt.receipt_id,
                 chain_id,
@@ -452,6 +592,7 @@ impl SqliteMemoryStore {
                 write.signed.entry_digest,
                 signing_key_id,
                 signer_fingerprint,
+                projection_json,
                 normalized_utc(write.attestation.issued_at()),
                 normalized_utc(Utc::now()),
             ],
@@ -508,15 +649,18 @@ impl SqliteMemoryStore {
             }
         }
         tx.commit()?;
-        Ok(DurableSignedReceipt {
-            receipt_id: write.receipt.receipt_id.clone(),
-            chain_id: chain_id.to_string(),
-            sequence: chain.sequence(),
-            payload_digest: write.signed.payload_digest.clone(),
-            entry_digest: write.signed.entry_digest.clone(),
-            signing_key_id,
-            signer_key_fingerprint: signer_fingerprint,
-        })
+        Ok((
+            DurableSignedReceipt {
+                receipt_id: write.receipt.receipt_id.clone(),
+                chain_id: chain_id.to_string(),
+                sequence: chain.sequence(),
+                payload_digest: write.signed.payload_digest.clone(),
+                entry_digest: write.signed.entry_digest.clone(),
+                signing_key_id,
+                signer_key_fingerprint: signer_fingerprint,
+            },
+            durable_replay_capsule,
+        ))
     }
 
     /// Return `legacy_unsigned` for every receipt without a V24 envelope.
@@ -546,6 +690,155 @@ impl SqliteMemoryStore {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    /// Return the explicitly registered public key for a configured signer.
+    /// Loading a seed never registers it implicitly: the registry is a
+    /// separate operator-controlled trust decision.
+    pub fn registered_receipt_signing_key(
+        &self,
+        key_id: &str,
+    ) -> Result<Option<TrustedSigningKey>> {
+        validate_registry_key_id(key_id)?;
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        load_trusted_signing_key(&reader, key_id)
+    }
+
+    /// The current local chain head, if this database has previously committed
+    /// a signed receipt. The returned predecessor is reconstructed from the
+    /// immutable envelope row, never mutable receipt JSON.
+    pub fn latest_receipt_chain_entry(&self) -> Result<Option<ChainEntry>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let row: Option<(String, String, i64, Option<String>, String, String)> = reader
+            .query_row(
+                "SELECT e.receipt_id, e.chain_id, e.sequence, e.previous_entry_digest,
+                        e.entry_digest, e.signer_key_fingerprint
+                   FROM receipt_chain_state h
+                   JOIN receipt_envelopes e
+                     ON e.chain_id = h.chain_id AND e.sequence = h.last_sequence
+                  ORDER BY h.updated_at DESC, h.chain_id DESC
+                  LIMIT 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(chain_entry_from_row).transpose()
+    }
+
+    /// Re-verify one stored envelope against the local trusted-key registry,
+    /// immutable row metadata, predecessor row, and the stored receipt's
+    /// signed redaction-safe binding. This does not claim an external anchor.
+    pub fn verify_stored_receipt_attestation(
+        &self,
+        receipt_id: &str,
+    ) -> Result<Option<StoredReceiptAttestationVerification>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let row: Option<(String, String, String, String, i64, String, String, String)> = reader
+            .query_row(
+                "SELECT r.payload, e.envelope_json, e.payload_digest, e.entry_digest,
+                        e.sequence, e.chain_id,
+                        e.signer_key_fingerprint, e.receipt_id
+                   FROM memory_receipts r
+                   JOIN receipt_envelopes e ON e.receipt_id = r.receipt_id
+                  WHERE r.receipt_id = ?1",
+                params![receipt_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            receipt_payload,
+            envelope_json,
+            payload_digest,
+            entry_digest,
+            sequence,
+            chain_id,
+            signer_fingerprint,
+            stored_receipt_id,
+        )) = row
+        else {
+            return Ok(None);
+        };
+        let sequence = u64::try_from(sequence).map_err(|_| {
+            StorageError::Init("stored receipt envelope has a negative sequence".into())
+        })?;
+        let receipt: Receipt = serde_json::from_str(&receipt_payload)
+            .map_err(|error| StorageError::Init(format!("stored receipt deserialize: {error}")))?;
+        let envelope: DsseEnvelope = serde_json::from_str(&envelope_json).map_err(|error| {
+            StorageError::Init(format!("stored DSSE envelope deserialize: {error}"))
+        })?;
+        let predecessor = if sequence == 0 {
+            PredecessorExpectation::Genesis
+        } else {
+            let predecessor = load_chain_entry(&reader, &chain_id, sequence - 1)?;
+            predecessor.map_or(
+                PredecessorExpectation::Missing,
+                PredecessorExpectation::Previous,
+            )
+        };
+        let report = verify_envelope_with_keys(
+            &envelope,
+            &load_trusted_signing_keys(&reader)?,
+            &VerificationContext {
+                expected_receipt_id: Some(stored_receipt_id),
+                expected_payload_digest: Some(payload_digest),
+                expected_entry_digest: Some(entry_digest.clone()),
+                expected_public_key_fingerprint: Some(signer_fingerprint.clone()),
+                expected_chain_id: Some(chain_id.clone()),
+                expected_sequence: Some(sequence),
+                predecessor,
+                predecessor_anchor: None,
+                expected_terminal_head: Some(ExpectedTerminalHead {
+                    chain_id,
+                    sequence,
+                    entry_digest,
+                    public_key_fingerprint: Some(signer_fingerprint),
+                }),
+            },
+        );
+        let receipt_binding_valid = report
+            .attestation
+            .as_ref()
+            .and_then(|attestation| attestation.predicate().receipt_binding())
+            .map(
+                |binding| match RedactionSafeReceiptBindingV1::for_receipt(&receipt) {
+                    Ok(expected) => expected == *binding,
+                    Err(_) => false,
+                },
+            )
+            .unwrap_or(false);
+        Ok(Some(StoredReceiptAttestationVerification {
+            report,
+            receipt_binding_valid,
+        }))
     }
 
     /// Load the stored DSSE envelope. This never synthesizes one for legacy
@@ -599,6 +892,13 @@ fn validate_signed_write_shape(write: &SignedReceiptWrite<'_>) -> Result<()> {
         .attestation
         .validate()
         .map_err(|error| StorageError::Init(format!("attestation invalid: {error}")))?;
+    let expected_binding = RedactionSafeReceiptBindingV1::for_receipt(write.receipt)
+        .map_err(|error| StorageError::Init(format!("receipt binding invalid: {error}")))?;
+    if write.attestation.predicate().receipt_binding() != Some(&expected_binding) {
+        return Err(StorageError::Init(
+            "signed receipt binding does not match the stored receipt".into(),
+        ));
+    }
     if write.disclosures.len() != write.attestation.predicate().evidence().len() {
         return Err(StorageError::Init(
             "every attested evidence slot requires exactly one deletable disclosure".into(),
@@ -616,11 +916,44 @@ fn validate_signed_write_shape(write: &SignedReceiptWrite<'_>) -> Result<()> {
             )));
         }
     }
+    let receipt_memory_ids = receipt_memory_ids(write.receipt);
+    let disclosure_memory_ids: HashSet<&str> = write
+        .disclosures
+        .iter()
+        .map(DisclosureMapping::memory_id)
+        .collect();
+    if receipt_memory_ids != disclosure_memory_ids {
+        return Err(StorageError::Init(
+            "signed disclosure set does not exactly bind the receipt memory references".into(),
+        ));
+    }
     Ok(())
 }
 
-fn load_trusted_signing_keys(tx: &Transaction<'_>) -> Result<Vec<TrustedSigningKey>> {
-    let mut stmt = tx.prepare(
+fn receipt_memory_ids(receipt: &Receipt) -> HashSet<&str> {
+    let mut ids = HashSet::new();
+    ids.extend(receipt.retrieved.iter().map(String::as_str));
+    ids.extend(receipt.suppressed.iter().map(|entry| entry.id.as_str()));
+    ids.extend(
+        receipt
+            .mutations
+            .iter()
+            .map(|mutation| mutation.id.as_str()),
+    );
+    if let Some(ReceiptEvidence::SynapticCapture(evidence)) = receipt.evidence.as_ref() {
+        ids.insert(evidence.trigger.memory_id.as_str());
+        ids.extend(
+            evidence
+                .candidates
+                .iter()
+                .filter_map(|candidate| candidate.memory_id.as_deref()),
+        );
+    }
+    ids
+}
+
+fn load_trusted_signing_keys(connection: &rusqlite::Connection) -> Result<Vec<TrustedSigningKey>> {
+    let mut stmt = connection.prepare(
         "SELECT key_id, public_key, status, valid_from, valid_until, revoked_at
            FROM receipt_signing_keys ORDER BY key_id LIMIT ?1",
     )?;
@@ -657,20 +990,104 @@ fn load_trusted_signing_keys(tx: &Transaction<'_>) -> Result<Vec<TrustedSigningK
     Ok(keys)
 }
 
+fn load_trusted_signing_key(
+    connection: &rusqlite::Connection,
+    key_id: &str,
+) -> Result<Option<TrustedSigningKey>> {
+    let row: Option<(
+        String,
+        Vec<u8>,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    )> = connection
+        .query_row(
+            "SELECT key_id, public_key, status, valid_from, valid_until, revoked_at
+               FROM receipt_signing_keys WHERE key_id = ?1",
+            params![key_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((key_id, public_key, status, valid_from, valid_until, revoked_at)) = row else {
+        return Ok(None);
+    };
+    let public_key: [u8; 32] = public_key
+        .try_into()
+        .map_err(|_| StorageError::Init("registered Ed25519 key is not 32 bytes".into()))?;
+    Ok(Some(TrustedSigningKey {
+        key_id,
+        public_key,
+        status: parse_signing_key_status(&status)?,
+        valid_from: parse_utc(&valid_from)?,
+        valid_until: valid_until.as_deref().map(parse_utc).transpose()?,
+        revoked_at: revoked_at.as_deref().map(parse_utc).transpose()?,
+    }))
+}
+
+fn load_chain_entry(
+    connection: &rusqlite::Connection,
+    chain_id: &str,
+    sequence: u64,
+) -> Result<Option<ChainEntry>> {
+    let sequence = u64_to_sqlite(sequence)?;
+    let row: Option<(String, String, i64, Option<String>, String, String)> = connection
+        .query_row(
+            "SELECT receipt_id, chain_id, sequence, previous_entry_digest,
+                    entry_digest, signer_key_fingerprint
+               FROM receipt_envelopes
+              WHERE chain_id = ?1 AND sequence = ?2",
+            params![chain_id, sequence],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(chain_entry_from_row).transpose()
+}
+
+fn chain_entry_from_row(
+    (receipt_id, chain_id, sequence, previous_entry_digest, entry_digest, signer_fingerprint): (
+        String,
+        String,
+        i64,
+        Option<String>,
+        String,
+        String,
+    ),
+) -> Result<ChainEntry> {
+    let sequence = u64::try_from(sequence)
+        .map_err(|_| StorageError::Init("stored receipt chain has a negative sequence".into()))?;
+    ChainEntry::from_verified_parts(
+        receipt_id,
+        chain_id,
+        sequence,
+        previous_entry_digest,
+        entry_digest,
+        signer_fingerprint,
+    )
+    .map_err(|error| StorageError::Init(format!("invalid stored receipt chain entry: {error}")))
+}
+
 #[cfg(unix)]
 fn validate_sidecar_key_id(key_id: &str) -> Result<()> {
-    if key_id.is_empty()
-        || key_id.len() > 128
-        || !key_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-    {
-        return Err(StorageError::Init(
-            "sidecar key id must be a 1..=128 byte ASCII code using only letters, digits, '.', '_', or '-'"
-                .into(),
-        ));
-    }
-    Ok(())
+    validate_registry_key_id(key_id)
 }
 
 #[cfg(unix)]
@@ -705,11 +1122,7 @@ fn random_signing_seed() -> [u8; 32] {
 }
 
 fn validate_registry_key(key: &TrustedSigningKey) -> Result<()> {
-    if key.key_id.trim().is_empty() || key.key_id.len() > 128 {
-        return Err(StorageError::Init(
-            "receipt signing key id must contain 1..=128 bytes".into(),
-        ));
-    }
+    validate_registry_key_id(&key.key_id)?;
     ed25519_dalek::VerifyingKey::from_bytes(&key.public_key)
         .map_err(|_| StorageError::Init("malformed Ed25519 public key".into()))?;
     if key.valid_until.is_some_and(|until| until <= key.valid_from) {
@@ -718,6 +1131,11 @@ fn validate_registry_key(key: &TrustedSigningKey) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_registry_key_id(key_id: &str) -> Result<()> {
+    validate_receipt_signing_key_id(key_id)
+        .map_err(|error| StorageError::Init(format!("invalid receipt signing key id: {error}")))
 }
 
 const fn signing_key_status_label(status: SigningKeyStatus) -> &'static str {
@@ -828,12 +1246,10 @@ mod tests {
             [memory.id.as_str()],
         )
         .unwrap();
-        let (first_attestation, first_disclosures) = first.into_parts();
+        let mut first_receipt = receipt("pending", std::slice::from_ref(&memory.id));
+        let (first_attestation, first_disclosures) =
+            first.bind_receipt(&mut first_receipt).unwrap().into_parts();
         let first_signed = sign_attestation(&first_attestation, "key-1", &SEED_1).unwrap();
-        let first_receipt = receipt(
-            first_attestation.receipt_id().as_str(),
-            std::slice::from_ref(&memory.id),
-        );
         let durable_first = store
             .save_signed_receipt_atomic(SignedReceiptWrite {
                 receipt: &first_receipt,
@@ -861,12 +1277,12 @@ mod tests {
             [memory.id.as_str()],
         )
         .unwrap();
-        let (second_attestation, second_disclosures) = second.into_parts();
+        let mut second_receipt = receipt("pending", std::slice::from_ref(&memory.id));
+        let (second_attestation, second_disclosures) = second
+            .bind_receipt(&mut second_receipt)
+            .unwrap()
+            .into_parts();
         let second_signed = sign_attestation(&second_attestation, "key-2", &SEED_2).unwrap();
-        let second_receipt = receipt(
-            second_attestation.receipt_id().as_str(),
-            std::slice::from_ref(&memory.id),
-        );
         let durable_second = store
             .save_signed_receipt_atomic(SignedReceiptWrite {
                 receipt: &second_receipt,
@@ -928,9 +1344,12 @@ mod tests {
             memory_ids.iter().map(String::as_str),
         )
         .unwrap();
-        let (attestation, disclosures) = prepared.into_parts();
+        let mut mutable_receipt = receipt("pending", &memory_ids);
+        let (attestation, disclosures) = prepared
+            .bind_receipt(&mut mutable_receipt)
+            .unwrap()
+            .into_parts();
         let signed = sign_attestation(&attestation, "purge-key", &SEED_1).unwrap();
-        let mutable_receipt = receipt(attestation.receipt_id().as_str(), &memory_ids);
         store
             .save_signed_receipt_atomic(SignedReceiptWrite {
                 receipt: &mutable_receipt,
@@ -1003,9 +1422,12 @@ mod tests {
             ["missing-memory"],
         )
         .unwrap();
-        let (attestation, disclosures) = prepared.into_parts();
+        let mut mutable_receipt = receipt("pending", &["missing-memory".to_string()]);
+        let (attestation, disclosures) = prepared
+            .bind_receipt(&mut mutable_receipt)
+            .unwrap()
+            .into_parts();
         let signed = sign_attestation(&attestation, "atomic-key", &SEED_1).unwrap();
-        let mutable_receipt = receipt(attestation.receipt_id().as_str(), &[]);
         assert!(
             store
                 .save_signed_receipt_atomic(SignedReceiptWrite {
@@ -1025,6 +1447,125 @@ mod tests {
                 .unwrap(),
             None,
             "failed disclosure FK must roll back the mutable receipt and envelope"
+        );
+    }
+
+    #[test]
+    fn signed_write_rejects_receipt_memory_swap_before_any_row_is_committed() {
+        let store = store();
+        let committed = store
+            .ingest(IngestInput {
+                content: "committed attestation memory".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let swapped = store
+            .ingest(IngestInput {
+                content: "different receipt memory".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let key = trusted_key("binding-key", &SEED_1);
+        store.register_receipt_signing_key(&key).unwrap();
+        let prepared = ReceiptAttestationV1::build(
+            Utc::now(),
+            ProducerIdentity::new("vestige-core", "2.3.0", "v26-binding").unwrap(),
+            AttestationChainPosition::Genesis,
+            "synaptic-capture-v1",
+            RedactionSafeDecisionProjectionV1::SynapticCapture {
+                direction: CaptureDirection::Backward,
+                evaluated_count: 1,
+                captured_count: 1,
+                withheld_count: 0,
+            },
+            [committed.id.as_str()],
+        )
+        .unwrap();
+        let mut mutable_receipt = receipt("pending", std::slice::from_ref(&committed.id));
+        let (attestation, disclosures) = prepared
+            .bind_receipt(&mut mutable_receipt)
+            .unwrap()
+            .into_parts();
+        let signed = sign_attestation(&attestation, "binding-key", &SEED_1).unwrap();
+
+        // Same cardinality, different memory: a count-only binding would miss
+        // this, so the signed disclosure set is also checked before the write.
+        mutable_receipt.retrieved = vec![swapped.id];
+        let error = store
+            .save_signed_receipt_atomic(SignedReceiptWrite {
+                receipt: &mutable_receipt,
+                attestation: &attestation,
+                signed: &signed,
+                disclosures: &disclosures,
+                run_id: None,
+                tool: Some("test"),
+                query: None,
+            })
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("signed disclosure set does not exactly bind")
+        );
+        assert_eq!(
+            store
+                .receipt_attestation_status(&mutable_receipt.receipt_id)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn retired_key_cannot_sign_new_receipts_after_rotation() {
+        let store = store();
+        let memory = store
+            .ingest(IngestInput {
+                content: "key lifecycle memory".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let key = trusted_key("retire-key", &SEED_1);
+        store.register_receipt_signing_key(&key).unwrap();
+        store
+            .transition_receipt_signing_key("retire-key", ReceiptSigningKeyTransition::Retire)
+            .unwrap();
+
+        let prepared = ReceiptAttestationV1::build(
+            Utc::now(),
+            ProducerIdentity::new("vestige-core", "2.3.0", "v26-lifecycle").unwrap(),
+            AttestationChainPosition::Genesis,
+            "synaptic-capture-v1",
+            RedactionSafeDecisionProjectionV1::SynapticCapture {
+                direction: CaptureDirection::Backward,
+                evaluated_count: 1,
+                captured_count: 1,
+                withheld_count: 0,
+            },
+            [memory.id.as_str()],
+        )
+        .unwrap();
+        let mut mutable_receipt = receipt("pending", std::slice::from_ref(&memory.id));
+        let (attestation, disclosures) = prepared
+            .bind_receipt(&mut mutable_receipt)
+            .unwrap()
+            .into_parts();
+        let signed = sign_attestation(&attestation, "retire-key", &SEED_1).unwrap();
+        let error = store
+            .save_signed_receipt_atomic(SignedReceiptWrite {
+                receipt: &mutable_receipt,
+                attestation: &attestation,
+                signed: &signed,
+                disclosures: &disclosures,
+                run_id: None,
+                tool: Some("test"),
+                query: None,
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("is not active for new writes"));
+        assert!(
+            store
+                .transition_receipt_signing_key("retire-key", ReceiptSigningKeyTransition::Retire,)
+                .is_err()
         );
     }
 

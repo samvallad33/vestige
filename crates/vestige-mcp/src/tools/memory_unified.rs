@@ -61,7 +61,7 @@ pub fn schema() -> Value {
             },
             "confirm": {
                 "type": "boolean",
-                "description": "Required for action='purge' and action='delete'. Purge/delete removes canonical content and embeddings. Legacy sync/audit tombstones retain an identifier and limited metadata, so this action is not verified-local machine unlearning.",
+                "description": "Required for action='purge' and action='delete'. Purge/delete removes canonical content and embeddings. Legacy audit/sync records retain only opaque markers and limited metadata, so this action is not verified-local machine unlearning.",
                 "default": false
             },
             "content": {
@@ -270,7 +270,7 @@ async fn execute_purge(
         "success": report.deleted,
         "nodeId": id,
         "message": if report.deleted {
-            "Memory purged; content and embeddings removed. Legacy sync/audit tombstones retain an identifier and limited metadata, so this is not a verified-local unlearning result."
+            "Memory purged; content and embeddings removed. Legacy audit/sync records retain only opaque markers and limited metadata, so this is not a verified-local unlearning result."
         } else {
             "Memory not found"
         },
@@ -754,7 +754,7 @@ mod tests {
             value["message"]
                 .as_str()
                 .unwrap()
-                .contains("Legacy sync/audit tombstones")
+                .contains("opaque markers")
         );
         assert_eq!(value["edgesPruned"], 0);
         assert!(storage.get_node(&id).unwrap().is_none());

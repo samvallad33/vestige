@@ -24,6 +24,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Number, Value};
 use uuid::{Uuid, Version};
 
+use crate::trace::{Receipt, ReceiptEvidence};
+
 /// RFC 8785/JCS schema identifier for the immutable payload.
 pub const RECEIPT_ATTESTATION_SCHEMA_V1: &str = "urn:vestige:receipt-attestation:v1";
 /// DSSE payload type signed by this module.
@@ -89,6 +91,8 @@ opaque_id!(OpaqueEvidenceSlot, "slot");
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReceiptPredicateKind {
+    /// A persisted retrieval selection and its redaction-safe summary.
+    RetrievalSelection,
     SynapticCapture,
     CounterfactualReplayInfluence,
     VerifiedLocalDisclosureErasure,
@@ -110,6 +114,7 @@ pub enum ReceiptClaimBoundary {
 impl ReceiptPredicateKind {
     const fn operation_kind(self) -> &'static str {
         match self {
+            Self::RetrievalSelection => "retrieval_selection",
             Self::SynapticCapture => "synaptic_capture",
             Self::CounterfactualReplayInfluence => "counterfactual_replay_influence",
             Self::VerifiedLocalDisclosureErasure => "verified_local_disclosure_erasure",
@@ -118,7 +123,9 @@ impl ReceiptPredicateKind {
 
     const fn claim_boundary(self) -> ReceiptClaimBoundary {
         match self {
-            Self::SynapticCapture => ReceiptClaimBoundary::DecisionEvidenceNotTruthOrCausality,
+            Self::RetrievalSelection | Self::SynapticCapture => {
+                ReceiptClaimBoundary::DecisionEvidenceNotTruthOrCausality
+            }
             Self::CounterfactualReplayInfluence => {
                 ReceiptClaimBoundary::ControlledReplayInfluenceNotRealWorldCausality
             }
@@ -142,6 +149,14 @@ pub enum CaptureDirection {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RedactionSafeDecisionProjectionV1 {
+    /// Structural summary of one retrieval result. Scores are normalized to
+    /// basis points so canonical signed JSON never relies on floating point.
+    RetrievalSelection {
+        returned_count: u32,
+        suppressed_count: u32,
+        mutation_count: u32,
+        trust_floor_basis_points: u16,
+    },
     SynapticCapture {
         direction: CaptureDirection,
         evaluated_count: u32,
@@ -164,6 +179,7 @@ pub enum RedactionSafeDecisionProjectionV1 {
 impl RedactionSafeDecisionProjectionV1 {
     pub const fn kind(&self) -> ReceiptPredicateKind {
         match self {
+            Self::RetrievalSelection { .. } => ReceiptPredicateKind::RetrievalSelection,
             Self::SynapticCapture { .. } => ReceiptPredicateKind::SynapticCapture,
             Self::CounterfactualReplayInfluence { .. } => {
                 ReceiptPredicateKind::CounterfactualReplayInfluence
@@ -175,15 +191,114 @@ impl RedactionSafeDecisionProjectionV1 {
     }
 
     fn digest(&self) -> Result<String, AttestationError> {
-        if let Self::VerifiedLocalDisclosureErasure { generation } = self
-            && (*generation == 0 || *generation > MAX_SAFE_CHAIN_SEQUENCE)
-        {
-            return Err(AttestationError::InvalidProjection(
-                "erasure generation must be a positive I-JSON-safe integer",
-            ));
-        }
+        self.validate()?;
         let canonical = serde_json_canonicalizer::to_vec(self)?;
         Ok(decision_digest(&canonical))
+    }
+
+    fn validate(&self) -> Result<(), AttestationError> {
+        match self {
+            Self::RetrievalSelection {
+                trust_floor_basis_points,
+                ..
+            } if *trust_floor_basis_points > 10_000 => Err(AttestationError::InvalidProjection(
+                "trust_floor_basis_points must be between 0 and 10000",
+            )),
+            Self::SynapticCapture {
+                evaluated_count,
+                captured_count,
+                withheld_count,
+                ..
+            } if captured_count.saturating_add(*withheld_count) > *evaluated_count => {
+                Err(AttestationError::InvalidProjection(
+                    "captured_count + withheld_count must not exceed evaluated_count",
+                ))
+            }
+            Self::CounterfactualReplayInfluence {
+                baseline_count,
+                counterfactual_count,
+                withheld_slot_count,
+                ..
+            } if counterfactual_count > baseline_count || withheld_slot_count > baseline_count => {
+                Err(AttestationError::InvalidProjection(
+                    "counterfactual and withheld counts must not exceed baseline_count",
+                ))
+            }
+            Self::VerifiedLocalDisclosureErasure { generation }
+                if *generation == 0 || *generation > MAX_SAFE_CHAIN_SEQUENCE =>
+            {
+                Err(AttestationError::InvalidProjection(
+                    "erasure generation must be a positive I-JSON-safe integer",
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Identity-free projection of the stored mutable receipt. It is signed with
+/// the decision projection, while the exact memory-id set is bound through the
+/// signed disclosure commitments and checked during the atomic write.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RedactionSafeReceiptBindingV1 {
+    retrieved_count: u32,
+    suppressed_count: u32,
+    mutation_count: u32,
+    visible_memory_count: u32,
+    typed_evidence_kind: Option<ReceiptBindingEvidenceKind>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptBindingEvidenceKind {
+    SynapticCapture,
+    CounterfactualReplay,
+}
+
+impl RedactionSafeReceiptBindingV1 {
+    pub fn for_receipt(receipt: &Receipt) -> Result<Self, AttestationError> {
+        let visible_memory_count = receipt_memory_ids(receipt).len();
+        let typed_evidence_kind = match receipt.evidence.as_ref() {
+            None => None,
+            Some(ReceiptEvidence::SynapticCapture(_)) => {
+                Some(ReceiptBindingEvidenceKind::SynapticCapture)
+            }
+            Some(ReceiptEvidence::CounterfactualReplay { .. }) => {
+                Some(ReceiptBindingEvidenceKind::CounterfactualReplay)
+            }
+        };
+        Ok(Self {
+            retrieved_count: u32::try_from(receipt.retrieved.len())
+                .map_err(|_| AttestationError::ReceiptBindingTooLarge)?,
+            suppressed_count: u32::try_from(receipt.suppressed.len())
+                .map_err(|_| AttestationError::ReceiptBindingTooLarge)?,
+            mutation_count: u32::try_from(receipt.mutations.len())
+                .map_err(|_| AttestationError::ReceiptBindingTooLarge)?,
+            visible_memory_count: u32::try_from(visible_memory_count)
+                .map_err(|_| AttestationError::ReceiptBindingTooLarge)?,
+            typed_evidence_kind,
+        })
+    }
+
+    pub fn retrieved_count(&self) -> u32 {
+        self.retrieved_count
+    }
+
+    pub fn suppressed_count(&self) -> u32 {
+        self.suppressed_count
+    }
+
+    pub fn mutation_count(&self) -> u32 {
+        self.mutation_count
+    }
+
+    pub fn visible_memory_count(&self) -> u32 {
+        self.visible_memory_count
+    }
+
+    pub fn typed_evidence_kind(&self) -> Option<ReceiptBindingEvidenceKind> {
+        self.typed_evidence_kind
     }
 }
 
@@ -214,6 +329,18 @@ impl PreparedReceiptAttestation {
 
     pub fn into_parts(self) -> (ReceiptAttestationV1, Vec<DisclosureMapping>) {
         (self.attestation, self.disclosures)
+    }
+
+    /// Bind this prepared predicate to the mutable receipt that will be stored
+    /// with it. The public receipt id is replaced with the fresh receipt-local
+    /// attestation id so the receipt, disclosure rows, envelope row, and chain
+    /// all share one durable identity. No secret key is touched here.
+    pub fn bind_receipt(mut self, receipt: &mut Receipt) -> Result<Self, AttestationError> {
+        receipt.receipt_id = self.attestation.receipt_id.as_str().to_string();
+        self.attestation.predicate.receipt_binding =
+            Some(RedactionSafeReceiptBindingV1::for_receipt(receipt)?);
+        self.attestation.validate()?;
+        Ok(self)
     }
 }
 
@@ -317,11 +444,15 @@ impl ReceiptAttestationV1 {
                 kind,
                 algorithm_version,
                 decision_digest: projection.digest()?,
+                projection,
                 evidence,
                 claim_boundary: kind.claim_boundary(),
+                receipt_binding: None,
             },
         };
-        attestation.validate()?;
+        // A prepared attestation is intentionally incomplete until it is bound
+        // to the exact mutable receipt that will share its durable identity.
+        attestation.validate_pre_binding()?;
         Ok(PreparedReceiptAttestation {
             attestation,
             disclosures,
@@ -354,6 +485,14 @@ impl ReceiptAttestationV1 {
 
     /// Validate invariants that are stricter than Serde's type checks.
     pub fn validate(&self) -> Result<(), AttestationError> {
+        self.validate_pre_binding()?;
+        if self.predicate.receipt_binding.is_none() {
+            return Err(AttestationError::MissingReceiptBinding);
+        }
+        Ok(())
+    }
+
+    fn validate_pre_binding(&self) -> Result<(), AttestationError> {
         if self.schema != RECEIPT_ATTESTATION_SCHEMA_V1 {
             return Err(AttestationError::UnsupportedSchema(self.schema.clone()));
         }
@@ -381,6 +520,13 @@ impl ReceiptAttestationV1 {
             "predicate.algorithmVersion",
             &self.predicate.algorithm_version,
         )?;
+        self.predicate.projection.validate()?;
+        if self.predicate.projection.kind() != self.predicate.kind {
+            return Err(AttestationError::ProjectionKindMismatch);
+        }
+        if self.predicate.projection.digest()? != self.predicate.decision_digest {
+            return Err(AttestationError::DecisionDigestMismatch);
+        }
         validate_digest("predicate.decisionDigest", &self.predicate.decision_digest)?;
         if self.predicate.claim_boundary != self.predicate.kind.claim_boundary() {
             return Err(AttestationError::ClaimBoundaryMismatch);
@@ -519,12 +665,19 @@ impl ChainLink {
 pub struct ReceiptPredicate {
     kind: ReceiptPredicateKind,
     algorithm_version: String,
+    /// The inspectable, identity-free decision values that produced the digest.
+    projection: RedactionSafeDecisionProjectionV1,
     /// Digest of a caller-defined, redaction-safe decision projection.
     decision_digest: String,
     /// Opaque receipt-local slots and salted commitments only.
     evidence: Vec<EvidenceCommitment>,
     /// Explicitly states what this evidence does and does not establish.
     claim_boundary: ReceiptClaimBoundary,
+    /// Signed identity-free projection of the stored receipt. It is absent
+    /// only while a builder is preparing an attestation and must exist before
+    /// canonicalization or signing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    receipt_binding: Option<RedactionSafeReceiptBindingV1>,
 }
 
 impl ReceiptPredicate {
@@ -534,6 +687,10 @@ impl ReceiptPredicate {
 
     pub fn algorithm_version(&self) -> &str {
         &self.algorithm_version
+    }
+
+    pub fn projection(&self) -> &RedactionSafeDecisionProjectionV1 {
+        &self.projection
     }
 
     pub fn decision_digest(&self) -> &str {
@@ -546,6 +703,10 @@ impl ReceiptPredicate {
 
     pub const fn claim_boundary(&self) -> ReceiptClaimBoundary {
         self.claim_boundary
+    }
+
+    pub fn receipt_binding(&self) -> Option<&RedactionSafeReceiptBindingV1> {
+        self.receipt_binding.as_ref()
     }
 }
 
@@ -998,6 +1159,18 @@ pub enum AttestationError {
     InvalidProjection(&'static str),
     #[error("key id must not be empty")]
     EmptyKeyId,
+    #[error(
+        "key id must be a 1..=128 byte ASCII code using only letters, digits, '.', '_', or '-'"
+    )]
+    InvalidKeyId,
+    #[error("signed receipt is missing its redaction-safe receipt binding")]
+    MissingReceiptBinding,
+    #[error("decision projection kind does not match the typed predicate kind")]
+    ProjectionKindMismatch,
+    #[error("decision projection does not match its signed decision digest")]
+    DecisionDigestMismatch,
+    #[error("receipt binding contains more values than v1 can represent")]
+    ReceiptBindingTooLarge,
     #[error("RFC 8785 canonicalization failed: {0}")]
     Canonicalization(#[from] serde_json::Error),
 }
@@ -1035,9 +1208,7 @@ pub fn sign_attestation(
     key_id: &str,
     signing_seed: &[u8; 32],
 ) -> Result<SignedReceiptAttestation, AttestationError> {
-    if key_id.trim().is_empty() {
-        return Err(AttestationError::EmptyKeyId);
-    }
+    validate_receipt_signing_key_id(key_id)?;
     let payload = canonical_attestation_bytes(attestation)?;
     let pae = dsse_pae(RECEIPT_ATTESTATION_PAYLOAD_TYPE_V1, &payload);
     let signing_key = SigningKey::from_bytes(signing_seed);
@@ -1586,6 +1757,41 @@ pub struct ChainEntry {
 }
 
 impl ChainEntry {
+    /// Build a chain entry from a locally verified immutable envelope row.
+    ///
+    /// This is crate-visible so the durable store can reconstruct the exact
+    /// predecessor selected from its append-only chain state; callers outside
+    /// Vestige cannot mint arbitrary predecessor metadata.
+    pub(crate) fn from_verified_parts(
+        receipt_id: String,
+        chain_id: String,
+        sequence: u64,
+        previous_entry_digest: Option<String>,
+        entry_digest: String,
+        signer_public_key_fingerprint: String,
+    ) -> Result<Self, AttestationError> {
+        let receipt_id = OpaqueReceiptId(receipt_id);
+        receipt_id.validate("chainEntry.receiptId")?;
+        let chain_id = OpaqueChainId(chain_id);
+        chain_id.validate("chainEntry.chainId")?;
+        validate_digest("chainEntry.entryDigest", &entry_digest)?;
+        if let Some(previous) = previous_entry_digest.as_deref() {
+            validate_digest("chainEntry.previousEntryDigest", previous)?;
+        }
+        validate_digest(
+            "chainEntry.signerPublicKeyFingerprint",
+            &signer_public_key_fingerprint,
+        )?;
+        Ok(Self {
+            receipt_id,
+            chain_id,
+            sequence,
+            previous_entry_digest,
+            entry_digest,
+            signer_public_key_fingerprint,
+        })
+    }
+
     pub fn receipt_id(&self) -> &OpaqueReceiptId {
         &self.receipt_id
     }
@@ -1920,6 +2126,45 @@ fn validate_closed_code(field: &'static str, value: &str) -> Result<(), Attestat
     }
 }
 
+/// Validate public signing-key identifiers before they enter an immutable DSSE
+/// envelope or the trusted-key registry. Key ids are lookup hints, but they are
+/// still permanent public metadata and must never contain user-controlled prose.
+pub fn validate_receipt_signing_key_id(key_id: &str) -> Result<(), AttestationError> {
+    if key_id.is_empty() {
+        return Err(AttestationError::EmptyKeyId);
+    }
+    if key_id.len() > 128
+        || !key_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(AttestationError::InvalidKeyId);
+    }
+    Ok(())
+}
+
+fn receipt_memory_ids(receipt: &Receipt) -> HashSet<&str> {
+    let mut ids = HashSet::new();
+    ids.extend(receipt.retrieved.iter().map(String::as_str));
+    ids.extend(receipt.suppressed.iter().map(|entry| entry.id.as_str()));
+    ids.extend(
+        receipt
+            .mutations
+            .iter()
+            .map(|mutation| mutation.id.as_str()),
+    );
+    if let Some(ReceiptEvidence::SynapticCapture(evidence)) = receipt.evidence.as_ref() {
+        ids.insert(evidence.trigger.memory_id.as_str());
+        ids.extend(
+            evidence
+                .candidates
+                .iter()
+                .filter_map(|candidate| candidate.memory_id.as_deref()),
+        );
+    }
+    ids
+}
+
 fn validate_producer_code(field: &'static str, value: &str) -> Result<(), AttestationError> {
     require_bounded_nonempty(field, value, MAX_PRODUCER_FIELD_BYTES)?;
     if value
@@ -2247,6 +2492,12 @@ mod tests {
     }
 
     fn attestation() -> ReceiptAttestationV1 {
+        let projection = RedactionSafeDecisionProjectionV1::SynapticCapture {
+            direction: CaptureDirection::Backward,
+            evaluated_count: 1,
+            captured_count: 1,
+            withheld_count: 0,
+        };
         ReceiptAttestationV1 {
             schema: RECEIPT_ATTESTATION_SCHEMA_V1.to_string(),
             schema_version: RECEIPT_ATTESTATION_VERSION_V1,
@@ -2266,9 +2517,17 @@ mod tests {
             predicate: ReceiptPredicate {
                 kind: ReceiptPredicateKind::SynapticCapture,
                 algorithm_version: "synaptic-capture-v1".to_string(),
-                decision_digest: decision_digest(b"redaction-safe-decision"),
+                decision_digest: projection.digest().unwrap(),
+                projection,
                 evidence: vec![disclosure().evidence_commitment()],
                 claim_boundary: ReceiptClaimBoundary::DecisionEvidenceNotTruthOrCausality,
+                receipt_binding: Some(RedactionSafeReceiptBindingV1 {
+                    retrieved_count: 1,
+                    suppressed_count: 0,
+                    mutation_count: 0,
+                    visible_memory_count: 1,
+                    typed_evidence_kind: None,
+                }),
             },
         }
     }
@@ -2673,6 +2932,16 @@ mod tests {
             ["private-memory"],
         )
         .unwrap();
+        let mut successor_receipt = Receipt::build(
+            issued_at(),
+            "rotation-test",
+            vec!["private-memory".to_string()],
+            Vec::new(),
+            Vec::new(),
+            &[1.0],
+            Vec::new(),
+        );
+        let prepared = prepared.bind_receipt(&mut successor_receipt).unwrap();
         let successor =
             sign_attestation(prepared.attestation(), "rotated-key", &ROTATED_SEED).unwrap();
         let rotated_key = TrustedSigningKey {
@@ -2742,8 +3011,21 @@ mod tests {
             first.attestation.predicate.claim_boundary,
             ReceiptClaimBoundary::ControlledReplayInfluenceNotRealWorldCausality
         );
+        let mut receipt = Receipt::build(
+            issued_at(),
+            "builder-test",
+            vec![
+                "private-memory-a".to_string(),
+                "private-memory-b".to_string(),
+            ],
+            Vec::new(),
+            Vec::new(),
+            &[1.0],
+            Vec::new(),
+        );
+        let bound = first.bind_receipt(&mut receipt).unwrap();
         let payload =
-            String::from_utf8(canonical_attestation_bytes(first.attestation()).unwrap()).unwrap();
+            String::from_utf8(canonical_attestation_bytes(bound.attestation()).unwrap()).unwrap();
         assert!(!payload.contains("private-memory"));
     }
 

@@ -16,7 +16,8 @@
 //!
 //! The recorder is best-effort: a persistence error never fails the tool call.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::sync::{Arc, OnceLock};
 
 use chrono::Utc;
@@ -24,12 +25,27 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 
 use crate::dashboard::events::VestigeEvent;
+use vestige_core::storage::{
+    SignedReceiptWrite, load_receipt_signing_seed,
+    receipt_attestation::{
+        AttestationChainPosition, DisclosureMapping, ProducerIdentity, ReceiptAttestationV1,
+        RedactionSafeDecisionProjectionV1, SignedReceiptAttestation, SigningKeyStatus,
+        sign_attestation,
+    },
+};
 use vestige_core::{
     MemoryTraceEvent, REPLAY_SELECTION_BOUNDARY, Receipt, ReplayDecayRisk,
     RetrievalReplayCapsuleDraft, RetrievalReplayItemDraft, Storage, SuppressReason,
     SuppressedReceiptEntry, WriteSource, private_evidence_digest, replay_evidence_slot,
     replay_policy_digest,
 };
+
+/// Opt-in environment configuration for the live receipt signer. The process
+/// never provisions a seed or registers a public key: operators must do those
+/// actions first, then explicitly configure both values below.
+const RECEIPT_SIGNING_KEY_ID_ENV: &str = "VESTIGE_RECEIPT_SIGNING_KEY_ID";
+const RECEIPT_SIGNING_SEED_PATH_ENV: &str = "VESTIGE_RECEIPT_SIGNING_SEED_PATH";
+const RECEIPT_ATTESTATION_ALGORITHM_V1: &str = "mcp-retrieval-receipt-v1";
 
 /// Tools that write to memory and are therefore subject to risk-gated review.
 ///
@@ -774,14 +790,130 @@ fn build_replay_capsule_draft(
     ))
 }
 
+#[derive(Debug)]
+struct ReceiptSigner {
+    key_id: String,
+    seed: [u8; 32],
+}
+
+/// Load the live signer only when an operator supplied a complete explicit
+/// configuration. A partial configuration, unreadable sidecar, unregistered
+/// key, seed/public-key mismatch, or non-active key is an error: retrieval
+/// receipt persistence then fails closed instead of quietly emitting unsigned
+/// evidence under a signing-enabled deployment.
+fn configured_receipt_signer(storage: &Storage) -> Result<Option<ReceiptSigner>, String> {
+    let key_id = env::var(RECEIPT_SIGNING_KEY_ID_ENV).ok();
+    let seed_path = env::var_os(RECEIPT_SIGNING_SEED_PATH_ENV);
+    match (key_id, seed_path) {
+        (None, None) => Ok(None),
+        (Some(key_id), Some(seed_path)) if !key_id.trim().is_empty() => {
+            let seed = load_receipt_signing_seed(std::path::Path::new(&seed_path))
+                .map_err(|error| format!("receipt signing seed is unavailable: {error}"))?;
+            let registered = storage
+                .registered_receipt_signing_key(&key_id)
+                .map_err(|error| format!("receipt signing key lookup failed: {error}"))?
+                .ok_or_else(|| {
+                    format!(
+                        "receipt signing key '{key_id}' is not registered; register its public key before enabling signing"
+                    )
+                })?;
+            if registered.status != SigningKeyStatus::Active {
+                return Err(format!(
+                    "receipt signing key '{key_id}' is not active for new receipts"
+                ));
+            }
+            let public_key = ed25519_dalek::SigningKey::from_bytes(&seed)
+                .verifying_key()
+                .to_bytes();
+            if public_key != registered.public_key {
+                return Err(format!(
+                    "receipt signing seed does not match registered public key '{key_id}'"
+                ));
+            }
+            Ok(Some(ReceiptSigner { key_id, seed }))
+        }
+        _ => Err(format!(
+            "receipt signing requires both {RECEIPT_SIGNING_KEY_ID_ENV} and {RECEIPT_SIGNING_SEED_PATH_ENV}, or neither"
+        )),
+    }
+}
+
+fn retrieval_projection(receipt: &Receipt) -> Result<RedactionSafeDecisionProjectionV1, String> {
+    let count = |name: &str, value: usize| {
+        u32::try_from(value).map_err(|_| format!("receipt {name} exceeds the attestation bound"))
+    };
+    let trust_floor_basis_points = if receipt.trust_floor.is_finite() {
+        (receipt.trust_floor.clamp(0.0, 1.0) * 10_000.0).round() as u16
+    } else {
+        return Err("receipt trust floor is not finite".into());
+    };
+    Ok(RedactionSafeDecisionProjectionV1::RetrievalSelection {
+        returned_count: count("retrieved count", receipt.retrieved.len())?,
+        suppressed_count: count("suppressed count", receipt.suppressed.len())?,
+        mutation_count: count("mutation count", receipt.mutations.len())?,
+        trust_floor_basis_points,
+    })
+}
+
+fn receipt_memory_ids(receipt: &Receipt) -> Vec<String> {
+    let mut ids = BTreeSet::new();
+    ids.extend(receipt.retrieved.iter().cloned());
+    ids.extend(receipt.suppressed.iter().map(|entry| entry.id.clone()));
+    ids.extend(receipt.mutations.iter().map(|mutation| mutation.id.clone()));
+    ids.into_iter().collect()
+}
+
+fn sign_retrieval_receipt(
+    storage: &Storage,
+    signer: &ReceiptSigner,
+    receipt: &mut Receipt,
+) -> Result<
+    (
+        ReceiptAttestationV1,
+        Vec<DisclosureMapping>,
+        SignedReceiptAttestation,
+    ),
+    String,
+> {
+    let predecessor = storage
+        .latest_receipt_chain_entry()
+        .map_err(|error| format!("receipt chain lookup failed: {error}"))?;
+    let chain_position = predecessor
+        .as_ref()
+        .map(AttestationChainPosition::Successor)
+        .unwrap_or(AttestationChainPosition::Genesis);
+    let prepared = ReceiptAttestationV1::build(
+        Utc::now(),
+        ProducerIdentity::new(
+            "vestige-mcp",
+            env!("CARGO_PKG_VERSION"),
+            "receipt-runtime-v1",
+        )
+        .map_err(|error| format!("receipt producer identity is invalid: {error}"))?,
+        chain_position,
+        RECEIPT_ATTESTATION_ALGORITHM_V1,
+        retrieval_projection(receipt)?,
+        receipt_memory_ids(receipt),
+    )
+    .map_err(|error| format!("receipt attestation build failed: {error}"))?;
+    let (attestation, disclosures) = prepared
+        .bind_receipt(receipt)
+        .map_err(|error| format!("receipt attestation binding failed: {error}"))?
+        .into_parts();
+    let signed = sign_attestation(&attestation, &signer.key_id, &signer.seed)
+        .map_err(|error| format!("receipt attestation signing failed: {error}"))?;
+    Ok((attestation, disclosures, signed))
+}
+
 /// Build a [`Receipt`] from a retrieval tool's response JSON, persist it, and
 /// return it as JSON ready to attach to that response. Reuses exactly the data
 /// the tool already computed (retrieved ids + trust, suppressed ids + reason,
 /// the activation path) — so the receipt is the auditable "nutrition label" for
 /// the answer and costs nothing extra to produce.
 ///
-/// Returns `None` for non-retrieval tools or empty results. Best-effort
-/// persistence: a storage error is logged, the receipt is still returned.
+/// Returns `None` for non-retrieval tools or empty results. When persistence
+/// fails, returns an explicit status object with no receipt id or payload, so a
+/// successful retrieval never implies it has durable receipt evidence.
 pub fn build_and_save_receipt(
     storage: &Arc<Storage>,
     run_id: &str,
@@ -824,7 +956,7 @@ pub fn build_and_save_receipt(
             }
         });
 
-    let receipt = Receipt::build(
+    let mut receipt = Receipt::build(
         Utc::now(),
         run_id,
         retrieved,
@@ -833,17 +965,65 @@ pub fn build_and_save_receipt(
         &trust_scores,
         Vec::new(),
     );
-    let capsule = build_replay_capsule_draft(&receipt.receipt_id, tool, result)?;
-    if let Err(e) = storage.save_retrieval_receipt_with_replay_capsule(
-        &receipt,
-        Some(run_id),
-        Some(tool),
-        &capsule,
-    ) {
-        tracing::warn!("atomic receipt and replay capsule save failed: {e}");
-        return None;
+    let signing_result = configured_receipt_signer(storage).and_then(|signer| {
+        let capsule_and_save = |receipt: &Receipt,
+                                signed: Option<(
+            &ReceiptAttestationV1,
+            &[DisclosureMapping],
+            &SignedReceiptAttestation,
+        )>|
+         -> Result<(), String> {
+            let capsule = build_replay_capsule_draft(&receipt.receipt_id, tool, result)
+                .ok_or_else(|| "retrieval receipt has no replayable final evidence".to_string())?;
+            match signed {
+                Some((attestation, disclosures, signed)) => storage
+                    .save_signed_retrieval_receipt_with_replay_capsule_atomic(
+                        SignedReceiptWrite {
+                            receipt,
+                            attestation,
+                            signed,
+                            disclosures,
+                            run_id: Some(run_id),
+                            tool: Some(tool),
+                            query: None,
+                        },
+                        &capsule,
+                    )
+                    .map(|_| ())
+                    .map_err(|error| format!("atomic signed receipt save failed: {error}")),
+                None => storage
+                    .save_retrieval_receipt_with_replay_capsule(
+                        receipt,
+                        Some(run_id),
+                        Some(tool),
+                        &capsule,
+                    )
+                    .map(|_| ())
+                    .map_err(|error| format!("atomic receipt save failed: {error}")),
+            }
+        };
+        match signer {
+            Some(signer) => {
+                let (attestation, disclosures, signed) =
+                    sign_retrieval_receipt(storage, &signer, &mut receipt)?;
+                capsule_and_save(&receipt, Some((&attestation, &disclosures, &signed)))
+            }
+            None => capsule_and_save(&receipt, None),
+        }
+    });
+    if let Err(error) = signing_result {
+        tracing::warn!("atomic receipt persistence failed: {error}");
+        return Some(receipt_persistence_unavailable());
     }
     Some(serde_json::to_value(&receipt).unwrap_or(serde_json::Value::Null))
+}
+
+fn receipt_persistence_unavailable() -> serde_json::Value {
+    serde_json::json!({
+        "persistence": "unavailable",
+        "claimBoundary": "Receipt evidence was not persisted; no durable receipt is claimed.",
+        "message": "Receipt persistence is temporarily unavailable. Retry the retrieval to obtain durable evidence."
+    })
 }
 
 /// Derive the run id for a tool call. Honours a client-supplied `runId` /
@@ -1359,6 +1539,39 @@ fn extract_dream_proposals(result: &Value, tool: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn receipt_signing_env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    struct ReceiptSigningEnvReset {
+        key_id: Option<std::ffi::OsString>,
+        seed_path: Option<std::ffi::OsString>,
+    }
+
+    impl ReceiptSigningEnvReset {
+        fn capture() -> Self {
+            Self {
+                key_id: env::var_os(RECEIPT_SIGNING_KEY_ID_ENV),
+                seed_path: env::var_os(RECEIPT_SIGNING_SEED_PATH_ENV),
+            }
+        }
+    }
+
+    impl Drop for ReceiptSigningEnvReset {
+        fn drop(&mut self) {
+            for (name, previous) in [
+                (RECEIPT_SIGNING_KEY_ID_ENV, self.key_id.take()),
+                (RECEIPT_SIGNING_SEED_PATH_ENV, self.seed_path.take()),
+            ] {
+                match previous {
+                    Some(value) => unsafe { env::set_var(name, value) },
+                    None => unsafe { env::remove_var(name) },
+                }
+            }
+        }
+    }
+
     #[test]
     fn run_id_honours_client_supplied() {
         let args = Some(serde_json::json!({ "runId": "run_session_7" }));
@@ -1560,6 +1773,21 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("retrieval-capsule.db");
         let storage = Arc::new(vestige_core::Storage::new(Some(db_path.clone())).unwrap());
+        // Replay-item rows deliberately carry an FK to the canonical memory so
+        // this regression exercises the same path as a live retrieval rather
+        // than relying on impossible fixture identifiers.
+        let first = storage
+            .ingest(vestige_core::IngestInput {
+                content: "raw memory sentinel alpha".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let second = storage
+            .ingest(vestige_core::IngestInput {
+                content: "raw memory sentinel beta".into(),
+                ..Default::default()
+            })
+            .unwrap();
         let result = serde_json::json!({
             "query": "private query sentinel",
             "method": "concrete",
@@ -1569,12 +1797,12 @@ mod tests {
             "tokenBudgetLimit": 120,
             "results": [
                 {
-                    "id": "memory_returned_a",
+                    "id": first.id,
                     "content": "raw memory sentinel alpha",
                     "retentionStrength": 0.75
                 },
                 {
-                    "id": "memory_returned_b",
+                    "id": second.id,
                     "content": "raw memory sentinel beta",
                     "retentionStrength": 0.35
                 }
@@ -1585,12 +1813,14 @@ mod tests {
         let receipt_json =
             build_and_save_receipt(&storage, "run_product_replay", "recall", &result)
                 .expect("retrieval should return its receipt");
-        let receipt_id = receipt_json["receipt_id"].as_str().unwrap();
+        let receipt_id = receipt_json["receipt_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("expected signed receipt, got {receipt_json}"));
         let persisted_receipt = storage.get_receipt(receipt_id).unwrap().unwrap();
         assert_eq!(
             persisted_receipt.retrieved,
-            vec!["redacted_1", "redacted_2"],
-            "public receipt reads must redact fixture ids that do not resolve to active memories"
+            vec![first.id.clone(), second.id.clone()],
+            "live retrieval evidence must retain its canonical active ids"
         );
         assert_eq!(persisted_receipt.trust_floor, 0.35);
 
@@ -1612,8 +1842,6 @@ mod tests {
             "private query sentinel",
             "raw memory sentinel alpha",
             "raw memory sentinel beta",
-            "memory_returned_a",
-            "memory_returned_b",
             "memory_expandable_sentinel",
             "b3k:",
         ] {
@@ -1654,6 +1882,19 @@ mod tests {
             )
             .unwrap();
         assert_eq!(expandable_rows, 0);
+    }
+
+    #[test]
+    fn receipt_persistence_failure_is_explicit_and_never_claims_a_receipt() {
+        let status = receipt_persistence_unavailable();
+        assert_eq!(status["persistence"], "unavailable");
+        assert!(status.get("receipt_id").is_none());
+        assert!(
+            status["claimBoundary"]
+                .as_str()
+                .unwrap()
+                .contains("not persisted")
+        );
     }
 
     #[test]
@@ -1824,6 +2065,107 @@ mod tests {
         std::sync::Arc::new(
             vestige_core::Storage::new(Some(dir.path().join("gate_test.db"))).unwrap(),
         )
+    }
+
+    #[test]
+    fn configured_signing_commits_receipt_envelope_and_replay_capsule_together() {
+        let _lock = receipt_signing_env_lock().lock().unwrap();
+        let _reset = ReceiptSigningEnvReset::capture();
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(Some(dir.path().join("signed-receipt.db"))).unwrap());
+        let provisioned = vestige_core::storage::provision_receipt_signing_key_sidecar(
+            &dir.path().join("receipt-keys"),
+            "test-receipt-key",
+            chrono::DateTime::<Utc>::UNIX_EPOCH,
+        )
+        .unwrap();
+        storage
+            .register_receipt_signing_key(&provisioned.trusted_key)
+            .unwrap();
+        unsafe {
+            env::set_var(RECEIPT_SIGNING_KEY_ID_ENV, "test-receipt-key");
+            env::set_var(RECEIPT_SIGNING_SEED_PATH_ENV, &provisioned.seed_path);
+        }
+        let memory = storage
+            .ingest(vestige_core::IngestInput {
+                content: "private retrieval content".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let result = serde_json::json!({
+            "results": [{
+                "id": memory.id,
+                "content": "private retrieval content",
+                "retentionStrength": 0.91
+            }]
+        });
+        let mut receipt = Receipt::build(
+            Utc::now(),
+            "run_signed",
+            vec![memory.id],
+            Vec::new(),
+            Vec::new(),
+            &[0.91],
+            Vec::new(),
+        );
+        let signer = configured_receipt_signer(&storage).unwrap().unwrap();
+        let (attestation, disclosures, signed) =
+            sign_retrieval_receipt(&storage, &signer, &mut receipt).unwrap();
+        let capsule = build_replay_capsule_draft(&receipt.receipt_id, "recall", &result).unwrap();
+        storage
+            .save_signed_retrieval_receipt_with_replay_capsule_atomic(
+                SignedReceiptWrite {
+                    receipt: &receipt,
+                    attestation: &attestation,
+                    signed: &signed,
+                    disclosures: &disclosures,
+                    run_id: Some("run_signed"),
+                    tool: Some("recall"),
+                    query: None,
+                },
+                &capsule,
+            )
+            .unwrap();
+        let receipt_id = receipt.receipt_id.as_str();
+        assert!(receipt_id.starts_with("ratt_"));
+        assert_eq!(
+            storage.receipt_attestation_status(receipt_id).unwrap(),
+            Some(vestige_core::storage::ReceiptAttestationStatus::SignedV1)
+        );
+        assert!(
+            storage
+                .get_retrieval_replay_capsule(receipt_id)
+                .unwrap()
+                .is_some()
+        );
+        let verification = storage
+            .verify_stored_receipt_attestation(receipt_id)
+            .unwrap()
+            .expect("stored verification");
+        assert!(
+            verification.is_valid(),
+            "{:?}",
+            verification.report.failures
+        );
+        assert!(
+            storage
+                .get_receipt_attestation_envelope(receipt_id)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn partial_signing_configuration_fails_closed() {
+        let _lock = receipt_signing_env_lock().lock().unwrap();
+        let _reset = ReceiptSigningEnvReset::capture();
+        unsafe {
+            env::set_var(RECEIPT_SIGNING_KEY_ID_ENV, "missing-key");
+            env::remove_var(RECEIPT_SIGNING_SEED_PATH_ENV);
+        }
+        let storage = store();
+        assert!(configured_receipt_signer(&storage).is_err());
     }
 
     #[test]
