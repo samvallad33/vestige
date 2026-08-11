@@ -1633,10 +1633,22 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
                 // second process that lost a startup race then observes the
                 // first process's committed schema instead of replaying stale
                 // migrations over it.
-                let tx = rusqlite::Transaction::new_unchecked(
-                    conn,
-                    rusqlite::TransactionBehavior::Immediate,
-                )?;
+                let mut attempts = 0_u8;
+                let tx = loop {
+                    match rusqlite::Transaction::new_unchecked(
+                        conn,
+                        rusqlite::TransactionBehavior::Immediate,
+                    ) {
+                        Ok(tx) => break tx,
+                        Err(rusqlite::Error::SqliteFailure(error, _))
+                            if error.code == rusqlite::ErrorCode::DatabaseBusy && attempts < 20 =>
+                        {
+                            attempts += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(25));
+                        }
+                        Err(error) => return Err(error),
+                    }
+                };
                 if migration.version <= get_current_version(&tx)? {
                     tx.commit()?;
                     continue;
