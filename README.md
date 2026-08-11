@@ -7,7 +7,7 @@ Local-first long-term memory for AI agents, delivered over MCP. Vestige remember
 [![Binary](https://img.shields.io/badge/binary-25MB_single_file-informational)](https://github.com/samvallad33/vestige/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6)](LICENSE)
 
-[What it is](#what-vestige-is) · [Install](#install) · [First interaction](#your-first-real-interaction) · [vs RAG](#how-it-differs-from-rag) · [Backward reach](#backward-reach-the-backfill-feature) · [Benchmark](#silent-rotation-a-reproducible-benchmark) · [Science](#the-science) · [Tools](#the-13-tools) · [Dashboard](#the-dashboard) · [Integrations](#works-with-every-agent) · [Pro](#vestige-pro) · [Docs](#go-deeper)
+[What it is](#what-vestige-is) · [Install](#install) · [First interaction](#your-first-real-interaction) · [vs RAG](#how-it-differs-from-rag) · [Backward reach](#backward-reach-the-backfill-feature) · [Benchmark](#silent-rotation-a-reproducible-benchmark) · [Science](#the-science) · [Tools](#the-14-tools) · [Receipts](docs/DECISION_RECEIPTS.md) · [Dashboard](#the-dashboard) · [Integrations](#works-with-every-agent) · [Pro](#vestige-pro) · [Docs](#go-deeper)
 
 ---
 
@@ -175,13 +175,14 @@ Every mechanism below is a cited result, implemented in Rust, running locally. N
 
 ---
 
-## The 13 tools
+## The 14 tools
 
-Vestige exposes exactly 13 MCP tools. Your agent calls them; you rarely call them by hand.
+Vestige exposes exactly 14 MCP tools. Your agent calls them; you rarely call them by hand.
 
 | Tool | Purpose |
 |---|---|
 | `recall` | Retrieve memories relevant to the current context |
+| `receipt` | Inspect a persisted retrieval receipt or run controlled evidence replay ([guide](docs/DECISION_RECEIPTS.md)) |
 | `backfill` | Reach backward from a failure to its root-cause memory |
 | `smart_ingest` | Store a fact, with gating for novelty and contradiction |
 | `memory` | Read, inspect, promote, or demote individual memories |
