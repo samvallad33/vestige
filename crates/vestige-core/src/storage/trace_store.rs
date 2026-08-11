@@ -18,6 +18,26 @@ use super::sqlite::SqliteMemoryStore;
 use super::{Result, StorageError};
 use crate::trace::{MemoryPr, MemoryPrAction, MemoryPrStatus, MemoryTraceEvent, Receipt};
 
+/// Side effect applied while atomically deciding a pre-execution mutation PR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingMemoryMutationEffect {
+    /// The reviewer kept the memory unchanged.
+    Kept,
+    /// The reviewer approved the pending purge/delete.
+    Purged,
+    /// The reviewer held the memory under active suppression.
+    Suppressed,
+}
+
+/// Result of deciding a PR created before a destructive mutation.
+#[derive(Debug, Clone)]
+pub struct PendingMemoryMutationDecision {
+    /// Final PR state returned even when an approved purge removed its row.
+    pub pr: MemoryPr,
+    /// Mutation side effect committed with the decision.
+    pub effect: PendingMemoryMutationEffect,
+}
+
 /// Trace retention window used when `VESTIGE_TRACE_RETENTION_DAYS` is unset or
 /// unusable.
 const DEFAULT_TRACE_RETENTION_DAYS: i64 = 30;
@@ -681,6 +701,108 @@ impl SqliteMemoryStore {
         }
         self.get_memory_pr(id)?
             .ok_or_else(|| StorageError::NotFound(id.to_string()))
+    }
+
+    /// Atomically decide and, when approved, apply a mutation that was held
+    /// before execution. Returns `None` for ordinary post-commit Memory PRs.
+    ///
+    /// `Forget` approves the requested purge/suppression, `Promote` (and the
+    /// other accept actions) keeps the current memory unchanged, and
+    /// `Quarantine` keeps the row but applies suppression. The PR transition
+    /// and mutation share one SQLite transaction, so neither can commit alone.
+    pub fn decide_pending_memory_mutation(
+        &self,
+        id: &str,
+        action: MemoryPrAction,
+    ) -> Result<Option<PendingMemoryMutationDecision>> {
+        let pr = self
+            .get_memory_pr(id)?
+            .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+        let Some(pending_action) = pr
+            .diff
+            .get("pendingAction")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Ok(None);
+        };
+        let subject_id = pr.subject_id.clone().ok_or_else(|| {
+            StorageError::Init(format!("pending mutation PR {id} has no subject"))
+        })?;
+        let new_status = action.resulting_status().ok_or_else(|| {
+            StorageError::Init("ask_agent_why is read-only and decides nothing".into())
+        })?;
+        let decision = serde_json::to_value(action)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let now = Utc::now();
+
+        let effect = {
+            let mut writer = self
+                .writer
+                .lock()
+                .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            let tx = writer.transaction()?;
+
+            let changed = tx.execute(
+                "UPDATE memory_prs SET status = ?1, decision = ?2, decided_at = ?3
+                 WHERE id = ?4 AND status = 'pending'",
+                params![new_status.as_str(), decision, now.to_rfc3339(), id],
+            )?;
+            if changed == 0 {
+                return Err(StorageError::Init(format!(
+                    "memory PR {id} is already decided and cannot be re-decided"
+                )));
+            }
+
+            let effect = match action {
+                MemoryPrAction::Forget if matches!(pending_action, "purge" | "delete") => {
+                    let deleted =
+                        Self::purge_node_in_transaction(&tx, &subject_id, now, true)?.is_some();
+                    if !deleted {
+                        return Err(StorageError::NotFound(subject_id.to_string()));
+                    }
+                    PendingMemoryMutationEffect::Purged
+                }
+                MemoryPrAction::Forget | MemoryPrAction::Quarantine => {
+                    let changed = tx.execute(
+                        "UPDATE knowledge_nodes SET
+                            last_accessed = ?1,
+                            suppression_count = COALESCE(suppression_count, 0) + 1,
+                            suppressed_at = ?1,
+                            retrieval_strength = MAX(0.05, retrieval_strength - 0.35),
+                            retention_strength = MAX(0.05, retention_strength - 0.20),
+                            stability = stability * 0.4
+                         WHERE id = ?2",
+                        params![now.to_rfc3339(), &subject_id],
+                    )?;
+                    if changed == 0 {
+                        return Err(StorageError::NotFound(subject_id.to_string()));
+                    }
+                    Self::invalidate_replay_evidence_for_memory_in_transaction(
+                        &tx,
+                        &subject_id,
+                        crate::storage::ReplayInvalidationReason::Suppressed,
+                    )?;
+                    PendingMemoryMutationEffect::Suppressed
+                }
+                _ => PendingMemoryMutationEffect::Kept,
+            };
+
+            tx.commit()?;
+            effect
+        };
+
+        let mut pr = pr;
+        pr.status = new_status;
+        pr.decision = Some(action);
+        pr.decided_at = Some(now.to_rfc3339());
+        if effect == PendingMemoryMutationEffect::Purged {
+            self.remove_purged_node_from_vector_index(&subject_id);
+        } else if effect == PendingMemoryMutationEffect::Suppressed {
+            let _ = self.log_access(&subject_id, "suppress");
+        }
+        Ok(Some(PendingMemoryMutationDecision { pr, effect }))
     }
 
     fn row_to_memory_pr(row: &rusqlite::Row) -> rusqlite::Result<MemoryPr> {

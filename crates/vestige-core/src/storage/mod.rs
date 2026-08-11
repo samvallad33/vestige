@@ -62,7 +62,9 @@ pub use synaptic_store::{
     SynapticCapturePolicy, SynapticCaptureRequest, SynapticImportanceEvent, SynapticIngestOutcome,
     SynapticIngestRequest, SynapticSignalSnapshot,
 };
-pub use trace_store::AgentRunSummary;
+pub use trace_store::{
+    AgentRunSummary, PendingMemoryMutationDecision, PendingMemoryMutationEffect,
+};
 pub use unlearning::{
     AntiResurrectionCommitments, ArtifactKind, ArtifactRef, CheckStatus, Commitment, CommitmentKey,
     CommitmentKind, ErasureLedgerRecord, GuaranteeExclusion, LineageClosure, LineageEdge,

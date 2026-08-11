@@ -210,6 +210,8 @@ pub use storage::{
     ModelSignature,
     NeverComposedCandidate,
     PORTABLE_ARCHIVE_FORMAT,
+    PendingMemoryMutationDecision,
+    PendingMemoryMutationEffect,
     PortableArchive,
     PortableImportMode,
     PortableImportReport,
