@@ -520,6 +520,57 @@ impl McpServer {
             );
         }
 
+        // Destructive and suppressive mutations must be reviewed before their
+        // tool implementation can remove a node or change its retrieval
+        // influence. This deliberately runs after the opening trace event but
+        // before dispatch. Normal calls continue to #150's unchanged
+        // record_result -> receipt -> post-commit gate -> event order.
+        if trace_enabled() {
+            let mode = crate::trace_recorder::read_review_mode(&self.storage);
+            let pending = crate::trace_recorder::gate_pending_memory_mutation(
+                &self.storage,
+                self.event_tx.as_ref(),
+                &trace_run_id,
+                &request.name,
+                &saved_args,
+                mode,
+            );
+            match pending {
+                Ok(Some(content)) => {
+                    // The pre-gate already emitted MemoryPrOpened. `success`
+                    // is false, so emitting the normal tool event cannot claim
+                    // a deletion or suppression that did not happen.
+                    self.emit_tool_event(&request.name, &saved_args, &content);
+                    let call_result = CallToolResult {
+                        content: vec![crate::protocol::messages::ToolResultContent {
+                            content_type: "text".to_string(),
+                            text: serde_json::to_string_pretty(&content)
+                                .unwrap_or_else(|_| content.to_string()),
+                        }],
+                        structured_content: Some(content),
+                        is_error: Some(false),
+                    };
+                    return serde_json::to_value(call_result)
+                        .map_err(|e| JsonRpcError::internal_error(&e.to_string()));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let error_content = serde_json::json!({ "error": error });
+                    let call_result = CallToolResult {
+                        content: vec![crate::protocol::messages::ToolResultContent {
+                            content_type: "text".to_string(),
+                            text: serde_json::to_string_pretty(&error_content)
+                                .unwrap_or_else(|_| error_content.to_string()),
+                        }],
+                        structured_content: Some(error_content),
+                        is_error: Some(true),
+                    };
+                    return serde_json::to_value(call_result)
+                        .map_err(|e| JsonRpcError::internal_error(&e.to_string()));
+                }
+            }
+        }
+
         // `mut` so the post-call block can annotate a successful result with any
         // Memory PRs or receipts it attaches to a successful result.
         let mut result = match request.name.as_str() {
@@ -2032,21 +2083,14 @@ mod tests {
         );
     }
 
-    /// A destructive write is necessarily post-commit in this gate: the node
-    /// has already been purged when the gate observes the result. The response
-    /// must therefore say that it was recorded for review, never that it is
-    /// quarantined or held.
+    /// Deprecated aliases share the same destructive policy; otherwise an
+    /// older MCP client could bypass the canonical `memory` pre-gate.
     #[tokio::test]
-    async fn destructive_write_is_recorded_for_review_not_reported_as_held() {
+    async fn legacy_delete_knowledge_is_pre_gated_on_the_real_mcp_path() {
         let (storage, _dir) = test_storage().await;
-        std::fs::write(
-            storage.data_dir().join("review_mode.json"),
-            r#"{"mode":"paranoid"}"#,
-        )
-        .unwrap();
         let node = storage
             .ingest(vestige_core::IngestInput {
-                content: "Memory scheduled for destructive review.".to_string(),
+                content: "Memory preserved through the legacy delete alias.".to_string(),
                 node_type: "fact".to_string(),
                 ..Default::default()
             })
@@ -2062,21 +2106,23 @@ mod tests {
             .handle_request(make_request(
                 "tools/call",
                 Some(serde_json::json!({
-                    "name": "memory",
+                    "name": "delete_knowledge",
                     "arguments": {
-                        "action": "purge",
                         "id": node.id.clone(),
                         "confirm": true,
-                        "reason": "exercise the post-commit review notice"
+                        "reason": "exercise the pre-execution review gate"
                     }
                 })),
             ))
             .await
             .unwrap();
-        assert!(response.error.is_none(), "purge should succeed");
         assert!(
-            storage.get_node(&node.id).unwrap().is_none(),
-            "the post-commit gate cannot claim to have prevented the purge"
+            response.error.is_none(),
+            "pending review is a valid MCP result"
+        );
+        assert!(
+            storage.get_node(&node.id).unwrap().is_some(),
+            "the legacy alias must not bypass pre-execution review"
         );
 
         let structured = response
@@ -2084,13 +2130,199 @@ mod tests {
             .as_ref()
             .and_then(|result| result.get("structuredContent"))
             .expect("structured tool result");
-        assert_eq!(structured["memoryPrs"][0]["held"], false);
-        let notice = structured["memoryPrNotice"]
-            .as_str()
-            .expect("destructive write notice");
-        assert!(notice.contains("already applied but recorded for review"));
-        assert!(notice.contains("nothing is held"));
-        assert!(!notice.contains("quarantined until"));
+        assert_eq!(structured["action"], "delete_pending_review");
+        assert_eq!(structured["pendingReview"], true);
+        let prs = storage
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].diff["pendingAction"], "delete");
+    }
+
+    /// Regression #117: purge must be intercepted on the real MCP path before
+    /// `memory_unified::execute` can delete the node. The response and dashboard
+    /// event must describe a pending review, not a completed deletion.
+    #[tokio::test]
+    async fn destructive_purge_is_pre_gated_on_the_real_mcp_path() {
+        use crate::dashboard::events::VestigeEvent;
+        use std::time::Duration;
+        use vestige_core::MemoryPrStatus;
+
+        let (storage, _dir) = test_storage().await;
+        let node = storage
+            .ingest(vestige_core::IngestInput {
+                content: "Memory that must survive pre-execution review.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (event_tx, mut events) = tokio::sync::broadcast::channel(16);
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new_with_events(storage.clone(), cognitive, event_tx);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "memory",
+                    "arguments": {
+                        "action": "purge",
+                        "id": node.id,
+                        "confirm": true,
+                        "reason": "exercise the pre-execution review gate",
+                        "runId": "run_pre_execution_purge"
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            response.error.is_none(),
+            "a pending-review response is a valid MCP result"
+        );
+
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("structuredContent"))
+            .expect("structured tool result");
+        assert_eq!(structured["success"], false);
+        assert_eq!(structured["pendingReview"], true);
+        assert_eq!(structured["action"], "purge_pending_review");
+        assert_eq!(structured["nodeId"], node.id);
+        assert!(
+            storage.get_node(&node.id).unwrap().is_some(),
+            "pre-execution gate must prevent the purge"
+        );
+
+        let prs = storage
+            .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].diff["pendingAction"], "purge");
+        assert_eq!(prs[0].diff["node"]["deleted"], false);
+
+        let mut saw_pr_opened = false;
+        for _ in 0..8 {
+            match tokio::time::timeout(Duration::from_millis(100), events.recv()).await {
+                Ok(Ok(VestigeEvent::MemoryPrOpened { .. })) => {
+                    saw_pr_opened = true;
+                }
+                Ok(Ok(VestigeEvent::MemoryDeleted { .. })) => {
+                    panic!("a blocked purge must not emit MemoryDeleted")
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => break,
+            }
+        }
+        assert!(saw_pr_opened, "pre-gate must announce the opened Memory PR");
+    }
+
+    /// Suppression changes retrieval influence immediately, so it is subject to
+    /// the same production pre-execution gate as an irreversible purge.
+    #[tokio::test]
+    async fn suppress_is_pre_gated_on_the_real_mcp_path() {
+        use vestige_core::MemoryPrStatus;
+
+        let (storage, _dir) = test_storage().await;
+        let node = storage
+            .ingest(vestige_core::IngestInput {
+                content: "Memory that must not be inhibited before review.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "suppress",
+                    "arguments": { "id": node.id, "reason": "requires review first" }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none());
+
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("structuredContent"))
+            .expect("structured tool result");
+        assert_eq!(structured["action"], "suppress_pending_review");
+        assert_eq!(structured["pendingReview"], true);
+        assert_eq!(
+            storage
+                .get_node(&node.id)
+                .unwrap()
+                .unwrap()
+                .suppression_count,
+            0,
+            "pre-execution gate must not change retrieval influence"
+        );
+        let prs = storage
+            .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].diff["pendingAction"], "suppress");
+    }
+
+    /// Fast mode is the documented explicit opt-out: it keeps legacy direct
+    /// execution instead of manufacturing a pending review.
+    #[tokio::test]
+    async fn fast_mode_allows_destructive_call_on_the_real_mcp_path() {
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"fast"}"#,
+        )
+        .unwrap();
+        let node = storage
+            .ingest(vestige_core::IngestInput {
+                content: "Fast mode purge target.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "memory",
+                    "arguments": { "action": "purge", "id": node.id, "confirm": true }
+                })),
+            ))
+            .await
+            .unwrap();
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("structuredContent"))
+            .expect("structured tool result");
+        assert_eq!(structured["success"], true);
+        assert!(storage.get_node(&node.id).unwrap().is_none());
+        assert!(
+            storage
+                .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+                .unwrap()
+                .is_empty(),
+            "Fast mode must not pre-gate the mutation"
+        );
     }
 
     /// Dashboard events must not announce a write as landed before the Memory
