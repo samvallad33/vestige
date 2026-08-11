@@ -5,6 +5,26 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — Memory PR write gate wired into the real tool path (#117)
+
+`gate_writes` — the risk gate that quarantines risky memory writes and opens
+Memory PRs for review — existed and was tested but had **no production
+caller**, so `ReviewMode` was inert and `memory_prs` never populated outside
+tests. It now runs on every traced tool call:
+
+- New shared reader for `<data_dir>/review_mode.json` (default `risk_gated`;
+  missing/corrupt files can never silently disable gating). The dashboard and
+  the write path read the mode through one implementation.
+- Risky writes are suppressed until their Memory PR is decided, and the tool
+  response now carries `memoryPrs` + `memoryPrNotice` so the calling agent
+  knows. The notice is truthful per-write: quarantined writes are reported as
+  held; destructive writes (already applied) are reported as recorded for
+  review, never as "quarantined".
+- Gating rides on the trace gate: `VESTIGE_TRACE_ENABLED=0` disables Memory
+  PRs along with the black box. Documented in `docs/CONFIGURATION.md`.
+
 ## [2.3.0] - 2026-07-26 — "Cognitive Observatory + Zero-Knowledge Sync"
 
 Two audits (39 verified fixes), three dormant features brought to life, a

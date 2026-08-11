@@ -520,6 +520,8 @@ impl McpServer {
             );
         }
 
+        // `mut` so the post-call block can annotate a successful result with any
+        // Memory PRs or receipts it attaches to a successful result.
         let mut result = match request.name.as_str() {
             // ================================================================
             // UNIFIED TOOLS (v1.1+) - Preferred API
@@ -1239,9 +1241,68 @@ impl McpServer {
                     obj.insert("receiptId".to_string(), serde_json::json!(receipt_id));
                     obj.insert("receipt".to_string(), receipt);
                 }
+
+                // Memory PR gate: classify the writes this tool just made under
+                // the active ReviewMode and, for risky ones, quarantine the new
+                // node and open a Memory PR. `gate_writes` no-ops for non-write
+                // tools, and `classify_write` auto-commits everything in Fast
+                // mode, so this is safe on every call.
+                //
+                // This closes the dead seam: the gate and its tests existed but
+                // it had no production caller, so `ReviewMode` was inert and
+                // nothing ever landed in `memory_prs` outside tests.
+                //
+                // Note this rides on `trace_enabled()` with the rest of the black
+                // box: a Memory PR is an auditable trace artifact and is reviewed
+                // through the same surfaces, so disabling tracing disables gating.
+                let mode = crate::trace_recorder::read_review_mode(&self.storage);
+                let opened = crate::trace_recorder::gate_writes(
+                    &self.storage,
+                    self.event_tx.as_ref(),
+                    &trace_run_id,
+                    &request.name,
+                    content,
+                    mode,
+                );
+                if !opened.is_empty()
+                    && let Some(obj) = content.as_object_mut()
+                {
+                    // Tell the calling agent exactly what happened. A held write
+                    // is quarantined until the PR is decided; a destructive write
+                    // (or a failed suppression) is NOT held — the PR is an audit
+                    // record of something that already happened. Saying
+                    // "quarantined" for those would be false.
+                    let held = opened
+                        .iter()
+                        .filter(|o| o.get("held").and_then(|v| v.as_bool()) == Some(true))
+                        .count();
+                    let recorded = opened.len() - held;
+                    let mut parts = Vec::new();
+                    if held > 0 {
+                        parts.push(format!(
+                            "{held} write(s) quarantined until their Memory PR is decided"
+                        ));
+                    }
+                    if recorded > 0 {
+                        parts.push(format!(
+                            "{recorded} write(s) already applied but recorded for review \
+                             (destructive or unsuppressable — nothing is held)"
+                        ));
+                    }
+                    obj.insert("memoryPrs".to_string(), serde_json::json!(opened));
+                    obj.insert(
+                        "memoryPrNotice".to_string(),
+                        serde_json::json!(format!(
+                            "Review mode '{}': {}. Review in the dashboard under Memory PRs \
+                             or via GET /api/memory-prs.",
+                            mode.as_str(),
+                            parts.join("; ")
+                        )),
+                    );
+                }
             }
-            // Emit after receipt attachment so any listening dashboard opens the
-            // same evidence artifact returned to the calling agent.
+            // Emit after receipt attachment and gating so the dashboard sees the
+            // same final evidence and review state returned to the calling agent.
             self.emit_tool_event(&request.name, &saved_args, content);
         }
 
@@ -1837,6 +1898,295 @@ mod tests {
                 "version": "1.0.0"
             }
         })
+    }
+
+    // ========================================================================
+    // MEMORY PR GATE WIRING
+    // ========================================================================
+
+    /// Regression test for the dead seam: `gate_writes` and its unit tests
+    /// existed, but nothing in production ever called it, so `ReviewMode` was
+    /// inert and `memory_prs` only ever filled up inside `#[cfg(test)]`.
+    ///
+    /// This drives a real `tools/call` through `handle_request` and asserts a
+    /// Memory PR actually lands. Paranoid mode is used deliberately so the test
+    /// pins the WIRING, not the risk heuristic (which is covered by the unit
+    /// tests in `trace_recorder`).
+    #[tokio::test]
+    async fn memory_pr_gate_is_wired_into_the_real_tool_path() {
+        use vestige_core::MemoryPrStatus;
+
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"paranoid"}"#,
+        )
+        .unwrap();
+
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        assert_eq!(
+            storage
+                .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+                .unwrap()
+                .len(),
+            0,
+            "no Memory PRs before the call"
+        );
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "smart_ingest",
+                    "arguments": { "content": "Staging was migrated to Postgres 17." }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            response.error.is_none(),
+            "smart_ingest should succeed: {:?}",
+            response.error
+        );
+
+        let prs = storage
+            .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(
+            prs.len(),
+            1,
+            "a write through the real tool path must open a Memory PR in Paranoid mode"
+        );
+
+        // The calling agent must be told its write is held, otherwise it will
+        // assume the memory is live and act on it.
+        let text = serde_json::to_string(&response.result).unwrap();
+        assert!(
+            text.contains("memoryPrs"),
+            "response must carry the opened PRs: {text}"
+        );
+        assert!(
+            text.contains("memoryPrNotice"),
+            "response must carry the human-readable notice: {text}"
+        );
+        // Truthfulness: this was a normal (non-destructive) write, so it must
+        // report held=true and the notice must say quarantined.
+        assert!(
+            text.contains("\"held\":true"),
+            "a suppressed write must report held=true: {text}"
+        );
+        assert!(
+            text.contains("quarantined until"),
+            "notice for a held write must say quarantined: {text}"
+        );
+    }
+
+    /// The third leg of the mode matrix: Fast mode must open NO Memory PR
+    /// through the real tool path — every write auto-commits.
+    #[tokio::test]
+    async fn fast_mode_opens_no_memory_pr() {
+        use vestige_core::MemoryPrStatus;
+
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"fast"}"#,
+        )
+        .unwrap();
+
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "smart_ingest",
+                    "arguments": { "content": "Fast mode write that must auto-commit." }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none());
+
+        assert_eq!(
+            storage
+                .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+                .unwrap()
+                .len(),
+            0,
+            "Fast mode must never open a Memory PR"
+        );
+        let text = serde_json::to_string(&response.result).unwrap();
+        assert!(
+            !text.contains("memoryPrNotice"),
+            "Fast mode must not attach a gating notice: {text}"
+        );
+    }
+
+    /// A destructive write is necessarily post-commit in this gate: the node
+    /// has already been purged when the gate observes the result. The response
+    /// must therefore say that it was recorded for review, never that it is
+    /// quarantined or held.
+    #[tokio::test]
+    async fn destructive_write_is_recorded_for_review_not_reported_as_held() {
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"paranoid"}"#,
+        )
+        .unwrap();
+        let node = storage
+            .ingest(vestige_core::IngestInput {
+                content: "Memory scheduled for destructive review.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "memory",
+                    "arguments": {
+                        "action": "purge",
+                        "id": node.id.clone(),
+                        "confirm": true,
+                        "reason": "exercise the post-commit review notice"
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none(), "purge should succeed");
+        assert!(
+            storage.get_node(&node.id).unwrap().is_none(),
+            "the post-commit gate cannot claim to have prevented the purge"
+        );
+
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("structuredContent"))
+            .expect("structured tool result");
+        assert_eq!(structured["memoryPrs"][0]["held"], false);
+        let notice = structured["memoryPrNotice"]
+            .as_str()
+            .expect("destructive write notice");
+        assert!(notice.contains("already applied but recorded for review"));
+        assert!(notice.contains("nothing is held"));
+        assert!(!notice.contains("quarantined until"));
+    }
+
+    /// Dashboard events must not announce a write as landed before the Memory
+    /// PR is opened. The receipt/gate merge seam is deliberately exercised
+    /// through the real MCP dispatch path, not by calling either helper alone.
+    #[tokio::test]
+    async fn memory_pr_event_precedes_memory_created_event() {
+        use crate::dashboard::events::VestigeEvent;
+        use std::time::Duration;
+
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"paranoid"}"#,
+        )
+        .unwrap();
+        let (event_tx, mut events) = tokio::sync::broadcast::channel(16);
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new_with_events(storage, cognitive, event_tx);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "smart_ingest",
+                    "arguments": { "content": "A write whose dashboard order is audited." }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none(), "smart_ingest should succeed");
+
+        let mut observed = Vec::new();
+        for _ in 0..8 {
+            let event = tokio::time::timeout(Duration::from_millis(100), events.recv())
+                .await
+                .expect("expected a queued dashboard event")
+                .expect("dashboard event channel should remain open");
+            match event {
+                VestigeEvent::MemoryPrOpened { .. } => observed.push("memory-pr-opened"),
+                VestigeEvent::MemoryCreated { .. } => {
+                    observed.push("memory-created");
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let opened_at = observed
+            .iter()
+            .position(|event| *event == "memory-pr-opened")
+            .expect("gating must open a Memory PR");
+        let created_at = observed
+            .iter()
+            .position(|event| *event == "memory-created")
+            .expect("emit_tool_event must publish the created memory");
+        assert!(
+            opened_at < created_at,
+            "dashboard must observe the Memory PR before the memory-created event: {observed:?}"
+        );
+    }
+
+    /// A corrupt or missing `review_mode.json` must never silently disable
+    /// gating: it falls back to the default RiskGated.
+    #[tokio::test]
+    async fn review_mode_falls_back_to_risk_gated() {
+        let (storage, _dir) = test_storage().await;
+        assert_eq!(
+            crate::trace_recorder::read_review_mode(&storage),
+            vestige_core::ReviewMode::RiskGated,
+            "missing file defaults to RiskGated"
+        );
+
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            "{ not valid json",
+        )
+        .unwrap();
+        assert_eq!(
+            crate::trace_recorder::read_review_mode(&storage),
+            vestige_core::ReviewMode::RiskGated,
+            "corrupt file defaults to RiskGated, never Fast"
+        );
+
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"fast"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::trace_recorder::read_review_mode(&storage),
+            vestige_core::ReviewMode::Fast,
+            "a valid mode is honored"
+        );
     }
 
     // ========================================================================

@@ -72,6 +72,35 @@ These are read only by `vestige sync --cloud`. Leave them unset and Vestige stay
 
 ---
 
+## Review Modes (Memory PR write gating)
+
+Vestige can hold risky memory writes for review instead of letting them land
+silently. Each held write is suppressed (excluded from normal retrieval) and
+opens a **Memory PR** you decide in the dashboard (Memory PRs tab) or via
+`GET /api/memory-prs`.
+
+| Mode | Behavior |
+|------|----------|
+| `fast` | Never gate. Every write auto-commits. |
+| `risk_gated` | **Default.** Ordinary writes auto-commit; risky ones (contradicting high-trust memories, destructive ops, sensitive topics) open a Memory PR. |
+| `paranoid` | Gate every write. Nothing enters the brain without approval. |
+
+The mode is stored in `<data_dir>/review_mode.json` and set from the dashboard
+(`POST /api/memory-prs/mode`). A missing or corrupt file falls back to
+`risk_gated` — a bad file can never silently disable gating.
+
+When a write is gated, the tool response carries `memoryPrs` and a
+`memoryPrNotice` telling the agent whether the write is **quarantined until
+decided** or (for destructive writes, which have already been applied)
+**recorded for review** with nothing held.
+
+> **Note:** gating rides on the trace system. Setting `VESTIGE_TRACE_ENABLED=0`
+> disables the black box **and Memory PR gating together** — a Memory PR is an
+> auditable trace artifact, so turning off tracing turns off the gate. Leave
+> tracing on (the default) if you rely on review modes.
+
+---
+
 ## Output Configuration (`vestige.toml`)
 
 > Added in **v2.1.26** (Roadmap Phase 2: Configurable Output).
