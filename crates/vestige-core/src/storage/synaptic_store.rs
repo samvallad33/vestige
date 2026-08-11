@@ -2344,15 +2344,30 @@ mod tests {
         let storage = Storage::new(Some(dir.path().join("context_gate.db"))).unwrap();
         let event_time = Utc::now() - chrono::Duration::minutes(5);
         let trigger = ingest(&storage, "database retry policy incident");
+        let trigger_id = trigger.id.clone();
         storage
             .process_synaptic_ingest(&SynapticIngestRequest {
-                memory_id: trigger.id,
+                memory_id: trigger_id.clone(),
                 tag: None,
                 event: Some(v2_event(event_time)),
             })
             .unwrap();
 
         let unrelated = ingest(&storage, "orchid watercolor palette selection");
+        // This is a context-gate unit test, not an embedding-model evaluation.
+        // Real model versions and architectures can legitimately assign these
+        // phrases different cosine scores across platforms. Remove that
+        // environment-dependent channel so the fixture deterministically
+        // exercises the no-context fallback on every runner.
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM node_embeddings WHERE node_id IN (?1, ?2)",
+                params![trigger_id, &unrelated.id],
+            )
+            .unwrap();
         let before = storage.get_node(&unrelated.id).unwrap().unwrap();
         let mut tag = SynapticTag::new(&unrelated.id);
         tag.created_at = event_time + chrono::Duration::minutes(1);
