@@ -1269,95 +1269,96 @@ fn evaluate_backward_v2_tx(
         candidates.into_iter().enumerate()
     {
         let evidence_slot = format!("candidate_{}", rank + 1);
-        let (disposition, reason_code, public_memory_id, strength_change) =
-            if tag.suppression_count > 0 {
-                suppressed.push(SuppressedReceiptEntry::new(
-                    evidence_slot.clone(),
-                    SuppressReason::Privacy,
-                ));
-                (
-                    SynapticCaptureDisposition::WithheldSuppressed,
-                    "withheld_suppressed",
-                    None,
-                    None,
-                )
-            } else if !tag.currently_valid {
-                suppressed.push(SuppressedReceiptEntry::new(
-                    evidence_slot.clone(),
-                    SuppressReason::Contradicted,
-                ));
-                (
-                    SynapticCaptureDisposition::WithheldInvalid,
-                    "withheld_invalid",
-                    None,
-                    None,
-                )
-            } else if context.score < event.context_threshold {
-                (
-                    SynapticCaptureDisposition::ContextMismatch,
-                    "context_mismatch",
-                    Some(tag.memory_id.clone()),
-                    None,
-                )
-            } else if tag_strength < event.minimum_tag_strength
-                || association_score < event.minimum_association_score
-            {
-                (
-                    SynapticCaptureDisposition::BelowThreshold,
-                    "below_threshold",
-                    Some(tag.memory_id.clone()),
-                    None,
-                )
-            } else if captured_count >= event.maximum_captures {
-                (
-                    SynapticCaptureDisposition::LostCompetition,
-                    "lost_competition",
-                    Some(tag.memory_id.clone()),
-                    None,
-                )
-            } else if let Some(change) = promote_memory_tx(
-                tx,
-                &tag.memory_id,
-                event.occurred_at_ms,
-                event.occurred_at_ms,
-                transaction_at_ms,
-            )? {
-                tx.execute(
-                    "UPDATE synaptic_tags SET state = 'captured',
+        let (disposition, reason_code, public_memory_id, strength_change) = if tag.suppression_count
+            > 0
+        {
+            suppressed.push(SuppressedReceiptEntry::new(
+                evidence_slot.clone(),
+                SuppressReason::Privacy,
+            ));
+            (
+                SynapticCaptureDisposition::WithheldSuppressed,
+                "withheld_suppressed",
+                None,
+                None,
+            )
+        } else if !tag.currently_valid {
+            suppressed.push(SuppressedReceiptEntry::new(
+                evidence_slot.clone(),
+                SuppressReason::Contradicted,
+            ));
+            (
+                SynapticCaptureDisposition::WithheldInvalid,
+                "withheld_invalid",
+                None,
+                None,
+            )
+        } else if context.score < event.context_threshold || context.method == "semantic_cosine" {
+            (
+                SynapticCaptureDisposition::ContextMismatch,
+                "context_mismatch",
+                Some(tag.memory_id.clone()),
+                None,
+            )
+        } else if tag_strength < event.minimum_tag_strength
+            || association_score < event.minimum_association_score
+        {
+            (
+                SynapticCaptureDisposition::BelowThreshold,
+                "below_threshold",
+                Some(tag.memory_id.clone()),
+                None,
+            )
+        } else if captured_count >= event.maximum_captures {
+            (
+                SynapticCaptureDisposition::LostCompetition,
+                "lost_competition",
+                Some(tag.memory_id.clone()),
+                None,
+            )
+        } else if let Some(change) = promote_memory_tx(
+            tx,
+            &tag.memory_id,
+            event.occurred_at_ms,
+            event.occurred_at_ms,
+            transaction_at_ms,
+        )? {
+            tx.execute(
+                "UPDATE synaptic_tags SET state = 'captured',
                          capture_event_id = ?1, captured_at_ms = ?2
                      WHERE tag_id = ?3 AND state = 'active'",
-                    params![event.internal_event_id, event.occurred_at_ms, tag.tag_id],
-                )?;
-                captured_count += 1;
-                retrieved.push(tag.memory_id.clone());
-                trust_scores.push(change.retention_strength.before);
-                activation_path.push(format!(
-                    "{} --[synaptic_capture]--> {}",
-                    tag.memory_id, event.trigger_memory_id
-                ));
-                mutations.push(ReceiptMutation {
-                    id: tag.memory_id.clone(),
-                    kind: "synaptic_capture".into(),
-                    note: Some("Evidence-backed temporal/context association".into()),
-                });
-                (
-                    SynapticCaptureDisposition::Captured,
-                    "captured",
-                    Some(tag.memory_id.clone()),
-                    Some(change),
-                )
-            } else {
-                suppressed.push(SuppressedReceiptEntry::new(
-                    evidence_slot.clone(),
-                    SuppressReason::Privacy,
-                ));
-                (
-                    SynapticCaptureDisposition::WithheldInvalid,
-                    "guarded_mutation_rejected",
-                    None,
-                    None,
-                )
-            };
+                params![event.internal_event_id, event.occurred_at_ms, tag.tag_id],
+            )?;
+            captured_count += 1;
+            retrieved.push(tag.memory_id.clone());
+            trust_scores.push(change.retention_strength.before);
+            activation_path.push(format!(
+                "{} --[synaptic_capture]--> {}",
+                tag.memory_id, event.trigger_memory_id
+            ));
+            mutations.push(ReceiptMutation {
+                id: tag.memory_id.clone(),
+                kind: "synaptic_capture".into(),
+                note: Some("Evidence-backed temporal/context association".into()),
+            });
+            (
+                SynapticCaptureDisposition::Captured,
+                "captured",
+                Some(tag.memory_id.clone()),
+                Some(change),
+            )
+        } else {
+            suppressed.push(SuppressedReceiptEntry::new(
+                evidence_slot.clone(),
+                SuppressReason::Privacy,
+            ));
+            (
+                SynapticCaptureDisposition::WithheldInvalid,
+                "guarded_mutation_rejected",
+                None,
+                None,
+            )
+        };
 
         insert_capture_item_tx(
             tx,
@@ -1577,7 +1578,8 @@ fn reconcile_forward_tag_tx(
                     None,
                     None,
                 )
-            } else if context.score < event.context_threshold {
+            } else if context.score < event.context_threshold || context.method == "semantic_cosine"
+            {
                 (
                     SynapticCaptureDisposition::ContextMismatch,
                     "context_mismatch",
