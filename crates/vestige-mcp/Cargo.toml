@@ -78,6 +78,10 @@ chrono = { version = "0.4", features = ["serde"] }
 # UUID
 uuid = { version = "1", features = ["v4", "serde"] }
 
+# Derives the public half of an operator-provisioned receipt signing seed
+# before it is allowed to sign against the separately registered key record.
+ed25519-dalek = "2"
+
 # Constant-time comparison for auth tokens (prevents timing side-channels)
 subtle = "2"
 

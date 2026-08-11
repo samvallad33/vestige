@@ -507,9 +507,8 @@ mod tests {
         let archive = sample_archive();
         let plaintext = serde_json::to_vec(&archive).unwrap();
         let body = super::super::cloud_crypto::encrypt(TEST_PASSPHRASE, &plaintext).unwrap();
-        let (base, _rx) = spawn_mock(move |_| {
-            http_response_bytes("200 OK", "ETag: \"v1-abc\"\r\n", &body)
-        });
+        let (base, _rx) =
+            spawn_mock(move |_| http_response_bytes("200 OK", "ETag: \"v1-abc\"\r\n", &body));
         let be = encrypted_backend(base, "secret");
         let got = be.read_archive().expect("read ok").expect("some archive");
         assert_eq!(got.archive_format, PORTABLE_ARCHIVE_FORMAT);
@@ -544,7 +543,10 @@ mod tests {
         assert_eq!(cap.method, "PUT");
         assert_eq!(cap.authorization.as_deref(), Some("Bearer secret"));
         assert_eq!(cap.if_match.as_deref(), Some("\"v1-abc\""));
-        assert_eq!(cap.content_type.as_deref(), Some("application/octet-stream"));
+        assert_eq!(
+            cap.content_type.as_deref(),
+            Some("application/octet-stream")
+        );
     }
 
     #[test]

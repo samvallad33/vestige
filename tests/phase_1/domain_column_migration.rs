@@ -39,6 +39,15 @@ async fn v11_db_upgrades_cleanly() {
     {
         let conn = rusqlite::Connection::open(&db).expect("open");
         for m in MIGRATIONS.iter().filter(|m| m.version <= 11) {
+            if m.version == 2 {
+                conn.execute_batch(
+                    "ALTER TABLE knowledge_nodes ADD COLUMN valid_from TEXT;\n\
+                     ALTER TABLE knowledge_nodes ADD COLUMN valid_until TEXT;\n\
+                     UPDATE schema_version SET version = 2, applied_at = datetime('now');",
+                )
+                .expect("apply V2 columns before its dependent indexes");
+                continue;
+            }
             conn.execute_batch(m.up).expect("apply migration");
         }
         // Insert 5 rows under V11 schema

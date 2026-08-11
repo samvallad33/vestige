@@ -726,7 +726,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bounty_mode_uses_member_tag_snapshot_after_purge() {
+    async fn test_purge_removes_composition_event_that_retains_member_data() {
         let (storage, _dir) = test_storage();
         let tagged = ingest(
             &storage,
@@ -775,7 +775,7 @@ mod tests {
             .purge_node(&tagged, Some("test purge"))
             .expect("purge should succeed");
 
-        let get_result = execute(
+        let get_error = execute(
             &storage,
             Some(serde_json::json!({
                 "action": "get",
@@ -783,11 +783,10 @@ mod tests {
             })),
         )
         .await
-        .unwrap();
+        .unwrap_err();
         assert!(
-            get_result["members"][0].get("preview").is_none()
-                || get_result["members"][0]["preview"].is_null(),
-            "purge should scrub member preview from composed_graph get"
+            get_error.contains("composition event not found"),
+            "purge must remove a composed event rather than leave a source-data-bearing projection"
         );
 
         let bounty = execute(
@@ -801,13 +800,11 @@ mod tests {
         .await
         .unwrap();
         let already = bounty["alreadyComposedLanes"].as_array().unwrap();
-        assert_eq!(already.len(), 1);
-        assert_eq!(
-            already[0]["event"]["id"].as_str(),
-            Some("purged-tagged-member-composition"),
-            "tag-filtered bounty_mode should use composition member tag snapshots after source memory purge"
+        assert!(
+            already.is_empty(),
+            "bounty mode must not surface a composition event that retained the purged member"
         );
-        assert_eq!(bounty["closedDoors"].as_array().unwrap().len(), 1);
+        assert!(bounty["closedDoors"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

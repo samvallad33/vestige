@@ -6,10 +6,7 @@
 use serde_json::Value;
 use std::sync::Arc;
 
-use vestige_core::{
-    CaptureWindow, ImportanceEvent, ImportanceEventType, Storage, SynapticTaggingConfig,
-    SynapticTaggingSystem,
-};
+use vestige_core::Storage;
 
 /// Input schema for trigger_importance tool
 pub fn trigger_schema() -> Value {
@@ -68,84 +65,21 @@ pub fn stats_schema() -> Value {
     })
 }
 
-/// Trigger an importance event to retroactively strengthen recent memories
-pub async fn execute_trigger(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
-    let args = args.ok_or("Missing arguments")?;
-
-    let event_type_str = args["event_type"]
-        .as_str()
-        .ok_or("event_type is required")?;
-
-    let memory_id = args["memory_id"].as_str().ok_or("memory_id is required")?;
-
-    let description = args["description"].as_str();
-    let hours_back = args["hours_back"].as_f64().unwrap_or(9.0);
-    let hours_forward = args["hours_forward"].as_f64().unwrap_or(2.0);
-
-    // Verify the trigger memory exists
-    let trigger_memory = storage
-        .get_node(memory_id)
-        .map_err(|e| format!("Error: {}", e))?
-        .ok_or("Memory not found")?;
-
-    // Create importance event based on type
-    let _event_type = match event_type_str {
-        "user_flag" => ImportanceEventType::UserFlag,
-        "emotional" => ImportanceEventType::EmotionalContent,
-        "novelty" => ImportanceEventType::NoveltySpike,
-        "repeated_access" => ImportanceEventType::RepeatedAccess,
-        "cross_reference" => ImportanceEventType::CrossReference,
-        _ => return Err(format!("Unknown event type: {}", event_type_str)),
-    };
-
-    // Create event using user_flag constructor (simpler API)
-    let event = ImportanceEvent::user_flag(memory_id, description);
-
-    // Configure capture window
-    let config = SynapticTaggingConfig {
-        capture_window: CaptureWindow::new(hours_back, hours_forward),
-        prp_threshold: 0.5,
-        tag_lifetime_hours: 12.0,
-        min_tag_strength: 0.1,
-        max_cluster_size: 100,
-        enable_clustering: true,
-        auto_decay: true,
-        cleanup_interval_hours: 1.0,
-    };
-
-    let mut stc = SynapticTaggingSystem::with_config(config);
-
-    // Get recent memories to tag
-    let recent = storage.get_all_nodes(100, 0).map_err(|e| e.to_string())?;
-
-    // Tag all recent memories
-    for mem in &recent {
-        stc.tag_memory(&mem.id);
-    }
-
-    // Trigger PRP (Plasticity-Related Proteins) synthesis
-    let result = stc.trigger_prp(event);
-
-    Ok(serde_json::json!({
-        "success": true,
-        "eventType": event_type_str,
-        "triggerMemory": {
-            "id": memory_id,
-            "content": trigger_memory.content
-        },
-        "captureWindow": {
-            "hoursBack": hours_back,
-            "hoursForward": hours_forward
-        },
-        "result": {
-            "memoriesCaptured": result.captured_count(),
-            "description": description
-        },
-        "explanation": format!(
-            "Importance signal triggered! {} memories within the {:.1}h window have been retroactively strengthened.",
-            result.captured_count(), hours_back
-        )
-    }))
+/// Legacy trigger endpoint deliberately disabled.
+///
+/// It previously built a temporary in-memory tagging system, reported captures
+/// that never reached SQLite, and then dropped that system. V22 capture is a
+/// storage transaction that records the event, candidates, mutation, and
+/// receipt together. Until this legacy endpoint can provide that same durable
+/// contract, failing closed is safer than returning an unaudited capture claim.
+pub async fn execute_trigger(
+    _storage: &Arc<Storage>,
+    _args: Option<Value>,
+) -> Result<Value, String> {
+    Err(
+        "trigger_importance is disabled because its legacy in-memory capture path cannot produce a durable V22 decision receipt. Use smart_ingest; qualifying high-salience ingests run the auditable capture transaction."
+            .to_string(),
+    )
 }
 
 /// Find memories with active synaptic tags
@@ -240,4 +174,48 @@ pub async fn execute_stats(storage: &Arc<Storage>) -> Result<Value, String> {
             "captureWindow": "Up to 9 hours in biological systems"
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vestige_core::IngestInput;
+
+    #[tokio::test]
+    async fn legacy_trigger_fails_closed_without_mutating_memory_state() {
+        let directory = tempfile::tempdir().expect("temporary database directory");
+        let storage = Arc::new(
+            Storage::new(Some(directory.path().join("tagging.db"))).expect("test storage"),
+        );
+        let node = storage
+            .ingest(IngestInput {
+                content: "must not be captured by a temporary in-memory system".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .expect("seed memory");
+        let before = storage
+            .get_node(&node.id)
+            .expect("load before")
+            .expect("node");
+
+        let error = execute_trigger(
+            &storage,
+            Some(serde_json::json!({
+                "event_type": "user_flag",
+                "memory_id": node.id,
+            })),
+        )
+        .await
+        .expect_err("legacy trigger must fail closed");
+
+        assert!(error.contains("durable V22 decision receipt"));
+        let after = storage
+            .get_node(&node.id)
+            .expect("load after")
+            .expect("node");
+        assert_eq!(after.retrieval_strength, before.retrieval_strength);
+        assert_eq!(after.retention_strength, before.retention_strength);
+        assert_eq!(after.stability, before.stability);
+    }
 }
