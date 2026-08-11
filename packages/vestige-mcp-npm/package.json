@@ -9,7 +9,8 @@
     "vestige-restore": "bin/vestige-restore.js"
   },
   "scripts": {
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "test:pnpm-global-install": "node --test tests/pnpm-global-install.test.js"
   },
   "keywords": [
     "mcp",
