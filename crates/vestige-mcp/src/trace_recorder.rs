@@ -98,6 +98,27 @@ fn is_write_decision(label: &str) -> bool {
     )
 }
 
+/// Read the persisted [`vestige_core::ReviewMode`] for this brain.
+///
+/// The mode lives in `<data_dir>/review_mode.json` and is written by the
+/// dashboard (`POST /api/memory-prs/mode`). Anything missing, unreadable, or
+/// unrecognised falls back to the default [`vestige_core::ReviewMode::RiskGated`],
+/// so a corrupt file can never silently disable gating.
+///
+/// This is the single source of truth: the dashboard handler delegates here so
+/// the MCP write path and the dashboard can never disagree about the mode.
+pub fn read_review_mode(storage: &Storage) -> vestige_core::ReviewMode {
+    std::fs::read_to_string(storage.data_dir().join("review_mode.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| {
+            v.get("mode")
+                .and_then(|m| m.as_str())
+                .map(vestige_core::ReviewMode::from_label)
+        })
+        .unwrap_or_default()
+}
+
 /// Risk-gate the writes in a tool result. For each write the tool just made,
 /// build a [`vestige_core::WriteContext`], classify it under the active
 /// [`vestige_core::ReviewMode`], and — if risky — quarantine the just-written
@@ -182,9 +203,20 @@ pub fn gate_writes(
         // Quarantine the just-written node so it's held out of retrieval until
         // the PR is decided. For a destructive write there's no live node to
         // suppress — the PR records the action for review/audit instead.
-        if node.is_some() {
-            let _ = storage.suppress_memory(&id);
-        }
+        // `held` is reported truthfully to the caller: a destructive write is
+        // NOT held (it already happened), and a failed suppression must not be
+        // announced as a quarantine.
+        let held = if node.is_some() {
+            match storage.suppress_memory(&id) {
+                Ok(_) => true,
+                Err(e) => {
+                    tracing::warn!("memory PR gate: quarantine of {id} failed: {e}");
+                    false
+                }
+            }
+        } else {
+            false
+        };
 
         let kind = match decision.as_str() {
             "supersede" | "replace" | "superseded" => MemoryPrKind::MemorySuperseded,
@@ -252,6 +284,10 @@ pub fn gate_writes(
             "title": pr.title,
             "signals": signals,
             "subjectId": id,
+            // true: node suppressed until the PR is decided. false: nothing is
+            // held — either the write was destructive (already applied, PR is
+            // an audit record) or suppression failed.
+            "held": held,
         }));
     }
 
