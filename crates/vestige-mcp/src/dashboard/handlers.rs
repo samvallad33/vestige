@@ -3,7 +3,7 @@
 //! v2.0: Adds cognitive operation endpoints (dream, explore, predict, importance, consolidation)
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path as FsPath, PathBuf};
@@ -17,6 +17,427 @@ use serde_json::Value;
 
 use super::events::VestigeEvent;
 use super::state::AppState;
+
+type EmbeddingProfileActionResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
+
+/// A deliberately narrow lifecycle request. The dashboard must state both the
+/// exact profile contract it intends to affect and an explicit confirmation;
+/// accepting an arbitrary JSON blob here would make it too easy for a stale
+/// page or an extension to trigger a profile transition accidentally.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmbeddingProfileActionRequest {
+    pub profile_id: String,
+    pub confirm: bool,
+}
+
+/// Return the catalog and persisted lifecycle receipts without starting a
+/// runtime, opening a model directory, or changing the active profile.
+pub async fn list_embedding_profiles(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, StatusCode> {
+    Ok(Json(embedding_profiles_snapshot(&state.storage)?))
+}
+
+/// Artifact roots are a local-machine capability, not an HTTP capability.
+/// The dashboard deliberately cannot install a model: it has no safe way to
+/// receive a directory without widening this local API into a filesystem
+/// control surface. The explicit CLI command verifies a local artifact root.
+pub async fn install_embedding_profile(
+    State(state): State<AppState>,
+    Json(request): Json<EmbeddingProfileActionRequest>,
+) -> EmbeddingProfileActionResult {
+    let profile_id = confirmed_builtin_embedding_profile_for_action(&request)?;
+    let _ = state;
+    Err(cli_only_embedding_lifecycle_response(
+        &profile_id,
+        "install",
+    ))
+}
+
+/// Evaluation must reconstruct the verified local runner from an operator-held
+/// artifact directory. Never accept that directory over HTTP or persist it in
+/// the database: run the explicit local CLI step instead.
+pub async fn evaluate_embedding_profile(
+    State(state): State<AppState>,
+    Json(request): Json<EmbeddingProfileActionRequest>,
+) -> EmbeddingProfileActionResult {
+    let profile_id = confirmed_builtin_embedding_profile_for_action(&request)?;
+    let _ = state;
+    Err(cli_only_embedding_lifecycle_response(
+        &profile_id,
+        "evaluate",
+    ))
+}
+
+/// Migration uses the same verified local runner and an isolated destination
+/// vector space. It is intentionally CLI-only so the server never receives or
+/// stores an arbitrary local filesystem path.
+pub async fn migrate_embedding_profile(
+    State(state): State<AppState>,
+    Json(request): Json<EmbeddingProfileActionRequest>,
+) -> EmbeddingProfileActionResult {
+    let profile_id = confirmed_builtin_embedding_profile_for_action(&request)?;
+    let _ = state;
+    Err(cli_only_embedding_lifecycle_response(
+        &profile_id,
+        "migrate",
+    ))
+}
+
+/// Atomically change the retrieval pointer only when storage accepts the
+/// target's persisted Ready/Active lifecycle state.
+pub async fn activate_embedding_profile(
+    State(state): State<AppState>,
+    Json(request): Json<EmbeddingProfileActionRequest>,
+) -> EmbeddingProfileActionResult {
+    let profile_id = confirmed_builtin_embedding_profile_for_action(&request)?;
+    state
+        .storage
+        .activate_embedding_profile(&profile_id)
+        .map_err(|_| embedding_profile_gate_rejected_response("activate"))?;
+    let mut response = embedding_profiles_snapshot_for_action(&state.storage)?;
+    response["accepted"] = Value::Bool(true);
+    response["message"] = Value::String("Embedding profile activated atomically.".to_string());
+    Ok(Json(response))
+}
+
+/// Rollback is the same validated pointer operation as activation; it never
+/// deletes vectors or regenerates embeddings.
+pub async fn rollback_embedding_profile(
+    State(state): State<AppState>,
+    Json(request): Json<EmbeddingProfileActionRequest>,
+) -> EmbeddingProfileActionResult {
+    let profile_id = confirmed_builtin_embedding_profile_for_action(&request)?;
+    state
+        .storage
+        .rollback_embedding_profile(&profile_id)
+        .map_err(|_| embedding_profile_gate_rejected_response("roll back"))?;
+    let mut response = embedding_profiles_snapshot_for_action(&state.storage)?;
+    response["accepted"] = Value::Bool(true);
+    response["message"] = Value::String("Embedding profile rolled back atomically.".to_string());
+    Ok(Json(response))
+}
+
+fn confirmed_builtin_embedding_profile_for_action(
+    request: &EmbeddingProfileActionRequest,
+) -> Result<vestige_core::EmbeddingProfileId, (StatusCode, Json<Value>)> {
+    if !request.confirm {
+        return Err(embedding_profile_bad_request_response());
+    }
+    let profile_id = vestige_core::EmbeddingProfileId::new(request.profile_id.clone())
+        .map_err(|_| embedding_profile_bad_request_response())?;
+    if vestige_core::builtin_embedding_profile_by_id(profile_id.as_str()).is_none() {
+        return Err(embedding_profile_bad_request_response());
+    }
+    Ok(profile_id)
+}
+
+fn embedding_profile_bad_request_response() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "accepted": false,
+            "message": "Choose an exact built-in profile ID and explicitly confirm the operation.",
+        })),
+    )
+}
+
+fn embedding_profile_gate_rejected_response(action: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "accepted": false,
+            "message": format!("No profile state changed: the local {} gate has not been satisfied.", action),
+        })),
+    )
+}
+
+fn cli_only_embedding_lifecycle_response(
+    profile_id: &vestige_core::EmbeddingProfileId,
+    stage: &str,
+) -> (StatusCode, Json<Value>) {
+    let profile = profile_id.as_str();
+    let command = match stage {
+        "install" => format!(
+            "vestige embeddings install {profile} --from <verified-artifact-directory> --yes"
+        ),
+        "evaluate" => {
+            format!("vestige embeddings evaluate {profile} --from <verified-artifact-directory>")
+        }
+        "migrate" => format!(
+            "vestige embeddings migrate --to {profile} --from <verified-artifact-directory> --yes"
+        ),
+        _ => unreachable!("only fixed embedding lifecycle stages are passed here"),
+    };
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "accepted": false,
+            "cliRequired": true,
+            "localOnly": true,
+            "operation": stage,
+            "command": command,
+            "message": "No profile state changed. This stage requires the explicit local CLI because the dashboard never accepts or stores artifact directories.",
+        })),
+    )
+}
+
+fn embedding_profiles_snapshot_for_action(
+    storage: &vestige_core::Storage,
+) -> Result<Value, (StatusCode, Json<Value>)> {
+    embedding_profiles_snapshot(storage).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "accepted": false,
+                "message": "The profile operation completed, but the updated local status could not be read.",
+            })),
+        )
+    })
+}
+
+fn embedding_profiles_snapshot(storage: &vestige_core::Storage) -> Result<Value, StatusCode> {
+    let manifests = storage
+        .list_embedding_profile_manifests()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let manifests_by_id: HashMap<String, vestige_core::EmbeddingProfileManifest> = manifests
+        .into_iter()
+        .map(|manifest| (manifest.profile.profile_id.to_string(), manifest))
+        .collect();
+    let active = storage
+        .active_embedding_profile()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let active_profile_id = active
+        .as_ref()
+        .map(|pointer| pointer.profile_id.to_string());
+    let rollback_profile_id = active
+        .as_ref()
+        .and_then(|pointer| pointer.previous_profile_id.as_ref())
+        .map(ToString::to_string);
+
+    // The built-in catalog is the only lifecycle action surface. Persisted
+    // manifests augment those immutable definitions with local receipts, but
+    // an old/unknown manifest is never offered as a model-control target.
+    let catalog = vestige_core::builtin_embedding_profiles();
+    let migrations_by_destination = catalog
+        .iter()
+        .map(|profile| {
+            storage
+                .latest_profile_migration_checkpoint_for_destination(&profile.profile_id)
+                .map(|checkpoint| (profile.profile_id.to_string(), checkpoint))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let profiles = catalog
+        .into_iter()
+        .map(|profile| {
+            let id = profile.profile_id.to_string();
+            let manifest = manifests_by_id.get(&id);
+            let migration = migrations_by_destination.get(&id).and_then(Option::as_ref);
+            dashboard_embedding_profile(
+                &profile,
+                manifest,
+                migration,
+                active_profile_id.as_deref() == Some(id.as_str()),
+                rollback_profile_id.as_deref() == Some(id.as_str()),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    Ok(serde_json::json!({
+        "profiles": profiles,
+        "activeProfileId": active_profile_id,
+        "rollbackProfileId": rollback_profile_id,
+        "localOnly": true,
+        "available": true,
+    }))
+}
+
+fn dashboard_embedding_profile(
+    profile: &vestige_core::EmbeddingProfile,
+    manifest: Option<&vestige_core::EmbeddingProfileManifest>,
+    migration_checkpoint: Option<&vestige_core::ProfileMigrationCheckpoint>,
+    active: bool,
+    rollback_ready: bool,
+) -> Value {
+    use vestige_core::{EmbeddingMigrationState, EmbeddingProfileState};
+
+    let state = manifest
+        .map(|manifest| manifest.state)
+        .unwrap_or(EmbeddingProfileState::NotInstalled);
+    let installed = !matches!(
+        state,
+        EmbeddingProfileState::NotInstalled
+            | EmbeddingProfileState::RetryableError
+            | EmbeddingProfileState::RepairNeeded
+    );
+    let stage = if active {
+        "active"
+    } else if rollback_ready {
+        "rollback_ready"
+    } else {
+        match state {
+            EmbeddingProfileState::NotInstalled => "available",
+            EmbeddingProfileState::Installing => "installing",
+            EmbeddingProfileState::Installed => "installed",
+            EmbeddingProfileState::Evaluating => "evaluating",
+            EmbeddingProfileState::Migrating => "migrating",
+            EmbeddingProfileState::Ready => "ready",
+            EmbeddingProfileState::Active => "ready",
+            EmbeddingProfileState::Inactive => "ready",
+            EmbeddingProfileState::RetryableError | EmbeddingProfileState::RepairNeeded => "error",
+        }
+    };
+    let evaluation = manifest.and_then(|manifest| manifest.evaluation.as_ref()).map(|summary| {
+        serde_json::json!({
+            "state": "complete",
+            "score": summary.recall_at_5,
+            "metric": "Recall@5",
+            "sampleSize": summary.corpus_size,
+        })
+    }).unwrap_or_else(|| {
+        serde_json::json!({
+            "state": if state == EmbeddingProfileState::Evaluating { "running" } else { "not_run" },
+        })
+    });
+    let migration = if active {
+        // The active pointer can only be written by storage after it has
+        // checked a completed migration and its matching integrity manifest.
+        serde_json::json!({ "state": "not_required" })
+    } else if let Some(checkpoint) = migration_checkpoint {
+        let state = match checkpoint.state {
+            EmbeddingMigrationState::Pending | EmbeddingMigrationState::Running => "in_progress",
+            EmbeddingMigrationState::Validating => "validating",
+            EmbeddingMigrationState::Paused => "paused",
+            EmbeddingMigrationState::Completed => "complete",
+            EmbeddingMigrationState::Failed => "failed",
+            EmbeddingMigrationState::Cancelled => "cancelled",
+        };
+        serde_json::json!({
+            "state": state,
+            "id": checkpoint.migration_id,
+            "total": checkpoint.total_memories,
+            "completed": checkpoint.completed_memories,
+            "remaining": checkpoint.total_memories.saturating_sub(checkpoint.completed_memories),
+            "updatedAt": checkpoint.updated_at.to_rfc3339(),
+        })
+    } else {
+        match state {
+            EmbeddingProfileState::Migrating => serde_json::json!({ "state": "in_progress" }),
+            // A Ready manifest alone is deliberately not presented as a
+            // completed migration. The runner must publish its checkpoint and
+            // integrity receipt before this dashboard can claim completion.
+            EmbeddingProfileState::Ready | EmbeddingProfileState::Active => {
+                serde_json::json!({ "state": "not_started" })
+            }
+            EmbeddingProfileState::RetryableError | EmbeddingProfileState::RepairNeeded => {
+                serde_json::json!({ "state": "failed" })
+            }
+            _ => serde_json::json!({ "state": "not_started" }),
+        }
+    };
+    let (receipt_at, receipt_summary) =
+        embedding_profile_receipt(manifest, migration_checkpoint, active);
+    let runtime_hardware = manifest
+        .and_then(|manifest| manifest.runtime.as_ref())
+        .map(|runtime| match runtime.device {
+            vestige_core::EmbeddingDevice::Cpu => "CPU local runtime",
+            vestige_core::EmbeddingDevice::Metal => "Apple Metal local runtime",
+            vestige_core::EmbeddingDevice::Cuda => "CUDA local runtime",
+        });
+
+    serde_json::json!({
+        "id": profile.profile_id,
+        "name": profile.display_name,
+        "modelId": profile.model_id,
+        "description": "A local-only embedding contract with an isolated vector space.",
+        "stage": stage,
+        "installed": installed,
+        "active": active,
+        "dimensions": profile.embedding_dimension,
+        "maxTokens": profile.maximum_token_limit,
+        "vectorBytes": profile.embedding_dimension.saturating_mul(std::mem::size_of::<f32>()),
+        "hardware": runtime_hardware.unwrap_or("Local hardware preflight required"),
+        "localOnly": true,
+        "migration": migration,
+        "evaluation": evaluation,
+        "lastReceipt": receipt_summary.map(|summary| serde_json::json!({
+            "id": manifest.map(vestige_core::EmbeddingProfileManifest::manifest_hash),
+            "at": receipt_at.map(|at| at.to_rfc3339()),
+            "summary": summary,
+        })),
+    })
+}
+
+fn embedding_profile_receipt(
+    manifest: Option<&vestige_core::EmbeddingProfileManifest>,
+    migration_checkpoint: Option<&vestige_core::ProfileMigrationCheckpoint>,
+    active: bool,
+) -> (Option<DateTime<Utc>>, Option<&'static str>) {
+    let Some(manifest) = manifest else {
+        return (None, None);
+    };
+    if active {
+        return (
+            Some(
+                manifest
+                    .last_verified_at
+                    .unwrap_or(manifest.profile.created_at),
+            ),
+            Some("Active retrieval pointer."),
+        );
+    }
+    if manifest.failure.is_some() {
+        return (
+            Some(
+                manifest
+                    .last_verified_at
+                    .unwrap_or(manifest.profile.created_at),
+            ),
+            Some("Local lifecycle state requires repair."),
+        );
+    }
+    if let Some(checkpoint) = migration_checkpoint {
+        return match checkpoint.state {
+            vestige_core::EmbeddingMigrationState::Completed => (
+                Some(checkpoint.updated_at),
+                Some("Isolated vector migration integrity verified."),
+            ),
+            vestige_core::EmbeddingMigrationState::Paused => (
+                Some(checkpoint.updated_at),
+                Some("Local migration paused; resume with its recorded checkpoint."),
+            ),
+            vestige_core::EmbeddingMigrationState::Failed => (
+                Some(checkpoint.updated_at),
+                Some("Local migration needs repair before activation."),
+            ),
+            vestige_core::EmbeddingMigrationState::Pending
+            | vestige_core::EmbeddingMigrationState::Running
+            | vestige_core::EmbeddingMigrationState::Validating => (
+                Some(checkpoint.updated_at),
+                Some("Isolated vector migration in progress."),
+            ),
+            vestige_core::EmbeddingMigrationState::Cancelled => (
+                Some(checkpoint.updated_at),
+                Some("Local migration was cancelled; its destination vectors remain isolated."),
+            ),
+        };
+    }
+    if let Some(evaluation) = &manifest.evaluation {
+        return (
+            Some(evaluation.completed_at),
+            Some("Local evaluation receipt recorded."),
+        );
+    }
+    if manifest.verification.verified_at.is_some() {
+        return (
+            manifest.verification.verified_at,
+            Some("Local artifact verification recorded."),
+        );
+    }
+    (manifest.installed_at, None)
+}
 
 /// Redirect root to the SvelteKit dashboard
 pub async fn serve_dashboard() -> Redirect {
@@ -2921,7 +3342,11 @@ mod tests {
     use std::sync::Arc;
     use tempfile::tempdir;
     use vestige_core::memory::IngestInput;
-    use vestige_core::{ConnectionRecord, DreamHistoryRecord, Storage};
+    use vestige_core::{
+        ConnectionRecord, DreamHistoryRecord, EmbeddingMigrationState,
+        EmbeddingProfileManifest, ProfileMigrationCheckpoint, Storage,
+    };
+    use uuid::Uuid;
 
     #[test]
     fn graph_sort_parse_defaults_to_recent() {
@@ -3111,6 +3536,232 @@ mod tests {
                 .suppression_count,
             1
         );
+    }
+
+    #[tokio::test]
+    async fn embedding_profiles_list_catalog_without_starting_a_runtime() {
+        let (_dir, storage) = seed_storage();
+
+        let Json(body) = list_embedding_profiles(State(AppState::new(storage, None)))
+            .await
+            .unwrap();
+
+        assert_eq!(body["available"], true);
+        assert_eq!(body["localOnly"], true);
+        let profiles = body["profiles"].as_array().unwrap();
+        assert_eq!(
+            profiles.len(),
+            vestige_core::builtin_embedding_profiles().len()
+        );
+        let qwen = profiles
+            .iter()
+            .find(|profile| profile["id"] == "qwen3-0.6b-retrieval-v1-1024")
+            .unwrap();
+        assert_eq!(qwen["stage"], "available");
+        assert_eq!(qwen["installed"], false);
+        assert_eq!(qwen["localOnly"], true);
+    }
+
+    #[tokio::test]
+    async fn embedding_profiles_surface_resumable_migration_progress_and_receipt() {
+        let (_dir, storage) = seed_storage();
+        let legacy =
+            vestige_core::builtin_embedding_profile_by_id("nomic-v1.5-legacy-raw-256").unwrap();
+        let destination =
+            vestige_core::builtin_embedding_profile_by_id("qwen3-0.6b-retrieval-v1-1024").unwrap();
+        let manifest = EmbeddingProfileManifest::not_installed(destination.clone()).unwrap();
+        storage.save_embedding_profile_manifest(&manifest).unwrap();
+        let now = Utc::now();
+        let migration_id = Uuid::new_v4();
+        storage
+            .save_profile_migration_checkpoint(&ProfileMigrationCheckpoint {
+                migration_id,
+                source_profile_id: legacy.profile_id,
+                destination_profile_id: destination.profile_id,
+                state: EmbeddingMigrationState::Paused,
+                total_memories: 10,
+                completed_memories: 4,
+                failed_memory_ids: Vec::new(),
+                last_memory_id: None,
+                started_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+
+        let Json(body) = list_embedding_profiles(State(AppState::new(storage, None)))
+            .await
+            .unwrap();
+        let qwen = body["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| profile["id"] == "qwen3-0.6b-retrieval-v1-1024")
+            .unwrap();
+        assert_eq!(qwen["migration"]["state"], "paused");
+        assert_eq!(qwen["migration"]["id"], migration_id.to_string());
+        assert_eq!(qwen["migration"]["completed"], 4);
+        assert_eq!(qwen["migration"]["remaining"], 6);
+        assert_eq!(
+            qwen["lastReceipt"]["summary"],
+            "Local migration paused; resume with its recorded checkpoint."
+        );
+    }
+
+    #[tokio::test]
+    async fn embedding_lifecycle_requires_confirm_and_canonical_catalog_id() {
+        let (_dir, storage) = seed_storage();
+        let state = AppState::new(storage, None);
+
+        let unconfirmed = install_embedding_profile(
+            State(state.clone()),
+            Json(EmbeddingProfileActionRequest {
+                profile_id: "qwen3-0.6b-retrieval-v1-1024".to_string(),
+                confirm: false,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(unconfirmed.0, StatusCode::BAD_REQUEST);
+
+        let malformed = install_embedding_profile(
+            State(state),
+            Json(EmbeddingProfileActionRequest {
+                profile_id: "QWEN3-0.6B".to_string(),
+                confirm: true,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(malformed.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn embedding_artifact_stages_require_the_explicit_local_cli() {
+        let (_dir, storage) = seed_storage();
+        let state = AppState::new(storage, None);
+        let request = || {
+            Json(EmbeddingProfileActionRequest {
+                profile_id: "qwen3-0.6b-retrieval-v1-1024".to_string(),
+                confirm: true,
+            })
+        };
+
+        for (stage, result) in [
+            (
+                "install",
+                install_embedding_profile(State(state.clone()), request()).await,
+            ),
+            (
+                "evaluate",
+                evaluate_embedding_profile(State(state.clone()), request()).await,
+            ),
+            (
+                "migrate",
+                migrate_embedding_profile(State(state), request()).await,
+            ),
+        ] {
+            let (status, Json(body)) = result.unwrap_err();
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(body["cliRequired"], true);
+            assert_eq!(body["operation"], stage);
+            assert!(
+                body["command"]
+                    .as_str()
+                    .unwrap()
+                    .contains("<verified-artifact-directory>")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn embedding_activation_defers_to_storage_validation() {
+        let (_dir, storage) = seed_storage();
+        let profile =
+            vestige_core::builtin_embedding_profile_by_id("qwen3-0.6b-retrieval-v1-1024").unwrap();
+        let mut manifest = vestige_core::EmbeddingProfileManifest::not_installed(profile).unwrap();
+        // This mimics a stale/incomplete lifecycle receipt. Storage must still
+        // reject it because evaluation, verified runtime, migration, and index
+        // integrity have not been established.
+        manifest.state = vestige_core::EmbeddingProfileState::Ready;
+        storage.save_embedding_profile_manifest(&manifest).unwrap();
+        let state = AppState::new(storage.clone(), None);
+
+        let result = activate_embedding_profile(
+            State(state),
+            Json(EmbeddingProfileActionRequest {
+                profile_id: "qwen3-0.6b-retrieval-v1-1024".to_string(),
+                confirm: true,
+            }),
+        )
+        .await;
+
+        assert_eq!(result.unwrap_err().0, StatusCode::CONFLICT);
+        assert_ne!(
+            storage
+                .active_embedding_profile()
+                .unwrap()
+                .map(|pointer| pointer.profile_id.to_string())
+                .as_deref(),
+            Some("qwen3-0.6b-retrieval-v1-1024")
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_list_total_is_the_full_unfiltered_store_not_the_page_length() {
+        let (_dir, storage) = seed_storage();
+        ingest(&storage, "first");
+        ingest(&storage, "second");
+        ingest(&storage, "third");
+
+        let Json(body) = list_memories(
+            State(AppState::new(storage, None)),
+            Query(MemoryListParams {
+                q: None,
+                node_type: None,
+                tag: None,
+                min_retention: None,
+                sort: None,
+                limit: Some(1),
+                offset: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(body["memories"].as_array().unwrap().len(), 1);
+        assert_eq!(body["total"], 3);
+    }
+
+    #[tokio::test]
+    async fn timeline_honors_year_range_and_returns_bitemporal_receipt_fields() {
+        let (_dir, storage) = seed_storage();
+        let valid_from = Utc::now() - Duration::days(2);
+        storage
+            .ingest(IngestInput {
+                content: "timeline receipt fixture".to_string(),
+                node_type: "fact".to_string(),
+                valid_from: Some(valid_from),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let Json(body) = get_timeline(
+            State(AppState::new(storage, None)),
+            Query(TimelineParams {
+                days: Some(365),
+                limit: Some(500),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(body["days"], 365, "the 365D dashboard control must be real");
+        let memory = &body["timeline"][0]["memories"][0];
+        assert!(memory["updatedAt"].is_string());
+        assert_eq!(memory["validFrom"], valid_from.to_rfc3339());
+        assert!(memory["validUntil"].is_null());
+        assert!(memory["storageStrength"].is_number());
+        assert!(memory["retrievalStrength"].is_number());
     }
 
     #[test]

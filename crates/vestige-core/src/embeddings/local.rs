@@ -7,13 +7,9 @@
 //! - **Default**: Nomic Embed Text v1.5 (ONNX, 768d → 256d Matryoshka, 8192 context)
 //! - **Optional**: Nomic Embed Text v2 MoE (Candle, 475M params, 305M active, 8 experts)
 //!   Enable with `nomic-v2` feature flag + `metal` for Apple Silicon acceleration.
-//! - **Optional**: Qwen3 Embedding 0.6B (Candle, 1024d → 256d Matryoshka)
-//!   Enable with `qwen3-embeddings` and `VESTIGE_EMBEDDING_MODEL=qwen3-0.6b`.
+//! - Optional Qwen profiles are owned by the explicit Embedding Profiles
+//!   runtime. They are never selected from an environment variable here.
 
-#[cfg(feature = "qwen3-embeddings")]
-use candle_core::{DType, Device};
-#[cfg(feature = "qwen3-embeddings")]
-use fastembed::Qwen3TextEmbedding;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::sync::{Mutex, OnceLock};
 
@@ -41,77 +37,36 @@ static EMBEDDING_BACKEND_RESULT: OnceLock<Result<Mutex<EmbeddingBackend>, String
     OnceLock::new();
 
 const NOMIC_V15_MODEL_ID: &str = "nomic-ai/nomic-embed-text-v1.5";
-#[cfg(feature = "qwen3-embeddings")]
-const QWEN3_06B_MODEL_ID: &str = "Qwen/Qwen3-Embedding-0.6B";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EmbeddingModelSpec {
     NomicV15,
-    #[cfg(feature = "qwen3-embeddings")]
-    Qwen3Embedding06B,
 }
 
 impl EmbeddingModelSpec {
-    fn selected() -> Result<Self, String> {
-        let requested = std::env::var("VESTIGE_EMBEDDING_MODEL")
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "nomic-v1.5".to_string());
-
-        match requested.as_str() {
-            "nomic" | "nomic-v1.5" | "nomic-embed-text-v1.5" | NOMIC_V15_MODEL_ID => {
-                Ok(Self::NomicV15)
-            }
-            "qwen3" | "qwen3-0.6b" | "qwen3-embedding-0.6b" | "qwen/qwen3-embedding-0.6b" => {
-                #[cfg(feature = "qwen3-embeddings")]
-                {
-                    Ok(Self::Qwen3Embedding06B)
-                }
-                #[cfg(not(feature = "qwen3-embeddings"))]
-                {
-                    Err(
-                        "VESTIGE_EMBEDDING_MODEL requests Qwen3, but vestige-core was not built with the qwen3-embeddings feature"
-                            .to_string(),
-                    )
-                }
-            }
-            other => Err(format!(
-                "Unsupported VESTIGE_EMBEDDING_MODEL '{}'. Expected 'nomic-v1.5' or 'qwen3-0.6b'.",
-                other
-            )),
-        }
+    /// The legacy service deliberately has no runtime selector. New model
+    /// families must be installed and selected through a persisted embedding
+    /// profile, never by an environment variable or hardware probe.
+    const fn legacy_default() -> Self {
+        Self::NomicV15
     }
 
     fn model_name(self) -> &'static str {
         match self {
             Self::NomicV15 => NOMIC_V15_MODEL_ID,
-            #[cfg(feature = "qwen3-embeddings")]
-            Self::Qwen3Embedding06B => QWEN3_06B_MODEL_ID,
         }
     }
 }
 
 enum EmbeddingBackend {
     NomicV15(TextEmbedding),
-    #[cfg(feature = "qwen3-embeddings")]
-    Qwen3Embedding06B(Qwen3TextEmbedding),
 }
 
 impl EmbeddingBackend {
     fn model_name(&self) -> &'static str {
         match self {
             Self::NomicV15(_) => NOMIC_V15_MODEL_ID,
-            #[cfg(feature = "qwen3-embeddings")]
-            Self::Qwen3Embedding06B(_) => QWEN3_06B_MODEL_ID,
         }
     }
-}
-
-fn qwen3_format_query(query: &str) -> String {
-    format!(
-        "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: {query}"
-    )
 }
 
 /// Get the default cache directory for fastembed models.
@@ -146,10 +101,14 @@ pub(crate) fn get_cache_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(".fastembed_cache")
 }
 
-/// Initialize the global embedding backend selected by `VESTIGE_EMBEDDING_MODEL`.
+/// Initialize the legacy Nomic backend.
+///
+/// This compatibility service intentionally cannot select Qwen or any other
+/// profile. Optional model initialization is performed only by the explicit,
+/// hash-verified Embedding Profiles runtime.
 fn get_backend() -> Result<std::sync::MutexGuard<'static, EmbeddingBackend>, EmbeddingError> {
     let result = EMBEDDING_BACKEND_RESULT.get_or_init(|| {
-        let spec = EmbeddingModelSpec::selected()?;
+        let spec = EmbeddingModelSpec::legacy_default();
         // Get cache directory (respects FASTEMBED_CACHE_PATH env var)
         let cache_dir = get_cache_dir();
 
@@ -176,26 +135,6 @@ fn get_backend() -> Result<std::sync::MutexGuard<'static, EmbeddingBackend>, Emb
                         )
                     })
             }
-            #[cfg(feature = "qwen3-embeddings")]
-            EmbeddingModelSpec::Qwen3Embedding06B => {
-                let device = qwen3_device();
-                Qwen3TextEmbedding::from_hf(
-                    QWEN3_06B_MODEL_ID,
-                    &device,
-                    DType::F32,
-                    MAX_TEXT_LENGTH,
-                )
-                .map(EmbeddingBackend::Qwen3Embedding06B)
-                .map(Mutex::new)
-                .map_err(|e| {
-                    format!(
-                        "Failed to initialize {} embedding model: {}. \
-                        Ensure Hugging Face model files can be downloaded.",
-                        spec.model_name(),
-                        e
-                    )
-                })
-            }
         }
     });
 
@@ -205,23 +144,6 @@ fn get_backend() -> Result<std::sync::MutexGuard<'static, EmbeddingBackend>, Emb
             .map_err(|e| EmbeddingError::ModelInit(format!("Lock poisoned: {}", e))),
         Err(err) => Err(EmbeddingError::ModelInit(err.clone())),
     }
-}
-
-#[cfg(feature = "qwen3-embeddings")]
-fn qwen3_device() -> Device {
-    #[cfg(feature = "cuda")]
-    {
-        if let Ok(device) = Device::new_cuda(0) {
-            return device;
-        }
-    }
-    #[cfg(feature = "metal")]
-    {
-        if let Ok(device) = Device::new_metal(0) {
-            return device;
-        }
-    }
-    Device::Cpu
 }
 
 // ============================================================================
@@ -377,9 +299,7 @@ impl EmbeddingService {
             return backend.model_name();
         }
 
-        EmbeddingModelSpec::selected()
-            .unwrap_or(EmbeddingModelSpec::NomicV15)
-            .model_name()
+        EmbeddingModelSpec::legacy_default().model_name()
     }
 
     /// Get the embedding dimensions
@@ -412,10 +332,6 @@ impl EmbeddingService {
             EmbeddingBackend::NomicV15(model) => model
                 .embed(vec![text], None)
                 .map_err(|e| EmbeddingError::EmbeddingFailed(e.to_string()))?,
-            #[cfg(feature = "qwen3-embeddings")]
-            EmbeddingBackend::Qwen3Embedding06B(model) => model
-                .embed(&[text])
-                .map_err(|e| EmbeddingError::EmbeddingFailed(e.to_string()))?,
         };
 
         if embeddings.is_empty() {
@@ -429,15 +345,10 @@ impl EmbeddingService {
 
     /// Generate an embedding for retrieval queries.
     ///
-    /// Qwen3 uses instruction-formatted queries against raw document embeddings;
-    /// Nomic remains symmetric and receives the query unchanged.
+    /// This legacy compatibility service uses raw queries. New retrieval
+    /// profiles must encode document/query text through `ProfiledEmbedder`.
     pub fn embed_query(&self, query: &str) -> Result<Embedding, EmbeddingError> {
-        if self.model_name().to_ascii_lowercase().contains("qwen3") {
-            let formatted = qwen3_format_query(query);
-            self.embed(&formatted)
-        } else {
-            self.embed(query)
-        }
+        self.embed(query)
     }
 
     /// Generate embeddings for multiple texts (batch processing)
@@ -469,10 +380,6 @@ impl EmbeddingService {
             let embeddings = match &mut *backend {
                 EmbeddingBackend::NomicV15(model) => model
                     .embed(truncated, None)
-                    .map_err(|e| EmbeddingError::EmbeddingFailed(e.to_string()))?,
-                #[cfg(feature = "qwen3-embeddings")]
-                EmbeddingBackend::Qwen3Embedding06B(model) => model
-                    .embed(&truncated)
                     .map_err(|e| EmbeddingError::EmbeddingFailed(e.to_string()))?,
             };
 
@@ -634,11 +541,11 @@ mod tests {
     }
 
     #[test]
-    fn test_qwen3_query_format() {
-        let formatted = qwen3_format_query("rust memory portability");
-        assert!(formatted.starts_with("Instruct:"));
-        assert!(formatted.contains("retrieve relevant passages"));
-        assert!(formatted.ends_with("Query: rust memory portability"));
+    fn legacy_service_has_no_environment_selected_optional_model() {
+        assert_eq!(
+            EmbeddingModelSpec::legacy_default().model_name(),
+            NOMIC_V15_MODEL_ID
+        );
     }
 
     #[test]

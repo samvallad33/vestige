@@ -68,7 +68,7 @@
 				e: '/explore', i: '/intentions', s: '/stats',
 				r: '/reasoning', a: '/activation', d: '/dreams',
 				c: '/schedule', p: '/importance', u: '/duplicates',
-				x: '/contradictions', n: '/patterns',
+				x: '/contradictions', n: '/patterns', v: '/embeddings',
 			};
 			const target = shortcutMap[e.key.toLowerCase()];
 			if (target && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -120,6 +120,7 @@
 		{ href: '/patterns', label: 'Patterns', icon: 'patterns', shortcut: 'N' },
 		{ href: '/intentions', label: 'Intentions', icon: 'intentions', shortcut: 'I' },
 		{ href: '/stats', label: 'Stats', icon: 'stats', shortcut: 'S' },
+		{ href: '/embeddings', label: 'Embeddings', icon: 'embeddings', shortcut: 'V' },
 		{ href: '/settings', label: 'Settings', icon: 'settings', shortcut: ',' },
 	];
 

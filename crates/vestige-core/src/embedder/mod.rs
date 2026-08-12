@@ -4,8 +4,12 @@ use std::future::Future;
 use std::pin::Pin;
 
 mod fastembed;
+#[cfg(feature = "qwen3-embeddings")]
+mod qwen3_local;
 
 pub use fastembed::FastembedEmbedder;
+#[cfg(feature = "qwen3-embeddings")]
+pub use qwen3_local::Qwen3LocalEmbedder;
 
 /// Error returned by every `Embedder` method.
 #[non_exhaustive]

@@ -313,39 +313,11 @@ async fn main() {
         }
     };
 
-    // Initialize embeddings in the background so MCP clients can complete the
-    // stdio handshake quickly. First-run model downloads can otherwise exceed
-    // short client startup timeouts.
-    #[cfg(feature = "embeddings")]
-    {
-        let storage_clone = Arc::clone(&storage);
-        tokio::task::spawn_blocking(move || {
-            if let Err(e) = storage_clone.init_embeddings() {
-                error!("Failed to initialize embedding service: {}", e);
-                error!("Smart ingest will fall back to regular ingest without deduplication");
-                error!(
-                    "Hint: Check FASTEMBED_CACHE_PATH or ensure ~/.cache/vestige/fastembed is writable"
-                );
-            } else {
-                info!("Embedding service initialized successfully");
-
-                #[cfg(feature = "vector-search")]
-                match storage_clone.generate_embeddings(None, false) {
-                    Ok(result) => {
-                        if result.successful > 0 || result.failed > 0 {
-                            info!(
-                                embeddings_generated = result.successful,
-                                embeddings_failed = result.failed,
-                                embeddings_skipped = result.skipped,
-                                "Background embedding backfill complete"
-                            );
-                        }
-                    }
-                    Err(e) => warn!("Background embedding backfill failed: {}", e),
-                }
-            }
-        });
-    }
+    // Embedding models are an explicit, profile-scoped capability.  In
+    // particular, starting an MCP process must never download a model, mutate
+    // an index, or silently re-embed a user's corpus.  The Embedding Profiles
+    // workflow is the only path permitted to install, migrate, and activate a
+    // profile; until then retrieval safely remains keyword-only.
 
     // Spawn periodic auto-consolidation so FSRS-6 decay scores stay fresh.
     // Runs on startup (if needed) and then every N hours (default: 6).
@@ -528,17 +500,9 @@ async fn main() {
         info!("HTTP MCP transport disabled; set VESTIGE_HTTP_ENABLED=1 or pass --http to enable");
     }
 
-    // Load cross-encoder reranker in the background (downloads ~150MB on first run)
-    #[cfg(all(feature = "vector-search", feature = "embeddings"))]
-    {
-        let cog_clone = Arc::clone(&cognitive);
-        tokio::spawn(async move {
-            // Small delay so we don't block the stdio handshake
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            let mut cog = cog_clone.lock().await;
-            cog.reranker.init_cross_encoder();
-        });
-    }
+    // Do not pre-warm optional model-backed retrieval components here.  The
+    // server process is allowed to start without mutating model caches or
+    // reaching the network; explicit profile operations own those effects.
 
     // Create MCP server with shared event channel for dashboard broadcasts
     let server = McpServer::new_with_events(storage, cognitive, event_tx);
