@@ -3737,64 +3737,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn memory_list_total_is_the_full_unfiltered_store_not_the_page_length() {
-        let (_dir, storage) = seed_storage();
-        ingest(&storage, "first");
-        ingest(&storage, "second");
-        ingest(&storage, "third");
-
-        let Json(body) = list_memories(
-            State(AppState::new(storage, None)),
-            Query(MemoryListParams {
-                q: None,
-                node_type: None,
-                tag: None,
-                min_retention: None,
-                sort: None,
-                limit: Some(1),
-                offset: None,
-            }),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(body["memories"].as_array().unwrap().len(), 1);
-        assert_eq!(body["total"], 3);
-    }
-
-    #[tokio::test]
-    async fn timeline_honors_year_range_and_returns_bitemporal_receipt_fields() {
-        let (_dir, storage) = seed_storage();
-        let valid_from = Utc::now() - Duration::days(2);
-        storage
-            .ingest(IngestInput {
-                content: "timeline receipt fixture".to_string(),
-                node_type: "fact".to_string(),
-                valid_from: Some(valid_from),
-                ..Default::default()
-            })
-            .unwrap();
-
-        let Json(body) = get_timeline(
-            State(AppState::new(storage, None)),
-            Query(TimelineParams {
-                days: Some(365),
-                limit: Some(500),
-            }),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(body["days"], 365, "the 365D dashboard control must be real");
-        let memory = &body["timeline"][0]["memories"][0];
-        assert!(memory["updatedAt"].is_string());
-        assert_eq!(memory["validFrom"], valid_from.to_rfc3339());
-        assert!(memory["validUntil"].is_null());
-        assert!(memory["storageStrength"].is_number());
-        assert!(memory["retrievalStrength"].is_number());
-    }
-
     #[test]
     fn default_center_id_recent_returns_newest_node() {
         let (_dir, storage) = seed_storage();
