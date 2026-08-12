@@ -1633,6 +1633,34 @@ ALTER TABLE receipt_envelopes ADD COLUMN projection_json TEXT CHECK (
 /// bricked the DB permanently). VACUUM (V7) cannot run inside a transaction,
 /// so it runs after the transaction commits.
 pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
+    // A fresh local database can be opened simultaneously by two processes at
+    // startup. Individual migration transactions already take the writer lock
+    // and re-check the version, but SQLite can still return BUSY while a peer
+    // is switching journal modes for the V7 page-size migration. Retrying the
+    // complete, idempotent runner makes that startup race converge instead of
+    // surfacing a transient lock to one of the openers.
+    const MAX_BUSY_RETRIES: u8 = 40;
+    let mut attempts = 0_u8;
+
+    loop {
+        match apply_migrations_once(conn) {
+            Ok(applied) => return Ok(applied),
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if matches!(
+                    error.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) && attempts < MAX_BUSY_RETRIES =>
+            {
+                attempts += 1;
+                let delay_ms = 25_u64.saturating_mul(1_u64 << attempts.min(4));
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn apply_migrations_once(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
     let initial_version = get_current_version(conn)?;
     let mut applied = 0;
 
