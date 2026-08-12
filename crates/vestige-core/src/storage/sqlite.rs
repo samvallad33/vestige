@@ -84,6 +84,51 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 /// project scopes were exposed. Scoped callers must opt into a different value.
 pub const DEFAULT_MEMORY_SCOPE: &str = "user";
 
+fn temporal_candidate_is_eligible(
+    incoming_from: Option<DateTime<Utc>>,
+    incoming_until: Option<DateTime<Utc>>,
+    existing_from: Option<DateTime<Utc>>,
+    existing_is_current: bool,
+    now: DateTime<Utc>,
+) -> bool {
+    let incoming_is_older = match (incoming_from, existing_from) {
+        (Some(incoming), Some(existing)) => incoming < existing,
+        _ => false,
+    };
+    let incoming_is_expired = incoming_until.is_some_and(|until| until < now);
+    !incoming_is_older && !(incoming_is_expired && existing_is_current)
+}
+
+#[cfg(test)]
+mod temporal_candidate_tests {
+    use super::temporal_candidate_is_eligible;
+    use chrono::{Duration, Utc};
+
+    #[test]
+    fn older_dated_summary_cannot_mutate_newer_current_policy() {
+        let now = Utc::now();
+        assert!(!temporal_candidate_is_eligible(
+            Some(now - Duration::days(365)),
+            Some(now - Duration::days(180)),
+            Some(now - Duration::days(30)),
+            true,
+            now,
+        ));
+    }
+
+    #[test]
+    fn newer_policy_remains_eligible_to_replace_an_older_fact() {
+        let now = Utc::now();
+        assert!(temporal_candidate_is_eligible(
+            Some(now),
+            None,
+            Some(now - Duration::days(30)),
+            true,
+            now,
+        ));
+    }
+}
+
 /// Environment variable selecting the SQLite commit-durability policy.
 pub const VESTIGE_SQLITE_DURABILITY_ENV: &str = "VESTIGE_SQLITE_DURABILITY";
 
@@ -1688,6 +1733,18 @@ impl SqliteMemoryStore {
                 continue;
             }
             if let Some(node) = self.get_node(node_id)? {
+                // A historical snapshot must never mutate, reinforce, or demote
+                // a fact whose validity starts later. Likewise, an already
+                // expired input cannot supersede a currently-valid policy.
+                if !temporal_candidate_is_eligible(
+                    input.valid_from,
+                    input.valid_until,
+                    node.valid_from,
+                    node.is_currently_valid(),
+                    Utc::now(),
+                ) {
+                    continue;
+                }
                 // Get embedding for this node
                 if let Some(emb) = self.get_node_embedding(node_id)? {
                     // Check if this memory was previously demoted (low retrieval strength)
@@ -1749,6 +1806,13 @@ impl SqliteMemoryStore {
             } => {
                 match update_type {
                     UpdateType::Reinforce => {
+                        if input.valid_from.is_some() || input.valid_until.is_some() {
+                            self.update_node_validity(
+                                &target_id,
+                                input.valid_from,
+                                input.valid_until,
+                            )?;
+                        }
                         // Just strengthen the existing memory
                         self.strengthen_on_access(&target_id)?;
                         let node = self
@@ -1786,6 +1850,13 @@ impl SqliteMemoryStore {
                             &merged_content,
                             policy,
                         )?;
+                        if input.valid_from.is_some() || input.valid_until.is_some() {
+                            self.update_node_validity(
+                                &target_id,
+                                input.valid_from,
+                                input.valid_until,
+                            )?;
+                        }
                         self.strengthen_on_access(&target_id)?;
 
                         let node = self
@@ -1816,6 +1887,13 @@ impl SqliteMemoryStore {
                             &input.content,
                             policy,
                         )?;
+                        if input.valid_from.is_some() || input.valid_until.is_some() {
+                            self.update_node_validity(
+                                &target_id,
+                                input.valid_from,
+                                input.valid_until,
+                            )?;
+                        }
                         let node = self
                             .get_node(&target_id)?
                             .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
@@ -1847,6 +1925,13 @@ impl SqliteMemoryStore {
                             &merged_content,
                             policy,
                         )?;
+                        if input.valid_from.is_some() || input.valid_until.is_some() {
+                            self.update_node_validity(
+                                &target_id,
+                                input.valid_from,
+                                input.valid_until,
+                            )?;
+                        }
                         let node = self
                             .get_node(&target_id)?
                             .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
@@ -1871,7 +1956,13 @@ impl SqliteMemoryStore {
                 supersede_reason,
                 prediction_error,
             } => {
-                // Demote the old memory and create new
+                // Close the old fact's world-time interval before demoting it.
+                // A dated replacement takes effect at its declared start;
+                // otherwise the supersession becomes effective now.
+                self.close_node_validity(
+                    &old_memory_id,
+                    input.valid_from.unwrap_or_else(Utc::now),
+                )?;
                 self.demote_memory(&old_memory_id)?;
 
                 // Create the new improved memory
@@ -1987,6 +2078,49 @@ impl SqliteMemoryStore {
     ) -> Result<()> {
         Self::enforce_secret_policy_for_content(new_content, policy)?;
         self.update_node_content_unchecked(id, new_content)
+    }
+
+    /// Replace a node's declared world-time interval without changing its
+    /// project namespace or transaction-time history.
+    pub fn update_node_validity(
+        &self,
+        id: &str,
+        valid_from: Option<DateTime<Utc>>,
+        valid_until: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        if let (Some(from), Some(until)) = (valid_from, valid_until)
+            && until <= from
+        {
+            return Err(StorageError::InvalidTimestamp(
+                "valid_until must be after valid_from".to_string(),
+            ));
+        }
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        writer.execute(
+            "UPDATE knowledge_nodes SET valid_from = ?1, valid_until = ?2, updated_at = ?3 WHERE id = ?4",
+            params![
+                valid_from.map(|value| value.to_rfc3339()),
+                valid_until.map(|value| value.to_rfc3339()),
+                Utc::now().to_rfc3339(),
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn close_node_validity(&self, id: &str, valid_until: DateTime<Utc>) -> Result<()> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        writer.execute(
+            "UPDATE knowledge_nodes SET valid_until = ?1, updated_at = ?2 WHERE id = ?3",
+            params![valid_until.to_rfc3339(), Utc::now().to_rfc3339(), id],
+        )?;
+        Ok(())
     }
 
     fn update_node_content_unchecked(&self, id: &str, new_content: &str) -> Result<()> {
