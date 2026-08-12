@@ -22,8 +22,11 @@ tests. It now runs on every traced tool call:
   knows. The notice is truthful per-write: quarantined writes are reported as
   held; destructive writes (already applied) are reported as recorded for
   review, never as "quarantined".
-- Gating rides on the trace gate: `VESTIGE_TRACE_ENABLED=0` disables Memory
-  PRs along with the black box. Documented in `docs/CONFIGURATION.md`.
+- Confirmed purge/delete and direct suppression now open a durable Memory PR
+  before execution in risk-gated/paranoid mode. Failed PR persistence blocks
+  the mutation; review decisions then atomically purge, keep, or quarantine.
+- `VESTIGE_TRACE=0` disables Black Box recording without disabling the
+  pre-execution destructive safety gate.
 
 ## [2.3.0] - 2026-07-26 — "Cognitive Observatory + Zero-Knowledge Sync"
 

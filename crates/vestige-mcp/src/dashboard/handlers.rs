@@ -2237,17 +2237,31 @@ pub async fn act_on_memory_pr(
         })));
     }
 
-    let decided = state
+    let pending_decision = state
         .storage
-        .decide_memory_pr(&id, action)
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .decide_pending_memory_mutation(&id, action)
+        .map_err(|e| {
+            tracing::warn!("failed to decide pending memory mutation {id}: {e}");
+            StatusCode::CONFLICT
+        })?;
+    let (decided, pending_effect) = match pending_decision {
+        Some(decision) => (decision.pr, Some(decision.effect)),
+        None => (
+            state
+                .storage
+                .decide_memory_pr(&id, action)
+                .map_err(|_| StatusCode::NOT_FOUND)?,
+            None,
+        ),
+    };
 
     // B1: an accept action (promote/merge/supersede) must RELEASE the subject
     // memory from quarantine — gate_writes suppressed it, so deciding the PR
     // without un-suppressing would leave it "promoted" yet still held out of
     // retrieval. Forget/Quarantine intentionally keep it suppressed.
     let mut released = false;
-    if action.releases_memory()
+    if pending_effect.is_none()
+        && action.releases_memory()
         && let Some(subject_id) = decided.subject_id.as_deref()
     {
         // Use the UNCONDITIONAL quarantine release, not reverse_suppression:
@@ -2276,6 +2290,33 @@ pub async fn act_on_memory_pr(
         }
     }
 
+    if let Some(effect) = pending_effect {
+        use vestige_core::PendingMemoryMutationEffect::*;
+        match effect {
+            Kept => {}
+            Purged => state.emit(VestigeEvent::MemoryDeleted {
+                id: decided.subject_id.clone().unwrap_or_default(),
+                timestamp: Utc::now(),
+            }),
+            Suppressed => {
+                if let Some(subject_id) = decided.subject_id.as_deref()
+                    && let Ok(Some(node)) = state.storage.get_node(subject_id)
+                {
+                    state.emit(VestigeEvent::MemorySuppressed {
+                        id: node.id,
+                        suppression_count: node.suppression_count,
+                        estimated_cascade: 0,
+                        reversible_until: node
+                            .suppressed_at
+                            .map(|at| at + Duration::hours(24))
+                            .unwrap_or_else(Utc::now),
+                        timestamp: Utc::now(),
+                    });
+                }
+            }
+        }
+    }
+
     state.emit(VestigeEvent::MemoryPrDecided {
         id: decided.id.clone(),
         decision: decided
@@ -2290,6 +2331,17 @@ pub async fn act_on_memory_pr(
     let mut out = serde_json::to_value(&decided).unwrap_or_default();
     if let Some(obj) = out.as_object_mut() {
         obj.insert("subjectReleased".to_string(), serde_json::json!(released));
+        if let Some(effect) = pending_effect {
+            let label = match effect {
+                vestige_core::PendingMemoryMutationEffect::Kept => "kept",
+                vestige_core::PendingMemoryMutationEffect::Purged => "purged",
+                vestige_core::PendingMemoryMutationEffect::Suppressed => "suppressed",
+            };
+            obj.insert(
+                "pendingMutationEffect".to_string(),
+                serde_json::json!(label),
+            );
+        }
     }
     Ok(Json(out))
 }
@@ -2949,6 +3001,116 @@ mod tests {
             })
             .unwrap();
         node.id
+    }
+
+    fn open_pending_mutation_pr(
+        storage: &Arc<Storage>,
+        node_id: &str,
+        pending_action: &str,
+    ) -> String {
+        let tool = if pending_action == "suppress" {
+            "suppress"
+        } else {
+            "memory"
+        };
+        let args = if pending_action == "suppress" {
+            serde_json::json!({ "id": node_id })
+        } else {
+            serde_json::json!({
+                "action": pending_action,
+                "id": node_id,
+                "confirm": true
+            })
+        };
+        crate::trace_recorder::gate_pending_memory_mutation(
+            storage,
+            None,
+            "run_review_outcome",
+            tool,
+            &Some(args),
+            vestige_core::ReviewMode::RiskGated,
+        )
+        .unwrap()
+        .expect("pending mutation should open a PR");
+        storage
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap()[0]
+            .id
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn pending_purge_forget_approves_and_executes_mutation() {
+        let (_dir, storage) = seed_storage();
+        let node_id = ingest(&storage, "purge after explicit review");
+        let pr_id = open_pending_mutation_pr(&storage, &node_id, "purge");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(body) = act_on_memory_pr(State(state), Path((pr_id, "forget".to_string())))
+            .await
+            .unwrap();
+
+        assert_eq!(body["pendingMutationEffect"], "purged");
+        assert!(storage.get_node(&node_id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_purge_promote_keeps_memory() {
+        let (_dir, storage) = seed_storage();
+        let node_id = ingest(&storage, "keep after explicit review");
+        let pr_id = open_pending_mutation_pr(&storage, &node_id, "purge");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(body) = act_on_memory_pr(State(state), Path((pr_id, "promote".to_string())))
+            .await
+            .unwrap();
+
+        assert_eq!(body["pendingMutationEffect"], "kept");
+        assert!(storage.get_node(&node_id).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn pending_purge_quarantine_keeps_but_suppresses_memory() {
+        let (_dir, storage) = seed_storage();
+        let node_id = ingest(&storage, "quarantine after explicit review");
+        let pr_id = open_pending_mutation_pr(&storage, &node_id, "purge");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(body) = act_on_memory_pr(State(state), Path((pr_id, "quarantine".to_string())))
+            .await
+            .unwrap();
+
+        assert_eq!(body["pendingMutationEffect"], "suppressed");
+        assert_eq!(
+            storage
+                .get_node(&node_id)
+                .unwrap()
+                .unwrap()
+                .suppression_count,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_suppress_forget_approves_and_executes_suppression() {
+        let (_dir, storage) = seed_storage();
+        let node_id = ingest(&storage, "suppress after explicit review");
+        let pr_id = open_pending_mutation_pr(&storage, &node_id, "suppress");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(body) = act_on_memory_pr(State(state), Path((pr_id, "forget".to_string())))
+            .await
+            .unwrap();
+
+        assert_eq!(body["pendingMutationEffect"], "suppressed");
+        assert_eq!(
+            storage
+                .get_node(&node_id)
+                .unwrap()
+                .unwrap()
+                .suppression_count,
+            1
+        );
     }
 
     #[test]

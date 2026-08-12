@@ -468,7 +468,7 @@ struct PortableMergeState {
 ///
 /// Keeping these counters separate from the public report lets portable sync
 /// execute the identical cleanup inside its existing merge transaction.
-struct PurgeCleanup {
+pub(crate) struct PurgeCleanup {
     edges_pruned: i64,
     insights_rewritten: i64,
     insights_deleted: i64,
@@ -2710,7 +2710,7 @@ impl SqliteMemoryStore {
     }
 
     /// Log a memory interaction for audit and explicit-feedback learning.
-    fn log_access(&self, node_id: &str, access_type: &str) -> Result<()> {
+    pub(crate) fn log_access(&self, node_id: &str, access_type: &str) -> Result<()> {
         let writer = self
             .writer
             .lock()
@@ -3459,10 +3459,22 @@ impl SqliteMemoryStore {
         })
     }
 
+    /// Remove a committed purge from the optional in-process vector index.
+    pub(crate) fn remove_purged_node_from_vector_index(&self, id: &str) {
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        if let Some(index) = self.vector_index.as_ref()
+            && let Ok(mut index) = index.lock()
+        {
+            let _ = index.remove(id);
+        }
+        #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
+        let _ = id;
+    }
+
     /// Execute the privacy-critical delete work inside a caller-owned SQLite
     /// transaction. Portable merge uses this exact path so a remote deletion
     /// cannot leave local non-FK evidence behind.
-    fn purge_node_in_transaction(
+    pub(crate) fn purge_node_in_transaction(
         tx: &rusqlite::Transaction<'_>,
         id: &str,
         deleted_at: DateTime<Utc>,

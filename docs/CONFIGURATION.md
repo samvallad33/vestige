@@ -89,15 +89,20 @@ The mode is stored in `<data_dir>/review_mode.json` and set from the dashboard
 (`POST /api/memory-prs/mode`). A missing or corrupt file falls back to
 `risk_gated` — a bad file can never silently disable gating.
 
-When a write is gated, the tool response carries `memoryPrs` and a
-`memoryPrNotice` telling the agent whether the write is **quarantined until
-decided** or (for destructive writes, which have already been applied)
-**recorded for review** with nothing held.
+When a normal risky write is gated, the tool response carries `memoryPrs` and a
+`memoryPrNotice` describing the quarantine. Confirmed purge/delete calls and
+direct suppression are different: in `risk_gated` and `paranoid` modes Vestige
+durably opens a pending Memory PR **before** the mutation and returns without
+changing the memory. If the PR cannot be saved, the call fails closed.
 
-> **Note:** gating rides on the trace system. Setting `VESTIGE_TRACE_ENABLED=0`
-> disables the black box **and Memory PR gating together** — a Memory PR is an
-> auditable trace artifact, so turning off tracing turns off the gate. Leave
-> tracing on (the default) if you rely on review modes.
+For a pending destructive PR, `forget` approves and executes the requested
+purge or suppression, `promote` keeps the memory unchanged, and `quarantine`
+keeps the row but suppresses it. `fast` remains the explicit direct-execution
+opt-out.
+
+> **Note:** `VESTIGE_TRACE=0` disables Black Box trace/receipt recording, but it
+> does not disable this pre-execution safety gate. Review mode, not tracing,
+> controls destructive mutation policy.
 
 ---
 
