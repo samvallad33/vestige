@@ -4483,9 +4483,7 @@ impl SqliteMemoryStore {
                 params![active_profile_id, active_model],
                 |row| row.get(0),
             )?;
-            let mismatched_count: i64 = if active_profile_id
-                == Some(LEGACY_EMBEDDING_PROFILE_ID)
-            {
+            let mismatched_count: i64 = if active_profile_id == Some(LEGACY_EMBEDDING_PROFILE_ID) {
                 // Legacy writes may still exist only in the compatibility
                 // mirror (for example after a pre-V28 client write). They are
                 // part of the active legacy vector space, so compare their
@@ -5509,9 +5507,9 @@ impl SqliteMemoryStore {
                 active.profile_id
             )));
         }
-        self.embedding_service
-            .init()
-            .map_err(|error| StorageError::Init(format!("Initialize legacy Nomic embeddings: {error}")))
+        self.embedding_service.init().map_err(|error| {
+            StorageError::Init(format!("Initialize legacy Nomic embeddings: {error}"))
+        })
     }
 
     #[cfg(not(feature = "embeddings"))]
@@ -14627,9 +14625,9 @@ mod tests {
         // profile-policy rejection.
         match storage.init_embeddings() {
             Ok(()) | Err(StorageError::Init(_)) => {}
-            Err(error) => panic!(
-                "legacy Nomic profile must be permitted to use init_embeddings: {error}"
-            ),
+            Err(error) => {
+                panic!("legacy Nomic profile must be permitted to use init_embeddings: {error}")
+            }
         }
     }
 

@@ -3453,10 +3453,7 @@ mod tests {
         assert_eq!(body["withActiveEmbeddings"], 3);
         assert_eq!(body["mismatchedEmbeddings"], 1);
         assert_eq!(body["embeddingCoverage"], 75.0);
-        assert_eq!(
-            body["activeEmbeddingModel"],
-            "Qwen/Qwen3-Embedding-0.6B"
-        );
+        assert_eq!(body["activeEmbeddingModel"], "Qwen/Qwen3-Embedding-0.6B");
     }
 
     fn open_pending_mutation_pr(
