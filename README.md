@@ -35,6 +35,8 @@ npm install -g vestige-mcp-server@latest
 
 This installs the `vestige-mcp` command. Prebuilt binaries ship for macOS (Apple Silicon and Intel), Linux x86_64, and Windows x86_64, so there is no compile step.
 
+If a global pnpm install skipped its postinstall hook, the command launcher retries the local binary installation on its first invocation. It reports that recovery on stderr, preserving MCP stdout for protocol messages.
+
 ### 2. Connect it to your agent
 
 Vestige speaks [MCP](https://modelcontextprotocol.io), so it works with any MCP-capable agent. Every MCP client understands this config. Add it to your client's MCP settings:
@@ -84,6 +86,8 @@ Later, someone tells the agent the opposite:
 > Our primary datastore is MySQL.
 
 When the agent tries to store that, Vestige does not silently append it. The engine returns a `claim_contradicts_memory` status and surfaces the older, conflicting memory, so the agent can resolve the conflict instead of quietly holding two incompatible facts.
+
+After a successful tool call, Vestige persists a retrieval receipt when that call has one, then records any Memory PR review evidence. That evidence is a post-commit record of the completed call; it is not a pre-execution block on the tool.
 
 The other command you will reach for is backfill. When something breaks, run:
 
@@ -196,6 +200,8 @@ Vestige exposes exactly 14 MCP tools. Your agent calls them; you rarely call the
 | `source_sync` | Sync memories from external connected sources |
 | `session_start` | Prime the agent with relevant context at session start |
 
+Memories can carry a project namespace through `smart_ingest`'s `scope`. Retrieval defaults to the legacy `user` namespace, so a project memory does not appear in an unscoped recall; pass `includeCrossScope: true` only when cross-project retrieval is intentional. This is relevance isolation, not authentication or an ACL.
+
 ---
 
 ## The dashboard
@@ -286,6 +292,8 @@ Vestige is a single Rust binary. No sidecar services, no external database, no c
 | Quality | 1,550 tests passing, clippy clean with `-D warnings` |
 
 Storage internals and encryption: [docs/STORAGE.md](docs/STORAGE.md).
+
+The workspace also contains `vestige-spacetime`, a compile-first Rust substrate that keeps its algorithms apart from the existing storage and MCP types. It has no migration, storage adapter, or MCP wiring here, so it does not claim runtime activation across every path.
 
 ---
 
