@@ -1272,6 +1272,22 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
+        let source = EmbeddingProfileId::new("nomic-v1.5-legacy-raw-256").unwrap();
+        // Seed the source profile explicitly: a migration must never delete
+        // an existing rollback vector, but it also must not invent one for a
+        // node whose historic Nomic embedding was never generated.
+        for node in storage.get_all_nodes(10, 0).unwrap() {
+            storage
+                .put_embedding_profile_vector(&EmbeddingProfileVector {
+                    profile_id: source.to_string(),
+                    node_id: node.id,
+                    embedding: f32_bytes(&vec![0.25; 256]),
+                    dimensions: 256,
+                    model: "nomic-ai/nomic-embed-text-v1.5".to_string(),
+                    created_at: Utc::now(),
+                })
+                .unwrap();
+        }
         let artifact_path = temp.path().join("runner.bin");
         fs::write(&artifact_path, b"local test artifact").unwrap();
         let artifact = ModelArtifactHash::sha256("runner.bin", sha256_hex(b"local test artifact"));
@@ -1312,7 +1328,6 @@ mod tests {
             .record_evaluation(&profile.profile_id, evaluation)
             .unwrap();
         storage.save_embedding_profile_manifest(&ready).unwrap();
-        let source = EmbeddingProfileId::new("nomic-v1.5-legacy-raw-256").unwrap();
         let migration_id = Uuid::new_v4();
         let interrupted = lifecycle
             .migrate_registered(&profile.profile_id, &source, Some(migration_id), Some(1))
@@ -1345,7 +1360,8 @@ mod tests {
             storage
                 .embedding_profile_vector(&source, &storage.get_all_nodes(1, 0).unwrap()[0].id)
                 .unwrap()
-                .is_none()
+                .is_some(),
+            "migration must retain the source profile vector so rollback can switch pointers without re-embedding"
         );
         assert!(
             storage
