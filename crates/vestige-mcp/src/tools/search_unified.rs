@@ -14,7 +14,7 @@
 //!   6. Predictive memory recording
 //!   7. Reconsolidation (mark labile)
 
-use chrono::Utc;
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -107,6 +107,10 @@ pub fn schema() -> Value {
                 "description": "Search across all project namespaces. Defaults to false; set only when cross-project retrieval is intentional.",
                 "default": false
             },
+            "validAt": {
+                "type": "string",
+                "description": "Return only facts valid at this time. Accepts 'now', RFC3339, or YYYY-MM-DD. When omitted, expired/future facts remain auditable but are conservatively downranked."
+            },
             "source_system": {
                 "type": "string",
                 "description": "Investigation filter (#57): only memories ingested from this external system, e.g. 'github' or 'redmine'. Post-filter — non-connector memories are excluded. Combine with a larger 'limit' if thinning is heavy."
@@ -172,6 +176,7 @@ struct SearchArgs {
     tag_prefix: Option<String>,
     scope: Option<String>,
     include_cross_scope: Option<bool>,
+    valid_at: Option<String>,
     // #57 Phase 4 — source-aware investigation filters (all post-filters).
     #[serde(alias = "source_system")]
     source_system: Option<String>,
@@ -189,6 +194,39 @@ struct SearchArgs {
     source_updated_before: Option<String>,
     #[serde(alias = "source_status")]
     source_status: Option<String>,
+}
+
+fn parse_valid_at(raw: Option<&str>) -> Result<Option<DateTime<Utc>>, String> {
+    let Some(raw) = raw else { return Ok(None) };
+    if raw == "now" {
+        return Ok(Some(Utc::now()));
+    }
+    if raw.trim() != raw || raw.is_empty() {
+        return Err(
+            "Invalid validAt: expected 'now', RFC3339, or YYYY-MM-DD without surrounding whitespace"
+                .to_string(),
+        );
+    }
+    if let Ok(timestamp) = DateTime::parse_from_rfc3339(raw) {
+        return Ok(Some(timestamp.with_timezone(&Utc)));
+    }
+    if let Ok(date) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        return Ok(Some(Utc.from_utc_datetime(
+            &date.and_hms_opt(0, 0, 0).expect("midnight is valid"),
+        )));
+    }
+    Err("Invalid validAt: expected 'now', RFC3339, or YYYY-MM-DD".to_string())
+}
+
+fn apply_default_validity_penalty(
+    result: &mut vestige_core::SearchResult,
+    valid_at: Option<DateTime<Utc>>,
+) {
+    if valid_at.is_none() && !result.node.is_currently_valid() {
+        // Historical and future facts remain available for audit, but should
+        // not outrank a current policy on relevance alone.
+        result.combined_score *= 0.1;
+    }
 }
 
 /// Execute unified search with 7-stage cognitive pipeline.
@@ -257,6 +295,7 @@ pub async fn execute(
     // both the concrete and hybrid paths). Hard-errors on malformed input.
     let source_filter = SourceFilter::from_args(&args)?;
     let scope_filter = ScopeFilter::from_args(&args)?;
+    let valid_at = parse_valid_at(args.valid_at.as_deref())?;
 
     let concrete = args
         .concrete
@@ -285,7 +324,15 @@ pub async fn execute(
 
         // Apply post-filters before formatting the response. Retrieval
         // telemetry is recorded later, after the final budget selection.
-        let results = filter_results_to_scope(storage, results, &scope_filter)?;
+        let mut results = filter_results_to_scope(storage, results, &scope_filter)?;
+        for result in &mut results {
+            apply_default_validity_penalty(result, valid_at);
+        }
+        results.sort_by(|a, b| {
+            b.combined_score
+                .partial_cmp(&a.combined_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let filtered_results: Vec<&vestige_core::SearchResult> = results
             .iter()
             .filter(|r| match args.tag_prefix.as_deref() {
@@ -293,6 +340,7 @@ pub async fn execute(
                 None => true,
             })
             .filter(|r| node_matches_source(&r.node, &source_filter))
+            .filter(|r| valid_at.is_none_or(|at| r.node.is_valid_at(at)))
             .take(limit as usize)
             .collect();
 
@@ -344,6 +392,7 @@ pub async fn execute(
             "profile": output_config.profile.as_str(),
             "scope": scope_filter.scope,
             "includeCrossScope": scope_filter.include_cross_scope,
+            "validAt": valid_at.map(|at| at.to_rfc3339()),
             "total": formatted.len(),
             "results": formatted,
         });
@@ -395,6 +444,9 @@ pub async fn execute(
     let mut keyword_priority_results: Vec<vestige_core::SearchResult> = Vec::new();
     for r in keyword_first_results {
         if !scope_filter.matches(storage, &r.node.id)? {
+            continue;
+        }
+        if valid_at.is_some_and(|at| !r.node.is_valid_at(at)) {
             continue;
         }
         if r.keyword_score.unwrap_or(0.0) >= keyword_priority_threshold
@@ -466,11 +518,19 @@ pub async fn execute(
     if source_filter.is_active() {
         filtered_results.retain(|r| node_matches_source(&r.node, &source_filter));
     }
+    if let Some(at) = valid_at {
+        filtered_results.retain(|result| result.node.is_valid_at(at));
+    }
+    for result in &mut filtered_results {
+        apply_default_validity_penalty(result, valid_at);
+    }
 
     // ====================================================================
     // Dedup: merge Stage 0 keyword-priority results into Stage 1 results
     // ====================================================================
-    for kp in &keyword_priority_results {
+    for keyword_priority in &keyword_priority_results {
+        let mut kp = keyword_priority.clone();
+        apply_default_validity_penalty(&mut kp, valid_at);
         // Respect tag_prefix here too — Stage 0 ran without it and can
         // re-introduce filtered-out memories on the "new result" branch.
         if let Some(prefix) = args.tag_prefix.as_deref()
@@ -480,6 +540,9 @@ pub async fn execute(
         }
         // Respect the source filter on re-inject for the same reason.
         if source_filter.is_active() && !node_matches_source(&kp.node, &source_filter) {
+            continue;
+        }
+        if valid_at.is_some_and(|at| !kp.node.is_valid_at(at)) {
             continue;
         }
         if let Some(existing) = filtered_results
@@ -495,7 +558,7 @@ pub async fn execute(
             }
         } else {
             // New result from Stage 0 not in Stage 1 — add it
-            filtered_results.push(kp.clone());
+            filtered_results.push(kp);
         }
     }
 
@@ -583,7 +646,7 @@ pub async fn execute(
             let validity = cog.temporal_searcher.validity_boost(
                 result.node.valid_from,
                 result.node.valid_until,
-                None,
+                valid_at,
             );
             // Blend: 85% relevance + 15% temporal signal
             let temporal_factor = recency * validity;
@@ -870,6 +933,7 @@ pub async fn execute(
         "profile": output_config.profile.as_str(),
         "scope": scope_filter.scope,
         "includeCrossScope": scope_filter.include_cross_scope,
+        "validAt": valid_at.map(|at| at.to_rfc3339()),
         "total": formatted.len(),
         "results": formatted,
     });
@@ -1281,6 +1345,8 @@ fn format_search_result(r: &vestige_core::SearchResult, detail_level: &str) -> V
                 "retentionStrength": r.node.retention_strength,
                 "createdAt": r.node.created_at.to_rfc3339(),
                 "updatedAt": r.node.updated_at.to_rfc3339(),
+                "validFrom": r.node.valid_from.map(|dt| dt.to_rfc3339()),
+                "validUntil": r.node.valid_until.map(|dt| dt.to_rfc3339()),
             });
             attach_source_record(&mut v, &r.node);
             v
@@ -1388,6 +1454,90 @@ mod tests {
         };
         let node = storage.ingest(input).unwrap();
         node.id
+    }
+
+    #[tokio::test]
+    async fn valid_at_returns_the_fact_true_at_that_time() {
+        let (storage, _dir) = test_storage().await;
+        let historical = storage
+            .ingest(IngestInput {
+                content: "deployment policy requires one approver".to_string(),
+                valid_from: Some("2025-01-01T00:00:00Z".parse().unwrap()),
+                valid_until: Some("2026-01-01T00:00:00Z".parse().unwrap()),
+                ..Default::default()
+            })
+            .unwrap();
+        let current = storage
+            .ingest(IngestInput {
+                content: "deployment policy requires two approvers".to_string(),
+                valid_from: Some("2026-01-01T00:00:00Z".parse().unwrap()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(serde_json::json!({
+                "query": "deployment policy approvers",
+                "concrete": true,
+                "validAt": "2025-06-01"
+            })),
+        )
+        .await
+        .unwrap();
+        let ids: Vec<&str> = response["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|result| result["id"].as_str())
+            .collect();
+        assert!(ids.contains(&historical.id.as_str()));
+        assert!(!ids.contains(&current.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn current_recall_conservatively_downranks_expired_facts() {
+        let (storage, _dir) = test_storage().await;
+        storage
+            .ingest(IngestInput {
+                content: "release policy alpha".to_string(),
+                valid_until: Some(Utc::now() - chrono::Duration::days(1)),
+                ..Default::default()
+            })
+            .unwrap();
+        let current = storage
+            .ingest(IngestInput {
+                content: "release policy alpha current".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(serde_json::json!({
+                "query": "release policy alpha",
+                "concrete": true
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["results"][0]["id"], current.id);
+    }
+
+    #[tokio::test]
+    async fn malformed_valid_at_is_rejected() {
+        let (storage, _dir) = test_storage().await;
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(serde_json::json!({"query": "policy", "validAt": "last Tuesday"})),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("Invalid validAt"));
     }
 
     #[tokio::test]
