@@ -4483,61 +4483,25 @@ impl SqliteMemoryStore {
                 params![active_profile_id, active_model],
                 |row| row.get(0),
             )?;
-            let mismatched_count: i64 = if active_profile_id == Some(LEGACY_EMBEDDING_PROFILE_ID) {
-                // Legacy writes may still exist only in the compatibility
-                // mirror (for example after a pre-V28 client write). They are
-                // part of the active legacy vector space, so compare their
-                // model/dimension directly instead of treating every mirror
-                // row as missing merely because V28 has not copied it yet.
-                reader.query_row(
-                    "SELECT COUNT(*)
-                     FROM knowledge_nodes kn
-                     WHERE (kn.has_embedding = 1 OR EXISTS (
-                           SELECT 1 FROM embedding_profile_vectors epv WHERE epv.node_id = kn.id
-                       ))
-                       AND NOT EXISTS (
-                           SELECT 1 FROM embedding_profile_vectors epv
-                           WHERE epv.node_id = kn.id
-                             AND epv.profile_id = ?1
-                             AND epv.model = ?2
-                             AND epv.dimensions = (
-                                 SELECT embedding_dimension FROM embedding_profiles
-                                 WHERE profile_id = ?1
-                             )
-                       )
-                       AND NOT EXISTS (
-                           SELECT 1 FROM node_embeddings ne
-                           WHERE ne.node_id = kn.id
-                             AND ne.model = ?2
-                             AND ne.dimensions = (
-                                 SELECT embedding_dimension FROM embedding_profiles
-                                 WHERE profile_id = ?1
-                             )
-                       )",
-                    params![active_profile_id, active_model],
-                    |row| row.get(0),
-                )?
-            } else {
-                reader.query_row(
-                    "SELECT COUNT(*)
-                     FROM knowledge_nodes kn
-                     WHERE (kn.has_embedding = 1 OR EXISTS (
-                           SELECT 1 FROM embedding_profile_vectors epv WHERE epv.node_id = kn.id
-                       ))
-                       AND NOT EXISTS (
-                           SELECT 1 FROM embedding_profile_vectors epv
-                           WHERE epv.node_id = kn.id
-                             AND epv.profile_id = ?1
-                             AND epv.model = ?2
-                             AND epv.dimensions = (
-                                 SELECT embedding_dimension FROM embedding_profiles
-                                 WHERE profile_id = ?1
-                             )
-                       )",
-                    params![active_profile_id, active_model],
-                    |row| row.get(0),
-                )?
-            };
+            let mismatched_count: i64 = reader.query_row(
+                "SELECT COUNT(*)
+                 FROM knowledge_nodes kn
+                 WHERE (kn.has_embedding = 1 OR EXISTS (
+                       SELECT 1 FROM embedding_profile_vectors epv WHERE epv.node_id = kn.id
+                   ))
+                   AND NOT EXISTS (
+                       SELECT 1 FROM embedding_profile_vectors epv
+                       WHERE epv.node_id = kn.id
+                         AND epv.profile_id = ?1
+                         AND epv.model = ?2
+                         AND epv.dimensions = (
+                             SELECT embedding_dimension FROM embedding_profiles
+                             WHERE profile_id = ?1
+                         )
+                   )",
+                params![active_profile_id, active_model],
+                |row| row.get(0),
+            )?;
             (active_count, mismatched_count)
         };
         #[cfg(not(feature = "embeddings"))]
@@ -14432,6 +14396,17 @@ mod tests {
                      SET has_embedding = 1, embedding_model = ?2
                      WHERE id = ?1",
                     rusqlite::params![&node.id, stale_model],
+                )
+                .unwrap();
+            // In a process where the legacy runtime was initialized by an
+            // earlier test, ingest also writes a matching V28 profile vector.
+            // Remove it so this fixture consistently represents a pre-V28
+            // mirror-only stale corpus.
+            writer
+                .execute(
+                    "DELETE FROM embedding_profile_vectors
+                     WHERE profile_id = ?1 AND node_id = ?2",
+                    rusqlite::params![LEGACY_EMBEDDING_PROFILE_ID, &node.id],
                 )
                 .unwrap();
         }
