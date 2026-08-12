@@ -46,6 +46,76 @@ export interface SystemStats {
 	newestMemory?: string;
 }
 
+// Embedding profiles deliberately keep model contracts separate. A profile owns
+// its encoder, vector space, local artifact state, and any migration receipt;
+// vectors from different profiles are never comparable.
+export type EmbeddingProfileStage =
+	| 'available'
+	| 'installing'
+	| 'installed'
+	| 'evaluating'
+	| 'evaluated'
+	| 'migrating'
+	| 'ready'
+	| 'active'
+	| 'rollback_ready'
+	| 'error';
+
+export interface EmbeddingProfile {
+	id: string;
+	name: string;
+	modelId: string;
+	description?: string;
+	stage: EmbeddingProfileStage;
+	installed: boolean;
+	active: boolean;
+	dimensions: number;
+	maxTokens?: number;
+	modelBytes?: number;
+	vectorBytes?: number;
+	diskBytes?: number;
+	hardware?: string;
+	localOnly?: boolean;
+	migration?: {
+		state: 'not_started' | 'in_progress' | 'validating' | 'paused' | 'complete' | 'not_required' | 'failed' | 'cancelled';
+		id?: string;
+		total?: number;
+		completed?: number;
+		remaining?: number;
+		updatedAt?: string;
+	};
+	evaluation?: {
+		state: 'not_run' | 'running' | 'complete' | 'failed';
+		score?: number;
+		metric?: string;
+		sampleSize?: number;
+	};
+	lastReceipt?: {
+		id?: string;
+		at?: string;
+		summary?: string;
+	};
+}
+
+export interface EmbeddingProfilesResponse {
+	profiles: EmbeddingProfile[];
+	activeProfileId?: string | null;
+	rollbackProfileId?: string | null;
+	localOnly?: boolean;
+	available?: boolean;
+}
+
+export interface EmbeddingProfileActionResponse extends Partial<EmbeddingProfilesResponse> {
+	accepted?: boolean;
+	message?: string;
+	receipt?: EmbeddingProfile['lastReceipt'];
+	// Install, evaluation, and migration deliberately return this guidance as a
+	// 409 response instead of accepting a filesystem path through the browser.
+	cliRequired?: boolean;
+	operation?: 'install' | 'evaluate' | 'migrate' | 'activate' | 'rollback';
+	command?: string;
+}
+
 export interface HealthCheck {
 	status: 'healthy' | 'degraded' | 'critical' | 'empty';
 	totalMemories: number;

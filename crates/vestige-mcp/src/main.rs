@@ -313,36 +313,30 @@ async fn main() {
         }
     };
 
-    // Initialize embeddings in the background so MCP clients can complete the
-    // stdio handshake quickly. First-run model downloads can otherwise exceed
-    // short client startup timeouts.
+    // Preserve the released Nomic default in the background so MCP clients can
+    // finish their stdio handshake before a first-run model download. Optional
+    // profiles reject this compatibility path: their artifact verification,
+    // evaluation, migration, and activation remain explicit local operations.
     #[cfg(feature = "embeddings")]
     {
         let storage_clone = Arc::clone(&storage);
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = storage_clone.init_embeddings() {
-                error!("Failed to initialize embedding service: {}", e);
-                error!("Smart ingest will fall back to regular ingest without deduplication");
-                error!(
-                    "Hint: Check FASTEMBED_CACHE_PATH or ensure ~/.cache/vestige/fastembed is writable"
-                );
-            } else {
-                info!("Embedding service initialized successfully");
+            if let Err(error) = storage_clone.init_embeddings() {
+                tracing::debug!(%error, "No legacy Nomic embedding runtime started");
+                return;
+            }
+            info!("Legacy Nomic embedding service initialized successfully");
 
-                #[cfg(feature = "vector-search")]
-                match storage_clone.generate_embeddings(None, false) {
-                    Ok(result) => {
-                        if result.successful > 0 || result.failed > 0 {
-                            info!(
-                                embeddings_generated = result.successful,
-                                embeddings_failed = result.failed,
-                                embeddings_skipped = result.skipped,
-                                "Background embedding backfill complete"
-                            );
-                        }
-                    }
-                    Err(e) => warn!("Background embedding backfill failed: {}", e),
-                }
+            #[cfg(feature = "vector-search")]
+            match storage_clone.generate_embeddings(None, false) {
+                Ok(result) if result.successful > 0 || result.failed > 0 => info!(
+                    embeddings_generated = result.successful,
+                    embeddings_failed = result.failed,
+                    embeddings_skipped = result.skipped,
+                    "Background legacy Nomic embedding backfill complete"
+                ),
+                Ok(_) => {}
+                Err(error) => warn!(%error, "Background legacy Nomic embedding backfill failed"),
             }
         });
     }

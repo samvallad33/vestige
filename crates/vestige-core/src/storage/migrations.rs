@@ -139,6 +139,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Project scopes: normalize legacy scope values to the safe user namespace",
         up: MIGRATION_V27_UP,
     },
+    Migration {
+        version: 28,
+        description: "Embedding Profiles: isolated vector rows, integrity manifests, active pointer, and resumable migration checkpoints",
+        up: MIGRATION_V28_UP,
+    },
 ];
 
 /// A database migration
@@ -1245,7 +1250,130 @@ DELETE FROM connector_cursors;
 
 UPDATE schema_version SET version = 20, applied_at = datetime('now');
 "#;
+/// V28: Embedding Profiles.
+///
+/// The legacy `node_embeddings` table remains intact as a compatibility mirror
+/// for existing installations and portable archives. New profile-aware code
+/// stores vectors in `embedding_profile_vectors`, whose compound primary key
+/// makes vectors from two encoding contracts physically distinct. This is the
+/// critical isolation boundary: semantic scores can only be produced from one
+/// profile at a time.
+const MIGRATION_V28_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS embedding_profiles (
+    profile_id TEXT PRIMARY KEY,
+    model_id TEXT NOT NULL,
+    immutable_model_revision TEXT NOT NULL,
+    verified_model_artifact_hashes TEXT NOT NULL DEFAULT '[]',
+    runtime_backend TEXT NOT NULL,
+    embedding_dimension INTEGER NOT NULL CHECK (embedding_dimension > 0),
+    normalization_method TEXT NOT NULL,
+    document_encoding_template TEXT NOT NULL,
+    query_encoding_template TEXT NOT NULL,
+    maximum_token_limit INTEGER NOT NULL CHECK (maximum_token_limit > 0),
+    chunking_strategy TEXT NOT NULL,
+    status TEXT NOT NULL,
+    installed_at TEXT,
+    last_verified_at TEXT,
+    runtime_metadata TEXT,
+    verification TEXT NOT NULL DEFAULT '{}',
+    evaluation TEXT,
+    failure TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 
+CREATE TABLE IF NOT EXISTS embedding_profile_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    active_profile_id TEXT NOT NULL REFERENCES embedding_profiles(profile_id),
+    previous_profile_id TEXT,
+    activated_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS embedding_profile_vectors (
+    profile_id TEXT NOT NULL REFERENCES embedding_profiles(profile_id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+    embedding BLOB NOT NULL,
+    dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+    model TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (profile_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_embedding_profile_vectors_profile ON embedding_profile_vectors(profile_id);
+CREATE INDEX IF NOT EXISTS idx_embedding_profile_vectors_node ON embedding_profile_vectors(node_id);
+
+CREATE TABLE IF NOT EXISTS embedding_profile_manifests (
+    profile_id TEXT PRIMARY KEY REFERENCES embedding_profiles(profile_id) ON DELETE CASCADE,
+    manifest_json TEXT NOT NULL,
+    manifest_hash TEXT NOT NULL,
+    vector_count INTEGER NOT NULL DEFAULT 0 CHECK (vector_count >= 0),
+    index_member_count INTEGER NOT NULL DEFAULT 0 CHECK (index_member_count >= 0),
+    index_integrity_hash TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS embedding_profile_migrations (
+    migration_id TEXT PRIMARY KEY,
+    source_profile_id TEXT NOT NULL REFERENCES embedding_profiles(profile_id),
+    destination_profile_id TEXT NOT NULL REFERENCES embedding_profiles(profile_id),
+    state TEXT NOT NULL,
+    total_memories INTEGER NOT NULL DEFAULT 0 CHECK (total_memories >= 0),
+    completed_memories INTEGER NOT NULL DEFAULT 0 CHECK (completed_memories >= 0),
+    failed_memory_ids TEXT NOT NULL DEFAULT '[]',
+    last_memory_id TEXT,
+    snapshot_path TEXT,
+    validation_report TEXT,
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_embedding_profile_migrations_destination ON embedding_profile_migrations(destination_profile_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS embedding_profile_migration_checkpoints (
+    migration_id TEXT NOT NULL REFERENCES embedding_profile_migrations(migration_id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+    state TEXT NOT NULL,
+    error TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (migration_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_embedding_profile_migration_checkpoints_state
+    ON embedding_profile_migration_checkpoints(migration_id, state, updated_at);
+
+-- Existing vectors remain available under an explicit legacy encoding contract.
+-- `INSERT OR IGNORE` makes this safe for databases created by pre-release builds.
+INSERT OR IGNORE INTO embedding_profiles (
+    profile_id, model_id, immutable_model_revision, verified_model_artifact_hashes,
+    runtime_backend, embedding_dimension, normalization_method,
+    document_encoding_template, query_encoding_template, maximum_token_limit,
+    chunking_strategy, status, created_at, updated_at
+) VALUES (
+    'nomic-v1.5-legacy-raw-256', 'nomic-ai/nomic-embed-text-v1.5', 'legacy-unpinned', '[]',
+    'legacy-fastembed', 256, 'l2', '{content}', '{query}', 8192,
+    'legacy-default', 'active', datetime('now'), datetime('now')
+);
+
+INSERT OR IGNORE INTO embedding_profile_state (
+    singleton, active_profile_id, previous_profile_id, activated_at, updated_at
+) VALUES (
+    1, 'nomic-v1.5-legacy-raw-256', NULL, datetime('now'), datetime('now')
+);
+
+INSERT OR IGNORE INTO embedding_profile_vectors (
+    profile_id, node_id, embedding, dimensions, model, created_at
+)
+SELECT
+    'nomic-v1.5-legacy-raw-256', node_id, embedding, dimensions, model, created_at
+FROM node_embeddings;
+
+INSERT OR IGNORE INTO embedding_profile_manifests (
+    profile_id, manifest_json, manifest_hash, vector_count, index_member_count, index_integrity_hash, updated_at
+) VALUES (
+    'nomic-v1.5-legacy-raw-256', '{}', 'legacy-unverified',
+    (SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = 'nomic-v1.5-legacy-raw-256'),
+    0, NULL, datetime('now')
+);
+UPDATE schema_version SET version = 28, applied_at = datetime('now');
+"#;
 /// V21: durable source of truth for synaptic tag-and-capture.
 ///
 /// `synaptic_tags` survives process restarts. `synaptic_events` gives an
@@ -2292,7 +2420,7 @@ mod tests {
         assert_eq!(cursor_row_count(&conn), 2);
 
         let applied = apply_migrations(&conn).expect("V20+ apply on a V19 database");
-        assert_eq!(applied, 8, "V20 through V27 should apply on a V19 database");
+        assert_eq!(applied, 9, "V20 through V28 should apply on a V19 database");
         assert_eq!(
             get_current_version(&conn).expect("version"),
             MIGRATIONS.last().unwrap().version
@@ -2304,16 +2432,16 @@ mod tests {
         );
     }
 
-    /// Fresh database: all migrations apply cleanly through V27 and the cursor
+    /// Fresh database: all migrations apply cleanly through V28 and the cursor
     /// table exists and is empty (nothing to clear, no error).
     #[test]
     fn v20_applies_cleanly_on_a_fresh_database() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("fresh migrations succeed through V27");
+        apply_migrations(&conn).expect("fresh migrations succeed through V28");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            27,
-            "latest migration must be V27"
+            28,
+            "latest migration must be V28"
         );
         assert_eq!(cursor_row_count(&conn), 0);
     }
@@ -2342,6 +2470,72 @@ mod tests {
             get_current_version(&conn).expect("version"),
             MIGRATIONS.last().unwrap().version
         );
+    }
+
+    #[test]
+    fn v28_isolates_legacy_vectors_and_seeds_only_the_legacy_pointer() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 27);
+        conn.execute(
+            "INSERT INTO knowledge_nodes (id, content, node_type, created_at, updated_at, last_accessed, \
+             stability, difficulty, reps, lapses, learning_state, storage_strength, retrieval_strength, \
+             retention_strength, next_review, scheduled_days, has_embedding) \
+             VALUES ('legacy-vector-node', 'legacy vector source', 'fact', datetime('now'), datetime('now'), datetime('now'), \
+             1.0, 0.3, 0, 0, 'new', 1.0, 1.0, 1.0, datetime('now'), 1, 1)",
+            [],
+        )
+        .expect("seed V27 node");
+        conn.execute(
+            "INSERT INTO node_embeddings (node_id, embedding, dimensions, model, created_at) \
+             VALUES ('legacy-vector-node', ?1, 256, 'nomic-ai/nomic-embed-text-v1.5', datetime('now'))",
+            [vec![7_u8; 1024]],
+        )
+        .expect("seed legacy vector");
+
+        apply_migrations(&conn).expect("apply V28");
+        assert_eq!(get_current_version(&conn).expect("version"), 28);
+        let copied: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_profile_vectors \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256' AND node_id = 'legacy-vector-node'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query copied vector");
+        assert_eq!(
+            copied, 1,
+            "V28 must retain a legacy vector in its isolated profile"
+        );
+        let active: String = conn
+            .query_row(
+                "SELECT active_profile_id FROM embedding_profile_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("active profile");
+        assert_eq!(active, "nomic-v1.5-legacy-raw-256");
+        let qwen_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_profiles WHERE profile_id LIKE 'qwen3-%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query Qwen profiles");
+        assert_eq!(qwen_rows, 0, "migration must not install or activate Qwen");
+
+        assert_eq!(
+            apply_migrations(&conn).expect("current schema is a no-op"),
+            0
+        );
+        let copied_after_reopen: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_profile_vectors \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256' AND node_id = 'legacy-vector-node'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query retained vector");
+        assert_eq!(copied_after_reopen, 1, "V28 copy is idempotent");
     }
 
     #[test]
@@ -2498,7 +2692,7 @@ mod tests {
         )
         .expect("mark V25 fixture current");
 
-        assert_eq!(apply_migrations(&conn).expect("apply V26 and V27"), 2);
+        assert_eq!(apply_migrations(&conn).expect("apply V26 through V28"), 3);
         let columns: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('receipt_envelopes')
@@ -2508,7 +2702,7 @@ mod tests {
             )
             .expect("inspect V26 column");
         assert_eq!(columns, 1);
-        assert_eq!(apply_migrations(&conn).expect("V27 replay is a no-op"), 0);
+        assert_eq!(apply_migrations(&conn).expect("V28 replay is a no-op"), 0);
     }
 
     #[test]

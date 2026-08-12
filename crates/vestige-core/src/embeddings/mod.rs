@@ -13,6 +13,20 @@ mod code;
 mod hybrid;
 mod local;
 
+// Compatibility facade: callers that historically looked for embedding
+// functionality under `embeddings` can adopt profiles without a module-path
+// migration. The canonical home is `crate::embedding`.
+pub use crate::embedding::{
+    ActiveEmbeddingProfile, BuiltinEmbeddingProfile, ChunkingStrategy,
+    EMBEDDING_PROFILE_MANIFEST_SCHEMA_VERSION, EmbeddingDevice, EmbeddingEvaluationSummary,
+    EmbeddingMigrationState, EmbeddingNormalization, EmbeddingProfile, EmbeddingProfileError,
+    EmbeddingProfileFailure, EmbeddingProfileId, EmbeddingProfileManifest, EmbeddingProfileState,
+    EmbeddingRuntimeBackend, EmbeddingRuntimeMetadata, EmbeddingVerification, EncodingTemplate,
+    ModelArtifactHash, ProfileMigrationCheckpoint, ProfileRuntimeRegistry, ProfiledEmbedder,
+    VerificationStatus, VerifiedLocalArtifact, builtin_embedding_profile_by_id,
+    builtin_embedding_profiles,
+};
+
 #[cfg(feature = "vector-search")]
 pub(crate) use local::get_cache_dir;
 pub use local::{

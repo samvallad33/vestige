@@ -1,0 +1,10 @@
+{
+  "fixture_version": "v1",
+  "license": "CC0-1.0",
+  "purpose": "Deterministic evaluator smoke test only; not suitable for model comparison or product claims.",
+  "files": {
+    "corpus.jsonl": "13fdc3c55556d7afdd0553cb85f4b9178a1e0e62001ca0833dcea3109f2df5c1",
+    "queries.jsonl": "3d11fa69b4ba47533f0bd0d9b0635a9f6f9802039f20000b484f94d2390108e9",
+    "reference-ranked-results.json": "1ed515fb27947b09c41027a204936850475e99452d2c4b1bf7180dcce3339506"
+  }
+}

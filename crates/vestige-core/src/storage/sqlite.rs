@@ -14,8 +14,17 @@ use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
+#[cfg(all(feature = "embeddings", feature = "vector-search"))]
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
+use crate::embedding::{
+    ActiveEmbeddingProfile, BuiltinEmbeddingProfile, EmbeddingMigrationState, EmbeddingProfileId,
+    EmbeddingProfileManifest, EmbeddingProfileState, ProfileMigrationCheckpoint,
+    VerificationStatus,
+};
+#[cfg(all(feature = "embeddings", feature = "vector-search"))]
+use crate::embedding::{EmbeddingRuntimeBackend, ProfiledEmbedder};
 use crate::fsrs::{
     DEFAULT_DECAY, FSRSScheduler, FSRSState, LearningState, MAX_STABILITY, Rating,
     retrievability_with_decay,
@@ -33,13 +42,15 @@ use crate::storage::portable::{
     PortableTable, PortableValue, encode_hex,
 };
 
+#[cfg(all(test, feature = "embeddings"))]
+use crate::embeddings::EMBEDDING_DIMENSIONS;
+#[cfg(all(feature = "embeddings", feature = "vector-search"))]
+use crate::embeddings::Embedding;
 #[cfg(feature = "embeddings")]
 use crate::embeddings::EmbeddingService;
-#[cfg(all(feature = "embeddings", feature = "vector-search"))]
-use crate::embeddings::{EMBEDDING_DIMENSIONS, Embedding, matryoshka_truncate};
 
 #[cfg(feature = "vector-search")]
-use crate::search::{VectorIndex, reciprocal_rank_fusion};
+use crate::search::{VectorIndex, VectorIndexConfig, reciprocal_rank_fusion};
 
 #[cfg(all(feature = "embeddings", feature = "vector-search"))]
 use crate::search::hyde;
@@ -75,6 +86,10 @@ pub enum StorageError {
     /// A project namespace must be a short, non-empty identifier.
     #[error("Invalid memory scope: {0}")]
     InvalidScope(String),
+    /// A profile operation would violate the explicit/reversible embedding
+    /// profile contract.
+    #[error("Invalid embedding profile: {0}")]
+    InvalidEmbeddingProfile(String),
 }
 
 /// Storage result type
@@ -412,6 +427,80 @@ pub struct PurgeReport {
     pub unlearning_claim_boundary: &'static str,
 }
 
+/// Persistent vector row belonging to exactly one embedding profile.
+///
+/// The bytes are intentionally opaque here: storage must not reinterpret or
+/// compare vectors from two profiles. The runtime validates encoding and builds
+/// a profile-specific index before it ever performs semantic retrieval.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingProfileVector {
+    pub profile_id: String,
+    pub node_id: String,
+    pub embedding: Vec<u8>,
+    pub dimensions: u32,
+    pub model: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Integrity evidence persisted beside a profile's vector rows and HNSW
+/// sidecar. The runtime owns the meaning of `manifest_json`, while SQLite owns
+/// atomic persistence and count bookkeeping.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingProfileIntegrityManifest {
+    pub profile_id: String,
+    pub manifest_json: serde_json::Value,
+    pub manifest_hash: String,
+    pub vector_count: u64,
+    pub index_member_count: u64,
+    pub index_integrity_hash: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A durable migration run. Checkpoints live in a sibling table so a crash can
+/// resume at memory granularity without ever altering the active profile.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingProfileMigrationRecord {
+    pub migration_id: String,
+    pub source_profile_id: String,
+    pub destination_profile_id: String,
+    pub state: String,
+    pub total_memories: u64,
+    pub completed_memories: u64,
+    pub failed_memory_ids: Vec<String>,
+    pub last_memory_id: Option<String>,
+    pub snapshot_path: Option<String>,
+    pub validation_report: Option<serde_json::Value>,
+    pub started_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Per-memory migration progress. A failed row is retained rather than hidden
+/// behind a misleading completed state.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingProfileMigrationNodeCheckpoint {
+    pub migration_id: String,
+    pub node_id: String,
+    pub state: String,
+    pub error: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+type EmbeddingProfileMigrationRow = (
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    String,
+    Option<String>,
+    String,
+    String,
+);
+
 // ============================================================================
 // STORAGE
 // ============================================================================
@@ -478,6 +567,10 @@ pub(crate) struct PurgeCleanup {
 const DATA_DIR_ENV: &str = "VESTIGE_DATA_DIR";
 const DATABASE_FILE: &str = "vestige.db";
 const VESTIGE_DISABLE_VECTOR_SEARCH: &str = "VESTIGE_DISABLE_VECTOR_SEARCH";
+/// Immutable compatibility identity for vectors written before Embedding
+/// Profiles existed. It is deliberately explicit: raw-text vectors must never
+/// be confused with the corrected Nomic retrieval encoding contract.
+pub const LEGACY_EMBEDDING_PROFILE_ID: &str = "nomic-v1.5-legacy-raw-256";
 
 /// Main storage struct with integrated embedding and vector search
 ///
@@ -500,8 +593,20 @@ pub struct SqliteMemoryStore {
     /// LRU cache for query embeddings to avoid re-embedding repeated queries
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     query_cache: Option<Mutex<LruCache<String, Vec<f32>>>>,
+    /// Explicit, process-local runtime for an active optional embedding
+    /// profile.  It is never restored from disk: a caller must re-verify and
+    /// attach local artifacts in every process before Qwen retrieval can run.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    attached_profile_runtime: RwLock<Option<AttachedProfileRuntime>>,
     /// Cached model signature. `None` until the first embedding is written.
     registered_model: std::sync::RwLock<Option<crate::storage::memory_store::ModelSignature>>,
+}
+
+#[cfg(all(feature = "embeddings", feature = "vector-search"))]
+#[derive(Clone)]
+struct AttachedProfileRuntime {
+    profile_id: EmbeddingProfileId,
+    embedder: Arc<ProfiledEmbedder>,
 }
 
 impl SqliteMemoryStore {
@@ -1138,8 +1243,15 @@ impl SqliteMemoryStore {
             vector_index,
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
             query_cache,
+            #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+            attached_profile_runtime: RwLock::new(None),
             registered_model: std::sync::RwLock::new(None),
         };
+
+        // V20 seeds a minimal SQL row so old databases migrate atomically.
+        // Replace that bootstrap with the complete, serializable manifest before
+        // exposing the store to callers.
+        storage.ensure_legacy_embedding_profile_manifest()?;
 
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         if storage.vector_index.is_some() {
@@ -1192,87 +1304,108 @@ impl SqliteMemoryStore {
         self.data_dir().join(name)
     }
 
+    /// Return the profile-scoped HNSW sidecar location. The profile ID is
+    /// validated before being placed in a path, preventing traversal through a
+    /// manifest or CLI argument.
+    pub fn embedding_profile_index_dir(&self, profile_id: &EmbeddingProfileId) -> Result<PathBuf> {
+        EmbeddingProfileId::new(profile_id.as_str().to_string())
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        Ok(self
+            .sidecar_dir("embedding-profiles")
+            .join(profile_id.as_str())
+            .join("hnsw"))
+    }
+
     /// Load existing embeddings into vector index
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn load_embeddings_into_index(&self) -> Result<()> {
         let Some(index) = self.vector_index.as_ref() else {
             return Ok(());
         };
-
-        let mut index = index
-            .lock()
-            .map_err(|_| StorageError::Init("Vector index lock poisoned".to_string()))?;
         let reader = self
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let active_profile_id = Self::active_profile_id_from_conn(&reader)?
+            .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.to_string());
+        drop(reader);
+        let rebuilt = self.build_embedding_profile_index(&active_profile_id)?;
+        let mut index = index
+            .lock()
+            .map_err(|_| StorageError::Init("Vector index lock poisoned".to_string()))?;
+        *index = rebuilt;
+        Ok(())
+    }
 
-        let mut stmt = reader.prepare("SELECT node_id, embedding, model FROM node_embeddings")?;
+    /// Build an isolated exact-dimension HNSW index without touching the live
+    /// index. Activation uses this preflight so an invalid destination can
+    /// never become the visible database pointer.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn build_embedding_profile_index(&self, profile_id: &str) -> Result<VectorIndex> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let profile_dimension: usize = reader
+            .query_row(
+                "SELECT embedding_dimension FROM embedding_profiles WHERE profile_id = ?1",
+                params![profile_id],
+                |row| row.get::<_, i64>(0),
+            )?
+            .try_into()
+            .map_err(|_| {
+                StorageError::InvalidEmbeddingProfile(format!(
+                    "profile '{}' has an invalid embedding dimension",
+                    profile_id
+                ))
+            })?;
+        let mut stmt = reader.prepare(
+            "SELECT node_id, embedding, model
+             FROM embedding_profile_vectors
+             WHERE profile_id = ?1",
+        )?;
 
         let embeddings: Vec<(String, Vec<u8>, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .query_map(params![profile_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
             .filter_map(|r| r.ok())
             .collect();
 
         drop(stmt);
         drop(reader);
 
-        *index = VectorIndex::new().map_err(|e| {
+        // An index is a profile-scoped structure. In particular, never
+        // Matryoshka-truncate a 1024/native profile into the legacy 256d index.
+        let mut index = VectorIndex::with_config(VectorIndexConfig {
+            dimensions: profile_dimension,
+            ..VectorIndexConfig::default()
+        })
+        .map_err(|e| {
             StorageError::Init(format!("Failed to rebuild vector index before load: {}", e))
         })?;
 
-        let mut load_failures = 0u32;
-        let mut skipped_model_mismatches = 0u32;
-        let active_model = self.embedding_service.model_name();
-        for (node_id, embedding_bytes, model_name) in embeddings {
-            if !Self::embedding_model_matches_active(&model_name, active_model) {
-                skipped_model_mismatches += 1;
-                continue;
+        for (node_id, embedding_bytes, _model_name) in embeddings {
+            let embedding = Embedding::from_bytes(&embedding_bytes).ok_or_else(|| {
+                StorageError::InvalidEmbeddingProfile(format!(
+                    "profile '{}' contains unreadable vector '{}'",
+                    profile_id, node_id
+                ))
+            })?;
+            if embedding.dimensions != profile_dimension {
+                return Err(StorageError::InvalidEmbeddingProfile(format!(
+                    "profile '{}' declares {} dimensions but vector '{}' has {}",
+                    profile_id, profile_dimension, node_id, embedding.dimensions
+                )));
             }
-
-            if let Some(embedding) = Embedding::from_bytes(&embedding_bytes) {
-                // Handle Matryoshka models explicitly. Do not silently truncate
-                // unknown embedding families into the active 256d index.
-                let vector = if embedding.dimensions != EMBEDDING_DIMENSIONS {
-                    let model_lower = model_name.to_ascii_lowercase();
-                    if model_lower.contains("nomic") || model_lower.contains("qwen3") {
-                        matryoshka_truncate(embedding.vector)
-                    } else {
-                        load_failures += 1;
-                        tracing::warn!(
-                            node_id = %node_id,
-                            model = %model_name,
-                            dimensions = embedding.dimensions,
-                            expected = EMBEDDING_DIMENSIONS,
-                            "Skipping embedding with incompatible dimensions"
-                        );
-                        continue;
-                    }
-                } else {
-                    embedding.vector
-                };
-                if let Err(e) = index.add(&node_id, &vector) {
-                    load_failures += 1;
-                    tracing::warn!("Failed to load embedding for {}: {}", node_id, e);
-                }
-            }
+            index.add(&node_id, &embedding.vector).map_err(|error| {
+                StorageError::InvalidEmbeddingProfile(format!(
+                    "profile '{}' failed to build index for vector '{}': {}",
+                    profile_id, node_id, error
+                ))
+            })?;
         }
-        if load_failures > 0 {
-            tracing::error!(
-                count = load_failures,
-                "Vector index: {} embeddings failed to load",
-                load_failures
-            );
-        }
-        if skipped_model_mismatches > 0 {
-            tracing::info!(
-                count = skipped_model_mismatches,
-                active_model = active_model,
-                "Vector index skipped embeddings from a different model family; run consolidation to re-embed them"
-            );
-        }
-
-        Ok(())
+        Ok(index)
     }
 
     fn secret_findings_for_input(input: &IngestInput) -> Vec<SecretFinding> {
@@ -1697,7 +1830,7 @@ impl SqliteMemoryStore {
         let scope = Self::normalize_scope(scope)?;
 
         // Generate embedding for new content
-        if !self.embedding_service.is_ready() {
+        if !self.active_embedding_runtime_ready()? {
             return self.regular_ingest_result(
                 input,
                 scope,
@@ -1715,10 +1848,11 @@ impl SqliteMemoryStore {
             );
         }
 
-        let new_embedding = self
-            .embedding_service
-            .embed(&input.content)
-            .map_err(|e| StorageError::Init(format!("Embedding failed: {}", e)))?;
+        // The prediction gate compares a candidate *document* with stored
+        // document vectors. Qwen's retrieval profile intentionally uses a
+        // different query template, so using get_query_embedding here would
+        // silently compare different encoded spaces.
+        let new_embedding = self.get_document_embedding(&input.content)?;
 
         // Find similar memories using semantic search
         let similar = self.semantic_search_raw(&input.content, 10)?;
@@ -1768,7 +1902,7 @@ impl SqliteMemoryStore {
 
         // Evaluate with prediction error gate
         let mut gate = PredictionErrorGate::new();
-        let decision = gate.evaluate(&input.content, &new_embedding.vector, &candidates);
+        let decision = gate.evaluate(&input.content, &new_embedding, &candidates);
 
         match decision {
             GateDecision::Create {
@@ -2014,20 +2148,35 @@ impl SqliteMemoryStore {
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-        let mut stmt =
-            reader.prepare("SELECT embedding, model FROM node_embeddings WHERE node_id = ?1")?;
+        let active_profile_id = Self::active_profile_id_from_conn(&reader)?
+            .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.to_string());
+        let mut stmt = reader.prepare(
+            "SELECT embedding FROM embedding_profile_vectors
+             WHERE profile_id = ?1 AND node_id = ?2",
+        )?;
 
-        let embedding_row: Option<(Vec<u8>, String)> = stmt
-            .query_row(params![node_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        let embedding_row: Option<Vec<u8>> = stmt
+            .query_row(params![&active_profile_id, node_id], |row| row.get(0))
             .optional()?;
 
-        Ok(embedding_row.and_then(|(bytes, model)| {
-            Self::embedding_vector_for_active_model(
-                &bytes,
-                &model,
-                self.embedding_service.model_name(),
-            )
-        }))
+        // Direct table writes remain a supported test and migration fixture.
+        // Only the legacy profile may consult that compatibility mirror; every
+        // non-legacy profile is strictly isolated from it.
+        let embedding_row =
+            if embedding_row.is_none() && active_profile_id == LEGACY_EMBEDDING_PROFILE_ID {
+                reader
+                    .query_row(
+                        "SELECT embedding FROM node_embeddings WHERE node_id = ?1",
+                        params![node_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+            } else {
+                embedding_row
+            };
+
+        Ok(embedding_row
+            .and_then(|bytes| Embedding::from_bytes(&bytes).map(|embedding| embedding.vector)))
     }
 
     /// Get all embedding vectors for duplicate detection
@@ -2037,22 +2186,48 @@ impl SqliteMemoryStore {
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-        let mut stmt = reader.prepare("SELECT node_id, embedding, model FROM node_embeddings")?;
-        let active_model = self.embedding_service.model_name();
+        let active_profile_id = Self::active_profile_id_from_conn(&reader)?
+            .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.to_string());
+        let mut stmt = reader.prepare(
+            "SELECT node_id, embedding FROM embedding_profile_vectors WHERE profile_id = ?1",
+        )?;
 
-        let results: Vec<(String, Vec<f32>)> = stmt
-            .query_map([], |row| {
+        let mut results: Vec<(String, Vec<f32>)> = stmt
+            .query_map(params![&active_profile_id], |row| {
                 let node_id: String = row.get(0)?;
                 let embedding_bytes: Vec<u8> = row.get(1)?;
-                let model: String = row.get(2)?;
-                Ok((node_id, embedding_bytes, model))
+                Ok((node_id, embedding_bytes))
             })?
             .filter_map(|r| r.ok())
-            .filter_map(|(id, bytes, model)| {
-                Self::embedding_vector_for_active_model(&bytes, &model, active_model)
-                    .map(|vector| (id, vector))
+            .filter_map(|(id, bytes)| {
+                Embedding::from_bytes(&bytes).map(|embedding| (id, embedding.vector))
             })
             .collect();
+
+        // Keep direct writes to the historic table readable for the legacy
+        // profile only. The anti-join avoids duplicate node ids after V20's
+        // one-time copy, while non-legacy profiles never see this mirror.
+        if active_profile_id == LEGACY_EMBEDDING_PROFILE_ID {
+            drop(stmt);
+            let mut legacy_stmt = reader.prepare(
+                "SELECT ne.node_id, ne.embedding
+                 FROM node_embeddings ne
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM embedding_profile_vectors pv
+                     WHERE pv.profile_id = ?1 AND pv.node_id = ne.node_id
+                 )",
+            )?;
+            results.extend(
+                legacy_stmt
+                    .query_map(params![LEGACY_EMBEDDING_PROFILE_ID], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                    })?
+                    .filter_map(|row| row.ok())
+                    .filter_map(|(id, bytes)| {
+                        Embedding::from_bytes(&bytes).map(|embedding| (id, embedding.vector))
+                    }),
+            );
+        }
 
         Ok(results)
     }
@@ -2154,7 +2329,7 @@ impl SqliteMemoryStore {
             // has_embedding = 0 / missing rows / model mismatch) never refreshed
             // it. Flip has_embedding to 0 on the not-ready path so the stale vector
             // is picked up and rebuilt once the embedder comes online.
-            if self.embedding_service.is_ready() {
+            if self.active_embedding_runtime_ready().unwrap_or(false) {
                 if let Err(e) = self.generate_embedding_for_node(id, new_content) {
                     tracing::warn!("Failed to regenerate embedding for {}: {}", id, e);
                 }
@@ -2172,15 +2347,52 @@ impl SqliteMemoryStore {
     /// Generate embedding for a node
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn generate_embedding_for_node(&self, node_id: &str, content: &str) -> Result<()> {
-        if !self.embedding_service.is_ready() {
+        if !self.active_embedding_runtime_ready()? {
             return Ok(());
         }
 
-        let embedding = self
-            .embedding_service
-            .embed(content)
-            .map_err(|e| StorageError::Init(format!("Embedding failed: {}", e)))?;
-        let model_name = self.embedding_service.model_name();
+        let active = self.active_embedding_profile()?.ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("no active embedding profile pointer".to_string())
+        })?;
+        let manifest = self
+            .embedding_profile_manifest(&active.profile_id)?
+            .ok_or_else(|| StorageError::NotFound(active.profile_id.to_string()))?;
+        let encoded_content = manifest
+            .profile
+            .encode_document(content)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+
+        let (embedding_bytes, embedding_dimensions, model_name, vector) =
+            if let Some(embedder) = self.attached_embedder_for(&active.profile_id)? {
+                let runtime = tokio::runtime::Runtime::new().map_err(|error| {
+                    StorageError::Init(format!("Create local embedding runtime: {error}"))
+                })?;
+                let vector = runtime
+                    .block_on(embedder.embed_document(content))
+                    .map_err(|error| StorageError::Init(format!("Embedding failed: {error}")))?;
+                let bytes = vector
+                    .iter()
+                    .flat_map(|value| value.to_le_bytes())
+                    .collect::<Vec<_>>();
+                (bytes, vector.len(), active.profile_id.to_string(), vector)
+            } else {
+                let embedding = self
+                    .embedding_service
+                    .embed(&encoded_content)
+                    .map_err(|e| StorageError::Init(format!("Embedding failed: {e}")))?;
+                (
+                    embedding.to_bytes(),
+                    embedding.dimensions,
+                    self.embedding_service.model_name().to_string(),
+                    embedding.vector,
+                )
+            };
+        if embedding_dimensions != manifest.profile.embedding_dimension {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "active profile '{}' requires {} dimensions but its runtime produced {}",
+                active.profile_id, manifest.profile.embedding_dimension, embedding_dimensions
+            )));
+        }
 
         let now = Utc::now();
 
@@ -2189,21 +2401,39 @@ impl SqliteMemoryStore {
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            if active.profile_id.as_str() == LEGACY_EMBEDDING_PROFILE_ID {
+                writer.execute(
+                    "INSERT OR REPLACE INTO node_embeddings (node_id, embedding, dimensions, model, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        node_id,
+                        &embedding_bytes,
+                        embedding_dimensions as i32,
+                        &model_name,
+                        now.to_rfc3339(),
+                    ],
+                )?;
+            }
+
+            let active_profile_id = Self::active_profile_id_from_conn(&writer)?
+                .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.to_string());
             writer.execute(
-                "INSERT OR REPLACE INTO node_embeddings (node_id, embedding, dimensions, model, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT OR REPLACE INTO embedding_profile_vectors
+                    (profile_id, node_id, embedding, dimensions, model, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
+                    active_profile_id,
                     node_id,
-                    embedding.to_bytes(),
-                    embedding.dimensions as i32,
-                    model_name,
+                    &embedding_bytes,
+                    embedding_dimensions as i32,
+                    &model_name,
                     now.to_rfc3339(),
                 ],
             )?;
 
             writer.execute(
                 "UPDATE knowledge_nodes SET has_embedding = 1, embedding_model = ?2 WHERE id = ?1",
-                params![node_id, model_name],
+                params![node_id, &model_name],
             )?;
         }
 
@@ -2212,10 +2442,982 @@ impl SqliteMemoryStore {
                 .lock()
                 .map_err(|_| StorageError::Init("Vector index lock poisoned".to_string()))?;
             index
-                .add(node_id, &embedding.vector)
+                .add(node_id, &vector)
                 .map_err(|e| StorageError::Init(format!("Vector index add failed: {}", e)))?;
         }
 
+        Ok(())
+    }
+
+    /// Read the active profile pointer from a caller-held connection. The
+    /// pointer has one row and is changed in the same SQLite transaction as
+    /// profile status, so readers can never observe a half-switch.
+    fn active_profile_id_from_conn(conn: &Connection) -> Result<Option<String>> {
+        conn.query_row(
+            "SELECT active_profile_id FROM embedding_profile_state WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(StorageError::from)
+    }
+
+    fn profile_state_text(state: EmbeddingProfileState) -> Result<String> {
+        serde_json::to_value(state)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| {
+                StorageError::InvalidEmbeddingProfile(
+                    "profile state must serialize to a string".to_string(),
+                )
+            })
+    }
+
+    fn migration_state_text(state: EmbeddingMigrationState) -> Result<String> {
+        serde_json::to_value(state)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| {
+                StorageError::InvalidEmbeddingProfile(
+                    "migration state must serialize to a string".to_string(),
+                )
+            })
+    }
+
+    fn parse_rfc3339(value: String, field: &str) -> Result<DateTime<Utc>> {
+        // V20's SQL bootstrap uses SQLite `datetime('now')` while subsequent
+        // Rust writes use RFC3339. Reuse the store's tolerant parser so either
+        // durable timestamp representation round-trips through profile APIs.
+        Self::parse_timestamp(&value, field).map_err(StorageError::from)
+    }
+
+    fn ensure_legacy_embedding_profile_manifest(&self) -> Result<()> {
+        // Normal opens must be completely idempotent. In particular, never
+        // rewrite a preserved legacy profile to Active after an explicit Qwen
+        // activation has moved the durable pointer elsewhere.
+        let existing_manifest = {
+            let reader = self
+                .reader
+                .lock()
+                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+            reader
+                .query_row(
+                    "SELECT manifest_json FROM embedding_profile_manifests WHERE profile_id = ?1",
+                    params![LEGACY_EMBEDDING_PROFILE_ID],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+        };
+        if existing_manifest
+            .as_deref()
+            .is_some_and(|json| serde_json::from_str::<EmbeddingProfileManifest>(json).is_ok())
+        {
+            return Ok(());
+        }
+
+        let mut manifest = EmbeddingProfileManifest::not_installed(
+            BuiltinEmbeddingProfile::NomicLegacyRaw256.profile(),
+        )
+        .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let active_is_legacy = self
+            .active_embedding_profile()?
+            .is_none_or(|active| active.profile_id.as_str() == LEGACY_EMBEDDING_PROFILE_ID);
+        manifest.state = if active_is_legacy {
+            EmbeddingProfileState::Active
+        } else {
+            // This only upgrades V20's bootstrap '{}' placeholder. Existing
+            // valid manifests already returned above, so no lifecycle receipt
+            // or user choice is ever overwritten on reopen.
+            EmbeddingProfileState::Ready
+        };
+        self.save_embedding_profile_manifest(&manifest)
+    }
+
+    /// Persist a full profile contract and its lifecycle receipt. This is a
+    /// metadata operation only: saving an Installed manifest never downloads,
+    /// migrates, or activates a model.
+    pub fn save_embedding_profile_manifest(
+        &self,
+        manifest: &EmbeddingProfileManifest,
+    ) -> Result<()> {
+        manifest
+            .validate()
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let profile = &manifest.profile;
+        let manifest_json = serde_json::to_string(manifest)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let artifact_hashes = serde_json::to_string(&profile.verified_model_artifact_hashes)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let runtime = serde_json::to_string(&manifest.runtime)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let verification = serde_json::to_string(&manifest.verification)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let evaluation = serde_json::to_string(&manifest.evaluation)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let failure = serde_json::to_string(&manifest.failure)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let state = Self::profile_state_text(manifest.state)?;
+        let now = Utc::now();
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = writer.transaction()?;
+        let existing: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT pm.manifest_json, pm.vector_count
+                 FROM embedding_profile_manifests pm WHERE pm.profile_id = ?1",
+                params![profile.profile_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((existing_json, vector_count)) = existing {
+            // The V20 bootstrap row is deliberately replaced once with the
+            // canonical legacy manifest. After that, a profile ID is an
+            // immutable vector-space identity, not a mutable model selector.
+            if let Ok(existing_manifest) =
+                serde_json::from_str::<EmbeddingProfileManifest>(&existing_json)
+                && vector_count > 0
+                && existing_manifest.profile != manifest.profile
+            {
+                return Err(StorageError::InvalidEmbeddingProfile(format!(
+                    "profile '{}' already owns {} vectors; changing its encoding contract requires a new profile ID",
+                    profile.profile_id, vector_count
+                )));
+            }
+        }
+        if manifest.state == EmbeddingProfileState::Active {
+            let pointer = Self::active_profile_id_from_conn(&tx)?;
+            if pointer.as_deref() != Some(profile.profile_id.as_str()) {
+                return Err(StorageError::InvalidEmbeddingProfile(format!(
+                    "profile '{}' may become active only through activate_embedding_profile",
+                    profile.profile_id
+                )));
+            }
+        }
+        tx.execute(
+            "INSERT INTO embedding_profiles (
+                profile_id, model_id, immutable_model_revision, verified_model_artifact_hashes,
+                runtime_backend, embedding_dimension, normalization_method,
+                document_encoding_template, query_encoding_template, maximum_token_limit,
+                chunking_strategy, status, installed_at, last_verified_at, runtime_metadata,
+                verification, evaluation, failure, created_at, updated_at
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+             ) ON CONFLICT(profile_id) DO UPDATE SET
+                model_id = excluded.model_id,
+                immutable_model_revision = excluded.immutable_model_revision,
+                verified_model_artifact_hashes = excluded.verified_model_artifact_hashes,
+                runtime_backend = excluded.runtime_backend,
+                embedding_dimension = excluded.embedding_dimension,
+                normalization_method = excluded.normalization_method,
+                document_encoding_template = excluded.document_encoding_template,
+                query_encoding_template = excluded.query_encoding_template,
+                maximum_token_limit = excluded.maximum_token_limit,
+                chunking_strategy = excluded.chunking_strategy,
+                status = excluded.status,
+                installed_at = excluded.installed_at,
+                last_verified_at = excluded.last_verified_at,
+                runtime_metadata = excluded.runtime_metadata,
+                verification = excluded.verification,
+                evaluation = excluded.evaluation,
+                failure = excluded.failure,
+                updated_at = excluded.updated_at",
+            params![
+                profile.profile_id.as_str(),
+                profile.model_id,
+                profile.immutable_model_revision,
+                artifact_hashes,
+                serde_json::to_string(&profile.runtime_backend).unwrap_or_default(),
+                profile.embedding_dimension as i64,
+                serde_json::to_string(&profile.normalization_method).unwrap_or_default(),
+                serde_json::to_string(&profile.document_encoding_template).unwrap_or_default(),
+                serde_json::to_string(&profile.query_encoding_template).unwrap_or_default(),
+                profile.maximum_token_limit as i64,
+                serde_json::to_string(&profile.chunking_strategy).unwrap_or_default(),
+                state,
+                manifest.installed_at.map(|value| value.to_rfc3339()),
+                manifest.last_verified_at.map(|value| value.to_rfc3339()),
+                runtime,
+                verification,
+                evaluation,
+                failure,
+                profile.created_at.to_rfc3339(),
+                now.to_rfc3339(),
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO embedding_profile_manifests (
+                profile_id, manifest_json, manifest_hash, vector_count, index_member_count, index_integrity_hash, updated_at
+             ) VALUES (
+                ?1, ?2, ?3,
+                (SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = ?1),
+                0, NULL, ?4
+             ) ON CONFLICT(profile_id) DO UPDATE SET
+                manifest_json = excluded.manifest_json,
+                manifest_hash = excluded.manifest_hash,
+                vector_count = (SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = excluded.profile_id),
+                updated_at = excluded.updated_at",
+            params![profile.profile_id.as_str(), manifest_json, manifest.manifest_hash(), now.to_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Read a profile's complete persisted contract and lifecycle state.
+    pub fn embedding_profile_manifest(
+        &self,
+        profile_id: &EmbeddingProfileId,
+    ) -> Result<Option<EmbeddingProfileManifest>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let manifest: Option<String> = reader
+            .query_row(
+                "SELECT manifest_json FROM embedding_profile_manifests WHERE profile_id = ?1",
+                params![profile_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        manifest
+            .map(|json| {
+                serde_json::from_str(&json)
+                    .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))
+            })
+            .transpose()
+    }
+
+    /// List known profiles without triggering any install/runtime work.
+    pub fn list_embedding_profile_manifests(&self) -> Result<Vec<EmbeddingProfileManifest>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let mut statement = reader
+            .prepare("SELECT manifest_json FROM embedding_profile_manifests ORDER BY profile_id")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .map(|row| {
+                let json = row?;
+                serde_json::from_str(&json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(error))
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
+    }
+
+    /// Read the active semantic-retrieval profile pointer.
+    pub fn active_embedding_profile(&self) -> Result<Option<ActiveEmbeddingProfile>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let row: Option<(String, Option<String>, String)> = reader
+            .query_row(
+                "SELECT active_profile_id, previous_profile_id, activated_at
+                 FROM embedding_profile_state WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        row.map(|(profile_id, previous_profile_id, activated_at)| {
+            Ok(ActiveEmbeddingProfile {
+                profile_id: EmbeddingProfileId::new(profile_id)
+                    .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?,
+                previous_profile_id: previous_profile_id
+                    .map(EmbeddingProfileId::new)
+                    .transpose()
+                    .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?,
+                activated_at: Self::parse_rfc3339(activated_at, "profile activation timestamp")?,
+            })
+        })
+        .transpose()
+    }
+
+    /// Change only the active-profile pointer after the caller has explicitly
+    /// installed, evaluated, migrated, and validated the destination. The
+    /// pointer and both status updates are one SQLite transaction; no vector
+    /// rows are copied, removed, or re-embedded during activation.
+    pub fn activate_embedding_profile(
+        &self,
+        profile_id: &EmbeddingProfileId,
+    ) -> Result<ActiveEmbeddingProfile> {
+        let target_state = Self::profile_state_text(EmbeddingProfileState::Ready)?;
+        let active_state = Self::profile_state_text(EmbeddingProfileState::Active)?;
+        let now = Utc::now();
+        // Prebuild outside the write transaction. A malformed vector, mixed
+        // dimensions, or unbuildable index fails here while the old pointer is
+        // still live. Once the index lock is acquired, searches block until the
+        // pointer transaction and in-memory index swap have both completed.
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        let rebuilt_index = if self.vector_index.is_some() {
+            Some(self.build_embedding_profile_index(profile_id.as_str())?)
+        } else {
+            None
+        };
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        let mut live_index = match self.vector_index.as_ref() {
+            Some(index) => Some(
+                index
+                    .lock()
+                    .map_err(|_| StorageError::Init("Vector index lock poisoned".to_string()))?,
+            ),
+            None => None,
+        };
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = writer.transaction()?;
+        let current: Option<String> = tx
+            .query_row(
+                "SELECT active_profile_id FROM embedding_profile_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let stored_state: Option<String> = tx
+            .query_row(
+                "SELECT status FROM embedding_profiles WHERE profile_id = ?1",
+                params![profile_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(stored_state) = stored_state else {
+            return Err(StorageError::NotFound(profile_id.to_string()));
+        };
+        let manifest_json: String = tx
+            .query_row(
+                "SELECT manifest_json FROM embedding_profile_manifests WHERE profile_id = ?1",
+                params![profile_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                StorageError::NotFound(format!("embedding profile manifest {profile_id}"))
+            })?;
+        let manifest: EmbeddingProfileManifest = serde_json::from_str(&manifest_json)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let legacy_rollback = profile_id.as_str() == LEGACY_EMBEDDING_PROFILE_ID
+            && current.is_some()
+            && current.as_deref() != Some(profile_id.as_str());
+        if stored_state != target_state && stored_state != active_state {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "profile '{}' is '{}' and cannot be activated; only a validated ready profile may change live semantic retrieval",
+                profile_id, stored_state
+            )));
+        }
+        if current.as_deref() == Some(profile_id.as_str()) {
+            tx.commit()?;
+            return Ok(ActiveEmbeddingProfile {
+                profile_id: profile_id.clone(),
+                previous_profile_id: None,
+                activated_at: now,
+            });
+        }
+        if !legacy_rollback
+            && (manifest.state != EmbeddingProfileState::Ready
+                || manifest.verification.status != VerificationStatus::Verified
+                || manifest.verification.verified_artifacts.is_empty()
+                || manifest
+                    .runtime
+                    .as_ref()
+                    .is_none_or(|runtime| !runtime.local_only)
+                || manifest.evaluation.is_none())
+        {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "profile '{}' must have a ready, locally verified runtime and completed evaluation before activation",
+                profile_id
+            )));
+        }
+        let completed_state = Self::migration_state_text(EmbeddingMigrationState::Completed)?;
+        let completed_migration: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM embedding_profile_migrations
+             WHERE destination_profile_id = ?1 AND state = ?2",
+            params![profile_id.as_str(), completed_state],
+            |row| row.get(0),
+        )?;
+        let integrity: Option<(i64, i64, String)> = tx
+            .query_row(
+                "SELECT vector_count, index_member_count, manifest_hash
+                 FROM embedding_profile_manifests WHERE profile_id = ?1",
+                params![profile_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((vector_count, index_member_count, manifest_hash)) = integrity else {
+            return Err(StorageError::InvalidEmbeddingProfile(
+                "missing profile integrity manifest".to_string(),
+            ));
+        };
+        if !legacy_rollback
+            && (completed_migration == 0
+                || vector_count != index_member_count
+                || manifest_hash != manifest.manifest_hash())
+        {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "profile '{}' lacks a completed migration with a validated matching index manifest",
+                profile_id
+            )));
+        }
+        let wrong_dimension_vectors: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM embedding_profile_vectors
+             WHERE profile_id = ?1 AND dimensions != ?2",
+            params![
+                profile_id.as_str(),
+                manifest.profile.embedding_dimension as i64
+            ],
+            |row| row.get(0),
+        )?;
+        if wrong_dimension_vectors != 0 {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "profile '{}' has {} vectors incompatible with its declared dimension",
+                profile_id, wrong_dimension_vectors
+            )));
+        }
+        if let Some(current_id) = &current {
+            // A prior active profile remains validated and rollback-ready. It
+            // becomes Ready (not Inactive), so any future activation still
+            // passes the exact same validation gate.
+            tx.execute(
+                "UPDATE embedding_profiles SET status = ?1, updated_at = ?2 WHERE profile_id = ?3",
+                params![target_state, now.to_rfc3339(), current_id],
+            )?;
+        }
+        tx.execute(
+            "UPDATE embedding_profiles SET status = ?1, updated_at = ?2 WHERE profile_id = ?3",
+            params![active_state, now.to_rfc3339(), profile_id.as_str()],
+        )?;
+        tx.execute(
+            "INSERT INTO embedding_profile_state (
+                singleton, active_profile_id, previous_profile_id, activated_at, updated_at
+             ) VALUES (1, ?1, ?2, ?3, ?3)
+             ON CONFLICT(singleton) DO UPDATE SET
+                active_profile_id = excluded.active_profile_id,
+                previous_profile_id = excluded.previous_profile_id,
+                activated_at = excluded.activated_at,
+                updated_at = excluded.updated_at",
+            params![profile_id.as_str(), current, now.to_rfc3339()],
+        )?;
+        tx.commit()?;
+        // The index lock blocks semantic search across the committed-pointer /
+        // in-memory-index handoff. The replacement was built and fully checked
+        // before the pointer was ever visible.
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        if let (Some(live_index), Some(rebuilt_index)) = (live_index.as_deref_mut(), rebuilt_index)
+        {
+            *live_index = rebuilt_index;
+        }
+        Ok(ActiveEmbeddingProfile {
+            profile_id: profile_id.clone(),
+            previous_profile_id: current
+                .map(EmbeddingProfileId::new)
+                .transpose()
+                .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?,
+            activated_at: now,
+        })
+    }
+
+    /// Instant rollback is exactly another explicit pointer change; the old
+    /// profile's isolated vectors and sidecar remain intact.
+    pub fn rollback_embedding_profile(
+        &self,
+        profile_id: &EmbeddingProfileId,
+    ) -> Result<ActiveEmbeddingProfile> {
+        self.activate_embedding_profile(profile_id)
+    }
+
+    /// Store a vector in one profile's private vector space. Dimension and
+    /// profile identity are checked at write time, preventing a migration from
+    /// accidentally contaminating its destination profile.
+    pub fn put_embedding_profile_vector(&self, vector: &EmbeddingProfileVector) -> Result<()> {
+        if vector.profile_id.trim().is_empty()
+            || vector.node_id.trim().is_empty()
+            || vector.dimensions == 0
+        {
+            return Err(StorageError::InvalidEmbeddingProfile(
+                "profile vector requires a profile ID, node ID, and positive dimensions"
+                    .to_string(),
+            ));
+        }
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = writer.transaction()?;
+        let declared_dimension: Option<i64> = tx
+            .query_row(
+                "SELECT embedding_dimension FROM embedding_profiles WHERE profile_id = ?1",
+                params![&vector.profile_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(declared_dimension) = declared_dimension else {
+            return Err(StorageError::NotFound(vector.profile_id.clone()));
+        };
+        if declared_dimension != i64::from(vector.dimensions) {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "profile '{}' declares {} dimensions but attempted vector has {}",
+                vector.profile_id, declared_dimension, vector.dimensions
+            )));
+        }
+        tx.execute(
+            "INSERT INTO embedding_profile_vectors
+                (profile_id, node_id, embedding, dimensions, model, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(profile_id, node_id) DO UPDATE SET
+                embedding = excluded.embedding, dimensions = excluded.dimensions,
+                model = excluded.model, created_at = excluded.created_at",
+            params![
+                &vector.profile_id,
+                &vector.node_id,
+                &vector.embedding,
+                vector.dimensions as i64,
+                &vector.model,
+                vector.created_at.to_rfc3339(),
+            ],
+        )?;
+        tx.execute(
+            "UPDATE embedding_profile_manifests
+             SET vector_count = (SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = ?1),
+                 updated_at = ?2
+             WHERE profile_id = ?1",
+            params![&vector.profile_id, Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Read one profile-scoped vector. This never falls back to another profile.
+    pub fn embedding_profile_vector(
+        &self,
+        profile_id: &EmbeddingProfileId,
+        node_id: &str,
+    ) -> Result<Option<EmbeddingProfileVector>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let row: Option<(Vec<u8>, i64, String, String)> = reader
+            .query_row(
+                "SELECT embedding, dimensions, model, created_at
+                 FROM embedding_profile_vectors WHERE profile_id = ?1 AND node_id = ?2",
+                params![profile_id.as_str(), node_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        row.map(|(embedding, dimensions, model, created_at)| {
+            Ok(EmbeddingProfileVector {
+                profile_id: profile_id.to_string(),
+                node_id: node_id.to_string(),
+                embedding,
+                dimensions: dimensions.try_into().map_err(|_| {
+                    StorageError::InvalidEmbeddingProfile("negative vector dimensions".to_string())
+                })?,
+                model,
+                created_at: Self::parse_rfc3339(created_at, "profile vector timestamp")?,
+            })
+        })
+        .transpose()
+    }
+
+    /// Record the validated vector/index membership for a profile. This is the
+    /// final integrity receipt required before `activate_embedding_profile` can
+    /// move live semantic retrieval to the profile.
+    pub fn save_embedding_profile_integrity_manifest(
+        &self,
+        integrity: &EmbeddingProfileIntegrityManifest,
+    ) -> Result<()> {
+        let profile_id = EmbeddingProfileId::new(integrity.profile_id.clone())
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let manifest = self
+            .embedding_profile_manifest(&profile_id)?
+            .ok_or_else(|| StorageError::NotFound(profile_id.to_string()))?;
+        if integrity.manifest_hash != manifest.manifest_hash() {
+            return Err(StorageError::InvalidEmbeddingProfile(
+                "integrity receipt hash does not match the persisted profile manifest".to_string(),
+            ));
+        }
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let actual_vector_count: i64 = writer.query_row(
+            "SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = ?1",
+            params![profile_id.as_str()],
+            |row| row.get(0),
+        )?;
+        if integrity.vector_count != actual_vector_count as u64
+            || integrity.index_member_count != integrity.vector_count
+        {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "integrity receipt for '{}' does not match stored profile vectors",
+                profile_id
+            )));
+        }
+        writer.execute(
+            "UPDATE embedding_profile_manifests SET
+                manifest_json = manifest_json,
+                manifest_hash = ?2,
+                vector_count = ?3,
+                index_member_count = ?4,
+                index_integrity_hash = ?5,
+                updated_at = ?6
+             WHERE profile_id = ?1",
+            params![
+                profile_id.as_str(),
+                &integrity.manifest_hash,
+                integrity.vector_count as i64,
+                integrity.index_member_count as i64,
+                &integrity.index_integrity_hash,
+                integrity.updated_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Persist (or resume) a migration checkpoint. The active-profile pointer
+    /// is deliberately untouched; migration is not activation.
+    pub fn save_profile_migration_checkpoint(
+        &self,
+        checkpoint: &ProfileMigrationCheckpoint,
+    ) -> Result<()> {
+        if checkpoint.source_profile_id == checkpoint.destination_profile_id {
+            return Err(StorageError::InvalidEmbeddingProfile(
+                "migration source and destination profiles must differ".to_string(),
+            ));
+        }
+        if checkpoint.completed_memories > checkpoint.total_memories {
+            return Err(StorageError::InvalidEmbeddingProfile(
+                "migration completed memories cannot exceed total memories".to_string(),
+            ));
+        }
+        let state = Self::migration_state_text(checkpoint.state)?;
+        let failed_memory_ids = serde_json::to_string(&checkpoint.failed_memory_ids)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = writer.transaction()?;
+        let profiles: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM embedding_profiles WHERE profile_id IN (?1, ?2)",
+            params![
+                checkpoint.source_profile_id.as_str(),
+                checkpoint.destination_profile_id.as_str()
+            ],
+            |row| row.get(0),
+        )?;
+        if profiles != 2 {
+            return Err(StorageError::NotFound(
+                "migration source or destination embedding profile".to_string(),
+            ));
+        }
+        tx.execute(
+            "INSERT INTO embedding_profile_migrations (
+                migration_id, source_profile_id, destination_profile_id, state,
+                total_memories, completed_memories, failed_memory_ids, last_memory_id,
+                started_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(migration_id) DO UPDATE SET
+                source_profile_id = excluded.source_profile_id,
+                destination_profile_id = excluded.destination_profile_id,
+                state = excluded.state,
+                total_memories = excluded.total_memories,
+                completed_memories = excluded.completed_memories,
+                failed_memory_ids = excluded.failed_memory_ids,
+                last_memory_id = excluded.last_memory_id,
+                updated_at = excluded.updated_at",
+            params![
+                checkpoint.migration_id.to_string(),
+                checkpoint.source_profile_id.as_str(),
+                checkpoint.destination_profile_id.as_str(),
+                state,
+                checkpoint.total_memories as i64,
+                checkpoint.completed_memories as i64,
+                failed_memory_ids,
+                checkpoint.last_memory_id.map(|value| value.to_string()),
+                checkpoint.started_at.to_rfc3339(),
+                checkpoint.updated_at.to_rfc3339(),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Fetch a resumable migration checkpoint by immutable migration ID.
+    pub fn profile_migration_checkpoint(
+        &self,
+        migration_id: Uuid,
+    ) -> Result<Option<ProfileMigrationCheckpoint>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let row: Option<EmbeddingProfileMigrationRow> = reader
+            .query_row(
+                "SELECT source_profile_id, destination_profile_id, state, total_memories,
+                        completed_memories, failed_memory_ids, last_memory_id, started_at, updated_at
+                 FROM embedding_profile_migrations WHERE migration_id = ?1",
+                params![migration_id.to_string()],
+                |row| Ok((
+                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
+                    row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?,
+                )),
+            )
+            .optional()?;
+        row.map(
+            |(source, destination, state, total, completed, failed, last, started, updated)| {
+                Ok(ProfileMigrationCheckpoint {
+                    migration_id,
+                    source_profile_id: EmbeddingProfileId::new(source).map_err(|error| {
+                        StorageError::InvalidEmbeddingProfile(error.to_string())
+                    })?,
+                    destination_profile_id: EmbeddingProfileId::new(destination).map_err(
+                        |error| StorageError::InvalidEmbeddingProfile(error.to_string()),
+                    )?,
+                    state: serde_json::from_value(serde_json::Value::String(state)).map_err(
+                        |error| StorageError::InvalidEmbeddingProfile(error.to_string()),
+                    )?,
+                    total_memories: total.try_into().map_err(|_| {
+                        StorageError::InvalidEmbeddingProfile(
+                            "negative migration total".to_string(),
+                        )
+                    })?,
+                    completed_memories: completed.try_into().map_err(|_| {
+                        StorageError::InvalidEmbeddingProfile(
+                            "negative migration completed count".to_string(),
+                        )
+                    })?,
+                    failed_memory_ids: serde_json::from_str(&failed).map_err(|error| {
+                        StorageError::InvalidEmbeddingProfile(error.to_string())
+                    })?,
+                    last_memory_id: last
+                        .map(|value| {
+                            Uuid::parse_str(&value).map_err(|error| {
+                                StorageError::InvalidEmbeddingProfile(error.to_string())
+                            })
+                        })
+                        .transpose()?,
+                    started_at: Self::parse_rfc3339(started, "migration start timestamp")?,
+                    updated_at: Self::parse_rfc3339(updated, "migration update timestamp")?,
+                })
+            },
+        )
+        .transpose()
+    }
+
+    /// Upsert one durable work item for a migration repair/resume queue.
+    pub fn save_embedding_profile_migration_node_checkpoint(
+        &self,
+        checkpoint: &EmbeddingProfileMigrationNodeCheckpoint,
+    ) -> Result<()> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        writer.execute(
+            "INSERT INTO embedding_profile_migration_checkpoints
+                (migration_id, node_id, state, error, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(migration_id, node_id) DO UPDATE SET
+                state = excluded.state, error = excluded.error, updated_at = excluded.updated_at",
+            params![
+                &checkpoint.migration_id,
+                &checkpoint.node_id,
+                &checkpoint.state,
+                &checkpoint.error,
+                checkpoint.updated_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Atomically persist one destination-profile vector and its durable
+    /// per-node migration checkpoint. A crash therefore leaves either neither
+    /// record or both records—never a vector that a resume cursor believes was
+    /// not written (or vice versa).
+    pub fn put_embedding_profile_vector_with_migration_checkpoint(
+        &self,
+        vector: &EmbeddingProfileVector,
+        checkpoint: &EmbeddingProfileMigrationNodeCheckpoint,
+    ) -> Result<()> {
+        if vector.node_id != checkpoint.node_id {
+            return Err(StorageError::InvalidEmbeddingProfile(
+                "migration checkpoint node ID must match its vector node ID".to_string(),
+            ));
+        }
+        if vector.dimensions == 0 {
+            return Err(StorageError::InvalidEmbeddingProfile(
+                "profile vector dimensions must be positive".to_string(),
+            ));
+        }
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = writer.transaction()?;
+        let destination_profile: Option<String> = tx
+            .query_row(
+                "SELECT destination_profile_id FROM embedding_profile_migrations WHERE migration_id = ?1",
+                params![&checkpoint.migration_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if destination_profile.as_deref() != Some(vector.profile_id.as_str()) {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "migration '{}' does not target profile '{}'",
+                checkpoint.migration_id, vector.profile_id
+            )));
+        }
+        let declared_dimension: i64 = tx.query_row(
+            "SELECT embedding_dimension FROM embedding_profiles WHERE profile_id = ?1",
+            params![&vector.profile_id],
+            |row| row.get(0),
+        )?;
+        if declared_dimension != i64::from(vector.dimensions) {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "profile '{}' declares {} dimensions but attempted vector has {}",
+                vector.profile_id, declared_dimension, vector.dimensions
+            )));
+        }
+        tx.execute(
+            "INSERT INTO embedding_profile_vectors
+                (profile_id, node_id, embedding, dimensions, model, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(profile_id, node_id) DO UPDATE SET
+                embedding = excluded.embedding, dimensions = excluded.dimensions,
+                model = excluded.model, created_at = excluded.created_at",
+            params![
+                &vector.profile_id,
+                &vector.node_id,
+                &vector.embedding,
+                vector.dimensions as i64,
+                &vector.model,
+                vector.created_at.to_rfc3339(),
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO embedding_profile_migration_checkpoints
+                (migration_id, node_id, state, error, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(migration_id, node_id) DO UPDATE SET
+                state = excluded.state, error = excluded.error, updated_at = excluded.updated_at",
+            params![
+                &checkpoint.migration_id,
+                &checkpoint.node_id,
+                &checkpoint.state,
+                &checkpoint.error,
+                checkpoint.updated_at.to_rfc3339(),
+            ],
+        )?;
+        tx.execute(
+            "UPDATE embedding_profile_manifests
+             SET vector_count = (SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = ?1),
+                 updated_at = ?2
+             WHERE profile_id = ?1",
+            params![&vector.profile_id, Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Return the latest resumable migration checkpoint for a destination
+    /// profile, ordered deterministically by update time and migration ID.
+    pub fn latest_profile_migration_checkpoint_for_destination(
+        &self,
+        profile_id: &EmbeddingProfileId,
+    ) -> Result<Option<ProfileMigrationCheckpoint>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let migration_id: Option<String> = reader
+            .query_row(
+                "SELECT migration_id FROM embedding_profile_migrations
+                 WHERE destination_profile_id = ?1
+                 ORDER BY updated_at DESC, migration_id DESC LIMIT 1",
+                params![profile_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        drop(reader);
+        migration_id
+            .map(|id| {
+                Uuid::parse_str(&id)
+                    .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))
+                    .and_then(|id| {
+                        self.profile_migration_checkpoint(id)?.ok_or_else(|| {
+                            StorageError::NotFound(format!("migration checkpoint {id}"))
+                        })
+                    })
+            })
+            .transpose()
+    }
+
+    /// Persist a migration snapshot receipt without ever storing a private
+    /// absolute path. The path is relative to `data_dir()` and the report must
+    /// bind both the snapshot bytes and the stable corpus snapshot by SHA-256.
+    pub fn save_profile_migration_snapshot_receipt(
+        &self,
+        migration_id: Uuid,
+        relative_snapshot_path: &Path,
+        validation_report: &serde_json::Value,
+    ) -> Result<()> {
+        if relative_snapshot_path.is_absolute()
+            || relative_snapshot_path.as_os_str().is_empty()
+            || relative_snapshot_path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(StorageError::InvalidEmbeddingProfile(
+                "migration snapshot path must be a non-empty relative path under the Vestige data directory".to_string(),
+            ));
+        }
+        let required_sha256 = ["snapshot_sha256", "corpus_sha256"];
+        for key in required_sha256 {
+            let valid = validation_report
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| {
+                    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                });
+            if !valid {
+                return Err(StorageError::InvalidEmbeddingProfile(format!(
+                    "migration validation report requires a 64-character SHA-256 '{key}'"
+                )));
+            }
+        }
+        let path = relative_snapshot_path.to_str().ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("snapshot path must be UTF-8".to_string())
+        })?;
+        let report = serde_json::to_string(validation_report)
+            .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let changed = writer.execute(
+            "UPDATE embedding_profile_migrations
+             SET snapshot_path = ?1, validation_report = ?2, updated_at = ?3
+             WHERE migration_id = ?4",
+            params![
+                path,
+                report,
+                Utc::now().to_rfc3339(),
+                migration_id.to_string()
+            ],
+        )?;
+        if changed != 1 {
+            return Err(StorageError::NotFound(format!("migration {migration_id}")));
+        }
         Ok(())
     }
 
@@ -3179,6 +4381,12 @@ impl SqliteMemoryStore {
     pub fn get_stats(&self) -> Result<MemoryStats> {
         let now = Utc::now().to_rfc3339();
 
+        // Resolve the active pointer before taking the shared reader lock.
+        // `active_embedding_profile` reads through that same mutex; calling it
+        // below after acquiring `reader` would self-deadlock every stats read.
+        #[cfg(feature = "embeddings")]
+        let active_profile = self.active_embedding_profile()?;
+
         let reader = self
             .reader
             .lock()
@@ -3241,37 +4449,57 @@ impl SqliteMemoryStore {
             )
             .optional()?;
 
-        #[cfg(feature = "embeddings")]
-        let active_embedding_model = Some(self.embedding_service.model_name().to_string());
+        let active_embedding_model = active_profile.as_ref().and_then(|active| {
+            reader
+                .query_row(
+                    "SELECT model_id FROM embedding_profiles WHERE profile_id = ?1",
+                    params![active.profile_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+        });
         #[cfg(not(feature = "embeddings"))]
         let active_embedding_model = None;
 
         #[cfg(feature = "embeddings")]
         let (nodes_with_active_embeddings, nodes_with_mismatched_embeddings) = {
-            let active_model = active_embedding_model.as_deref().unwrap_or_default();
-            let model_pattern = Self::active_embedding_model_like_pattern(active_model);
+            let active_profile_id = active_profile
+                .as_ref()
+                .map(|active| active.profile_id.as_str());
+            let active_model = active_embedding_model.as_deref();
             let active_count: i64 = reader.query_row(
                 "SELECT COUNT(*)
                  FROM knowledge_nodes kn
-                 WHERE kn.has_embedding = 1
-                   AND EXISTS (
-                       SELECT 1 FROM node_embeddings ne
-                       WHERE ne.node_id = kn.id
-                         AND ne.model LIKE ?1
+                 WHERE EXISTS (
+                       SELECT 1 FROM embedding_profile_vectors epv
+                       WHERE epv.node_id = kn.id
+                         AND epv.profile_id = ?1
+                         AND epv.model = ?2
+                         AND epv.dimensions = (
+                             SELECT embedding_dimension FROM embedding_profiles
+                             WHERE profile_id = ?1
+                         )
                    )",
-                params![&model_pattern],
+                params![active_profile_id, active_model],
                 |row| row.get(0),
             )?;
             let mismatched_count: i64 = reader.query_row(
                 "SELECT COUNT(*)
                  FROM knowledge_nodes kn
-                 WHERE kn.has_embedding = 1
+                 WHERE (kn.has_embedding = 1 OR EXISTS (
+                       SELECT 1 FROM embedding_profile_vectors epv WHERE epv.node_id = kn.id
+                   ))
                    AND NOT EXISTS (
-                       SELECT 1 FROM node_embeddings ne
-                       WHERE ne.node_id = kn.id
-                         AND ne.model LIKE ?1
+                       SELECT 1 FROM embedding_profile_vectors epv
+                       WHERE epv.node_id = kn.id
+                         AND epv.profile_id = ?1
+                         AND epv.model = ?2
+                         AND epv.dimensions = (
+                             SELECT embedding_dimension FROM embedding_profiles
+                             WHERE profile_id = ?1
+                         )
                    )",
-                params![&model_pattern],
+                params![active_profile_id, active_model],
                 |row| row.get(0),
             )?;
             (active_count, mismatched_count)
@@ -3360,31 +4588,46 @@ impl SqliteMemoryStore {
             }
         }
 
-        // Convenience: embedding-coverage NULL count. Defined as the number
-        // of knowledge_nodes with NO matching row in node_embeddings. This is
-        // distinct from `nodes_with_embeddings` in MemoryStats (which uses
-        // the `has_embedding` column flag); we compute the join-based truth
-        // here so audit scripts can detect drift between the flag and the
-        // actual embeddings table.
+        // Convenience: active-profile coverage is the number of nodes with no
+        // vector in the currently selected isolated vector space.
+        let active_profile_id = Self::active_profile_id_from_conn(&reader)?;
         let embedding_null_count: i64 = reader
             .query_row(
                 "SELECT COUNT(*) FROM knowledge_nodes kn
                  WHERE NOT EXISTS (
-                     SELECT 1 FROM node_embeddings ne WHERE ne.node_id = kn.id
+                     SELECT 1 FROM embedding_profile_vectors epv
+                     WHERE epv.node_id = kn.id AND epv.profile_id = ?1
                  )",
-                [],
+                params![active_profile_id],
                 |row| row.get(0),
             )
             .unwrap_or(0);
 
         #[cfg(feature = "embeddings")]
-        let active_embedding_model = Some(self.embedding_service.model_name().to_string());
+        let active_embedding_model = active_profile_id.as_deref().and_then(|profile_id| {
+            reader
+                .query_row(
+                    "SELECT model_id FROM embedding_profiles WHERE profile_id = ?1",
+                    params![profile_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+        });
         #[cfg(not(feature = "embeddings"))]
         let active_embedding_model: Option<String> = None;
 
         #[cfg(feature = "embeddings")]
         let active_embedding_dimensions: Option<u32> =
-            Some(self.embedding_service.dimensions() as u32);
+            active_profile_id.as_deref().and_then(|profile_id| {
+                reader
+                    .query_row(
+                        "SELECT embedding_dimension FROM embedding_profiles WHERE profile_id = ?1",
+                        params![profile_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .ok()
+                    .and_then(|dimension| u32::try_from(dimension).ok())
+            });
         #[cfg(not(feature = "embeddings"))]
         let active_embedding_dimensions: Option<u32> = None;
 
@@ -4110,9 +5353,98 @@ impl SqliteMemoryStore {
         }
     }
 
-    /// Check if embedding service is ready
+    /// Attach a verified process-local runtime to the currently active profile.
+    ///
+    /// This deliberately stores no artifact path and never initializes or
+    /// downloads a model. The profile contract must exactly match the persisted
+    /// active profile, which prevents a runner for one vector space from being
+    /// used to query another.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub(crate) fn attach_active_profile_embedder(
+        &self,
+        profile_id: &EmbeddingProfileId,
+        embedder: Arc<ProfiledEmbedder>,
+    ) -> Result<()> {
+        let active = self.active_embedding_profile()?.ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("no active embedding profile pointer".to_string())
+        })?;
+        if active.profile_id != *profile_id {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "cannot attach runtime for '{}' while '{}' is active",
+                profile_id, active.profile_id
+            )));
+        }
+        let manifest = self
+            .embedding_profile_manifest(profile_id)?
+            .ok_or_else(|| StorageError::NotFound(profile_id.to_string()))?;
+        if manifest.profile != *embedder.profile()
+            || manifest.verification.status != VerificationStatus::Verified
+            || manifest
+                .runtime
+                .as_ref()
+                .is_none_or(|runtime| !runtime.local_only)
+        {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "profile '{}' does not have a matching verified local runtime contract",
+                profile_id
+            )));
+        }
+        let mut attached = self.attached_profile_runtime.write().map_err(|_| {
+            StorageError::Init("Attached profile runtime lock poisoned".to_string())
+        })?;
+        *attached = Some(AttachedProfileRuntime {
+            profile_id: profile_id.clone(),
+            embedder,
+        });
+        if let Some(cache) = &self.query_cache {
+            cache
+                .lock()
+                .map_err(|_| StorageError::Init("Query cache lock poisoned".to_string()))?
+                .clear();
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn attached_embedder_for(
+        &self,
+        profile_id: &EmbeddingProfileId,
+    ) -> Result<Option<Arc<ProfiledEmbedder>>> {
+        let attached = self.attached_profile_runtime.read().map_err(|_| {
+            StorageError::Init("Attached profile runtime lock poisoned".to_string())
+        })?;
+        Ok(attached.as_ref().and_then(|runtime| {
+            (runtime.profile_id == *profile_id).then(|| runtime.embedder.clone())
+        }))
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn active_embedding_runtime_ready(&self) -> Result<bool> {
+        let active = self.active_embedding_profile()?.ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("no active embedding profile pointer".to_string())
+        })?;
+        let manifest = self
+            .embedding_profile_manifest(&active.profile_id)?
+            .ok_or_else(|| StorageError::NotFound(active.profile_id.to_string()))?;
+        if self.attached_embedder_for(&active.profile_id)?.is_some() {
+            return Ok(true);
+        }
+        Ok(
+            manifest.profile.runtime_backend != EmbeddingRuntimeBackend::FastembedCandle
+                && self.embedding_service.is_ready(),
+        )
+    }
+
+    /// Check if the active profile has a usable local query runtime. Optional
+    /// Qwen profiles return false until a verified runner is explicitly
+    /// attached to this process.
     #[cfg(feature = "embeddings")]
     pub fn is_embedding_ready(&self) -> bool {
+        #[cfg(feature = "vector-search")]
+        {
+            self.active_embedding_runtime_ready().unwrap_or(false)
+        }
+        #[cfg(not(feature = "vector-search"))]
         self.embedding_service.is_ready()
     }
 
@@ -4121,12 +5453,26 @@ impl SqliteMemoryStore {
         false
     }
 
-    /// Initialize the embedding service explicitly
-    /// Call this at startup to catch initialization errors early
+    /// Initialize the released Nomic default without widening optional profile
+    /// activation into an implicit model-selection path.
+    ///
+    /// Existing installs have always initialized the active legacy Nomic
+    /// runtime from normal CLI/MCP startup. Preserve that contract exactly.
+    /// Every non-legacy profile, including all Qwen variants, remains an
+    /// explicit artifact-backed workflow and cannot be initialized here.
     #[cfg(feature = "embeddings")]
     pub fn init_embeddings(&self) -> Result<()> {
-        self.embedding_service.init().map_err(|e| {
-            StorageError::Init(format!("Embedding service initialization failed: {}", e))
+        let active = self.active_embedding_profile()?.ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("no active embedding profile pointer".to_string())
+        })?;
+        if active.profile_id.as_str() != LEGACY_EMBEDDING_PROFILE_ID {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "direct embedding initialization is supported only for the released legacy Nomic profile; '{}' requires the explicit profile workflow",
+                active.profile_id
+            )));
+        }
+        self.embedding_service.init().map_err(|error| {
+            StorageError::Init(format!("Initialize legacy Nomic embeddings: {error}"))
         })
     }
 
@@ -4138,7 +5484,13 @@ impl SqliteMemoryStore {
     /// Get query embedding from cache or compute it
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn get_query_embedding(&self, query: &str) -> Result<Vec<f32>> {
-        let cache_key = format!("{}\0{}", self.embedding_service.model_name(), query);
+        let active = self.active_embedding_profile()?.ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("no active embedding profile pointer".to_string())
+        })?;
+        let manifest = self
+            .embedding_profile_manifest(&active.profile_id)?
+            .ok_or_else(|| StorageError::NotFound(active.profile_id.to_string()))?;
+        let cache_key = format!("{}\0{}", active.profile_id, query);
         // Check cache first
         let Some(index_cache) = self.query_cache.as_ref() else {
             return Err(StorageError::Init("Query cache unavailable".to_string()));
@@ -4152,21 +5504,94 @@ impl SqliteMemoryStore {
             }
         }
 
-        // Not in cache, compute embedding
-        let embedding = self
-            .embedding_service
-            .embed_query(query)
-            .map_err(|e| StorageError::Init(format!("Failed to embed query: {}", e)))?;
+        // Never fall back from an active optional profile to the legacy
+        // service. Qwen vectors and Nomic vectors are different spaces; a
+        // missing explicit attachment is an availability error, not permission
+        // to issue a semantically invalid query.
+        let vector = if let Some(embedder) = self.attached_embedder_for(&active.profile_id)? {
+            let runtime = tokio::runtime::Runtime::new().map_err(|error| {
+                StorageError::Init(format!("Create local query runtime: {error}"))
+            })?;
+            runtime
+                .block_on(embedder.embed_query(query))
+                .map_err(|error| StorageError::Init(format!("Failed to embed query: {error}")))?
+        } else if manifest.profile.runtime_backend == EmbeddingRuntimeBackend::FastembedCandle {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "active profile '{}' requires an explicitly attached verified local runtime; supply its artifact directory for this process",
+                active.profile_id
+            )));
+        } else {
+            self.embedding_service
+                .embed(
+                    &manifest.profile.encode_query(query).map_err(|error| {
+                        StorageError::InvalidEmbeddingProfile(error.to_string())
+                    })?,
+                )
+                .map_err(|e| StorageError::Init(format!("Failed to embed query: {e}")))?
+                .vector
+        };
+        if vector.len() != manifest.profile.embedding_dimension {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "active profile '{}' requires {} dimensions but its runtime produced {}",
+                active.profile_id,
+                manifest.profile.embedding_dimension,
+                vector.len()
+            )));
+        }
 
         // Store in cache
         {
             let mut cache = index_cache
                 .lock()
                 .map_err(|_| StorageError::Init("Query cache lock poisoned".to_string()))?;
-            cache.put(cache_key, embedding.vector.clone());
+            cache.put(cache_key, vector.clone());
         }
 
-        Ok(embedding.vector)
+        Ok(vector)
+    }
+
+    /// Compute one document vector for the active profile without populating
+    /// the query cache. Document and query templates are distinct parts of a
+    /// profile contract, particularly for Qwen retrieval profiles.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn get_document_embedding(&self, content: &str) -> Result<Vec<f32>> {
+        let active = self.active_embedding_profile()?.ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("no active embedding profile pointer".to_string())
+        })?;
+        let manifest = self
+            .embedding_profile_manifest(&active.profile_id)?
+            .ok_or_else(|| StorageError::NotFound(active.profile_id.to_string()))?;
+        let vector = if let Some(embedder) = self.attached_embedder_for(&active.profile_id)? {
+            let runtime = tokio::runtime::Runtime::new().map_err(|error| {
+                StorageError::Init(format!("Create local document runtime: {error}"))
+            })?;
+            runtime
+                .block_on(embedder.embed_document(content))
+                .map_err(|error| StorageError::Init(format!("Failed to embed document: {error}")))?
+        } else if manifest.profile.runtime_backend == EmbeddingRuntimeBackend::FastembedCandle {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "active profile '{}' requires an explicitly attached verified local runtime; supply its artifact directory for this process",
+                active.profile_id
+            )));
+        } else {
+            self.embedding_service
+                .embed(
+                    &manifest.profile.encode_document(content).map_err(|error| {
+                        StorageError::InvalidEmbeddingProfile(error.to_string())
+                    })?,
+                )
+                .map_err(|error| StorageError::Init(format!("Failed to embed document: {error}")))?
+                .vector
+        };
+        if vector.len() != manifest.profile.embedding_dimension {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "active profile '{}' requires {} dimensions but its runtime produced {}",
+                active.profile_id,
+                manifest.profile.embedding_dimension,
+                vector.len()
+            )));
+        }
+        Ok(vector)
     }
 
     /// Semantic search
@@ -4183,7 +5608,7 @@ impl SqliteMemoryStore {
             ));
         };
 
-        if !self.embedding_service.is_ready() {
+        if !self.active_embedding_runtime_ready()? {
             return Err(StorageError::Init("Embedding model not ready".to_string()));
         }
 
@@ -4250,7 +5675,7 @@ impl SqliteMemoryStore {
         )?;
 
         let semantic_results =
-            if self.vector_search_available() && self.embedding_service.is_ready() {
+            if self.vector_search_available() && self.active_embedding_runtime_ready()? {
                 self.semantic_search_raw(query, limit * overfetch_factor)?
             } else {
                 vec![]
@@ -4530,8 +5955,11 @@ impl SqliteMemoryStore {
         if !self.vector_search_available() {
             return Ok(vec![]);
         }
-        if !self.embedding_service.is_ready() {
-            return Ok(vec![]);
+        if !self.active_embedding_runtime_ready()? {
+            return Err(StorageError::InvalidEmbeddingProfile(
+                "active embedding profile has no explicitly attached local query runtime"
+                    .to_string(),
+            ));
         }
 
         // HyDE query expansion: for conceptual queries, embed expanded variants
@@ -4573,37 +6001,46 @@ impl SqliteMemoryStore {
         node_ids: Option<&[String]>,
         force: bool,
     ) -> Result<EmbeddingResult> {
-        if !self.embedding_service.is_ready() {
-            self.embedding_service.init().map_err(|e| {
-                StorageError::Init(format!("Failed to init embedding service: {}", e))
-            })?;
+        if !self.active_embedding_runtime_ready()? {
+            // Generating vectors is never authority to download or initialize
+            // a model. Explicit profile installation/runtime preparation must
+            // happen first; callers receive an honest empty result meanwhile.
+            tracing::debug!("Skipping embedding generation: active runtime is not installed/ready");
+            return Ok(EmbeddingResult::default());
         }
 
+        let active = self.active_embedding_profile()?.ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("no active embedding profile pointer".to_string())
+        })?;
+        let active_manifest = self
+            .embedding_profile_manifest(&active.profile_id)?
+            .ok_or_else(|| StorageError::NotFound(active.profile_id.to_string()))?;
+        let active_model = active_manifest.profile.model_id.as_str();
         let mut result = EmbeddingResult::default();
-        let active_model = self.embedding_service.model_name();
-        let nodes = self.embedding_regeneration_candidates(node_ids, force)?;
+        let nodes = self.embedding_regeneration_candidates(
+            &active.profile_id,
+            active_manifest.profile.embedding_dimension,
+            active_model,
+            node_ids,
+            force,
+        )?;
 
         for (id, content, stored_model) in nodes {
             if !force {
-                let (has_emb, stored_model): (i32, Option<String>) = self
+                let stored_model: Option<String> = self
                     .reader
                     .lock()
                     .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?
                     .query_row(
-                        "SELECT COALESCE(kn.has_embedding, 0), COALESCE(ne.model, kn.embedding_model)
-                         FROM knowledge_nodes kn
-                         LEFT JOIN node_embeddings ne ON ne.node_id = kn.id
-                         WHERE kn.id = ?1",
-                        params![&id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
+                        "SELECT model FROM embedding_profile_vectors
+                         WHERE profile_id = ?1 AND node_id = ?2",
+                        params![active.profile_id.as_str(), &id],
+                        |row| row.get(0),
                     )
-                    .unwrap_or((0, stored_model));
+                    .optional()?
+                    .or(stored_model);
 
-                if has_emb == 1
-                    && stored_model.as_deref().is_some_and(|model| {
-                        Self::embedding_model_matches_active(model, active_model)
-                    })
-                {
+                if stored_model.as_deref() == Some(active_model) {
                     result.skipped += 1;
                     continue;
                 }
@@ -4624,6 +6061,9 @@ impl SqliteMemoryStore {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn embedding_regeneration_candidates(
         &self,
+        profile_id: &EmbeddingProfileId,
+        profile_dimension: usize,
+        profile_model: &str,
         node_ids: Option<&[String]>,
         force: bool,
     ) -> Result<Vec<(String, String, Option<String>)>> {
@@ -4639,16 +6079,18 @@ impl SqliteMemoryStore {
 
             let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
             let query = format!(
-                "SELECT kn.id, kn.content, COALESCE(ne.model, kn.embedding_model) AS embedding_model
+                "SELECT kn.id, kn.content, epv.model
                  FROM knowledge_nodes kn
-                 LEFT JOIN node_embeddings ne ON ne.node_id = kn.id
+                 LEFT JOIN embedding_profile_vectors epv
+                   ON epv.node_id = kn.id AND epv.profile_id = ?
                  WHERE kn.id IN ({})",
                 placeholders
             );
 
             let mut stmt = reader.prepare(&query)?;
-            let params: Vec<&dyn rusqlite::ToSql> =
-                ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            let profile = profile_id.as_str();
+            let mut params: Vec<&dyn rusqlite::ToSql> = vec![&profile];
+            params.extend(ids.iter().map(|id| id as &dyn rusqlite::ToSql));
             let rows = stmt.query_map(params.as_slice(), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -4660,9 +6102,13 @@ impl SqliteMemoryStore {
         }
 
         if force {
-            let mut stmt =
-                reader.prepare("SELECT id, content, embedding_model FROM knowledge_nodes")?;
-            let rows = stmt.query_map([], |row| {
+            let mut stmt = reader.prepare(
+                "SELECT kn.id, kn.content, epv.model
+                 FROM knowledge_nodes kn
+                 LEFT JOIN embedding_profile_vectors epv
+                   ON epv.node_id = kn.id AND epv.profile_id = ?1",
+            )?;
+            let rows = stmt.query_map(params![profile_id.as_str()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -4672,24 +6118,23 @@ impl SqliteMemoryStore {
             return Ok(rows.filter_map(|r| r.ok()).collect());
         }
 
-        let active_model = self.embedding_service.model_name();
-        let model_pattern = Self::active_embedding_model_like_pattern(active_model);
         let mut stmt = reader.prepare(
-            "SELECT kn.id, kn.content, COALESCE(ne.model, kn.embedding_model) AS embedding_model
+            "SELECT kn.id, kn.content, epv.model
              FROM knowledge_nodes kn
-             LEFT JOIN node_embeddings ne ON ne.node_id = kn.id
-             WHERE kn.has_embedding = 0
-                OR kn.has_embedding IS NULL
-                OR ne.node_id IS NULL
-                OR COALESCE(ne.model, kn.embedding_model, '') NOT LIKE ?1",
+             LEFT JOIN embedding_profile_vectors epv
+               ON epv.node_id = kn.id AND epv.profile_id = ?1
+             WHERE epv.node_id IS NULL OR epv.dimensions != ?2 OR epv.model != ?3",
         )?;
-        let rows = stmt.query_map(params![model_pattern], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
-        })?;
+        let rows = stmt.query_map(
+            params![profile_id.as_str(), profile_dimension as i64, profile_model],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
@@ -5788,10 +7233,10 @@ impl SqliteMemoryStore {
     /// Generate all missing or active-model-mismatched embeddings.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn generate_missing_embeddings(&self) -> Result<i64> {
-        if !self.embedding_service.is_ready()
-            && let Err(e) = self.embedding_service.init()
-        {
-            tracing::warn!("Could not initialize embedding model: {}", e);
+        if !self.active_embedding_runtime_ready()? {
+            tracing::debug!(
+                "Skipping consolidation embedding generation: active profile runtime is unavailable"
+            );
             return Ok(0);
         }
 
@@ -8847,33 +10292,14 @@ impl SqliteMemoryStore {
         format!("\"{}\"", identifier.replace('"', "\"\""))
     }
 
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(feature = "embeddings", feature = "vector-search", test))]
     fn embedding_model_matches_active(stored_model: &str, active_model: &str) -> bool {
-        if stored_model == active_model {
-            return true;
-        }
-
-        let stored = stored_model.to_ascii_lowercase();
-        let active = active_model.to_ascii_lowercase();
-
-        if active.contains("qwen3") {
-            return stored.contains("qwen3");
-        }
-
-        if active.contains("nomic-embed-text-v1.5") {
-            return stored.contains("nomic") && stored.contains("v1.5");
-        }
-
-        false
+        // Profile-aware retrieval never uses model-family matching. This helper
+        // remains solely for legacy vector-repair bookkeeping.
+        stored_model == active_model
     }
 
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    fn embedding_model_supports_matryoshka(model_name: &str) -> bool {
-        let model = model_name.to_ascii_lowercase();
-        model.contains("nomic") || model.contains("qwen3")
-    }
-
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(feature = "embeddings", feature = "vector-search", test))]
     fn embedding_vector_for_active_model(
         embedding_bytes: &[u8],
         stored_model: &str,
@@ -8882,27 +10308,7 @@ impl SqliteMemoryStore {
         if !Self::embedding_model_matches_active(stored_model, active_model) {
             return None;
         }
-
-        let embedding = Embedding::from_bytes(embedding_bytes)?;
-        if embedding.dimensions == EMBEDDING_DIMENSIONS {
-            Some(embedding.vector)
-        } else if Self::embedding_model_supports_matryoshka(stored_model) {
-            Some(matryoshka_truncate(embedding.vector))
-        } else {
-            None
-        }
-    }
-
-    #[cfg(feature = "embeddings")]
-    fn active_embedding_model_like_pattern(active_model: &str) -> String {
-        let active = active_model.to_ascii_lowercase();
-        if active.contains("qwen3") {
-            "%qwen3%".to_string()
-        } else if active.contains("nomic-embed-text-v1.5") {
-            "%nomic%v1.5%".to_string()
-        } else {
-            active_model.to_string()
-        }
+        Embedding::from_bytes(embedding_bytes).map(|embedding| embedding.vector)
     }
 
     // ========================================================================
@@ -12920,14 +14326,14 @@ mod tests {
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
-    fn test_embedding_model_family_matching() {
+    fn test_embedding_model_identity_matching() {
         assert!(Storage::embedding_model_matches_active(
+            "Qwen/Qwen3-Embedding-0.6B",
+            "Qwen/Qwen3-Embedding-0.6B",
+        ));
+        assert!(!Storage::embedding_model_matches_active(
             "nomic-embed-text-v1.5",
             "nomic-ai/nomic-embed-text-v1.5",
-        ));
-        assert!(Storage::embedding_model_matches_active(
-            "Qwen/Qwen3-Embedding-0.6B",
-            "Qwen/Qwen3-Embedding-0.6B",
         ));
         assert!(!Storage::embedding_model_matches_active(
             "nomic-ai/nomic-embed-text-v1.5",
@@ -12992,14 +14398,32 @@ mod tests {
                     rusqlite::params![&node.id, stale_model],
                 )
                 .unwrap();
+            // In a process where the legacy runtime was initialized by an
+            // earlier test, ingest also writes a matching V28 profile vector.
+            // Remove it so this fixture consistently represents a pre-V28
+            // mirror-only stale corpus.
+            writer
+                .execute(
+                    "DELETE FROM embedding_profile_vectors
+                     WHERE profile_id = ?1 AND node_id = ?2",
+                    rusqlite::params![LEGACY_EMBEDDING_PROFILE_ID, &node.id],
+                )
+                .unwrap();
         }
 
         let stats = storage.get_stats().unwrap();
         assert_eq!(stats.nodes_with_mismatched_embeddings, 125);
         assert_eq!(stats.nodes_with_active_embeddings, 0);
 
+        let legacy = EmbeddingProfileId::new(LEGACY_EMBEDDING_PROFILE_ID).unwrap();
         let candidates = storage
-            .embedding_regeneration_candidates(None, false)
+            .embedding_regeneration_candidates(
+                &legacy,
+                EMBEDDING_DIMENSIONS,
+                "nomic-ai/nomic-embed-text-v1.5",
+                None,
+                false,
+            )
             .unwrap();
         assert_eq!(candidates.len(), 125);
     }
@@ -13009,6 +14433,394 @@ mod tests {
         let storage = create_test_storage();
         let stats = storage.get_stats().unwrap();
         assert_eq!(stats.total_nodes, 0);
+    }
+
+    #[test]
+    fn reopening_after_qwen_pointer_preserves_legacy_manifest_state() {
+        let dir = tempdir().unwrap();
+        let qwen = BuiltinEmbeddingProfile::QwenBalanced1024
+            .profile()
+            .profile_id;
+        {
+            let storage = create_test_storage_at(&dir, "reopen-qwen.db");
+            storage
+                .save_embedding_profile_manifest(&ready_profile_manifest(
+                    BuiltinEmbeddingProfile::QwenBalanced1024,
+                ))
+                .unwrap();
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE embedding_profiles SET status = 'ready' WHERE profile_id = ?1",
+                    params![LEGACY_EMBEDDING_PROFILE_ID],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "UPDATE embedding_profiles SET status = 'active' WHERE profile_id = ?1",
+                    params![qwen.as_str()],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "UPDATE embedding_profile_state
+                     SET active_profile_id = ?1, previous_profile_id = ?2, activated_at = ?3, updated_at = ?3
+                     WHERE singleton = 1",
+                    params![
+                        qwen.as_str(),
+                        LEGACY_EMBEDDING_PROFILE_ID,
+                        Utc::now().to_rfc3339(),
+                    ],
+                )
+                .unwrap();
+        }
+
+        let reopened = create_test_storage_at(&dir, "reopen-qwen.db");
+        assert_eq!(
+            reopened
+                .active_embedding_profile()
+                .unwrap()
+                .unwrap()
+                .profile_id,
+            qwen
+        );
+        let legacy = EmbeddingProfileId::new(LEGACY_EMBEDDING_PROFILE_ID).unwrap();
+        assert_eq!(
+            reopened
+                .embedding_profile_manifest(&legacy)
+                .unwrap()
+                .unwrap()
+                .state,
+            EmbeddingProfileState::Active,
+            "a valid legacy manifest is preserved exactly; bootstrap must not rewrite it"
+        );
+    }
+
+    fn ready_profile_manifest(profile: BuiltinEmbeddingProfile) -> EmbeddingProfileManifest {
+        let mut manifest = EmbeddingProfileManifest::not_installed(profile.profile()).unwrap();
+        manifest.state = EmbeddingProfileState::Ready;
+        manifest
+    }
+
+    #[test]
+    fn embedding_profiles_keep_vectors_isolated() {
+        let storage = create_test_storage();
+        let legacy = EmbeddingProfileId::new(LEGACY_EMBEDDING_PROFILE_ID).unwrap();
+        let qwen = BuiltinEmbeddingProfile::QwenBalanced1024
+            .profile()
+            .profile_id;
+        storage
+            .save_embedding_profile_manifest(&ready_profile_manifest(
+                BuiltinEmbeddingProfile::QwenBalanced1024,
+            ))
+            .unwrap();
+        let node = storage
+            .ingest(IngestInput {
+                content: "profile vector isolation".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        storage
+            .put_embedding_profile_vector(&EmbeddingProfileVector {
+                profile_id: legacy.to_string(),
+                node_id: node.id.clone(),
+                embedding: vec![1, 2, 3],
+                dimensions: 256,
+                model: "legacy".to_string(),
+                created_at: Utc::now(),
+            })
+            .unwrap();
+        storage
+            .put_embedding_profile_vector(&EmbeddingProfileVector {
+                profile_id: qwen.to_string(),
+                node_id: node.id.clone(),
+                embedding: vec![4, 5, 6],
+                dimensions: 1024,
+                model: "qwen".to_string(),
+                created_at: Utc::now(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            storage
+                .embedding_profile_vector(&legacy, &node.id)
+                .unwrap()
+                .unwrap()
+                .embedding,
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            storage
+                .embedding_profile_vector(&qwen, &node.id)
+                .unwrap()
+                .unwrap()
+                .embedding,
+            vec![4, 5, 6]
+        );
+
+        // Neither profile can see the other profile's vector. The source row
+        // remains, so a later validated activation never needs a re-embed.
+        assert!(
+            storage
+                .embedding_profile_vector(&legacy, &node.id)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn activation_rejects_ready_profile_without_verified_runtime_and_evaluation() {
+        let storage = create_test_storage();
+        let manifest = ready_profile_manifest(BuiltinEmbeddingProfile::QwenBalanced1024);
+        let profile_id = manifest.profile.profile_id.clone();
+        storage.save_embedding_profile_manifest(&manifest).unwrap();
+
+        let error = storage.activate_embedding_profile(&profile_id).unwrap_err();
+        assert!(matches!(error, StorageError::InvalidEmbeddingProfile(_)));
+        assert_eq!(
+            storage
+                .active_embedding_profile()
+                .unwrap()
+                .unwrap()
+                .profile_id
+                .as_str(),
+            LEGACY_EMBEDDING_PROFILE_ID
+        );
+    }
+
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn init_embeddings_permits_the_released_legacy_nomic_profile() {
+        let storage = create_test_storage();
+
+        // `init_embeddings` still owns the released Nomic startup path. The
+        // actual backend may be unavailable in an offline test environment,
+        // but that must surface as backend initialization failure, never as a
+        // profile-policy rejection.
+        match storage.init_embeddings() {
+            Ok(()) | Err(StorageError::Init(_)) => {}
+            Err(error) => {
+                panic!("legacy Nomic profile must be permitted to use init_embeddings: {error}")
+            }
+        }
+    }
+
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn init_embeddings_rejects_an_active_qwen_profile() {
+        let storage = create_test_storage();
+        let qwen = BuiltinEmbeddingProfile::QwenBalanced1024
+            .profile()
+            .profile_id;
+        storage
+            .save_embedding_profile_manifest(&ready_profile_manifest(
+                BuiltinEmbeddingProfile::QwenBalanced1024,
+            ))
+            .unwrap();
+
+        // This intentionally sets only the persisted active pointer. It does
+        // not satisfy the activation gate; the point is to verify that the
+        // legacy convenience initializer fails closed before it can select or
+        // initialize a different vector-space runtime.
+        let writer = storage.writer.lock().unwrap();
+        writer
+            .execute(
+                "UPDATE embedding_profiles SET status = 'ready' WHERE profile_id = ?1",
+                params![LEGACY_EMBEDDING_PROFILE_ID],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "UPDATE embedding_profiles SET status = 'active' WHERE profile_id = ?1",
+                params![qwen.as_str()],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "UPDATE embedding_profile_state
+                 SET active_profile_id = ?1, previous_profile_id = ?2,
+                     activated_at = ?3, updated_at = ?3
+                 WHERE singleton = 1",
+                params![
+                    qwen.as_str(),
+                    LEGACY_EMBEDDING_PROFILE_ID,
+                    Utc::now().to_rfc3339(),
+                ],
+            )
+            .unwrap();
+        drop(writer);
+
+        let error = storage.init_embeddings().unwrap_err();
+        assert!(matches!(error, StorageError::InvalidEmbeddingProfile(_)));
+        assert!(error.to_string().contains(qwen.as_str()));
+        assert!(error.to_string().contains("explicit profile workflow"));
+    }
+
+    #[test]
+    fn migration_vector_and_node_checkpoint_commit_together() {
+        let storage = create_test_storage();
+        let legacy = EmbeddingProfileId::new(LEGACY_EMBEDDING_PROFILE_ID).unwrap();
+        let qwen = BuiltinEmbeddingProfile::QwenBalanced1024
+            .profile()
+            .profile_id;
+        storage
+            .save_embedding_profile_manifest(&ready_profile_manifest(
+                BuiltinEmbeddingProfile::QwenBalanced1024,
+            ))
+            .unwrap();
+        let migration_id = Uuid::new_v4();
+        let now = Utc::now();
+        storage
+            .save_profile_migration_checkpoint(&ProfileMigrationCheckpoint {
+                migration_id,
+                source_profile_id: legacy,
+                destination_profile_id: qwen.clone(),
+                state: EmbeddingMigrationState::Running,
+                total_memories: 1,
+                completed_memories: 0,
+                failed_memory_ids: Vec::new(),
+                last_memory_id: None,
+                started_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+        let node = storage
+            .ingest(IngestInput {
+                content: "atomic migration checkpoint target".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        storage
+            .put_embedding_profile_vector_with_migration_checkpoint(
+                &EmbeddingProfileVector {
+                    profile_id: qwen.to_string(),
+                    node_id: node.id.clone(),
+                    embedding: vec![1, 2, 3],
+                    dimensions: 1024,
+                    model: "qwen-test".to_string(),
+                    created_at: now,
+                },
+                &EmbeddingProfileMigrationNodeCheckpoint {
+                    migration_id: migration_id.to_string(),
+                    node_id: node.id.clone(),
+                    state: "completed".to_string(),
+                    error: None,
+                    updated_at: now,
+                },
+            )
+            .unwrap();
+        assert!(
+            storage
+                .embedding_profile_vector(&qwen, &node.id)
+                .unwrap()
+                .is_some()
+        );
+        let reader = storage.reader.lock().unwrap();
+        let checkpoint_rows: i64 = reader
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_profile_migration_checkpoints
+                 WHERE migration_id = ?1 AND node_id = ?2",
+                params![migration_id.to_string(), node.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(checkpoint_rows, 1);
+    }
+
+    #[test]
+    fn purge_removes_vectors_from_every_embedding_profile() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "profile-wide purge target".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let legacy = EmbeddingProfileId::new(LEGACY_EMBEDDING_PROFILE_ID).unwrap();
+        let qwen = BuiltinEmbeddingProfile::QwenBalanced1024
+            .profile()
+            .profile_id;
+        storage
+            .save_embedding_profile_manifest(&ready_profile_manifest(
+                BuiltinEmbeddingProfile::QwenBalanced1024,
+            ))
+            .unwrap();
+        for (profile_id, dimensions) in [(&legacy, 256), (&qwen, 1024)] {
+            storage
+                .put_embedding_profile_vector(&EmbeddingProfileVector {
+                    profile_id: profile_id.to_string(),
+                    node_id: node.id.clone(),
+                    embedding: vec![7, 8, 9],
+                    dimensions,
+                    model: "test".to_string(),
+                    created_at: Utc::now(),
+                })
+                .unwrap();
+        }
+
+        storage
+            .purge_node(&node.id, Some("profile purge test"))
+            .unwrap();
+        let reader = storage.reader.lock().unwrap();
+        let remaining: i64 = reader
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_profile_vectors WHERE node_id = ?1",
+                params![node.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0, "purge must cascade to every profile vector");
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn non_256_active_profile_builds_matching_dimension_index_without_truncation() {
+        let storage = create_test_storage();
+        let qwen = BuiltinEmbeddingProfile::QwenBalanced1024
+            .profile()
+            .profile_id;
+        storage
+            .save_embedding_profile_manifest(&ready_profile_manifest(
+                BuiltinEmbeddingProfile::QwenBalanced1024,
+            ))
+            .unwrap();
+        let node = storage
+            .ingest(IngestInput {
+                content: "dimension isolation".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        storage
+            .put_embedding_profile_vector(&EmbeddingProfileVector {
+                profile_id: qwen.to_string(),
+                node_id: node.id,
+                embedding: Embedding::new(vec![0.25; 1024]).to_bytes(),
+                dimensions: 1024,
+                model: "Qwen/Qwen3-Embedding-0.6B".to_string(),
+                created_at: Utc::now(),
+            })
+            .unwrap();
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE embedding_profile_state SET active_profile_id = ?1 WHERE singleton = 1",
+                    params![qwen.as_str()],
+                )
+                .unwrap();
+        }
+        storage.load_embeddings_into_index().unwrap();
+        assert_eq!(
+            storage
+                .vector_index
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .dimensions(),
+            1024
+        );
     }
 
     #[test]

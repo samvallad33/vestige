@@ -85,6 +85,8 @@ pub mod config;
 pub mod connectors;
 pub mod consolidation;
 pub mod embedder;
+/// Durable profile contracts for local embedding vector spaces.
+pub mod embedding;
 pub mod fsrs;
 pub mod fts;
 pub mod memory;
@@ -198,6 +200,10 @@ pub use storage::{
     DurableSynapticCapture,
     DurableSynapticPairReceipt,
     FrozenReplayItem,
+    EmbeddingProfileIntegrityManifest,
+    EmbeddingProfileMigrationNodeCheckpoint,
+    EmbeddingProfileMigrationRecord,
+    EmbeddingProfileVector,
     HealthStatus,
     InsightRecord,
     IntentionRecord,
@@ -270,6 +276,22 @@ pub use storage::{
 // Embedder trait and implementations
 pub use embedder::{
     Embedder, EmbedderError, EmbedderResult, EmbedderSend, FastembedEmbedder, LocalEmbedder,
+};
+
+// Embedding profile contracts are feature-independent so profile discovery,
+// storage metadata, and explicit install workflows remain available in a
+// lightweight build without an inference runtime.
+pub use embedding::{
+    ActiveEmbeddingProfile, BuiltinEmbeddingProfile, ChunkingStrategy,
+    EMBEDDING_PROFILE_MANIFEST_SCHEMA_VERSION, EmbeddingDevice, EmbeddingEvaluationSummary,
+    EmbeddingLifecycleError, EmbeddingLifecycleEvaluationReceipt,
+    EmbeddingLifecycleMigrationReceipt, EmbeddingMigrationState, EmbeddingNormalization,
+    EmbeddingProfile, EmbeddingProfileError, EmbeddingProfileFailure, EmbeddingProfileId,
+    EmbeddingProfileLifecycle, EmbeddingProfileManifest, EmbeddingProfileState,
+    EmbeddingRuntimeBackend, EmbeddingRuntimeMetadata, EmbeddingVerification, EncodingTemplate,
+    ModelArtifactHash, ProfileMigrationCheckpoint, ProfileRuntimeRegistry, ProfiledEmbedder,
+    VerificationStatus, VerifiedLocalArtifact, builtin_embedding_profile_by_id,
+    builtin_embedding_profiles,
 };
 
 // Consolidation (sleep-inspired memory processing)

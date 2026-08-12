@@ -20,7 +20,9 @@ import type {
 	SanhedrinAppealReason,
 	SanhedrinAppealResponse,
 	SanhedrinLatestResponse,
-	SanhedrinTelemetryResponse
+	SanhedrinTelemetryResponse,
+	EmbeddingProfilesResponse,
+	EmbeddingProfileActionResponse
 } from '$types';
 
 const BASE = '/api';
@@ -158,6 +160,33 @@ export const api = {
 			fetcher<SanhedrinAppealResponse>('/sanhedrin/appeal', {
 				method: 'POST',
 				body: JSON.stringify({ reason, note, claimId, receiptId })
+			})
+	},
+
+	// Embedding profiles: every operation is intentional and profile-scoped.
+	// The service refuses implicit model downloads, activation, or re-embedding;
+	// this UI mirrors that contract by exposing distinct staged endpoints.
+	embeddings: {
+		profiles: () => fetcher<EmbeddingProfilesResponse>('/embeddings/profiles'),
+		install: (profileId: string) =>
+			fetcher<EmbeddingProfileActionResponse>('/embeddings/install', {
+				method: 'POST', body: JSON.stringify({ profile_id: profileId, confirm: true })
+			}),
+		evaluate: (profileId: string) =>
+			fetcher<EmbeddingProfileActionResponse>('/embeddings/evaluate', {
+				method: 'POST', body: JSON.stringify({ profile_id: profileId, confirm: true })
+			}),
+		migrate: (profileId: string) =>
+			fetcher<EmbeddingProfileActionResponse>('/embeddings/migrate', {
+				method: 'POST', body: JSON.stringify({ profile_id: profileId, confirm: true })
+			}),
+		activate: (profileId: string) =>
+			fetcher<EmbeddingProfileActionResponse>('/embeddings/activate', {
+				method: 'POST', body: JSON.stringify({ profile_id: profileId, confirm: true })
+			}),
+		rollback: (profileId: string) =>
+			fetcher<EmbeddingProfileActionResponse>('/embeddings/rollback', {
+				method: 'POST', body: JSON.stringify({ profile_id: profileId, confirm: true })
 			})
 	},
 
