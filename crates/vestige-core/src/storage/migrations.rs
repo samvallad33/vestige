@@ -2502,7 +2502,10 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("query copied vector");
-        assert_eq!(copied, 1, "V28 must retain a legacy vector in its isolated profile");
+        assert_eq!(
+            copied, 1,
+            "V28 must retain a legacy vector in its isolated profile"
+        );
         let active: String = conn
             .query_row(
                 "SELECT active_profile_id FROM embedding_profile_state WHERE singleton = 1",
@@ -2520,7 +2523,10 @@ mod tests {
             .expect("query Qwen profiles");
         assert_eq!(qwen_rows, 0, "migration must not install or activate Qwen");
 
-        assert_eq!(apply_migrations(&conn).expect("current schema is a no-op"), 0);
+        assert_eq!(
+            apply_migrations(&conn).expect("current schema is a no-op"),
+            0
+        );
         let copied_after_reopen: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM embedding_profile_vectors \
@@ -2686,7 +2692,7 @@ mod tests {
         )
         .expect("mark V25 fixture current");
 
-        assert_eq!(apply_migrations(&conn).expect("apply V26 and V27"), 2);
+        assert_eq!(apply_migrations(&conn).expect("apply V26 through V28"), 3);
         let columns: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('receipt_envelopes')
@@ -2696,7 +2702,7 @@ mod tests {
             )
             .expect("inspect V26 column");
         assert_eq!(columns, 1);
-        assert_eq!(apply_migrations(&conn).expect("V27 replay is a no-op"), 0);
+        assert_eq!(apply_migrations(&conn).expect("V28 replay is a no-op"), 0);
     }
 
     #[test]

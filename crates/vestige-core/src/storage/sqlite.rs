@@ -4613,16 +4613,17 @@ impl SqliteMemoryStore {
         let active_embedding_model: Option<String> = None;
 
         #[cfg(feature = "embeddings")]
-        let active_embedding_dimensions: Option<u32> = active_profile_id.as_deref().and_then(|profile_id| {
-            reader
-                .query_row(
-                    "SELECT embedding_dimension FROM embedding_profiles WHERE profile_id = ?1",
-                    params![profile_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .ok()
-                .and_then(|dimension| u32::try_from(dimension).ok())
-        });
+        let active_embedding_dimensions: Option<u32> =
+            active_profile_id.as_deref().and_then(|profile_id| {
+                reader
+                    .query_row(
+                        "SELECT embedding_dimension FROM embedding_profiles WHERE profile_id = ?1",
+                        params![profile_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .ok()
+                    .and_then(|dimension| u32::try_from(dimension).ok())
+            });
         #[cfg(not(feature = "embeddings"))]
         let active_embedding_dimensions: Option<u32> = None;
 
@@ -6114,11 +6115,11 @@ impl SqliteMemoryStore {
         let rows = stmt.query_map(
             params![profile_id.as_str(), profile_dimension as i64, profile_model],
             |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
             },
         )?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -7220,7 +7221,9 @@ impl SqliteMemoryStore {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn generate_missing_embeddings(&self) -> Result<i64> {
         if !self.active_embedding_runtime_ready()? {
-            tracing::debug!("Skipping consolidation embedding generation: active profile runtime is unavailable");
+            tracing::debug!(
+                "Skipping consolidation embedding generation: active profile runtime is unavailable"
+            );
             return Ok(0);
         }
 
@@ -14310,14 +14313,14 @@ mod tests {
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
-    fn test_embedding_model_family_matching() {
+    fn test_embedding_model_identity_matching() {
         assert!(Storage::embedding_model_matches_active(
+            "Qwen/Qwen3-Embedding-0.6B",
+            "Qwen/Qwen3-Embedding-0.6B",
+        ));
+        assert!(!Storage::embedding_model_matches_active(
             "nomic-embed-text-v1.5",
             "nomic-ai/nomic-embed-text-v1.5",
-        ));
-        assert!(Storage::embedding_model_matches_active(
-            "Qwen/Qwen3-Embedding-0.6B",
-            "Qwen/Qwen3-Embedding-0.6B",
         ));
         assert!(!Storage::embedding_model_matches_active(
             "nomic-ai/nomic-embed-text-v1.5",
