@@ -522,9 +522,17 @@ async fn main() {
         info!("HTTP MCP transport disabled; set VESTIGE_HTTP_ENABLED=1 or pass --http to enable");
     }
 
-    // Do not pre-warm optional model-backed retrieval components here.  The
-    // server process is allowed to start without mutating model caches or
-    // reaching the network; explicit profile operations own those effects.
+    // Load cross-encoder reranker in the background (downloads ~150MB on first run)
+    #[cfg(all(feature = "vector-search", feature = "embeddings"))]
+    {
+        let cog_clone = Arc::clone(&cognitive);
+        tokio::spawn(async move {
+            // Small delay so we don't block the stdio handshake
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let mut cog = cog_clone.lock().await;
+            cog.reranker.init_cross_encoder();
+        });
+    }
 
     // Create MCP server with shared event channel for dashboard broadcasts
     let server = McpServer::new_with_events(storage, cognitive, event_tx);

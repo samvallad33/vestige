@@ -34,7 +34,6 @@ Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the stand
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VESTIGE_DATA_DIR` | OS per-user data directory | Storage directory fallback; overridden by `--data-dir`; database lives at `<dir>/vestige.db` |
-| `VESTIGE_EMBEDDING_MODEL` | `nomic-v1.5` | Embedding backend selector. Use `qwen3-0.6b` with a build that enables `qwen3-embeddings` |
 | `RUST_LOG` | `info` (via tracing-subscriber) | Log verbosity + per-module filtering |
 | `FASTEMBED_CACHE_PATH` | Platform cache directory; `./.fastembed_cache` fallback | Embedding model cache location |
 | `VESTIGE_DASHBOARD_PORT` | `3927` | Dashboard HTTP + WebSocket port |
