@@ -14,7 +14,7 @@
 //!   Pre-ingest: importance scoring (4-channel) + intent detection → auto-tag
 //!   Post-ingest: synaptic tagging + novelty model update + hippocampal indexing
 
-use chrono::Utc;
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -57,6 +57,14 @@ pub fn schema() -> Value {
             "scope": {
                 "type": "string",
                 "description": "Project namespace for this memory. Defaults to 'user' for backward compatibility. Recall searches this namespace unless includeCrossScope=true."
+            },
+            "validFrom": {
+                "type": "string",
+                "description": "When this fact becomes true. Use RFC3339 or an exact YYYY-MM-DD date."
+            },
+            "validUntil": {
+                "type": "string",
+                "description": "When this fact stops being true. Use RFC3339 or an exact YYYY-MM-DD date; must be after validFrom."
             },
             "forceCreate": {
                 "type": "boolean",
@@ -103,6 +111,14 @@ pub fn schema() -> Value {
                             "type": "string",
                             "description": "Project namespace for this item. Overrides the batch scope when supplied."
                         },
+                        "validFrom": {
+                            "type": "string",
+                            "description": "When this item becomes true (RFC3339 or YYYY-MM-DD)."
+                        },
+                        "validUntil": {
+                            "type": "string",
+                            "description": "When this item stops being true (RFC3339 or YYYY-MM-DD; after validFrom)."
+                        },
                         "forceCreate": {
                             "type": "boolean",
                             "description": "Force creation of this item even if similar content exists",
@@ -130,6 +146,8 @@ struct SmartIngestArgs {
     tags: Option<Vec<String>>,
     source: Option<String>,
     scope: Option<String>,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
     force_create: Option<bool>,
     allow_secrets: Option<bool>,
     batch_merge_policy: Option<String>,
@@ -146,8 +164,54 @@ struct BatchItem {
     node_type: Option<String>,
     source: Option<String>,
     scope: Option<String>,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
     force_create: Option<bool>,
     allow_secrets: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ValidityRange {
+    from: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+}
+
+fn parse_validity_timestamp(
+    raw: Option<&str>,
+    field: &str,
+) -> Result<Option<DateTime<Utc>>, String> {
+    let Some(raw) = raw else { return Ok(None) };
+    if raw.trim() != raw || raw.is_empty() {
+        return Err(format!(
+            "Invalid {field}: expected RFC3339 or YYYY-MM-DD without surrounding whitespace"
+        ));
+    }
+    if let Ok(timestamp) = DateTime::parse_from_rfc3339(raw) {
+        return Ok(Some(timestamp.with_timezone(&Utc)));
+    }
+    if let Ok(date) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        return Ok(Some(Utc.from_utc_datetime(
+            &date.and_hms_opt(0, 0, 0).expect("midnight is valid"),
+        )));
+    }
+    Err(format!("Invalid {field}: expected RFC3339 or YYYY-MM-DD"))
+}
+
+fn parse_validity_range(
+    valid_from: Option<&str>,
+    valid_until: Option<&str>,
+) -> Result<ValidityRange, String> {
+    let valid_from = parse_validity_timestamp(valid_from, "validFrom")?;
+    let valid_until = parse_validity_timestamp(valid_until, "validUntil")?;
+    if let (Some(from), Some(until)) = (valid_from, valid_until)
+        && until <= from
+    {
+        return Err("Invalid validity range: validUntil must be after validFrom".to_string());
+    }
+    Ok(ValidityRange {
+        from: valid_from,
+        until: valid_until,
+    })
 }
 
 pub async fn execute(
@@ -201,6 +265,7 @@ pub async fn execute(
     let content = args.content.ok_or(
         "Missing 'content' field. Provide 'content' for single mode or 'items' for batch mode.",
     )?;
+    let validity = parse_validity_range(args.valid_from.as_deref(), args.valid_until.as_deref())?;
     let secret_policy = if args.allow_secrets.unwrap_or(false) {
         SecretPolicy::AllowExplicitly
     } else {
@@ -270,8 +335,8 @@ pub async fn execute(
         // Store importance composite as sentiment_magnitude for FSRS encoding boost
         sentiment_magnitude: importance_composite,
         tags,
-        valid_from: None,
-        valid_until: None,
+        valid_from: validity.from,
+        valid_until: validity.until,
         source_envelope: None,
     };
 
@@ -444,6 +509,19 @@ async fn execute_batch(
             .scope
             .clone()
             .unwrap_or_else(|| default_scope.to_string());
+        let validity =
+            match parse_validity_range(item.valid_from.as_deref(), item.valid_until.as_deref()) {
+                Ok(range) => range,
+                Err(reason) => {
+                    errors += 1;
+                    results.push(serde_json::json!({
+                        "index": i,
+                        "status": "error",
+                        "reason": reason
+                    }));
+                    continue;
+                }
+            };
         // Skip empty content
         if item.content.trim().is_empty() {
             results.push(serde_json::json!({
@@ -523,8 +601,8 @@ async fn execute_batch(
             sentiment_score: 0.0,
             sentiment_magnitude: importance_composite,
             tags,
-            valid_from: None,
-            valid_until: None,
+            valid_from: validity.from,
+            valid_until: validity.until,
             source_envelope: None,
         };
 
@@ -1321,8 +1399,87 @@ mod tests {
         assert!(schema_value["properties"]["forceCreate"].is_object());
         assert!(schema_value["properties"]["batchMergePolicy"].is_object());
         assert!(schema_value["properties"]["items"].is_object());
+        assert!(schema_value["properties"]["validFrom"].is_object());
+        assert!(schema_value["properties"]["validUntil"].is_object());
         // v1.7: no top-level required — content for single mode, items for batch mode
         assert!(schema_value.get("required").is_none() || schema_value["required"].is_null());
+    }
+
+    #[tokio::test]
+    async fn smart_ingest_persists_strict_single_item_validity() {
+        let (storage, _dir) = test_storage().await;
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "The deployment policy applies during Q3.",
+                "forceCreate": true,
+                "validFrom": "2026-07-01",
+                "validUntil": "2026-10-01T00:00:00Z"
+            })),
+        )
+        .await
+        .unwrap();
+        let node = storage
+            .get_node(response["nodeId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            node.valid_from.unwrap().to_rfc3339(),
+            "2026-07-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            node.valid_until.unwrap().to_rfc3339(),
+            "2026-10-01T00:00:00+00:00"
+        );
+    }
+
+    #[tokio::test]
+    async fn smart_ingest_rejects_invalid_dates_and_reversed_ranges() {
+        let (storage, _dir) = test_storage().await;
+        for args in [
+            serde_json::json!({"content": "bad date", "validFrom": "07/01/2026"}),
+            serde_json::json!({
+                "content": "bad range",
+                "validFrom": "2026-10-01",
+                "validUntil": "2026-07-01"
+            }),
+        ] {
+            assert!(
+                execute(&storage, &test_cognitive(), Some(args))
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(storage.get_stats().unwrap().total_nodes, 0);
+    }
+
+    #[tokio::test]
+    async fn batch_validity_is_per_item_and_invalid_items_do_not_write() {
+        let (storage, _dir) = test_storage().await;
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "items": [
+                    {"content": "dated item", "validFrom": "2026-08-01"},
+                    {"content": "invalid item", "validUntil": "yesterday"}
+                ]
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["success"], false);
+        assert_eq!(response["results"][1]["status"], "error");
+        let node = storage
+            .get_node(response["results"][0]["nodeId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            node.valid_from.unwrap().to_rfc3339(),
+            "2026-08-01T00:00:00+00:00"
+        );
+        assert_eq!(storage.get_stats().unwrap().total_nodes, 1);
     }
 
     #[tokio::test]
