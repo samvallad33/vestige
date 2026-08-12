@@ -4381,6 +4381,12 @@ impl SqliteMemoryStore {
     pub fn get_stats(&self) -> Result<MemoryStats> {
         let now = Utc::now().to_rfc3339();
 
+        // Resolve the active pointer before taking the shared reader lock.
+        // `active_embedding_profile` reads through that same mutex; calling it
+        // below after acquiring `reader` would self-deadlock every stats read.
+        #[cfg(feature = "embeddings")]
+        let active_profile = self.active_embedding_profile()?;
+
         let reader = self
             .reader
             .lock()
@@ -4443,8 +4449,6 @@ impl SqliteMemoryStore {
             )
             .optional()?;
 
-        #[cfg(feature = "embeddings")]
-        let active_profile = self.active_embedding_profile()?;
         let active_embedding_model = active_profile.as_ref().and_then(|active| {
             reader
                 .query_row(
@@ -4479,25 +4483,63 @@ impl SqliteMemoryStore {
                 params![active_profile_id, active_model],
                 |row| row.get(0),
             )?;
-            let mismatched_count: i64 = reader.query_row(
-                "SELECT COUNT(*)
-                 FROM knowledge_nodes kn
-                 WHERE (kn.has_embedding = 1 OR EXISTS (
-                       SELECT 1 FROM embedding_profile_vectors epv WHERE epv.node_id = kn.id
-                   ))
-                   AND NOT EXISTS (
-                       SELECT 1 FROM embedding_profile_vectors epv
-                       WHERE epv.node_id = kn.id
-                         AND epv.profile_id = ?1
-                         AND epv.model = ?2
-                         AND epv.dimensions = (
-                             SELECT embedding_dimension FROM embedding_profiles
-                             WHERE profile_id = ?1
-                         )
-                   )",
-                params![active_profile_id, active_model],
-                |row| row.get(0),
-            )?;
+            let mismatched_count: i64 = if active_profile_id
+                == Some(LEGACY_EMBEDDING_PROFILE_ID)
+            {
+                // Legacy writes may still exist only in the compatibility
+                // mirror (for example after a pre-V28 client write). They are
+                // part of the active legacy vector space, so compare their
+                // model/dimension directly instead of treating every mirror
+                // row as missing merely because V28 has not copied it yet.
+                reader.query_row(
+                    "SELECT COUNT(*)
+                     FROM knowledge_nodes kn
+                     WHERE (kn.has_embedding = 1 OR EXISTS (
+                           SELECT 1 FROM embedding_profile_vectors epv WHERE epv.node_id = kn.id
+                       ))
+                       AND NOT EXISTS (
+                           SELECT 1 FROM embedding_profile_vectors epv
+                           WHERE epv.node_id = kn.id
+                             AND epv.profile_id = ?1
+                             AND epv.model = ?2
+                             AND epv.dimensions = (
+                                 SELECT embedding_dimension FROM embedding_profiles
+                                 WHERE profile_id = ?1
+                             )
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM node_embeddings ne
+                           WHERE ne.node_id = kn.id
+                             AND ne.model = ?2
+                             AND ne.dimensions = (
+                                 SELECT embedding_dimension FROM embedding_profiles
+                                 WHERE profile_id = ?1
+                             )
+                       )",
+                    params![active_profile_id, active_model],
+                    |row| row.get(0),
+                )?
+            } else {
+                reader.query_row(
+                    "SELECT COUNT(*)
+                     FROM knowledge_nodes kn
+                     WHERE (kn.has_embedding = 1 OR EXISTS (
+                           SELECT 1 FROM embedding_profile_vectors epv WHERE epv.node_id = kn.id
+                       ))
+                       AND NOT EXISTS (
+                           SELECT 1 FROM embedding_profile_vectors epv
+                           WHERE epv.node_id = kn.id
+                             AND epv.profile_id = ?1
+                             AND epv.model = ?2
+                             AND epv.dimensions = (
+                                 SELECT embedding_dimension FROM embedding_profiles
+                                 WHERE profile_id = ?1
+                             )
+                       )",
+                    params![active_profile_id, active_model],
+                    |row| row.get(0),
+                )?
+            };
             (active_count, mismatched_count)
         };
         #[cfg(not(feature = "embeddings"))]
@@ -5449,18 +5491,27 @@ impl SqliteMemoryStore {
         false
     }
 
-    /// Legacy compatibility entry point.
+    /// Initialize the released Nomic default without widening optional profile
+    /// activation into an implicit model-selection path.
     ///
-    /// It intentionally refuses to initialize an embedding runtime: callers
-    /// must use the explicit Embedding Profiles install/evaluate/migrate/
-    /// activate workflow. This prevents an arbitrary library caller from
-    /// turning a routine operation into a model download.
+    /// Existing installs have always initialized the active legacy Nomic
+    /// runtime from normal CLI/MCP startup. Preserve that contract exactly.
+    /// Every non-legacy profile, including all Qwen variants, remains an
+    /// explicit artifact-backed workflow and cannot be initialized here.
     #[cfg(feature = "embeddings")]
     pub fn init_embeddings(&self) -> Result<()> {
-        Err(StorageError::InvalidEmbeddingProfile(
-            "direct embedding initialization is disabled; use an explicit Embedding Profile install workflow"
-                .to_string(),
-        ))
+        let active = self.active_embedding_profile()?.ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("no active embedding profile pointer".to_string())
+        })?;
+        if active.profile_id.as_str() != LEGACY_EMBEDDING_PROFILE_ID {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "direct embedding initialization is supported only for the released legacy Nomic profile; '{}' requires the explicit profile workflow",
+                active.profile_id
+            )));
+        }
+        self.embedding_service
+            .init()
+            .map_err(|error| StorageError::Init(format!("Initialize legacy Nomic embeddings: {error}")))
     }
 
     #[cfg(not(feature = "embeddings"))]
@@ -14563,6 +14614,74 @@ mod tests {
                 .as_str(),
             LEGACY_EMBEDDING_PROFILE_ID
         );
+    }
+
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn init_embeddings_permits_the_released_legacy_nomic_profile() {
+        let storage = create_test_storage();
+
+        // `init_embeddings` still owns the released Nomic startup path. The
+        // actual backend may be unavailable in an offline test environment,
+        // but that must surface as backend initialization failure, never as a
+        // profile-policy rejection.
+        match storage.init_embeddings() {
+            Ok(()) | Err(StorageError::Init(_)) => {}
+            Err(error) => panic!(
+                "legacy Nomic profile must be permitted to use init_embeddings: {error}"
+            ),
+        }
+    }
+
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn init_embeddings_rejects_an_active_qwen_profile() {
+        let storage = create_test_storage();
+        let qwen = BuiltinEmbeddingProfile::QwenBalanced1024
+            .profile()
+            .profile_id;
+        storage
+            .save_embedding_profile_manifest(&ready_profile_manifest(
+                BuiltinEmbeddingProfile::QwenBalanced1024,
+            ))
+            .unwrap();
+
+        // This intentionally sets only the persisted active pointer. It does
+        // not satisfy the activation gate; the point is to verify that the
+        // legacy convenience initializer fails closed before it can select or
+        // initialize a different vector-space runtime.
+        let writer = storage.writer.lock().unwrap();
+        writer
+            .execute(
+                "UPDATE embedding_profiles SET status = 'ready' WHERE profile_id = ?1",
+                params![LEGACY_EMBEDDING_PROFILE_ID],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "UPDATE embedding_profiles SET status = 'active' WHERE profile_id = ?1",
+                params![qwen.as_str()],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "UPDATE embedding_profile_state
+                 SET active_profile_id = ?1, previous_profile_id = ?2,
+                     activated_at = ?3, updated_at = ?3
+                 WHERE singleton = 1",
+                params![
+                    qwen.as_str(),
+                    LEGACY_EMBEDDING_PROFILE_ID,
+                    Utc::now().to_rfc3339(),
+                ],
+            )
+            .unwrap();
+        drop(writer);
+
+        let error = storage.init_embeddings().unwrap_err();
+        assert!(matches!(error, StorageError::InvalidEmbeddingProfile(_)));
+        assert!(error.to_string().contains(qwen.as_str()));
+        assert!(error.to_string().contains("explicit profile workflow"));
     }
 
     #[test]

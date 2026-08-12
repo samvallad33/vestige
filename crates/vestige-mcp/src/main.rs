@@ -313,11 +313,33 @@ async fn main() {
         }
     };
 
-    // Embedding models are an explicit, profile-scoped capability.  In
-    // particular, starting an MCP process must never download a model, mutate
-    // an index, or silently re-embed a user's corpus.  The Embedding Profiles
-    // workflow is the only path permitted to install, migrate, and activate a
-    // profile; until then retrieval safely remains keyword-only.
+    // Preserve the released Nomic default in the background so MCP clients can
+    // finish their stdio handshake before a first-run model download. Optional
+    // profiles reject this compatibility path: their artifact verification,
+    // evaluation, migration, and activation remain explicit local operations.
+    #[cfg(feature = "embeddings")]
+    {
+        let storage_clone = Arc::clone(&storage);
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) = storage_clone.init_embeddings() {
+                tracing::debug!(%error, "No legacy Nomic embedding runtime started");
+                return;
+            }
+            info!("Legacy Nomic embedding service initialized successfully");
+
+            #[cfg(feature = "vector-search")]
+            match storage_clone.generate_embeddings(None, false) {
+                Ok(result) if result.successful > 0 || result.failed > 0 => info!(
+                    embeddings_generated = result.successful,
+                    embeddings_failed = result.failed,
+                    embeddings_skipped = result.skipped,
+                    "Background legacy Nomic embedding backfill complete"
+                ),
+                Ok(_) => {}
+                Err(error) => warn!(%error, "Background legacy Nomic embedding backfill failed"),
+            }
+        });
+    }
 
     // Spawn periodic auto-consolidation so FSRS-6 decay scores stay fresh.
     // Runs on startup (if needed) and then every N hours (default: 6).

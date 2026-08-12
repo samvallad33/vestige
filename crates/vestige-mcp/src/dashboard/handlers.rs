@@ -1345,24 +1345,35 @@ pub async fn get_stats(State(state): State<AppState>) -> Result<Json<Value>, Sta
         .get_stats()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    Ok(Json(dashboard_stats_response(&stats)))
+}
+
+fn dashboard_stats_response(stats: &vestige_core::memory::MemoryStats) -> Value {
+    // Coverage must describe the profile currently serving semantic retrieval.
+    // Qwen profile vectors intentionally stay out of the legacy
+    // `node_embeddings` mirror, so using `nodes_with_embeddings` here would
+    // falsely report zero coverage after a complete Qwen migration.
     let embedding_coverage = if stats.total_nodes > 0 {
-        (stats.nodes_with_embeddings as f64 / stats.total_nodes as f64) * 100.0
+        (stats.nodes_with_active_embeddings as f64 / stats.total_nodes as f64) * 100.0
     } else {
         0.0
     };
 
-    Ok(Json(serde_json::json!({
+    serde_json::json!({
         "totalMemories": stats.total_nodes,
         "dueForReview": stats.nodes_due_for_review,
         "averageRetention": stats.average_retention,
         "averageStorageStrength": stats.average_storage_strength,
         "averageRetrievalStrength": stats.average_retrieval_strength,
         "withEmbeddings": stats.nodes_with_embeddings,
+        "withActiveEmbeddings": stats.nodes_with_active_embeddings,
+        "mismatchedEmbeddings": stats.nodes_with_mismatched_embeddings,
         "embeddingCoverage": embedding_coverage,
         "embeddingModel": stats.embedding_model,
+        "activeEmbeddingModel": stats.active_embedding_model,
         "oldestMemory": stats.oldest_memory.map(|dt| dt.to_rfc3339()),
         "newestMemory": stats.newest_memory.map(|dt| dt.to_rfc3339()),
-    })))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -3426,6 +3437,26 @@ mod tests {
             })
             .unwrap();
         node.id
+    }
+
+    #[test]
+    fn dashboard_stats_reports_coverage_for_the_active_profile() {
+        let mut stats = vestige_core::memory::MemoryStats::default();
+        stats.total_nodes = 4;
+        stats.nodes_with_embeddings = 0;
+        stats.nodes_with_active_embeddings = 3;
+        stats.nodes_with_mismatched_embeddings = 1;
+        stats.active_embedding_model = Some("Qwen/Qwen3-Embedding-0.6B".to_string());
+
+        let body = dashboard_stats_response(&stats);
+        assert_eq!(body["withEmbeddings"], 0);
+        assert_eq!(body["withActiveEmbeddings"], 3);
+        assert_eq!(body["mismatchedEmbeddings"], 1);
+        assert_eq!(body["embeddingCoverage"], 75.0);
+        assert_eq!(
+            body["activeEmbeddingModel"],
+            "Qwen/Qwen3-Embedding-0.6B"
+        );
     }
 
     fn open_pending_mutation_pr(
