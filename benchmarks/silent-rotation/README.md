@@ -131,9 +131,10 @@ These are stated at greater length in `FINDING.md`, and none of them are hidden.
   existing edge, not discovery of one.
 - The retrievable corpus is 8 documents. That is easy mode for the RAG arms, and
   nothing here is measured at production scale.
-- No ablation separates event anchoring from causal traversal from temporal
-  validity. You can fairly argue the result comes from removing query variance
-  alone. That is the next experiment.
+- The three-axis ablation has been run. Event-anchoring, the causal edge, and
+  the shared bus are load-bearing together (`ABLATION.md`). No single axis
+  reproduces the full arm. The edge is still hand-authored: this measures
+  traversal, not discovery.
 - On Kimi K3 the dense cosine baseline never converged wrong (3 correct, 2 split of 5) and it
   costs less per run. Across all 23 shared trials it is 4 correct to Vestige's 20, so the gap
   is model-dependent rather than uniform. There is no "beats RAG on outcomes" claim here to defend.

@@ -1,4 +1,9 @@
-# The ablation: which axis of the Vestige arm carries the result
+# The ablation killed my own explanation: three axes, 0 of 5 each
+
+I wanted to know which single axis of the Vestige arm carried the result, so I wrote down what each
+possible answer would mean before running it. All three single-axis arms scored 0 of 5 where the
+full arm scored 5 of 5. No single axis explains the result. The mechanism is a conjunction, which is
+a weaker claim than the one I started with, and it is the one the data supports.
 
 Companion to `PREREGISTRATION.md`. The interpretation applied below is the one committed in that
 file **before** these arms ran. Check `git log` on `PREREGISTRATION.md` (committed Jul 22) against
