@@ -435,6 +435,7 @@ async fn handle_event(
         | VestigeEvent::MemoryUnsuppressed { .. }
         | VestigeEvent::Rac1CascadeSwept { .. }
         | VestigeEvent::DeepReferenceCompleted { .. }
+        | VestigeEvent::BackfillFired { .. }
         | VestigeEvent::HookVerdictRecorded { .. }
         | VestigeEvent::DreamStarted { .. }
         | VestigeEvent::DreamProgress { .. }

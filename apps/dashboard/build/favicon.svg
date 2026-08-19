@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <radialGradient id="g" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </radialGradient>
+  </defs>
+  <circle cx="16" cy="16" r="14" fill="#0a0a1a" stroke="url(#g)" stroke-width="1.5"/>
+  <!-- Neural nodes -->
+  <circle cx="16" cy="10" r="2.5" fill="#a855f7" opacity="0.9"/>
+  <circle cx="10" cy="18" r="2" fill="#6366f1" opacity="0.8"/>
+  <circle cx="22" cy="18" r="2" fill="#3b82f6" opacity="0.8"/>
+  <circle cx="16" cy="23" r="1.8" fill="#10b981" opacity="0.7"/>
+  <circle cx="8" cy="12" r="1.5" fill="#ec4899" opacity="0.6"/>
+  <circle cx="24" cy="12" r="1.5" fill="#f59e0b" opacity="0.6"/>
+  <!-- Connections -->
+  <line x1="16" y1="10" x2="10" y2="18" stroke="#6366f1" stroke-width="0.8" opacity="0.5"/>
+  <line x1="16" y1="10" x2="22" y2="18" stroke="#3b82f6" stroke-width="0.8" opacity="0.5"/>
+  <line x1="10" y1="18" x2="16" y2="23" stroke="#10b981" stroke-width="0.6" opacity="0.4"/>
+  <line x1="22" y1="18" x2="16" y2="23" stroke="#10b981" stroke-width="0.6" opacity="0.4"/>
+  <line x1="8" y1="12" x2="16" y2="10" stroke="#ec4899" stroke-width="0.5" opacity="0.3"/>
+  <line x1="24" y1="12" x2="16" y2="10" stroke="#f59e0b" stroke-width="0.5" opacity="0.3"/>
+  <line x1="10" y1="18" x2="22" y2="18" stroke="#818cf8" stroke-width="0.5" opacity="0.3"/>
+</svg>

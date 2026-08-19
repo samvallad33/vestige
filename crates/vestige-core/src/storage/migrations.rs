@@ -99,6 +99,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Scope the source idempotency key by source_project so same-system sources with overlapping ids no longer clobber each other",
         up: MIGRATION_V19_UP,
     },
+    Migration {
+        version: 20,
+        description: "Embedding Profiles: isolated vector rows, integrity manifests, active pointer, and resumable migration checkpoints",
+        up: MIGRATION_V20_UP,
+    },
 ];
 
 /// A database migration
@@ -1155,6 +1160,132 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_source_key
 UPDATE schema_version SET version = 19, applied_at = datetime('now');
 "#;
 
+/// V20: Embedding Profiles.
+///
+/// The legacy `node_embeddings` table remains intact as a compatibility mirror
+/// for existing installations and portable archives. New profile-aware code
+/// stores vectors in `embedding_profile_vectors`, whose compound primary key
+/// makes vectors from two encoding contracts physically distinct. This is the
+/// critical isolation boundary: semantic scores can only be produced from one
+/// profile at a time.
+const MIGRATION_V20_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS embedding_profiles (
+    profile_id TEXT PRIMARY KEY,
+    model_id TEXT NOT NULL,
+    immutable_model_revision TEXT NOT NULL,
+    verified_model_artifact_hashes TEXT NOT NULL DEFAULT '[]',
+    runtime_backend TEXT NOT NULL,
+    embedding_dimension INTEGER NOT NULL CHECK (embedding_dimension > 0),
+    normalization_method TEXT NOT NULL,
+    document_encoding_template TEXT NOT NULL,
+    query_encoding_template TEXT NOT NULL,
+    maximum_token_limit INTEGER NOT NULL CHECK (maximum_token_limit > 0),
+    chunking_strategy TEXT NOT NULL,
+    status TEXT NOT NULL,
+    installed_at TEXT,
+    last_verified_at TEXT,
+    runtime_metadata TEXT,
+    verification TEXT NOT NULL DEFAULT '{}',
+    evaluation TEXT,
+    failure TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS embedding_profile_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    active_profile_id TEXT NOT NULL REFERENCES embedding_profiles(profile_id),
+    previous_profile_id TEXT,
+    activated_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS embedding_profile_vectors (
+    profile_id TEXT NOT NULL REFERENCES embedding_profiles(profile_id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+    embedding BLOB NOT NULL,
+    dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+    model TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (profile_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_embedding_profile_vectors_profile ON embedding_profile_vectors(profile_id);
+CREATE INDEX IF NOT EXISTS idx_embedding_profile_vectors_node ON embedding_profile_vectors(node_id);
+
+CREATE TABLE IF NOT EXISTS embedding_profile_manifests (
+    profile_id TEXT PRIMARY KEY REFERENCES embedding_profiles(profile_id) ON DELETE CASCADE,
+    manifest_json TEXT NOT NULL,
+    manifest_hash TEXT NOT NULL,
+    vector_count INTEGER NOT NULL DEFAULT 0 CHECK (vector_count >= 0),
+    index_member_count INTEGER NOT NULL DEFAULT 0 CHECK (index_member_count >= 0),
+    index_integrity_hash TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS embedding_profile_migrations (
+    migration_id TEXT PRIMARY KEY,
+    source_profile_id TEXT NOT NULL REFERENCES embedding_profiles(profile_id),
+    destination_profile_id TEXT NOT NULL REFERENCES embedding_profiles(profile_id),
+    state TEXT NOT NULL,
+    total_memories INTEGER NOT NULL DEFAULT 0 CHECK (total_memories >= 0),
+    completed_memories INTEGER NOT NULL DEFAULT 0 CHECK (completed_memories >= 0),
+    failed_memory_ids TEXT NOT NULL DEFAULT '[]',
+    last_memory_id TEXT,
+    snapshot_path TEXT,
+    validation_report TEXT,
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_embedding_profile_migrations_destination ON embedding_profile_migrations(destination_profile_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS embedding_profile_migration_checkpoints (
+    migration_id TEXT NOT NULL REFERENCES embedding_profile_migrations(migration_id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+    state TEXT NOT NULL,
+    error TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (migration_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_embedding_profile_migration_checkpoints_state
+    ON embedding_profile_migration_checkpoints(migration_id, state, updated_at);
+
+-- Existing vectors remain available under an explicit legacy encoding contract.
+-- `INSERT OR IGNORE` makes this safe for databases created by pre-release builds.
+INSERT OR IGNORE INTO embedding_profiles (
+    profile_id, model_id, immutable_model_revision, verified_model_artifact_hashes,
+    runtime_backend, embedding_dimension, normalization_method,
+    document_encoding_template, query_encoding_template, maximum_token_limit,
+    chunking_strategy, status, created_at, updated_at
+) VALUES (
+    'nomic-v1.5-legacy-raw-256', 'nomic-ai/nomic-embed-text-v1.5', 'legacy-unpinned', '[]',
+    'legacy-fastembed', 256, 'l2', '{content}', '{query}', 8192,
+    'legacy-default', 'active', datetime('now'), datetime('now')
+);
+
+INSERT OR IGNORE INTO embedding_profile_state (
+    singleton, active_profile_id, previous_profile_id, activated_at, updated_at
+) VALUES (
+    1, 'nomic-v1.5-legacy-raw-256', NULL, datetime('now'), datetime('now')
+);
+
+INSERT OR IGNORE INTO embedding_profile_vectors (
+    profile_id, node_id, embedding, dimensions, model, created_at
+)
+SELECT
+    'nomic-v1.5-legacy-raw-256', node_id, embedding, dimensions, model, created_at
+FROM node_embeddings;
+
+INSERT OR IGNORE INTO embedding_profile_manifests (
+    profile_id, manifest_json, manifest_hash, vector_count, index_member_count, index_integrity_hash, updated_at
+) VALUES (
+    'nomic-v1.5-legacy-raw-256', '{}', 'legacy-unverified',
+    (SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = 'nomic-v1.5-legacy-raw-256'),
+    0, NULL, datetime('now')
+);
+
+UPDATE schema_version SET version = 20, applied_at = datetime('now');
+"#;
+
 /// Apply pending migrations
 ///
 /// Each migration is applied inside an explicit transaction so its schema
@@ -1659,4 +1790,3 @@ mod tests {
         assert_eq!(domain_scores, "{}");
     }
 }
-

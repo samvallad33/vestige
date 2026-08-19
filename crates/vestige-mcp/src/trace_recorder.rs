@@ -25,7 +25,8 @@ use tokio::sync::broadcast;
 
 use crate::dashboard::events::VestigeEvent;
 use vestige_core::{
-    MemoryTraceEvent, Receipt, Storage, SuppressReason, SuppressedReceiptEntry, WriteSource,
+    BackfillCandidateEvidence, BackfillReceiptEvidence, MemoryTraceEvent, Receipt, Storage,
+    SuppressReason, SuppressedReceiptEntry, WriteSource,
 };
 
 /// Tools that write to memory and are therefore subject to risk-gated review.
@@ -488,8 +489,12 @@ fn pr_kind_phrase(kind: vestige_core::MemoryPrKind) -> &'static str {
 fn is_retrieval_tool(tool: &str) -> bool {
     matches!(
         tool,
-        "deep_reference" | "cross_reference" | "search" | "explore_connections"
+        "recall" | "deep_reference" | "cross_reference" | "search" | "explore_connections"
     )
+}
+
+fn is_receiptable_tool(tool: &str) -> bool {
+    is_retrieval_tool(tool) || tool == "backfill"
 }
 
 /// Build a [`Receipt`] from a retrieval tool's response JSON, persist it, and
@@ -506,8 +511,12 @@ pub fn build_and_save_receipt(
     tool: &str,
     result: &serde_json::Value,
 ) -> Option<serde_json::Value> {
-    if !is_retrieval_tool(tool) {
+    if !is_receiptable_tool(tool) {
         return None;
+    }
+
+    if tool == "backfill" {
+        return build_and_save_backfill_receipt(storage, run_id, result);
     }
 
     let (retrieved, activation) = extract_retrieved(result);
@@ -553,6 +562,124 @@ pub fn build_and_save_receipt(
         tracing::warn!("receipt save failed: {e}");
     }
     Some(serde_json::to_value(&receipt).unwrap_or(serde_json::Value::Null))
+}
+
+/// Persist the exact output of a Backfill run as the same receipt primitive
+/// used by retrieval. The proof records candidates, not an asserted root cause:
+/// the UI must preserve that epistemic boundary.
+fn build_and_save_backfill_receipt(
+    storage: &Arc<Storage>,
+    run_id: &str,
+    result: &Value,
+) -> Option<Value> {
+    if !result.get("triggered")?.as_bool()? {
+        return None;
+    }
+    let failure = result.get("failure")?;
+    let failure_id = failure.get("id")?.as_str()?.to_string();
+    let failure_preview = failure
+        .get("content_preview")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let candidates: Vec<BackfillCandidateEvidence> = result
+        .get("causes")
+        .and_then(|v| v.as_array())?
+        .iter()
+        .filter_map(|cause| {
+            Some(BackfillCandidateEvidence {
+                memory_id: cause.get("memory_id")?.as_str()?.to_string(),
+                content_preview: cause
+                    .get("content_preview")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                shared_entities: cause
+                    .get("shared_entities")
+                    .and_then(|v| v.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(ToString::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                age_days_before_failure: cause
+                    .get("age_days_before_failure")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                similarity_rank: cause
+                    .get("similarity_rank")
+                    .and_then(|v| v.as_u64())
+                    .map(|rank| rank as usize),
+                backfill_score: cause
+                    .get("backfill_score")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                promoted: cause
+                    .get("promoted")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                candidate_edge_persisted: cause
+                    .get("candidate_edge_persisted")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            })
+        })
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let retrieved = candidates
+        .iter()
+        .map(|candidate| candidate.memory_id.clone())
+        .collect();
+    let activation_path = candidates
+        .iter()
+        .map(|candidate| format!("{} -> {}", candidate.memory_id, failure_id))
+        .collect();
+    let mutations = candidates
+        .iter()
+        .filter(|candidate| candidate.promoted)
+        .map(|candidate| vestige_core::ReceiptMutation {
+            id: candidate.memory_id.clone(),
+            kind: "backfill_candidate_promoted".to_string(),
+            note: Some("Promoted after an explicit-entity backward candidate match".to_string()),
+        })
+        .collect();
+    let mut receipt = Receipt::build(
+        Utc::now(),
+        run_id,
+        retrieved,
+        Vec::new(),
+        activation_path,
+        &[],
+        mutations,
+    );
+    receipt.backfill = Some(BackfillReceiptEvidence {
+        failure_id,
+        failure_preview,
+        scanned: result.get("scanned").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+        lookback_days: result
+            .get("lookback_days")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(30),
+        baseline: "embedding cosine rank within the scanned candidate set".to_string(),
+        path_ids: result
+            .get("path_ids")
+            .and_then(|value| value.as_array())
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| id.as_str().map(ToString::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        candidates,
+    });
+    if let Err(error) = storage.save_receipt(&receipt, Some(run_id), Some("backfill"), None) {
+        tracing::warn!(%error, "backfill receipt save failed");
+    }
+    Some(serde_json::to_value(receipt).unwrap_or(Value::Null))
 }
 
 /// Derive the run id for a tool call. Honours a client-supplied `runId` /
@@ -766,6 +893,22 @@ fn extract_retrieved(result: &Value) -> (Vec<String>, BTreeMap<String, f64>) {
                 ids.push(id.to_string());
                 if let Some(t) = item.get("trust").and_then(|v| v.as_f64()) {
                     activation.insert(id.to_string(), t);
+                }
+            }
+        }
+    }
+
+    // Retroactive Salience Backfill: these are not ordinary retrieval hits,
+    // but they are the exact earlier candidates an agent must inspect. Record
+    // them in the same run so Black Box and its receipt list agree.
+    if ids.is_empty()
+        && let Some(arr) = result.get("causes").and_then(|r| r.as_array())
+    {
+        for item in arr {
+            if let Some(id) = item.get("memory_id").and_then(|v| v.as_str()) {
+                ids.push(id.to_string());
+                if let Some(score) = item.get("backfill_score").and_then(|v| v.as_f64()) {
+                    activation.insert(id.to_string(), score);
                 }
             }
         }
@@ -1366,4 +1509,9 @@ mod tests {
         assert!(!is_write_tool("search"));
         assert!(!is_write_tool("deep_reference"));
     }
+
+    // The receipt-spine acceptance test lives in server.rs as a real
+    // McpServer::handle_request recall test (seed → dispatch recall with a known
+    // runId → assert the trace AND list_receipts_for_run), which exercises the
+    // whole production path rather than this helper in isolation.
 }

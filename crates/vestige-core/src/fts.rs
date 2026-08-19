@@ -222,12 +222,19 @@ mod tests {
     #[test]
     fn or_query_bounds_token_count_and_length() {
         // DoS hardening: <=64 arms, each token <=64 chars.
-        let many = (0..500).map(|i| format!("t{i}")).collect::<Vec<_>>().join(" ");
+        let many = (0..500)
+            .map(|i| format!("t{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         let q = sanitize_fts5_or_query(&many).unwrap();
         assert!(q.matches(" OR ").count() <= 63, "OR-chain must be bounded");
         let longtok = "a".repeat(200);
         let q2 = sanitize_fts5_or_query(&longtok).unwrap();
-        assert!(q2.len() <= 66, "single token capped at 64 + quotes, got {}", q2.len());
+        assert!(
+            q2.len() <= 66,
+            "single token capped at 64 + quotes, got {}",
+            q2.len()
+        );
     }
 
     #[test]

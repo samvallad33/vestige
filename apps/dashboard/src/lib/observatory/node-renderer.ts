@@ -20,7 +20,13 @@ import {
 	buildNodeStateArray,
 	buildEdgeIndexArray
 } from './graph-upload';
-import { FLOATS_PER_NODE, NODE_LANE, type ObservatoryGraph, type ObservatoryEdge } from './types';
+import {
+	FLOATS_PER_NODE,
+	NODE_LANE,
+	UINTS_PER_PATHSTEP,
+	type ObservatoryGraph,
+	type ObservatoryEdge
+} from './types';
 import { renderNodesWGSL } from './shaders/render-nodes.wgsl';
 import { simulateWGSL } from './shaders/simulate.wgsl';
 import { renderPathWGSL } from './shaders/render-path.wgsl';
@@ -31,6 +37,15 @@ const CAMERA_FLOATS = 24;
 
 /** Orbit distance fitted to the default field radius (graph-upload). */
 const ORBIT_DISTANCE = 300;
+
+/**
+ * Fixed PathStep buffer capacity (vec4<u32> = 16B each → 2KB). Sizing the
+ * buffer to a cap ONCE means a live recall / receipt-replay only rewrites its
+ * contents (writeBuffer) instead of destroying+recreating the buffer and
+ * recompiling 3 shader modules + pipelines every ~4s — the periodic frame
+ * hitch the launch audit caught. Recall/birth/rescue paths are all ≤ ~40 beats.
+ */
+const MAX_PATH_STEPS = 128;
 
 export class NodeRenderer implements FramePass {
 	private engine: ObservatoryEngine;
@@ -114,7 +129,10 @@ export class NodeRenderer implements FramePass {
 		// recomputing on the real FSRS curve. Padded to ≥16 bytes so a tiny
 		// graph still makes a valid storage buffer.
 		const liveRet = new Float32Array(Math.max(nodeCount, 4));
-		for (let i = 0; i < nodeCount; i++) liveRet[i] = graph.nodes[i].retention;
+		// Floor at 0.001: exact 0.0 is the FOSSIL LIGHT "not yet born" sentinel
+		// (render mask collapses those sprites), and a fully-decayed-but-real
+		// memory must stay faintly visible — forgotten, never deleted.
+		for (let i = 0; i < nodeCount; i++) liveRet[i] = Math.max(0.001, graph.nodes[i].retention);
 		this.liveRetentionBuffer?.destroy();
 		this.liveRetentionBuffer = device.createBuffer({
 			label: 'observatory-live-retention',
@@ -130,14 +148,23 @@ export class NodeRenderer implements FramePass {
 			? buildRecallPath(response, graph)
 			: { steps: [], data: new Uint32Array(4) };
 		this.pathSteps = recall.steps;
+		// Fixed-capacity path buffer, created ONCE. Later setPathSteps calls
+		// (live recall, receipt replay) only writeBuffer into it — no realloc,
+		// no pipeline rebuild.
 		this.pathBuffer?.destroy();
 		this.pathBuffer = device.createBuffer({
 			label: 'observatory-path-steps',
-			size: recall.data.byteLength,
+			size: MAX_PATH_STEPS * UINTS_PER_PATHSTEP * 4,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
 		});
-		device.queue.writeBuffer(this.pathBuffer, 0, recall.data.buffer as ArrayBuffer);
-		this.pathStepCount = this.pathSteps.length;
+		device.queue.writeBuffer(
+			this.pathBuffer,
+			0,
+			recall.data.buffer as ArrayBuffer,
+			0,
+			Math.min(recall.data.byteLength, MAX_PATH_STEPS * UINTS_PER_PATHSTEP * 4)
+		);
+		this.pathStepCount = Math.min(this.pathSteps.length, MAX_PATH_STEPS);
 
 		// Per-frame counts for every shader that reads Params.
 		this.engine.params[2] = nodeCount;
@@ -156,23 +183,38 @@ export class NodeRenderer implements FramePass {
 	}
 
 	/**
-	 * Replace the PathStep buffer after upload (Moment B: the birth engrave
-	 * steps ride the same wavefront machinery as recall). Rebuilds the
-	 * pipelines/bind groups so they reference the new buffer.
+	 * Replace the PathStep contents (Moment B birth engrave; live recall; the
+	 * receipt-replay cold-open). The buffer is fixed-capacity and created once at
+	 * upload, so the HOT PATH here is a single writeBuffer + count update — NO
+	 * buffer realloc, NO shader recompile, NO pipeline/bind-group rebuild. This
+	 * is what makes the ~4s receipt replay allocation-free instead of a periodic
+	 * frame hitch (launch audit finding). Only the cold case (buffer not yet
+	 * created, or a path longer than capacity) falls back to a full rebuild.
 	 */
 	setPathSteps(data: Uint32Array<ArrayBuffer>, steps: PathStepMeta[]): void {
 		const device = this.engine.gpuDevice;
 		if (!device) return;
 		this.pathSteps = steps;
-		this.pathStepCount = steps.length;
+		const capBytes = MAX_PATH_STEPS * UINTS_PER_PATHSTEP * 4;
+
+		if (this.pathBuffer && data.byteLength <= capBytes) {
+			// Hot path: overwrite in place, clamp the draw/step count.
+			this.pathStepCount = Math.min(steps.length, MAX_PATH_STEPS);
+			device.queue.writeBuffer(this.pathBuffer, 0, data.buffer as ArrayBuffer, 0, data.byteLength);
+			this.engine.params[4] = this.pathStepCount;
+			return;
+		}
+
+		// Cold path: (re)create at capacity and rebuild pipelines once.
+		this.pathStepCount = Math.min(steps.length, MAX_PATH_STEPS);
 		this.pathBuffer?.destroy();
 		this.pathBuffer = device.createBuffer({
 			label: 'observatory-path-steps',
-			size: Math.max(data.byteLength, 16),
+			size: capBytes,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
 		});
-		device.queue.writeBuffer(this.pathBuffer, 0, data.buffer as ArrayBuffer);
-		this.engine.params[4] = steps.length;
+		device.queue.writeBuffer(this.pathBuffer, 0, data.buffer as ArrayBuffer, 0, Math.min(data.byteLength, capBytes));
+		this.engine.params[4] = this.pathStepCount;
 		this.createPipeline(device);
 	}
 
@@ -215,6 +257,16 @@ export class NodeRenderer implements FramePass {
 		const n = Math.min(data.length, this.nodeCount);
 		if (n <= 0) return;
 		device.queue.writeBuffer(this.liveRetentionBuffer, 0, data.buffer as ArrayBuffer, 0, n * 4);
+	}
+
+	/**
+	 * Fossil Light's source contract. The radiance pass reads the SAME mutable
+	 * node state and camera that this renderer just wrote in the current frame;
+	 * it must never approximate the 3D graph on the CPU or read it back.
+	 */
+	getFossilLightSources(): { nodeBuffer: GPUBuffer; cameraBuffer: GPUBuffer; nodeCount: number } | null {
+		if (!this.nodeBuffer || !this.cameraBuffer || this.nodeCount <= 0) return null;
+		return { nodeBuffer: this.nodeBuffer, cameraBuffer: this.cameraBuffer, nodeCount: this.nodeCount };
 	}
 
 	private createPipeline(device: GPUDevice): void {

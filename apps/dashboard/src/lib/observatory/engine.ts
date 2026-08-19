@@ -62,6 +62,14 @@ export interface FramePass {
 	compute?(encoder: GPUCommandEncoder, frame: number): void;
 	/** Encode draw calls inside the main render pass. */
 	render?(pass: GPURenderPassEncoder, frame: number): void;
+	/**
+	 * Optional render-rate contract for quiet, information-dense organs.
+	 *
+	 * The engine still advances its deterministic clock at 60 Hz; this only
+	 * decides how often an otherwise-settled scene pays for an HDR render and
+	 * post chain. Passes that omit it retain the normal 60 fps behavior.
+	 */
+	targetFrameRate?(frame: number): number;
 }
 
 export class ObservatoryEngine {
@@ -78,6 +86,8 @@ export class ObservatoryEngine {
 	private disposed = false;
 	private maxDpr: number;
 	private onFrame?: (frame: number, fps: number) => void;
+	private lastRenderTs = Number.NEGATIVE_INFINITY;
+	private visibilityListenerAttached = false;
 
 	/** Per-frame uniform data (layout: types.PARAMS_FLOATS). */
 	readonly params = new Float32Array(PARAMS_FLOATS);
@@ -236,10 +246,20 @@ export class ObservatoryEngine {
 	 */
 	setPaused(paused: boolean): void {
 		this.paused = paused;
+		this.requestRender();
 	}
 
 	get isPaused(): boolean {
 		return this.paused;
+	}
+
+	/**
+	 * Makes the next scheduled frame render immediately. A quiet receipt volume
+	 * calls this on selection, replay, or slicer input so interaction never waits
+	 * for its low-rate settled cadence.
+	 */
+	requestRender(): void {
+		this.lastRenderTs = Number.NEGATIVE_INFINITY;
 	}
 
 	/**
@@ -333,8 +353,15 @@ export class ObservatoryEngine {
 		this.post = new PostChain(this.device, this.paramsBuffer, this.format);
 
 		this.setStatus({ state: 'running' });
-		this.running = true;
-		this.rafId = requestAnimationFrame(this.frame);
+		this.attachVisibilityListener();
+		// ALWAYS start the loop, even if document.hidden. A genuinely hidden
+		// tab never fires rAF (the browser starves it — zero battery cost), so
+		// gating the initial start buys nothing; but embedded/headless/capture
+		// environments report hidden=true WHILE still firing rAF, and gating
+		// here rendered a permanently black canvas for all of them (verified:
+		// in-app browser pane, Jul 14 2026). The visibilitychange handler still
+		// stops/resumes the loop for real tab switches.
+		this.resumeLoop();
 		return true;
 	}
 
@@ -363,16 +390,61 @@ export class ObservatoryEngine {
 		});
 	}
 
+	private attachVisibilityListener(): void {
+		if (this.visibilityListenerAttached || typeof document === 'undefined') return;
+		document.addEventListener('visibilitychange', this.handleVisibilityChange);
+		this.visibilityListenerAttached = true;
+	}
+
+	private handleVisibilityChange = () => {
+		if (typeof document === 'undefined') return;
+		if (document.hidden) {
+			this.stopLoop();
+			return;
+		}
+		this.resumeLoop();
+	};
+
+	private resumeLoop(): void {
+		if (this.running || this.disposed || !this.device || !this.context || !this.paramsBuffer || !this.post) return;
+		this.running = true;
+		// Do not turn a tab's hidden time into a visual fast-forward or leave it
+		// waiting for a prior settled-rate interval when it becomes visible again.
+		this.lastRafTs = 0;
+		this.accumulatorMs = 0;
+		this.requestRender();
+		this.rafId = requestAnimationFrame(this.frame);
+	}
+
+	private frameRateFor(frame: number): number {
+		// A pass WITHOUT targetFrameRate implicitly demands the full 60 fps —
+		// NodeRenderer, LivingField, and every shipped organ animate every frame
+		// and never opted into throttling. Only when EVERY registered pass opts
+		// into a quieter cadence may the engine settle below 60 (a quiet
+		// instrument like the chrono shuttle must never drag the living field
+		// down to its own idle rate — that bug shipped once, Jul 14 2026).
+		let target = 0;
+		for (const pass of this.passes) {
+			const requested = pass.targetFrameRate?.(frame);
+			if (typeof requested !== 'number' || !Number.isFinite(requested)) {
+				target = 60;
+				continue;
+			}
+			target = Math.max(target, requested);
+		}
+		return Math.max(1, Math.min(60, target || 60));
+	}
+
 	private frame = (ts: number) => {
 		if (!this.running || !this.device || !this.context || !this.paramsBuffer || !this.post)
 			return;
 
-		// fps estimate — telemetry only, never sim state
+		// Wall delta feeds ONLY the fixed-timestep accumulator. The fps estimate
+		// is computed at submit time from RENDERED-frame deltas (below) — the
+		// rAF cadence here would report ~60/120 even while the settled-rate
+		// governor presents at 10-12 fps, lying to the telemetry strip.
 		let deltaMs = 0;
-		if (this.lastRafTs > 0) {
-			deltaMs = ts - this.lastRafTs;
-			if (deltaMs > 0) this.fpsEstimate = Math.round(1000 / deltaMs);
-		}
+		if (this.lastRafTs > 0) deltaMs = ts - this.lastRafTs;
 		this.lastRafTs = ts;
 
 		// Fixed 60Hz timestep: advance the deterministic clock by however many
@@ -394,6 +466,12 @@ export class ObservatoryEngine {
 		// Capture mode (?frame=N) pins every derived value to one loop frame.
 		const state = this.clock.state;
 		const frame = this.freezeFrame ?? state.frame;
+		const targetFrameRate = this.frameRateFor(frame);
+		const minFrameInterval = 1000 / targetFrameRate;
+		if (ts - this.lastRenderTs < minFrameInterval) {
+			this.rafId = requestAnimationFrame(this.frame);
+			return;
+		}
 		const phase = frame / this.clock.framesPerLoop;
 
 		// Per-frame params (layout must match WGSL Params; types.ts doc block).
@@ -467,6 +545,12 @@ export class ObservatoryEngine {
 
 		this.device.queue.submit([encoder.finish()]);
 
+		// Honest fps: measured across frames actually PRESENTED, so telemetry
+		// shows the settled rate when quiet passes throttle the render.
+		if (Number.isFinite(this.lastRenderTs) && ts > this.lastRenderTs) {
+			this.fpsEstimate = Math.round(1000 / (ts - this.lastRenderTs));
+		}
+		this.lastRenderTs = ts;
 		this.onFrame?.(frame, this.fpsEstimate);
 		this.rafId = requestAnimationFrame(this.frame);
 	};
@@ -483,6 +567,10 @@ export class ObservatoryEngine {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.stopLoop();
+		if (this.visibilityListenerAttached && typeof document !== 'undefined') {
+			document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+			this.visibilityListenerAttached = false;
+		}
 		this.paramsBuffer?.destroy();
 		this.paramsBuffer = null;
 		this.post?.dispose();

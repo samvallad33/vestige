@@ -1,0 +1,11 @@
+{
+  "q-code-config": [{"memory_id":"mem-code-config","score":0.99},{"memory_id":"mem-code-confuser","score":0.33}],
+  "q-exact-id": [{"memory_id":"mem-exact-id","score":1.0},{"memory_id":"mem-exact-confuser","score":0.21}],
+  "q-incident": [{"memory_id":"mem-incident","score":0.95}],
+  "q-decision": [{"memory_id":"mem-decision-current","score":0.94},{"memory_id":"mem-decision-old","score":0.42}],
+  "q-temporal": [{"memory_id":"mem-temporal-current","score":0.93},{"memory_id":"mem-temporal-old","score":0.35}],
+  "q-project-boundary": [{"memory_id":"mem-project-a","score":0.91},{"memory_id":"mem-project-b","score":0.48}],
+  "q-multilingual": [{"memory_id":"mem-multilingual","score":0.92}],
+  "q-duplicate": [{"memory_id":"mem-duplicate-target","score":0.90},{"memory_id":"mem-duplicate-confuser","score":0.50}],
+  "q-semantic": [{"memory_id":"mem-semantic","score":0.96}]
+}

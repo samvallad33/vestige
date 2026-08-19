@@ -41,6 +41,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import {
+	BASE,
 	captureErrors,
 	expectNoErrors,
 	gotoRoute,
@@ -59,18 +60,6 @@ const PICK_GRID: Array<[number, number]> = [
 	[0.36, 0.6],
 	[0.64, 0.4],
 	[0.5, 0.62]
-];
-
-// The demo-mode label column. Anchored at NDC x:-0.91 (÷ aspect≈1.78 → screen
-// fx≈0.26) with rows descending from y:0.76. Empirically verified: clicks here
-// land on real demo labels and flip the ?demo= URL through pickAt → switchDemo.
-const DEMO_LABEL_PICKS: Array<[number, number]> = [
-	[0.27, 0.18],
-	[0.27, 0.21],
-	[0.27, 0.24],
-	[0.27, 0.27],
-	[0.28, 0.16],
-	[0.28, 0.3]
 ];
 
 async function clickGrid(page: Page, grid: Array<[number, number]>) {
@@ -154,16 +143,19 @@ test.describe('/observatory organ — real-data WebGPU cognitive field', () => {
 			`field must render non-black real data (avgLum=${shown.avgLum} var=${shown.variance})`
 		).toBe(true);
 
-		// ── 6. ZERO DOM LEAK ─────────────────────────────────────────────────────
-		// This immersive organ bypasses the DOM app chrome. Exactly one canvas, no
-		// stray control panel/sidebar leaking over the field.
+		// ── 6. DELIBERATE, ACCESSIBLE CHROME ONLY ─────────────────────────────────
+		// The Observatory intentionally has a compact DOM control layer: it makes
+		// its real WebGPU moments discoverable and keyboard-operable. The broader
+		// dashboard shell must still not leak into this immersive scene.
 		expect(await page.locator('canvas').count(), 'observatory renders a single field canvas').toBe(
 			1
 		);
+		await expect(page.locator('.obs-ui')).toBeVisible();
 		expect(
-			await page.locator('nav, aside, [data-app-sidebar]').count(),
-			'no DOM app chrome must leak over the immersive field'
-		).toBe(0);
+			await page.locator('.obs-ui nav').count(),
+			'the Observatory exposes one intentional evidence/moment control strip'
+		).toBe(1);
+		expect(await page.locator('aside, [data-app-sidebar], .os-dock').count()).toBe(0);
 
 		// ── 3. ALIVE ─────────────────────────────────────────────────────────────
 		const animated = await isAnimating(page, 900);
@@ -174,11 +166,11 @@ test.describe('/observatory organ — real-data WebGPU cognitive field', () => {
 		await clickGrid(page, PICK_GRID);
 		expectNoErrors(capture);
 
-		// (b) A REAL demo-label pick drives pickAt → switchDemo → {#key demo}
-		//     remount. Proven live: clicking the label column flips ?demo=. This is
-		//     the organ's genuine in-canvas interaction, end to end.
+		// (b) A visible, accessible demo control drives switchDemo → {#key demo}
+		//     remount. This replaced the old invisible MSDF hit target so the real
+		//     action is both discoverable and keyboard accessible.
 		const startUrl = page.url();
-		await clickGrid(page, DEMO_LABEL_PICKS);
+		await page.getByRole('button', { name: 'Salience' }).click();
 		await page.waitForTimeout(400);
 		await expect(async () => {
 			expect(page.url(), 'picking a demo label must switch the ?demo= mode').toContain('demo=');
@@ -210,5 +202,76 @@ test.describe('/observatory organ — real-data WebGPU cognitive field', () => {
 			body: await page.screenshot(),
 			contentType: 'image/png'
 		});
+	});
+
+	test('Backfill receipt deep-link is receipt-scoped and fails closed to its exact evidence route', async ({ page }) => {
+		const receiptId = 'r_backfill_proof';
+		const causeId = 'cause-pool-limit';
+		const bridgeId = 'deploy-change';
+		const failureId = 'checkout-timeout';
+		const receipt = {
+			receipt_id: receiptId,
+			retrieved: [causeId],
+			suppressed: [],
+			activation_path: [`${causeId} -> ${bridgeId} -> ${failureId}`],
+			trust_floor: 0.6,
+			decay_risk: 'medium',
+			mutations: [],
+			backfill: {
+				failure_id: failureId,
+				failure_preview: 'Checkout connection-acquisition timeout',
+				scanned: 19,
+				lookback_days: 30,
+				baseline: 'embedding cosine rank within the scanned candidate set',
+				path_ids: [causeId, bridgeId, failureId],
+				candidates: [{
+					memory_id: causeId,
+					content_preview: 'Lowered connection-pool max from 100 to 20',
+					shared_entities: ['db.config.yaml'],
+					age_days_before_failure: 21,
+					similarity_rank: 389,
+					backfill_score: 0.92,
+					promoted: false,
+					candidate_edge_persisted: true
+				}]
+			}
+		};
+		const graph = {
+			nodes: [
+				{ id: causeId, label: 'Pool limit changed', type: 'decision', retention: 0.8, tags: ['db.config.yaml'], createdAt: '2026-06-01T00:00:00Z', updatedAt: '2026-06-01T00:00:00Z', isCenter: true },
+				{ id: bridgeId, label: 'Deploy applied', type: 'event', retention: 0.7, tags: ['db.config.yaml'], createdAt: '2026-06-10T00:00:00Z', updatedAt: '2026-06-10T00:00:00Z', isCenter: false },
+				{ id: failureId, label: 'Checkout timeout', type: 'event', retention: 0.9, tags: ['crash'], createdAt: '2026-06-22T00:00:00Z', updatedAt: '2026-06-22T00:00:00Z', isCenter: false },
+				// A tempting unrelated graph node must never enter the receipt replay.
+				{ id: 'unrelated-lookalike', label: 'Driver upgrade', type: 'decision', retention: 0.95, tags: ['postgres'], createdAt: '2026-06-20T00:00:00Z', updatedAt: '2026-06-20T00:00:00Z', isCenter: false }
+			],
+			edges: [
+				{ source: causeId, target: bridgeId, weight: 1, type: 'causal' },
+				{ source: bridgeId, target: failureId, weight: 1, type: 'causal' }
+			],
+			center_id: causeId,
+			depth: 3,
+			nodeCount: 4,
+			edgeCount: 2
+		};
+		const requestedCenters: string[] = [];
+
+		await page.route(`**/api/receipts/${receiptId}`, (route) => route.fulfill({ json: receipt }));
+		await page.route('**/api/graph?**', (route) => {
+			const center = new URL(route.request().url()).searchParams.get('center_id');
+			if (center) requestedCenters.push(center);
+			return route.fulfill({ json: graph });
+		});
+
+		await page.goto(`${BASE}/observatory?receipt=${receiptId}`);
+		await expect(page.getByRole('heading', { name: 'Backfill Replay' })).toBeVisible();
+		await expect(page.getByText('Receipt evidence only')).toBeVisible();
+		await expect(page.getByText(`This field replays only the recorded Backfill candidate evidence in receipt ${receiptId}.`)).toBeVisible();
+		await expect(page.locator('.obs-card-label')).toContainText('1 retrieved · 0 suppressed');
+		await expect(page.locator('.obs-stats')).toContainText('3 memories');
+		await expect(page.getByRole('button', { name: 'Salience' })).toHaveCount(0);
+
+		await expect(async () => {
+			expect(new Set(requestedCenters)).toEqual(new Set([causeId, bridgeId, failureId]));
+		}).toPass({ timeout: 8000 });
 	});
 });

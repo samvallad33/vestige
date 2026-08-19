@@ -43,7 +43,7 @@ export function retrievability(
 	return r < 0 ? 0 : r > 1 ? 1 : r;
 }
 
-const MS_PER_DAY = 86_400_000;
+export const MS_PER_DAY = 86_400_000;
 
 /**
  * Days elapsed between an ISO timestamp (`lastAccessed`) and `nowMs`, plus an
@@ -65,6 +65,39 @@ export function elapsedDays(
 	if (!Number.isFinite(t)) return projectionDays > 0 ? projectionDays : 0;
 	const days = (nowMs - t) / MS_PER_DAY;
 	return Math.max(0, days) + Math.max(0, projectionDays);
+}
+
+/**
+ * FOSSIL LIGHT — retention evaluated at an ARBITRARY instant `evalMs` (the
+ * chrono scrub position), not just "now + forward". Same closed form, signed
+ * time. The honesty contract with client-side data (the graph payload carries
+ * only the LATEST FSRS state per memory):
+ *
+ *  - before creation (`evalMs < createdAt`) → 0: the memory does not exist
+ *    yet, so scrubbing across its birthday pops it out of the field.
+ *  - at/before the last review → 1 via the closed form's own elapsed<=0
+ *    guard (the client has no earlier review history, so the curve is
+ *    anchored at the last review — not an invention, just the known state).
+ *  - after the last review → the true forgetting curve.
+ *
+ * Existing memories floor at 0.001 so exact 0.0 is reserved as the
+ * "not yet born" sentinel the render mask keys on.
+ */
+export function retrievabilityAt(
+	stability: number | undefined,
+	lastAccessedIso: string | undefined,
+	createdAtIso: string | undefined,
+	evalMs: number,
+	w20: number = DEFAULT_DECAY
+): number {
+	if (createdAtIso) {
+		const created = Date.parse(createdAtIso);
+		if (Number.isFinite(created) && evalMs < created) return 0;
+	}
+	if (stability === undefined || !Number.isFinite(stability) || !lastAccessedIso) return 1;
+	const last = Date.parse(lastAccessedIso);
+	if (!Number.isFinite(last)) return 1;
+	return Math.max(0.001, retrievability(stability, (evalMs - last) / MS_PER_DAY, w20));
 }
 
 /**

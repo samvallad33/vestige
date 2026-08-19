@@ -4,15 +4,19 @@
 
 ---
 
-## First-Run Network Requirement
+## Embedding Profiles
 
-Vestige downloads the **Nomic Embed Text v1.5** model (~130MB) from Hugging Face on first use. Qwen3 embeddings are opt-in and download their own Hugging Face model when selected.
+Vestige never downloads or switches an embedding model in the background. Nomic Compact is the local baseline; optional Qwen profiles must be explicitly installed from verified artifacts, evaluated, migrated into an isolated vector space, and activated by the user.
 
-**All subsequent runs are fully offline.**
+`VESTIGE_EMBEDDING_MODEL` is not supported. Environment variables, hardware
+detection, upgrades, and ordinary startup cannot select, download, or activate
+an embedding profile. Use `vestige embeddings list` to inspect the local
+profile catalog and the explicit lifecycle commands to change it.
 
 ### Model Cache Location
 
-The embedding model is cached in platform-specific directories:
+The legacy Nomic runtime uses platform-specific cache directories when it has
+already been provisioned locally:
 
 | Platform | Cache Location |
 |----------|----------------|
@@ -25,7 +29,9 @@ Override with environment variable:
 export FASTEMBED_CACHE_PATH="/custom/path"
 ```
 
-Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the standard Hugging Face cache environment such as `HF_HOME` if you need to relocate that larger model cache.
+Qwen profiles do not use a Hugging Face runtime downloader. Their artifacts
+must be supplied locally, hash-verified, and paired with a compatible packaged
+runner before an explicit profile install can succeed.
 
 ---
 
@@ -34,7 +40,6 @@ Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the stand
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VESTIGE_DATA_DIR` | OS per-user data directory | Storage directory fallback; overridden by `--data-dir`; database lives at `<dir>/vestige.db` |
-| `VESTIGE_EMBEDDING_MODEL` | `nomic-v1.5` | Embedding backend selector. Use `qwen3-0.6b` with a build that enables `qwen3-embeddings` |
 | `RUST_LOG` | `info` (via tracing-subscriber) | Log verbosity + per-module filtering |
 | `FASTEMBED_CACHE_PATH` | Platform cache directory; `./.fastembed_cache` fallback | Embedding model cache location |
 | `VESTIGE_DASHBOARD_PORT` | `3927` | Dashboard HTTP + WebSocket port |

@@ -46,17 +46,17 @@ struct Node {
 @group(0) @binding(1) var<uniform> camera: Camera;
 @group(0) @binding(2) var<storage, read> nodes: array<Node>;
 
-// Iridescent thin-film band — ported EXACTLY from causal-brain-demo.html
-// spectral(w) (visual DNA §7.1): indigo → cyan-teal → mint → magenta rim,
-// wrapping. Activation glow rides this band; base color stays FSRS state.
+// Fossil-light activation band. Recall is not a rainbow screensaver: a living
+// memory travels graphite → amber → jade → chalk, with no violet/purple energy
+// leaking back into the stage.
 fn spectral(w_in: f32) -> vec3<f32> {
 	let w = fract(w_in);
 	// var, not let: WGSL only allows dynamic indexing through a reference.
 	var stops = array<vec3<f32>, 4>(
-		vec3<f32>(0.20, 0.28, 0.95), // indigo
-		vec3<f32>(0.20, 0.85, 0.90), // cyan-teal
-		vec3<f32>(0.45, 1.00, 0.72), // mint
-		vec3<f32>(0.85, 0.45, 1.00)  // magenta rim
+		vec3<f32>(0.48, 0.22, 0.08), // fossil amber
+		vec3<f32>(0.82, 0.58, 0.24), // warmed phosphor
+		vec3<f32>(0.30, 0.74, 0.53), // retained jade
+		vec3<f32>(0.88, 0.94, 0.82)  // chalk ignition
 	);
 	let f = w * 4.0;
 	let i = u32(floor(f)) % 4u;
@@ -64,6 +64,22 @@ fn spectral(w_in: f32) -> vec3<f32> {
 	let a = stops[i];
 	let b = stops[(i + 1u) % 4u];
 	return mix(a, b, frac);
+}
+
+// Incoming semantic colors predate Fossil Light and include blue/violet
+// states. Keep a trace of that information, but chromatically ground it so the
+// field cannot fall back into the old purple-neon visual language.
+fn fossil_tone(source: vec3<f32>, retention: f32) -> vec3<f32> {
+	let amber = vec3<f32>(0.66, 0.30, 0.10);
+	let jade = vec3<f32>(0.30, 0.74, 0.52);
+	let retained = smoothstep(0.16, 0.92, clamp(retention, 0.0, 1.0));
+	let physical = mix(amber, jade, retained);
+	let grounded_source = vec3<f32>(
+		clamp(source.r, 0.0, 1.0),
+		max(clamp(source.g, 0.0, 1.0), clamp(source.b, 0.0, 1.0) * 0.70),
+		min(clamp(source.b, 0.0, 1.0), clamp(source.g, 0.0, 1.0) + 0.08)
+	);
+	return mix(physical, grounded_source, 0.14);
 }
 
 struct VSOut {
@@ -155,8 +171,14 @@ fn vs_main(
 			drift = dzc * (vec3<f32>(0.0, -34.0, 0.0) + away * 22.0);
 		}
 	}
+	// FOSSIL LIGHT existence mask — live retention of exactly 0 means "not yet
+	// born at the scrubbed instant" (fsrs.ts reserves 0.0 as the unborn
+	// sentinel; existing memories floor at 0.001). Collapsing the sprite to
+	// zero size pops the memory out of the field when the chrono crosses its
+	// birthday — cheaper and cleaner than a fragment discard.
+	let exists = step(0.0005, node.vel_retention.w);
 	let half_size = node.pos_radius.w * 3.2 * breath * (1.0 + 0.9 * recall)
-		* (1.0 + lane_swell) * horizon_scale;
+		* (1.0 + lane_swell) * horizon_scale * exists;
 	let world = node.pos_radius.xyz + drift
 		+ camera.right.xyz * corner.x * half_size
 		+ camera.up.xyz * corner.y * half_size;
@@ -181,22 +203,39 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 	let suppressed = (flags & 2u) != 0u;
 	let is_center = (flags & 1u) != 0u;
 
-	// Soft sprite: hot core + feathered halo. The halo rides the breath pulse.
-	let core = smoothstep(0.22, 0.0, d);
-	let halo = pow(max(1.0 - d, 0.0), 2.4);
-	var intensity = core * 1.35 + halo * (0.42 + 0.18 * params.pulse);
+	// SOMATIC PHOTOMETRY — retention is consolidation, not generic bloom.
+	// High-retention memories form a concentrated bright soma; their neurites
+	// remain deliberately dim. A forward Chrono projection makes weak memories
+	// scatter into the field instead of multiplying the whole halo's brightness.
+	let consolidated = smoothstep(0.04, 0.96, clamp(retention, 0.0, 1.0));
+	let forward_age = clamp(max(params.projection_days, 0.0) / 120.0, 0.0, 1.0);
+	let depth_scatter = (1.0 - consolidated) * (0.28 + 0.72 * forward_age);
+	let soma = exp(-d * d * mix(34.0, 17.0, consolidated));
+	let halo = pow(max(1.0 - d, 0.0), 3.4);
+	let theta = atan2(in.uv.y + 0.00001, in.uv.x);
+	let branch_count = 5.0 + floor(fract(in.misc.w * 0.173) * 3.0);
+	let branch_wave = max(0.0, 0.5 + 0.5 * sin(theta * branch_count + in.misc.w * 1.91));
+	let branch_gate = pow(branch_wave, 18.0);
+	let branch_band = smoothstep(0.16, 0.38, d) * (1.0 - smoothstep(0.72, 0.96, d));
+	let neurites = branch_gate * branch_band * (0.035 + 0.12 * consolidated)
+		* (1.0 - depth_scatter * 0.72);
+	let scattered_tissue = halo * (0.015 + 0.11 * depth_scatter) * (0.82 + 0.18 * params.pulse);
+	let tone = fossil_tone(in.color, retention);
+	let soma_tone = mix(tone, vec3<f32>(0.90, 0.96, 0.84), consolidated * 0.48);
+	var color = soma_tone * soma * (0.34 + 0.98 * consolidated)
+		+ tone * neurites
+		+ tone * scattered_tissue;
 
-	// Meaning layer: low-retention memories glow dimmer (drifting toward the
-	// horizon), the center anchor reads brightest.
-	intensity = intensity * (0.45 + 0.55 * retention);
+	// The anchor can be legible without becoming a fake sun. A suppressed memory
+	// is intentionally a cold, near-dark scar: in an additive pass it cannot
+	// subtract light yet, but it no longer emits the field's normal luminance.
 	if (is_center) {
-		intensity = intensity * 1.6;
+		color = color * 1.32;
 	}
 	if (suppressed) {
-		intensity = intensity * 0.28;
+		let scar_ring = smoothstep(0.66, 0.78, d) * (1.0 - smoothstep(0.80, 0.92, d));
+		color = color * 0.055 + vec3<f32>(0.22, 0.10, 0.045) * scar_ring * 0.10;
 	}
-
-	var color = in.color * intensity;
 
 	// Forgetting-horizon (demo 3): multiplicative dim toward near-black as
 	// demo.z rises. Floor 0.06 — never fully gone, always retrievable. Sits
@@ -206,16 +245,29 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 		color = color * mix(1.0, 0.06, clamp(in.demo_yzw.y, 0.0, 1.0));
 	}
 
-	// Recall activation (§7.1): the thin-film band takes over as the wave
-	// lands. Hue drifts exactly ONE full spectral cycle per 720-frame loop
-	// (loop_phase wraps 0→1 and spectral() fract-wraps) — oil-slick shimmer
-	// with a mathematically invisible loop seam.
+	// Recall activation — GCaMP calcium-imaging emission. The intensity lane
+	// (simulate.wgsl recall_sim) is now a real biexponential calcium transient;
+	// the COLOR here matches what you see under a two-photon scope: a green
+	// fluorescence core, a lingering yellow-green ember through the slow decay
+	// tail, and a white-hot pinpoint only at the instant of the spike. The
+	// traveling wavefront still rides the spectral band so a multi-hop causal
+	// recall reads as a wave, but each node that fires flashes like a neuron.
+	// jGCaMP green ~ (0.16, 1.0, 0.42); saturated re-fires (recall > 1) push
+	// toward white-hot the way an over-driven indicator clips.
 	let recall = in.misc.z;
 	if (recall > 0.001) {
+		let hot = clamp(recall, 0.0, 1.0);                    // spike peak → 1
+		let ember = clamp(recall, 0.0, 1.0);                  // afterglow presence
+		// GCaMP fluorophore green, warming to yellow-green as the transient
+		// saturates (nonlinear summation on rapid re-fire).
+		let gcamp = mix(vec3<f32>(0.16, 1.00, 0.42), vec3<f32>(0.62, 1.00, 0.30), clamp(recall - 0.6, 0.0, 1.0));
+		// The spectral band survives as the traveling-wave shimmer, but dialed
+		// under the calcium green so the biology reads first.
 		let band = spectral(0.1 + params.loop_phase + d * 0.35);
-		let activation = band * recall * (core * 1.7 + halo * 0.9);
-		// white-hot pinpoint at full ignition
-		let flash = vec3<f32>(1.0, 1.0, 1.0) * core * recall * 0.55;
+		let activation = (gcamp * (soma * 1.85 + halo * 1.05) + band * 0.28 * halo) * ember;
+		// White-hot pinpoint ONLY at the fast spike (soma core × hot), so the
+		// ignition punches and the ember stays green.
+		let flash = vec3<f32>(1.0, 1.0, 0.94) * soma * hot * 0.6;
 		color = color + activation + flash;
 	}
 
@@ -225,17 +277,17 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 	if (params.demo_id == 2.0) {
 		if (in.demo_yzw.x > 0.001) {
 			// Searchlight: cold clinical white — unmistakably NOT the spectral grammar.
-			color = color + vec3<f32>(0.82, 0.90, 1.00) * in.demo_yzw.x * (core * 1.8 + halo * 0.7);
+			color = color + vec3<f32>(0.82, 0.90, 1.00) * in.demo_yzw.x * (soma * 1.8 + halo * 0.7);
 		}
 		if (in.demo_yzw.y > 0.001) {
 			// Interrogation shimmer: icy spectral strobe as the wave scrubs the past.
-			color = color + spectral(0.55 + params.loop_phase) * in.demo_yzw.y * (core * 0.9 + halo * 0.5)
-				+ vec3<f32>(1.0) * core * in.demo_yzw.y * 0.2;
+			color = color + spectral(0.55 + params.loop_phase) * in.demo_yzw.y * (soma * 0.9 + halo * 0.5)
+				+ vec3<f32>(1.0) * soma * in.demo_yzw.y * 0.2;
 		}
 		if (in.demo_yzw.z > 0.001) {
 			// Detonation: crimson blaze + warm-white pinpoint.
-			color = color + vec3<f32>(1.00, 0.16, 0.10) * in.demo_yzw.z * (core * 1.9 + halo * 1.1)
-				+ vec3<f32>(1.0, 0.85, 0.8) * core * in.demo_yzw.z * 0.4;
+			color = color + vec3<f32>(1.00, 0.16, 0.10) * in.demo_yzw.z * (soma * 1.9 + halo * 1.1)
+				+ vec3<f32>(1.0, 0.85, 0.8) * soma * in.demo_yzw.z * 0.4;
 		}
 	} else if (params.demo_id == 4.0 || params.live_kind == 1.0) {
 		// firewall: demo.y carries TWO value bands — intrusion flare (0..1]
@@ -248,8 +300,8 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 		// band boundary (fades out as fy climbs toward the membrane band).
 		let flare = min(fy, 1.0) * (1.0 - smoothstep(1.0, 1.8, fy));
 		if (flare > 0.001) {
-			color = color + vec3<f32>(0.62, 1.00, 0.55) * flare * (core * 1.7 + halo * 0.9)
-				+ vec3<f32>(0.90, 1.00, 0.85) * core * flare * 0.5;
+			color = color + vec3<f32>(0.62, 1.00, 0.55) * flare * (soma * 1.7 + halo * 0.9)
+				+ vec3<f32>(0.90, 1.00, 0.85) * soma * flare * 0.5;
 		}
 		// Membrane: quarantine ring at d ≈ 0.75 with fresnel-ish falloff —
 		// green body, crimson edge. exp(-q·q) squares by multiplication and
@@ -267,7 +319,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 		if (fw > 0.001) {
 			let rim = smoothstep(0.45, 0.8, d) * (1.0 - smoothstep(0.85, 1.0, d));
 			color = color + vec3<f32>(1.00, 0.14, 0.10) * rim * fw * 1.5
-				+ vec3<f32>(1.00, 0.60, 0.50) * core * fw * 0.15;
+				+ vec3<f32>(1.00, 0.60, 0.50) * soma * fw * 0.15;
 		}
 	}
 

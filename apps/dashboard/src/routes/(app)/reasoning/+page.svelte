@@ -1,426 +1,244 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$stores/api';
-	import RouteStage, { type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import PageHeader from '$components/PageHeader.svelte';
+	import Icon from '$components/Icon.svelte';
 	import {
 		normalizeDeepReferenceResponse,
 		type ReasoningScene,
 		type NormalizedEvidence
 	} from '$lib/observatory/reasoning/reasoning-scene';
-	import { createReasoningTracePasses } from '$lib/observatory/reasoning/reasoning-trace-pass';
-	import type { ObservatoryEngine } from '$lib/observatory/engine';
-	import type { RouteFramePass } from '$lib/observatory/RouteStage.svelte';
-	import type { RouteSceneModel } from '$lib/observatory/route-scene';
-	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
-	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 
-	// ── Observable Decision Trace ────────────────────────────────────────────
-	// This route is now a full-bleed WebGPU "observable decision trace": one
-	// query becomes a left-to-right causal beam whose evidence, contradictions,
-	// supersessions and recommendation are STAGED as the decision forms. The old
-	// DOM card-stack (header / form / answer / confidence / pipeline / evidence
-	// grid) is gone — the only DOM is a visually-hidden native input + an
-	// aria-live output region for keyboard + screen-reader access. Everything
-	// visible is rendered in-canvas via the reasoning-trace pass.
-	//
-	// Honest framing: this is a ONE-SHOT deep_reference response replayed as a
-	// trace — never a pretend token stream. Every bright object maps to a real
-	// field of the response.
-
+	// Memory Replay is deliberately DOM-first: the value is the proof a person can read,
+	// not a decorative simulation of thought.
 	let query = $state('');
 	let loading = $state(false);
-	let error: string | null = $state(null);
-	let reasoningScene: ReasoningScene | null = $state(null);
-	let selection: string | null = $state(null); // aria description of last pick
-	let askInputEl: HTMLInputElement | null = $state(null);
-	// Live viewport aspect → portrait entry affordance. Desktop (aspect>=0.85) is
-	// byte-identical: the DOM overlay never mounts and the full canvas empty label
-	// renders exactly as before. Only narrow/portrait phones get the tappable UI.
-	let portrait = $state(false);
-	// A visible portrait DOM input the user can TAP to ask (phones have no Cmd+K).
-	let mobileInputEl: HTMLInputElement | null = $state(null);
+	let error = $state<string | null>(null);
+	let scene = $state<ReasoningScene | null>(null);
+	let runId = $state<string | null>(null);
+	let receiptId = $state<string | null>(null);
+	let input: HTMLInputElement | null = $state(null);
 
-	function syncPortrait() {
-		if (typeof window === 'undefined') return;
-		const vw = window.innerWidth;
-		const vh = window.innerHeight;
-		portrait = vw > 0 && vh > 0 && vw / vh < 0.85;
+	const EXAMPLES = ['refund compliance exception', 'What port does the dev server use?', 'How does FSRS-6 trust scoring work?'];
+	const confidence = $derived(Math.round((scene?.recommended?.trust_score ?? 0) * 100));
+	const receiptUrl = $derived(receiptId ? `/dashboard/observatory?receipt=${encodeURIComponent(receiptId)}` : null);
+	const blackBoxUrl = $derived(runId ? `/dashboard/blackbox?run=${encodeURIComponent(runId)}` : '/dashboard/blackbox');
+
+	function freshRunId() {
+		return `run_replay_${Date.now().toString(36)}`;
 	}
 
-	// Desktop keeps the exact original canvas guidance. Portrait blanks the canvas
-	// label (the DOM overlay owns guidance) so the long line can't clip off-screen.
-	const emptyLabel = $derived(
-		portrait ? '' : 'ASK A QUESTION - PRESS CMD+K - WATCH THE DECISION FORM'
-	);
-
-	// Evidence galaxy behind the trace: every real deep_reference evidence memory
-	// becomes a cell (trust = oxygen, contradictions scar) so the Theater is a
-	// full-bleed field, not a thin beam on black. The beam/ribbon/nucleus trace
-	// draws ON TOP. Rebuilds whenever a new decision trace lands.
-	let evidenceField: LivingFieldPass | null = null;
-	// Passive real memory pool shown at rest (pre-query), dim, so the stage is
-	// alive without faking a decision trace. Replaced by real evidence on a query.
-	let restPool: NormalizedEvidence[] = [];
-	function buildEvidenceCells() {
-		const s = reasoningScene;
-		// Pre-query: dim memory-pool substrate (honest — no trace claimed).
-		if (!s || (s.evidence ?? []).length === 0) {
-			const data: FieldDatum[] = restPool.map((e, i) => ({
-				id: e.id || `rest:${i}`,
-				score: 0.25 + 0.4 * clampR(e.trust ?? 0.5),
-				hue: FIELD_HUE.bridge,
-				energy: 0.14 + 0.26 * clampR(e.trust ?? 0.5),
-				metric2: clampR(e.trust ?? 0.5),
-				kind: 'reasoning-rest',
-				payload: e
-			}));
-			return layoutGalaxy(data, { maxRadius: 0.9, minCellR: 0.014, maxCellR: 0.045 });
+	function stringAt(raw: Record<string, unknown>, ...keys: string[]) {
+		for (const key of keys) {
+			const value = raw[key];
+			if (typeof value === 'string' && value) return value;
 		}
-		const contradictionIds = new Set(
-			(s.contradictions ?? []).flatMap((c) => [c.stronger?.id, c.weaker?.id]).filter(Boolean) as string[]
-		);
-		const data: FieldDatum[] = (s.evidence ?? []).map((e: NormalizedEvidence, i) => ({
-			id: e.id || `evidence:${i}`,
-			score: 0.4 + 0.6 * clampR(e.trust ?? 0.5),
-			hue: contradictionIds.has(e.id) ? FIELD_HUE.scarlet : FIELD_HUE.forward,
-			energy: 0.45 + 0.55 * clampR(e.trust ?? 0.5),
-			metric2: clampR(e.trust ?? 0.5),
-			scar: contradictionIds.has(e.id),
-			selected: e.id === s.recommended?.memory_id,
-			kind: 'reasoning-evidence',
-			payload: e
-		}));
-		return layoutGalaxy(data, { maxRadius: 0.9, minCellR: 0.016, maxCellR: 0.06 });
+		return null;
 	}
-	function clampR(v: number): number {
-		return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0.5));
-	}
-	function createReasoningPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
-		const field = new LivingFieldPass(engine);
-		// Keep portrait byte-for-byte at the verified dim 0.2. Desktop has a broad
-		// reading well over the full trace, so the field can be richer around it
-		// without washing out the MSDF query, gates, evidence, or receipt text.
-		const vw = engine.params[6] || (typeof window !== 'undefined' ? window.innerWidth : 0);
-		const vh = engine.params[7] || (typeof window !== 'undefined' ? window.innerHeight : 0);
-		const aspect = vw > 0 && vh > 0 ? vw / vh : 1;
-		const desktop = aspect >= 0.85;
-		field.setIntensity(desktop ? 0.9 : 0.2);
-		field.setReadingWell(
-			desktop
-				? { x: 0, y: 0.15, hw: 0.95, hh: 0.72, floor: 0.22, soft: 0.22 }
-				: { x: 0, y: 0.15, hw: 0.95, hh: 0.72, floor: 0.06, soft: 0.22 }
-		);
-		evidenceField = field;
-		field.setCells(buildEvidenceCells());
-		const fieldWrapper: RouteFramePass = {
-			compute: (encoder) => field.compute(encoder),
-			render: (pass) => field.render(pass),
-			dispose: () => {
-				field.dispose();
-				if (evidenceField === field) evidenceField = null;
-			}
-		};
-		// Evidence field FIRST (behind), then the real beam/ribbon/nucleus trace.
-		return [fieldWrapper, ...createReasoningTracePasses(engine, scene)];
-	}
-	$effect(() => {
-		void reasoningScene?.evidence.length;
-		evidenceField?.setCells(buildEvidenceCells());
-	});
 
-	const EXAMPLE_QUERIES = [
-		'What port does the dev server use?',
-		'Should I enable prefix caching with vLLM?',
-		'How does FSRS-6 trust scoring work?',
-		'Why did the benchmark score drop after the parser change?'
-	];
-
-	async function ask() {
-		const q = query.trim();
-		if (!q || loading) return;
+	async function runReplay() {
+		const question = query.trim();
+		if (!question || loading) return;
 		loading = true;
 		error = null;
-		reasoningScene = null;
-		selection = null;
+		scene = null;
+		receiptId = null;
+		const nextRunId = freshRunId();
+		runId = nextRunId;
 		try {
-			const raw = (await api.deepReference(q, 20)) as Record<string, unknown>;
-			reasoningScene = normalizeDeepReferenceResponse(raw);
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Unknown error';
+			const raw = (await api.deepReference(question, 20, nextRunId)) as Record<string, unknown>;
+			scene = normalizeDeepReferenceResponse(raw);
+			runId = stringAt(raw, 'runId', 'run_id') ?? nextRunId;
+			receiptId = stringAt(raw, 'receiptId', 'receipt_id');
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : 'Unable to retrieve the supporting memory.';
 		} finally {
 			loading = false;
 		}
 	}
 
-	/** Live-region summary of what the trace currently shows (screen readers). */
-	const ariaSummary = $derived.by(() => {
-		if (loading) return 'Reasoning in progress.';
-		if (error) return `Error: ${error}`;
-		if (!reasoningScene) return 'Ask a question to trace how Vestige forms a decision from memory.';
-		const s = reasoningScene;
-		const rec = s.recommended?.answer_preview ?? 'no recommendation';
-		return (
-			`Decision trace for "${query}". ${s.evidence.length} evidence memories, ` +
-			`${s.contradictions.length} contradiction${s.contradictions.length === 1 ? '' : 's'}, ` +
-			`${s.superseded.length} superseded. Recommendation: ${rec}. ` +
-			`Confidence ${Math.round((s.recommended?.trust_score ?? 0) * 100)} percent.`
-		);
-	});
-
-	function handleRoutePick(pick: RoutePick) {
-		// Selection is surfaced to screen readers; the pass draws the in-canvas
-		// receipt for the picked object (gate / evidence / recommendation).
-		const p = pick.payload as { ariaLabel?: string; preview?: string } | undefined;
-		selection = p?.ariaLabel ?? p?.preview ?? `${pick.kind} selected`;
+	function useExample(example: string) {
+		query = example;
+		void runReplay();
 	}
 
-	function handleGlobalKey(e: KeyboardEvent) {
-		if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-			e.preventDefault();
-			askInputEl?.focus();
-			askInputEl?.select();
-		}
+	function reset() {
+		query = '';
+		scene = null;
+		error = null;
+		runId = null;
+		receiptId = null;
+		input?.focus();
 	}
 
-	onMount(() => {
-		askInputEl?.focus();
-		syncPortrait();
-		window.addEventListener('keydown', handleGlobalKey);
-		window.addEventListener('resize', syncPortrait);
-		window.addEventListener('orientationchange', syncPortrait);
-		// Keep the Theater HONEST-EMPTY at rest (the DOM "ask a question to trace"
-		// state), but light the field with a passive real memory pool so the stage
-		// isn't black while it waits. A real query replaces the pool with the actual
-		// evidence galaxy. No auto-run — the user (or a demo) drives the trace.
-		void api.memories
-			.list({ limit: '80' })
-			.then((res) => {
-				restPool = res.memories.map((m, i) => {
-					const retention = clampR(m.retentionStrength);
-					return {
-						id: m.id || `rest:${i}`,
-						trust: 0.35 + 0.4 * retention,
-						date: '',
-						role: 'supporting' as const,
-						preview: ''
-					};
-				});
-				evidenceField?.setCells(buildEvidenceCells());
-			})
-			.catch(() => {});
-		return () => {
-			window.removeEventListener('keydown', handleGlobalKey);
-			window.removeEventListener('resize', syncPortrait);
-			window.removeEventListener('orientationchange', syncPortrait);
-		};
-	});
+	function labelFor(evidence: NormalizedEvidence) {
+		if (evidence.role === 'primary') return 'Primary evidence';
+		if (evidence.role === 'contradicting') return 'Conflicting evidence';
+		if (evidence.role === 'superseded') return 'Older, superseded evidence';
+		return 'Supporting evidence';
+	}
+
+	onMount(() => input?.focus());
 </script>
 
 <svelte:head>
-	<title>Reasoning Theater · Vestige</title>
+	<title>Memory Replay · Vestige</title>
 </svelte:head>
 
-<RouteStage
-	organ="reasoning"
-	seed={`reasoning-trace:${query || 'empty'}`}
-	scene={reasoningScene}
-	passes={createReasoningPasses}
-	loading={loading}
-	error={error}
-	{emptyLabel}
-	onpick={handleRoutePick}
-/>
+<main class="replay-shell">
+	<PageHeader
+		icon="reasoning"
+		title="Memory Replay"
+		subtitle="See the exact memories Vestige retrieved before it makes a recommendation."
+		accent="recall"
+	>
+		<span class="live-pill"><span></span> Live retrieval proof</span>
+	</PageHeader>
 
-<!--
-  PORTRAIT ENTRY AFFORDANCE (phones have no Cmd+K). Desktop never mounts this —
-  it's gated on the live viewport aspect, so the 1440px render is untouched. This
-  is the ONE focal point at rest on a phone: a title, one line of guidance, and a
-  real tappable input that runs the same ask() the canvas trace consumes.
--->
-{#if portrait && !reasoningScene && !loading && !error}
-	<div class="reasoning-mobile" role="search">
-		<h1 class="rm-title">REASONING THEATER</h1>
-		<p class="rm-sub">Ask your memory a question and watch the decision form from evidence.</p>
+	<section class="hero-card">
+		<div class="hero-copy">
+			<p class="eyebrow">MAKE AI DECISIONS AUDITABLE</p>
+			<h1>Ask a question. See the memory behind the answer.</h1>
+			<p>Vestige retrieves real, local memory, evaluates conflicts, and gives you a receipt for the run.</p>
+		</div>
 		<form
-			class="rm-form"
-			onsubmit={(e) => {
-				e.preventDefault();
-				query = mobileInputEl?.value ?? query;
-				void ask();
-				mobileInputEl?.blur();
+			class="ask-form"
+			onsubmit={(event) => {
+				event.preventDefault();
+				void runReplay();
 			}}
 		>
-			<input
-				bind:this={mobileInputEl}
-				class="rm-input"
-				type="search"
-				enterkeyhint="search"
-				autocomplete="off"
-				spellcheck="false"
-				placeholder="Ask your memory anything..."
-				aria-label="Ask Vestige a question"
-			/>
-			<button class="rm-go" type="submit">ASK</button>
+			<label for="memory-question">Your question</label>
+			<div class="ask-row">
+				<input
+					bind:this={input}
+					bind:value={query}
+					id="memory-question"
+					type="search"
+					placeholder="Ask Vestige something it should remember…"
+					autocomplete="off"
+				/>
+				<button type="submit" disabled={!query.trim() || loading}>
+					<Icon name="reasoning" size={16} /> {loading ? 'Retrieving…' : 'Run replay'}
+				</button>
+			</div>
+			<div class="examples" aria-label="Example questions">
+				<span>Try:</span>
+				{#each EXAMPLES as example}
+					<button type="button" onclick={() => useExample(example)}>{example}</button>
+				{/each}
+			</div>
 		</form>
-		<ul class="rm-examples">
-			{#each EXAMPLE_QUERIES.slice(0, 3) as q}
-				<li>
-					<button
-						type="button"
-						class="rm-chip"
-						onclick={() => {
-							query = q;
-							if (mobileInputEl) mobileInputEl.value = q;
-							void ask();
-						}}>{q}</button
-					>
-				</li>
-			{/each}
-		</ul>
-	</div>
-{/if}
+	</section>
 
-<!--
-  The ONLY DOM: a visually-hidden native input (real keyboard + IME, Cmd+K
-  focus, example-query datalist) and an aria-live output. The visible query
-  echo, gates, evidence, and receipt are all rendered in-canvas by the trace
-  pass. Nothing here paints a visible pixel — the field owns the surface.
--->
-<form class="sr-only" onsubmit={(e) => { e.preventDefault(); void ask(); }}>
-	<label for="reasoning-ask">Ask Vestige a question</label>
-	<input
-		id="reasoning-ask"
-		bind:this={askInputEl}
-		bind:value={query}
-		list="reasoning-examples"
-		autocomplete="off"
-		spellcheck="false"
-		placeholder="Ask your memory anything…"
-	/>
-	<datalist id="reasoning-examples">
-		{#each EXAMPLE_QUERIES as q}
-			<option value={q}></option>
-		{/each}
-	</datalist>
-	<button type="submit">Trace decision</button>
-</form>
+	{#if error}
+		<section class="notice error">
+			<Icon name="close" size={18} />
+			<div><strong>Replay could not complete.</strong><br />{error}</div>
+			<button type="button" onclick={() => void runReplay()}>Try again</button>
+		</section>
+	{:else if loading}
+		<section class="loading-card" aria-live="polite">
+			<div class="pulse"></div><div><strong>Retrieving from your memory</strong><p>Creating a trace and receipt for this run…</p></div>
+		</section>
+	{:else if scene}
+		<section class="proof-strip" aria-label="Retrieval proof summary">
+			<div><strong>{scene.evidence.length}</strong><span>memories retrieved</span></div>
+			<div><strong>{scene.contradictions.length}</strong><span>conflicts flagged</span></div>
+			<div><strong>{confidence}%</strong><span>confidence</span></div>
+			<div class:ready={Boolean(receiptId)}><strong>{receiptId ? 'Receipt ready' : 'Trace recorded'}</strong><span>{receiptId ? 'proof is linked to this run' : 'receipt availability pending'}</span></div>
+		</section>
 
-<div class="sr-only" aria-live="polite" role="status">{ariaSummary}</div>
-{#if selection}
-	<div class="sr-only" aria-live="polite">{selection}</div>
-{/if}
+		<div class="results-grid">
+			<section class="decision-card">
+				<div class="section-kicker"><span class="dot"></span> Recommendation</div>
+				{#if scene.recommended?.answer_preview}
+					<h2>{scene.recommended.answer_preview}</h2>
+				{:else}
+					<h2>No reliable recommendation was produced.</h2>
+				{/if}
+				<p class="honesty"><strong>What this proves:</strong> the memory IDs below were retrieved in this run. It does not claim an answer changed.</p>
+				<div class="action-row">
+					<a href={blackBoxUrl}>Open this run in Black Box <span>→</span></a>
+					{#if receiptUrl}<a class="secondary" href={receiptUrl}>Open exact receipt <span>→</span></a>{/if}
+					<button class="quiet" type="button" onclick={reset}>New question</button>
+				</div>
+				{#if runId}<code class="run-id">RUN {runId}</code>{/if}
+			</section>
+
+			<aside class="method-card">
+				<p class="section-kicker">Why this is different</p>
+				<ol>
+					<li><span>1</span><div><strong>Retrieve</strong><small>Find the real memories relevant to your question.</small></div></li>
+					<li><span>2</span><div><strong>Evaluate</strong><small>Expose conflicts and older superseded context.</small></div></li>
+					<li><span>3</span><div><strong>Prove</strong><small>Keep a run receipt anyone can inspect.</small></div></li>
+				</ol>
+			</aside>
+		</div>
+
+		<section class="evidence-panel">
+			<header>
+				<div><p class="section-kicker">Proven: retrieved in this run</p><h2>The evidence Vestige actually used</h2></div>
+				<span>{scene.evidence.length} memory{scene.evidence.length === 1 ? '' : 'ies'}</span>
+			</header>
+			{#if scene.evidence.length}
+				<div class="evidence-list">
+					{#each scene.evidence as evidence (evidence.id)}
+						<article class:primary={evidence.role === 'primary'} class:conflict={evidence.role === 'contradicting'}>
+							<div class="evidence-top"><span>{labelFor(evidence)}</span><b>{Math.round(evidence.trust * 100)}% trust</b></div>
+							<p>{evidence.preview || 'Memory content is unavailable in this response.'}</p>
+							<code>{evidence.id}</code>
+						</article>
+					{/each}
+				</div>
+			{:else}
+				<div class="empty-evidence">No memory was retrieved for this question. That result is visible rather than hidden.</div>
+			{/if}
+		</section>
+
+		{#if scene.contradictions.length || scene.superseded.length}
+			<section class="attribution-panel">
+				<p class="section-kicker">Attributed: likely influence</p>
+				<h2>Context Vestige weighed, but did not treat as decisive</h2>
+				{#each scene.contradictions as conflict}
+					<p><strong>Conflict flagged:</strong> {conflict.summary}</p>
+				{/each}
+				{#each scene.superseded as older}
+					<p><strong>Superseded:</strong> {older.preview || older.id} <code>{older.id}</code></p>
+				{/each}
+			</section>
+		{/if}
+	{:else}
+		<section class="empty-state">
+			<div class="empty-icon"><Icon name="memories" size={28} /></div>
+			<div><h2>Turn an AI answer into evidence you can inspect.</h2><p>Run a replay to reveal retrieved memory, confidence, conflicts, and the exact run receipt.</p></div>
+		</section>
+	{/if}
+</main>
 
 <style>
-	/* Standard visually-hidden: keyboard + screen-reader reachable, zero pixels. */
-	.sr-only {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		padding: 0;
-		margin: -1px;
-		overflow: hidden;
-		clip: rect(0, 0, 0, 0);
-		white-space: nowrap;
-		border: 0;
-	}
-
-	/* Portrait entry affordance — the readable focal point on a phone. Sits in the
-	   upper-center over the dim field, clear of the bottom nav FAB. Never shown on
-	   desktop (the {#if portrait} gate keeps it unmounted there). */
-	.reasoning-mobile {
-		position: fixed;
-		left: 0;
-		right: 0;
-		top: 16vh;
-		z-index: 5;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 0.9rem;
-		padding: 0 7vw;
-		text-align: center;
-		pointer-events: none;
-	}
-	.reasoning-mobile > * {
-		pointer-events: auto;
-	}
-	.rm-title {
-		margin: 0;
-		font-size: clamp(1.4rem, 7vw, 2rem);
-		font-weight: 600;
-		letter-spacing: 0.14em;
-		color: #e9ffb7;
-		text-shadow: 0 0 24px rgba(0, 245, 212, 0.28);
-	}
-	.rm-sub {
-		margin: 0;
-		max-width: 30ch;
-		font-size: clamp(0.85rem, 3.6vw, 1rem);
-		line-height: 1.45;
-		color: rgba(200, 230, 235, 0.72);
-	}
-	.rm-form {
-		display: flex;
-		width: 100%;
-		max-width: 30rem;
-		margin-top: 0.4rem;
-		border: 1px solid rgba(0, 245, 212, 0.4);
-		border-radius: 0.7rem;
-		background: rgba(6, 14, 16, 0.66);
-		-webkit-backdrop-filter: blur(6px);
-		backdrop-filter: blur(6px);
-		overflow: hidden;
-	}
-	.rm-input {
-		flex: 1 1 auto;
-		min-width: 0;
-		padding: 0.85rem 0.95rem;
-		border: 0;
-		background: transparent;
-		color: #eafcff;
-		font-size: 1rem;
-		outline: none;
-	}
-	.rm-input::placeholder {
-		color: rgba(160, 190, 195, 0.55);
-	}
-	.rm-go {
-		flex: 0 0 auto;
-		padding: 0 1.2rem;
-		border: 0;
-		border-left: 1px solid rgba(0, 245, 212, 0.3);
-		background: rgba(0, 245, 212, 0.14);
-		color: #7ffff0;
-		font-weight: 700;
-		letter-spacing: 0.12em;
-		cursor: pointer;
-	}
-	.rm-go:active {
-		background: rgba(0, 245, 212, 0.28);
-	}
-	.rm-examples {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-		width: 100%;
-		max-width: 30rem;
-		margin: 0.2rem 0 0;
-		padding: 0;
-		list-style: none;
-	}
-	.rm-chip {
-		width: 100%;
-		padding: 0.6rem 0.8rem;
-		border: 1px solid rgba(120, 150, 155, 0.25);
-		border-radius: 0.55rem;
-		background: rgba(10, 18, 20, 0.5);
-		color: rgba(190, 220, 225, 0.82);
-		font-size: 0.86rem;
-		text-align: left;
-		cursor: pointer;
-	}
-	.rm-chip:active {
-		border-color: rgba(0, 245, 212, 0.5);
-		color: #d6fff8;
-	}
+	:global(body) { background: #071012; }
+	.replay-shell { min-height: 100%; max-width: 1180px; margin: 0 auto; padding: 2rem clamp(1rem, 3vw, 2.5rem) 4rem; color: #e8f5f4; }
+	.live-pill { display: inline-flex; align-items: center; gap: .5rem; color: #91bab6; font: 600 .72rem/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
+	.live-pill span, .dot { width: .5rem; height: .5rem; border-radius: 999px; background: #00e7c8; box-shadow: 0 0 12px #00e7c8; }
+	.hero-card, .decision-card, .method-card, .evidence-panel, .attribution-panel, .empty-state, .loading-card, .notice { border: 1px solid rgba(139, 192, 184, .17); background: linear-gradient(135deg, rgba(14, 33, 35, .96), rgba(7, 18, 21, .94)); box-shadow: 0 18px 50px rgba(0,0,0,.2); border-radius: 1.15rem; }
+	.hero-card { margin-top: 1.5rem; padding: clamp(1.3rem, 3vw, 2.6rem); display: grid; gap: 2rem; grid-template-columns: minmax(0, .85fr) minmax(380px, 1.15fr); background: radial-gradient(circle at 100% 0%, rgba(0, 231, 200, .12), transparent 42%), linear-gradient(135deg, #10282a, #071315); }
+	.eyebrow, .section-kicker { margin: 0; color: #55dbc8; font: 700 .68rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; text-transform: uppercase; }
+	.hero-copy h1 { max-width: 16ch; margin: .7rem 0 .8rem; font-size: clamp(1.7rem, 3.2vw, 2.65rem); line-height: 1.05; letter-spacing: -.045em; color: #f2fffd; }
+	.hero-copy > p:last-child { max-width: 48ch; margin: 0; color: #a9c4c1; line-height: 1.55; }
+	.ask-form { align-self: end; } .ask-form label { display: block; margin-bottom: .6rem; color: #b8d1cf; font-size: .78rem; font-weight: 700; }
+	.ask-row { display: flex; gap: .65rem; } .ask-row input { min-width: 0; flex: 1; border: 1px solid rgba(120, 178, 170, .3); border-radius: .75rem; background: rgba(0,0,0,.24); padding: .9rem 1rem; color: #f4fffd; outline: none; font-size: .92rem; } .ask-row input:focus { border-color: #4ce3cb; box-shadow: 0 0 0 3px rgba(0,231,200,.13); }
+	button, .action-row a { cursor: pointer; } .ask-row button { border: 0; border-radius: .75rem; padding: .9rem 1.05rem; display: inline-flex; align-items: center; gap: .45rem; background: #00cbb0; color: #03201d; font-weight: 800; white-space: nowrap; } .ask-row button:disabled { opacity: .45; cursor: not-allowed; }
+	.examples { display: flex; flex-wrap: wrap; gap: .45rem; align-items: center; margin-top: .8rem; color: #7d9c99; font-size: .72rem; } .examples button { border: 1px solid rgba(134, 184, 177, .22); border-radius: 99px; background: transparent; padding: .35rem .6rem; color: #b9d5d1; font-size: .72rem; } .examples button:hover { border-color: #54ddc9; color: #effffd; }
+	.proof-strip { display: grid; grid-template-columns: repeat(4, 1fr); margin: 1rem 0; overflow: hidden; border: 1px solid rgba(139, 192, 184, .16); border-radius: .9rem; background: rgba(9, 24, 26, .8); } .proof-strip > div { padding: 1rem 1.15rem; border-right: 1px solid rgba(139, 192, 184, .15); } .proof-strip > div:last-child { border: 0; } .proof-strip strong { display: block; color: #eafffb; font-size: 1.1rem; } .proof-strip span { display: block; margin-top: .2rem; color: #82a39f; font-size: .7rem; } .proof-strip .ready strong { color: #5be6cf; }
+	.results-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(250px, .65fr); gap: 1rem; } .decision-card, .method-card, .evidence-panel, .attribution-panel { padding: clamp(1.15rem, 2vw, 1.6rem); } .section-kicker { display: flex; align-items: center; gap: .5rem; } .decision-card h2 { max-width: 30ch; margin: 1rem 0; color: #f4fffd; font-size: clamp(1.3rem, 2.4vw, 1.85rem); line-height: 1.25; letter-spacing: -.025em; } .honesty { margin: 0; border-left: 2px solid #5ce3d0; padding-left: .85rem; color: #a8c6c1; font-size: .83rem; line-height: 1.5; }
+	.action-row { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1.3rem; } .action-row a, .quiet { border: 1px solid rgba(102, 226, 205, .38); border-radius: .6rem; background: rgba(0, 225, 195, .11); padding: .6rem .75rem; color: #75f0dc; font-size: .78rem; font-weight: 700; text-decoration: none; } .action-row .secondary, .quiet { border-color: rgba(158, 190, 186, .25); background: transparent; color: #aec9c5; } .run-id { display: block; margin-top: 1rem; color: #60817c; font-size: .66rem; overflow-wrap: anywhere; }
+	.method-card { background: linear-gradient(180deg, rgba(10, 29, 31, .96), rgba(7, 17, 19, .96)); } .method-card ol { margin: 1.2rem 0 0; padding: 0; list-style: none; } .method-card li { display: flex; gap: .7rem; margin: 1rem 0; } .method-card li > span { display: grid; place-items: center; flex: 0 0 1.55rem; height: 1.55rem; border-radius: 50%; background: rgba(0,226,196,.12); color: #60e6d2; font-size: .72rem; font-weight: 800; } .method-card strong { display: block; font-size: .85rem; } .method-card small { display: block; margin-top: .18rem; color: #87a6a2; line-height: 1.35; }
+	.evidence-panel, .attribution-panel { margin-top: 1rem; } .evidence-panel header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; } .evidence-panel h2, .attribution-panel h2 { margin: .45rem 0 0; color: #effdfa; font-size: 1.13rem; } .evidence-panel header > span { border-radius: 99px; background: rgba(103, 157, 150, .12); padding: .35rem .55rem; color: #94b9b4; font-size: .7rem; white-space: nowrap; }
+	.evidence-list { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 285px), 1fr)); } .evidence-list article { min-width: 0; border: 1px solid rgba(144, 191, 184, .17); border-radius: .75rem; background: rgba(1, 12, 13, .34); padding: 1rem; } .evidence-list article.primary { border-color: rgba(60, 225, 198, .46); box-shadow: inset 3px 0 #2ce0c4; } .evidence-list article.conflict { border-color: rgba(255, 115, 104, .42); } .evidence-top { display: flex; justify-content: space-between; gap: .5rem; color: #5ce2cf; font-size: .68rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; } .evidence-list article.conflict .evidence-top { color: #ff9c91; } .evidence-top b { color: #a3c3bf; font-weight: 600; } .evidence-list p { min-height: 3.2em; margin: .75rem 0; color: #d6e8e5; font-size: .86rem; line-height: 1.5; } .evidence-list code, .attribution-panel code { color: #6e9690; font-size: .65rem; overflow-wrap: anywhere; }
+	.attribution-panel { border-color: rgba(234, 174, 80, .27); background: linear-gradient(135deg, rgba(49, 35, 14, .44), rgba(16, 23, 21, .94)); } .attribution-panel .section-kicker { color: #e9bc6e; } .attribution-panel p:not(.section-kicker) { margin: .8rem 0 0; color: #c4c8b5; font-size: .85rem; line-height: 1.5; }
+	.empty-state, .loading-card, .notice { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; padding: 1.35rem; } .empty-icon, .pulse { display: grid; place-items: center; flex: 0 0 3.2rem; height: 3.2rem; border-radius: .8rem; background: rgba(0,226,196,.1); color: #63e6d2; } .empty-state h2, .loading-card strong { margin: 0; color: #effdfa; font-size: 1rem; } .empty-state p, .loading-card p { margin: .35rem 0 0; color: #91b0ac; font-size: .83rem; line-height: 1.45; } .pulse { position: relative; } .pulse::after { content: ''; width: .72rem; height: .72rem; border-radius: 50%; background: #58e8d2; animation: pulse 1s infinite alternate; } .notice.error { border-color: rgba(255, 111, 100, .4); color: #f6b0a9; } .notice button { margin-left: auto; border: 1px solid currentColor; border-radius: .5rem; background: transparent; padding: .45rem .65rem; color: inherit; }
+	@keyframes pulse { to { opacity: .35; transform: scale(.55); } }
+	@media (max-width: 800px) { .hero-card, .results-grid { grid-template-columns: 1fr; } .proof-strip { grid-template-columns: 1fr 1fr; } .proof-strip > div:nth-child(2) { border-right: 0; } .proof-strip > div:nth-child(-n+2) { border-bottom: 1px solid rgba(139, 192, 184, .15); } }
+	@media (max-width: 520px) { .replay-shell { padding-top: 1rem; } .ask-row { flex-direction: column; } .ask-row button { justify-content: center; } .proof-strip { grid-template-columns: 1fr; } .proof-strip > div { border-right: 0; border-bottom: 1px solid rgba(139, 192, 184, .15); } .proof-strip > div:last-child { border-bottom: 0; } }
 </style>

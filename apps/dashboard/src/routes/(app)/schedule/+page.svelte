@@ -1,21 +1,34 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import PageHeader from '$components/PageHeader.svelte';
+	import Icon from '$components/Icon.svelte';
+	import AnimatedNumber from '$components/AnimatedNumber.svelte';
+	import { reveal } from '$lib/actions/reveal';
 	import { api } from '$stores/api';
 	import type { Memory } from '$types';
 	import type { ObservatoryEngine } from '$lib/observatory/engine';
-	import { rgb01 } from '$lib/observatory/cognitive-palette';
-	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
 	import { emptyScene, type RouteSceneModel } from '$lib/observatory/route-scene';
 	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
 	import { layoutRings, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 
-	type ScheduleTextItem = TextLayerItem & { memoryId?: string };
+	// One prediction row from POST /api/predict — the backend's REAL blended
+	// FSRS urgency (decay + review schedule) mapped to a high/medium/low band.
+	// Rendered in the "what needs review next" panel so the primary action shows
+	// live proof, never a constant.
+	type Prediction = {
+		id: string;
+		content: string;
+		nodeType: string;
+		retention: number;
+		urgency: number;
+		predictedNeed: 'high' | 'medium' | 'low';
+	};
 
-	const CYAN = [...rgb01('#22C7DE'), 1] satisfies [number, number, number, number];
-	const AMBER = [...rgb01('#FFB000'), 0.9] satisfies [number, number, number, number];
-	const SCARLET = [...rgb01('#FF3B30'), 0.92] satisfies [number, number, number, number];
-	const FETCH_LIMIT = 2000;
+	// A schedule is a precise working set, not a full-table scan. Keep both the
+	// list request and detail enrichment below the API's hard 200-row ceiling so
+	// the first interactive frame stays predictable on large brains.
+	const FETCH_LIMIT = 80;
 	const ROW_LIMIT = 40;
 	// The list endpoint (/api/memories) omits FSRS review fields (nextReviewAt /
 	// lastAccessedAt) — only the per-memory endpoint (/api/memories/:id) returns
@@ -25,25 +38,25 @@
 	// GETs against the local brain take <1s.
 	const ENRICH_LIMIT = 200;
 	const ENRICH_CONCURRENCY = 16;
+	const WEEK_MS = 7 * 86_400_000;
 
 	let memories: Memory[] = $state([]);
+	let totalMemories = $state(0);
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let engineRef: ObservatoryEngine | null = null;
 
-	// Live viewport aspect (canvas px) — same signal TextLayerPass.portraitAdapt
-	// reads (engine.params[6]/[7]), with a window fallback for the pre-frame-0
-	// pass. NEVER a hardcoded phone width; desktop (aspect>=0.85) is untouched.
-	function viewportAspect(): number {
-		let vw = engineRef?.params[6] || 0;
-		let vh = engineRef?.params[7] || 0;
-		if ((vw <= 0 || vh <= 0) && typeof window !== 'undefined') {
-			vw = window.innerWidth;
-			vh = window.innerHeight;
-		}
-		if (vw <= 0 || vh <= 0) return 1;
-		return vw / vh;
-	}
+	// --- Primary action: POST /api/predict (real FSRS urgency bands) ---
+	let predictions = $state<Prediction[]>([]);
+	let predicting = $state(false);
+	let predictError = $state<string | null>(null);
+	let predictedAt = $state<number | null>(null);
+
+	// --- Selection (NON-MUTATING). A plain click on a WebGPU row/cell or a DOM
+	// row only OPENS the detail panel. The only mutation, promote(), lives behind
+	// an explicit labelled button inside that panel. ---
+	let selectedId = $state<string | null>(null);
+	let promoting = $state(false);
 
 	// Trim to a cap on a word boundary so a portrait row never ends mid-token.
 	function trimSnippet(text: string, cap: number): string {
@@ -67,9 +80,11 @@
 		error = null;
 		try {
 			const res = await api.memories.list({ limit: String(FETCH_LIMIT) });
+			totalMemories = res.total;
 			memories = await enrichReviewFields(res.memories);
 		} catch (err) {
 			memories = [];
+			totalMemories = 0;
 			error = err instanceof Error ? err.message : 'API FETCH FAILED';
 		} finally {
 			loading = false;
@@ -105,12 +120,55 @@
 		return enriched;
 	}
 
+	// PRIMARY ACTION — ask the backend what it predicts you'll need next. This is
+	// POST /api/predict; it returns real per-memory urgency (blended FSRS decay +
+	// review schedule), never a constant. Read-only: it surfaces, never mutates.
+	async function runPredict() {
+		if (predicting || loading) return;
+		predicting = true;
+		predictError = null;
+		try {
+			const res = (await api.predict()) as { predictions?: Prediction[] };
+			predictions = Array.isArray(res.predictions) ? res.predictions : [];
+			predictedAt = Date.now();
+		} catch (err) {
+			predictError = err instanceof Error ? err.message : 'PREDICT FAILED';
+			predictions = [];
+		} finally {
+			predicting = false;
+		}
+	}
+
+	// EXPLICIT MUTATION — only ever fired by the labelled "Mark reviewed" button
+	// in the detail panel, never by a plain select. promote() strengthens the
+	// memory and pushes its next review out.
+	async function markReviewed(memoryId: string) {
+		if (promoting) return;
+		promoting = true;
+		try {
+			const promoted = await api.memories.promote(memoryId);
+			// promote returns a PARTIAL {id, promoted, retentionStrength} — merge the
+			// changed field into the full Memory, never replace it (a full swap drops
+			// content/nodeType/... and crashes the next render — the /memories bug).
+			memories = memories.map((memory) =>
+				memory.id === promoted.id
+					? { ...memory, retentionStrength: promoted.retentionStrength }
+					: memory
+			);
+			error = null;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'PROMOTE FAILED';
+		} finally {
+			promoting = false;
+		}
+	}
+
 	function sanitizeAscii(value: string): string {
 		return value
-			.replace(/[\u2014\u2013]/g, '-')
-			.replace(/[\u2018\u2019]/g, "'")
-			.replace(/[\u201C\u201D]/g, '"')
-			.replace(/\u2026/g, '...')
+			.replace(/[—–]/g, '-')
+			.replace(/[‘’]/g, "'")
+			.replace(/[“”]/g, '"')
+			.replace(/…/g, '...')
 			.replace(/[^\x20-\x7E]/g, '?');
 	}
 
@@ -128,6 +186,17 @@
 		if (!Number.isFinite(next)) return 0;
 		const days = (next - nowMs) / 86_400_000;
 		return clamp01(1 - days / 30);
+	}
+
+	// Human "due in" label for a DOM row: negative -> overdue, 0 -> today, else Nd.
+	function dueInLabel(memory: Memory, nowMs: number): string {
+		const next = dueAt(memory);
+		if (!Number.isFinite(next)) return 'no date';
+		const days = Math.ceil((next - nowMs) / 86_400_000);
+		if (days < 0) return `${Math.abs(days)}d overdue`;
+		if (days === 0) return 'due today';
+		if (days === 1) return 'due tomorrow';
+		return `in ${days}d`;
 	}
 
 	function scheduleLine(memory: Memory, nowMs: number, portrait = false): string {
@@ -159,6 +228,42 @@
 	}
 
 	const scheduled = $derived(dueMemories(memories));
+
+	// --- REAL stat cards, all derived from enriched FSRS timestamps ---
+	const dueNowCount = $derived.by(() => {
+		const now = Date.now();
+		return scheduled.filter((m) => dueAt(m) <= now).length;
+	});
+	const dueThisWeekCount = $derived.by(() => {
+		const now = Date.now();
+		return scheduled.filter((m) => {
+			const next = dueAt(m);
+			return next > now && next <= now + WEEK_MS;
+		}).length;
+	});
+	// Average retention across the due set — the honest "how well are these held"
+	// number (0-100). Only meaningful when something is scheduled.
+	const avgDueRetention = $derived.by(() => {
+		if (scheduled.length === 0) return 0;
+		const sum = scheduled.reduce((acc, m) => acc + clamp01(m.retentionStrength), 0);
+		return Math.round((sum / scheduled.length) * 100);
+	});
+
+	// The bounded DOM list of upcoming reviews (mirror of the WebGPU rows).
+	const upcomingRows = $derived.by(() => {
+		const now = Date.now();
+		return scheduled.slice(0, ROW_LIMIT).map((memory) => ({
+			memory,
+			dueIn: dueInLabel(memory, now),
+			overdue: dueAt(memory) <= now,
+			retentionPct: Math.round(clamp01(memory.retentionStrength) * 100)
+		}));
+	});
+
+	const selectedMemory = $derived(
+		selectedId ? (memories.find((m) => m.id === selectedId) ?? null) : null
+	);
+
 	const scene = $derived< RouteSceneModel >(
 		scheduled.length === 0
 			? emptyScene('schedule')
@@ -187,175 +292,9 @@
 				}
 	);
 
-	const emptyLabel = $derived(
-		memories.length === 0
-			? '0 MEMORIES LOADED'
-			: `${memories.length} MEMORIES / 0 REVIEW TIMESTAMPS`
-	);
-
-	function buildTextItems(routeScene: RouteSceneModel): ScheduleTextItem[] {
-		const nodes = routeScene.nodes;
-		const portrait = viewportAspect() < 0.85;
-
-		if (portrait) {
-			// Phone plan: ONE focal header + a short, well-spaced column with real
-			// negative space instead of a 40-deep edge-to-edge wall. Row count derives
-			// from the LIVE aspect (taller/narrower -> fewer rows), never a fixed phone
-			// number. Rows carry a short, word-boundary-trimmed label so they never run
-			// off the right edge or truncate mid-word. Desktop is untouched.
-			const aspect = viewportAspect();
-			const portraitness = clamp01((0.85 - aspect) / (0.85 - 0.42));
-			const rowCount = Math.max(9, Math.round(12 - 3 * portraitness));
-			const rows = nodes.slice(0, rowCount);
-			if (rows.length === 0) {
-				return [
-					{
-						id: 'schedule:header',
-						kind: 'schedule-header',
-						text: 'REVIEW SCHEDULE',
-						x: -0.6,
-						y: 0.82,
-						size: 0.032,
-						color: CYAN,
-						depth: 0.9,
-						weight: 0.6,
-						startFrame: -100000,
-						revealSpan: 1,
-						maxWidthEm: 26
-					},
-					{
-						id: 'schedule:empty',
-						kind: 'schedule-header',
-						text: 'Nothing due for review',
-						x: -0.62,
-						y: 0.1,
-						size: 0.03,
-						color: AMBER,
-						depth: 0.85,
-						weight: 0.5,
-						startFrame: -100000,
-						revealSpan: 1,
-						maxWidthEm: 28
-					}
-				];
-			}
-			const nowMs = Date.now();
-			const memById = new Map(memories.map((memory) => [memory.id, memory]));
-			const header: ScheduleTextItem = {
-				id: 'schedule:header',
-				kind: 'schedule-header',
-				text: `REVIEW SCHEDULE  ${scheduled.length} DUE`,
-				x: -0.72,
-				y: 0.82,
-				size: 0.03,
-				color: CYAN,
-				depth: 0.9,
-				weight: 0.6,
-				startFrame: -100000,
-				revealSpan: 1,
-				maxWidthEm: 30
-			};
-			const top = 0.6;
-			const bottom = -0.72;
-			const rowStep = rows.length > 1 ? (top - bottom) / (rows.length - 1) : 0;
-			return [
-				header,
-				...rows.map((node, i) => {
-					const memory = memById.get(node.source.id);
-					const text = memory
-						? scheduleLine(memory, nowMs, true)
-						: sanitizeAscii(node.label).slice(0, 34);
-					return {
-						id: `schedule:${node.source.id}`,
-						kind: 'schedule-memory',
-						memoryId: node.source.id,
-						text,
-						x: -0.82,
-						y: top - i * rowStep,
-						size: 0.03,
-						color: urgencyByNode(node.activation ?? 0, node.retention),
-						depth: clamp01(0.7 + (node.activation ?? 0) * 0.3),
-						weight: clamp01(node.retention),
-						startFrame: -100000,
-						revealSpan: 1,
-						maxWidthEm: 34,
-						hitPadX: 0.05,
-						hitPadY: 0.03
-					} satisfies ScheduleTextItem;
-				})
-			];
-		}
-
-		const top = 0.74;
-		const rowStep = 1.52 / Math.max(1, ROW_LIMIT - 1);
-		return nodes.slice(0, ROW_LIMIT).map((node, i) => ({
-			id: `schedule:${node.source.id}`,
-			kind: 'schedule-memory',
-			memoryId: node.source.id,
-			text: sanitizeAscii(node.label),
-			x: -0.9,
-			y: top - i * rowStep,
-			size: 0.026,
-			color: urgencyByNode(node.activation ?? 0, node.retention),
-			// depth = trust/crispness channel (1.0 = crisp + forward + brighter).
-			// It must stay high or the DOF blur + dim glow makes the small rows
-			// invisible. Urgency biases it up so due-now rows read crispest;
-			// retention is carried by `weight` (MSDF stroke mass), not depth.
-			depth: clamp01(0.62 + (node.activation ?? 0) * 0.38),
-			weight: clamp01(node.retention),
-			// The MSDF reveal gate is `(params.frame - ageFrame)/revealSpan`, and
-			// packGlyph bumps ageFrame by (globalGlyphIndex * 2). A 40-row schedule
-			// packs ~2700 glyphs, so past the first few rows ageFrame exceeds the
-			// 720-frame loop and those rows are discarded FOREVER. A large negative
-			// startFrame drives every glyph's ageFrame far below 0, so reveal
-			// saturates to 1 on frame 0 and EVERY due row renders immediately.
-			startFrame: -100000,
-			revealSpan: 1,
-			maxWidthEm: 54,
-				hitPadX: 0.03,
-				hitPadY: 0.014
-		}));
-	}
-
-	function urgencyByNode(urgencyDepth: number, retention: number): [number, number, number, number] {
-		// On the real brain nearly every record is overdue (urgency saturates to 1),
-		// so gating colour on urgency alone paints the whole field one flat scarlet.
-		// Grade by retention instead: low-retention rows are the ones actually at
-		// risk (scarlet), mid rows amber, healthy rows cyan — a readable, honest
-		// heat map of what most needs review.
-		if (retention < 0.4) return SCARLET;
-		if (retention < 0.7) return AMBER;
-		return CYAN;
-	}
-
-	class ScheduleTextPass implements RouteFramePass {
-		private readonly text: TextLayerPass;
-		private current: RouteSceneModel;
-
-		constructor(engine: ObservatoryEngine, initialScene: RouteSceneModel) {
-			this.current = initialScene;
-			this.text = new TextLayerPass(engine);
-			this.text.setText(buildTextItems(this.current));
-			void this.text.init().then(() => this.text.setText(buildTextItems(this.current)));
-		}
-
-		uploadScene(nextScene: RouteSceneModel) {
-			this.current = nextScene;
-			this.text.setText(buildTextItems(this.current));
-		}
-
-		render(pass: GPURenderPassEncoder) {
-			this.text.render(pass);
-		}
-
-		pickAt(ndcX: number, ndcY: number) {
-			return this.text.pickAt(ndcX, ndcY);
-		}
-
-		dispose() {
-			this.text.dispose();
-		}
-	}
+	// The DOM overlay owns all content (header + real stat cards + empty state), so
+	// no centered in-canvas MSDF status line renders behind the glass.
+	const emptyLabel = $derived('');
 
 	class ScheduleFieldPass implements RouteFramePass {
 		private field: LivingFieldPass;
@@ -393,31 +332,29 @@
 		engineRef = engine;
 		const field = new ScheduleFieldPass(engine);
 		field.uploadScene(initialScene);
-		return [field, new ScheduleTextPass(engine, initialScene)];
+		return [field];
 	}
 
-	async function handleRoutePick(pick: RoutePick) {
+	// NON-MUTATING pick: a plain click on a WebGPU field cell only SELECTS (opens
+	// the detail panel). Promotion is an explicit labelled button.
+	function handleRoutePick(pick: RoutePick) {
 		if (pick.kind !== 'schedule-memory') return;
-		// TEXT row payload has .memoryId; FIELD cell payload is a RouteNode whose
-		// source.id is the memory id. Read either so field cells promote, not no-op.
-		const item = pick.payload as Partial<ScheduleTextItem> & { source?: { id?: string } };
+		// FIELD cell payload is a RouteNode whose source.id is the memory id.
+		const item = pick.payload as { memoryId?: string; source?: { id?: string } };
 		const memoryId = item.memoryId ?? item.source?.id;
 		if (!memoryId) return;
-		try {
-			const promoted = await api.memories.promote(memoryId);
-			// promote returns a PARTIAL {id, promoted, retentionStrength} — merge the
-			// changed field into the full Memory, never replace it (a full swap drops
-			// content/nodeType/... and crashes the next render — the /memories bug).
-			memories = memories.map((memory) =>
-				memory.id === promoted.id
-					? { ...memory, retentionStrength: promoted.retentionStrength }
-					: memory
-			);
-			error = null;
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'PROMOTE FAILED';
-		}
+		selectedId = memoryId;
 	}
+
+	function selectRow(memoryId: string) {
+		selectedId = selectedId === memoryId ? null : memoryId;
+	}
+
+	const needColor: Record<Prediction['predictedNeed'], string> = {
+		high: '#FF3B30',
+		medium: '#FFB000',
+		low: '#22C7DE'
+	};
 </script>
 
 <RouteStage
@@ -430,3 +367,236 @@
 	{emptyLabel}
 	onpick={handleRoutePick}
 />
+
+<div class="relative z-10 min-h-full p-6 space-y-6 pointer-events-none">
+	<div class="pointer-events-auto">
+		<PageHeader
+			icon="schedule"
+			title="Review Schedule"
+			subtitle="What FSRS says is due for review, and when each memory next resurfaces."
+			accent="recall"
+		>
+			<button
+				type="button"
+				onclick={runPredict}
+				disabled={predicting || loading || memories.length === 0}
+				title={memories.length === 0 ? 'Load memories first' : 'Ask the backend what you will need next'}
+				class="inline-flex items-center gap-2 rounded-xl border border-recall/30 bg-recall/12 px-4 py-2 text-sm font-medium text-recall-glow transition hover:bg-recall/20 disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-recall/60"
+			>
+				<Icon name="importance" size={15} />
+				{predicting ? 'Predicting…' : 'Predict what I need next'}
+			</button>
+		</PageHeader>
+	</div>
+
+	{#if error}
+		<div class="glass-panel pointer-events-auto flex flex-col items-center gap-3 rounded-2xl p-10 text-center">
+			<div class="text-sm text-decay">Couldn't load the review schedule</div>
+			<div class="max-w-md text-xs text-muted">{error}</div>
+			<button
+				type="button"
+				onclick={loadSchedule}
+				class="mt-2 rounded-lg bg-recall/20 px-4 py-2 text-xs font-medium text-recall-glow transition hover:bg-recall/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-recall/60"
+			>
+				Retry
+			</button>
+		</div>
+	{:else if loading}
+		<div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pointer-events-auto">
+			{#each Array(3) as _}
+				<div class="glass-subtle shimmer h-24 rounded-xl"></div>
+			{/each}
+		</div>
+		<div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-4 pointer-events-auto">
+			<div class="glass-subtle shimmer min-h-[520px] rounded-2xl"></div>
+			<div class="glass-subtle shimmer h-[520px] rounded-2xl"></div>
+		</div>
+	{:else if scheduled.length === 0}
+		<div class="glass-panel pointer-events-auto enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center">
+			<div
+				class="flex h-14 w-14 items-center justify-center rounded-2xl border border-recall/25 bg-recall/10 text-recall"
+			>
+				<Icon name="schedule" size={26} draw />
+			</div>
+			<div class="text-sm font-medium text-bright">
+				Nothing is due for review right now.
+			</div>
+			<div class="max-w-sm text-xs text-muted">
+				{memories.length.toLocaleString()} recent memories are sampled{totalMemories > memories.length ? ` from ${totalMemories.toLocaleString()} total` : ''}, but none carry an FSRS
+				<code class="text-dim">nextReviewAt</code> timestamp yet. Reviews are scheduled as
+				memories are recalled and consolidated — check back, or run
+				<span class="text-recall-glow">Predict what I need next</span> to see what the backend
+				thinks is slipping.
+			</div>
+		</div>
+	{:else}
+		<!-- LIVE PROOF — three real FSRS stat cards -->
+		<div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pointer-events-auto">
+			<div use:reveal={{ delay: 0, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="flex items-center gap-2">
+					<span class="ping-host inline-flex">
+						<span class="w-2 h-2 rounded-full" style="background: #FF3B30"></span>
+					</span>
+					<div class="text-3xl font-bold tabular-nums" style="color: #FF3B30">
+						<AnimatedNumber value={dueNowCount} />
+					</div>
+				</div>
+				<div class="text-xs text-dim mt-1">due now (overdue or today)</div>
+			</div>
+			<div use:reveal={{ delay: 60, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="text-3xl font-bold tabular-nums" style="color: #FFB000">
+					<AnimatedNumber value={dueThisWeekCount} />
+				</div>
+				<div class="text-xs text-dim mt-1">coming due within 7 days</div>
+			</div>
+			<div use:reveal={{ delay: 120, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="text-3xl text-bright font-bold tabular-nums">
+					<AnimatedNumber value={avgDueRetention} />%
+				</div>
+				<div class="text-xs text-dim mt-1">avg retention across the due set</div>
+			</div>
+		</div>
+
+		<!-- INTERPRETATION — one-line insight tying colour to meaning -->
+		<div class="pointer-events-auto flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-[11px] text-muted">
+			<span class="inline-flex items-center gap-1.5">
+				<span class="w-2 h-2 rounded-full" style="background: #FF3B30"></span> at risk (&lt;40% retention)
+			</span>
+			<span class="inline-flex items-center gap-1.5">
+				<span class="w-2 h-2 rounded-full" style="background: #FFB000"></span> softening (40–70%)
+			</span>
+			<span class="inline-flex items-center gap-1.5">
+				<span class="w-2 h-2 rounded-full" style="background: #22C7DE"></span> healthy (&gt;70%)
+			</span>
+			<span class="ml-auto text-dim">
+				{scheduled.length.toLocaleString()} scheduled from {memories.length.toLocaleString()} recent memories{totalMemories > memories.length ? ` · ${totalMemories.toLocaleString()} total` : ''}
+			</span>
+		</div>
+
+		<!-- Main view: DOM upcoming list + selection detail -->
+		<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-4 pointer-events-auto">
+			<div class="glass-panel rounded-2xl p-3 space-y-1.5 max-h-[620px] overflow-y-auto">
+				<div class="flex items-center justify-between px-1 pb-2 sticky top-0 bg-deep/60 backdrop-blur-sm z-10">
+					<span class="text-xs text-dim uppercase tracking-wider">Upcoming reviews</span>
+					<span class="text-xs text-muted tabular-nums"><AnimatedNumber value={upcomingRows.length} /></span>
+				</div>
+
+				{#each upcomingRows as row, i (row.memory.id)}
+					{@const isSelected = selectedId === row.memory.id}
+					<button
+						use:reveal={{ delay: Math.min(i * 28, 320), y: 8 }}
+						onclick={() => selectRow(row.memory.id)}
+						class="w-full text-left p-3 rounded-xl border transition lift
+							{isSelected
+								? 'bg-recall/10 border-recall/40 shadow-[0_0_12px_rgba(34,199,222,0.16)]'
+								: 'border-subtle/20 hover:border-recall/30 hover:bg-white/[0.02]'}"
+					>
+						<div class="flex items-center gap-2 mb-1.5">
+							<div
+								class="w-2 h-2 rounded-full shrink-0"
+								style="background: {row.retentionPct < 40 ? '#FF3B30' : row.retentionPct < 70 ? '#FFB000' : '#22C7DE'}"
+							></div>
+							<span
+								class="text-[11px] font-medium tabular-nums"
+								style="color: {row.overdue ? '#FF3B30' : '#FFB000'}"
+							>
+								{row.dueIn}
+							</span>
+							<span class="ml-auto text-[10px] text-muted tabular-nums">{row.retentionPct}% retained</span>
+						</div>
+						<div class="text-xs text-text truncate">
+							{sanitizeAscii(row.memory.content).slice(0, 90) || 'Untitled memory'}
+						</div>
+					</button>
+				{/each}
+			</div>
+
+			<!-- INTERPRETATION — selection detail panel (non-mutating select) -->
+			<aside use:reveal={{ delay: 100, y: 16 }} class="glass rounded-2xl p-4 space-y-3 max-h-[620px] overflow-y-auto">
+				{#if selectedMemory}
+					<div class="flex items-start justify-between gap-2">
+						<div class="font-mono text-[10px] uppercase tracking-[0.2em] text-recall-glow">Review detail</div>
+						<button
+							type="button"
+							onclick={() => (selectedId = null)}
+							class="rounded-lg border border-subtle/30 px-2.5 py-1 text-[11px] text-muted transition hover:border-recall/40 hover:text-recall"
+						>
+							Close
+						</button>
+					</div>
+					<p class="text-sm text-text leading-relaxed">{sanitizeAscii(selectedMemory.content)}</p>
+					<div class="grid grid-cols-2 gap-2 pt-1">
+						<div class="rounded-lg bg-white/[0.03] p-2.5">
+							<div class="text-[10px] uppercase tracking-wider text-muted">next review</div>
+							<div class="mt-0.5 text-xs text-bright">{dueInLabel(selectedMemory, Date.now())}</div>
+						</div>
+						<div class="rounded-lg bg-white/[0.03] p-2.5">
+							<div class="text-[10px] uppercase tracking-wider text-muted">retention</div>
+							<div class="mt-0.5 text-xs text-bright tabular-nums">{Math.round(clamp01(selectedMemory.retentionStrength) * 100)}%</div>
+						</div>
+						<div class="rounded-lg bg-white/[0.03] p-2.5">
+							<div class="text-[10px] uppercase tracking-wider text-muted">retrieval</div>
+							<div class="mt-0.5 text-xs text-bright tabular-nums">{Math.round(clamp01(selectedMemory.retrievalStrength) * 100)}%</div>
+						</div>
+						<div class="rounded-lg bg-white/[0.03] p-2.5">
+							<div class="text-[10px] uppercase tracking-wider text-muted">type</div>
+							<div class="mt-0.5 truncate text-xs text-dim">{selectedMemory.nodeType}</div>
+						</div>
+					</div>
+					{#if selectedMemory.tags && selectedMemory.tags.length > 0}
+						<div class="flex flex-wrap gap-1">
+							{#each selectedMemory.tags as t}
+								<span class="text-[9px] px-1.5 py-0.5 rounded bg-white/[0.04] text-muted">{t}</span>
+							{/each}
+						</div>
+					{/if}
+					<button
+						type="button"
+						onclick={() => selectedMemory && markReviewed(selectedMemory.id)}
+						disabled={promoting}
+						class="w-full mt-1 inline-flex items-center justify-center gap-2 rounded-xl border border-recall/30 bg-recall/12 px-3 py-2 text-xs font-medium text-recall-glow transition hover:bg-recall/20 disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-recall/60"
+					>
+						<Icon name="sparkle" size={13} />
+						{promoting ? 'Marking…' : 'Mark reviewed (strengthen)'}
+					</button>
+				{:else if predictions.length > 0}
+					<div class="font-mono text-[10px] uppercase tracking-[0.2em] text-recall-glow">Predicted need</div>
+					<p class="text-[11px] text-muted">
+						The backend's blended FSRS urgency for the {predictions.length} most active memories.
+						{#if predictedAt}<span class="text-dim">Just now.</span>{/if}
+					</p>
+					<div class="space-y-1.5">
+						{#each predictions as p (p.id)}
+							<button
+								type="button"
+								onclick={() => (selectedId = p.id)}
+								class="w-full text-left rounded-lg border border-subtle/20 p-2.5 transition hover:border-recall/30 hover:bg-white/[0.02]"
+							>
+								<div class="flex items-center gap-2 mb-1">
+									<span class="text-[9px] uppercase tracking-wider font-medium" style="color: {needColor[p.predictedNeed]}">
+										{p.predictedNeed}
+									</span>
+									<span class="ml-auto text-[10px] text-muted tabular-nums">{Math.round(p.urgency * 100)}% urgency</span>
+								</div>
+								<div class="text-[11px] text-dim truncate">{sanitizeAscii(p.content)}</div>
+							</button>
+						{/each}
+					</div>
+				{:else}
+					<div class="flex flex-col items-center justify-center gap-2 py-10 text-center">
+						<div class="text-dim opacity-50 breathe">
+							<Icon name="schedule" size={38} strokeWidth={1.2} />
+						</div>
+						<p class="text-xs text-muted max-w-[220px]">
+							Select any upcoming review to see its retention, next-review date, and a
+							<span class="text-recall-glow">Mark reviewed</span> action.
+						</p>
+						{#if predictError}
+							<p class="text-[11px] text-decay">{predictError}</p>
+						{/if}
+					</div>
+				{/if}
+			</aside>
+		</div>
+	{/if}
+</div>

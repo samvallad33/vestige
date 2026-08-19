@@ -50,23 +50,71 @@ pub const MIN_SHARED_ENTITIES: usize = 1;
 /// Words that mark a memory as a failure/"aversive" event when auto-detecting.
 /// Lowercased substring match against content + tags.
 pub const FAILURE_MARKERS: &[&str] = &[
-    "error", "bug", "crash", "crashed", "regression", "broke", "broken",
-    "failure", "failed", "panic", "exception", "fault", "outage", "incident",
+    "error",
+    "bug",
+    "crash",
+    "crashed",
+    "regression",
+    "broke",
+    "broken",
+    "failure",
+    "failed",
+    "panic",
+    "exception",
+    "fault",
+    "outage",
+    "incident",
     // NOTE: bare "500" was removed — it matched benign content like "$500",
     // "500 users", or "line 500" and wrongly flagged a quiet CAUSE memory as a
     // failure, excluding it from the backward reach. The specific HTTP error
     // codes 502/503/504 below stay; a genuine "HTTP 500" is still caught by
     // "error"/"failed"/"exception" in any real incident note.
-    "timeout", "deadlock", "leak", "corrupt", "stack overflow",
+    "timeout",
+    "deadlock",
+    "leak",
+    "corrupt",
+    "stack overflow",
     // performance/degradation failures (an agent should backfill from these too)
-    "spiked", "latency", "degraded", "slow", "hang", "hung", "throttled",
-    "oom", "502", "503", "504", "rejected", "denied", "flaky",
+    "spiked",
+    "latency",
+    "degraded",
+    "slow",
+    "hang",
+    "hung",
+    "throttled",
+    "oom",
+    "502",
+    "503",
+    "504",
+    "rejected",
+    "denied",
+    "flaky",
     // real-incident vocabulary (CauseBench found these missing — postmortems often
     // describe failures without the classic crash words above)
-    "pinned", "saturated", "saturation", "stalled", "exhausted", "exhaustion",
-    "overload", "overloaded", "backlog", "fell behind", "lag", "lagging",
-    "unavailable", "down", "dropped", "reset", "refused", "stampede",
-    "thrashing", "starved", "starvation", "expired", "expiry", "overflow",
+    "pinned",
+    "saturated",
+    "saturation",
+    "stalled",
+    "exhausted",
+    "exhaustion",
+    "overload",
+    "overloaded",
+    "backlog",
+    "fell behind",
+    "lag",
+    "lagging",
+    "unavailable",
+    "down",
+    "dropped",
+    "reset",
+    "refused",
+    "stampede",
+    "thrashing",
+    "starved",
+    "starvation",
+    "expired",
+    "expiry",
+    "overflow",
 ];
 
 /// How strongly to promote the backfilled cause: multiply its stability by this
@@ -117,15 +165,17 @@ pub struct FailureEvent {
 pub fn extract_entities(content: &str, tags: &[String]) -> Vec<String> {
     use std::collections::HashSet;
     let mut set: HashSet<String> = tags.iter().map(|t| t.to_lowercase()).collect();
-    for raw in content.split(|c: char| {
-        !(c.is_alphanumeric() || c == '_' || c == '.' || c == '/' || c == '-')
-    }) {
+    for raw in content
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.' || c == '/' || c == '-'))
+    {
         let tok = raw.trim_matches(|c: char| c == '.' || c == '/' || c == '-');
         if tok.len() < 3 {
             continue;
         }
         let is_env = tok.len() >= 3
-            && tok.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+            && tok
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
             && tok.chars().any(|c| c.is_ascii_uppercase());
         let is_path = (tok.contains('/') || tok.contains('.'))
             && tok.chars().any(|c| c.is_ascii_alphabetic());
@@ -173,7 +223,10 @@ fn contains_marker_word(hay: &str, marker: &str) -> bool {
 /// Shared by every caller so failure detection never drifts.
 pub fn looks_like_failure(content: &str, tags: &[String]) -> bool {
     let hay = content.to_lowercase();
-    if FAILURE_MARKERS.iter().any(|m| contains_marker_word(&hay, m)) {
+    if FAILURE_MARKERS
+        .iter()
+        .any(|m| contains_marker_word(&hay, m))
+    {
         return true;
     }
     tags.iter().any(|t| {
@@ -272,8 +325,7 @@ impl RetroactiveBackfill {
             };
         }
 
-        let failure_entities: HashSet<&str> =
-            failure.entities.iter().map(|s| s.as_str()).collect();
+        let failure_entities: HashSet<&str> = failure.entities.iter().map(|s| s.as_str()).collect();
 
         // similarity ranking (only to PROVE the cause ranks low on similarity)
         let mut by_sim: Vec<(&str, f32)> = candidates
@@ -326,7 +378,11 @@ impl RetroactiveBackfill {
             })
             .collect();
 
-        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         scored.truncate(self.max_causes);
 
         BackfillResult {
@@ -416,12 +472,18 @@ mod tests {
 
         let result = RetroactiveBackfill::new().run(&failure(), &candidates);
 
-        assert!(result.triggered, "high-PE failure with markers must trigger");
+        assert!(
+            result.triggered,
+            "high-PE failure with markers must trigger"
+        );
         assert!(!result.causes.is_empty(), "must surface at least one cause");
 
         let top = &result.causes[0];
         // the promoted memory is the real cause, not the similar distractor
-        assert_eq!(top.memory_id, "cause-mon", "must promote the causal env-var note");
+        assert_eq!(
+            top.memory_id, "cause-mon",
+            "must promote the causal env-var note"
+        );
         assert!(top.shared_entities.contains(&"API_TIMEOUT".to_string()));
         // and it is provably NOT what similarity search would have surfaced:
         assert!(
@@ -434,7 +496,10 @@ mod tests {
             "backward-only: a future memory must never be backfilled"
         );
         // it gets a real stability boost (stops decaying, will surface next time)
-        assert!(top.promoted_stability > 5.0, "the cause must be promoted (boosted stability)");
+        assert!(
+            top.promoted_stability > 5.0,
+            "the cause must be promoted (boosted stability)"
+        );
     }
 
     #[test]
@@ -448,7 +513,10 @@ mod tests {
             manual: false,
         };
         let result = RetroactiveBackfill::new().run(&calm, &[]);
-        assert!(!result.triggered, "a calm, low-surprise note must not fire a backfill");
+        assert!(
+            !result.triggered,
+            "a calm, low-surprise note must not fire a backfill"
+        );
     }
 
     #[test]
@@ -471,7 +539,10 @@ mod tests {
             similarity_to_failure: Some(0.3),
         }];
         let result = RetroactiveBackfill::new().run(&manual, &candidates);
-        assert!(result.triggered, "manual override must trigger regardless of markers/PE");
+        assert!(
+            result.triggered,
+            "manual override must trigger regardless of markers/PE"
+        );
         assert_eq!(result.causes[0].memory_id, "cause");
     }
 

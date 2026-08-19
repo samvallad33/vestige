@@ -110,6 +110,74 @@ export function retentionColor(r: number): [number, number, number] {
 	return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
 }
 
+// ---------------------------------------------------------------------------
+// SALIENCE PALETTE — "a grey mind that spends color only where it decides
+// something matters." The shared ramp for the resting-cortex organs
+// (observatory / explore / memories / feed). Unlike retentionColor (which is
+// green even at the low end), this DESATURATES the crowd toward cold graphite
+// and lets a memory EARN saturated luciferin, then gold, then white-hot as its
+// salience rises. Salience here = the decision-weight of a memory (importance /
+// activation / retention), 0..1 — NOT raw retention alone. The perceptual point:
+// a first-time viewer sees a dim grey field where only the memories the system
+// currently cares about carry color, and the very top ones blaze. Pure function,
+// deterministic, no DOM — safe to call from mappers + (mirrored) from WGSL.
+// ---------------------------------------------------------------------------
+
+/** Cold graphite the unselected crowd desaturates toward (never pure black so
+ *  the cell still reads as a node, not a hole). */
+const GRAPHITE: [number, number, number] = [0x3a / 255, 0x44 / 255, 0x4c / 255];
+/** The gold flare a high-salience memory earns before white-hot (matches the
+ *  render-shader gold in the waitlist engine: energy>2 → gold → white). */
+const SALIENCE_GOLD: [number, number, number] = [1.0, 0.78, 0.36];
+
+function mix3(
+	a: [number, number, number],
+	b: [number, number, number],
+	t: number
+): [number, number, number] {
+	const f = t < 0 ? 0 : t > 1 ? 1 : t;
+	return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+}
+
+/**
+ * salience → color for a resting-cortex cell. `s` is 0..1 decision-weight.
+ *  - s < ~0.35  → cold graphite (the crowd; color is spent, not given)
+ *  - mid        → the retention ramp fades UP out of grey (green→luciferin)
+ *  - s > ~0.82  → ignites toward gold, then white-hot at the very top
+ * `rescued` forces the gold→white ignition regardless of `s` (the salience
+ * "vote" pulling an about-to-be-forgotten memory back into the light).
+ */
+export function saliencePalette(s: number, rescued = false): [number, number, number] {
+	const t = Math.max(0, Math.min(1, Number.isFinite(s) ? s : 0));
+	// The crowd is graphite; color earns in above ~0.30 and saturates by ~0.72.
+	const earn = smooth01((t - 0.3) / 0.42);
+	let col = mix3(GRAPHITE, retentionColor(t), earn);
+	// Top salience flares gold, then blows to white-hot at the very peak.
+	const flare = smooth01((t - 0.82) / 0.18);
+	col = mix3(col, SALIENCE_GOLD, flare * 0.85);
+	if (rescued) {
+		// The rescued memory is the winner of the vote: force gold→white ignition.
+		col = mix3(col, SALIENCE_GOLD, 0.7);
+		col = mix3(col, [1, 1, 1], 0.35);
+	} else {
+		col = mix3(col, [1, 1, 1], smooth01((t - 0.93) / 0.07) * 0.5);
+	}
+	return col;
+}
+
+/** Salience → glow energy (0..1) for the same resting-cortex cells. The crowd
+ *  keeps a low ember; salient cells brighten; rescued cells blaze. */
+export function salienceEnergy(s: number, rescued = false): number {
+	const t = Math.max(0, Math.min(1, Number.isFinite(s) ? s : 0));
+	if (rescued) return 1;
+	return 0.18 + 0.72 * smooth01((t - 0.15) / 0.7);
+}
+
+function smooth01(x: number): number {
+	const t = x < 0 ? 0 : x > 1 ? 1 : x;
+	return t * t * (3 - 2 * t);
+}
+
 /**
  * Event type → the impulse color it injects into the organism. Drives the Feed
  * bloodstream, the LiveBridge reactions, and per-organ event pulses. Only real

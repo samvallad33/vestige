@@ -4,11 +4,14 @@
 	import type { IntentionItem } from '$types';
 	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
 	import type { ObservatoryEngine } from '$lib/observatory/engine';
-	import { CAUSAL, IMMUNE, RETENTION, rgb01 } from '$lib/observatory/cognitive-palette';
-	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
 	import type { RouteSceneModel } from '$lib/observatory/route-scene';
 	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
 	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
+	import PageHeader from '$components/PageHeader.svelte';
+	import Icon from '$components/Icon.svelte';
+	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
+	import AnimatedNumber from '$components/AnimatedNumber.svelte';
+	import { reveal } from '$lib/actions/reveal';
 
 	type RichIntention = IntentionItem & {
 		retention?: number;
@@ -18,7 +21,6 @@
 		tags?: string[];
 		related_memories?: string[];
 	};
-	type IntentionTextItem = TextLayerItem & { intentionId?: string };
 	type PredictedIntent = {
 		id: string;
 		content: string;
@@ -28,12 +30,6 @@
 		urgency?: number;
 	};
 
-	const CYAN = [...rgb01(CAUSAL.forward), 1] satisfies [number, number, number, number];
-	const LUCIFERIN = [...rgb01(RETENTION.luciferin), 0.88] satisfies [number, number, number, number];
-	const SCARLET = [...rgb01(IMMUNE.veto), 0.92] satisfies [number, number, number, number];
-	const MUTED = [...rgb01(RETENTION.recall), 0.62] satisfies [number, number, number, number];
-	const AMBER = [...rgb01(IMMUNE.caution), 0.9] satisfies [number, number, number, number];
-	const INTENTION_LIMIT = 36;
 	const ACTIVE_FILTER = 'active';
 	const ALL_FILTER = 'all';
 
@@ -44,12 +40,11 @@
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let selectedIntentionId: string | null = $state(null);
-	let textPass: TextLayerPass | null = null;
 	let engineRef: ObservatoryEngine | null = null;
 
-	// Live viewport aspect (canvas px) — same signal TextLayerPass.portraitAdapt
-	// reads (engine.params[6]/[7]), with a window fallback for the pre-frame-0
-	// pass. NEVER a hardcoded phone width; desktop (aspect>=0.85) is untouched.
+	// Live viewport aspect (canvas px) from engine.params[6]/[7], with a window
+	// fallback for the pre-frame-0 pass. Drives the field's portrait/desktop tuning.
+	// NEVER a hardcoded phone width; desktop (aspect>=0.85) is untouched.
 	function viewportAspect(): number {
 		let vw = engineRef?.params[6] || 0;
 		let vh = engineRef?.params[7] || 0;
@@ -61,22 +56,11 @@
 		return vw / vh;
 	}
 
-	// Trim to a cap on a word boundary so a portrait row never ends mid-token.
-	function trimSnippet(text: string, cap: number): string {
-		const s = sanitizeAscii(text).replace(/\s+/g, ' ').trim();
-		if (s.length <= cap) return s;
-		const hard = s.slice(0, cap);
-		const lastSpace = hard.lastIndexOf(' ');
-		return lastSpace > cap * 0.6 ? hard.slice(0, lastSpace) : hard;
-	}
-
 	onMount(() => {
 		void loadIntentions(ACTIVE_FILTER);
 	});
 
 	onDestroy(() => {
-		textPass?.dispose();
-		textPass = null;
 		engineRef = null;
 	});
 
@@ -84,7 +68,6 @@
 		filter = nextFilter;
 		loading = true;
 		error = null;
-		updateTextPass();
 		try {
 			const [res, predictionRes] = await Promise.all([api.intentions(nextFilter), api.predict()]);
 			intentions = (res.intentions || []) as RichIntention[];
@@ -97,19 +80,23 @@
 			error = err instanceof Error ? err.message : 'UNKNOWN INTENTION FETCH ERROR';
 		} finally {
 			loading = false;
-			updateTextPass();
 		}
+	}
+
+	// Explicit, labelled control that swaps the filter. Kept as its own function so
+	// the DOM dropdown and the in-field toggle share one non-mutating code path.
+	function setFilter(next: string) {
+		if (next === filter) return;
+		void loadIntentions(next);
 	}
 
 	function createIntentionsPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
 		engineRef = engine;
 		const field = new IntentionsFieldPass(engine);
 		field.uploadScene(scene);
-		const pass = new TextLayerPass(engine);
-		textPass = pass;
-		void pass.init().then(() => updateTextPass());
-		pass.setText(buildTextItems());
-		return [field, pass as RouteFramePass];
+		// The DOM overlay owns all readable content; the field stays as the alive
+		// backdrop only. No in-canvas MSDF text pass — it would ghost behind the DOM.
+		return [field];
 	}
 
 	class IntentionsFieldPass implements RouteFramePass {
@@ -146,10 +133,6 @@
 		render(pass: GPURenderPassEncoder): void { this.field.render(pass); }
 		pickAt(x: number, y: number): RoutePick | null { return this.field.pickAt(x, y); }
 		dispose(): void { this.field.dispose(); }
-	}
-
-	function updateTextPass() {
-		textPass?.setText(buildTextItems());
 	}
 
 	function sanitizeAscii(value: string): string {
@@ -189,216 +172,6 @@
 		} catch {
 			return sanitizeAscii(intention.trigger_type).slice(0, 26);
 		}
-	}
-
-	function intentionLine(intention: RichIntention, portrait = false): string {
-		// Portrait: drop the id + trigger columns and shorten the snippet so the row
-		// fits the narrow width on one readable line — never edge-to-edge, never
-		// truncated mid-word. Desktop keeps the full, byte-identical row.
-		if (portrait) {
-			// Word-boundary trim so the row never ends mid-token. Cap sized so the
-			// snippet + the trailing "  pN status" tag still fits the narrow portrait
-			// width on one line (verified live at 360 and 390).
-			const content = trimSnippet(intention.content, 34);
-			const status = sanitizeAscii(intention.status).slice(0, 8);
-			return sanitizeAscii(`${content}  p${intention.priority} ${status}`);
-		}
-		const content = sanitizeAscii(intention.content).replace(/\s+/g, ' ').trim().slice(0, 48);
-		const status = sanitizeAscii(intention.status).slice(0, 12);
-		const trigger = summarizeTrigger(intention);
-		return sanitizeAscii(
-			`${content} | ${intention.id.slice(0, 8)} | p${intention.priority} | ${status} | ${trigger}`
-		);
-	}
-
-	function statusItem(text: string, color = MUTED): IntentionTextItem {
-		return {
-			id: 'intentions:status',
-			kind: 'intention-status',
-			text: sanitizeAscii(text),
-			x: -0.58,
-			y: 0.02,
-			size: 0.044,
-			color,
-			depth: 0.78,
-			weight: 0.62,
-			revealSpan: 32,
-			maxWidthEm: 50
-		};
-	}
-
-	// A dedicated, explicit filter toggle (active <-> all). Selecting an intention
-	// must NOT silently flip the global filter — that lives here as its own target.
-	function filterToggleItem(portrait = false): IntentionTextItem {
-		if (portrait) {
-			// Portrait: a readable, centred heading pinned to the top band. It owns its
-			// OWN mobile layout (portraitAdapt treats intention-filter as body text, so
-			// author in the reclaimed-y space; the near-centre x keeps it on-screen after
-			// the size boost). Drop the "SHOWING:" prefix — the shorter label leaves a
-			// real right-edge margin at 360 so the closing bracket never clips.
-			const portraitText =
-				filter === ACTIVE_FILTER ? '[ ACTIVE - TAP FOR ALL ]' : '[ ALL - TAP FOR ACTIVE ]';
-			return {
-				id: 'intentions:filter',
-				kind: 'intention-filter',
-				text: portraitText,
-				x: -0.5,
-				y: 0.86,
-				size: 0.03,
-				color: AMBER,
-				depth: 1,
-				weight: 0.7,
-				revealSpan: 12,
-				maxWidthEm: 34,
-				hitPadX: 0.06,
-				hitPadY: 0.04
-			};
-		}
-		return {
-			id: 'intentions:filter',
-			kind: 'intention-filter',
-			text: filter === ACTIVE_FILTER ? '[ SHOWING: ACTIVE - CLICK FOR ALL ]' : '[ SHOWING: ALL - CLICK FOR ACTIVE ]',
-			// Far top-left corner (radius ~1.3 from origin) — beyond the galaxy's
-			// bounded reach (maxRadius 0.7 + maxCellR 0.2 ≈ 0.9), so no field cell can
-			// overlap and steal this click (field is picked before text chrome).
-			x: -0.94,
-			y: 0.9,
-			size: 0.024,
-			color: AMBER,
-			depth: 1,
-			weight: 0.7,
-			revealSpan: 12,
-			maxWidthEm: 40,
-			hitPadX: 0.03,
-			hitPadY: 0.03
-		};
-	}
-
-	function buildTextItems(): IntentionTextItem[] {
-		if (loading) return [statusItem('LOADING INTENTION FIELD...', CYAN)];
-		if (error) return [statusItem(`ERROR - ${error}`.slice(0, 72), SCARLET)];
-
-		const portrait = viewportAspect() < 0.85;
-
-		if (portrait) {
-			// Phone plan: ONE focal heading + a short, well-spaced column with real
-			// negative space. Row count derives from the LIVE aspect (taller/narrower
-			// -> fewer rows), never a fixed phone number. When the field is empty or
-			// tiny, a content-first focal message tells a first-timer what they're
-			// looking at instead of leaving a black void.
-			// Instant reveal on portrait: the MSDF reveal gate bumps ageFrame by
-			// (globalGlyphIndex*2) and discards glyphs whose ageFrame exceeds the frame
-			// loop, so a per-row startFrame leaves long portrait rows half-drawn ("...is
-			// li"). A large negative startFrame + revealSpan 1 saturates reveal to 1 on
-			// frame 0 so EVERY row renders in full immediately. Same trick as schedule.
-			const REVEAL = -100000;
-			const items: IntentionTextItem[] = [filterToggleItem(true)];
-			if (intentions.length === 0) {
-				items.push({
-					id: 'intentions:empty',
-					kind: 'intention-status',
-					text: 'NO ACTIVE INTENTIONS',
-					x: -0.5,
-					y: 0.18,
-					size: 0.04,
-					color: MUTED,
-					depth: 0.9,
-					weight: 0.6,
-					startFrame: REVEAL,
-					revealSpan: 1,
-					maxWidthEm: 22
-				});
-				items.push({
-					id: 'intentions:empty-sub',
-					kind: 'intention-status',
-					text: 'Vestige is watching for triggers. Tap the heading to see all.',
-					x: -0.72,
-					y: 0.02,
-					size: 0.026,
-					color: MUTED,
-					depth: 0.78,
-					weight: 0.5,
-					startFrame: REVEAL,
-					revealSpan: 1,
-					maxWidthEm: 30
-				});
-				return items;
-			}
-			const aspect = viewportAspect();
-			const portraitness = clamp01((0.85 - aspect) / (0.85 - 0.42));
-			const rowCount = Math.max(6, Math.round(10 - 4 * portraitness));
-			const rows = intentions.slice(0, rowCount);
-			// A count line so a single-row field reads as "1 of 1", not a lone stray.
-			items.push({
-				id: 'intentions:count',
-				kind: 'intention-status',
-				text: `${intentions.length} ACTIVE FOCUS${intentions.length === 1 ? '' : 'ES'}`,
-				x: -0.62,
-				y: 0.66,
-				size: 0.026,
-				color: MUTED,
-				depth: 0.8,
-				weight: 0.5,
-				startFrame: REVEAL,
-				revealSpan: 1,
-				maxWidthEm: 28
-			});
-			const top = 0.5;
-			const bottom = -0.7;
-			const rowStep = rows.length > 1 ? (top - bottom) / (rows.length - 1) : 0;
-			for (let i = 0; i < rows.length; i++) {
-				const intention = rows[i];
-				const active = selectedIntentionId === intention.id;
-				items.push({
-					id: `intent:${intention.id}`,
-					kind: 'intention',
-					intentionId: intention.id,
-					text: intentionLine(intention, true),
-					x: -0.82,
-					y: top - i * rowStep,
-					size: active ? 0.032 : 0.03,
-					color: active ? LUCIFERIN : CYAN,
-					depth: active ? 1 : Math.max(0.7, intentionDepth(intention)),
-					weight: statusWeight(intention),
-					startFrame: REVEAL,
-					revealSpan: 1,
-					maxWidthEm: 34,
-					hitPadX: 0.05,
-					hitPadY: 0.03
-				});
-			}
-			return items;
-		}
-
-		if (intentions.length === 0) return [filterToggleItem(), statusItem(`EMPTY ${filter.toUpperCase()} INTENTION FIELD`, MUTED)];
-
-		const items: IntentionTextItem[] = [filterToggleItem()];
-		const rows = intentions.slice(0, INTENTION_LIMIT);
-		const top = 0.72;
-		const rowStep = 1.5 / Math.max(1, INTENTION_LIMIT - 1);
-		for (let i = 0; i < rows.length; i++) {
-			const intention = rows[i];
-			const id = `intent:${intention.id}`;
-			const active = selectedIntentionId === intention.id;
-			items.push({
-				id,
-				kind: 'intention',
-				intentionId: intention.id,
-				text: intentionLine(intention),
-				x: -0.88,
-				y: top - i * rowStep,
-				size: active ? 0.031 : 0.026,
-				color: active ? LUCIFERIN : CYAN,
-				depth: active ? 1 : intentionDepth(intention),
-				weight: statusWeight(intention),
-				startFrame: i * 2,
-				revealSpan: 20,
-				maxWidthEm: 52,
-				hitPadX: 0.03,
-				hitPadY: 0.015
-			});
-		}
-		return items;
 	}
 
 	const scene = $derived<RouteSceneModel>({
@@ -451,19 +224,69 @@
 	});
 
 	function handlePick(pick: RoutePick) {
-		// The explicit filter toggle switches active <-> all (its own target).
-		if (pick.kind === 'intention-filter') {
-			void loadIntentions(filter === ACTIVE_FILTER ? ALL_FILTER : ACTIVE_FILTER);
-			return;
-		}
 		if (pick.kind !== 'intention') return;
-		// The pick can come from the TEXT pass (payload = IntentionTextItem with
-		// .intentionId) OR the FIELD pass (payload = RouteNode with .source.id).
-		// Read the intention id from whichever shape it is, so field cells are
-		// clickable, not just text rows.
-		const payload = pick.payload as Partial<IntentionTextItem> & { source?: { id?: string } };
-		selectedIntentionId = payload.intentionId ?? payload.source?.id ?? null;
-		updateTextPass();
+		// The pick comes from the FIELD pass (payload = RouteNode with .source.id),
+		// so clicking a field cell selects that intention (highlight only).
+		const payload = pick.payload as { source?: { id?: string } };
+		selectedIntentionId = payload.source?.id ?? null;
+	}
+
+	// ── DOM overlay: real, legible reading surface on top of the WebGPU field ──
+	// Every number below is derived from the real /api/intentions + /api/predict
+	// payloads — none are constants. Selecting a row only sets selectedIntentionId
+	// (highlight); it never mutates, snoozes, promotes, or deletes an intention.
+
+	const PRIORITY_LABEL: Record<number, string> = {
+		1: 'low',
+		2: 'normal',
+		3: 'high',
+		4: 'critical'
+	};
+	function priorityLabel(p: number): string {
+		return PRIORITY_LABEL[p] ?? 'normal';
+	}
+	// Urgency ~ priority band: critical/high read hot, normal/low cool. Pure
+	// derivation of the real priority field, not a stored constant.
+	function priorityColor(p: number): string {
+		if (p >= 4) return '#ef4444';
+		if (p >= 3) return '#f59e0b';
+		if (p <= 1) return '#64748b';
+		return '#22c7de';
+	}
+
+	const filterOptions: DropdownOption[] = [
+		{ value: ACTIVE_FILTER, label: 'Active intentions', icon: 'intentions' },
+		{ value: ALL_FILTER, label: 'All (incl. fired / snoozed)', icon: 'filter' }
+	];
+
+	// Live proof, all from the fetched payloads.
+	const visibleCount = $derived(intentions.length);
+	const highPriorityCount = $derived(intentions.filter((i) => (i.priority ?? 2) >= 3).length);
+	const predictedCount = $derived(predictions.length);
+
+	const selectedIntention = $derived(
+		selectedIntentionId ? intentions.find((i) => i.id === selectedIntentionId) ?? null : null
+	);
+
+	function fmtDate(value?: string | null): string | null {
+		if (!value) return null;
+		const t = new Date(value).getTime();
+		if (!Number.isFinite(t)) return null;
+		try {
+			return new Date(t).toLocaleString(undefined, {
+				month: 'short',
+				day: 'numeric',
+				hour: '2-digit',
+				minute: '2-digit'
+			});
+		} catch {
+			return null;
+		}
+	}
+
+	function selectRow(id: string) {
+		// Plain select = highlight only. Non-mutating by contract.
+		selectedIntentionId = selectedIntentionId === id ? null : id;
 	}
 </script>
 
@@ -478,6 +301,236 @@
 	passes={createIntentionsPasses}
 	loading={loading}
 	error={error}
-	emptyLabel={`EMPTY ${filter.toUpperCase()} INTENTION FIELD`}
+	emptyLabel=""
 	onpick={handlePick}
 />
+
+<!-- md:pl-24 clears the fixed os-dock rail (collapsed ~66px, left: 0.75rem) so the
+     left edge of the reading panels never slides under it on desktop. Mobile keeps
+     p-6 — the dock is hidden there (os-mobilebar replaces it). -->
+<div class="relative z-10 min-h-full p-6 md:pl-24 space-y-6 pointer-events-none">
+	<!-- (1) IDENTITY -->
+	<div class="pointer-events-auto">
+		<PageHeader
+			icon="intentions"
+			title="Intentions"
+			subtitle="Standing goals and intentions Vestige is tracking for you."
+			accent="synapse"
+		>
+			<div class="flex items-center gap-2">
+				<span class="text-dim text-sm tabular-nums inline-flex items-center gap-1.5">
+					<AnimatedNumber value={visibleCount} /> {filter === ACTIVE_FILTER ? 'active' : 'total'}
+				</span>
+				<!-- (3) PRIMARY ACTION: explicit, labelled filter swap (real api reload). -->
+				<Dropdown
+					options={filterOptions}
+					value={filter}
+					label="Show"
+					icon="filter"
+					onChange={setFilter}
+				/>
+			</div>
+		</PageHeader>
+	</div>
+
+	{#if error}
+		<!-- (5) STATE GUIDANCE — error -->
+		<div class="glass-panel pointer-events-auto flex flex-col items-center gap-3 rounded-2xl p-10 text-center">
+			<div class="text-sm text-decay">Couldn't load intentions</div>
+			<div class="max-w-md text-xs text-muted break-words">{error}</div>
+			<button
+				type="button"
+				onclick={() => loadIntentions(filter)}
+				class="mt-2 rounded-lg bg-synapse/20 px-4 py-2 text-xs font-medium text-synapse-glow transition hover:bg-synapse/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60"
+			>
+				Retry
+			</button>
+		</div>
+	{:else if loading}
+		<!-- (5) STATE GUIDANCE — loading (shimmer skeletons) -->
+		<div class="grid grid-cols-2 lg:grid-cols-3 gap-3 pointer-events-auto">
+			{#each Array(3) as _}
+				<div class="glass-subtle shimmer h-20 rounded-xl"></div>
+			{/each}
+		</div>
+		<div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-4 pointer-events-auto">
+			<div class="glass-subtle shimmer min-h-[420px] rounded-2xl"></div>
+			<div class="glass-subtle shimmer h-[420px] rounded-2xl"></div>
+		</div>
+	{:else}
+		<!-- (2) LIVE PROOF — big real stat cards -->
+		<div class="grid grid-cols-2 lg:grid-cols-3 gap-3 pointer-events-auto">
+			<div use:reveal={{ delay: 0, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="text-2xl text-bright font-bold tabular-nums">
+					<AnimatedNumber value={visibleCount} />
+				</div>
+				<div class="text-xs text-dim mt-1">
+					{filter === ACTIVE_FILTER ? 'active intentions' : 'intentions (all states)'}
+				</div>
+			</div>
+			<div use:reveal={{ delay: 60, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="flex items-center gap-2">
+					<span class="w-2 h-2 rounded-full" style="background: #f59e0b"></span>
+					<div class="text-2xl font-bold tabular-nums" style="color: #f59e0b">
+						<AnimatedNumber value={highPriorityCount} />
+					</div>
+				</div>
+				<div class="text-xs text-dim mt-1">high / critical priority</div>
+			</div>
+			<div use:reveal={{ delay: 120, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="text-2xl font-bold tabular-nums" style="color: #22c7de">
+					<AnimatedNumber value={predictedCount} />
+				</div>
+				<div class="text-xs text-dim mt-1">predicted needs (FSRS)</div>
+			</div>
+		</div>
+
+		{#if intentions.length === 0}
+			<!-- (5) STATE GUIDANCE — designed empty state + (6) explanation -->
+			<div class="glass-panel pointer-events-auto enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center">
+				<div
+					class="flex h-14 w-14 items-center justify-center rounded-2xl border border-synapse/25 bg-synapse/10 text-synapse-glow"
+				>
+					<Icon name="intentions" size={26} draw />
+				</div>
+				<div class="text-sm font-medium text-bright">
+					No {filter === ACTIVE_FILTER ? 'active ' : ''}intentions
+				</div>
+				<div class="max-w-md text-xs text-muted leading-relaxed">
+					An intention is a standing goal Vestige holds for you — a
+					<span class="text-dim">prospective memory</span> that stays dormant until its trigger
+					fires (a time, a topic you return to, or a codebase you open). Nothing is being
+					tracked yet.
+				</div>
+				{#if filter === ACTIVE_FILTER}
+					<button
+						type="button"
+						onclick={() => setFilter(ALL_FILTER)}
+						class="mt-1 rounded-lg bg-synapse/20 px-4 py-2 text-xs font-medium text-synapse-glow transition hover:bg-synapse/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60"
+					>
+						Show all intentions (incl. fired &amp; snoozed)
+					</button>
+				{/if}
+			</div>
+		{:else}
+			<!-- Populated: legible DOM list + selection detail -->
+			<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-4 pointer-events-auto">
+				<!-- Intention list -->
+				<div class="glass-panel rounded-2xl p-3 space-y-2 max-h-[560px] overflow-y-auto">
+					<div class="flex items-center justify-between px-1 pb-2 sticky top-0 bg-deep/60 backdrop-blur-sm z-10">
+						<span class="text-xs text-dim uppercase tracking-wider">Intentions</span>
+						<span class="text-xs text-muted tabular-nums"><AnimatedNumber value={visibleCount} /></span>
+					</div>
+
+					{#each intentions as intention, i (intention.id)}
+						{@const active = selectedIntentionId === intention.id}
+						{@const trigger = summarizeTrigger(intention)}
+						<button
+							use:reveal={{ delay: Math.min(i * 30, 300), y: 10 }}
+							onclick={() => selectRow(intention.id)}
+							class="w-full text-left p-3 rounded-xl border transition lift
+								{active
+									? 'bg-synapse/10 border-synapse/40 shadow-[0_0_12px_rgba(99,102,241,0.18)]'
+									: 'border-subtle/20 hover:border-synapse/30 hover:bg-white/[0.02]'}"
+						>
+							<div class="flex items-center gap-2 mb-1.5">
+								<span
+									class="w-2 h-2 rounded-full shrink-0"
+									style="background: {priorityColor(intention.priority)}"
+								></span>
+								<span
+									class="text-[10px] uppercase tracking-wider"
+									style="color: {priorityColor(intention.priority)}"
+								>
+									{priorityLabel(intention.priority)}
+								</span>
+								<span class="text-[10px] text-muted ml-auto capitalize">{intention.status}</span>
+							</div>
+							<div class="text-sm text-text leading-snug">{intention.content}</div>
+							<div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted">
+								<span class="inline-flex items-center gap-1">
+									<Icon name="pulse" size={11} />
+									{intention.trigger_type}{trigger && trigger !== intention.trigger_type ? ` · ${trigger}` : ''}
+								</span>
+								{#if fmtDate(intention.deadline)}
+									<span>due {fmtDate(intention.deadline)}</span>
+								{/if}
+							</div>
+						</button>
+					{/each}
+				</div>
+
+				<!-- (6) INTERPRETATION — selection detail panel -->
+				<aside use:reveal={{ delay: 120, y: 16 }} class="glass rounded-2xl p-4 max-h-[560px] overflow-y-auto">
+					{#if selectedIntention}
+						<div class="flex items-start justify-between gap-3 border-b border-subtle/20 pb-3">
+							<div class="min-w-0">
+								<div class="font-mono text-[10px] uppercase tracking-[0.2em] text-synapse-glow">Intention</div>
+								<div class="mt-1 flex items-center gap-2">
+									<span
+										class="text-[10px] uppercase tracking-wider"
+										style="color: {priorityColor(selectedIntention.priority)}"
+									>
+										{priorityLabel(selectedIntention.priority)} priority
+									</span>
+									<span class="text-[10px] text-muted capitalize">· {selectedIntention.status}</span>
+								</div>
+							</div>
+							<button
+								type="button"
+								onclick={() => selectRow(selectedIntention.id)}
+								class="rounded-lg border border-subtle/30 px-2.5 py-1 text-xs text-muted transition hover:border-synapse/40 hover:text-text"
+							>
+								Close
+							</button>
+						</div>
+
+						<p class="mt-3 text-sm text-text leading-relaxed">{selectedIntention.content}</p>
+
+						<div class="mt-4 space-y-3 text-xs">
+							<div>
+								<div class="text-[10px] uppercase tracking-wider text-muted">Trigger</div>
+								<div class="mt-0.5 text-text">
+									{selectedIntention.trigger_type}
+								</div>
+								{#if summarizeTrigger(selectedIntention) && summarizeTrigger(selectedIntention) !== selectedIntention.trigger_type}
+									<div class="text-dim">{summarizeTrigger(selectedIntention)}</div>
+								{/if}
+							</div>
+							{#if fmtDate(selectedIntention.created_at)}
+								<div>
+									<div class="text-[10px] uppercase tracking-wider text-muted">Created</div>
+									<div class="mt-0.5 text-dim">{fmtDate(selectedIntention.created_at)}</div>
+								</div>
+							{/if}
+							{#if fmtDate(selectedIntention.deadline)}
+								<div>
+									<div class="text-[10px] uppercase tracking-wider text-muted">Deadline</div>
+									<div class="mt-0.5 text-dim">{fmtDate(selectedIntention.deadline)}</div>
+								</div>
+							{/if}
+							{#if fmtDate(selectedIntention.snoozed_until)}
+								<div>
+									<div class="text-[10px] uppercase tracking-wider text-muted">Snoozed until</div>
+									<div class="mt-0.5 text-dim">{fmtDate(selectedIntention.snoozed_until)}</div>
+								</div>
+							{/if}
+							<div class="pt-1 font-mono text-[10px] text-muted break-all">{selectedIntention.id}</div>
+						</div>
+					{:else}
+						<div class="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-center">
+							<div class="text-dim opacity-60 breathe">
+								<Icon name="intentions" size={34} strokeWidth={1.2} />
+							</div>
+							<p class="text-dim text-sm">Select an intention</p>
+							<p class="max-w-[220px] text-xs text-muted leading-relaxed">
+								Click a row (or a node in the field) to read its trigger, priority, and
+								deadline. Selecting never changes it.
+							</p>
+						</div>
+					{/if}
+				</aside>
+			</div>
+		{/if}
+	{/if}
+</div>

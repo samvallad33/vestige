@@ -1,0 +1,55 @@
+{
+  "spec_version": "agent-memory-eval/v1",
+  "fixture_version": "v1",
+  "fixture_manifest_sha256": "REPLACE_WITH_VERIFIED_FIXTURE_MANIFEST_SHA256",
+  "evaluator": {
+    "path": "benchmarks/agent-memory-eval/evaluate.py",
+    "source_sha256": "REPLACE_WITH_COMMITTED_EVALUATOR_SHA256",
+    "command": "python3 benchmarks/agent-memory-eval/evaluate.py --fixture-dir ... --rankings ... --output ..."
+  },
+  "profile_manifest": {
+    "profile_id": "candidate-profile-id",
+    "model_id": "publisher/model",
+    "immutable_model_revision": "FULL_IMMUTABLE_REVISION",
+    "verified_model_artifact_hashes": {
+      "model": "SHA256",
+      "tokenizer": "SHA256"
+    },
+    "runtime_backend": "backend-and-version",
+    "embedding_dimension": 0,
+    "normalization_method": "explicit-method",
+    "document_encoding_template": "versioned template",
+    "query_encoding_template": "versioned template",
+    "maximum_token_limit": 0,
+    "chunking_strategy": "versioned strategy",
+    "created_at": "2026-08-11T00:00:00Z",
+    "status": "evaluated"
+  },
+  "runtime": {
+    "vestige_revision": "FULL_GIT_COMMIT",
+    "os": "OS VERSION",
+    "architecture": "ARCH",
+    "backend_build": "BUILD IDENTIFIER",
+    "accelerator": "NONE OR DEVICE",
+    "driver_or_runtime": "VERSION OR NOT_APPLICABLE"
+  },
+  "device": {
+    "cpu": "MODEL",
+    "ram_bytes": 0,
+    "available_storage_bytes_before_run": 0
+  },
+  "reproducibility": {
+    "corpus_snapshot_id": "IMMUTABLE SNAPSHOT ID",
+    "random_seed": 0,
+    "chunking": "MUST MATCH PROFILE MANIFEST",
+    "hybrid_search": "PINNED SETTINGS",
+    "warmup_queries": 0,
+    "clock_source": "MONOTONIC CLOCK"
+  },
+  "artifacts": {
+    "raw_rankings": {"path": "artifacts/raw-rankings.json", "sha256": "SHA256"},
+    "operational_measurements": {"path": "artifacts/measurements.json", "sha256": "SHA256"},
+    "evaluation_report": {"path": "artifacts/report.json", "sha256": "SHA256"},
+    "migration_and_rollback_receipts": {"path": "artifacts/migration-rollback.json", "sha256": "SHA256"}
+  }
+}

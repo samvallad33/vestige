@@ -152,7 +152,12 @@ fn vs_main(
 	let waveAlpha = waveIntensity * 0.9 * params.brightness; // bright pulse
 
 	// Spectral hue rides the wavefront.
-	out.color = baseColor * edgeAlpha + waveColor * waveAlpha;
+	// FOSSIL LIGHT existence mask — an edge only exists while BOTH endpoints
+	// do. Live retention of exactly 0 is the "not yet born at the scrubbed
+	// instant" sentinel (fsrs.ts floors living memories at 0.001), so edges
+	// vanish with their memories when the chrono rewinds across a birthday.
+	let exists = step(0.0005, src.vel_retention.w) * step(0.0005, tgt.vel_retention.w);
+	out.color = (baseColor * edgeAlpha + waveColor * waveAlpha) * exists;
 
 	// Line width: thicker at the wavefront for visibility.
 	out.width = 1.0 + waveIntensity * 3.0;

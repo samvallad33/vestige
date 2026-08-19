@@ -102,6 +102,21 @@ fn reading_well(uv_ndc: vec2f, o: FieldOpts) -> f32 {
 	let outside = length(vec2f(dx, dy)) / max(o.well_soft, 0.001);
 	return mix(o.well_floor, 1.0, clamp(outside, 0.0, 1.0));
 }
+
+// Fossil Light keeps the generic organ field inside the graphite / amber /
+// jade family. A small amount of an organ's semantic hue survives, but old
+// blue-violet source values are grounded before they reach the HDR bloom pass.
+fn somatic_tone(hue: vec3f, persistence: f32) -> vec3f {
+	let amber = vec3f(0.62, 0.28, 0.10);
+	let jade = vec3f(0.28, 0.68, 0.48);
+	let physical = mix(amber, jade, smoothstep(0.14, 0.90, persistence));
+	let grounded = vec3f(
+		clamp(hue.r, 0.0, 1.0),
+		max(clamp(hue.g, 0.0, 1.0), clamp(hue.b, 0.0, 1.0) * 0.70),
+		min(clamp(hue.b, 0.0, 1.0), clamp(hue.g, 0.0, 1.0) + 0.08)
+	);
+	return mix(physical, grounded, 0.16);
+}
 `;
 
 // Pass 1 — additive splat of every cell into the low-res density field
@@ -146,13 +161,20 @@ fn fs_splat(in: VSOut) -> @location(0) vec4f {
 	let d = length(in.uv);
 	if (d > 1.0) { discard; }
 	let energy = clamp(in.hue_energy.w, 0.0, 1.0);
-	let metric2 = clamp(in.info.z, 0.0, 1.0);
+	let persistence = clamp(in.info.z, 0.0, 1.0);
 	let flags = in.info.y;
 	let scar = select(0.0, 1.0, (flags >= 2.0 && flags < 4.0) || flags >= 6.0);
-	let body = exp(-d * d * 2.7) * (0.32 + energy * 0.95);
-	// .r = raw density (fills the void), .g = oxygen (energy-weighted),
-	// .b = scar/seam accent for endangered cells
-	return vec4f(body, body * (0.4 + metric2 * 0.9), body * scar * 0.7, 1.0);
+	// Low-res density is intentionally soma-heavy. The branch traces are thin
+	// enough that the blur turns them into microscopy-like connective tissue,
+	// not another field of soft, identical circles.
+	let soma = exp(-d * d * mix(10.5, 5.8, persistence));
+	let theta = atan2(in.uv.y + 0.00001, in.uv.x);
+	let branch_wave = max(0.0, 0.5 + 0.5 * sin(theta * (5.0 + floor(in.info.x * 3.0)) + in.info.x * TAU));
+	let branch_band = smoothstep(0.14, 0.34, d) * (1.0 - smoothstep(0.66, 0.92, d));
+	let neurites = pow(branch_wave, 16.0) * branch_band * (0.025 + persistence * 0.070);
+	let body = soma * (0.22 + energy * 0.68) + neurites;
+	// .r = soma-led density, .g = retained oxygen, .b = suppressed/scar seam.
+	return vec4f(body, body * (0.32 + persistence * 0.82), body * scar * 0.50, 1.0);
 }
 `;
 
@@ -215,30 +237,26 @@ fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> VSOut {
 
 @fragment
 fn fs_membrane(in: VSOut) -> @location(0) vec4f {
-	let dims = vec2f(textureDimensions(field_tex, 0));
-	let px = 1.0 / max(dims, vec2f(1.0));
 	let f = textureSample(field_tex, field_sampler, in.uv);
-	let left = textureSampleLevel(field_tex, field_sampler, in.uv - vec2f(px.x, 0.0), 0.0);
-	let right = textureSampleLevel(field_tex, field_sampler, in.uv + vec2f(px.x, 0.0), 0.0);
-	let down = textureSampleLevel(field_tex, field_sampler, in.uv - vec2f(0.0, px.y), 0.0);
-	let up = textureSampleLevel(field_tex, field_sampler, in.uv + vec2f(0.0, px.y), 0.0);
 	let density = clamp(f.r, 0.0, 5.0);
 	let oxygen = clamp(f.g, 0.0, 5.0);
 	let scar = clamp(f.b, 0.0, 3.0);
-	let grad = length(vec2f((right.r + right.g) - (left.r + left.g), (up.r + up.g) - (down.r + down.g)));
-	let membrane = smoothstep(0.05, 0.62, density) * (1.0 - smoothstep(2.0, 4.0, density));
-	let edge = smoothstep(0.008, 0.11, grad) * membrane;
 	let breath = 0.72 + 0.55 * params.pulse;
 	// Cold blue-black substrate: the fullscreen plasma is desaturated + dimmed hard
 	// so it reads as a deep breathing floor, NOT a neon-green wash over text.
+	//
+	// The old membrane ALSO drew an edge term = smoothstep of the density
+	// gradient, which outlined every blurred cell blob → a dense mesh of ugly
+	// overlapping grey-green rings/circles across the whole frame ("what even is
+	// this"). That edge term is REMOVED. The base plasma cloud contribution is also
+	// cut hard so the field reads as clean glowing cells on near-void, not fog.
 	let blackwater = vec3f(0.006, 0.012, 0.015);
 	let amber = vec3f(0.70, 0.38, 0.14);
 	let oxygen_col = vec3f(0.42, 0.70, 0.40); // desaturated (was neon 0.66,1.0,0.37)
 	let scarlet = vec3f(0.85, 0.22, 0.18);
-	var color = blackwater * (0.30 + density * 0.10);
-	color = color + mix(amber, oxygen_col, clamp(oxygen / max(density, 0.001), 0.0, 1.0)) * density * 0.10 * breath;
-	color = color + vec3f(0.55, 0.62, 0.50) * edge * (0.28 + 0.18 * params.pulse);
-	color = color + scarlet * scar * (0.28 + 0.18 * params.pulse);
+	var color = blackwater * (0.30 + density * 0.06);
+	color = color + mix(amber, oxygen_col, clamp(oxygen / max(density, 0.001), 0.0, 1.0)) * density * 0.035 * breath;
+	color = color + scarlet * scar * (0.20 + 0.12 * params.pulse);
 	let vignette = smoothstep(1.02, 0.10, distance(in.uv, vec2f(0.5)));
 	// Reading well: the field emits LESS where text lives, so labels read. Plus the
 	// per-page intensity. Deeper vignette floor pushes frame edges toward void.
@@ -306,23 +324,34 @@ fn fs_cell(in: VSOut) -> @location(0) vec4f {
 	let selected = select(0.0, 1.0, flags == 1.0 || flags == 3.0 || flags == 5.0 || flags == 7.0);
 	let scar = select(0.0, 1.0, (flags >= 2.0 && flags < 4.0) || flags >= 6.0);
 	let phase = in.info.x;
-	// twinkle tamed to 0.85..1.05 (amp 0.10) — cells breathe, never strobe over text.
-	let twinkle = 0.85 + 0.10 * (0.5 + 0.5 * sin(params.time * 2.1 + phase * 26.0));
-	// tighter core (d*d*3.2), low amplitude, then a soft-knee ceiling so even a
-	// max-energy selected cell + bloom cannot spike into the text luminance range.
-	var body = exp(-d * d * 3.2) * (0.10 + energy * 0.42) * twinkle;
-	body = body / (1.0 + body * 0.9);
-	// cool the hue toward a cold substrate so raw green/amber can't run away and
-	// beat cyan/ivory text (green channel near-white after threshold-free bloom).
-	let cool = vec3f(0.16, 0.22, 0.30);
-	let tinted = mix(cool, hue, 0.55);
+	// Per-cell persistence is supplied by the real organ mapper (retention where
+	// available). projection_days is the signed field clock: only a forward
+	// projection is treated as age, so historical scrubs never fake decay.
+	let persistence = clamp(in.info.z, 0.0, 1.0);
+	let chrono_age = clamp(max(params.projection_days, 0.0) / 120.0, 0.0, 1.0);
+	let consolidation = clamp(energy * 0.58 + persistence * 0.42, 0.0, 1.0);
+	let depth_scatter = (1.0 - consolidation) * (0.24 + chrono_age * 0.76);
+	// Twinkle remains below 5%; it gives the soma metabolic motion without a
+	// neon pulse. Storage strength concentrates luminance at the centre.
+	let twinkle = 0.95 + 0.05 * (0.5 + 0.5 * sin(params.time * 2.1 + phase * 26.0));
+	let soma = exp(-d * d * mix(12.5, 6.5, consolidation)) * (0.08 + consolidation * 0.46) * twinkle;
+	let theta = atan2(in.uv.y + 0.00001, in.uv.x);
+	let branch_wave = max(0.0, 0.5 + 0.5 * sin(theta * (5.0 + floor(fract(in.extra.y * 0.13) * 3.0)) + phase * TAU));
+	let branch_band = smoothstep(0.15, 0.34, d) * (1.0 - smoothstep(0.68, 0.94, d));
+	let neurites = pow(branch_wave, 17.0) * branch_band * (0.018 + consolidation * 0.075)
+		* (1.0 - depth_scatter * 0.68);
+	let scatter = pow(max(1.0 - d, 0.0), 3.8) * (0.010 + depth_scatter * 0.075);
+	let tinted = somatic_tone(hue, persistence);
+	let soma_tone = mix(tinted, vec3f(0.90, 0.96, 0.84), consolidation * 0.40);
 	let rim = smoothstep(0.98, 0.72, d) * (1.0 - smoothstep(0.72, 0.40, d));
 	let scarlet = vec3f(0.85, 0.22, 0.18);
 	let ivory = vec3f(0.90, 0.96, 0.86);
-	var color = tinted * body;
-	// rim is a SELECTED-ONLY affordance now (no global white shimmer over text).
-	color = color + ivory * rim * selected * 0.5;
-	color = color + scarlet * scar * smoothstep(0.16, 0.0, abs(d - 0.74)) * 0.35;
+	var color = soma_tone * soma + tinted * neurites + tinted * scatter;
+	// The rim is a selected-only instrument mark, never a global decorative glow.
+	color = color + ivory * rim * selected * 0.32;
+	// Scarred/suppressed cells lose normal emission and leave a small oxide seam.
+	let scar_ring = smoothstep(0.70, 0.78, d) * (1.0 - smoothstep(0.80, 0.90, d));
+	color = mix(color, color * 0.10 + scarlet * scar_ring * 0.12, scar);
 	// selected/scar stay a touch brighter than the dimmed backdrop so meaning survives.
 	let keep = max(intensity, (selected + scar) * 0.7);
 	let well = reading_well(in.center_ndc, fopts);

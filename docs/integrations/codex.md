@@ -37,7 +37,8 @@ Start Codex and ask:
 
 > "What MCP tools do you have access to?"
 
-You should see Vestige's tools listed (`search`, `smart_ingest`, `memory`, and others).
+You should see Vestige's tools listed (`session_start`, `recall`,
+`smart_ingest`, `memory`, and others).
 
 ---
 
@@ -99,8 +100,9 @@ memory, add an `AGENTS.md` file at the workspace or repo root:
 
 ```markdown
 Before answering substantive prompts, consult Vestige using the current prompt
-plus project and user context. Use `session_context` for broad context, `search`
-for quick memory checks, and `deep_reference` for decisions, contradictions, or
+plus project and user context. Use `session_start` for broad context,
+`recall(mode="lookup")` for quick memory checks, and
+`recall(mode="reason"|"contradictions")` for decisions, contradictions, or
 accuracy-sensitive questions. Compose memories into actions; do not summarize
 retrievals.
 ```

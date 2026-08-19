@@ -22,8 +22,9 @@ root, or a higher workspace root, with a rule like:
 
 ```markdown
 Before answering substantive prompts, consult Vestige using the current prompt
-plus project and user context. Use `session_context` for broad context, `search`
-for quick memory checks, and `deep_reference` for decisions, contradictions, or
+plus project and user context. Use `session_start` for broad context,
+`recall(mode="lookup")` for quick memory checks, and
+`recall(mode="reason"|"contradictions")` for decisions, contradictions, or
 accuracy-sensitive questions. Compose memories into actions; do not summarize
 retrievals.
 ```
@@ -34,9 +35,10 @@ This is the Codex equivalent of the lightweight top-bread memory trigger.
 
 Use the smallest call that can change the answer:
 
-- `session_context`: start of a topic or project switch.
-- `search`: identity, preference, exact memory, or quick project context.
-- `deep_reference` / `cross_reference`: decision history, contradictions,
+- `session_start`: start of a topic or project switch.
+- `recall(mode="lookup")`: identity, preference, exact memory, or quick project
+  context.
+- `recall(mode="reason"|"contradictions")`: decision history, contradictions,
   timelines, or root-cause analysis.
 - `memory(get_batch)`: expand specific load-bearing memories.
 - `smart_ingest`: save durable corrections, decisions, or new preferences.
@@ -56,17 +58,19 @@ changed recommendation clear.
 
 ## 5. Know The Limit
 
-Claude Code's Cognitive Sandwich can use `UserPromptSubmit` and `Stop` hooks to
-wrap every response. Codex may expose different hook events depending on version.
-Do not assume Claude's hook chain is active in Codex just because Vestige MCP is
-registered.
+Claude Code's Cognitive Sandwich uses `UserPromptSubmit` and `Stop` hooks.
+Codex supports `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop`
+hooks too; its payload differs, so configure an explicit adapter rather than
+assuming Claude's scripts can read Codex events unchanged.
 
 For Codex, the reliable portable layer is:
 
 1. MCP server configured.
 2. `AGENTS.md` instruction trigger.
-3. Local Codex rule docs.
+3. The native hook adapter for session recall, prompt recall, tool receipts, and
+   final-answer checks.
 4. Explicit agent discipline: call Vestige before substantive answers.
 
-If a future Codex version supports a stable pre-prompt hook, wire that hook to
-inject a short Vestige reminder or context packet before the model answers.
+Keep the adapter fail-open and keep the hook source shared with Claude so both
+surfaces follow the same retrieval, composition, verification, and feedback
+workflow.

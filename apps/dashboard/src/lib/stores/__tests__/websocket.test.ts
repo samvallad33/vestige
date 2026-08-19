@@ -47,6 +47,7 @@ import {
 	uptimeSeconds,
 	heartbeat,
 	formatUptime,
+	defaultWebSocketUrl,
 } from '../websocket';
 import type { VestigeEvent } from '$types';
 
@@ -94,6 +95,16 @@ beforeEach(() => {
 	// below). For the derived-store defaults tests we call disconnect() to
 	// fully reset the store.
 	websocket.clearEvents();
+});
+
+describe('defaultWebSocketUrl', () => {
+	it('keeps development on the dashboard origin so Vite can proxy /ws', () => {
+		expect(defaultWebSocketUrl({ protocol: 'http:', host: '127.0.0.1:5199' })).toBe('ws://127.0.0.1:5199/ws');
+	});
+
+	it('uses WSS when the dashboard is served over HTTPS', () => {
+		expect(defaultWebSocketUrl({ protocol: 'https:', host: 'app.vestige.dev' })).toBe('wss://app.vestige.dev/ws');
+	});
 });
 
 // ---------------------------------------------------------------------------

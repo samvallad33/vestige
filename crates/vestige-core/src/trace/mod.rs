@@ -47,10 +47,13 @@ use serde::{Deserialize, Serialize};
 mod receipt;
 mod review;
 
-pub use receipt::{DecayRisk, Receipt, ReceiptMutation, SuppressedReceiptEntry};
+pub use receipt::{
+    BackfillCandidateEvidence, BackfillReceiptEvidence, DecayRisk, Receipt, ReceiptMutation,
+    SuppressedReceiptEntry,
+};
 pub use review::{
-    classify_write, MemoryPr, MemoryPrAction, MemoryPrKind, MemoryPrStatus, ReviewMode, RiskClass,
-    RiskSignal, WriteContext, HIGH_TRUST_FLOOR, LOW_CONFIDENCE_FLOOR,
+    HIGH_TRUST_FLOOR, LOW_CONFIDENCE_FLOOR, MemoryPr, MemoryPrAction, MemoryPrKind, MemoryPrStatus,
+    ReviewMode, RiskClass, RiskSignal, WriteContext, classify_write,
 };
 
 // ============================================================================

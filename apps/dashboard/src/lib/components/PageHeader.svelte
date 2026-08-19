@@ -20,7 +20,14 @@
 	let { icon, title, subtitle, accent = 'synapse', children }: Props = $props();
 </script>
 
-<header class="flex items-start justify-between gap-4 mb-6 enter">
+<!--
+	Layout: on a phone the title/subtitle and the right-side actions STACK
+	vertically (flex-col) so the subtitle keeps the full viewport width and can
+	never collapse into a one-word-per-line column when a wide action (dropdown /
+	button) sits beside a long subtitle. From `sm` up it's the original single
+	row with actions right-aligned. Desktop render is unchanged.
+-->
+<header class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4 mb-6 enter">
 	<div class="flex items-center gap-3.5 min-w-0">
 		<div
 			class="header-tile relative flex items-center justify-center w-11 h-11 rounded-xl shrink-0
@@ -36,7 +43,7 @@
 		</div>
 	</div>
 	{#if children}
-		<div class="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+		<div class="flex items-center gap-2 shrink-0 flex-wrap sm:justify-end">
 			{@render children()}
 		</div>
 	{/if}

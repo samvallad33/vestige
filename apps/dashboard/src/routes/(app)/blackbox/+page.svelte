@@ -14,6 +14,7 @@
 	//  rows. No fake demo events.
 	// ═══════════════════════════════════════════════════════════════════════
 	import { onMount } from 'svelte';
+	import { page } from '$app/stores';
 	import PageHeader from '$components/PageHeader.svelte';
 	import Icon from '$components/Icon.svelte';
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
@@ -93,7 +94,14 @@
 		try {
 			const res = await api.traces.list(100);
 			runs = res.runs;
-			if (!selectedRunId && runs.length) selectRun(runs[0].runId);
+			// A Replay handoff carries an exact run id. Honor it instead of relying on
+			// recency, so a live event cannot silently switch the proof being shown.
+			const requestedRunId = $page.url.searchParams.get('run');
+			if (!selectedRunId && requestedRunId && runs.some((run) => run.runId === requestedRunId)) {
+				selectRun(requestedRunId);
+			} else if (!selectedRunId && runs.length) {
+				selectRun(runs[0].runId);
+			}
 		} catch (e) {
 			error = String(e);
 		}

@@ -20,7 +20,9 @@ import type {
 	SanhedrinAppealReason,
 	SanhedrinAppealResponse,
 	SanhedrinLatestResponse,
-	SanhedrinTelemetryResponse
+	SanhedrinTelemetryResponse,
+	EmbeddingProfilesResponse,
+	EmbeddingProfileActionResponse
 } from '$types';
 
 const BASE = '/api';
@@ -164,10 +166,31 @@ export const api = {
 	// Returns a reasoning chain + evidence + contradictions + supersession +
 	// evolution + confidence. Emits DeepReferenceCompleted on the WebSocket so
 	// the 3D graph can camera-glide + pulse + arc.
-	deepReference: (query: string, depth = 20) =>
+	deepReference: (query: string, depth = 20, runId?: string) =>
 		fetcher<Record<string, unknown>>('/deep_reference', {
 			method: 'POST',
-			body: JSON.stringify({ query, depth })
+			body: JSON.stringify({ query, depth, ...(runId ? { runId } : {}) })
+		}),
+
+	// Retroactive Salience Backfill: preview by default; callers must explicitly
+	// opt into promotion. The returned receipt is the sole source for the
+	// Black Box and Observatory proof surfaces.
+	backfill: (params: {
+		failureId?: string;
+		manual?: boolean;
+		lookbackDays?: number;
+		promote?: boolean;
+		runId?: string;
+	}) =>
+		fetcher<BackfillResponse>('/backfill', {
+			method: 'POST',
+			body: JSON.stringify({
+				...(params.failureId ? { failure_id: params.failureId } : {}),
+				manual: params.manual ?? false,
+				lookback_days: params.lookbackDays ?? 30,
+				promote: params.promote ?? false,
+				...(params.runId ? { runId: params.runId } : {})
+			})
 		}),
 
 	sanhedrin: {
@@ -177,6 +200,33 @@ export const api = {
 			fetcher<SanhedrinAppealResponse>('/sanhedrin/appeal', {
 				method: 'POST',
 				body: JSON.stringify({ reason, note, claimId, receiptId })
+			})
+	},
+
+	// Embedding profiles: every operation is intentional and profile-scoped.
+	// The service refuses implicit model downloads, activation, or re-embedding;
+	// this UI mirrors that contract by exposing distinct staged endpoints.
+	embeddings: {
+		profiles: () => fetcher<EmbeddingProfilesResponse>('/embeddings/profiles'),
+		install: (profileId: string) =>
+			fetcher<EmbeddingProfileActionResponse>('/embeddings/install', {
+				method: 'POST', body: JSON.stringify({ profile_id: profileId, confirm: true })
+			}),
+		evaluate: (profileId: string) =>
+			fetcher<EmbeddingProfileActionResponse>('/embeddings/evaluate', {
+				method: 'POST', body: JSON.stringify({ profile_id: profileId, confirm: true })
+			}),
+		migrate: (profileId: string) =>
+			fetcher<EmbeddingProfileActionResponse>('/embeddings/migrate', {
+				method: 'POST', body: JSON.stringify({ profile_id: profileId, confirm: true })
+			}),
+		activate: (profileId: string) =>
+			fetcher<EmbeddingProfileActionResponse>('/embeddings/activate', {
+				method: 'POST', body: JSON.stringify({ profile_id: profileId, confirm: true })
+			}),
+		rollback: (profileId: string) =>
+			fetcher<EmbeddingProfileActionResponse>('/embeddings/rollback', {
+				method: 'POST', body: JSON.stringify({ profile_id: profileId, confirm: true })
 			})
 	},
 
@@ -263,6 +313,41 @@ export type Receipt = {
 	trust_floor: number;
 	decay_risk: 'low' | 'medium' | 'high';
 	mutations: { id: string; kind: string; note?: string }[];
+	backfill?: BackfillEvidence;
+};
+
+export type BackfillCandidate = {
+	memory_id: string;
+	content_preview: string;
+	shared_entities: string[];
+	age_days_before_failure: number;
+	similarity_rank: number | null;
+	backfill_score: number;
+	promoted: boolean;
+};
+
+export type BackfillEvidence = {
+	failure_id: string;
+	failure_preview: string;
+	scanned: number;
+	lookback_days: number;
+	baseline: string;
+	/** Ordered, persisted evidence route from the earlier candidate to the
+	 * observed failure. Observatory must render this verbatim or not render a
+	 * route at all; it may never fill gaps with graph topology. */
+	path_ids?: string[];
+	candidates: BackfillCandidate[];
+};
+
+export type BackfillResponse = {
+	triggered: boolean;
+	headline?: string;
+	failure?: { id: string; content_preview: string };
+	causes?: BackfillCandidate[];
+	note?: string;
+	runId: string;
+	receiptId: string | null;
+	receipt: Receipt | null;
 };
 
 export type ReceiptListResponse = { total: number; receipts: Receipt[] };

@@ -47,6 +47,8 @@
 		onpick?: (pick: RoutePick) => void;
 		/** Existing ObservatoryEngine needs an existing DemoMode; route id stays pass-local. */
 		demo?: DemoMode;
+		/** Per-organ WebGPU pixel-density budget. */
+		maxDpr?: number;
 		loading?: boolean;
 		error?: string | null;
 		emptyLabel?: string;
@@ -60,6 +62,7 @@
 		embedded = false,
 		onpick,
 		demo = 'recall-path',
+		maxDpr = 2,
 		loading = false,
 		error = null,
 		emptyLabel = 'NO ROUTE DATA IN FIELD'
@@ -78,6 +81,7 @@
 	let ready = $state(false);
 	let cursorSmoothed: { x: number; y: number } | null = null;
 	let focusedChromeRun: string | null = null;
+	let lastChromeSignature: string | null = null;
 
 	const CYAN = [...rgb01(CAUSAL.forward), 1] satisfies [number, number, number, number];
 	const DIM_GREEN = [...rgb01(RETENTION.recall), 0.58] satisfies [number, number, number, number];
@@ -102,6 +106,7 @@
 		updateChromeText();
 	}
 
+
 	$effect(() => {
 		engine?.setPaused(paused);
 		updateChromeText();
@@ -116,8 +121,15 @@
 	}
 
 	function handleFrame(frame: number, fps: number) {
-		frameCount = frame;
-		fpsEstimate = fps;
+		// The Witness chamber has no live telemetry. Keeping these as reactive state
+		// on every rAF made Svelte invalidate the whole route 60 times per second
+		// while the shader was otherwise settled. Development telemetry on other
+		// organs stays live, but is sampled below instead of forcing a full text
+		// buffer rebuild every frame.
+		if (import.meta.env.DEV && organ !== 'witness') {
+			frameCount = frame;
+			fpsEstimate = fps;
+		}
 		navPass?.setActivePath(currentDashboardPath());
 		updateChromeText(frame, fps);
 	}
@@ -133,6 +145,7 @@
 
 		navPass = createNavLayerPass(e, { activePath: currentDashboardPath() });
 		chromeText = new TextLayerPass(e);
+		lastChromeSignature = null;
 		e.addPass(navPass);
 		e.addPass(chromeText);
 		await Promise.all([navPass.init(), chromeText.init()]);
@@ -190,7 +203,8 @@
 
 	function makeChromeItems(frame = frameCount, fps = fpsEstimate): TextLayerItem[] {
 		const portrait = isPortrait();
-		// Desktop: floating PAUSE + dev telemetry. Phone: neither (see isPortrait).
+		// Desktop: floating PAUSE (always) + FPS telemetry (dev builds only — it's
+		// debug noise a launch user shouldn't see). Phone: neither (see isPortrait).
 		const items: TextLayerItem[] = portrait
 			? []
 			: [
@@ -204,16 +218,20 @@
 						color: paused ? AMBER : CYAN,
 						revealSpan: 1
 					},
-					{
-						id: 'route-chrome:telemetry',
-						kind: 'route-telemetry',
-						text: `${organ.toUpperCase()} - ${frame}F - ${fps}FPS`,
-						x: 0.44,
-						y: 0.88,
-						size: 0.022,
-						color: DIM_GREEN,
-						revealSpan: 1
-					}
+					...(import.meta.env.DEV && organ !== 'witness'
+						? [
+								{
+									id: 'route-chrome:telemetry',
+									kind: 'route-telemetry',
+									text: `${organ.toUpperCase()} - ${frame}F - ${fps}FPS`,
+									x: 0.44,
+									y: 0.88,
+									size: 0.022,
+									color: DIM_GREEN,
+									revealSpan: 1
+								} satisfies TextLayerItem
+							]
+						: [])
 				];
 
 		if (loading) {
@@ -272,7 +290,26 @@
 	}
 
 	function updateChromeText(frame = frameCount, fps = fpsEstimate) {
-		chromeText?.setText(makeChromeItems(frame, fps));
+		if (!chromeText) return;
+		const showsTelemetry = import.meta.env.DEV && organ !== 'witness';
+		// Telemetry is diagnostic chrome, not simulation input. Sample it at 10 Hz
+		// so the MSDF glyph layout/storage upload is never on the critical frame
+		// path. Witness and production routes now upload their static chrome only
+		// when an actual visible state changes (pause, load, error, empty, aspect).
+		const sampledFrame = showsTelemetry ? Math.floor(frame / 6) * 6 : 0;
+		const sampledFps = showsTelemetry ? Math.round(fps / 5) * 5 : 0;
+		const signature = [
+			organ,
+			paused ? 'paused' : 'running',
+			loading ? 'loading' : 'ready',
+			error ?? '',
+			currentScene.alive ? 'alive' : 'empty',
+			isPortrait() ? 'portrait' : 'landscape',
+			showsTelemetry ? `${sampledFrame}:${sampledFps}` : ''
+		].join('|');
+		if (signature === lastChromeSignature) return;
+		lastChromeSignature = signature;
+		chromeText.setText(makeChromeItems(sampledFrame, sampledFps));
 	}
 
 	function pointerToNdc(e: PointerEvent | MouseEvent): { x: number; y: number } | null {
@@ -361,19 +398,63 @@
 			routePasses = [];
 			chromeText = null;
 			navPass = null;
+			lastChromeSignature = null;
 		};
 	});
 
 	onMount(() => initReducedMotion());
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+<!-- The GPU picker is a custom pointer surface. Pause/resume is separately
+     exposed as a native button below for keyboard and assistive technology. -->
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 <div
 	bind:this={canvasLayerEl}
 	class="{embedded ? 'absolute' : 'fixed'} inset-0 overflow-hidden"
+	role="application"
+	aria-label={`Interactive 3D ${organ} field`}
 	onclick={handleFieldClick}
 	onpointermove={handlePointerMove}
 	onpointerleave={handlePointerLeave}
 >
-	<ObservatoryCanvas {demo} {seed} onframe={handleFrame} onready={handleReady} />
+	<ObservatoryCanvas {demo} {seed} {maxDpr} onframe={handleFrame} onready={handleReady} />
+	<button
+		type="button"
+		class="route-motion-control"
+		onclick={togglePause}
+		aria-pressed={paused}
+		aria-label={paused ? 'Resume 3D field motion' : 'Pause 3D field motion'}
+	>
+		{paused ? 'RESUME MOTION' : 'PAUSE MOTION'}
+	</button>
 </div>
+
+<style>
+	.route-motion-control {
+		position: fixed;
+		right: 1rem;
+		bottom: 1rem;
+		z-index: 2;
+		border: 1px solid rgba(34, 199, 222, 0.32);
+		border-radius: 0.7rem;
+		background: rgba(5, 6, 10, 0.84);
+		color: rgba(143, 232, 242, 0.95);
+		padding: 0.45rem 0.65rem;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+		font-size: 0.65rem;
+		letter-spacing: 0.1em;
+		cursor: pointer;
+	}
+
+	.route-motion-control:focus-visible {
+		outline: 2px solid #8fe8f2;
+		outline-offset: 3px;
+	}
+
+	@media (max-width: 640px) {
+		.route-motion-control {
+			right: 0.75rem;
+			bottom: 4.6rem;
+		}
+	}
+</style>

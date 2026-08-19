@@ -14,6 +14,12 @@
 	 */
 	import { onMount } from 'svelte';
 	import { api } from '$stores/api';
+	import {
+		ReceiptReplay,
+		receiptsToReplayItems,
+		fieldNodesToReplayItems,
+		mostRecalledMemories
+	} from '$lib/observatory/receipt-replay';
 	import { eventFeed } from '$stores/websocket';
 	import type { GraphResponse } from '$types';
 	import TelemetryStrip from '$lib/observatory/overlays/TelemetryStrip.svelte';
@@ -25,13 +31,19 @@
 	import { NodeRenderer } from '$lib/observatory/node-renderer';
 	import { BirthRenderer } from '$lib/observatory/birth-renderer';
 	import { RescueRenderer } from '$lib/observatory/rescue-renderer';
-	import { buildRescuePlan, type RescuePlan } from '$lib/observatory/rescue-plan';
+	import {
+		buildRescuePlan,
+		type ReceiptBackfillEvidence,
+		type RescuePlan
+	} from '$lib/observatory/rescue-plan';
 	import { ForgettingRenderer } from '$lib/observatory/forgetting-renderer';
 	import { buildForgettingPlan } from '$lib/observatory/forgetting-plan';
 	import { FirewallRenderer } from '$lib/observatory/firewall-renderer';
 	import { buildFirewallPlan, type FirewallPlan } from '$lib/observatory/firewall-plan';
 	import type { PathStepMeta } from '$lib/observatory/path-builder';
 	import { LiveBridge } from '$lib/observatory/live-bridge';
+	import { ChronoShuttlePass } from '$lib/observatory/chrono/shuttle-pass';
+	import { FossilLightTransportPass } from '$lib/observatory/chrono/radiance-cascade-pass';
 
 	interface Props {
 		demo: DemoMode;
@@ -67,6 +79,14 @@
 		/** Route-local all-WebGPU instrument overlays can attach their own passes. */
 		onready?: (engine: ObservatoryEngine) => void;
 		/**
+		 * When a Memory Receipt opens the Observatory, constrain the field to the
+		 * receipt's real retrieved/suppressed ids. No topology-derived stand-ins.
+		 */
+		focusIds?: string[];
+		/** Exact Backfill receipt data. When present, salience-rescue renders only
+		 * those evidence ids; it never falls back to graph/layout inference. */
+		backfillEvidence?: ReceiptBackfillEvidence;
+		/**
 		 * v2.3 living field — subscribe the field to the REAL backend event
 		 * stream ($eventFeed) so it renders live FSRS decay, the contradiction
 		 * firewall, the dream storm, and the causal recall wavefront driven by
@@ -89,16 +109,129 @@
 		chrome = 'full',
 		onpick,
 		onready,
+		focusIds = [],
+		backfillEvidence,
 		live = false
 	}: Props = $props();
 
-	// v2.3 living field — forward-projection scrubber (Phase 1 honesty control).
-	// Real FSRS drift over a viewing session is imperceptibly slow, so this adds
-	// N days to every node's real elapsed and recomputes decay on the SAME true
-	// curve — legible, not faked. 0 = "now". Bound by the on-page control below.
-	let projectionDays = $state(0);
+	// FOSSIL LIGHT — the memory time axis. ONE signed control in days relative
+	// to NOW: negative rewinds the whole field into the brain's real past
+	// (retention re-evaluated at that instant on the true closed form,
+	// memories unborn before their createdAt pop out of existence), positive
+	// is the original forward forgetting-horizon projection. 0 = live now.
+	let timeAxisDays = $state(0);
+	let chronoScrubbing = $state(false);
+	// Lower bound = the oldest memory's birthday (set after the graph loads).
+	let chronoMinDays = $state(0);
+	// ?t=<ISO8601> deep link — applied once the graph loads so it clamps to
+	// the real oldest-memory bound. Composes with ?frame=N capture.
+	let pendingChronoIso: string | null = null;
+	const projectionDays = $derived(Math.max(0, timeAxisDays));
+	const chronoOffsetDays = $derived(Math.min(0, timeAxisDays));
+	const chronoLabel = $derived(
+		timeAxisDays === 0
+			? 'now'
+			: timeAxisDays > 0
+				? `+${Math.round(timeAxisDays)}d`
+				: new Date(Date.now() + timeAxisDays * 86_400_000).toLocaleDateString(undefined, {
+						month: 'short',
+						day: 'numeric'
+					})
+	);
 	let liveBridge: LiveBridge | null = null;
+	let shuttlePass: ChronoShuttlePass | null = null;
+	let radiancePass: FossilLightTransportPass | null = null;
+	let shuttleReady = $state(false);
 	let liveDecayReady = $state(false);
+
+	// FOSSIL LIGHT — grab the GPU rail itself. The phosphor rail band (bottom
+	// of the canvas, mirroring shuttle-pass RAIL_* clip constants) is a direct
+	// pointer target: dragging maps clientX across the rail span onto the SAME
+	// [oldest, +365d] domain the shuttle renders; release keeps momentum with
+	// friction; a glide that comes home within a day of NOW snaps to it.
+	// Time has mass, and NOW is magnetic.
+	const RAIL_SPAN = 0.835; // shuttle-pass RAIL_LEFT/RIGHT (NDC)
+	const RAIL_Y_FRAC = (1 + 0.685) / 2; // shuttle-pass RAIL_Y → screen-y fraction
+	let railDragging = false;
+	let railGlideRaf = 0;
+	let railVel = 0; // days per 60Hz frame
+	let railLastT = 0;
+	let suppressNextClick = false;
+
+	function railXToDays(clientX: number): number {
+		const rect = canvasLayerEl?.getBoundingClientRect();
+		if (!rect || rect.width === 0) return timeAxisDays;
+		const ndc = ((clientX - rect.left) / rect.width) * 2 - 1;
+		const t = Math.max(0, Math.min(1, (ndc / RAIL_SPAN) * 0.5 + 0.5));
+		return chronoMinDays + t * (365 - chronoMinDays);
+	}
+	function inRailBand(e: PointerEvent): boolean {
+		const rect = canvasLayerEl?.getBoundingClientRect();
+		if (!rect || rect.height === 0) return false;
+		const fy = (e.clientY - rect.top) / rect.height;
+		return fy > RAIL_Y_FRAC - 0.075 && fy < RAIL_Y_FRAC + 0.075;
+	}
+	function stopGlide() {
+		if (railGlideRaf) cancelAnimationFrame(railGlideRaf);
+		railGlideRaf = 0;
+	}
+	function railPointerDown(e: PointerEvent) {
+		if (!shuttleReady || capture || !inRailBand(e)) return;
+		stopGlide();
+		railDragging = true;
+		chronoScrubbing = true;
+		railVel = 0;
+		railLastT = performance.now();
+		timeAxisDays = railXToDays(e.clientX);
+		(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+		e.preventDefault();
+	}
+	function railPointerMove(e: PointerEvent) {
+		if (!railDragging) return;
+		const now = performance.now();
+		const days = railXToDays(e.clientX);
+		const dt = Math.max(1, now - railLastT);
+		// days-per-16ms fling velocity, low-pass filtered so one jittery
+		// pointer sample cannot launch the timeline into orbit.
+		railVel = railVel * 0.6 + ((days - timeAxisDays) / dt) * 16 * 0.4;
+		railLastT = now;
+		timeAxisDays = days;
+	}
+	function railPointerUp(e: PointerEvent) {
+		if (!railDragging) return;
+		railDragging = false;
+		suppressNextClick = true;
+		(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+		const glide = () => {
+			railGlideRaf = 0;
+			railVel *= 0.94;
+			let next = timeAxisDays + railVel;
+			if (next <= chronoMinDays) {
+				next = chronoMinDays;
+				railVel = 0;
+			}
+			if (next >= 365) {
+				next = 365;
+				railVel = 0;
+			}
+			// NOW-snap: a glide heading home within a day of 0 locks to it.
+			const towardNow = (timeAxisDays < 0 && railVel > 0) || (timeAxisDays > 0 && railVel < 0);
+			if (Math.abs(next) < 1 && towardNow) {
+				next = 0;
+				railVel = 0;
+			}
+			timeAxisDays = next;
+			if (Math.abs(railVel) > 0.02) railGlideRaf = requestAnimationFrame(glide);
+			else chronoScrubbing = false;
+		};
+		if (Math.abs(railVel) > 0.05) railGlideRaf = requestAnimationFrame(glide);
+		else chronoScrubbing = false;
+	}
+	function railPointerCancel() {
+		railDragging = false;
+		chronoScrubbing = false;
+		stopGlide();
+	}
 
 	// Motion control (WCAG): the field's ambient orbit/sim drift runs >5s, so it
 	// needs a persistent pause control AND must honor prefers-reduced-motion.
@@ -134,6 +267,12 @@
 	// GPU picking — screen px → NDC → NodeRenderer.pickAt (one readback/click).
 	let canvasLayerEl: HTMLDivElement | null = $state(null);
 	async function handleFieldClick(e: MouseEvent) {
+		// A rail drag ends in a click on this same layer — never turn the tail
+		// of a time-scrub into an accidental GPU pick.
+		if (suppressNextClick) {
+			suppressNextClick = false;
+			return;
+		}
 		if (!onpick || !renderer || !canvasLayerEl) return;
 		const rect = canvasLayerEl.getBoundingClientRect();
 		if (rect.width === 0 || rect.height === 0) return;
@@ -152,6 +291,24 @@
 		firewall: 'FIREWALL'
 	};
 
+	/**
+	 * Bounded memory-light source selection. Every index names a real graph
+	 * memory; the GPU subsequently owns its position, camera projection, live
+	 * FSRS retention, birth mask, and suppression flag. Ranking is a one-time
+	 * cost guard, never a substitute for the full 3D graph's data.
+	 */
+	function fossilLightSourceIndices(): Uint32Array {
+		if (!renderer?.graph) return new Uint32Array();
+		return new Uint32Array(
+			renderer.graph.nodes
+				.map((node) => ({ index: node.index, id: node.id, retention: node.retention }))
+				.sort((a, b) => b.retention - a.retention || a.id.localeCompare(b.id))
+				.slice(0, 64)
+				.map((node) => node.index)
+				.sort((a, b) => a - b)
+		);
+	}
+
 	// Intentional initial-value capture: `capture` is fixed for the lifetime of
 	// a mount ({#key} remounts on change) and the H key mutates showHud freely
 	// afterward — a $derived would fight the toggle.
@@ -159,9 +316,24 @@
 	let showHud = $state(!capture);
 
 	function onKeydown(e: KeyboardEvent) {
+		// Never steal shortcuts from a real DOM input, text area, or editable
+		// inspector. The field is keyboard-operable, but text entry always wins.
+		const target = e.target as HTMLElement | null;
+		if (
+			target?.isContentEditable ||
+			target?.tagName === 'INPUT' ||
+			target?.tagName === 'TEXTAREA' ||
+			target?.tagName === 'SELECT'
+		)
+			return;
 		if (e.key === 'h' || e.key === 'H') showHud = !showHud;
 		if (e.key === 'Escape' && onexit) onexit();
+		if ((e.key === ' ' || e.key.toLowerCase() === 'p') && !capture) {
+			e.preventDefault();
+			togglePause();
+		}
 	}
+
 
 	let graphData: GraphResponse | null = $state(null);
 	let loading = $state(true);
@@ -195,25 +367,131 @@
 			// (~12 nodes), while 'connected' surfaces the populous, edge-rich field
 			// (~150 real memories, thousands of edges) so the Observatory reads as
 			// a living brain doing real work, not a sparse placeholder.
-			const data = await api.graph({
-				max_nodes: 200,
-				depth: 3,
-				sort: 'connected'
-			});
-			graphData = data;
-			nodeCount = data.nodeCount;
-			edgeCount = data.edgeCount;
-			centerId = data.center_id;
+			const focus = new Set(focusIds.filter(Boolean));
+			const scoped = focus.size
+				? await (async () => {
+						// Receipt scope is an exact-ID contract. Resolve each requested
+						// memory as the graph center before filtering, rather than filtering
+						// an arbitrary connected cluster that may not contain it.
+						const graphs = await Promise.all(
+							[...focus].map((center_id) => api.graph({ center_id, max_nodes: 200, depth: 3 }))
+						);
+						const nodes = [
+							...new Map(graphs.flatMap((graph) => graph.nodes).map((node) => [node.id, node])).values()
+						].filter((node) => focus.has(node.id));
+						const ids = new Set(nodes.map((node) => node.id));
+						const edges = [
+							...new Map(
+								graphs.flatMap((graph) => graph.edges).map((edge) => [`${edge.source}:${edge.target}`, edge])
+							).values()
+						].filter((edge) => ids.has(edge.source) && ids.has(edge.target));
+						return {
+							...graphs[0],
+							nodes,
+							edges,
+							center_id: nodes[0]?.id ?? graphs[0]?.center_id ?? '',
+							nodeCount: nodes.length,
+							edgeCount: edges.length
+						} satisfies GraphResponse;
+					})()
+				: await api.graph({ max_nodes: 200, depth: 3, sort: 'connected' });
+			graphData = scoped;
+			nodeCount = scoped.nodeCount;
+			edgeCount = scoped.edgeCount;
+			centerId = scoped.center_id;
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load graph data';
+			// Empty brain: get_graph 404s when the user has zero memories (a real
+			// launch-day first-run cohort). Render the friendly "NO MEMORIES IN
+			// FIELD" empty state (gated on graphData.nodeCount === 0), not a raw
+			// "API 404: Not Found" error box.
+			const msg = e instanceof Error ? e.message : 'Failed to load graph data';
+			if (/\b404\b/.test(msg)) {
+				graphData = {
+					nodes: [],
+					edges: [],
+					nodeCount: 0,
+					edgeCount: 0,
+					center_id: ''
+				} as unknown as GraphResponse;
+				nodeCount = 0;
+				edgeCount = 0;
+				centerId = '';
+			} else {
+				error = msg;
+			}
 		} finally {
 			loading = false;
 		}
 	}
 
+	// COLD-OPEN AHA — the self-driving replay of the user's REAL recall history.
+	// Built after the live bridge exists (needs field membership); ticked every
+	// frame so past recalls fire through the same GCaMP wavefront as live ones.
+	let receiptReplay: ReceiptReplay | null = null;
+	// "This is uniquely YOUR data" proof surface: the user's most-recalled
+	// memories (by real receipt frequency) — the nodes that saturate hottest.
+	let topRecalled = $state<{ id: string; recalls: number; label: string }[]>([]);
+	// Which real signal the proof panel is showing — receipt recall counts, or
+	// (when receipts don't intersect the field) FSRS retention. Both real; the
+	// label must say which so the number is never misread.
+	let topRecalledSource = $state<'recalls' | 'retention'>('recalls');
+
 	function handleFrame(frame: number, fps: number) {
 		frameCount = frame;
 		fpsEstimate = fps;
+		// Drive the ambient receipt replay. Paused while the user actively
+		// scrubs time (chrono) — the past shouldn't self-recall under the hand.
+		if (receiptReplay && !chronoScrubbing) receiptReplay.tick(frame);
+	}
+
+	// Load the user's real recall receipts and wire the cold-open replay + the
+	// most-recalled proof readout. Both are pure functions of THIS user's data.
+	async function initReceiptReplay() {
+		if (!liveBridge || !renderer?.graph) return;
+		const graph = renderer.graph;
+		const inField = (id: string) => graph.indexById.has(id);
+		const labelFor = (id: string) =>
+			graph.nodes[graph.indexById.get(id) ?? -1]?.label ?? id.slice(0, 8);
+
+		let receipts: Awaited<ReturnType<typeof api.receipts.list>>['receipts'] = [];
+		try {
+			receipts = (await api.receipts.list(60))?.receipts ?? [];
+		} catch {
+			// Offline backend → field stays live-driven; fall through to field-node
+			// replay so the cold-open is still alive.
+		}
+
+		// Prefer the user's REAL past recalls; fall back to recalling the field's
+		// own real memories when receipts don't intersect the loaded field.
+		let items = receiptsToReplayItems(receipts, inField);
+		if (items.length === 0) {
+			items = fieldNodesToReplayItems(graph.nodes, 12);
+		}
+		if (items.length > 0) {
+			receiptReplay = new ReceiptReplay(liveBridge, { intervalFrames: 240 });
+			receiptReplay.setItems(items);
+		}
+
+		// "Most recalled" proof: from real receipts when they overlap the field,
+		// else the field's own most-retained memories (real per-user signal).
+		const fromReceipts = mostRecalledMemories(receipts, inField, 3);
+		if (fromReceipts.length > 0) {
+			topRecalledSource = 'recalls';
+			topRecalled = fromReceipts.map((m) => ({ ...m, label: labelFor(m.id) }));
+		} else {
+			topRecalledSource = 'retention';
+			topRecalled = [...graph.nodes]
+				// Skip empty-content memories so the marquee "your data" panel never
+				// shows a blank name; fall back to the id stub if a label is empty.
+				.filter((n) => (n.label ?? '').trim().length > 0)
+				.sort((a, b) => b.retention - a.retention)
+				.slice(0, 3)
+				.map((n) => ({
+					id: n.id,
+					recalls: Math.round(n.retention * 100),
+					label: n.label || n.id.slice(0, 8)
+				}));
+		}
 	}
 
 	function handleReady(e: ObservatoryEngine) {
@@ -274,7 +552,7 @@
 				// the true cause. All choreography is a pure CPU plan; the
 				// RescueRenderer overwrites the demo lanes AFTER recall_sim
 				// (construction order = pass order — load-bearing for the seam).
-				const plan = buildRescuePlan(graphData, renderer.graph!, seed);
+				const plan = buildRescuePlan(graphData, renderer.graph!, seed, backfillEvidence);
 				rescuePlan = plan;
 				if (plan.viable) {
 					rescueRenderer = new RescueRenderer({ engine, nodeRenderer: renderer, plan });
@@ -335,6 +613,7 @@
 					response: graphData,
 					seed,
 					projectionDays: () => projectionDays,
+					chronoOffsetDays: () => chronoOffsetDays,
 					onFirewall: (info) => {
 						liveFirewallLabel = info.intruderLabel;
 						liveFirewallAt = Date.now();
@@ -342,6 +621,52 @@
 				});
 				liveDecayReady = liveBridge.liveDecayAvailable;
 				engine.setPreFrameHook((simFrame) => liveBridge?.drain(simFrame));
+
+				// COLD-OPEN AHA — replay the user's REAL past recalls so the field
+				// is alive the instant the dashboard loads. Never during capture
+				// (?frame=N must freeze to identical pixels — a self-firing recall
+				// would break reproducibility).
+				if (!capture) void initReceiptReplay();
+
+				// FOSSIL LIGHT — time-axis lower bound = the oldest memory's real
+				// birthday (padded a day so its unbirth is reachable), then apply
+				// any ?t= deep link now that the bound is known.
+				let oldest = Number.POSITIVE_INFINITY;
+				for (const n of renderer.graph.nodes) {
+					if (n.createdAt) {
+						const t = Date.parse(n.createdAt);
+						if (Number.isFinite(t) && t < oldest) oldest = t;
+					}
+				}
+				if (Number.isFinite(oldest)) {
+					chronoMinDays = Math.floor((oldest - Date.now()) / 86_400_000) - 1;
+				}
+				if (pendingChronoIso) {
+					const t = Date.parse(pendingChronoIso);
+					if (Number.isFinite(t)) {
+						timeAxisDays = Math.min(365, Math.max(chronoMinDays, (t - Date.now()) / 86_400_000));
+					}
+					pendingChronoIso = null;
+				}
+				// FOSSIL LIGHT W1 — bounded memory light transport. Sources are a
+				// small deterministic subset of real graph memories, but projection,
+				// Chrono/FSRS state and suppression are read from NodeRenderer's live
+				// GPU buffers after simulation, so the light stays locked to the
+				// moving 3D field without a CPU approximation or readback.
+				// Capture mode (?frame=N / ?capture) must stay pixel-reproducible:
+				// the shuttle's scrub position and the light field's idle cadence
+				// both derive from wall-clock NOW, so neither instrument mounts
+				// during a capture — the field itself stays byte-identical.
+				if (!capture) {
+					radiancePass = new FossilLightTransportPass(engine, renderer, fossilLightSourceIndices());
+					engine.addPass(radiancePass);
+					// The GPU shuttle is an instrument, not a second time model. It reads
+					// the same graph timestamps the closed-form decay bridge uses, then
+					// receives only the small signed control uniform while the user scrubs.
+					shuttlePass = new ChronoShuttlePass(engine, renderer.graph.nodes);
+					engine.addPass(shuttlePass);
+					shuttleReady = true;
+				}
 				// Dev/verification hook — read live state from the console. Guarded
 				// so it never runs in SSR and is harmless in production.
 				if (typeof window !== 'undefined') {
@@ -364,11 +689,13 @@
 		if (liveBridge) liveBridge.ingest(events);
 	});
 
-	// The forward-projection scrubber recomputes decay immediately on change so
-	// dragging the slider is responsive (the per-frame drain throttles decay).
+	// The time axis recomputes decay immediately on change so dragging the
+	// control is responsive (the per-frame drain throttles ambient decay).
 	$effect(() => {
-		void projectionDays;
+		void timeAxisDays;
 		liveBridge?.refreshDecay();
+		shuttlePass?.setTimeline(timeAxisDays, chronoScrubbing);
+		radiancePass?.setScrubbing(chronoScrubbing);
 	});
 
 	// Auto-clear the live firewall verdict ~7s after it fires (matches the
@@ -383,8 +710,22 @@
 	});
 
 	onMount(() => {
+		// FOSSIL LIGHT deep link — ?t=<ISO8601> opens the field already
+		// scrubbed to that instant (applied post-load, once bounds are known).
+		pendingChronoIso = new URLSearchParams(window.location.search).get('t');
 		loadGraph();
-		return initReducedMotion();
+		const cleanupMotion = initReducedMotion();
+		return () => {
+			stopGlide();
+			cleanupMotion?.();
+			// Clear the dev/verification global so a demo/receipt remount doesn't
+			// retain a disposed LiveBridge → engine → renderer → 200-node graph
+			// forever (one orphaned brain per switch otherwise).
+			if (typeof window !== 'undefined') {
+				const w = window as unknown as { __vestigeLiveBridge?: unknown };
+				if (w.__vestigeLiveBridge === liveBridge) delete w.__vestigeLiveBridge;
+			}
+		};
 	});
 </script>
 
@@ -397,12 +738,20 @@
 >
 	<!-- Canvas layer (z-index 0) — the living memory field. When the host
 	     passes onpick, clicks GPU-pick the memory under the cursor. -->
-	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+	<!-- The GPU picker is a custom pointer surface. Pause/resume is separately
+	     exposed as a native button below for keyboard and assistive technology. -->
+	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 	<div
 		bind:this={canvasLayerEl}
-		class="absolute inset-0 z-0"
+		class="absolute inset-0 z-0 touch-none"
 		class:cursor-crosshair={!!onpick && !capture}
+		role="application"
+		aria-label="Interactive 3D memory field"
 		onclick={handleFieldClick}
+		onpointerdown={railPointerDown}
+		onpointermove={railPointerMove}
+		onpointerup={railPointerUp}
+		onpointercancel={railPointerCancel}
 	>
 		<ObservatoryCanvas
 			{demo}
@@ -418,6 +767,32 @@
 	     chrome='none' leaves only loading/error (host page owns the chrome). -->
 	{#if showHud}
 	<div class="absolute inset-0 z-10 pointer-events-none">
+		<!-- "This is uniquely YOUR data" proof — the user's most-recalled
+		     memories, ranked by REAL receipt frequency. These are the nodes the
+		     agent leans on hardest, and (via GCaMP nonlinear summation) the ones
+		     that saturate hottest in the field. Two users see different names
+		     here because their minds are different — the discipline test as the
+		     sales pitch. Only shown when real receipts exist. -->
+		{#if live && topRecalled.length > 0}
+			<div
+				class="absolute top-20 right-4 sm:right-6 max-w-[15rem] flex flex-col gap-1.5
+					px-3.5 py-3 rounded-xl border border-[#A8FF5E]/15 bg-[#05060a]/55 backdrop-blur-[2px]"
+			>
+				<div class="font-mono text-[10px] tracking-[0.16em] text-[#A8FF5E]/70 uppercase">
+					{topRecalledSource === 'recalls' ? 'Most recalled · your mind' : 'Strongest memories · your mind'}
+				</div>
+				{#each topRecalled as m, i (m.id)}
+					<div class="flex items-baseline gap-2 font-mono text-[11px]">
+						<span class="text-[#E9FFB7]/90 tabular-nums w-4">{i + 1}</span>
+						<span class="text-[#d8ded0]/90 truncate flex-1" title={m.label}>{m.label}</span>
+						<span class="text-[#A8FF5E]/80 tabular-nums whitespace-nowrap"
+							>{m.recalls}{topRecalledSource === 'recalls' ? '×' : '%'}</span
+						>
+					</div>
+				{/each}
+			</div>
+		{/if}
+
 		<!-- v2.3 living field — LIVE contradiction firewall verdict. Fires only
 		     when a real MemorySuppressed / contradiction event quarantines a
 		     memory on camera; the crimson quarantine ring plays on the field
@@ -443,15 +818,16 @@
 		<!-- Motion pause control (WCAG: persistent, for >5s ambient motion). Live
 		     field only. Pausing freezes ambient drift; live event pulses persist.
 		     Auto-on under prefers-reduced-motion. -->
-		{#if live}
+		{#if !capture}
 			<button
 				onclick={togglePause}
 				class="absolute bottom-4 right-4 pointer-events-auto flex items-center gap-2 px-3 py-1.5
 					rounded-xl border border-[#22C7DE]/25 bg-[#05060a]/80 backdrop-blur-sm
 					font-mono text-[11px] tracking-wide text-[#22C7DE]/80 hover:text-[#22C7DE]
 					hover:border-[#22C7DE]/50 transition-colors"
-				title={paused ? 'Resume field motion' : 'Pause field motion (event pulses stay live)'}
+				title={paused ? 'Resume field motion' : 'Pause field motion'}
 				aria-pressed={paused}
+				aria-label={paused ? 'Resume 3D memory field motion' : 'Pause 3D memory field motion'}
 			>
 				{paused ? '▶ RESUME' : '❚❚ PAUSE'}
 			</button>
@@ -463,31 +839,42 @@
 		     faked). Only shown when the backend serves real FSRS state. -->
 		{#if live && liveDecayReady}
 			<div
-				class="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-auto
-					flex items-center gap-3 px-4 py-2.5 rounded-xl border border-[#22C7DE]/25
-					bg-[#05060a]/80 backdrop-blur-sm font-mono text-[11px] tracking-wide"
+				class="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-auto
+					flex items-center gap-3 px-3 py-1.5 rounded-full border border-[#91ad8a]/20
+					bg-[#05060a]/45 backdrop-blur-[2px] font-mono text-[10px] tracking-[0.14em]"
+				class:opacity-100={shuttleReady}
+				class:opacity-75={!shuttleReady}
 			>
-				<span class="text-[#22C7DE]/80 uppercase">Forgetting horizon</span>
+				<span class="text-[#91ad8a]/80 uppercase whitespace-nowrap">Chrono</span>
 				<input
 					type="range"
-					min="0"
+					min={chronoMinDays}
 					max="365"
-					step="1"
-					bind:value={projectionDays}
-					class="w-40 sm:w-56 accent-[#22C7DE] cursor-pointer"
-					aria-label="Project the forgetting curve forward N days"
-					title="Project every memory forward on its real FSRS curve"
+					step="0.25"
+					bind:value={timeAxisDays}
+					oninput={() => (chronoScrubbing = true)}
+					onchange={() => (chronoScrubbing = false)}
+					onpointerup={() => (chronoScrubbing = false)}
+					onpointercancel={() => (chronoScrubbing = false)}
+					onblur={() => (chronoScrubbing = false)}
+					class="w-36 sm:w-52 accent-[#91ad8a] cursor-ew-resize opacity-75 hover:opacity-100 transition-opacity"
+					aria-label="Scrub the memory field through time — back to the oldest memory, forward on the forgetting curve"
+					title="Rewind the whole brain to any instant, or project it forward — every memory relit on its real FSRS curve"
 				/>
-				<span class="text-[#7fe6c0] w-16 text-right tabular-nums">
-					{projectionDays === 0 ? 'now' : `+${projectionDays}d`}
+				<span
+					class="w-16 text-right tabular-nums"
+					class:text-[#b9d9a9]={timeAxisDays >= 0}
+					class:text-[#dfc68e]={timeAxisDays < 0}
+				>
+					{chronoLabel}
 				</span>
-				{#if projectionDays !== 0}
+				{#if timeAxisDays !== 0}
 					<button
-						onclick={() => (projectionDays = 0)}
-						class="text-[#22C7DE]/60 hover:text-[#22C7DE] transition-colors"
+						onclick={() => (timeAxisDays = 0)}
+						class="text-[#d8ded0]/55 hover:text-[#d8ded0] transition-colors"
 						title="Return to now"
 					>
-						reset
+						now
 					</button>
 				{/if}
 			</div>

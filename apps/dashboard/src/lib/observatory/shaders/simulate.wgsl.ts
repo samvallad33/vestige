@@ -82,28 +82,57 @@ fn recall_sim(@builtin(global_invocation_id) id: vec3<u32>) {
 	let frame = params.frame;
 	var intensity = 0.0;
 
+	var node = nodes[i];
+	let flags = u32(node.color_flags.w);
+	let is_center = (flags & 1u) != 0u;
+
+	// --- GCaMP calcium-transient recall kinetics ---------------------------
+	// A retrieved memory does NOT ease-out linearly; it fires like a neuron
+	// under two-photon calcium imaging. Each recall beat is one calcium
+	// transient with a biexponential envelope: near-instant rise, MUCH slower
+	// decay (jGCaMP8/GCaMP6 kinetics, Nature 2023 s41586-023-05828-9). Empirical
+	// asymmetry is ~1:30 rise:decay; at the observatory's 60fps loop clock that
+	// is a ~3-frame time-to-peak and a ~90-frame decay tail. tau_decay is
+	// MODULATED BY REAL FSRS RETENTION (vel_retention.w): a weak, decaying
+	// memory's ember fades fast; a strongly-retained one glows on. The
+	// discipline test holds — swap the retention for noise and the afterglow
+	// lengths scramble.
+	let ret = clamp(node.vel_retention.w, 0.0, 1.0);
+	let tau_rise = 3.0;                        // fast fluorescence spike (~50ms)
+	let tau_decay = 55.0 + 70.0 * ret;         // 55..125 frames — retention holds the glow
+	// SEAM FADE — the GCaMP tail decays slowly (tau_decay up to 125f), and the
+	// last story beat lands at ~bf=480, so at the last loop frame 719 a hot
+	// node still glows ~0.15 and would snap to 0 at frame 0 (dt goes negative):
+	// a visible pop every 12s. Force the whole recall envelope to zero over the
+	// final ~30 frames so the loop is seamless by construction (restores the old
+	// smoothstep guarantee that the calcium version broke).
+	let seam = 1.0 - smoothstep(688.0, 718.0, frame);
 	let steps = u32(params.path_count);
 	for (var s = 0u; s < steps; s = s + 1u) {
 		let step = path[s];
 		let bf = f32(step.z);
 
 		if (step.y == i) {
-			// Arrival: sharp attack as the wavefront lands, slow afterglow.
-			let attack = smoothstep(bf - 14.0, bf + 4.0, frame);
-			let decay = 1.0 - smoothstep(bf + 40.0, bf + 200.0, frame);
-			intensity = max(intensity, attack * decay);
+			// Arrival transient: analytic biexponential (calcium indicator ODE),
+			// not a tween. Clamp dt>=0 BEFORE the exponentials so the pre-beat
+			// case is a cheap, finite 0.0 (select() evaluates both arms; the old
+			// discarded true-arm computed exp(+large)=+Inf for future beats).
+			let dt = max(frame - bf, 0.0);
+			let g = (1.0 - exp(-dt / tau_rise)) * exp(-dt / tau_decay);
+			// NONLINEAR SUMMATION: rapid re-fires stack supralinearly (a hot,
+			// over-recalled memory saturates like an over-driven indicator)
+			// instead of the old max(). Saturating add keeps it bounded/HDR-safe.
+			intensity = intensity + g * (1.0 - 0.55 * intensity);
 		}
 		if (step.x == i && step.x != step.y) {
-			// Departure: the source shimmers as the wave leaves it.
-			let rise = smoothstep(bf - 55.0, bf - 30.0, frame);
-			let fall = 1.0 - smoothstep(bf + 10.0, bf + 70.0, frame);
-			intensity = max(intensity, rise * fall * 0.45);
+			// Departure: the source shimmers briefly as the wave leaves it —
+			// a small pre-transient before its own arrival glow.
+			let dt = max(frame - (bf - 32.0), 0.0);
+			let g = (1.0 - exp(-dt / tau_rise)) * exp(-dt / (tau_decay * 0.45));
+			intensity = intensity + g * 0.4 * (1.0 - 0.55 * intensity);
 		}
 	}
-
-	var node = nodes[i];
-	let flags = u32(node.color_flags.w);
-	let is_center = (flags & 1u) != 0u;
+	intensity = clamp(intensity, 0.0, 1.35) * seam;
 
 	// Write recall intensity (existing behavior preserved).
 	node.demo.x = intensity;
@@ -116,7 +145,13 @@ fn recall_sim(@builtin(global_invocation_id) id: vec3<u32>) {
 	// static snapshot instead of collapsing to black.
 	if (i < arrayLength(&live_retention)) {
 		let lr = live_retention[i];
-		if (lr > 0.0) {
+		// FOSSIL LIGHT: lr == 0.0 is the honest "not yet born at the scrubbed
+		// instant" sentinel and MUST propagate so the render mask can pop the
+		// memory out of existence. Living memories are floored at 0.001 by the
+		// CPU (fsrs.ts/node-renderer.ts), so gating on >= 0.0 never blanks a
+		// real field; the old strictly-positive guard predates the floor and
+		// blocked unbirth.
+		if (lr >= 0.0) {
 			node.vel_retention = vec4<f32>(node.vel_retention.xyz, lr);
 		}
 	}

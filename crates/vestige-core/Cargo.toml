@@ -52,7 +52,13 @@ ort-dynamic = ["embeddings", "fastembed/ort-load-dynamic"]
 nomic-v2 = ["embeddings", "fastembed/nomic-v2-moe"]
 
 # Qwen3 Embeddings (Candle backend, opt-in for v2.1.1 re-embedding)
-qwen3-embeddings = ["embeddings", "fastembed/qwen3", "dep:candle-core"]
+qwen3-embeddings = [
+    "embeddings",
+    "fastembed/qwen3",
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:tokenizers",
+]
 
 # Backwards-compatible feature alias from the original v2.1.0 naming.
 qwen3-reranker = ["qwen3-embeddings"]
@@ -125,8 +131,10 @@ notify = "8"
 # ============================================================================
 # nomic-embed-text-v1.5: 768 dimensions, 8192 token context, Matryoshka support
 # fastembed v5 provides Nomic v2 MoE and Qwen3 feature-gated model loaders.
-fastembed = { version = "5.11", default-features = false, features = ["hf-hub-native-tls", "image-models"], optional = true }
+fastembed = { version = "=5.13.4", default-features = false, features = ["hf-hub-native-tls", "image-models"], optional = true }
 candle-core = { version = "0.10.2", optional = true }
+candle-nn = { version = "0.10.2", optional = true }
+tokenizers = { version = "0.22.2", default-features = false, features = ["onig"], optional = true }
 
 # ============================================================================
 # OPTIONAL: Vector Search (USearch - HNSW, 20x faster than FAISS)
@@ -156,6 +164,7 @@ usearch = { version = "=2.23.0", default-features = false, features = ["fp16lib"
 lru = "0.16"
 trait-variant = "0.1"
 blake3 = "1"
+sha2 = "0.10"
 
 # ============================================================================
 # OPTIONAL: External-source connectors (#57)

@@ -11,7 +11,7 @@
 //! map rows back through a small closure.
 
 use chrono::Utc;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
 use super::sqlite::SqliteMemoryStore;
@@ -138,9 +138,8 @@ impl SqliteMemoryStore {
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-        let mut stmt = reader.prepare(
-            "SELECT payload FROM agent_traces WHERE run_id = ?1 ORDER BY seq ASC",
-        )?;
+        let mut stmt = reader
+            .prepare("SELECT payload FROM agent_traces WHERE run_id = ?1 ORDER BY seq ASC")?;
         let rows = stmt.query_map(params![run_id], |row| {
             let payload: String = row.get(0)?;
             Ok(payload)
@@ -268,9 +267,8 @@ impl SqliteMemoryStore {
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-        let mut stmt = reader.prepare(
-            "SELECT payload FROM memory_receipts ORDER BY created_at DESC LIMIT ?1",
-        )?;
+        let mut stmt = reader
+            .prepare("SELECT payload FROM memory_receipts ORDER BY created_at DESC LIMIT ?1")?;
         let rows = stmt.query_map(params![limit as i64], |row| {
             let p: String = row.get(0)?;
             Ok(p)
@@ -473,10 +471,11 @@ impl SqliteMemoryStore {
             .unwrap_or(crate::trace::MemoryPrKind::NewFact);
         let status = serde_json::from_value(serde_json::Value::String(status_s))
             .unwrap_or(MemoryPrStatus::Pending);
-        let diff: serde_json::Value = serde_json::from_str(&diff_s).unwrap_or(serde_json::json!({}));
+        let diff: serde_json::Value =
+            serde_json::from_str(&diff_s).unwrap_or(serde_json::json!({}));
         let signals = serde_json::from_str(&signals_s).unwrap_or_default();
-        let decision = decision_s
-            .and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok());
+        let decision =
+            decision_s.and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok());
 
         Ok(MemoryPr {
             id: row.get("id")?,
@@ -566,6 +565,7 @@ mod tests {
             trust_floor: 0.62,
             decay_risk: DecayRisk::Medium,
             mutations: vec![],
+            backfill: None,
         };
         s.save_receipt(&receipt, Some("run_abc"), Some("search"), Some("q"))
             .unwrap();
@@ -585,6 +585,7 @@ mod tests {
             trust_floor: 0.9,
             decay_risk: DecayRisk::Low,
             mutations: vec![],
+            backfill: None,
         };
         s.save_receipt(&mk("r_a1"), Some("run_a"), Some("search"), None)
             .unwrap();
@@ -664,9 +665,7 @@ mod tests {
         // Promote = release. (The action releases_memory() == true; the handler
         // calls release_quarantine on the subject.)
         assert!(crate::MemoryPrAction::Promote.releases_memory());
-        let released = s
-            .release_quarantine(&node.id)
-            .expect("release quarantine");
+        let released = s.release_quarantine(&node.id).expect("release quarantine");
         assert_eq!(
             released.suppression_count, 0,
             "promoting the PR must release the memory — not leave it suppressed"
@@ -738,9 +737,10 @@ mod tests {
             decision: None,
         };
         s.save_memory_pr(&pr).unwrap();
-        assert!(s
-            .decide_memory_pr("pr_2", MemoryPrAction::AskAgentWhy)
-            .is_err());
+        assert!(
+            s.decide_memory_pr("pr_2", MemoryPrAction::AskAgentWhy)
+                .is_err()
+        );
         // Still pending.
         assert_eq!(s.count_pending_memory_prs().unwrap(), 1);
     }

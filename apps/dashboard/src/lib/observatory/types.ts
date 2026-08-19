@@ -191,6 +191,14 @@ export interface ObservatoryNode {
 	 */
 	stability?: number;
 	lastAccessed?: string;
+	/**
+	 * FOSSIL LIGHT — real creation instant (ISO). The chrono scrub's existence
+	 * mask: retention evaluates to exactly 0 before this, so rewinding across a
+	 * memory's birthday pops it out of the field. Served by get_graph
+	 * (handlers.rs `"createdAt"`); undefined on older serializers (node then
+	 * simply never unbirths — graceful).
+	 */
+	createdAt?: string;
 }
 
 export interface ObservatoryEdge {
@@ -220,7 +228,11 @@ export function toObservatoryNode(n: GraphNode, index: number): ObservatoryNode 
 		isCenter: !!n.isCenter,
 		suppressed: (n.suppression_count ?? 0) > 0,
 		stability: typeof n.stability === 'number' ? n.stability : undefined,
-		lastAccessed: typeof n.lastAccessed === 'string' ? n.lastAccessed : undefined
+		lastAccessed: typeof n.lastAccessed === 'string' ? n.lastAccessed : undefined,
+		createdAt:
+			typeof (n as { createdAt?: unknown }).createdAt === 'string'
+				? (n as { createdAt: string }).createdAt
+				: undefined
 	};
 }
 

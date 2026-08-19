@@ -241,6 +241,30 @@ describe('LiveBridge', () => {
 		expect(renderer.lastPathStepCount).toBeGreaterThan(0);
 	});
 
+	it('renders a Backfill receipt path exactly as emitted, not via the graph pathfinder', () => {
+		const { engine, renderer, bridge } = makeBridge();
+		bridge.ingest([ev('Heartbeat', {}, base)]);
+		bridge.ingest([
+			ev('BackfillFired', { failure_id: 'd', path_ids: ['b', 'c', 'd'] }, base + 1000)
+		]);
+		engine.advance(3);
+		bridge.drain(engine.totalFrames);
+		expect(engine.params[PARAM_IDX.liveKind]).toBe(LIVE_KIND.causalRecall);
+		expect(renderer.lastPathStepCount).toBe(2);
+	});
+
+	it('does not collapse a Backfill route when one persisted waypoint is outside the field', () => {
+		const { engine, renderer, bridge } = makeBridge();
+		bridge.ingest([ev('Heartbeat', {}, base)]);
+		bridge.ingest([
+			ev('BackfillFired', { failure_id: 'd', path_ids: ['b', 'missing', 'd'] }, base + 1000)
+		]);
+		engine.advance(3);
+		bridge.drain(engine.totalFrames);
+		expect(engine.params[PARAM_IDX.liveKind]).toBe(LIVE_KIND.causalRecall);
+		expect(renderer.setPathStepsCalls).toBe(0);
+	});
+
 	it('the forward-projection scrubber decays the field further', () => {
 		const engine = new MockEngine();
 		const renderer = new MockRenderer();

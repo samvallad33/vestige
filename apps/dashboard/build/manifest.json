@@ -1,0 +1,19 @@
+{
+	"name": "Vestige Memory Dashboard",
+	"short_name": "Vestige",
+	"description": "Cognitive memory visualization for AI agents",
+	"start_url": "/",
+	"display": "standalone",
+	"background_color": "#050510",
+	"theme_color": "#050510",
+	"icons": [
+		{
+			"src": "/favicon.svg",
+			"sizes": "any",
+			"type": "image/svg+xml",
+			"purpose": "any maskable"
+		}
+	],
+	"categories": ["developer", "utilities"],
+	"orientation": "any"
+}

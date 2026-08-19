@@ -23,8 +23,8 @@
 import type { ObservatoryEngine } from './engine';
 import type { NodeRenderer } from './node-renderer';
 import type { GraphResponse, VestigeEvent } from '$types';
-import { LIVE_KIND, PARAM_IDX, type ObservatoryGraph, type ObservatoryEdge } from './types';
-import { liveRetrievability } from './fsrs';
+import { LIVE_KIND, PARAM_IDX, PATH_KIND, type ObservatoryGraph, type ObservatoryEdge } from './types';
+import { liveRetrievability, retrievabilityAt, MS_PER_DAY } from './fsrs';
 import { FirewallRenderer } from './firewall-renderer';
 import { buildLiveFirewallPlan, emptyFirewallPlan } from './firewall-plan';
 import { buildRecallPath } from './path-builder';
@@ -37,6 +37,8 @@ interface DecodedEvent {
 	targetId: string;
 	/** Neighbor / path node ids the event references. */
 	relatedIds: string[];
+	/** Exact ordered path named by a persisted receipt. */
+	exactPath?: string[];
 	/** Contradiction / connection pairs [a,b][] the event carries. */
 	pairs: [string, string][];
 	/** Free-form scalar (estimated_cascade, weight, memory_count …). */
@@ -74,6 +76,14 @@ export interface LiveBridgeDeps {
 	 * bridge always reads the live control value without re-subscribing.
 	 */
 	projectionDays?: () => number;
+	/**
+	 * FOSSIL LIGHT chrono scrub — SIGNED days offset from NOW (negative = the
+	 * past). When non-zero, per-node retention is re-evaluated at the scrubbed
+	 * instant via `retrievabilityAt` (same closed form, signed time, existence
+	 * mask before each memory's createdAt). 0 = live now. A getter so the
+	 * bridge always reads the live control without re-subscribing.
+	 */
+	chronoOffsetDays?: () => number;
 	/** Dev/verification: mirror what the bridge applied, for assertions. */
 	onApply?: (info: { simFrame: number; activeKind: number; eventsSeen: number }) => void;
 	/** Fired when a live firewall arms — the host can surface a verdict card. */
@@ -87,6 +97,7 @@ export class LiveBridge {
 	private response: GraphResponse;
 	private seed: string;
 	private projectionDays: () => number;
+	private chronoOffsetDays: () => number;
 	private onApply?: LiveBridgeDeps['onApply'];
 	private onFirewall?: LiveBridgeDeps['onFirewall'];
 
@@ -128,6 +139,7 @@ export class LiveBridge {
 		this.response = deps.response;
 		this.seed = deps.seed;
 		this.projectionDays = deps.projectionDays ?? (() => 0);
+		this.chronoOffsetDays = deps.chronoOffsetDays ?? (() => 0);
 		this.onApply = deps.onApply;
 		this.onFirewall = deps.onFirewall;
 		this.indexById = deps.graph.indexById;
@@ -200,6 +212,45 @@ export class LiveBridge {
 		}
 		this.lastAppliedMs = maxMs;
 		this.seeded = true;
+	}
+
+	/**
+	 * True while a REAL live event is playing its envelope. The receipt-replay
+	 * driver reads this to yield: a genuine recall/firewall/dream from the agent
+	 * always preempts the ambient replay of past receipts.
+	 */
+	get hasActiveEvent(): boolean {
+		return this.active !== null;
+	}
+
+	/**
+	 * COLD-OPEN AHA — replay one of the user's REAL past recalls (from a stored
+	 * receipt's activation_path) as a causalRecall, driving the exact same GCaMP
+	 * wavefront a live retrieval fires. This is NOT synthetic choreography: the
+	 * target + path are real memory ids the user's agent actually retrieved. A
+	 * client opening their dashboard cold watches their own memory being
+	 * recalled, in calcium. No-op if a real live event owns the field, if the
+	 * target isn't in the current field, or if replay is globally off.
+	 */
+	replayRecall(targetId: string, pathIds: string[], simFrame: number): boolean {
+		if (this.active !== null) return false;
+		const targetIndex = this.indexById.get(targetId);
+		if (targetIndex === undefined) return false;
+		// Do NOT ambient-replay a recall on a memory that does not exist at the
+		// current instant: during a deep chrono rewind the target may be unborn
+		// (live retention 0 → the render existence mask hides it), so the recall
+		// would fire into the void. Fire only on memories currently on camera.
+		if ((this.retention[targetIndex] ?? 0) < 0.0005) return false;
+		const related = pathIds.filter((id) => id !== targetId && this.indexById.has(id));
+		this.arm({
+			kind: LIVE_KIND.causalRecall,
+			startFrame: simFrame,
+			targetId,
+			relatedIds: related,
+			pairs: [],
+			scalar: related.length
+		});
+		return true;
 	}
 
 	ingest(events: VestigeEvent[]): void {
@@ -276,16 +327,17 @@ export class LiveBridge {
 			case 'BackfillFired':
 			case 'CausalReceipt': {
 				// Phase 4 dedicated event: carries the backward causal path.
-				const path = strArr(data.path_ids ?? data.causal_path).filter((x) =>
-					this.indexById.has(x)
-				);
-				const target = str(data.target_id ?? data.effect_id) || path[0];
+				// Preserve the raw receipt route. Filtering it here would turn
+				// [candidate, missing, failure] into a fabricated direct edge.
+				const path = strArr(data.path_ids ?? data.causal_path);
+				const target = str(data.failure_id ?? data.target_id ?? data.effect_id) || path.at(-1) || path[0];
 				if (target && this.indexById.has(target)) {
 					this.arm({
 						kind: LIVE_KIND.causalRecall,
 						startFrame: simFrame,
 						targetId: target,
 						relatedIds: path.filter((x) => x !== target),
+						exactPath: path,
 						pairs: [],
 						scalar: path.length
 					});
@@ -387,6 +439,26 @@ export class LiveBridge {
 		// The proven recall-wavefront machinery (render-path.wgsl, simulate.wgsl)
 		// renders it — kind-1 (backward) hops burn into the magenta rim.
 		if (ev.kind === LIVE_KIND.causalRecall && this.indexById.has(ev.targetId)) {
+			if (ev.exactPath && ev.exactPath.length > 1) {
+				// A persisted Backfill route is atomic. Dropping an absent waypoint
+				// would forge a direct edge that the receipt never recorded.
+				const ids = ev.exactPath;
+				if (ids.some((id) => !this.indexById.has(id))) return;
+				const data = new Uint32Array(Math.max(1, ids.length - 1) * 4);
+				const steps = [];
+				for (let i = 0; i < ids.length - 1; i++) {
+					const sourceIndex = this.indexById.get(ids[i])!;
+					const targetIndex = this.indexById.get(ids[i + 1])!;
+					const beatFrame = ev.startFrame + 24 + i * 42;
+					data[i * 4] = sourceIndex;
+					data[i * 4 + 1] = targetIndex;
+					data[i * 4 + 2] = beatFrame;
+					data[i * 4 + 3] = PATH_KIND.backwardCause;
+					steps.push({ sourceIndex, targetIndex, beatFrame, kind: PATH_KIND.backwardCause, beatKind: 'receipt-path', nodeId: ids[i + 1], label: 'receipt-backed candidate path' });
+				}
+				this.renderer.setPathSteps(data, steps);
+				return;
+			}
 			const built = buildRecallPath(this.response, this.graph, 8, {
 				preferCausal: true,
 				centerId: ev.targetId
@@ -433,11 +505,24 @@ export class LiveBridge {
 		// curve). Throttled to every 6 frames (10Hz) — decay drifts far slower
 		// than a frame, and the scrubber jumps are applied immediately below. ---
 		const proj = this.projectionDays();
-		p[PARAM_IDX.projectionDays] = proj;
-		if (this.hasLiveDecay && (simFrame - this.lastDecayFrame >= 6 || proj !== this.lastProj)) {
-			this.recomputeDecay(proj);
+		const chrono = this.chronoOffsetDays();
+		// The params lane stays forward-only (>=0): shaders read projection_days
+		// for the horizon grammar and never expect signed time. The signed
+		// chrono offset lives entirely in the CPU decay eval below.
+		p[PARAM_IDX.projectionDays] = Math.max(0, proj);
+		// Recompute when: throttle tick (decay drifts), either time control
+		// moved, or we just returned to NOW (one final pass to restore live
+		// values). Chrono scrubbing works even without live FSRS state — the
+		// createdAt existence mask alone still unbirths memories.
+		const decayActive = this.hasLiveDecay || chrono !== 0 || this.lastChrono !== 0;
+		if (
+			decayActive &&
+			(simFrame - this.lastDecayFrame >= 6 || proj !== this.lastProj || chrono !== this.lastChrono)
+		) {
+			this.recomputeDecay(proj, chrono);
 			this.lastDecayFrame = simFrame;
 			this.lastProj = proj;
+			this.lastChrono = chrono;
 		}
 
 		// --- Live event envelope: lanes 12..14. ---
@@ -487,6 +572,7 @@ export class LiveBridge {
 	}
 
 	private lastProj = -1;
+	private lastChrono = 0;
 
 	/** 0..1+ agitation envelope for the active event at `elapsed` frames. */
 	private energyEnvelope(ev: DecodedEvent, elapsed: number, _openEnded: boolean): number {
@@ -506,23 +592,44 @@ export class LiveBridge {
 		return Math.max(0, attack * Math.min(1, release));
 	}
 
-	/** Recompute per-node live retrievability and push to the GPU (Phase 1). */
-	private recomputeDecay(projectionDays: number): void {
+	/**
+	 * Recompute per-node live retrievability and push to the GPU (Phase 1 +
+	 * FOSSIL LIGHT). At NOW (chrono 0) this is the original forward path; with
+	 * a chrono offset the whole field is re-evaluated at the scrubbed instant
+	 * on the same closed form — retention genuinely relights, and memories not
+	 * yet born read exactly 0 (the render mask pops them out of existence).
+	 */
+	private recomputeDecay(projectionDays: number, chronoOffsetDays = 0): void {
 		const nowMs = this.engine.wallNowMs;
 		const nodes = this.graph.nodes;
-		for (let i = 0; i < nodes.length; i++) {
-			const n = nodes[i];
-			this.retention[i] =
-				n.stability !== undefined && n.lastAccessed
-					? liveRetrievability(n.stability, n.lastAccessed, nowMs, projectionDays)
-					: n.retention;
+		if (chronoOffsetDays !== 0) {
+			const evalMs = nowMs + (chronoOffsetDays + Math.max(0, projectionDays)) * MS_PER_DAY;
+			for (let i = 0; i < nodes.length; i++) {
+				const n = nodes[i];
+				this.retention[i] =
+					n.stability !== undefined || n.createdAt
+						? retrievabilityAt(n.stability, n.lastAccessed, n.createdAt, evalMs)
+						: Math.max(0.001, n.retention);
+			}
+		} else {
+			for (let i = 0; i < nodes.length; i++) {
+				const n = nodes[i];
+				this.retention[i] =
+					n.stability !== undefined && n.lastAccessed
+						? liveRetrievability(n.stability, n.lastAccessed, nowMs, projectionDays)
+						: Math.max(0.001, n.retention);
+			}
 		}
 		this.renderer.uploadLiveRetention(this.retention);
 	}
 
-	/** Force a decay recompute now (e.g. the scrubber moved). */
+	/** Force a decay recompute now (e.g. a time control moved). */
 	refreshDecay(): void {
-		if (this.hasLiveDecay) this.recomputeDecay(this.projectionDays());
+		const chrono = this.chronoOffsetDays();
+		if (this.hasLiveDecay || chrono !== 0 || this.lastChrono !== 0) {
+			this.recomputeDecay(this.projectionDays(), chrono);
+			this.lastChrono = chrono;
+		}
 	}
 }
 

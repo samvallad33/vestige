@@ -16,11 +16,12 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+use chrono::Utc;
+use vestige_core::advanced::prediction_error::cosine_similarity;
 use vestige_core::advanced::retroactive_backfill::{
     self, BackfillCandidate, FailureEvent, RetroactiveBackfill,
 };
-use vestige_core::advanced::prediction_error::cosine_similarity;
-use vestige_core::{KnowledgeNode, Storage};
+use vestige_core::{ConnectionRecord, KnowledgeNode, Storage};
 
 pub fn schema() -> Value {
     json!({
@@ -109,14 +110,13 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             .ok_or_else(|| format!("failure memory '{id}' not found"))?,
         None => {
             // most recent memory that looks like a failure
-            let recent = storage.get_all_nodes(scan_limit, 0).map_err(|e| e.to_string())?;
-            recent
-                .into_iter()
-                .find(looks_like_failure)
-                .ok_or_else(|| {
-                    "no failure-like memory found to backfill from; pass failure_id or manual=true"
-                        .to_string()
-                })?
+            let recent = storage
+                .get_all_nodes(scan_limit, 0)
+                .map_err(|e| e.to_string())?;
+            recent.into_iter().find(looks_like_failure).ok_or_else(|| {
+                "no failure-like memory found to backfill from; pass failure_id or manual=true"
+                    .to_string()
+            })?
         }
     };
 
@@ -125,7 +125,11 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
 
     // surprise/prediction-error proxy: a failure-marked memory is treated as
     // high-salience; otherwise fall back to a neutral value (manual can force).
-    let pe = if looks_like_failure(&failure_node) { 0.9_f32 } else { 0.3_f32 };
+    let pe = if looks_like_failure(&failure_node) {
+        0.9_f32
+    } else {
+        0.3_f32
+    };
 
     let failure = FailureEvent {
         id: failure_node.id.clone(),
@@ -137,7 +141,9 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     };
 
     // 2. Build candidate causes from all OTHER memories (older than the failure).
-    let all = storage.get_all_nodes(scan_limit, 0).map_err(|e| e.to_string())?;
+    let all = storage
+        .get_all_nodes(scan_limit, 0)
+        .map_err(|e| e.to_string())?;
     let mut candidates: Vec<BackfillCandidate> = Vec::new();
     for node in &all {
         if node.id == failure_node.id {
@@ -148,7 +154,10 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         if age <= 0.0 {
             continue;
         }
-        let sim = match (&failure_embedding, storage.get_node_embedding(&node.id).ok().flatten()) {
+        let sim = match (
+            &failure_embedding,
+            storage.get_node_embedding(&node.id).ok().flatten(),
+        ) {
             (Some(f), Some(c)) if f.len() == c.len() => Some(cosine_similarity(f, &c)),
             _ => None,
         };
@@ -186,13 +195,42 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             .find(|c| c.id == cause.memory_id)
             .map(|c| c.content.chars().take(140).collect::<String>())
             .unwrap_or_default();
-        let mut did_promote = false;
-        if promote {
-            // promote_memory_backfill boosts retrieval strength + reps (the FSRS
-            // promote knob) with a bounded stability multiply — shared with the
-            // step-8.5 auto-fire path (omega-backfill-safety patch, pending upstream).
-            did_promote = storage.promote_memory_backfill(&cause.memory_id).is_ok();
-        }
+        // A Backfill result is explicit-entity evidence, not an omniscient
+        // causal oracle. Always persist that evidence edge before saving the
+        // receipt — including dry-run previews. `promote=false` means no FSRS
+        // mutation, not "hide the evidence from the graph". The distinct link
+        // type prevents any consumer from presenting this as a proven causal
+        // relationship.
+        let link_type = "backfill_candidate".to_string();
+        let already_linked = storage
+            .get_connections_for_memory(&cause.memory_id)
+            .map(|connections| {
+                connections.iter().any(|connection| {
+                    connection.source_id == cause.memory_id
+                        && connection.target_id == failure_node.id
+                        && connection.link_type == link_type
+                })
+            })
+            .unwrap_or(false);
+        let candidate_edge_persisted = already_linked
+            || storage
+                .save_connection(&ConnectionRecord {
+                    source_id: cause.memory_id.clone(),
+                    target_id: failure_node.id.clone(),
+                    strength: cause.score.clamp(0.0, 1.0),
+                    link_type,
+                    created_at: Utc::now(),
+                    last_activated: Utc::now(),
+                    activation_count: 0,
+                })
+                .is_ok();
+        let did_promote = if promote && candidate_edge_persisted {
+            // promote_memory_backfill boosts retrieval strength + reps (the
+            // FSRS knob) with a bounded stability multiply.
+            storage.promote_memory_backfill(&cause.memory_id).is_ok()
+        } else {
+            false
+        };
         promoted.push(json!({
             "memory_id": cause.memory_id,
             "content_preview": content_preview,
@@ -201,6 +239,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             "similarity_rank": cause.similarity_rank,
             "backfill_score": (cause.score * 100.0).round() / 100.0,
             "promoted": did_promote,
+            "candidate_edge_persisted": candidate_edge_persisted,
             "reason": cause.reason,
         }));
     }
@@ -208,6 +247,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     Ok(json!({
         "tool": "backfill",
         "triggered": true,
+        "lookback_days": lookback,
         "headline": format!(
             "Reached back across history from the failure and surfaced {} causal memor{} that semantic search would have missed.",
             result.causes.len(),
@@ -219,6 +259,14 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             "entities": failure_entities,
         },
         "scanned": result.scanned,
+        // This is an explicit direct evidence edge from the highest-ranked
+        // candidate to the failure, not a topology inferred by the renderer.
+        // The complete candidate set remains below for alternate branches.
+        "path_ids": promoted.first()
+            .and_then(|cause| cause.get("memory_id"))
+            .and_then(|id| id.as_str())
+            .map(|id| vec![id.to_string(), failure.id.clone()])
+            .unwrap_or_default(),
         "causes": promoted,
         "note": "Causes are ranked by causal join (shared entities, backward in time), NOT semantic similarity. A high similarity_rank means a vector search would NOT have surfaced this — that is the point.",
     }))
@@ -271,7 +319,10 @@ mod tests {
             })
             .unwrap();
         storage
-            .set_created_at(&distractor.id, chrono::Utc::now() - chrono::Duration::days(20))
+            .set_created_at(
+                &distractor.id,
+                chrono::Utc::now() - chrono::Duration::days(20),
+            )
             .unwrap();
 
         // 3) The failure, recorded last (most recent) — the "aversive event".
@@ -280,20 +331,25 @@ mod tests {
                 content: "Service crashed: 500 Internal Server Error on the auth endpoint"
                     .to_string(),
                 node_type: "event".to_string(),
-                tags: vec!["auth-service".to_string(), "API_TIMEOUT".to_string(), "crash".to_string()],
+                tags: vec![
+                    "auth-service".to_string(),
+                    "API_TIMEOUT".to_string(),
+                    "crash".to_string(),
+                ],
                 ..Default::default()
             })
             .unwrap();
 
         // Run the backfill tool against the real store (auto-finds the failure).
-        let out = execute(
-            &storage,
-            Some(json!({ "promote": true, "manual": false })),
-        )
-        .await
-        .expect("backfill must run");
+        let out = execute(&storage, Some(json!({ "promote": true, "manual": false })))
+            .await
+            .expect("backfill must run");
 
-        assert_eq!(out["triggered"], json!(true), "the crash must trigger a backfill");
+        assert_eq!(
+            out["triggered"],
+            json!(true),
+            "the crash must trigger a backfill"
+        );
         let causes = out["causes"].as_array().expect("causes array");
         assert!(!causes.is_empty(), "must surface at least one cause");
 
@@ -309,8 +365,31 @@ mod tests {
             shared.iter().any(|e| e.as_str() == Some("api_timeout")),
             "must link via the shared API_TIMEOUT entity, got: {shared:?}"
         );
+        assert_eq!(
+            top["candidate_edge_persisted"],
+            json!(true),
+            "the candidate evidence edge must exist before a receipt can claim it"
+        );
+        assert_eq!(
+            out["path_ids"],
+            json!([cause.id, failure.id]),
+            "the tool must publish the exact backend-authored candidate-to-failure path"
+        );
+        let edges = storage.get_connections_for_memory(&cause.id).unwrap();
+        assert!(
+            edges.iter().any(|edge| {
+                edge.source_id == cause.id
+                    && edge.target_id == failure.id
+                    && edge.link_type == "backfill_candidate"
+            }),
+            "candidate evidence edge must be persisted"
+        );
         // It was actually promoted in the real store.
-        assert_eq!(top["promoted"], json!(true), "the cause must be promoted in storage");
+        assert_eq!(
+            top["promoted"],
+            json!(true),
+            "the cause must be promoted in storage"
+        );
         // Sanity: the failure we ingested is the one that fired.
         assert_eq!(out["failure"]["id"], json!(failure.id));
     }

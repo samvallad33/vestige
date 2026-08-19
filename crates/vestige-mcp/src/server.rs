@@ -484,7 +484,7 @@ impl McpServer {
             &saved_args,
         );
 
-        let result = match request.name.as_str() {
+        let mut result = match request.name.as_str() {
             // ================================================================
             // UNIFIED TOOLS (v1.1+) - Preferred API
             // ================================================================
@@ -501,7 +501,9 @@ impl McpServer {
             }
             // DEPRECATED (v2.2): folded into `recall` (mode='lookup'). Hidden alias.
             "search" => {
-                warn!("Tool 'search' is deprecated in v2.2. Use 'recall' (mode='lookup', the default).");
+                warn!(
+                    "Tool 'search' is deprecated in v2.2. Use 'recall' (mode='lookup', the default)."
+                );
                 tools::search_unified::execute(
                     &self.storage,
                     &self.cognitive,
@@ -641,7 +643,9 @@ impl McpServer {
             // DEPRECATED (v2.2): folded into `memory_status`. Hidden aliases —
             // each calls the same underlying handler verbatim.
             "system_status" => {
-                warn!("Tool 'system_status' is deprecated in v2.2. Use 'memory_status' (view='health').");
+                warn!(
+                    "Tool 'system_status' is deprecated in v2.2. Use 'memory_status' (view='health')."
+                );
                 tools::maintenance::execute_system_status(
                     &self.storage,
                     &self.cognitive,
@@ -934,12 +938,16 @@ impl McpServer {
             // `memory_status` (view='timeline' / view='changelog'). Hidden aliases.
             // ================================================================
             "memory_timeline" => {
-                warn!("Tool 'memory_timeline' is deprecated in v2.2. Use 'memory_status' (view='timeline').");
+                warn!(
+                    "Tool 'memory_timeline' is deprecated in v2.2. Use 'memory_status' (view='timeline')."
+                );
                 tools::timeline::execute(&self.storage, &self.output_config, request.arguments)
                     .await
             }
             "memory_changelog" => {
-                warn!("Tool 'memory_changelog' is deprecated in v2.2. Use 'memory_status' (view='changelog').");
+                warn!(
+                    "Tool 'memory_changelog' is deprecated in v2.2. Use 'memory_status' (view='changelog')."
+                );
                 tools::changelog::execute(&self.storage, request.arguments).await
             }
 
@@ -978,7 +986,9 @@ impl McpServer {
             // `maintain`. Hidden aliases; pre-emit Started events preserved.
             // ================================================================
             "consolidate" => {
-                warn!("Tool 'consolidate' is deprecated in v2.2. Use 'maintain' (action='consolidate').");
+                warn!(
+                    "Tool 'consolidate' is deprecated in v2.2. Use 'maintain' (action='consolidate')."
+                );
                 self.emit(VestigeEvent::ConsolidationStarted {
                     timestamp: chrono::Utc::now(),
                 });
@@ -1002,7 +1012,9 @@ impl McpServer {
             // ================================================================
             // DEPRECATED (v2.2): folded into `maintain` (action='importance_score').
             "importance_score" => {
-                warn!("Tool 'importance_score' is deprecated in v2.2. Use 'maintain' (action='importance_score').");
+                warn!(
+                    "Tool 'importance_score' is deprecated in v2.2. Use 'maintain' (action='importance_score')."
+                );
                 tools::importance::execute(&self.storage, &self.cognitive, request.arguments).await
             }
             // ================================================================
@@ -1014,7 +1026,9 @@ impl McpServer {
             // aliases (≥1 minor release) — they call the same underlying handlers
             // verbatim, so envelopes/plan_id/confirm-gating/bitemporal are intact.
             "find_duplicates" => {
-                warn!("Tool 'find_duplicates' is deprecated in v2.2. Use 'dedup' with action='scan'.");
+                warn!(
+                    "Tool 'find_duplicates' is deprecated in v2.2. Use 'dedup' with action='scan'."
+                );
                 tools::dedup::execute(&self.storage, request.arguments).await
             }
             "merge_candidates" | "plan_merge" | "plan_supersede" | "apply_plan" | "merge_undo"
@@ -1058,7 +1072,9 @@ impl McpServer {
             }
             // DEPRECATED (v2.2): folded into `graph`. Hidden aliases.
             "explore_connections" => {
-                warn!("Tool 'explore_connections' is deprecated in v2.2. Use 'graph' (action='chain'|'associations'|'bridges').");
+                warn!(
+                    "Tool 'explore_connections' is deprecated in v2.2. Use 'graph' (action='chain'|'associations'|'bridges')."
+                );
                 tools::explore::execute(&self.storage, &self.cognitive, request.arguments).await
             }
             "predict" => {
@@ -1100,26 +1116,37 @@ impl McpServer {
             // ================================================================
             // DEPRECATED (v2.2): folded into `memory_status` (view='retention').
             "memory_health" => {
-                warn!("Tool 'memory_health' is deprecated in v2.2. Use 'memory_status' (view='retention').");
+                warn!(
+                    "Tool 'memory_health' is deprecated in v2.2. Use 'memory_status' (view='retention')."
+                );
                 tools::health::execute(&self.storage, request.arguments).await
             }
             // DEPRECATED (v2.2): folded into `graph`. Hidden aliases.
             "memory_graph" => {
-                warn!("Tool 'memory_graph' is deprecated in v2.2. Use 'graph' (action='memory_graph').");
+                warn!(
+                    "Tool 'memory_graph' is deprecated in v2.2. Use 'graph' (action='memory_graph')."
+                );
                 tools::graph::execute(&self.storage, request.arguments).await
             }
             "composed_graph" => {
-                warn!("Tool 'composed_graph' is deprecated in v2.2. Use 'graph' (action='recent'|'get'|'memory'|'neighbors'|'never_composed'|'bounty_mode'|'label').");
+                warn!(
+                    "Tool 'composed_graph' is deprecated in v2.2. Use 'graph' (action='recent'|'get'|'memory'|'neighbors'|'never_composed'|'bounty_mode'|'label')."
+                );
                 tools::composed_graph::execute(&self.storage, request.arguments).await
             }
             // DEPRECATED (v2.2): folded into `recall`. Hidden aliases.
             "deep_reference" | "cross_reference" => {
-                warn!("Tool '{}' is deprecated in v2.2. Use 'recall' (mode='reason').", request.name);
+                warn!(
+                    "Tool '{}' is deprecated in v2.2. Use 'recall' (mode='reason').",
+                    request.name
+                );
                 tools::cross_reference::execute(&self.storage, &self.cognitive, request.arguments)
                     .await
             }
             "contradictions" => {
-                warn!("Tool 'contradictions' is deprecated in v2.2. Use 'recall' (mode='contradictions').");
+                warn!(
+                    "Tool 'contradictions' is deprecated in v2.2. Use 'recall' (mode='contradictions')."
+                );
                 tools::contradictions::execute(&self.storage, request.arguments).await
             }
 
@@ -1140,8 +1167,7 @@ impl McpServer {
         // DASHBOARD EVENT EMISSION (v2.0)
         // Emit real-time events to WebSocket clients after successful tool calls.
         // ================================================================
-        if let Ok(ref content) = result {
-            self.emit_tool_event(&request.name, &saved_args, content);
+        if let Ok(ref mut content) = result {
             // Agent Black Box: inspect the successful result and record the
             // downstream memory events (retrieve/suppress/veto/dream) under the
             // same run_id as the opening mcp.call, so /api/traces, /api/receipts
@@ -1153,6 +1179,38 @@ impl McpServer {
                 &request.name,
                 content,
             );
+            // Receipt spine: persist the auditable receipt for THIS retrieval run
+            // (recall / deep_reference / search / explore_connections) so a real
+            // agent call produces a real, fetchable receipt via GET
+            // /api/receipts?run=<trace_run_id>. build_and_save_receipt no-ops for
+            // non-retrieval tools and empty results, so this is safe on every call.
+            // This closes the dead seam: the builder existed but had no caller.
+            let receipt = crate::trace_recorder::build_and_save_receipt(
+                &self.storage,
+                &trace_run_id,
+                &request.name,
+                content,
+            );
+            // Attach runId + receiptId + receipt to the RETURNED structured result
+            // (not just persisted) so the caller/agent gets the auditable "which
+            // memories did this use" receipt inline. Only stamp runId/receipt when
+            // there's a receipt (a real retrieval); runId is always safe to carry.
+            if let Some(obj) = content.as_object_mut() {
+                obj.entry("runId".to_string())
+                    .or_insert_with(|| serde_json::json!(trace_run_id));
+                if let Some(receipt) = receipt {
+                    let receipt_id = receipt
+                        .get("receipt_id")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    obj.insert("receiptId".to_string(), serde_json::json!(receipt_id));
+                    obj.insert("receipt".to_string(), receipt);
+                }
+            }
+            // Emit after the receipt has been persisted and attached. Backfill
+            // events are therefore always linkable to the exact artifact the
+            // dashboard opens; no live visual can outrun the evidence.
+            self.emit_tool_event(&request.name, &saved_args, content);
         }
 
         let response = match result {
@@ -1689,6 +1747,88 @@ impl McpServer {
                 });
             }
 
+            // -- Retroactive Salience Backfill --
+            // The event is emitted only after build_and_save_receipt attached a
+            // real receiptId above. Candidate ids and join keys are copied from
+            // the tool output verbatim; the frontend must never infer them.
+            "backfill" => {
+                let receipt_id = result
+                    .get("receiptId")
+                    .and_then(|value| value.as_str())
+                    .filter(|id| !id.is_empty());
+                let failure_id = result
+                    .get("failure")
+                    .and_then(|failure| failure.get("id"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let candidates = result
+                    .get("causes")
+                    .and_then(|value| value.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if let Some(receipt_id) = receipt_id
+                    && !failure_id.is_empty()
+                    && !candidates.is_empty()
+                {
+                    let candidate_ids: Vec<String> = candidates
+                        .iter()
+                        .filter_map(|candidate| {
+                            candidate.get("memory_id").and_then(|value| value.as_str())
+                        })
+                        .map(ToString::to_string)
+                        .collect();
+                    let shared_entities: Vec<String> = candidates
+                        .iter()
+                        .flat_map(|candidate| {
+                            candidate
+                                .get("shared_entities")
+                                .and_then(|value| value.as_array())
+                                .cloned()
+                                .unwrap_or_default()
+                        })
+                        .filter_map(|entity| entity.as_str().map(ToString::to_string))
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .collect();
+                    let path_ids: Vec<String> = result
+                        .get("receipt")
+                        .and_then(|receipt| receipt.get("backfill"))
+                        .and_then(|proof| proof.get("path_ids"))
+                        .and_then(|value| value.as_array())
+                        .map(|ids| {
+                            ids.iter()
+                                .filter_map(|id| id.as_str().map(ToString::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let promoted = candidates.iter().any(|candidate| {
+                        candidate
+                            .get("promoted")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false)
+                    });
+                    // Only receipt-authored paths may enter the live scene.
+                    if path_ids.len() < 2 {
+                        return;
+                    }
+                    self.emit(VestigeEvent::BackfillFired {
+                        run_id: result
+                            .get("runId")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        receipt_id: receipt_id.to_string(),
+                        failure_id,
+                        candidate_ids,
+                        path_ids,
+                        shared_entities,
+                        promoted,
+                        timestamp: now,
+                    });
+                }
+            }
+
             // Other tools don't emit events
             _ => {}
         }
@@ -2180,6 +2320,183 @@ mod tests {
         }
     }
 
+    /// THE RECEIPT SPINE ACCEPTANCE TEST (Jul 14 2026).
+    ///
+    /// Drives the REAL production path: McpServer::handle_request dispatches a
+    /// `recall` with a known runId, and we assert BOTH sides of the spine:
+    ///   1. the trace exists — agent_traces has this run (Black Box can open it),
+    ///   2. GET /api/receipts?run=<runId> (== storage.list_receipts_for_run)
+    ///      returns the run's receipt listing the real memory that was retrieved,
+    ///   3. the tool RESPONSE carries runId + receiptId + receipt inline.
+    /// Before this wiring, recall recorded nothing durable — the builder existed
+    /// with no caller, so no real query produced a fetchable receipt or a trace.
+    #[tokio::test]
+    async fn recall_run_produces_trace_and_fetchable_receipt_spine() {
+        let (mut server, _dir) = test_server().await;
+        let init_request = make_request("initialize", Some(init_params()));
+        server.handle_request(init_request).await;
+
+        // Seed a real, distinctive memory the recall can retrieve. The query below
+        // shares strong keyword overlap with this content so the hybrid lexical
+        // path retrieves it even in a fresh test DB without a warmed embedding
+        // index (the receipt spine is what's under test, not retrieval quality).
+        let seeded = server
+            .storage
+            .ingest(vestige_core::IngestInput {
+                content:
+                    "Vestige dashboard dev server runs on port 5199 under base path dashboard."
+                        .to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // Dispatch recall with a KNOWN runId so we can fetch by it afterwards.
+        let run_id = "run_spine_accept";
+        let request = make_request(
+            "tools/call",
+            Some(serde_json::json!({
+                "name": "recall",
+                "arguments": {
+                    "query": "port 5199",
+                    "concrete": true,
+                    "runId": run_id
+                }
+            })),
+        );
+        let response = server.handle_request(request).await.unwrap();
+        assert!(
+            response.error.is_none(),
+            "recall dispatched: {:?}",
+            response.error
+        );
+
+        // 1. The trace exists for this run — Black Box can open it.
+        let trace = server.storage.get_trace(run_id).unwrap();
+        assert!(
+            !trace.is_empty(),
+            "recall must record at least the opening mcp.call trace event for the run"
+        );
+
+        // 2. The receipt is fetchable by run id — the exact GET /api/receipts?run= path.
+        let receipts = server.storage.list_receipts_for_run(run_id, 10).unwrap();
+        assert_eq!(
+            receipts.len(),
+            1,
+            "one real recall produces exactly one fetchable receipt for its run"
+        );
+        let receipt = &receipts[0];
+        assert!(
+            receipt.retrieved.contains(&seeded.id),
+            "the receipt lists the real memory the recall actually retrieved"
+        );
+
+        // 3. The tool RESPONSE carries the spine fields inline (not just persisted).
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|r| r.get("structuredContent"))
+            .expect("recall returns structured content");
+        assert_eq!(
+            structured.get("runId").and_then(|v| v.as_str()),
+            Some(run_id),
+            "response echoes the runId"
+        );
+        assert_eq!(
+            structured.get("receiptId").and_then(|v| v.as_str()),
+            Some(receipt.receipt_id.as_str()),
+            "response carries the persisted receiptId"
+        );
+        assert!(
+            structured.get("receipt").is_some(),
+            "response carries the receipt inline"
+        );
+    }
+
+    /// MCP must publish the same receipt-backed route as the HTTP dashboard
+    /// adapter. This protects the terminal/agent → Black Box → Observatory
+    /// proof loop from transport-specific topology inference.
+    #[tokio::test]
+    async fn backfill_mcp_run_persists_receipt_and_emits_exact_receipt_path() {
+        let (storage, _dir) = test_storage().await;
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let (event_tx, mut events) = broadcast::channel(16);
+        let mut server = McpServer::new_with_events(storage.clone(), cognitive, event_tx);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let cause = storage
+            .ingest(vestige_core::IngestInput {
+                content: "Set API_TIMEOUT=2 in deploy environment.".to_string(),
+                node_type: "decision".to_string(),
+                tags: vec!["API_TIMEOUT".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        storage
+            .set_created_at(&cause.id, chrono::Utc::now() - chrono::Duration::days(3))
+            .unwrap();
+        let failure = storage
+            .ingest(vestige_core::IngestInput {
+                content: "Checkout crashed with timeout on the auth endpoint.".to_string(),
+                node_type: "event".to_string(),
+                tags: vec!["API_TIMEOUT".to_string(), "crash".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        let run_id = "run_backfill_mcp_proof";
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "backfill",
+                    "arguments": {
+                        "failure_id": failure.id,
+                        "promote": false,
+                        "runId": run_id
+                    }
+                })),
+            ))
+            .await
+            .expect("MCP response");
+        assert!(
+            response.error.is_none(),
+            "backfill dispatched: {:?}",
+            response.error
+        );
+
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("structuredContent"))
+            .expect("structured backfill result");
+        let receipt_id = structured
+            .get("receiptId")
+            .and_then(|id| id.as_str())
+            .expect("persisted receipt id");
+        assert_eq!(
+            structured["receipt"]["backfill"]["path_ids"],
+            serde_json::json!([cause.id, failure.id])
+        );
+        let stored = storage
+            .get_receipt(receipt_id)
+            .unwrap()
+            .expect("receipt saved");
+        assert_eq!(
+            stored.backfill.expect("proof").path_ids,
+            vec![cause.id.clone(), failure.id.clone()]
+        );
+
+        let emitted = loop {
+            match events.recv().await.expect("server event") {
+                VestigeEvent::BackfillFired { path_ids, .. } => break path_ids,
+                _ => continue,
+            }
+        };
+        assert_eq!(emitted, vec![cause.id, failure.id]);
+    }
+
     /// v2.2: the 7 tools folded into `maintain` must still dispatch, the new
     /// actions must resolve, gc must default to dry_run, and restore must keep
     /// path validation (a nonexistent path errors rather than silently no-op).
@@ -2205,7 +2522,11 @@ mod tests {
             );
             let response = server.handle_request(request).await.unwrap();
             if let Some(err) = response.error {
-                assert_ne!(err.code, -32602, "'{name}' {args} should dispatch: {}", err.message);
+                assert_ne!(
+                    err.code, -32602,
+                    "'{name}' {args} should dispatch: {}",
+                    err.message
+                );
             }
         }
 
@@ -2241,11 +2562,17 @@ mod tests {
                 .map(|r| {
                     r["content"][0]["text"]
                         .as_str()
-                        .map(|t| t.to_lowercase().contains("not found") || t.to_lowercase().contains("error"))
+                        .map(|t| {
+                            t.to_lowercase().contains("not found")
+                                || t.to_lowercase().contains("error")
+                        })
                         .unwrap_or(false)
                 })
                 .unwrap_or(false);
-        assert!(validated, "maintain action=restore must validate a missing path");
+        assert!(
+            validated,
+            "maintain action=restore must validate a missing path"
+        );
     }
 
     /// v2.2 HOT PATH: `recall` defaults to mode='lookup' (search), the folded
@@ -2265,8 +2592,14 @@ mod tests {
             ("semantic_search", serde_json::json!({"query": "x"})),
             // New unified modes.
             ("recall", serde_json::json!({"query": "x"})), // default mode = lookup
-            ("recall", serde_json::json!({"mode": "lookup", "query": "x"})),
-            ("recall", serde_json::json!({"mode": "reason", "query": "x"})),
+            (
+                "recall",
+                serde_json::json!({"mode": "lookup", "query": "x"}),
+            ),
+            (
+                "recall",
+                serde_json::json!({"mode": "reason", "query": "x"}),
+            ),
             ("recall", serde_json::json!({"mode": "contradictions"})),
         ];
 
@@ -2293,10 +2626,12 @@ mod tests {
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
 
-        let args = serde_json::json!({ "query": "anything" });
+        // A shared caller-supplied runId keeps the trace correlation field
+        // deterministic while comparing the lookup payloads.
+        let args = serde_json::json!({ "query": "anything", "runId": "run_lookup_contract" });
         let via_recall = make_request(
             "tools/call",
-            Some(serde_json::json!({ "name": "recall", "arguments": args })),
+            Some(serde_json::json!({ "name": "recall", "arguments": args.clone() })),
         );
         let via_search = make_request(
             "tools/call",
@@ -2582,7 +2917,14 @@ mod tests {
         let result = response.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
 
-        for name in ["recall", "memory_status", "memory", "codebase", "dedup", "graph"] {
+        for name in [
+            "recall",
+            "memory_status",
+            "memory",
+            "codebase",
+            "dedup",
+            "graph",
+        ] {
             let tool = tools
                 .iter()
                 .find(|t| t["name"].as_str() == Some(name))

@@ -1,13 +1,11 @@
 // Spatial Palace — the organ registry.
 //
 // The palace is the set of dashboard organs rendered as a navigable 3D
-// constellation. Each of the 19 organ routes is one region-node; clicking /
-// diving into a region enters that organ. Rendering is owned by PalaceNodePass
-// (bespoke hero-orb billboards + its own close-orbit camera); this module just
-// declares WHAT the organs are (ORGAN_REGIONS) and resolves a picked href back
-// to its region (regionByHref). PalaceNodePass.uploadRegions(ORGAN_REGIONS)
-// consumes this list; it lays the orbs out on a deterministic golden-angle shell
-// (center organ at origin), so the constellation is capture-stable.
+// constellation. Nine curated hero routes are particle organs; clicking one
+// collapses the field into that destination. Rendering is owned by
+// PalaceSwarmPass; this module declares WHAT the organs are and resolves a
+// picked href back to its region. Formation anchors are deterministic, so the
+// constellation remains capture-stable.
 
 /** One organ region in the palace. `href` is the dashboard route it dives into. */
 export interface OrganRegion {
@@ -22,8 +20,8 @@ export interface OrganRegion {
 /**
  * The organ constellation surfaced by the palace.
  *
- * LAUNCH CURATION (Sam, Jul 10 2026): trimmed from 19 to a TIGHT DEMO of ~8 hero
- * organs + Settings. 20 organs cognitively overloaded first-time users — the
+ * LAUNCH CURATION (Sam, Jul 10-13 2026): trimmed from 19 to a TIGHT DEMO of nine
+ * hero organs. 20 organs cognitively overloaded first-time users — the
  * memory-hygiene / maintainer-tool pages (duplicates, contradictions, patterns,
  * memory-prs, ...) read as confusing plumbing, not "my AI's memory is alive".
  * The hidden organs are NOT deleted: their routes stay in the codebase, remain
@@ -41,8 +39,8 @@ export const ORGAN_REGIONS: OrganRegion[] = [
 	{ href: '/feed', label: 'FEED', family: 'signal' },
 	{ href: '/explore', label: 'EXPLORE', family: 'reasoning' },
 	{ href: '/reasoning', label: 'REASONING', family: 'reasoning' },
-	{ href: '/stats', label: 'STATS', family: 'system' },
-	{ href: '/settings', label: 'SETTINGS', family: 'system' }
+	{ href: '/blackbox', label: 'BLACK BOX', family: 'signal' },
+	{ href: '/contradictions', label: 'CONTRADICTIONS', family: 'immune' }
 ];
 
 /**
@@ -53,8 +51,6 @@ export const ORGAN_REGIONS: OrganRegion[] = [
  * documented and one edit away.
  */
 export const HIDDEN_ORGANS: OrganRegion[] = [
-	{ href: '/contradictions', label: 'CONTRADICTIONS', family: 'immune' },
-	{ href: '/blackbox', label: 'BLACK BOX', family: 'signal' },
 	{ href: '/duplicates', label: 'DUPLICATES', family: 'memory' },
 	{ href: '/memory-prs', label: 'MEMORY PRS', family: 'immune' },
 	{ href: '/activation', label: 'ACTIVATION', family: 'signal' },
@@ -62,7 +58,9 @@ export const HIDDEN_ORGANS: OrganRegion[] = [
 	{ href: '/schedule', label: 'SCHEDULE', family: 'temporal' },
 	{ href: '/importance', label: 'IMPORTANCE', family: 'reasoning' },
 	{ href: '/patterns', label: 'PATTERNS', family: 'reasoning' },
-	{ href: '/intentions', label: 'INTENTIONS', family: 'temporal' }
+	{ href: '/intentions', label: 'INTENTIONS', family: 'temporal' },
+	{ href: '/stats', label: 'STATS', family: 'system' },
+	{ href: '/settings', label: 'SETTINGS', family: 'system' }
 ];
 
 /** Resolve a picked palace node id (an href) back to its organ region. */

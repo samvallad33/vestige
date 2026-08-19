@@ -142,3 +142,17 @@ fastembed-rs/
 
 .claude/
 .codebase-memory/
+
+# Internal AI-council planning scratch + session dumps — never public
+.council/
+
+# Private business material: pricing strategy, sales playbooks, and outreach
+# lists containing third parties' names and contact details. These sit in the
+# working tree untracked; without this rule a single `git add -A` would publish
+# real people's personal data to a public repo.
+docs/business/
+*.session.jsonl
+blackbox-proof-*/*.jsonl
+
+# Hermes agent-runtime conversation dumps (dated hex, tens of MB, embed system prompts)
+[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]

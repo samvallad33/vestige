@@ -30,6 +30,7 @@
 		| 'patterns'
 		| 'intentions'
 		| 'stats'
+		| 'embeddings'
 		| 'settings'
 		| 'command'
 		| 'search'
@@ -77,6 +78,8 @@
 		intentions: `<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.4"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/>`,
 		// Bar chart — stats.
 		stats: `<path d="M4 20h16"/><rect x="5.5" y="11" width="3.2" height="6.5" rx="1" fill="currentColor" stroke="none"/><rect x="10.4" y="7" width="3.2" height="10.5" rx="1" fill="currentColor" stroke="none" opacity=".85"/><rect x="15.3" y="13.5" width="3.2" height="4" rx="1" fill="currentColor" stroke="none" opacity=".7"/>`,
+		// Stacked vector planes — independent, non-comparable embedding spaces.
+		embeddings: `<path d="m5 7 7-3.5L19 7l-7 3.5z"/><path d="m5 12 7 3.5 7-3.5M5 17l7 3.5 7-3.5"/><path d="M5 7v10M19 7v10" opacity=".55"/><circle cx="12" cy="10.5" r="1" fill="currentColor" stroke="none"/>`,
 		// Gear — settings.
 		settings: `<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.6M12 18.9v2.6M21.5 12h-2.6M5.1 12H2.5M18.7 5.3l-1.9 1.9M7.2 16.8l-1.9 1.9M18.7 18.7l-1.9-1.9M7.2 7.2 5.3 5.3"/>`,
 

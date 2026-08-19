@@ -141,9 +141,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_content_fails() {
-        let storage = Arc::new(
-            Storage::new(Some(std::path::PathBuf::from("/tmp/test_importance.db"))).unwrap(),
-        );
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(Some(dir.path().join("importance.db"))).unwrap());
         let result = execute(
             &storage,
             &test_cognitive(),
@@ -155,9 +154,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_basic_importance_score() {
-        let storage = Arc::new(
-            Storage::new(Some(std::path::PathBuf::from("/tmp/test_importance2.db"))).unwrap(),
-        );
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(Some(dir.path().join("importance.db"))).unwrap());
         let result = execute(
             &storage,
             &test_cognitive(),

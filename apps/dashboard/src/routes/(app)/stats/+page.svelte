@@ -1,14 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import PageHeader from '$components/PageHeader.svelte';
+	import AnimatedNumber from '$components/AnimatedNumber.svelte';
+	import Icon from '$components/Icon.svelte';
 	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
 	import type { ObservatoryEngine } from '$lib/observatory/engine';
-	import { CAUSAL, IMMUNE, RETENTION, VITALS, rgb01 } from '$lib/observatory/cognitive-palette';
 	import type { RouteReceipt, RouteSceneModel } from '$lib/observatory/route-scene';
-	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
 	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
 	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
+	import { reveal } from '$lib/actions/reveal';
 	import { api } from '$stores/api';
-	import type { ConsolidationResult, SystemStats } from '$types';
+	import type { ConsolidationResult, HealthCheck, RetentionDistribution, SystemStats } from '$types';
 
 	type VitalReceipt = RouteReceipt & {
 		metric: string;
@@ -16,19 +18,26 @@
 		magnitude: number;
 	};
 
-	const CYAN = [...rgb01(CAUSAL.forward), 1] satisfies [number, number, number, number];
-	const FLOW = [...rgb01(VITALS.throughput), 0.96] satisfies [number, number, number, number];
-	const LUCIFERIN = [...rgb01(RETENTION.luciferin), 0.9] satisfies [number, number, number, number];
-	const AMBER = [...rgb01(IMMUNE.caution), 0.88] satisfies [number, number, number, number];
-	const SCARLET = [...rgb01(IMMUNE.veto), 0.9] satisfies [number, number, number, number];
-
-	let stats: SystemStats | null = $state(null);
+	let stats = $state<SystemStats | null>(null);
+	let retention = $state<RetentionDistribution | null>(null);
+	let health = $state<HealthCheck | null>(null);
 	let loading = $state(true);
 	let error: string | null = $state(null);
-	let consolidation: ConsolidationResult | null = $state(null);
+	let consolidation = $state<ConsolidationResult | null>(null);
+	let consolidating = $state(false);
+	let actionError: string | null = $state(null);
 	// Tracked when the user picks a vital. Selection only — no API call.
-	// Consolidation runs only from the explicit [ CONSOLIDATE ] button on settings.
+	// Consolidation runs only from the explicit labelled button in the DOM overlay.
 	let selectedVitalId: string | null = $state(null);
+
+	const totalMemories = $derived(health?.totalMemories ?? stats?.totalMemories ?? 0);
+	const averageRetention = $derived(health?.averageRetention ?? stats?.averageRetention ?? 0);
+	const embeddingCoverage = $derived(stats?.embeddingCoverage ?? 0);
+	const dueForReview = $derived(stats?.dueForReview ?? 0);
+	const distribution = $derived(retention?.distribution ?? []);
+	const maxBucketCount = $derived(Math.max(1, ...distribution.map((bucket) => bucket.count)));
+	const distributionTotal = $derived(distribution.reduce((sum, bucket) => sum + bucket.count, 0));
+	const healthLabel = $derived(health?.status ?? 'unknown');
 
 	const statsScene = $derived.by<RouteSceneModel>(() => {
 		const receipts = stats ? buildReceipts(stats, consolidation) : [];
@@ -43,6 +52,14 @@
 			alive: receipts.length > 0
 		};
 	});
+	const selectedReceipt = $derived(
+		statsScene.receipts.find((receipt) => `stats:${(receipt as VitalReceipt).metric}` === selectedVitalId) as
+			| VitalReceipt
+			| undefined
+	);
+	const consolidateDisabledReason = $derived(
+		loading ? 'Waiting for live vitals' : !stats ? 'Vitals unavailable' : totalMemories === 0 ? 'No memories to consolidate' : null
+	);
 
 	onMount(() => {
 		void loadStats();
@@ -52,19 +69,64 @@
 		loading = true;
 		error = null;
 		try {
-			stats = await api.stats();
+			const [nextStats, nextRetention, nextHealth] = await Promise.all([
+				api.stats(),
+				api.retentionDistribution(),
+				api.health()
+			]);
+			stats = nextStats;
+			retention = nextRetention;
+			health = nextHealth;
 		} catch (err) {
 			stats = null;
+			retention = null;
+			health = null;
 			error = err instanceof Error ? err.message : String(err);
 		} finally {
 			loading = false;
 		}
 	}
 
+	async function runConsolidate() {
+		if (consolidating || consolidateDisabledReason) return;
+		consolidating = true;
+		actionError = null;
+		try {
+			consolidation = await api.consolidate();
+			await loadStats();
+		} catch (err) {
+			actionError = err instanceof Error ? err.message : 'Consolidation failed';
+		} finally {
+			consolidating = false;
+		}
+	}
+
+	function bucketColor(index: number): string {
+		const progress = distribution.length <= 1 ? 1 : index / (distribution.length - 1);
+		if (progress < 0.34) return '#ef4444';
+		if (progress < 0.67) return '#f59e0b';
+		return '#7dffb3';
+	}
+
+	function metricExplanation(metric: string): string {
+		switch (metric) {
+			case 'totalMemories':
+				return 'The total durable memory population currently held by this Vestige brain.';
+			case 'averageRetention':
+				return 'The mean FSRS retrievability across memories; higher values indicate stronger expected recall.';
+			case 'embeddingCoverage':
+				return 'The share of memories with semantic embeddings available for similarity-aware recall.';
+			case 'dueForReview':
+				return 'Memories whose FSRS schedule says they are ready for maintenance in the next consolidation cycle.';
+			default:
+				return 'A live backend measurement represented by one of the breathing cells in the field.';
+		}
+	}
+
 	function handleRoutePick(pick: RoutePick) {
 		// Plain click on a vital must SELECT/INSPECT only — never mutate.
 		// Consolidation is an expensive real FSRS mutation and lives behind the
-		// EXPLICIT [ CONSOLIDATE ] action button on the settings page. Reading a
+		// EXPLICIT Consolidate memory action button in the overlay. Reading a
 		// number here must not silently rewrite the whole memory system.
 		if (pick.kind === 'stats-vital') {
 			selectedVitalId = pick.id;
@@ -72,12 +134,12 @@
 	}
 
 	function createStatsVitalsPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
-		// Field FIRST (renders behind), then text labels on top.
+		// The DOM overlay owns ALL vitals text (header + stat cards + retention chart),
+		// so the canvas emits NO MSDF text — only the alive breathing field behind it.
+		// Emitting in-canvas labels here would bleed a redundant "ghost" through the glass.
 		const field = new StatsVitalsFieldPass(engine);
 		field.uploadScene(scene);
-		const text = new StatsVitalsTextPass(engine);
-		text.uploadScene(scene);
-		return [field, text];
+		return [field];
 	}
 
 	/**
@@ -128,75 +190,6 @@
 		if (metric.includes('Coverage') || metric.includes('Embeddings')) return magnitude > 0.7 ? FIELD_HUE.oxygen : FIELD_HUE.bridge;
 		if (metric.includes('Retention') || metric.includes('Strength')) return magnitude < 0.4 ? FIELD_HUE.scarlet : FIELD_HUE.oxygen;
 		return FIELD_HUE.recall;
-	}
-
-	class StatsVitalsTextPass implements RouteFramePass {
-		private text: TextLayerPass;
-		private initPromise: Promise<void> | null = null;
-		private scene: RouteSceneModel | null = null;
-		private focused: string | null = null;
-
-		constructor(engine: ObservatoryEngine) {
-			this.text = new TextLayerPass(engine);
-		}
-
-		uploadScene(scene: RouteSceneModel): void {
-			this.scene = scene;
-			void this.ensureReady().then(() => this.text.setText(this.buildItems(scene)));
-		}
-
-		render(pass: GPURenderPassEncoder): void {
-			this.text.render(pass);
-		}
-
-		pickAt(ndcX: number, ndcY: number): RoutePick | null {
-			const hit = this.text.pickAt(ndcX, ndcY);
-			const next = hit?.id ?? null;
-			if (next !== this.focused) {
-				this.focused = next;
-				this.text.setRunDepth(next, 1);
-			}
-			return hit;
-		}
-
-		dispose(): void {
-			this.text.dispose();
-			this.scene = null;
-		}
-
-		private async ensureReady(): Promise<void> {
-			if (!this.initPromise) this.initPromise = this.text.init();
-			await this.initPromise;
-		}
-
-		private buildItems(scene: RouteSceneModel): TextLayerItem[] {
-			const receipts = scene.receipts as VitalReceipt[];
-			if (receipts.length === 0) return [];
-			const top = 0.68;
-			const step = 1.36 / Math.max(1, receipts.length - 1);
-			return receipts.map((receipt, i) => {
-				const magnitude = clamp01(receipt.magnitude);
-				return {
-					id: `stats:${receipt.metric}`,
-					kind: 'stats-vital',
-					text: receipt.label,
-					x: -0.82,
-					y: top - i * step,
-					size: i < 4 ? 0.036 : 0.027,
-					color: vitalColor(receipt.metric, magnitude),
-					// Depth drives brightness, but floor it so a low-magnitude vital
-					// (e.g. an older newestMemory timestamp) never fades to unreadable —
-					// every stat must be legible; magnitude still varies the glow above it.
-					depth: Math.max(0.55, magnitude),
-					weight: Math.max(0.18, Math.sqrt(magnitude)),
-					startFrame: i * 2,
-					revealSpan: 22,
-					maxWidthEm: 48,
-					hitPadX: 0.03,
-					hitPadY: 0.03
-				};
-			});
-		}
 	}
 
 	function buildReceipts(currentStats: SystemStats, currentConsolidation: ConsolidationResult | null): VitalReceipt[] {
@@ -267,13 +260,6 @@
 		return String(value);
 	}
 
-	function vitalColor(metric: string, magnitude: number): [number, number, number, number] {
-		if (metric.includes('due') || metric.includes('decay')) return magnitude > 0.4 ? AMBER : FLOW;
-		if (metric.includes('Coverage') || metric.includes('Embeddings')) return magnitude > 0.7 ? LUCIFERIN : CYAN;
-		if (metric.includes('Retention') || metric.includes('Strength')) return magnitude < 0.4 ? SCARLET : LUCIFERIN;
-		return FLOW;
-	}
-
 	function sanitizeAscii(value: string): string {
 		return value
 			.replace(/[\u2014\u2013]/g, '-')
@@ -293,7 +279,161 @@
 	seed={`stats-vitals:${stats?.totalMemories ?? 0}:${stats?.dueForReview ?? 0}:${stats?.averageRetention ?? 0}`}
 	scene={statsScene}
 	passes={createStatsVitalsPasses}
+	emptyLabel=""
 	loading={loading}
 	error={error}
 	onpick={handleRoutePick}
 />
+
+<div class="relative z-10 min-h-full space-y-6 p-6 pointer-events-none">
+	<div class="pointer-events-auto">
+		<PageHeader
+			icon="stats"
+			title="System Vitals"
+			subtitle="The live health of your memory: retention, coverage, and what is due."
+			accent="recall"
+		>
+			<div class="flex items-center gap-2">
+				<span class="inline-flex items-center gap-1.5 rounded-full border border-subtle/30 bg-deep/60 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-dim">
+					<span class="h-1.5 w-1.5 rounded-full {health?.status === 'healthy' ? 'bg-recall' : health?.status === 'empty' ? 'bg-muted' : 'bg-warning'}"></span>
+					{healthLabel}
+				</span>
+				<div class="flex flex-col items-end gap-1">
+					<button
+						type="button"
+						onclick={runConsolidate}
+						disabled={consolidating || Boolean(consolidateDisabledReason)}
+						class="inline-flex items-center gap-2 rounded-xl border border-synapse/35 bg-synapse/15 px-3.5 py-2 text-xs font-semibold text-synapse-glow transition hover:bg-synapse/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60 disabled:cursor-not-allowed disabled:opacity-45"
+					>
+						<Icon name="pulse" size={14} />
+						{consolidating ? 'Consolidating…' : 'Consolidate memory'}
+					</button>
+					{#if consolidateDisabledReason && !consolidating}
+						<span class="text-[9px] text-muted">{consolidateDisabledReason}</span>
+					{/if}
+				</div>
+			</div>
+		</PageHeader>
+	</div>
+
+	{#if error}
+		<section class="glass-panel pointer-events-auto flex flex-col items-center gap-3 rounded-2xl p-10 text-center" aria-live="polite">
+			<div class="flex h-12 w-12 items-center justify-center rounded-2xl border border-decay/25 bg-decay/10 text-decay">
+				<Icon name="pulse" size={24} />
+			</div>
+			<h2 class="text-sm font-semibold text-bright">System vitals are unavailable</h2>
+			<p class="max-w-md text-xs text-muted">{error}</p>
+			<button type="button" onclick={loadStats} class="mt-1 rounded-lg bg-synapse/20 px-4 py-2 text-xs font-medium text-synapse-glow transition hover:bg-synapse/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60">
+				Retry vitals
+			</button>
+		</section>
+	{:else if loading}
+		<div class="grid grid-cols-2 gap-3 lg:grid-cols-4 pointer-events-auto" aria-label="Loading system vitals">
+			{#each Array(4) as _}
+				<div class="glass-subtle shimmer h-28 rounded-xl"></div>
+			{/each}
+		</div>
+		<div class="glass-subtle shimmer h-[360px] rounded-2xl pointer-events-auto"></div>
+	{:else}
+		<section class="grid grid-cols-2 gap-3 lg:grid-cols-4 pointer-events-auto" aria-label="Live memory statistics">
+			<button type="button" aria-pressed={selectedVitalId === 'stats:totalMemories'} onclick={() => (selectedVitalId = 'stats:totalMemories')} use:reveal={{ delay: 0, y: 12 }} class="glass rounded-xl p-5 text-left lift transition {selectedVitalId === 'stats:totalMemories' ? 'border-recall/50 bg-recall/10' : ''}">
+				<div class="text-3xl font-bold tabular-nums text-bright"><AnimatedNumber value={totalMemories} /></div>
+				<div class="mt-2 text-[11px] font-medium uppercase tracking-wider text-dim">Memories</div>
+				<div class="mt-1 text-[10px] text-muted">Stored in the live brain</div>
+			</button>
+			<button type="button" aria-pressed={selectedVitalId === 'stats:averageRetention'} onclick={() => (selectedVitalId = 'stats:averageRetention')} use:reveal={{ delay: 60, y: 12 }} class="glass rounded-xl p-5 text-left lift transition {selectedVitalId === 'stats:averageRetention' ? 'border-recall/50 bg-recall/10' : ''}">
+				<div class="text-3xl font-bold tabular-nums text-recall"><AnimatedNumber value={averageRetention * 100} decimals={1} /><span class="text-base">%</span></div>
+				<div class="mt-2 text-[11px] font-medium uppercase tracking-wider text-dim">Avg retention</div>
+				<div class="mt-1 text-[10px] text-muted">Current FSRS retrievability</div>
+			</button>
+			<button type="button" aria-pressed={selectedVitalId === 'stats:embeddingCoverage'} onclick={() => (selectedVitalId = 'stats:embeddingCoverage')} use:reveal={{ delay: 120, y: 12 }} class="glass rounded-xl p-5 text-left lift transition {selectedVitalId === 'stats:embeddingCoverage' ? 'border-synapse/50 bg-synapse/10' : ''}">
+				<div class="text-3xl font-bold tabular-nums text-synapse-glow"><AnimatedNumber value={embeddingCoverage} decimals={1} /><span class="text-base">%</span></div>
+				<div class="mt-2 text-[11px] font-medium uppercase tracking-wider text-dim">Embedding coverage</div>
+				<div class="mt-1 text-[10px] text-muted">{stats?.withEmbeddings.toLocaleString() ?? 0} memories searchable by meaning</div>
+			</button>
+			<button type="button" aria-pressed={selectedVitalId === 'stats:dueForReview'} onclick={() => (selectedVitalId = 'stats:dueForReview')} use:reveal={{ delay: 180, y: 12 }} class="glass rounded-xl p-5 text-left lift transition {selectedVitalId === 'stats:dueForReview' ? 'border-warning/50 bg-warning/10' : ''}">
+				<div class="text-3xl font-bold tabular-nums {dueForReview > 0 ? 'text-warning' : 'text-recall'}"><AnimatedNumber value={dueForReview} /></div>
+				<div class="mt-2 text-[11px] font-medium uppercase tracking-wider text-dim">Due for review</div>
+				<div class="mt-1 text-[10px] text-muted">Ready for the next consolidation cycle</div>
+			</button>
+		</section>
+
+		<div class="glass pointer-events-auto flex min-h-16 items-center gap-3 rounded-xl border border-subtle/25 px-4 py-3">
+			<div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-recall/10 text-recall">
+				<Icon name={selectedReceipt ? 'pulse' : 'stats'} size={17} />
+			</div>
+			{#if selectedReceipt}
+				<div class="min-w-0">
+					<div class="text-[10px] font-medium uppercase tracking-wider text-muted">Selected vital · {selectedReceipt.metric}</div>
+					<p class="mt-1 text-xs text-dim">{metricExplanation(selectedReceipt.metric)} Live value: <span class="font-medium text-bright">{formatValue(selectedReceipt.metric, selectedReceipt.rawValue)}</span>.</p>
+				</div>
+			{:else}
+				<div>
+					<div class="text-[10px] font-medium uppercase tracking-wider text-muted">What you're seeing</div>
+					<p class="mt-1 text-xs text-dim">Select a stat card or a breathing field cell to inspect the live measurement. Selection never changes memory.</p>
+				</div>
+			{/if}
+		</div>
+
+		{#if actionError}
+			<div class="glass pointer-events-auto flex items-center gap-2 rounded-xl border border-decay/25 px-4 py-3 text-xs text-decay" aria-live="polite">
+				<Icon name="pulse" size={14} />
+				Consolidation failed: {actionError}
+			</div>
+		{:else if consolidation}
+			<div class="glass pointer-events-auto flex items-center gap-2 rounded-xl border border-recall/25 px-4 py-3 text-xs text-recall" aria-live="polite">
+				<Icon name="sparkle" size={14} />
+				Consolidation complete. Vitals and retention bands have been refreshed.
+			</div>
+		{/if}
+
+		<section use:reveal={{ delay: 220, y: 16 }} class="glass-panel pointer-events-auto rounded-2xl p-5 lg:p-6">
+			<div class="flex flex-wrap items-start justify-between gap-3">
+				<div>
+					<div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-bright">
+						<Icon name="stats" size={15} />
+						Retention distribution
+					</div>
+					<p class="mt-1.5 text-xs text-muted">Every memory grouped by its current probability of successful recall.</p>
+				</div>
+				<div class="text-right text-xs text-dim"><AnimatedNumber value={distributionTotal} /> memories measured</div>
+			</div>
+
+			{#if distribution.length === 0 || distributionTotal === 0}
+				<div class="mt-6 flex min-h-56 flex-col items-center justify-center gap-3 rounded-xl border border-subtle/20 bg-deep/35 p-8 text-center">
+					<div class="flex h-12 w-12 items-center justify-center rounded-2xl border border-recall/25 bg-recall/10 text-recall">
+						<Icon name="stats" size={24} draw />
+					</div>
+					<h2 class="text-sm font-medium text-bright">No retention history yet</h2>
+					<p class="max-w-sm text-xs text-muted">Add memories to build the first retention profile. The histogram will fill as Vestige learns their recall strength.</p>
+					<button type="button" onclick={loadStats} class="rounded-lg bg-recall/15 px-4 py-2 text-xs font-medium text-recall transition hover:bg-recall/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-recall/60">
+						Refresh vitals
+					</button>
+				</div>
+			{:else}
+				<div class="mt-7 grid min-h-64 grid-cols-[repeat(auto-fit,minmax(44px,1fr))] items-end gap-2" role="img" aria-label="Histogram of memory counts by retention range">
+					{#each distribution as bucket, index (bucket.range)}
+						<div class="group flex h-full min-w-0 flex-col items-center justify-end gap-2">
+							<div class="text-xs font-semibold tabular-nums text-bright opacity-80 transition group-hover:opacity-100">{bucket.count.toLocaleString()}</div>
+							<div class="relative flex h-44 w-full items-end overflow-hidden rounded-t-lg border border-subtle/20 bg-deep/45">
+								<div
+									class="w-full min-h-[3px] rounded-t-md transition-all duration-500 group-hover:brightness-125"
+									style={`height: ${Math.max(2, (bucket.count / maxBucketCount) * 100)}%; background: ${bucketColor(index)}; box-shadow: 0 0 18px ${bucketColor(index)}55`}
+								></div>
+							</div>
+							<div class="min-h-8 text-center text-[10px] leading-tight text-dim">{bucket.range}</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
+
+			<div class="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-subtle/20 pt-4 text-[10px] text-dim">
+				<span class="font-medium uppercase tracking-wider text-muted">Legend</span>
+				<span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-decay"></span>Fragile · review soon</span>
+				<span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-warning"></span>Stabilizing</span>
+				<span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-recall"></span>Durable recall</span>
+				<span class="ml-auto text-muted">Taller bars mean more memories in that retention band.</span>
+			</div>
+		</section>
+	{/if}
+</div>

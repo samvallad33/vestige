@@ -22,6 +22,7 @@
 	import { initTheme } from '$stores/theme';
 	import { OS_ROUTES, DOCK_ROUTES, routesByGroup, HOME_ROUTE } from '$lib/os-routes';
 	import { shell } from '$lib/stores/shell.svelte';
+	import { routeBurst } from '$lib/stores/route-burst';
 
 	let { children } = $props();
 	let showCommandPalette = $state(false);
@@ -30,7 +31,12 @@
 	let dashboardPath = $derived(
 		$page.url.pathname.startsWith(base) ? $page.url.pathname.slice(base.length) || '/' : $page.url.pathname
 	);
-	let isMarketingRoute = $derived(dashboardPath === '/waitlist' || dashboardPath.startsWith('/waitlist/'));
+	let isMarketingRoute = $derived(
+		dashboardPath === '/waitlist' ||
+			dashboardPath.startsWith('/waitlist/') ||
+			dashboardPath === '/benchmark' ||
+			dashboardPath.startsWith('/benchmark/')
+	);
 	// The organs are full-bleed WebGPU canvases. The OS shell (persistent dock +
 	// ⌘K palette) is NOT the old flex-sidebar — it FLOATS over the canvas as an
 	// overlay so it never fights the `fixed inset-0` organ layout. It shows on
@@ -199,6 +205,18 @@
 <div data-app-root class="contents">
 	{@render children()}
 </div>
+
+<!-- Root-owned portal veil: it stays mounted while Palace is destroyed and the
+     destination organ boots behind it, so the singularity never falls into a
+     dead black route gap. -->
+<div
+	class="route-burst-veil route-burst-{$routeBurst.phase}"
+	class:route-burst-reduced={$routeBurst.reduced}
+	style:--burst-x="{$routeBurst.x}%"
+	style:--burst-y="{$routeBurst.y}%"
+	style:--burst-color={$routeBurst.color}
+	aria-hidden="true"
+></div>
 
 {#if showShell}
 	<!-- ── Persistent desktop dock (floating, left edge) ──────────────────────
@@ -509,6 +527,49 @@
 		backdrop-filter: blur(14px);
 		-webkit-backdrop-filter: blur(14px);
 	}
+	/* Scoped component CSS is emitted after Tailwind utilities, so md:hidden was
+	   losing to display:flex above. Make the desktop exclusion explicit. */
+	@media (min-width: 768px) {
+		.os-mobilebar {
+			display: none;
+		}
+	}
+
+	.route-burst-veil {
+		position: fixed;
+		inset: 0;
+		z-index: 150;
+		pointer-events: none;
+		opacity: 0;
+		clip-path: circle(0 at var(--burst-x) var(--burst-y));
+		/* NEUTRAL bridge veil — a tight white flash core straight into the dark
+		   background. NO organ color (Sam: every transition was "ending in a color";
+		   the shape-specific explosion is the star, the veil just bridges the route
+		   handoff so there is no black gap). --burst-color is intentionally unused. */
+		background:
+			radial-gradient(circle at var(--burst-x) var(--burst-y), #ffffff 0 2%, rgba(10, 16, 22, 0.9) 22%, #020307 60%),
+			#020307;
+		will-change: opacity, clip-path;
+	}
+	.route-burst-covering {
+		pointer-events: auto;
+		opacity: 1;
+		clip-path: circle(155vmax at var(--burst-x) var(--burst-y));
+		transition:
+			clip-path 110ms cubic-bezier(0.2, 0.9, 0.2, 1),
+			opacity 45ms linear;
+	}
+	.route-burst-revealing {
+		opacity: 0;
+		clip-path: circle(155vmax at var(--burst-x) var(--burst-y));
+		transition: opacity 260ms cubic-bezier(0.22, 1, 0.36, 1);
+	}
+	.route-burst-reduced {
+		background: #020307;
+		filter: none;
+		clip-path: none;
+		transition: opacity 140ms ease;
+	}
 	.os-mobile-link {
 		display: flex;
 		flex-direction: column;
@@ -538,6 +599,10 @@
 		.os-dock-theme,
 		.os-dock-status-text {
 			transition: none;
+		}
+		.route-burst-veil {
+			clip-path: none;
+			transition: opacity 120ms ease;
 		}
 	}
 </style>

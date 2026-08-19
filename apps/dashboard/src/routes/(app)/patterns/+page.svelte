@@ -3,16 +3,16 @@
 	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
 	import PageHeader from '$components/PageHeader.svelte';
 	import Icon from '$components/Icon.svelte';
+	import AnimatedNumber from '$components/AnimatedNumber.svelte';
+	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
+	import { reveal } from '$lib/actions/reveal';
 	import { api } from '$stores/api';
-	import { rgb01 } from '$lib/observatory/cognitive-palette';
 	import { assertProvenance, type RouteNode, type RouteSceneModel } from '$lib/observatory/route-scene';
-	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
 	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
 	import { layoutRings, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 	import type { CrossProjectCategory, CrossProjectPattern, CrossProjectPatternsResponse } from '$types';
 	import type { ObservatoryEngine } from '$lib/observatory/engine';
 
-	type PatternLineItem = TextLayerItem & { patternKey?: string; category?: CrossProjectCategory };
 	type PatternScene = RouteSceneModel & {
 		organ: 'patterns';
 		patterns: CrossProjectPattern[];
@@ -20,44 +20,21 @@
 		maxTransferCount: number;
 	};
 
-	const CYAN = [...rgb01('#22C7DE'), 1] satisfies [number, number, number, number];
-	const AMBER = [...rgb01('#FFB020'), 0.88] satisfies [number, number, number, number];
-	const SCARLET = [...rgb01('#FF3B30'), 0.92] satisfies [number, number, number, number];
 	const ROW_LIMIT = 42;
-	// The MSDF reveal is frame-driven per glyph: the shared text layer packs
-	// ageFrame = startFrame + globalGlyphIndex * 2. Across many long rows that
-	// global index reaches the thousands, so late glyphs would only reveal after
-	// thousands of frames — the field renders near-black at rest. Anchor startFrame
-	// far in the past so every glyph's ageFrame is already elapsed and the whole
-	// queue is legible immediately (the shared layer is used by 15 organs, so the
-	// fix stays here in the item timing, not in the protected pass).
-	const REVEAL_ANCHOR = -100000;
 
 	let data = $state<CrossProjectPatternsResponse>({ projects: [], patterns: [] });
 	let loading = $state(true);
 	let error: string | null = $state(null);
 	let selectedCategory: CrossProjectCategory | null = $state(null);
+	// The specific pattern the user clicked (DOM row or field cell) — drives the
+	// interpretation panel. NON-MUTATING: selecting only opens a read-only receipt.
+	let selectedPattern = $state<CrossProjectPattern | null>(null);
 	// The corpus cross-project patterns are mined FROM — a dim living substrate so
 	// the organ breathes even when there are zero standing transfers today (the
 	// pattern set is recomputed and legitimately empty at times). Real memories,
 	// so the field still passes the discipline test.
 	let poolCells: FieldDatum[] = [];
 	let patternField: PatternFieldPass | null = null;
-
-	// Portrait phones get a legible DOM error/empty state layered over the field —
-	// the zero-DOM WebGPU error text is unreadable on a phone (tiny centered red
-	// glyphs with no title/affordance). Gated to portrait/narrow aspect (< 0.85) so
-	// the desktop-with-data render stays byte-identical to before. Derived from the
-	// LIVE viewport via matchMedia, not a hardcoded width.
-	let isPortrait = $state(false);
-	onMount(() => {
-		if (typeof window === 'undefined') return;
-		const mq = window.matchMedia('(max-aspect-ratio: 85/100)');
-		isPortrait = mq.matches;
-		const onChange = (e: MediaQueryListEvent) => (isPortrait = e.matches);
-		mq.addEventListener('change', onChange);
-		return () => mq.removeEventListener('change', onChange);
-	});
 
 	onMount(() => {
 		void loadPatterns();
@@ -100,6 +77,57 @@
 			: data.patterns;
 		return [...patterns].sort((a, b) => b.transfer_count - a.transfer_count || b.confidence - a.confidence);
 	});
+
+	// --- Real stat proof, all derived from the wire response (never constants). ---
+	const patternCount = $derived(data.patterns.length);
+	const projectCount = $derived(data.projects.length);
+	const totalTransfers = $derived(
+		data.patterns.reduce((sum, p) => sum + finite(p.transfer_count), 0)
+	);
+	// Strongest theme = the category carrying the most cross-project transfers.
+	const strongestTheme = $derived.by<{ category: CrossProjectCategory; transfers: number } | null>(() => {
+		if (data.patterns.length === 0) return null;
+		const byCategory = new Map<CrossProjectCategory, number>();
+		for (const p of data.patterns) {
+			byCategory.set(p.category, (byCategory.get(p.category) ?? 0) + finite(p.transfer_count));
+		}
+		let best: { category: CrossProjectCategory; transfers: number } | null = null;
+		for (const [category, transfers] of byCategory) {
+			if (!best || transfers > best.transfers) best = { category, transfers };
+		}
+		return best;
+	});
+
+	// --- Category lens dropdown. Only tracked categories that actually appear in
+	// the data are offered, so the control never lies about what's there. ---
+	const presentCategories = $derived.by<CrossProjectCategory[]>(() => {
+		const set = new Set<CrossProjectCategory>();
+		for (const p of data.patterns) set.add(p.category);
+		return Array.from(set).sort();
+	});
+	const categoryOptions = $derived<DropdownOption[]>([
+		{ value: '', label: 'All themes', icon: 'patterns' },
+		...presentCategories.map((c) => ({
+			value: c,
+			label: prettyCategory(c),
+			badge: data.patterns.filter((p) => p.category === c).length
+		}))
+	]);
+	function onCategoryChange(v: string) {
+		selectedCategory = v ? (v as CrossProjectCategory) : null;
+		selectedPattern = null;
+	}
+
+	// NON-MUTATING selection: opens the read-only detail panel, toggles off on
+	// re-click. No API mutation is ever triggered by a click.
+	function selectPattern(pattern: CrossProjectPattern) {
+		selectedPattern = isSamePattern(selectedPattern, pattern) ? null : pattern;
+	}
+
+	function isSamePattern(a: CrossProjectPattern | null, b: CrossProjectPattern | null): boolean {
+		if (!a || !b) return false;
+		return patternKey(a) === patternKey(b);
+	}
 
 	const patternScene = $derived.by<PatternScene>(() => normalizePatternScene(data.projects, visiblePatterns));
 
@@ -161,20 +189,12 @@
 	};
 
 	function createPatternPasses(engine: ObservatoryEngine): RouteFramePass[] {
-		// Field FIRST (renders behind), then MSDF text labels on top.
+		// Only the living ring field renders in-canvas. The DOM overlay owns every
+		// readable row now, so no MSDF text pass is added here (removing it kills the
+		// redundant "ghost" text that used to bleed through behind the glass).
 		const field = new PatternFieldPass(engine);
 		patternField = field;
-		const textPass = new TextLayerPass(engine);
-		void textPass.init();
-		return [
-			field,
-			{
-				render: (pass) => textPass.render(pass),
-				pickAt: (x, y) => textPass.pickAt(x, y),
-				dispose: () => textPass.dispose(),
-				uploadScene: (scene) => textPass.setText(buildTextItems(scene as PatternScene))
-			}
-		];
+		return [field];
 	}
 
 	/**
@@ -267,46 +287,15 @@
 		return CATEGORY_RING[category] ?? 0;
 	}
 
-	function buildTextItems(scene: PatternScene): PatternLineItem[] {
-		const rows = scene.patterns.slice(0, ROW_LIMIT);
-		const top = 0.74;
-		const rowStep = 1.48 / Math.max(1, ROW_LIMIT - 1);
-		return rows.map((pattern, index) => {
-			const strength = clamp01(finite(pattern.transfer_count) / scene.maxTransferCount);
-			const confidence = clamp01(pattern.confidence);
-			// Depth drives z-layering AND the shader's idle wobble ((1-depth)*sin(time)).
-			// Real cross-project data is often uniform (every transfer_count == 1 →
-			// strength == 1), which would pin depth at 1.0 and freeze the field. Blend
-			// strength with confidence and a gentle per-row phase so depth lives in the
-			// animated 0.55..0.9 band (matching the sibling text organs) and the field
-			// breathes at rest without faking any data channel.
-			const rowPhase = 0.06 * Math.sin(index * 0.7);
-			const depth = clamp01(0.6 + strength * 0.2 + (confidence - 0.5) * 0.4 + rowPhase);
-			return {
-				id: `pattern:${patternKey(pattern)}`,
-				kind: 'pattern',
-				patternKey: patternKey(pattern),
-				category: pattern.category,
-				text: patternLine(pattern),
-				x: -0.88,
-				y: top - index * rowStep,
-				size: 0.024 + confidence * 0.005,
-				color: selectedCategory && pattern.category === selectedCategory ? AMBER : CYAN,
-				depth,
-				weight: confidence,
-				startFrame: REVEAL_ANCHOR + index * 2,
-				revealSpan: 20,
-				maxWidthEm: 58,
-				hitPadX: 0.03,
-				hitPadY: 0.013
-			};
-		});
-	}
-
 	function handleRoutePick(pick: RoutePick) {
 		if (pick.kind !== 'pattern') return;
-		const item = pick.payload as PatternLineItem;
-		selectedCategory = selectedCategory === item.category ? null : (item.category ?? null);
+		// Field-cell pick opens the matching pattern's read-only receipt — never a
+		// mutation. Each cell carries its scene node, whose source id is the pattern
+		// key (see normalizePatternScene), so we resolve straight back to the pattern.
+		const node = pick.payload as RouteNode;
+		const key = node?.source?.id;
+		const match = key ? (data.patterns.find((p) => patternKey(p) === key) ?? null) : null;
+		if (match) selectPattern(match);
 	}
 
 	function patternLine(pattern: CrossProjectPattern): string {
@@ -329,12 +318,27 @@
 		).slice(0, 180);
 	}
 
+	function prettyCategory(category: CrossProjectCategory): string {
+		// Split the PascalCase enum into words for human-readable labels.
+		return category.replace(/([a-z])([A-Z])/g, '$1 $2');
+	}
+
+	function categoryAccent(category: CrossProjectCategory): string {
+		return CATEGORY_RING[category] >= 4 ? '#FF3B30' : CATEGORY_RING[category] >= 2 ? '#FFB020' : '#22C7DE';
+	}
+
+	function formatDate(iso: string): string {
+		const t = Date.parse(iso);
+		if (Number.isNaN(t)) return iso;
+		return new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+	}
+
 	function sanitizeAscii(value: string): string {
 		return value
-			.replace(/[\u2014\u2013]/g, '-')
-			.replace(/[\u2018\u2019]/g, "'")
-			.replace(/[\u201C\u201D]/g, '"')
-			.replace(/\u2026/g, '...')
+			.replace(/[—–]/g, '-')
+			.replace(/[‘’]/g, "'")
+			.replace(/[“”]/g, '"')
+			.replace(/…/g, '...')
 			.replace(/[^\x20-\x7E]/g, '?');
 	}
 
@@ -368,64 +372,250 @@
 	passes={createPatternPasses}
 	loading={loading}
 	error={error}
+	emptyLabel=""
 	onpick={handleRoutePick}
 />
 
 <!--
-	Portrait-only DOM chrome. On a phone the WebGPU-only error/empty state is a
-	blank near-black screen with unreadable centered red glyphs and no title. This
-	overlay gives portrait users a legible title (so they know this is Patterns) and
-	a proper card for the error / empty / loading states with a Retry affordance —
-	mirroring the contradictions organ. Gated to portrait (aspect < 0.85) so the
-	desktop-with-data render is byte-identical. pointer-events pass through to the
-	field except on the interactive card.
+	DOM-hybrid overlay (mirrors /contradictions). The WebGPU ring field stays alive
+	behind; this layer carries the identity, live proof, primary action, state
+	guidance, and interpretation. pointer-events pass through to the field except on
+	interactive children (pointer-events-auto).
 -->
-{#if isPortrait}
-	<div class="pointer-events-none fixed inset-0 z-10 flex flex-col p-6">
-		<div class="pointer-events-auto">
-			<PageHeader
-				icon="patterns"
-				title="Cross-Project Patterns"
-				accent="recall"
+<div class="relative z-10 min-h-full p-6 space-y-6 pointer-events-none">
+	<!-- (1) IDENTITY -->
+	<div class="pointer-events-auto">
+		<PageHeader
+			icon="patterns"
+			title="Cross-Project Patterns"
+			subtitle="Recurring structures Vestige detects across your projects and topics."
+			accent="recall"
+		>
+			<span class="text-dim text-sm tabular-nums inline-flex items-center gap-1.5">
+				<AnimatedNumber value={visiblePatterns.length} /> in view
+			</span>
+			<!-- (3) PRIMARY ACTION -->
+			<button
+				type="button"
+				onclick={loadPatterns}
+				disabled={loading}
+				class="inline-flex items-center gap-1.5 rounded-xl border border-recall/30 bg-recall/10 px-3 py-2 text-xs font-medium text-recall transition hover:bg-recall/20 disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-recall/60 lift"
+				title={loading ? 'Re-scanning your projects…' : 'Re-scan projects for transferred patterns'}
 			>
-				<span class="text-dim text-sm tabular-nums">
-					{visiblePatterns.length} {visiblePatterns.length === 1 ? 'pattern' : 'patterns'}
-				</span>
-			</PageHeader>
+				<Icon name="patterns" size={13} />
+				{loading ? 'Scanning…' : 'Re-scan patterns'}
+			</button>
+		</PageHeader>
+	</div>
+
+	{#if error}
+		<!-- (5) STATE GUIDANCE — error -->
+		<div class="glass-panel pointer-events-auto flex flex-col items-center gap-3 rounded-2xl p-10 text-center">
+			<div class="text-sm text-decay">Couldn't load cross-project patterns</div>
+			<div class="max-w-md text-xs text-muted">{error}</div>
+			<button
+				type="button"
+				onclick={loadPatterns}
+				class="mt-2 rounded-lg bg-recall/20 px-4 py-2 text-xs font-medium text-recall transition hover:bg-recall/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-recall/60"
+			>
+				Retry
+			</button>
+		</div>
+	{:else if loading}
+		<!-- (5) STATE GUIDANCE — loading -->
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 pointer-events-auto">
+			{#each Array(4) as _}
+				<div class="glass-subtle shimmer h-20 rounded-xl"></div>
+			{/each}
+		</div>
+		<div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4 pointer-events-auto">
+			<div class="glass-subtle shimmer min-h-[420px] rounded-2xl"></div>
+			<div class="glass-subtle shimmer h-[420px] rounded-2xl"></div>
+		</div>
+	{:else if patternCount === 0}
+		<!-- (5) STATE GUIDANCE — empty (designed, not a void) -->
+		<div class="glass-panel pointer-events-auto enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center">
+			<div class="flex h-14 w-14 items-center justify-center rounded-2xl border border-recall/25 bg-recall/10 text-recall">
+				<Icon name="patterns" size={26} draw />
+			</div>
+			<div class="text-sm font-medium text-bright">No cross-project patterns standing today.</div>
+			<div class="max-w-md text-xs text-muted">
+				A pattern appears here once a solved approach in one project — an error-handling
+				shape, a testing strategy, an architecture — shows up again in another. Keep working
+				across projects, then hit <span class="text-recall">Re-scan patterns</span> to mine them.
+			</div>
+			{#if projectCount > 0}
+				<div class="mt-1 text-[11px] text-dim tabular-nums">
+					Watching <AnimatedNumber value={projectCount} /> {projectCount === 1 ? 'project' : 'projects'} · none have shared a structure yet
+				</div>
+			{/if}
+		</div>
+	{:else}
+		<!-- (2) LIVE PROOF — real stat cards -->
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 pointer-events-auto">
+			<div use:reveal={{ delay: 0, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="text-2xl text-bright font-bold tabular-nums">
+					<AnimatedNumber value={patternCount} />
+				</div>
+				<div class="text-xs text-dim mt-1">patterns detected</div>
+			</div>
+			<div use:reveal={{ delay: 60, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="text-2xl text-bright font-bold tabular-nums">
+					<AnimatedNumber value={projectCount} />
+				</div>
+				<div class="text-xs text-dim mt-1">projects linked</div>
+			</div>
+			<div use:reveal={{ delay: 120, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="text-2xl font-bold tabular-nums" style="color: #22C7DE">
+					<AnimatedNumber value={totalTransfers} />
+				</div>
+				<div class="text-xs text-dim mt-1">total transfers</div>
+			</div>
+			<div use:reveal={{ delay: 180, y: 12 }} class="p-4 glass rounded-xl lift">
+				{#if strongestTheme}
+					<div class="text-lg font-bold leading-tight" style="color: {categoryAccent(strongestTheme.category)}">
+						{prettyCategory(strongestTheme.category)}
+					</div>
+					<div class="text-xs text-dim mt-1 tabular-nums">
+						strongest theme · {strongestTheme.transfers} transfers
+					</div>
+				{:else}
+					<div class="text-lg font-bold text-muted">—</div>
+					<div class="text-xs text-dim mt-1">strongest theme</div>
+				{/if}
+			</div>
 		</div>
 
-		{#if error}
-			<div class="pointer-events-auto mt-2 flex flex-1 items-center justify-center">
-				<div class="glass-panel flex w-full max-w-md flex-col items-center gap-3 rounded-2xl p-8 text-center">
-					<div class="text-sm text-decay">Couldn't load patterns</div>
-					<div class="max-w-sm text-xs text-muted">{error}</div>
-					<button
-						type="button"
-						onclick={loadPatterns}
-						class="mt-2 rounded-lg bg-recall/20 px-4 py-2 text-xs font-medium text-recall transition hover:bg-recall/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-recall/60"
-					>
-						Retry
-					</button>
-				</div>
-			</div>
-		{:else if loading}
-			<div class="pointer-events-auto mt-2 flex flex-1 items-center justify-center">
-				<div class="glass-subtle shimmer h-32 w-full max-w-md rounded-2xl"></div>
-			</div>
-		{:else if visiblePatterns.length === 0}
-			<div class="pointer-events-auto mt-2 flex flex-1 items-center justify-center">
-				<div class="glass-panel flex w-full max-w-md flex-col items-center gap-3 rounded-2xl p-8 text-center">
-					<div class="flex h-14 w-14 items-center justify-center rounded-2xl border border-recall/25 bg-recall/10 text-recall">
-						<Icon name="patterns" size={26} draw />
+		<!-- Filter bar (drives lens only; non-mutating) -->
+		<div class="flex flex-wrap gap-3 items-end enter pointer-events-auto">
+			<Dropdown
+				options={categoryOptions}
+				value={selectedCategory ?? ''}
+				label="Theme"
+				icon="filter"
+				onChange={onCategoryChange}
+			/>
+			{#if selectedCategory}
+				<button
+					onclick={() => {
+						selectedCategory = null;
+						selectedPattern = null;
+					}}
+					class="ml-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs border border-subtle/30 text-dim hover:text-text hover:border-recall/30 hover:bg-white/[0.03] transition lift"
+				>
+					<Icon name="close" size={13} />
+					Clear theme
+				</button>
+			{/if}
+		</div>
+
+		<!-- Main: pattern grid + interpretation panel -->
+		<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-4 pointer-events-auto">
+			<!-- Pattern list/grid -->
+			<div class="space-y-2">
+				{#if visiblePatterns.length === 0}
+					<div class="glass-panel flex flex-col items-center gap-2 rounded-2xl p-10 text-center">
+						<div class="text-dim opacity-60 breathe"><Icon name="patterns" size={40} strokeWidth={1.2} /></div>
+						<p class="text-dim text-sm">No patterns in the <span class="text-recall">{selectedCategory ? prettyCategory(selectedCategory) : ''}</span> theme.</p>
 					</div>
-					<div class="text-sm font-medium text-bright">
-						No cross-project patterns standing today.
+				{:else}
+					<div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
+						{#each visiblePatterns as pattern, i (patternKey(pattern))}
+							{@const focused = isSamePattern(selectedPattern, pattern)}
+							<button
+								use:reveal={{ delay: Math.min(i * 30, 320), y: 10 }}
+								onclick={() => selectPattern(pattern)}
+								class="w-full text-left p-4 rounded-xl border transition lift glass
+									{focused
+										? 'border-recall/45 shadow-[0_0_14px_rgba(34,199,222,0.18)]'
+										: 'border-subtle/20 hover:border-recall/30 hover:bg-white/[0.02]'}"
+							>
+								<div class="flex items-center gap-2 mb-2">
+									<span class="w-2 h-2 rounded-full shrink-0" style="background: {categoryAccent(pattern.category)}"></span>
+									<span class="text-[10px] uppercase tracking-wider" style="color: {categoryAccent(pattern.category)}">
+										{prettyCategory(pattern.category)}
+									</span>
+									<span class="ml-auto text-[10px] text-muted tabular-nums">
+										{pattern.transfer_count}× · {Math.round(clamp01(pattern.confidence) * 100)}%
+									</span>
+								</div>
+								<div class="text-sm text-bright font-medium mb-1.5 truncate">{pattern.name}</div>
+								<div class="flex flex-wrap items-center gap-1.5 text-[11px] text-dim">
+									<span class="px-1.5 py-0.5 rounded bg-white/[0.05] text-muted">{pattern.origin_project}</span>
+									<Icon name="explore" size={11} />
+									<span class="truncate">{pattern.transferred_to.join(', ') || 'unshared'}</span>
+								</div>
+							</button>
+						{/each}
 					</div>
-					<div class="max-w-sm text-xs text-muted">
-						Patterns appear here when a solved approach in one project transfers to another.
-					</div>
-				</div>
+				{/if}
 			</div>
-		{/if}
-	</div>
-{/if}
+
+			<!-- (6) INTERPRETATION — selection detail / hint -->
+			<aside use:reveal={{ delay: 120, y: 16 }} class="glass-panel rounded-2xl p-4 h-fit sticky top-6">
+				{#if selectedPattern}
+					{@const p = selectedPattern}
+					<div class="flex items-start justify-between gap-2 border-b border-subtle/20 pb-3">
+						<div class="min-w-0">
+							<div class="font-mono text-[10px] uppercase tracking-[0.22em]" style="color: {categoryAccent(p.category)}">
+								{prettyCategory(p.category)}
+							</div>
+							<h2 class="mt-1 text-base font-semibold text-bright leading-tight break-words">{p.name}</h2>
+						</div>
+						<button
+							type="button"
+							onclick={() => (selectedPattern = null)}
+							class="shrink-0 rounded-lg border border-subtle/30 px-2.5 py-1 text-xs text-muted transition hover:border-recall/40 hover:text-recall"
+						>
+							Close
+						</button>
+					</div>
+
+					<p class="mt-3 text-xs text-dim leading-relaxed">
+						This pattern was first solved in
+						<span class="text-text font-medium">{p.origin_project}</span>
+						and Vestige later matched it in
+						<span class="text-text font-medium">{p.transferred_to.join(', ') || '— no other project yet'}</span>.
+					</p>
+
+					<div class="mt-4 grid grid-cols-2 gap-2">
+						<div class="rounded-xl bg-white/[0.03] p-3">
+							<div class="text-[10px] uppercase tracking-wider text-muted">transfers</div>
+							<div class="mt-1 font-mono text-lg text-bright tabular-nums">{p.transfer_count}</div>
+						</div>
+						<div class="rounded-xl bg-white/[0.03] p-3">
+							<div class="text-[10px] uppercase tracking-wider text-muted">confidence</div>
+							<div class="mt-1 font-mono text-lg tabular-nums" style="color: {categoryAccent(p.category)}">
+								{Math.round(clamp01(p.confidence) * 100)}%
+							</div>
+						</div>
+						<div class="rounded-xl bg-white/[0.03] p-3">
+							<div class="text-[10px] uppercase tracking-wider text-muted">reached</div>
+							<div class="mt-1 font-mono text-lg text-bright tabular-nums">{p.transferred_to.length}</div>
+						</div>
+						<div class="rounded-xl bg-white/[0.03] p-3">
+							<div class="text-[10px] uppercase tracking-wider text-muted">last used</div>
+							<div class="mt-1 font-mono text-xs text-dim">{formatDate(p.last_used)}</div>
+						</div>
+					</div>
+
+					<div class="mt-3 flex flex-wrap gap-1">
+						<span class="text-[9px] px-1.5 py-0.5 rounded bg-white/[0.04] text-muted">{p.origin_project}</span>
+						{#each p.transferred_to as proj}
+							<span class="text-[9px] px-1.5 py-0.5 rounded bg-recall/10 text-recall">{proj}</span>
+						{/each}
+					</div>
+				{:else}
+					<div class="flex flex-col items-center gap-2 py-6 text-center">
+						<div class="text-dim opacity-60 breathe"><Icon name="sparkle" size={30} draw /></div>
+						<div class="text-xs font-medium text-bright">Pick a pattern</div>
+						<p class="max-w-[15rem] text-[11px] text-muted leading-relaxed">
+							Click any card — or a glowing ring in the field — to see where the structure
+							started and which projects it spread to. Each ring is one theme.
+						</p>
+					</div>
+				{/if}
+			</aside>
+		</div>
+	{/if}
+</div>

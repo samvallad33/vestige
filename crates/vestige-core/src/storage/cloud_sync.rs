@@ -24,9 +24,9 @@
 use std::cell::RefCell;
 use std::time::Duration;
 
+use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, ETAG, IF_MATCH};
-use reqwest::StatusCode;
 
 use super::portable::PortableArchive;
 use super::sqlite::{PortableSyncBackend, Result, StorageError};
@@ -49,10 +49,10 @@ pub struct HttpPortableSyncBackend {
     endpoint: String,
     /// Per-user sync key, presented as `Authorization: Bearer <key>`.
     sync_key: String,
-    /// Optional zero-knowledge passphrase. When set, the archive is encrypted
-    /// before upload and decrypted after download — the server never sees
-    /// plaintext, and this passphrase is never sent to the server.
-    encryption_key: Option<String>,
+    /// Required zero-knowledge passphrase. The archive is always encrypted
+    /// before upload and decrypted after download; the server never receives
+    /// this passphrase or a plaintext archive.
+    encryption_key: String,
     /// Blocking HTTP client (the trait is synchronous).
     client: Client,
     /// ETag captured on the most recent successful read, used as the `If-Match`
@@ -62,19 +62,19 @@ pub struct HttpPortableSyncBackend {
 }
 
 impl HttpPortableSyncBackend {
-    /// Build a cloud sync backend for `endpoint` authenticated with `sync_key`,
-    /// with no client-side encryption (plaintext upload).
+    /// Plaintext cloud sync is deliberately disabled.
     ///
     /// A trailing slash on `endpoint` is trimmed so URL joining is predictable.
     pub fn new(endpoint: impl Into<String>, sync_key: impl Into<String>) -> Result<Self> {
         Self::new_with_encryption(endpoint, sync_key, None)
     }
 
-    /// Build a cloud sync backend with optional zero-knowledge encryption.
+    /// Build a cloud sync backend with required zero-knowledge encryption.
     ///
-    /// When `encryption_key` is `Some`, the portable archive is encrypted with
-    /// XChaCha20-Poly1305 (Argon2id-derived key) before upload and decrypted on
-    /// download. The passphrase never leaves this process.
+    /// The portable archive is encrypted with XChaCha20-Poly1305
+    /// (Argon2id-derived key) before upload and decrypted on download. The
+    /// passphrase never leaves this process. Missing or blank passphrases are
+    /// rejected rather than silently uploading plaintext.
     pub fn new_with_encryption(
         endpoint: impl Into<String>,
         sync_key: impl Into<String>,
@@ -92,7 +92,15 @@ impl HttpPortableSyncBackend {
                 "cloud sync key is empty (set VESTIGE_CLOUD_SYNC_KEY)".to_string(),
             ));
         }
-        let encryption_key = encryption_key.filter(|k| !k.is_empty());
+        let encryption_key = encryption_key
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| {
+                StorageError::Init(
+                    "cloud sync encryption key is required; set \
+                     VESTIGE_CLOUD_ENCRYPTION_KEY before syncing"
+                        .to_string(),
+                )
+            })?;
         let client = Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .user_agent(concat!("vestige-cloud-sync/", env!("CARGO_PKG_VERSION")))
@@ -109,7 +117,7 @@ impl HttpPortableSyncBackend {
 
     /// Whether this backend encrypts client-side (zero-knowledge).
     pub fn is_encrypted(&self) -> bool {
-        self.encryption_key.is_some()
+        true
     }
 
     /// Full blob URL for this backend.
@@ -150,27 +158,18 @@ impl PortableSyncBackend for HttpPortableSyncBackend {
                     .bytes()
                     .map_err(|e| StorageError::Init(format!("cloud sync read body failed: {e}")))?;
 
-                // Decrypt if this is a zero-knowledge envelope. If a passphrase
-                // is configured but the remote is still plaintext (legacy), parse
-                // it directly — the next push will encrypt it (transparent upgrade).
-                let plaintext: std::borrow::Cow<'_, [u8]> =
-                    if super::cloud_crypto::is_encrypted(&bytes) {
-                        let pass = self.encryption_key.as_deref().ok_or_else(|| {
-                            StorageError::Init(
-                                "remote archive is encrypted but VESTIGE_CLOUD_ENCRYPTION_KEY is \
-                                 not set on this device"
-                                    .to_string(),
-                            )
-                        })?;
-                        std::borrow::Cow::Owned(super::cloud_crypto::decrypt(pass, &bytes)?)
-                    } else {
-                        std::borrow::Cow::Borrowed(&bytes)
-                    };
+                if !super::cloud_crypto::is_encrypted(&bytes) {
+                    return Err(StorageError::Init(
+                        "refusing plaintext cloud archive: Vestige Pro requires \
+                         end-to-end encrypted sync"
+                            .to_string(),
+                    ));
+                }
+                let plaintext = super::cloud_crypto::decrypt(&self.encryption_key, &bytes)?;
 
-                let archive: PortableArchive =
-                    serde_json::from_slice(&plaintext).map_err(|e| {
-                        StorageError::Init(format!("failed to parse cloud sync archive: {e}"))
-                    })?;
+                let archive: PortableArchive = serde_json::from_slice(&plaintext).map_err(|e| {
+                    StorageError::Init(format!("failed to parse cloud sync archive: {e}"))
+                })?;
                 Ok(Some(archive))
             }
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(StorageError::Init(
@@ -188,21 +187,15 @@ impl PortableSyncBackend for HttpPortableSyncBackend {
         let plaintext = serde_json::to_vec(archive)
             .map_err(|e| StorageError::Init(format!("failed to serialize archive: {e}")))?;
 
-        // Zero-knowledge: encrypt before upload when a passphrase is set, so the
-        // server only ever stores ciphertext. Content type reflects the payload.
-        let (body, content_type) = match self.encryption_key.as_deref() {
-            Some(pass) => (
-                super::cloud_crypto::encrypt(pass, &plaintext)?,
-                "application/octet-stream",
-            ),
-            None => (plaintext, "application/json"),
-        };
+        // Zero-knowledge is mandatory for hosted sync: plaintext never leaves
+        // this process and every successful upload is an encrypted envelope.
+        let body = super::cloud_crypto::encrypt(&self.encryption_key, &plaintext)?;
 
         let mut req = self
             .client
             .put(self.blob_url())
             .header(AUTHORIZATION, format!("Bearer {}", self.sync_key))
-            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
             .body(body);
 
         // Optimistic concurrency: only overwrite the object we pulled. If the
@@ -240,12 +233,14 @@ impl PortableSyncBackend for HttpPortableSyncBackend {
 
 #[cfg(test)]
 mod tests {
+    use super::super::portable::{PORTABLE_ARCHIVE_FORMAT, PortableArchive, PortableTable};
     use super::*;
-    use super::super::portable::{PortableArchive, PortableTable, PORTABLE_ARCHIVE_FORMAT};
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::thread;
+
+    const TEST_PASSPHRASE: &str = "correct horse battery staple";
 
     fn sample_archive() -> PortableArchive {
         PortableArchive {
@@ -268,6 +263,7 @@ mod tests {
         method: String,
         authorization: Option<String>,
         if_match: Option<String>,
+        content_type: Option<String>,
     }
 
     /// Minimal one-shot HTTP mock. `responder` builds the raw HTTP response
@@ -275,7 +271,7 @@ mod tests {
     /// URL and a receiver for the captured request.
     fn spawn_mock<F>(responder: F) -> (String, mpsc::Receiver<CapturedRequest>)
     where
-        F: Fn(&CapturedRequest) -> String + Send + 'static,
+        F: Fn(&CapturedRequest) -> Vec<u8> + Send + 'static,
     {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
         let addr = listener.local_addr().expect("addr");
@@ -293,10 +289,12 @@ mod tests {
                         cap.authorization = Some(v.trim().to_string());
                     } else if let Some(v) = line.strip_prefix("if-match: ") {
                         cap.if_match = Some(v.trim().to_string());
+                    } else if let Some(v) = line.strip_prefix("content-type: ") {
+                        cap.content_type = Some(v.trim().to_string());
                     }
                 }
                 let response = responder(&cap);
-                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(&response);
                 let _ = stream.flush();
                 let _ = tx.send(cap);
             }
@@ -304,30 +302,61 @@ mod tests {
         (format!("http://{addr}"), rx)
     }
 
-    fn http_response(status: &str, extra_headers: &str, body: &str) -> String {
-        format!(
-            "HTTP/1.1 {status}\r\nContent-Length: {}\r\n{extra_headers}Connection: close\r\n\r\n{body}",
+    fn http_response(status: &str, extra_headers: &str, body: &str) -> Vec<u8> {
+        http_response_bytes(status, extra_headers, body.as_bytes())
+    }
+
+    fn http_response_bytes(status: &str, extra_headers: &str, body: &[u8]) -> Vec<u8> {
+        let mut response = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\n{extra_headers}Connection: close\r\n\r\n",
             body.len()
         )
+        .into_bytes();
+        response.extend_from_slice(body);
+        response
+    }
+
+    fn encrypted_backend(endpoint: impl Into<String>, sync_key: &str) -> HttpPortableSyncBackend {
+        HttpPortableSyncBackend::new_with_encryption(
+            endpoint,
+            sync_key,
+            Some(TEST_PASSPHRASE.to_string()),
+        )
+        .unwrap()
     }
 
     #[test]
-    fn new_rejects_empty_endpoint_and_key() {
-        assert!(HttpPortableSyncBackend::new("", "key").is_err());
-        assert!(HttpPortableSyncBackend::new("https://x", "").is_err());
-        assert!(HttpPortableSyncBackend::new("https://x", "key").is_ok());
+    fn new_rejects_plaintext_empty_endpoint_and_empty_key() {
+        assert!(HttpPortableSyncBackend::new("https://x", "key").is_err());
+        assert!(
+            HttpPortableSyncBackend::new_with_encryption(
+                "",
+                "key",
+                Some(TEST_PASSPHRASE.to_string())
+            )
+            .is_err()
+        );
+        assert!(
+            HttpPortableSyncBackend::new_with_encryption(
+                "https://x",
+                "",
+                Some(TEST_PASSPHRASE.to_string())
+            )
+            .is_err()
+        );
+        assert!(encrypted_backend("https://x", "key").is_encrypted());
     }
 
     #[test]
     fn endpoint_trailing_slash_trimmed() {
-        let be = HttpPortableSyncBackend::new("https://sync.example/", "k").unwrap();
+        let be = encrypted_backend("https://sync.example/", "k");
         assert_eq!(be.blob_url(), "https://sync.example/v1/blob");
     }
 
     #[test]
     fn read_404_returns_none() {
         let (base, rx) = spawn_mock(|_| http_response("404 Not Found", "", ""));
-        let be = HttpPortableSyncBackend::new(base, "secret").unwrap();
+        let be = encrypted_backend(base, "secret");
         let got = be.read_archive().expect("read ok");
         assert!(got.is_none());
         let cap = rx.recv().unwrap();
@@ -338,11 +367,11 @@ mod tests {
     #[test]
     fn read_200_parses_and_captures_etag() {
         let archive = sample_archive();
-        let body = serde_json::to_string(&archive).unwrap();
-        let (base, _rx) = spawn_mock(move |_| {
-            http_response("200 OK", "ETag: \"v1-abc\"\r\n", &body)
-        });
-        let be = HttpPortableSyncBackend::new(base, "secret").unwrap();
+        let plaintext = serde_json::to_vec(&archive).unwrap();
+        let body = super::super::cloud_crypto::encrypt(TEST_PASSPHRASE, &plaintext).unwrap();
+        let (base, _rx) =
+            spawn_mock(move |_| http_response_bytes("200 OK", "ETag: \"v1-abc\"\r\n", &body));
+        let be = encrypted_backend(base, "secret");
         let got = be.read_archive().expect("read ok").expect("some archive");
         assert_eq!(got.archive_format, PORTABLE_ARCHIVE_FORMAT);
         // ETag captured for the next If-Match write.
@@ -350,9 +379,18 @@ mod tests {
     }
 
     #[test]
+    fn read_200_rejects_plaintext_downgrade() {
+        let body = serde_json::to_string(&sample_archive()).unwrap();
+        let (base, _rx) = spawn_mock(move |_| http_response("200 OK", "", &body));
+        let be = encrypted_backend(base, "secret");
+        let err = be.read_archive().unwrap_err();
+        assert!(err.to_string().contains("refusing plaintext"));
+    }
+
+    #[test]
     fn read_401_is_error() {
         let (base, _rx) = spawn_mock(|_| http_response("401 Unauthorized", "", ""));
-        let be = HttpPortableSyncBackend::new(base, "bad").unwrap();
+        let be = encrypted_backend(base, "bad");
         assert!(be.read_archive().is_err());
     }
 
@@ -360,19 +398,23 @@ mod tests {
     fn write_sends_if_match_when_etag_present() {
         // Seed an etag as if a prior read happened.
         let (base, rx) = spawn_mock(|_| http_response("200 OK", "", ""));
-        let be = HttpPortableSyncBackend::new(base, "secret").unwrap();
+        let be = encrypted_backend(base, "secret");
         *be.last_etag.borrow_mut() = Some("\"v1-abc\"".to_string());
         be.write_archive(&sample_archive()).expect("write ok");
         let cap = rx.recv().unwrap();
         assert_eq!(cap.method, "PUT");
         assert_eq!(cap.authorization.as_deref(), Some("Bearer secret"));
         assert_eq!(cap.if_match.as_deref(), Some("\"v1-abc\""));
+        assert_eq!(
+            cap.content_type.as_deref(),
+            Some("application/octet-stream")
+        );
     }
 
     #[test]
     fn write_omits_if_match_for_first_create() {
         let (base, rx) = spawn_mock(|_| http_response("201 Created", "", ""));
-        let be = HttpPortableSyncBackend::new(base, "secret").unwrap();
+        let be = encrypted_backend(base, "secret");
         // No prior read → no etag → no If-Match (allow create).
         be.write_archive(&sample_archive()).expect("write ok");
         let cap = rx.recv().unwrap();
@@ -383,7 +425,7 @@ mod tests {
     #[test]
     fn write_412_is_conflict_error() {
         let (base, _rx) = spawn_mock(|_| http_response("412 Precondition Failed", "", ""));
-        let be = HttpPortableSyncBackend::new(base, "secret").unwrap();
+        let be = encrypted_backend(base, "secret");
         *be.last_etag.borrow_mut() = Some("\"stale\"".to_string());
         let err = be.write_archive(&sample_archive()).unwrap_err();
         assert!(err.to_string().contains("conflict"));

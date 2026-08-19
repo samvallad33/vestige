@@ -29,6 +29,7 @@ export type RouteOrgan =
 	| 'dreams'
 	| 'intentions'
 	| 'blackbox'
+	| 'witness'
 	| 'memory-prs'
 	| 'stats'
 	| 'settings';

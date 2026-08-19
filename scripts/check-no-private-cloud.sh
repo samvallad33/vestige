@@ -13,10 +13,11 @@
 #                    transactional email. This MUST NEVER be committed here.
 #
 # This guard scans only tracked files (git grep) for distinctive *service*
-# signatures — module headers, billing/provider internals, and server-side
-# auth/namespace mapping — chosen so the legitimate public client does NOT
-# match. It deliberately does NOT match the VESTIGE_CLOUD_* client env-var
-# prefix, which the public client uses legitimately.
+# signatures — module headers, billing/provider internals, the private Stripe
+# test-control-plane harness, and server-side auth/namespace mapping — chosen
+# so the legitimate public client does NOT match. It deliberately does NOT
+# match the VESTIGE_CLOUD_* client env-var prefix, which the public client uses
+# legitimately.
 set -u
 
 cd "$(git rev-parse --show-toplevel)" || {
@@ -39,9 +40,22 @@ PATTERNS=(
   # Billing / provider internals (server-only)
   'LEMONSQUEEZY_WEBHOOK_SECRET'
   'lemonsqueezy'
+  # Private Stripe test-control-plane harness. These are its exact stable
+  # identifiers, rather than generic Stripe, billing, or webhook language
+  # that public docs and the local-first client may legitimately use.
+  'vestige-stripe-test-control-plane'
+  'VESTIGE_STRIPE_TEST_'
+  'managed_continuity'
+  'stripe_test_control_plane'
   # Server-side sync-key -> namespace mapping (the authoritative mapping that
   # by design lives ONLY in the hosted service, never the client)
   'sync_keys SET key_hash'
+)
+
+# A copied private module must be rejected by its exact tracked path even if
+# its contents have changed enough to evade the stable content markers above.
+PRIVATE_PATHS=(
+  'src/stripe_test_control_plane.rs'
 )
 
 # Files this guard itself lives in / references the patterns must be excluded,
@@ -60,6 +74,16 @@ for pat in "${PATTERNS[@]}"; do
     if [ -n "$hits" ]; then
       violations=$((violations + 1))
       report+=$'\n'"  ✗ private-service marker found: \"$pat\""$'\n'
+      report+="$(printf '%s\n' "$hits" | sed 's/^/      /')"$'\n'
+    fi
+  fi
+done
+
+for path in "${PRIVATE_PATHS[@]}"; do
+  if hits=$(git ls-files -- "$path"); then
+    if [ -n "$hits" ]; then
+      violations=$((violations + 1))
+      report+=$'\n'"  ✗ private-service path found: \"$path\""$'\n'
       report+="$(printf '%s\n' "$hits" | sed 's/^/      /')"$'\n'
     fi
   fi

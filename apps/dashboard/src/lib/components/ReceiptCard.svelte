@@ -24,20 +24,13 @@
 		high: '#f43f5e'
 	};
 
-	// Hero-journey handoff: open the exact receipt in the Graph, centered on its
-	// primary memory, with the full retrieved set focused, then AUTO-LAUNCH Cinema
-	// over that evidence. Base-safe via osGoto (a bare goto('/graph') escaped the
-	// /dashboard base and 404'd); the cognitive context (memory/focus/receipt/
-	// cinema) rides the URL so the whole set survives the navigation.
-	function openInCinema() {
-		const primary = receipt.retrieved[0];
-		if (!primary) return;
-		osGoto('/graph', {
-			memory: primary,
-			focus: receipt.retrieved,
-			receipt: receipt.receipt_id,
-			cinema: true
-		});
+	// Launch-slice handoff: the Observatory receives the immutable receipt id,
+	// refetches it, and renders only memory ids actually named by that receipt.
+	// The route is base-safe through osGoto (a bare goto('/observatory') can
+	// escape the /dashboard base in production).
+	function openInObservatory() {
+		if (!receipt.retrieved.length && !receipt.suppressed.length) return;
+		osGoto('/observatory', { receipt: receipt.receipt_id });
 	}
 </script>
 
@@ -99,9 +92,13 @@
 		{/if}
 	{/if}
 
-	<button class="cinema-btn" onclick={openInCinema} disabled={!receipt.retrieved.length}>
+	<button
+		class="cinema-btn"
+		onclick={openInObservatory}
+		disabled={!receipt.retrieved.length && !receipt.suppressed.length}
+	>
 		<Icon name="sparkle" size={14} />
-		Open receipt in Cinema
+		Open exact receipt in Observatory
 	</button>
 </div>
 

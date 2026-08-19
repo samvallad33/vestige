@@ -85,6 +85,8 @@ pub mod config;
 pub mod connectors;
 pub mod consolidation;
 pub mod embedder;
+/// Durable profile contracts for local embedding vector spaces.
+pub mod embedding;
 pub mod fsrs;
 pub mod fts;
 pub mod memory;
@@ -166,13 +168,15 @@ pub use config::{CONFIG_FILE, OutputConfig, OutputDefaults, OutputProfile, Vesti
 
 // Agent Black Box / Receipts / Memory PRs (the cognitive flight recorder)
 pub use trace::{
-    classify_write, DecayRisk, MemoryPr, MemoryPrAction, MemoryPrKind, MemoryPrStatus,
-    MemoryTraceEvent, Receipt, ReceiptMutation, ReviewMode, RiskClass, RiskSignal, SuppressReason,
-    SuppressedReceiptEntry, WriteContext, WriteSource, HIGH_TRUST_FLOOR, LOW_CONFIDENCE_FLOOR,
+    BackfillCandidateEvidence, BackfillReceiptEvidence, DecayRisk, HIGH_TRUST_FLOOR,
+    LOW_CONFIDENCE_FLOOR, MemoryPr, MemoryPrAction, MemoryPrKind, MemoryPrStatus, MemoryTraceEvent,
+    Receipt, ReceiptMutation, ReviewMode, RiskClass, RiskSignal, SuppressReason,
+    SuppressedReceiptEntry, WriteContext, WriteSource, classify_write,
 };
 
 // Storage layer
 pub use storage::{
+    AgentRunSummary,
     ClassificationResult,
     CompositionEventRecord,
     CompositionMemberRecord,
@@ -183,6 +187,10 @@ pub use storage::{
     ConsolidationHistoryRecord,
     Domain,
     DreamHistoryRecord,
+    EmbeddingProfileIntegrityManifest,
+    EmbeddingProfileMigrationNodeCheckpoint,
+    EmbeddingProfileMigrationRecord,
+    EmbeddingProfileVector,
     HealthStatus,
     InsightRecord,
     IntentionRecord,
@@ -203,7 +211,6 @@ pub use storage::{
     Result,
     SchedulingState,
     SearchQuery,
-    AgentRunSummary,
     SmartIngestResult,
     SourceUpsertOutcome,
     SourceUpsertResult,
@@ -219,6 +226,22 @@ pub use storage::{
 // Embedder trait and implementations
 pub use embedder::{
     Embedder, EmbedderError, EmbedderResult, EmbedderSend, FastembedEmbedder, LocalEmbedder,
+};
+
+// Embedding profile contracts are feature-independent so profile discovery,
+// storage metadata, and explicit install workflows remain available in a
+// lightweight build without an inference runtime.
+pub use embedding::{
+    ActiveEmbeddingProfile, BuiltinEmbeddingProfile, ChunkingStrategy,
+    EMBEDDING_PROFILE_MANIFEST_SCHEMA_VERSION, EmbeddingDevice, EmbeddingEvaluationSummary,
+    EmbeddingLifecycleError, EmbeddingLifecycleEvaluationReceipt,
+    EmbeddingLifecycleMigrationReceipt, EmbeddingMigrationState, EmbeddingNormalization,
+    EmbeddingProfile, EmbeddingProfileError, EmbeddingProfileFailure, EmbeddingProfileId,
+    EmbeddingProfileLifecycle, EmbeddingProfileManifest, EmbeddingProfileState,
+    EmbeddingRuntimeBackend, EmbeddingRuntimeMetadata, EmbeddingVerification, EncodingTemplate,
+    ModelArtifactHash, ProfileMigrationCheckpoint, ProfileRuntimeRegistry, ProfiledEmbedder,
+    VerificationStatus, VerifiedLocalArtifact, builtin_embedding_profile_by_id,
+    builtin_embedding_profiles,
 };
 
 // Consolidation (sleep-inspired memory processing)

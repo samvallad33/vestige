@@ -3,7 +3,7 @@
 //! v2.0: Adds cognitive operation endpoints (dream, explore, predict, importance, consolidation)
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path as FsPath, PathBuf};
@@ -17,6 +17,427 @@ use serde_json::Value;
 
 use super::events::VestigeEvent;
 use super::state::AppState;
+
+type EmbeddingProfileActionResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
+
+/// A deliberately narrow lifecycle request. The dashboard must state both the
+/// exact profile contract it intends to affect and an explicit confirmation;
+/// accepting an arbitrary JSON blob here would make it too easy for a stale
+/// page or an extension to trigger a profile transition accidentally.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmbeddingProfileActionRequest {
+    pub profile_id: String,
+    pub confirm: bool,
+}
+
+/// Return the catalog and persisted lifecycle receipts without starting a
+/// runtime, opening a model directory, or changing the active profile.
+pub async fn list_embedding_profiles(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, StatusCode> {
+    Ok(Json(embedding_profiles_snapshot(&state.storage)?))
+}
+
+/// Artifact roots are a local-machine capability, not an HTTP capability.
+/// The dashboard deliberately cannot install a model: it has no safe way to
+/// receive a directory without widening this local API into a filesystem
+/// control surface. The explicit CLI command verifies a local artifact root.
+pub async fn install_embedding_profile(
+    State(state): State<AppState>,
+    Json(request): Json<EmbeddingProfileActionRequest>,
+) -> EmbeddingProfileActionResult {
+    let profile_id = confirmed_builtin_embedding_profile_for_action(&request)?;
+    let _ = state;
+    Err(cli_only_embedding_lifecycle_response(
+        &profile_id,
+        "install",
+    ))
+}
+
+/// Evaluation must reconstruct the verified local runner from an operator-held
+/// artifact directory. Never accept that directory over HTTP or persist it in
+/// the database: run the explicit local CLI step instead.
+pub async fn evaluate_embedding_profile(
+    State(state): State<AppState>,
+    Json(request): Json<EmbeddingProfileActionRequest>,
+) -> EmbeddingProfileActionResult {
+    let profile_id = confirmed_builtin_embedding_profile_for_action(&request)?;
+    let _ = state;
+    Err(cli_only_embedding_lifecycle_response(
+        &profile_id,
+        "evaluate",
+    ))
+}
+
+/// Migration uses the same verified local runner and an isolated destination
+/// vector space. It is intentionally CLI-only so the server never receives or
+/// stores an arbitrary local filesystem path.
+pub async fn migrate_embedding_profile(
+    State(state): State<AppState>,
+    Json(request): Json<EmbeddingProfileActionRequest>,
+) -> EmbeddingProfileActionResult {
+    let profile_id = confirmed_builtin_embedding_profile_for_action(&request)?;
+    let _ = state;
+    Err(cli_only_embedding_lifecycle_response(
+        &profile_id,
+        "migrate",
+    ))
+}
+
+/// Atomically change the retrieval pointer only when storage accepts the
+/// target's persisted Ready/Active lifecycle state.
+pub async fn activate_embedding_profile(
+    State(state): State<AppState>,
+    Json(request): Json<EmbeddingProfileActionRequest>,
+) -> EmbeddingProfileActionResult {
+    let profile_id = confirmed_builtin_embedding_profile_for_action(&request)?;
+    state
+        .storage
+        .activate_embedding_profile(&profile_id)
+        .map_err(|_| embedding_profile_gate_rejected_response("activate"))?;
+    let mut response = embedding_profiles_snapshot_for_action(&state.storage)?;
+    response["accepted"] = Value::Bool(true);
+    response["message"] = Value::String("Embedding profile activated atomically.".to_string());
+    Ok(Json(response))
+}
+
+/// Rollback is the same validated pointer operation as activation; it never
+/// deletes vectors or regenerates embeddings.
+pub async fn rollback_embedding_profile(
+    State(state): State<AppState>,
+    Json(request): Json<EmbeddingProfileActionRequest>,
+) -> EmbeddingProfileActionResult {
+    let profile_id = confirmed_builtin_embedding_profile_for_action(&request)?;
+    state
+        .storage
+        .rollback_embedding_profile(&profile_id)
+        .map_err(|_| embedding_profile_gate_rejected_response("roll back"))?;
+    let mut response = embedding_profiles_snapshot_for_action(&state.storage)?;
+    response["accepted"] = Value::Bool(true);
+    response["message"] = Value::String("Embedding profile rolled back atomically.".to_string());
+    Ok(Json(response))
+}
+
+fn confirmed_builtin_embedding_profile_for_action(
+    request: &EmbeddingProfileActionRequest,
+) -> Result<vestige_core::EmbeddingProfileId, (StatusCode, Json<Value>)> {
+    if !request.confirm {
+        return Err(embedding_profile_bad_request_response());
+    }
+    let profile_id = vestige_core::EmbeddingProfileId::new(request.profile_id.clone())
+        .map_err(|_| embedding_profile_bad_request_response())?;
+    if vestige_core::builtin_embedding_profile_by_id(profile_id.as_str()).is_none() {
+        return Err(embedding_profile_bad_request_response());
+    }
+    Ok(profile_id)
+}
+
+fn embedding_profile_bad_request_response() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "accepted": false,
+            "message": "Choose an exact built-in profile ID and explicitly confirm the operation.",
+        })),
+    )
+}
+
+fn embedding_profile_gate_rejected_response(action: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "accepted": false,
+            "message": format!("No profile state changed: the local {} gate has not been satisfied.", action),
+        })),
+    )
+}
+
+fn cli_only_embedding_lifecycle_response(
+    profile_id: &vestige_core::EmbeddingProfileId,
+    stage: &str,
+) -> (StatusCode, Json<Value>) {
+    let profile = profile_id.as_str();
+    let command = match stage {
+        "install" => format!(
+            "vestige embeddings install {profile} --from <verified-artifact-directory> --yes"
+        ),
+        "evaluate" => {
+            format!("vestige embeddings evaluate {profile} --from <verified-artifact-directory>")
+        }
+        "migrate" => format!(
+            "vestige embeddings migrate --to {profile} --from <verified-artifact-directory> --yes"
+        ),
+        _ => unreachable!("only fixed embedding lifecycle stages are passed here"),
+    };
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "accepted": false,
+            "cliRequired": true,
+            "localOnly": true,
+            "operation": stage,
+            "command": command,
+            "message": "No profile state changed. This stage requires the explicit local CLI because the dashboard never accepts or stores artifact directories.",
+        })),
+    )
+}
+
+fn embedding_profiles_snapshot_for_action(
+    storage: &vestige_core::Storage,
+) -> Result<Value, (StatusCode, Json<Value>)> {
+    embedding_profiles_snapshot(storage).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "accepted": false,
+                "message": "The profile operation completed, but the updated local status could not be read.",
+            })),
+        )
+    })
+}
+
+fn embedding_profiles_snapshot(storage: &vestige_core::Storage) -> Result<Value, StatusCode> {
+    let manifests = storage
+        .list_embedding_profile_manifests()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let manifests_by_id: HashMap<String, vestige_core::EmbeddingProfileManifest> = manifests
+        .into_iter()
+        .map(|manifest| (manifest.profile.profile_id.to_string(), manifest))
+        .collect();
+    let active = storage
+        .active_embedding_profile()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let active_profile_id = active
+        .as_ref()
+        .map(|pointer| pointer.profile_id.to_string());
+    let rollback_profile_id = active
+        .as_ref()
+        .and_then(|pointer| pointer.previous_profile_id.as_ref())
+        .map(ToString::to_string);
+
+    // The built-in catalog is the only lifecycle action surface. Persisted
+    // manifests augment those immutable definitions with local receipts, but
+    // an old/unknown manifest is never offered as a model-control target.
+    let catalog = vestige_core::builtin_embedding_profiles();
+    let migrations_by_destination = catalog
+        .iter()
+        .map(|profile| {
+            storage
+                .latest_profile_migration_checkpoint_for_destination(&profile.profile_id)
+                .map(|checkpoint| (profile.profile_id.to_string(), checkpoint))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let profiles = catalog
+        .into_iter()
+        .map(|profile| {
+            let id = profile.profile_id.to_string();
+            let manifest = manifests_by_id.get(&id);
+            let migration = migrations_by_destination.get(&id).and_then(Option::as_ref);
+            dashboard_embedding_profile(
+                &profile,
+                manifest,
+                migration,
+                active_profile_id.as_deref() == Some(id.as_str()),
+                rollback_profile_id.as_deref() == Some(id.as_str()),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    Ok(serde_json::json!({
+        "profiles": profiles,
+        "activeProfileId": active_profile_id,
+        "rollbackProfileId": rollback_profile_id,
+        "localOnly": true,
+        "available": true,
+    }))
+}
+
+fn dashboard_embedding_profile(
+    profile: &vestige_core::EmbeddingProfile,
+    manifest: Option<&vestige_core::EmbeddingProfileManifest>,
+    migration_checkpoint: Option<&vestige_core::ProfileMigrationCheckpoint>,
+    active: bool,
+    rollback_ready: bool,
+) -> Value {
+    use vestige_core::{EmbeddingMigrationState, EmbeddingProfileState};
+
+    let state = manifest
+        .map(|manifest| manifest.state)
+        .unwrap_or(EmbeddingProfileState::NotInstalled);
+    let installed = !matches!(
+        state,
+        EmbeddingProfileState::NotInstalled
+            | EmbeddingProfileState::RetryableError
+            | EmbeddingProfileState::RepairNeeded
+    );
+    let stage = if active {
+        "active"
+    } else if rollback_ready {
+        "rollback_ready"
+    } else {
+        match state {
+            EmbeddingProfileState::NotInstalled => "available",
+            EmbeddingProfileState::Installing => "installing",
+            EmbeddingProfileState::Installed => "installed",
+            EmbeddingProfileState::Evaluating => "evaluating",
+            EmbeddingProfileState::Migrating => "migrating",
+            EmbeddingProfileState::Ready => "ready",
+            EmbeddingProfileState::Active => "ready",
+            EmbeddingProfileState::Inactive => "ready",
+            EmbeddingProfileState::RetryableError | EmbeddingProfileState::RepairNeeded => "error",
+        }
+    };
+    let evaluation = manifest.and_then(|manifest| manifest.evaluation.as_ref()).map(|summary| {
+        serde_json::json!({
+            "state": "complete",
+            "score": summary.recall_at_5,
+            "metric": "Recall@5",
+            "sampleSize": summary.corpus_size,
+        })
+    }).unwrap_or_else(|| {
+        serde_json::json!({
+            "state": if state == EmbeddingProfileState::Evaluating { "running" } else { "not_run" },
+        })
+    });
+    let migration = if active {
+        // The active pointer can only be written by storage after it has
+        // checked a completed migration and its matching integrity manifest.
+        serde_json::json!({ "state": "not_required" })
+    } else if let Some(checkpoint) = migration_checkpoint {
+        let state = match checkpoint.state {
+            EmbeddingMigrationState::Pending | EmbeddingMigrationState::Running => "in_progress",
+            EmbeddingMigrationState::Validating => "validating",
+            EmbeddingMigrationState::Paused => "paused",
+            EmbeddingMigrationState::Completed => "complete",
+            EmbeddingMigrationState::Failed => "failed",
+            EmbeddingMigrationState::Cancelled => "cancelled",
+        };
+        serde_json::json!({
+            "state": state,
+            "id": checkpoint.migration_id,
+            "total": checkpoint.total_memories,
+            "completed": checkpoint.completed_memories,
+            "remaining": checkpoint.total_memories.saturating_sub(checkpoint.completed_memories),
+            "updatedAt": checkpoint.updated_at.to_rfc3339(),
+        })
+    } else {
+        match state {
+            EmbeddingProfileState::Migrating => serde_json::json!({ "state": "in_progress" }),
+            // A Ready manifest alone is deliberately not presented as a
+            // completed migration. The runner must publish its checkpoint and
+            // integrity receipt before this dashboard can claim completion.
+            EmbeddingProfileState::Ready | EmbeddingProfileState::Active => {
+                serde_json::json!({ "state": "not_started" })
+            }
+            EmbeddingProfileState::RetryableError | EmbeddingProfileState::RepairNeeded => {
+                serde_json::json!({ "state": "failed" })
+            }
+            _ => serde_json::json!({ "state": "not_started" }),
+        }
+    };
+    let (receipt_at, receipt_summary) =
+        embedding_profile_receipt(manifest, migration_checkpoint, active);
+    let runtime_hardware = manifest
+        .and_then(|manifest| manifest.runtime.as_ref())
+        .map(|runtime| match runtime.device {
+            vestige_core::EmbeddingDevice::Cpu => "CPU local runtime",
+            vestige_core::EmbeddingDevice::Metal => "Apple Metal local runtime",
+            vestige_core::EmbeddingDevice::Cuda => "CUDA local runtime",
+        });
+
+    serde_json::json!({
+        "id": profile.profile_id,
+        "name": profile.display_name,
+        "modelId": profile.model_id,
+        "description": "A local-only embedding contract with an isolated vector space.",
+        "stage": stage,
+        "installed": installed,
+        "active": active,
+        "dimensions": profile.embedding_dimension,
+        "maxTokens": profile.maximum_token_limit,
+        "vectorBytes": profile.embedding_dimension.saturating_mul(std::mem::size_of::<f32>()),
+        "hardware": runtime_hardware.unwrap_or("Local hardware preflight required"),
+        "localOnly": true,
+        "migration": migration,
+        "evaluation": evaluation,
+        "lastReceipt": receipt_summary.map(|summary| serde_json::json!({
+            "id": manifest.map(vestige_core::EmbeddingProfileManifest::manifest_hash),
+            "at": receipt_at.map(|at| at.to_rfc3339()),
+            "summary": summary,
+        })),
+    })
+}
+
+fn embedding_profile_receipt(
+    manifest: Option<&vestige_core::EmbeddingProfileManifest>,
+    migration_checkpoint: Option<&vestige_core::ProfileMigrationCheckpoint>,
+    active: bool,
+) -> (Option<DateTime<Utc>>, Option<&'static str>) {
+    let Some(manifest) = manifest else {
+        return (None, None);
+    };
+    if active {
+        return (
+            Some(
+                manifest
+                    .last_verified_at
+                    .unwrap_or(manifest.profile.created_at),
+            ),
+            Some("Active retrieval pointer."),
+        );
+    }
+    if manifest.failure.is_some() {
+        return (
+            Some(
+                manifest
+                    .last_verified_at
+                    .unwrap_or(manifest.profile.created_at),
+            ),
+            Some("Local lifecycle state requires repair."),
+        );
+    }
+    if let Some(checkpoint) = migration_checkpoint {
+        return match checkpoint.state {
+            vestige_core::EmbeddingMigrationState::Completed => (
+                Some(checkpoint.updated_at),
+                Some("Isolated vector migration integrity verified."),
+            ),
+            vestige_core::EmbeddingMigrationState::Paused => (
+                Some(checkpoint.updated_at),
+                Some("Local migration paused; resume with its recorded checkpoint."),
+            ),
+            vestige_core::EmbeddingMigrationState::Failed => (
+                Some(checkpoint.updated_at),
+                Some("Local migration needs repair before activation."),
+            ),
+            vestige_core::EmbeddingMigrationState::Pending
+            | vestige_core::EmbeddingMigrationState::Running
+            | vestige_core::EmbeddingMigrationState::Validating => (
+                Some(checkpoint.updated_at),
+                Some("Isolated vector migration in progress."),
+            ),
+            vestige_core::EmbeddingMigrationState::Cancelled => (
+                Some(checkpoint.updated_at),
+                Some("Local migration was cancelled; its destination vectors remain isolated."),
+            ),
+        };
+    }
+    if let Some(evaluation) = &manifest.evaluation {
+        return (
+            Some(evaluation.completed_at),
+            Some("Local evaluation receipt recorded."),
+        );
+    }
+    if manifest.verification.verified_at.is_some() {
+        return (
+            manifest.verification.verified_at,
+            Some("Local artifact verification recorded."),
+        );
+    }
+    (manifest.installed_at, None)
+}
 
 /// Redirect root to the SvelteKit dashboard
 pub async fn serve_dashboard() -> Redirect {
@@ -134,8 +555,24 @@ pub async fn list_memories(
         })
         .collect();
 
+    // `memories` is a page; `total` must describe the whole unfiltered brain,
+    // not merely the page length. Dashboard organs use this distinction to say
+    // "newest 36 of 4,812" without pretending they ranked every record.
+    // Filtered list counts remain page-scoped until the storage API grows an
+    // equivalent filtered COUNT query.
+    let total =
+        if params.node_type.is_none() && params.tag.is_none() && params.min_retention.is_none() {
+            state
+                .storage
+                .get_stats()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .total_nodes as usize
+        } else {
+            formatted.len()
+        };
+
     Ok(Json(serde_json::json!({
-        "total": formatted.len(),
+        "total": total,
         "memories": formatted,
     })))
 }
@@ -962,7 +1399,10 @@ pub async fn get_timeline(
     State(state): State<AppState>,
     Query(params): Query<TimelineParams>,
 ) -> Result<Json<Value>, StatusCode> {
-    let days = params.days.unwrap_or(7).clamp(1, 90);
+    // The Timeline organ exposes a 365-day range. Keep the HTTP contract in
+    // lockstep with that control: clamping at 90 silently made its "365D"
+    // state show only the last quarter while still labelling the field a year.
+    let days = params.days.unwrap_or(7).clamp(1, 365);
     let limit = params.limit.unwrap_or(200).clamp(1, 500);
 
     let start = Utc::now() - Duration::days(days);
@@ -989,7 +1429,15 @@ pub async fn get_timeline(
             "content": content_preview,
             "nodeType": node.node_type,
             "retentionStrength": node.retention_strength,
+            "storageStrength": node.storage_strength,
+            "retrievalStrength": node.retrieval_strength,
             "createdAt": node.created_at.to_rfc3339(),
+            // Transaction time is distinct from valid time.  The timeline
+            // receipt renders both, so omitting this field made every loaded
+            // memory look rewritten and left the transaction-time line empty.
+            "updatedAt": node.updated_at.to_rfc3339(),
+            "validFrom": node.valid_from.map(|at| at.to_rfc3339()),
+            "validUntil": node.valid_until.map(|at| at.to_rfc3339()),
         }));
     }
 
@@ -1263,6 +1711,12 @@ pub async fn get_graph(
                 // single-node handlers; the field just needed it per-node too.
                 "stability": n.stability,
                 "lastAccessed": n.last_accessed.to_rfc3339(),
+                // The Observatory's Fossil Light treats active suppression as
+                // an inhibitory state, not an invented visual category. Keep
+                // it on every graph node so GPU source emission can be zeroed
+                // from the same canonical state as the memory inspector.
+                "suppression_count": n.suppression_count,
+                "suppressed_at": n.suppressed_at.as_ref().map(|at| at.to_rfc3339()),
             })
         })
         .collect();
@@ -1908,6 +2362,10 @@ pub async fn list_intentions(
 pub struct DeepReferenceBody {
     pub query: String,
     pub depth: Option<i32>,
+    /// Optional client-supplied run id so an agent can correlate a whole
+    /// session's calls under one runId. Omitted → a fresh run is minted.
+    #[serde(alias = "runId", default)]
+    pub run_id: Option<String>,
 }
 
 /// Run the 8-stage deep_reference cognitive pipeline over HTTP.
@@ -1930,16 +2388,70 @@ pub async fn deep_reference_query(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    // Receipt spine: honour a client-supplied runId (so an agent can correlate a
+    // whole session), else mint a fresh one. The same run id threads the opening
+    // mcp.call event, the downstream memory events, the receipt, and the returned
+    // response so Black Box can open THIS exact run.
+    let call_args = serde_json::json!({
+        "query": body.query.clone(),
+        "depth": body.depth.unwrap_or(20).clamp(5, 50),
+        "run_id": body.run_id.clone(),
+    });
+    let run_id = crate::trace_recorder::run_id_for(&Some(call_args.clone()));
+
+    // Record the opening mcp.call event for this HTTP deep_reference run, exactly
+    // like the MCP dispatch does, so /api/traces (agent_runs/agent_traces) has this
+    // run and Black Box can list + open it. Without this the run is invisible.
+    crate::trace_recorder::record_call(
+        &state.storage,
+        Some(&state.event_tx),
+        &run_id,
+        "deep_reference",
+        &Some(call_args.clone()),
+    );
+
     let args = serde_json::json!({
         "query": body.query.clone(),
         "depth": body.depth.unwrap_or(20).clamp(5, 50),
     });
 
     let start = std::time::Instant::now();
-    let response = crate::tools::cross_reference::execute(&state.storage, cognitive, Some(args))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut response =
+        crate::tools::cross_reference::execute(&state.storage, cognitive, Some(args))
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let duration_ms = start.elapsed().as_millis() as u64;
+
+    // Record the downstream memory events (retrieve/suppress/contradiction) under
+    // the SAME run_id, then build + persist the auditable receipt from the data the
+    // pipeline already computed. Together these make agent_runs/agent_traces AND
+    // the receipt all consistent for this run — the previously-dead seam.
+    crate::trace_recorder::record_result(
+        &state.storage,
+        Some(&state.event_tx),
+        &run_id,
+        "deep_reference",
+        &response,
+    );
+    let receipt = crate::trace_recorder::build_and_save_receipt(
+        &state.storage,
+        &run_id,
+        "deep_reference",
+        &response,
+    );
+    let receipt_id = receipt
+        .as_ref()
+        .and_then(|r| r.get("receipt_id"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    if let Some(obj) = response.as_object_mut() {
+        obj.insert("runId".to_string(), serde_json::json!(run_id));
+        obj.insert("receiptId".to_string(), serde_json::json!(receipt_id));
+        obj.insert(
+            "receipt".to_string(),
+            receipt.clone().unwrap_or(serde_json::Value::Null),
+        );
+    }
 
     // Pull evidence IDs out for the WebSocket event so Graph3D can glide,
     // pulse, and arc. We intentionally read from the serialized JSON rather
@@ -2034,6 +2546,147 @@ pub async fn deep_reference_query(
         duration_ms,
         timestamp: Utc::now(),
     });
+
+    Ok(Json(response))
+}
+
+// ============================================================================
+// RETROACTIVE SALIENCE BACKFILL — receipt-first dashboard surface
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct BackfillBody {
+    pub failure_id: Option<String>,
+    #[serde(default)]
+    pub manual: bool,
+    pub lookback_days: Option<i64>,
+    /// Dashboard requests are previews by default. Promotion is an explicit
+    /// user action because a candidate match must never silently rewrite memory.
+    pub promote: Option<bool>,
+    #[serde(alias = "runId", default)]
+    pub run_id: Option<String>,
+}
+
+/// Run Backfill from the dashboard and return the immutable receipt that every
+/// downstream surface uses. This is intentionally a thin adapter over the MCP
+/// tool: terminal, agent, Black Box, and Observatory all see the same result.
+pub async fn backfill_query(
+    State(state): State<AppState>,
+    Json(body): Json<BackfillBody>,
+) -> Result<Json<Value>, StatusCode> {
+    let lookback_days = body.lookback_days.unwrap_or(30).clamp(1, 365);
+    let promote = body.promote.unwrap_or(false);
+    let call_args = serde_json::json!({
+        "failure_id": body.failure_id,
+        "manual": body.manual,
+        "lookback_days": lookback_days,
+        "promote": promote,
+        "run_id": body.run_id,
+    });
+    let run_id = crate::trace_recorder::run_id_for(&Some(call_args.clone()));
+    crate::trace_recorder::record_call(
+        &state.storage,
+        Some(&state.event_tx),
+        &run_id,
+        "backfill",
+        &Some(call_args.clone()),
+    );
+
+    let mut response = crate::tools::backfill::execute(&state.storage, Some(call_args))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    crate::trace_recorder::record_result(
+        &state.storage,
+        Some(&state.event_tx),
+        &run_id,
+        "backfill",
+        &response,
+    );
+    let receipt = crate::trace_recorder::build_and_save_receipt(
+        &state.storage,
+        &run_id,
+        "backfill",
+        &response,
+    );
+    let receipt_id = receipt
+        .as_ref()
+        .and_then(|value| value.get("receipt_id"))
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string);
+
+    if let Some(object) = response.as_object_mut() {
+        object.insert("runId".to_string(), serde_json::json!(run_id));
+        object.insert("receiptId".to_string(), serde_json::json!(receipt_id));
+        object.insert(
+            "receipt".to_string(),
+            receipt.clone().unwrap_or(Value::Null),
+        );
+    }
+
+    // Emit only an exact, persisted proof. A non-trigger/no-candidate result is
+    // still returned to the caller but never gets a fabricated victory event.
+    if let (Some(receipt_id), Some(proof)) = (
+        receipt_id,
+        receipt.as_ref().and_then(|value| value.get("backfill")),
+    ) {
+        let failure_id = proof
+            .get("failure_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let candidates = proof
+            .get("candidates")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let candidate_ids: Vec<String> = candidates
+            .iter()
+            .filter_map(|candidate| candidate.get("memory_id").and_then(|value| value.as_str()))
+            .map(ToString::to_string)
+            .collect();
+        let shared_entities: Vec<String> = candidates
+            .iter()
+            .flat_map(|candidate| {
+                candidate
+                    .get("shared_entities")
+                    .and_then(|value| value.as_array())
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .filter_map(|entity| entity.as_str().map(ToString::to_string))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let promoted = candidates.iter().any(|candidate| {
+            candidate
+                .get("promoted")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        });
+        let path_ids: Vec<String> = proof
+            .get("path_ids")
+            .and_then(|value| value.as_array())
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| id.as_str().map(ToString::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // A live scene is only allowed to animate a receipt-authored route.
+        // Do not manufacture candidate -> failure topology in this adapter.
+        if path_ids.len() >= 2 {
+            state.emit(VestigeEvent::BackfillFired {
+                run_id,
+                receipt_id,
+                failure_id,
+                candidate_ids,
+                path_ids,
+                shared_entities,
+                promoted,
+                timestamp: Utc::now(),
+            });
+        }
+    }
 
     Ok(Json(response))
 }
@@ -2145,7 +2798,13 @@ pub async fn export_trace(
     // Content-Disposition header or the filename. Falls back to "trace".
     let safe: String = run_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let safe = if safe.trim_matches('_').is_empty() {
         "trace".to_string()
@@ -2255,8 +2914,8 @@ pub async fn act_on_memory_pr(
     State(state): State<AppState>,
     Path((id, action)): Path<(String, String)>,
 ) -> Result<Json<Value>, StatusCode> {
-    let action = vestige_core::MemoryPrAction::from_label(&action)
-        .ok_or(StatusCode::BAD_REQUEST)?;
+    let action =
+        vestige_core::MemoryPrAction::from_label(&action).ok_or(StatusCode::BAD_REQUEST)?;
 
     // Ask Agent Why is read-only — return the self-explaining signals.
     if matches!(action, vestige_core::MemoryPrAction::AskAgentWhy) {
@@ -2370,7 +3029,10 @@ pub async fn set_review_mode(
     // B7: atomic write (temp + rename) so a concurrent read can never see a
     // partially-written / corrupt review_mode.json, reusing the same helper the
     // Sanhedrin receipt path uses.
-    write_atomic(&path, &serde_json::to_vec_pretty(&payload).unwrap_or_default())?;
+    write_atomic(
+        &path,
+        &serde_json::to_vec_pretty(&payload).unwrap_or_default(),
+    )?;
     Ok(Json(serde_json::json!({ "mode": mode.as_str() })))
 }
 
@@ -2589,10 +3251,7 @@ fn shared_keywords(a: &str, b: &str) -> String {
     let b_lower = b.to_lowercase();
     let tokenize = |s: &'_ str| -> HashSet<String> {
         s.split_whitespace()
-            .map(|w| {
-                w.trim_matches(|c: char| !c.is_alphanumeric())
-                    .to_string()
-            })
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string())
             .filter(|w| w.len() > 3)
             .collect()
     };
@@ -2907,8 +3566,12 @@ mod tests {
     use chrono::Utc;
     use std::sync::Arc;
     use tempfile::tempdir;
+    use uuid::Uuid;
     use vestige_core::memory::IngestInput;
-    use vestige_core::{ConnectionRecord, DreamHistoryRecord, Storage};
+    use vestige_core::{
+        ConnectionRecord, DreamHistoryRecord, EmbeddingMigrationState, EmbeddingProfileManifest,
+        ProfileMigrationCheckpoint, Storage,
+    };
 
     #[test]
     fn graph_sort_parse_defaults_to_recent() {
@@ -2988,6 +3651,232 @@ mod tests {
             })
             .unwrap();
         node.id
+    }
+
+    #[tokio::test]
+    async fn embedding_profiles_list_catalog_without_starting_a_runtime() {
+        let (_dir, storage) = seed_storage();
+
+        let Json(body) = list_embedding_profiles(State(AppState::new(storage, None)))
+            .await
+            .unwrap();
+
+        assert_eq!(body["available"], true);
+        assert_eq!(body["localOnly"], true);
+        let profiles = body["profiles"].as_array().unwrap();
+        assert_eq!(
+            profiles.len(),
+            vestige_core::builtin_embedding_profiles().len()
+        );
+        let qwen = profiles
+            .iter()
+            .find(|profile| profile["id"] == "qwen3-0.6b-retrieval-v1-1024")
+            .unwrap();
+        assert_eq!(qwen["stage"], "available");
+        assert_eq!(qwen["installed"], false);
+        assert_eq!(qwen["localOnly"], true);
+    }
+
+    #[tokio::test]
+    async fn embedding_profiles_surface_resumable_migration_progress_and_receipt() {
+        let (_dir, storage) = seed_storage();
+        let legacy =
+            vestige_core::builtin_embedding_profile_by_id("nomic-v1.5-legacy-raw-256").unwrap();
+        let destination =
+            vestige_core::builtin_embedding_profile_by_id("qwen3-0.6b-retrieval-v1-1024").unwrap();
+        let manifest = EmbeddingProfileManifest::not_installed(destination.clone()).unwrap();
+        storage.save_embedding_profile_manifest(&manifest).unwrap();
+        let now = Utc::now();
+        let migration_id = Uuid::new_v4();
+        storage
+            .save_profile_migration_checkpoint(&ProfileMigrationCheckpoint {
+                migration_id,
+                source_profile_id: legacy.profile_id,
+                destination_profile_id: destination.profile_id,
+                state: EmbeddingMigrationState::Paused,
+                total_memories: 10,
+                completed_memories: 4,
+                failed_memory_ids: Vec::new(),
+                last_memory_id: None,
+                started_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+
+        let Json(body) = list_embedding_profiles(State(AppState::new(storage, None)))
+            .await
+            .unwrap();
+        let qwen = body["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| profile["id"] == "qwen3-0.6b-retrieval-v1-1024")
+            .unwrap();
+        assert_eq!(qwen["migration"]["state"], "paused");
+        assert_eq!(qwen["migration"]["id"], migration_id.to_string());
+        assert_eq!(qwen["migration"]["completed"], 4);
+        assert_eq!(qwen["migration"]["remaining"], 6);
+        assert_eq!(
+            qwen["lastReceipt"]["summary"],
+            "Local migration paused; resume with its recorded checkpoint."
+        );
+    }
+
+    #[tokio::test]
+    async fn embedding_lifecycle_requires_confirm_and_canonical_catalog_id() {
+        let (_dir, storage) = seed_storage();
+        let state = AppState::new(storage, None);
+
+        let unconfirmed = install_embedding_profile(
+            State(state.clone()),
+            Json(EmbeddingProfileActionRequest {
+                profile_id: "qwen3-0.6b-retrieval-v1-1024".to_string(),
+                confirm: false,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(unconfirmed.0, StatusCode::BAD_REQUEST);
+
+        let malformed = install_embedding_profile(
+            State(state),
+            Json(EmbeddingProfileActionRequest {
+                profile_id: "QWEN3-0.6B".to_string(),
+                confirm: true,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(malformed.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn embedding_artifact_stages_require_the_explicit_local_cli() {
+        let (_dir, storage) = seed_storage();
+        let state = AppState::new(storage, None);
+        let request = || {
+            Json(EmbeddingProfileActionRequest {
+                profile_id: "qwen3-0.6b-retrieval-v1-1024".to_string(),
+                confirm: true,
+            })
+        };
+
+        for (stage, result) in [
+            (
+                "install",
+                install_embedding_profile(State(state.clone()), request()).await,
+            ),
+            (
+                "evaluate",
+                evaluate_embedding_profile(State(state.clone()), request()).await,
+            ),
+            (
+                "migrate",
+                migrate_embedding_profile(State(state), request()).await,
+            ),
+        ] {
+            let (status, Json(body)) = result.unwrap_err();
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(body["cliRequired"], true);
+            assert_eq!(body["operation"], stage);
+            assert!(
+                body["command"]
+                    .as_str()
+                    .unwrap()
+                    .contains("<verified-artifact-directory>")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn embedding_activation_defers_to_storage_validation() {
+        let (_dir, storage) = seed_storage();
+        let profile =
+            vestige_core::builtin_embedding_profile_by_id("qwen3-0.6b-retrieval-v1-1024").unwrap();
+        let mut manifest = vestige_core::EmbeddingProfileManifest::not_installed(profile).unwrap();
+        // This mimics a stale/incomplete lifecycle receipt. Storage must still
+        // reject it because evaluation, verified runtime, migration, and index
+        // integrity have not been established.
+        manifest.state = vestige_core::EmbeddingProfileState::Ready;
+        storage.save_embedding_profile_manifest(&manifest).unwrap();
+        let state = AppState::new(storage.clone(), None);
+
+        let result = activate_embedding_profile(
+            State(state),
+            Json(EmbeddingProfileActionRequest {
+                profile_id: "qwen3-0.6b-retrieval-v1-1024".to_string(),
+                confirm: true,
+            }),
+        )
+        .await;
+
+        assert_eq!(result.unwrap_err().0, StatusCode::CONFLICT);
+        assert_ne!(
+            storage
+                .active_embedding_profile()
+                .unwrap()
+                .map(|pointer| pointer.profile_id.to_string())
+                .as_deref(),
+            Some("qwen3-0.6b-retrieval-v1-1024")
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_list_total_is_the_full_unfiltered_store_not_the_page_length() {
+        let (_dir, storage) = seed_storage();
+        ingest(&storage, "first");
+        ingest(&storage, "second");
+        ingest(&storage, "third");
+
+        let Json(body) = list_memories(
+            State(AppState::new(storage, None)),
+            Query(MemoryListParams {
+                q: None,
+                node_type: None,
+                tag: None,
+                min_retention: None,
+                sort: None,
+                limit: Some(1),
+                offset: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(body["memories"].as_array().unwrap().len(), 1);
+        assert_eq!(body["total"], 3);
+    }
+
+    #[tokio::test]
+    async fn timeline_honors_year_range_and_returns_bitemporal_receipt_fields() {
+        let (_dir, storage) = seed_storage();
+        let valid_from = Utc::now() - Duration::days(2);
+        storage
+            .ingest(IngestInput {
+                content: "timeline receipt fixture".to_string(),
+                node_type: "fact".to_string(),
+                valid_from: Some(valid_from),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let Json(body) = get_timeline(
+            State(AppState::new(storage, None)),
+            Query(TimelineParams {
+                days: Some(365),
+                limit: Some(500),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(body["days"], 365, "the 365D dashboard control must be real");
+        let memory = &body["timeline"][0]["memories"][0];
+        assert!(memory["updatedAt"].is_string());
+        assert_eq!(memory["validFrom"], valid_from.to_rfc3339());
+        assert!(memory["validUntil"].is_null());
+        assert!(memory["storageStrength"].is_number());
+        assert!(memory["retrievalStrength"].is_number());
     }
 
     #[test]
@@ -3155,11 +4044,7 @@ mod tests {
             "date_diff_days",
             "topic",
         ] {
-            assert!(
-                !pair[field].is_null(),
-                "missing contract field: {}",
-                field
-            );
+            assert!(!pair[field].is_null(), "missing contract field: {}", field);
         }
         // a = older, b = newer (chronological).
         let ids: Vec<&str> = vec![
@@ -3293,9 +4178,160 @@ mod tests {
         assert_eq!(err, StatusCode::NOT_FOUND);
     }
 
+    /// HTTP receipt-spine acceptance: the dashboard's deep-reference endpoint
+    /// must create one correlated Black Box trace and one receipt that can be
+    /// fetched by both its run and its exact receipt id.
+    #[tokio::test]
+    async fn deep_reference_http_run_produces_fetchable_receipt() {
+        let (_dir, storage) = seed_storage();
+        let seeded_id = ingest(
+            &storage,
+            "Receipt HTTP anchor: the dashboard query must open its exact evidence receipt.",
+        );
+        let state = AppState::new(
+            storage.clone(),
+            Some(Arc::new(tokio::sync::Mutex::new(
+                crate::cognitive::CognitiveEngine::new(),
+            ))),
+        );
+        let run_id = "run_http_receipt_spine".to_string();
+
+        let Json(response) = deep_reference_query(
+            State(state.clone()),
+            Json(DeepReferenceBody {
+                query: "Receipt HTTP anchor".to_string(),
+                depth: Some(5),
+                run_id: Some(run_id.clone()),
+            }),
+        )
+        .await
+        .expect("deep reference should complete");
+
+        assert_eq!(response["runId"], run_id);
+        let receipt_id = response["receiptId"]
+            .as_str()
+            .expect("response includes a persisted receipt id");
+        assert!(response["receipt"].is_object());
+        assert!(
+            !storage.get_trace(&run_id).unwrap().is_empty(),
+            "Black Box trace exists for the same HTTP run"
+        );
+
+        let Json(scoped) = list_receipts(
+            State(state.clone()),
+            Query(TraceListParams {
+                limit: Some(10),
+                run: Some(run_id.clone()),
+            }),
+        )
+        .await
+        .expect("run-scoped receipt list succeeds");
+        assert_eq!(scoped["total"], 1);
+        assert_eq!(scoped["receipts"][0]["receipt_id"], receipt_id);
+        assert!(
+            scoped["receipts"][0]["retrieved"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|id| id == &seeded_id)),
+            "receipt lists only evidence retrieved by this HTTP run"
+        );
+
+        let Json(receipt) = get_receipt(State(state), Path(receipt_id.to_string()))
+            .await
+            .expect("exact receipt fetch succeeds");
+        assert_eq!(receipt["receipt_id"], receipt_id);
+    }
+
+    /// Full proof-spine acceptance: a dashboard preview creates one durable
+    /// Backfill receipt, persists the candidate evidence edge, and broadcasts
+    /// only the route embedded in that receipt (never a graph-inferred route).
+    #[tokio::test]
+    async fn backfill_http_preview_persists_receipt_edge_and_exact_live_path() {
+        let (_dir, storage) = seed_storage();
+        let cause = storage
+            .ingest(IngestInput {
+                content: "Set API_TIMEOUT=2 in deploy environment.".to_string(),
+                node_type: "decision".to_string(),
+                tags: vec!["API_TIMEOUT".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        storage
+            .set_created_at(&cause.id, Utc::now() - Duration::days(3))
+            .unwrap();
+        let failure = storage
+            .ingest(IngestInput {
+                content: "Checkout crashed with timeout on the auth endpoint.".to_string(),
+                node_type: "event".to_string(),
+                tags: vec!["API_TIMEOUT".to_string(), "crash".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        let state = AppState::new(storage.clone(), None);
+        let mut events = state.subscribe();
+        let run_id = "run_backfill_http_proof".to_string();
+
+        let Json(response) = backfill_query(
+            State(state.clone()),
+            Json(BackfillBody {
+                failure_id: Some(failure.id.clone()),
+                manual: false,
+                lookback_days: Some(30),
+                promote: None,
+                run_id: Some(run_id.clone()),
+            }),
+        )
+        .await
+        .expect("backfill preview succeeds");
+
+        assert_eq!(response["runId"], run_id);
+        assert_eq!(response["causes"][0]["promoted"], false);
+        assert_eq!(
+            response["receipt"]["backfill"]["path_ids"],
+            serde_json::json!([cause.id, failure.id])
+        );
+        let receipt_id = response["receiptId"].as_str().expect("receipt id");
+        let persisted = storage
+            .get_receipt(receipt_id)
+            .unwrap()
+            .expect("receipt saved");
+        assert_eq!(
+            persisted.backfill.expect("backfill proof").path_ids,
+            vec![cause.id.clone(), failure.id.clone()]
+        );
+        assert!(
+            storage
+                .get_connections_for_memory(&cause.id)
+                .unwrap()
+                .iter()
+                .any(|edge| {
+                    edge.source_id == cause.id
+                        && edge.target_id == failure.id
+                        && edge.link_type == "backfill_candidate"
+                }),
+            "preview still persists explicit evidence, without a promotion"
+        );
+        // Trace events are broadcast first; keep consuming until we receive
+        // the receipt-backed domain event under test.
+        let emitted = loop {
+            match events.recv().await.expect("dashboard event") {
+                VestigeEvent::BackfillFired {
+                    receipt_id: emitted_receipt,
+                    path_ids,
+                    ..
+                } => break (emitted_receipt, path_ids),
+                _ => continue,
+            }
+        };
+        assert_eq!(emitted.0, receipt_id);
+        assert_eq!(emitted.1, vec![cause.id, failure.id]);
+    }
+
     #[test]
     fn audit_action_mapping_covers_real_reason_types() {
-        assert_eq!(audit_action_for("access", "dormant", "active"), Some("accessed"));
+        assert_eq!(
+            audit_action_for("access", "dormant", "active"),
+            Some("accessed")
+        );
         assert_eq!(
             audit_action_for("cue_reactivation", "silent", "active"),
             Some("accessed")

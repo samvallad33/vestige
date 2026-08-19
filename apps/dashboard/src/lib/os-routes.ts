@@ -51,7 +51,7 @@ export const OS_ROUTES: OsRoute[] = [
 	// PRIMARY — the spine of the product, in the persistent dock.
 	{ href: '/palace', label: 'Palace', purpose: 'The spatial launcher — every organ as a constellation you fly into.', group: 'Primary', shortcut: 'P', icon: 'logo', stage: 'canvas', visibility: 'dock', ready: true },
 	{ href: '/observatory', label: 'Observatory', purpose: 'The living memory field + the deterministic cognitive moments (Salience Rescue).', group: 'Primary', shortcut: 'O', icon: 'sparkle', stage: 'observatory', visibility: 'dock', ready: true },
-	{ href: '/graph', label: 'Graph', purpose: 'The causal memory graph — field + classic inspector, selection, Cinema entry.', group: 'Primary', shortcut: 'G', icon: 'graph', stage: 'canvas', visibility: 'dock', ready: true },
+	{ href: '/graph', label: 'Witness', purpose: 'Receipt-bounded evidence loom — prove which memories shaped an agent run.', group: 'Primary', shortcut: 'G', icon: 'graph', stage: 'canvas', visibility: 'dock', ready: true },
 	{ href: '/memories', label: 'Memories', purpose: 'Browse, search, and inspect individual memories with their FSRS state.', group: 'Primary', shortcut: 'M', icon: 'memories', stage: 'observatory', visibility: 'dock', ready: true },
 	{ href: '/timeline', label: 'Timeline', purpose: 'Bitemporal history — when memories were valid vs recorded, with audit windows.', group: 'Primary', shortcut: 'T', icon: 'timeline', stage: 'route-stage', visibility: 'dock', ready: true },
 	{ href: '/blackbox', label: 'Black Box', purpose: 'The receipt — what Vestige concluded, the evidence, and why, exportable.', group: 'Primary', shortcut: 'B', icon: 'blackbox', stage: 'route-stage', visibility: 'dock', ready: true },
@@ -76,6 +76,7 @@ export const OS_ROUTES: OsRoute[] = [
 	{ href: '/stats', label: 'Stats', purpose: 'System vitals — retention distribution, coverage, throughput.', group: 'Reflect', shortcut: 'S', icon: 'stats', stage: 'route-stage', visibility: 'nav', ready: true },
 
 	// SYSTEM
+	{ href: '/embeddings', label: 'Embeddings', purpose: 'Own local embedding profiles: install, evaluate, migrate, activate, and roll back with receipts.', group: 'System', icon: 'embeddings', stage: 'dom', visibility: 'nav', ready: true },
 	{ href: '/settings', label: 'Settings', purpose: 'Tune the cognitive engine and run the maintenance rituals.', group: 'System', shortcut: ',', icon: 'settings', stage: 'route-stage', visibility: 'nav', ready: true }
 ];
 

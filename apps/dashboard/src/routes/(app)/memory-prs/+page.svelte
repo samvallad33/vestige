@@ -1,71 +1,42 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type MemoryPr } from '$lib/stores/api';
+	import { api, type MemoryPr, type MemoryPrAction, type ReviewMode } from '$lib/stores/api';
 	import { memoryPrEvents } from '$lib/stores/websocket';
 	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
 	import type { ObservatoryEngine } from '$lib/observatory/engine';
-	import { IMMUNE, RETENTION, rgb01 } from '$lib/observatory/cognitive-palette';
 	import type { RouteSceneModel } from '$lib/observatory/route-scene';
-	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
+	import { type TextLayerItem } from '$lib/observatory/text/text-layer';
 	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
 	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 	import PageHeader from '$lib/components/PageHeader.svelte';
-	import Icon from '$lib/components/Icon.svelte';
+	import Icon, { type IconName } from '$lib/components/Icon.svelte';
 	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
 	import { reveal } from '$lib/actions/reveal';
-	import { spotlight } from '$lib/actions/interactions';
 
 	type MemoryPrTextItem = TextLayerItem & { prId?: string };
 	type WhySignal = { code: string; detail: string };
 
-	const CYAN = [...rgb01('#22C7DE'), 1] satisfies [number, number, number, number];
-	const AMBER = [...rgb01(IMMUNE.caution), 0.9] satisfies [number, number, number, number];
-	const MUTED = [...rgb01(RETENTION.recall), 0.62] satisfies [number, number, number, number];
 	const ROW_LIMIT = 28;
 	const PR_LIMIT = 100;
-	// The MSDF reveal is frame-driven per glyph: the shared text layer packs
-	// ageFrame = startFrame + globalGlyphIndex * 2. Across many long rows that
-	// global index reaches the thousands, so late glyphs would only reveal after
-	// ~7000 frames — the field renders near-black at rest. We anchor startFrame
-	// far in the past so every glyph's ageFrame is already elapsed and the whole
-	// queue is legible immediately (the shared layer is used by 15 organs, so the
-	// fix stays here, in the item timing, not in the pass).
-	const REVEAL_ANCHOR = -100000;
 
+	// --- Real state from the API ------------------------------------------------
 	let prs: MemoryPr[] = $state([]);
-	let whySignals: WhySignal[] = $state([]);
+	let total = $state(0);
+	let pendingCount = $state(0);
+	let mode = $state<ReviewMode>('risk_gated');
 	let loading = $state(true);
 	let error: string | null = $state(null);
-	// The DOM row the user last asked "why" about — so the returned risk signals
-	// render against a concrete PR, not a floating panel with no anchor.
+
+	// The DOM row the user last selected + the "why" the agent returned for it.
+	// Selection is NON-MUTATING: it only expands the row and shows detail.
+	let selectedPrId: string | null = $state(null);
 	let whyForPrId: string | null = $state(null);
-
-	// PORTRAIT GATE — everything below is gated on the LIVE viewport aspect so the
-	// desktop (landscape, aspect>=0.85) render stays byte-identical zero-DOM: no DOM
-	// overlay, full-strength in-canvas PR field. On a phone (portrait, aspect<0.85)
-	// the in-canvas log wall is illegible, so we surface a readable DOM overlay AND
-	// dim the field to a pure backdrop. Threshold matches TextLayerPass.portraitAdapt.
-	let isPortrait = $state(false);
-	onMount(() => {
-		const update = () => {
-			isPortrait = window.innerWidth / Math.max(1, window.innerHeight) < 0.85;
-		};
-		update();
-		window.addEventListener('resize', update);
-		return () => window.removeEventListener('resize', update);
-	});
-
-	const pendingCount = $derived(prs.filter((pr) => pr.status === 'pending').length);
-	// Cap the readable DOM list to the same window the field renders so the two
-	// stay in sync and the scroll stays bounded on a phone.
-	const domRows = $derived(prs.slice(0, ROW_LIMIT));
-
-	function prStatusTone(status: string): string {
-		if (status === 'pending') return 'text-warning border-warning/30 bg-warning/10';
-		if (status === 'approved' || status === 'promoted') return 'text-recall border-recall/25 bg-recall/10';
-		if (status === 'rejected' || status === 'forgotten') return 'text-decay border-decay/25 bg-decay/10';
-		return 'text-dim border-white/10 bg-white/[0.04]';
-	}
+	let whySignals: WhySignal[] = $state([]);
+	let whyLoading = $state(false);
+	// The action currently running against a PR (so its button shows a spinner
+	// and we never double-fire a mutation). Keyed `${prId}:${action}`.
+	let actingKey: string | null = $state(null);
+	let actionNotice: string | null = $state(null);
 
 	onMount(() => {
 		void loadPrs();
@@ -77,26 +48,144 @@
 		try {
 			const res = await api.memoryPrs.list(undefined, PR_LIMIT);
 			prs = res.prs;
-			whySignals = [];
+			total = res.total;
+			pendingCount = res.pendingCount;
+			mode = res.mode;
 		} catch (err) {
 			prs = [];
-			whySignals = [];
-			error = err instanceof Error ? err.message : 'UNKNOWN MEMORY PR FETCH ERROR';
+			total = 0;
+			pendingCount = 0;
+			error = err instanceof Error ? err.message : 'Failed to load memory PRs';
 		} finally {
 			loading = false;
 		}
 	}
 
+	// Live: refresh the queue when the backend emits a memory-PR event.
 	$effect(() => {
 		if ($memoryPrEvents.length) void loadPrs();
 	});
 
+	// --- Derived real stats -----------------------------------------------------
+	// The kinds actually present in the queue, so the "what's proposed" card is
+	// real and never a constant. supersede / merge / forget / promote / new.
+	const decidedCount = $derived(prs.filter((pr) => pr.status !== 'pending').length);
+	const supersedeCount = $derived(prs.filter((pr) => pr.kind === 'supersede').length);
+	const mergeCount = $derived(prs.filter((pr) => pr.kind === 'merge').length);
+	const forgetCount = $derived(prs.filter((pr) => pr.kind === 'forget').length);
+	// Total risk signals attached across every PR in the queue — the reason the
+	// review gate exists. Zero when the queue is clean.
+	const totalSignals = $derived(prs.reduce((sum, pr) => sum + pr.signals.length, 0));
+
+	const modeLabel = $derived(
+		mode === 'fast' ? 'Fast (auto-apply)' : mode === 'paranoid' ? 'Paranoid' : 'Risk-gated'
+	);
+
+	// --- Explicit, labeled mutations the client + backend both support. Each maps
+	// 1:1 to an api.memoryPrs.act action. `ask_agent_why` is read-only; the rest
+	// mutate and are only offered while a PR is still pending. Selection alone
+	// never triggers any of these. ---
+	// Static class strings per action so the Tailwind JIT scans them literally
+	// (dynamically-built `border-${tone}` strings are never emitted). Only tokens
+	// that exist in app.css are used: synapse / recall / warning / decay.
+	type PrActionDef = {
+		action: Exclude<MemoryPrAction, 'ask_agent_why'>;
+		label: string;
+		cls: string;
+		icon: IconName;
+	};
+	const MUTATIONS: PrActionDef[] = [
+		{
+			action: 'promote',
+			label: 'Approve',
+			icon: 'sparkle',
+			cls: 'border-recall/30 text-recall hover:bg-recall/15'
+		},
+		{
+			action: 'merge',
+			label: 'Merge',
+			icon: 'duplicates',
+			cls: 'border-synapse/30 text-synapse-glow hover:bg-synapse/15'
+		},
+		{
+			action: 'supersede',
+			label: 'Supersede',
+			icon: 'timeline',
+			cls: 'border-memory/30 text-memory hover:bg-memory/15'
+		},
+		{
+			action: 'quarantine',
+			label: 'Quarantine',
+			icon: 'contradictions',
+			cls: 'border-warning/30 text-warning hover:bg-warning/15'
+		},
+		{
+			action: 'forget',
+			label: 'Forget',
+			icon: 'close',
+			cls: 'border-decay/30 text-decay hover:bg-decay/15'
+		}
+	];
+
+	function prStatusTone(status: string): string {
+		if (status === 'pending') return 'text-warning border-warning/30 bg-warning/10';
+		if (status === 'approved' || status === 'promoted')
+			return 'text-recall border-recall/25 bg-recall/10';
+		if (status === 'rejected' || status === 'forgotten' || status === 'quarantined')
+			return 'text-decay border-decay/25 bg-decay/10';
+		return 'text-dim border-white/10 bg-white/[0.04]';
+	}
+
+	// NON-MUTATING: expand/collapse a row. Never calls act().
+	function selectPr(id: string) {
+		selectedPrId = selectedPrId === id ? null : id;
+	}
+
+	// Read-only agent explanation for one PR.
+	async function askWhy(prId: string) {
+		selectedPrId = prId;
+		whyForPrId = prId;
+		whyLoading = true;
+		whySignals = [];
+		try {
+			const res = (await api.memoryPrs.act(prId, 'ask_agent_why')) as { why?: WhySignal[] };
+			whySignals = res.why ?? [];
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Failed to ask the agent why';
+		} finally {
+			whyLoading = false;
+		}
+	}
+
+	// Explicit, labeled mutation — only from a button click, never from selection.
+	async function runAction(prId: string, action: PrActionDef['action'], label: string) {
+		const key = `${prId}:${action}`;
+		if (actingKey) return;
+		actingKey = key;
+		actionNotice = null;
+		try {
+			await api.memoryPrs.act(prId, action);
+			actionNotice = `${label} applied — refreshing queue.`;
+			await loadPrs();
+		} catch (err) {
+			error = err instanceof Error ? err.message : `Failed to ${label.toLowerCase()} this PR`;
+		} finally {
+			actingKey = null;
+		}
+	}
+
+	// ==========================================================================
+	//  WebGPU field + MSDF text layer — the ALIVE backdrop. Preserved verbatim
+	//  from the original page; the DOM overlay now reads on top of it.
+	// ==========================================================================
+	let fieldPass: MemoryPrFieldPass | null = null;
+
 	function sanitizeAscii(value: string): string {
 		return value
-			.replace(/[\u2014\u2013]/g, '-')
-			.replace(/[\u2018\u2019]/g, "'")
-			.replace(/[\u201C\u201D]/g, '"')
-			.replace(/\u2026/g, '...')
+			.replace(/[—–]/g, '-')
+			.replace(/[‘’]/g, "'")
+			.replace(/[“”]/g, '"')
+			.replace(/…/g, '...')
 			.replace(/[^\x20-\x7E]/g, '?');
 	}
 
@@ -120,7 +209,12 @@
 	}
 
 	function confidenceDepth(pr: MemoryPr): number {
-		const fromDiff = numericField(pr.diff, ['confidence', 'trust', 'contradictsTrust', 'contradicts_trust']);
+		const fromDiff = numericField(pr.diff, [
+			'confidence',
+			'trust',
+			'contradictsTrust',
+			'contradicts_trust'
+		]);
 		if (fromDiff !== null) return clamp01(fromDiff > 1 ? fromDiff / 100 : fromDiff);
 		return 0.5;
 	}
@@ -130,55 +224,6 @@
 			.replace(/\s+/g, ' ')
 			.trim()
 			.slice(0, 96);
-	}
-
-	// In PORTRAIT the readable DOM overlay is the hero, so the in-canvas PR rows must
-	// recede to a faint ambient substrate (they'd otherwise be an illegible wall of
-	// log text competing with the DOM copy on top). In LANDSCAPE (desktop) the
-	// in-canvas text IS the content, so it keeps full strength — desktop unchanged.
-	function dim(color: [number, number, number, number]): [number, number, number, number] {
-		if (!isPortrait) return color;
-		return [color[0], color[1], color[2], color[3] * 0.34];
-	}
-
-	function buildTextItems(): MemoryPrTextItem[] {
-		const rows = prs.slice(0, ROW_LIMIT);
-		const top = 0.74;
-		const rowStep = 1.46 / Math.max(1, ROW_LIMIT - 1);
-		const prItems = rows.map((pr, i) => ({
-			id: `memory-pr:${pr.id}`,
-			kind: 'memory-pr',
-			prId: pr.id,
-			text: prLine(pr),
-			x: -0.9,
-			y: top - i * rowStep,
-			size: 0.025,
-			color: dim(pr.status === 'pending' ? CYAN : MUTED),
-			depth: confidenceDepth(pr),
-			weight: 1,
-			startFrame: REVEAL_ANCHOR + i * 2,
-			revealSpan: 20,
-			maxWidthEm: 54,
-				hitPadX: 0.03,
-				hitPadY: 0.019
-		})) satisfies MemoryPrTextItem[];
-
-		const whyItems = whySignals.slice(0, 5).map((signal, i) => ({
-			id: `memory-pr-why:${signal.code}:${i}`,
-			kind: 'memory-pr-why',
-			text: sanitizeAscii(`${signal.code}: ${signal.detail}`).replace(/\s+/g, ' ').trim().slice(0, 86),
-			x: -0.82,
-			y: -0.76 - i * 0.052,
-			size: 0.02,
-			color: dim(AMBER),
-			depth: 0.72,
-			weight: 0.8,
-			startFrame: REVEAL_ANCHOR + (rows.length + i) * 2,
-			revealSpan: 18,
-			maxWidthEm: 56
-		})) satisfies MemoryPrTextItem[];
-
-		return [...prItems, ...whyItems];
 	}
 
 	let memoryPrScene: RouteSceneModel = $derived({
@@ -203,37 +248,17 @@
 		alive: prs.length > 0
 	});
 
-	// Live handles so the portrait $effect can re-dim the field and re-push the
-	// (portrait-dimmed) in-canvas text when the viewport aspect crosses the gate.
-	let fieldPass: MemoryPrFieldPass | null = null;
-	let textPass: TextLayerPass | null = null;
-
-	$effect(() => {
-		// Re-apply the portrait/landscape backdrop treatment whenever the gate flips.
-		const portrait = isPortrait;
-		fieldPass?.applyBackdrop(portrait);
-		textPass?.setText(buildTextItems());
-	});
-
 	function createMemoryPrPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
 		const field = new MemoryPrFieldPass(engine);
-		field.applyBackdrop(isPortrait);
+		field.applyBackdrop();
 		field.uploadScene(scene);
 		fieldPass = field;
-		const text = new TextLayerPass(engine);
-		textPass = text;
-		void text.init().then(() => text.setText(buildTextItems()));
-		return [field,
-			{
-				render: (pass) => text.render(pass),
-				uploadScene: () => text.setText(buildTextItems()),
-				pickAt: (x, y) => text.pickAt(x, y),
-				dispose: () => {
-					if (textPass === text) textPass = null;
-					text.dispose();
-				}
-			}
-		];
+		// The DOM overlay owns all readable content (header + stat cards + queue
+		// rows). We deliberately emit NO in-canvas MSDF text so the field never
+		// doubles as a raw PR-log dump bleeding through behind the glass — same
+		// outcome as /explore, whose buildTextItems() returns []. The field pass
+		// stays: it is the alive backdrop.
+		return [field];
 	}
 
 	class MemoryPrFieldPass implements RouteFramePass {
@@ -241,56 +266,57 @@
 		constructor(engine: ObservatoryEngine) {
 			this.field = new LivingFieldPass(engine);
 		}
-		// PORTRAIT: the readable hero is the DOM overlay, so the field recedes to a
-		// faint full-frame ambient substrate behind the cards. LANDSCAPE (desktop):
-		// the in-canvas PR queue IS the content, so keep the original intensity + the
-		// left-column reading well that kept those rows legible — desktop unchanged.
-		applyBackdrop(portrait: boolean): void {
-			if (portrait) {
-				this.field.setIntensity(0.14);
-				this.field.setReadingWell({ x: 0, y: 0, hw: 1.0, hh: 1.0, floor: 0.05, soft: 0.35 });
-			} else {
-				this.field.setIntensity(0.22);
-				this.field.setReadingWell({ x: -0.2, y: -0.1, hw: 0.78, hh: 0.9, floor: 0.06, soft: 0.25 });
-			}
+		// The DOM overlay is the readable hero, so the field is a faint full-frame
+		// ambient substrate behind the glass cards on every viewport.
+		applyBackdrop(): void {
+			this.field.setIntensity(0.16);
+			this.field.setReadingWell({ x: 0, y: 0, hw: 1.0, hh: 1.0, floor: 0.05, soft: 0.35 });
 		}
 		uploadScene(scene: RouteSceneModel): void {
-			const data: FieldDatum[] = scene.nodes.map((node) => ({ id: node.source.id, score: node.activation ?? 0.5, hue: FIELD_HUE.caution, energy: node.activation, metric2: node.trust, scar: (node.tags?.length ?? 0) > 1, kind: 'memory-pr', payload: node }));
+			const data: FieldDatum[] = scene.nodes.map((node) => ({
+				id: node.source.id,
+				score: node.activation ?? 0.5,
+				hue: FIELD_HUE.caution,
+				energy: node.activation,
+				metric2: node.trust,
+				scar: (node.tags?.length ?? 0) > 1,
+				kind: 'memory-pr',
+				payload: node
+			}));
 			this.field.setCells(layoutGalaxy(data, { maxRadius: 0.9, minCellR: 0.035, maxCellR: 0.09 }));
 		}
-		compute(encoder: GPUCommandEncoder): void { this.field.compute(encoder); }
-		render(pass: GPURenderPassEncoder): void { this.field.render(pass); }
-		pickAt(x: number, y: number): RoutePick | null { return this.field.pickAt(x, y); }
+		compute(encoder: GPUCommandEncoder): void {
+			this.field.compute(encoder);
+		}
+		render(pass: GPURenderPassEncoder): void {
+			this.field.render(pass);
+		}
+		pickAt(x: number, y: number): RoutePick | null {
+			return this.field.pickAt(x, y);
+		}
 		dispose(): void {
 			if (fieldPass === this) fieldPass = null;
 			this.field.dispose();
 		}
 	}
 
-	async function handleRoutePick(pick: RoutePick) {
+	// Picking a field cell or a text row is NON-MUTATING: it selects + scrolls the
+	// DOM card into focus and asks the agent why (read-only). No mutation ever
+	// fires from a pick — mutations are the labeled buttons only.
+	function handleRoutePick(pick: RoutePick) {
 		if (pick.kind !== 'memory-pr') return;
-		// Pick can be a TEXT row (payload = MemoryPrTextItem with .prId) or a FIELD
-		// cell (payload = RouteNode with .source.id == pr id). Read whichever, so
-		// field cells act on the real PR, not silently no-op.
 		const payload = pick.payload as Partial<MemoryPrTextItem> & { source?: { id?: string } };
 		const prId = payload.prId ?? payload.source?.id;
 		if (!prId) return;
-		await askWhy(prId);
-	}
-
-	async function askWhy(prId: string) {
-		whyForPrId = prId;
-		try {
-			const res = (await api.memoryPrs.act(prId, 'ask_agent_why')) as { why?: WhySignal[] };
-			whySignals = res.why ?? [];
-		} catch (err) {
-			error = err instanceof Error ? err.message : 'UNKNOWN MEMORY PR ACTION ERROR';
+		void askWhy(prId);
+		if (typeof document !== 'undefined') {
+			document.getElementById(`pr-card-${prId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 		}
 	}
 </script>
 
 <svelte:head>
-	<title>Memory PRs · Vestige</title>
+	<title>Memory Pull Requests · Vestige</title>
 </svelte:head>
 
 <RouteStage
@@ -300,26 +326,20 @@
 	passes={createMemoryPrPasses}
 	{loading}
 	{error}
-	emptyLabel="NO MEMORY PRS"
+	emptyLabel=""
 	onpick={handleRoutePick}
 />
 
-<!-- PORTRAIT-ONLY readable DOM overlay (content-first). On desktop (landscape) this
-     organ stays zero-DOM: the in-canvas PR field IS the content. On a phone the field
-     is an illegible log wall, so we surface THIS as the focal content and dim the field
-     to a backdrop. Container is pointer-events-none so empty gaps still reach the field,
-     while each card is pointer-events-auto. pb-28 clears the global MobileNav FAB. -->
-{#if isPortrait}
-<div
-	class="relative z-10 mx-auto max-h-dvh max-w-3xl space-y-6 overflow-y-auto overscroll-contain p-6 pb-28 pointer-events-none"
->
-	<!-- Opaque backing so the masthead + description read cleanly over the dim field
-	     (the -mb-2 pulls the PageHeader's own bottom margin back inside the panel). -->
-	<div class="glass-subtle pointer-events-auto rounded-2xl p-5 [&_header]:mb-0">
+<!-- DOM-hybrid overlay (contradictions pattern): RouteStage renders the WebGPU
+     field behind; this reads on top. Container is pointer-events-none so empty
+     gaps still reach the field, every interactive child is pointer-events-auto. -->
+<div class="relative z-10 min-h-full p-6 space-y-6 pointer-events-none">
+	<!-- (1) IDENTITY -->
+	<div class="pointer-events-auto">
 		<PageHeader
 			icon="memorypr"
-			title="Memory PRs: Review Queue"
-			subtitle="Proposed changes to your memory (new facts, supersessions, merges, and forgets) held for review before they touch the graph. Tap a PR to ask the agent why it was proposed."
+			title="Memory Pull Requests"
+			subtitle="Proposed changes to your memory (supersede / merge / forget) awaiting your review before they touch the graph."
 			accent="warning"
 		>
 			<span
@@ -328,34 +348,14 @@
 			>
 				<span class="breathe h-2 w-2 rounded-full bg-warning"></span>
 			</span>
-			<span class="text-xs text-dim">Live</span>
+			<span class="text-dim text-sm tabular-nums inline-flex items-center gap-1.5">
+				<AnimatedNumber value={pendingCount} /> pending
+			</span>
 		</PageHeader>
 	</div>
 
-	<!-- Status / count strip -->
-	<div
-		class="glass-panel pointer-events-auto flex flex-wrap items-center gap-3 rounded-2xl p-4 text-xs text-text"
-		role="status"
-		aria-live="polite"
-	>
-		{#if loading}
-			<span class="breathe h-2 w-2 rounded-full bg-warning"></span>
-			<span class="text-dim">Loading review queue…</span>
-		{:else if error}
-			<span class="h-2 w-2 rounded-full bg-decay"></span>
-			<span class="text-decay">Queue unavailable</span>
-		{:else}
-			<span class="breathe h-2 w-2 rounded-full bg-warning"></span>
-			<span class="tabular-nums">
-				<AnimatedNumber value={prs.length} />
-				{prs.length === 1 ? 'PR' : 'PRs'}
-				· <AnimatedNumber value={pendingCount} /> pending review
-			</span>
-		{/if}
-	</div>
-
-	<!-- Results -->
 	{#if error}
+		<!-- (5) STATE GUIDANCE — error -->
 		<div
 			class="glass-panel pointer-events-auto flex flex-col items-center gap-3 rounded-2xl p-10 text-center"
 		>
@@ -370,12 +370,19 @@
 			</button>
 		</div>
 	{:else if loading}
-		<div class="pointer-events-auto space-y-3">
+		<!-- (5) STATE GUIDANCE — loading skeletons -->
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 pointer-events-auto">
 			{#each Array(4) as _}
-				<div class="glass-subtle shimmer h-20 rounded-2xl"></div>
+				<div class="glass-subtle shimmer h-20 rounded-xl"></div>
 			{/each}
 		</div>
-	{:else if domRows.length === 0}
+		<div class="pointer-events-auto space-y-3">
+			{#each Array(4) as _}
+				<div class="glass-subtle shimmer h-24 rounded-2xl"></div>
+			{/each}
+		</div>
+	{:else if prs.length === 0}
+		<!-- (5) STATE GUIDANCE — empty: icon + explanation + exact next action -->
 		<div
 			class="glass-panel pointer-events-auto enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center"
 		>
@@ -384,55 +391,196 @@
 			>
 				<Icon name="sparkle" size={26} draw />
 			</div>
-			<div class="text-sm font-medium text-bright">No pending memory PRs.</div>
-			<div class="max-w-sm text-xs text-muted">
-				Every proposed change has been reviewed. New facts and supersessions will queue here
-				for your approval before they touch the graph.
+			<div class="text-sm font-medium text-bright">
+				No memory PRs — nothing is proposing to change your memory.
+			</div>
+			<div class="max-w-md text-xs text-muted">
+				When an agent wants to supersede, merge, or forget one of your memories, the change is
+				held here as a pull request first. Keep working with your agent; risky brain-changes will
+				queue here for your approval instead of applying silently.
 			</div>
 		</div>
 	{:else}
-		<div class="pointer-events-auto space-y-3">
-			{#each domRows as pr, i (pr.id)}
-				<button
-					type="button"
-					onclick={() => void askWhy(pr.id)}
-					use:reveal={{ delay: Math.min(i * 35, 350), y: 12 }}
-					use:spotlight
-					class="spotlight-surface lift glass-panel block w-full rounded-2xl p-4 text-left transition hover:border-warning/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-warning/60"
-				>
-					<div class="flex items-start justify-between gap-3">
-						<div class="min-w-0">
-							<div class="truncate text-sm font-medium text-bright">{pr.title}</div>
-							<div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-dim">
-								<span class="font-mono">{pr.id.slice(0, 8)}</span>
-								<span class="text-muted">·</span>
-								<span class="uppercase tracking-wide">{pr.kind}</span>
-								{#if pr.signals.length}
-									<span class="text-muted">·</span>
-									<span>{pr.signals.length} signal{pr.signals.length === 1 ? '' : 's'}</span>
-								{/if}
-							</div>
-						</div>
-						<span
-							class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide {prStatusTone(pr.status)}"
-						>
-							{pr.status}
-						</span>
+		<!-- (2) LIVE PROOF — 4 oversized real stat cards -->
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 pointer-events-auto">
+			<div use:reveal={{ delay: 0, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="text-2xl text-bright font-bold tabular-nums">
+					<AnimatedNumber value={total} />
+				</div>
+				<div class="text-xs text-dim mt-1">pull requests total</div>
+			</div>
+			<div use:reveal={{ delay: 60, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="flex items-center gap-2">
+					<span class="ping-host inline-flex">
+						<span class="w-2 h-2 rounded-full bg-warning"></span>
+					</span>
+					<div class="text-2xl font-bold tabular-nums text-warning">
+						<AnimatedNumber value={pendingCount} />
 					</div>
+				</div>
+				<div class="text-xs text-dim mt-1">awaiting your review</div>
+			</div>
+			<div use:reveal={{ delay: 120, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="text-2xl text-bright font-bold tabular-nums">
+					<AnimatedNumber value={totalSignals} />
+				</div>
+				<div class="text-xs text-dim mt-1">risk signals flagged</div>
+			</div>
+			<div use:reveal={{ delay: 180, y: 12 }} class="p-4 glass rounded-xl lift">
+				<div class="text-2xl text-bright font-bold tabular-nums capitalize">{modeLabel}</div>
+				<div class="text-xs text-dim mt-1">review gate mode</div>
+			</div>
+		</div>
 
-					{#if whyForPrId === pr.id && whySignals.length}
-						<div class="mt-3 space-y-1.5 border-t border-white/[0.06] pt-3">
-							{#each whySignals.slice(0, 5) as signal (signal.code)}
-								<div class="flex gap-2 text-[11px]">
-									<span class="shrink-0 font-mono text-warning">{signal.code}</span>
-									<span class="text-muted">{signal.detail}</span>
+		<!-- (6) INTERPRETATION — what a Memory PR is + the live kind breakdown -->
+		<div
+			use:reveal={{ delay: 220, y: 12 }}
+			class="glass-subtle pointer-events-auto rounded-2xl p-4 text-xs text-muted"
+		>
+			<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+				<span class="text-dim">
+					A <span class="text-text font-medium">Memory PR</span> is a proposed brain-change your
+					agent wants to make — supersede an outdated fact, merge duplicates, or forget something —
+					held here for review instead of applied silently.
+				</span>
+				<span class="ml-auto flex flex-wrap items-center gap-3 tabular-nums">
+					<span><span class="text-memory font-medium">{supersedeCount}</span> supersede</span>
+					<span><span class="text-synapse-glow font-medium">{mergeCount}</span> merge</span>
+					<span><span class="text-decay font-medium">{forgetCount}</span> forget</span>
+					<span><span class="text-recall font-medium">{decidedCount}</span> decided</span>
+				</span>
+			</div>
+		</div>
+
+		{#if actionNotice}
+			<div
+				class="glass-subtle pointer-events-auto rounded-xl px-4 py-2 text-xs text-recall"
+				role="status"
+				aria-live="polite"
+			>
+				{actionNotice}
+			</div>
+		{/if}
+
+		<!-- (3) PRIMARY ACTION lives per-row as labeled buttons + the review queue. -->
+		<div class="pointer-events-auto space-y-3">
+			{#each prs as pr, i (pr.id)}
+				{@const isSelected = selectedPrId === pr.id}
+				{@const isPending = pr.status === 'pending'}
+				<div
+					id={`pr-card-${pr.id}`}
+					use:reveal={{ delay: Math.min(i * 30, 300), y: 12 }}
+					class="glass-panel lift rounded-2xl p-4 transition
+						{isSelected ? 'border-warning/40 shadow-[0_0_18px_rgba(245,158,11,0.14)]' : ''}"
+				>
+					<!-- Row header — NON-MUTATING select (expand/collapse only). -->
+					<button
+						type="button"
+						onclick={() => selectPr(pr.id)}
+						class="block w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-warning/50 rounded-lg"
+						aria-expanded={isSelected}
+					>
+						<div class="flex items-start justify-between gap-3">
+							<div class="min-w-0">
+								<div class="truncate text-sm font-medium text-bright">{pr.title}</div>
+								<div class="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-dim">
+									<span class="font-mono">{pr.id.slice(0, 8)}</span>
+									<span class="text-muted">·</span>
+									<span class="uppercase tracking-wide">{pr.kind}</span>
+									{#if pr.signals.length}
+										<span class="text-muted">·</span>
+										<span class="text-warning"
+											>{pr.signals.length} signal{pr.signals.length === 1 ? '' : 's'}</span
+										>
+									{/if}
+									<span class="text-muted">·</span>
+									<span>{new Date(pr.created_at).toLocaleDateString()}</span>
 								</div>
-							{/each}
+							</div>
+							<span
+								class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide {prStatusTone(
+									pr.status
+								)}"
+							>
+								{pr.status}
+							</span>
+						</div>
+					</button>
+
+					<!-- (6) INTERPRETATION — expanded signals + agent "why". -->
+					{#if isSelected}
+						<div class="mt-3 space-y-3 border-t border-white/[0.06] pt-3">
+							{#if pr.signals.length}
+								<div class="space-y-1.5">
+									<div class="text-[10px] uppercase tracking-wider text-muted">Risk signals</div>
+									{#each pr.signals as signal (signal.code)}
+										<div class="flex gap-2 text-[11px]">
+											<span class="shrink-0 font-mono text-warning">{signal.code}</span>
+											<span class="text-muted">{signal.detail}</span>
+										</div>
+									{/each}
+								</div>
+							{:else}
+								<div class="text-[11px] text-muted">No risk signals attached to this PR.</div>
+							{/if}
+
+							{#if whyForPrId === pr.id}
+								<div class="space-y-1.5">
+									<div class="text-[10px] uppercase tracking-wider text-muted">Agent explanation</div>
+									{#if whyLoading}
+										<div class="text-[11px] text-dim">Asking the agent…</div>
+									{:else if whySignals.length}
+										{#each whySignals.slice(0, 5) as signal (signal.code)}
+											<div class="flex gap-2 text-[11px]">
+												<span class="shrink-0 font-mono text-recall">{signal.code}</span>
+												<span class="text-muted">{signal.detail}</span>
+											</div>
+										{/each}
+									{:else}
+										<div class="text-[11px] text-muted">The agent returned no extra reasoning.</div>
+									{/if}
+								</div>
+							{/if}
 						</div>
 					{/if}
-				</button>
+
+					<!-- ACTIONS — explicit labeled buttons. Read-only "Ask why" always;
+					     mutations only while pending. Nothing here fires from selection. -->
+					<div class="mt-3 flex flex-wrap items-center gap-2 border-t border-white/[0.06] pt-3">
+						<button
+							type="button"
+							onclick={() => void askWhy(pr.id)}
+							class="inline-flex items-center gap-1.5 rounded-lg border border-white/12 px-3 py-1.5 text-xs text-dim transition hover:text-text hover:border-warning/30 hover:bg-white/[0.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-warning/50"
+						>
+							<Icon name="sparkle" size={13} />
+							Ask agent why
+						</button>
+
+						{#if isPending}
+							{#each MUTATIONS as m (m.action)}
+								{@const key = `${pr.id}:${m.action}`}
+								<button
+									type="button"
+									disabled={actingKey !== null}
+									onclick={() => void runAction(pr.id, m.action, m.label)}
+									class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition
+										focus:outline-none focus-visible:ring-2 focus-visible:ring-warning/50
+										disabled:opacity-40 disabled:cursor-not-allowed {m.cls}"
+								>
+									<Icon name={m.icon} size={13} />
+									{actingKey === key ? `${m.label}…` : m.label}
+								</button>
+							{/each}
+						{:else}
+							<span class="text-[11px] text-muted" title="Only pending PRs can be acted on">
+								Decided{pr.decided_at
+									? ` ${new Date(pr.decided_at).toLocaleDateString()}`
+									: ''} — no actions available
+							</span>
+						{/if}
+					</div>
+				</div>
 			{/each}
 		</div>
 	{/if}
 </div>
-{/if}

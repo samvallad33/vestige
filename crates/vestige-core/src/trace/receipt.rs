@@ -54,6 +54,48 @@ pub struct Receipt {
     /// Any memory mutations this retrieval triggered (testing-effect
     /// strengthening, reconsolidation, supersession). Empty for a pure read.
     pub mutations: Vec<ReceiptMutation>,
+
+    /// Optional proof payload for Retroactive Salience Backfill. Keeping this
+    /// inside the canonical receipt means the exact candidate evidence shown to
+    /// an engineer is the same durable artifact Black Box and Observatory open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backfill: Option<BackfillReceiptEvidence>,
+}
+
+/// One earlier memory surfaced by a Backfill run. This deliberately records
+/// *candidate* evidence rather than asserting an unverified root cause.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BackfillCandidateEvidence {
+    pub memory_id: String,
+    pub content_preview: String,
+    pub shared_entities: Vec<String>,
+    pub age_days_before_failure: f64,
+    pub similarity_rank: Option<usize>,
+    pub backfill_score: f64,
+    pub promoted: bool,
+    /// Whether the explicit candidate-to-failure evidence edge was durably
+    /// written before this receipt was saved. This is deliberately separate
+    /// from promotion: a preview can record evidence without strengthening a
+    /// memory.
+    pub candidate_edge_persisted: bool,
+}
+
+/// Auditable, receipt-scoped output of a Retroactive Salience Backfill run.
+/// `similarity_rank` is explicitly the engine's embedding rank within its
+/// scanned candidate set; it is not represented as a benchmark or a universal
+/// statement about vector search.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BackfillReceiptEvidence {
+    pub failure_id: String,
+    pub failure_preview: String,
+    pub scanned: usize,
+    pub lookback_days: i64,
+    pub baseline: String,
+    /// Ordered, receipt-authoritative causal route for the primary candidate:
+    /// `candidate_id -> failure_id`. Consumers must render this exact path and
+    /// must not substitute a graph/layout-derived route.
+    pub path_ids: Vec<String>,
+    pub candidates: Vec<BackfillCandidateEvidence>,
 }
 
 impl Receipt {
@@ -101,10 +143,7 @@ impl Receipt {
         trust_scores: &[f64],
         mutations: Vec<ReceiptMutation>,
     ) -> Self {
-        let trust_floor = trust_scores
-            .iter()
-            .copied()
-            .fold(f64::INFINITY, f64::min);
+        let trust_floor = trust_scores.iter().copied().fold(f64::INFINITY, f64::min);
         let trust_floor = if trust_floor.is_finite() {
             (trust_floor * 100.0).round() / 100.0
         } else {
@@ -122,12 +161,7 @@ impl Receipt {
             .filter(|c| c.is_ascii_alphanumeric())
             .take(6)
             .collect();
-        let receipt_id = format!(
-            "r_{}_{}_{}",
-            now.format("%Y_%m_%d"),
-            short,
-            unique_clean
-        );
+        let receipt_id = format!("r_{}_{}_{}", now.format("%Y_%m_%d"), short, unique_clean);
 
         Self {
             receipt_id,
@@ -137,6 +171,7 @@ impl Receipt {
             trust_floor,
             decay_risk,
             mutations,
+            backfill: None,
         }
     }
 }
@@ -291,6 +326,7 @@ mod tests {
             trust_floor: 0.62,
             decay_risk: DecayRisk::Medium,
             mutations: vec![],
+            backfill: None,
         };
         let json = serde_json::to_value(&r).unwrap();
         assert_eq!(json["receipt_id"], "r_2026_06_22_abc");

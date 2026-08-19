@@ -53,6 +53,9 @@ impl From<crate::storage::StorageError> for MemoryStoreError {
             S::Database(e) => MemoryStoreError::Backend(e.to_string()),
             S::Io(e) => MemoryStoreError::Backend(e.to_string()),
             S::InvalidTimestamp(s) => MemoryStoreError::Backend(format!("invalid timestamp: {s}")),
+            S::InvalidEmbeddingProfile(s) => {
+                MemoryStoreError::InvalidInput(format!("invalid embedding profile: {s}"))
+            }
             S::Init(s) => MemoryStoreError::Init(s),
         }
     }

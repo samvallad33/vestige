@@ -3,6 +3,18 @@ import type { VestigeEvent } from '$types';
 
 const MAX_EVENTS = 200;
 
+/**
+ * The dashboard API and its socket are one origin from the browser's point of
+ * view.  Keeping the port/protocol from `location` lets Vite proxy `/ws` in
+ * development and uses the deployed origin in production (including WSS on
+ * HTTPS).  The old development-only `:3927` exception bypassed the dashboard
+ * proxy and made the live organs silently connect to the wrong service.
+ */
+export function defaultWebSocketUrl(location: Pick<Location, 'protocol' | 'host'>): string {
+	const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+	return `${protocol}//${location.host}/ws`;
+}
+
 function createWebSocketStore() {
 	const { subscribe, set, update } = writable<{
 		connected: boolean;
@@ -23,9 +35,7 @@ function createWebSocketStore() {
 	let reconnectAttempts = 0;
 
 	function connect(url?: string) {
-		const wsUrl = url || (window.location.port === '5173'
-			? `ws://${window.location.hostname}:3927/ws`
-			: `ws://${window.location.host}/ws`);
+		const wsUrl = url || defaultWebSocketUrl(window.location);
 
 		if (ws?.readyState === WebSocket.OPEN) return;
 

@@ -901,7 +901,11 @@ pub async fn execute(
         format!(
             "CAUTION: your claim conflicts with {} stored memor{}. Do NOT treat this as resolved — review the conflicting memory(ies) below before acting.",
             claim_conflicts.len(),
-            if claim_conflicts.len() == 1 { "y" } else { "ies" }
+            if claim_conflicts.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            }
         )
     } else if let Some(rec) = recommended {
         if contradictions.is_empty() {

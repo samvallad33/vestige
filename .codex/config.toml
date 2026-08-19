@@ -1,0 +1,9 @@
+# Project-specific secret-free MCP setup.
+# Supabase inherits the authenticated global Streamable HTTP configuration.
+[mcp_servers.kaggle]
+command = "/Users/entity002/.codex/scripts/kaggle-mcp"
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+
+[mcp_servers.kaggle.env]
+VESTIGE_KAGGLE_KEYCHAIN_SERVICE = "vestige-kaggle-mcp-vestige"

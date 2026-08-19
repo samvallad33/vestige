@@ -1,0 +1,15 @@
+{"memory_id":"mem-code-config","project_id":"vestige","content":"The retry policy lives at crates/vestige-core/src/storage/retry.rs. VESTIGE_RETRY_WINDOW_MS=4500 controls the local retry window."}
+{"memory_id":"mem-code-confuser","project_id":"vestige","content":"The HTTP timeout is VESTIGE_HTTP_TIMEOUT_MS=4500 in crates/vestige-mcp/src/server.rs; it is not the storage retry setting."}
+{"memory_id":"mem-exact-id","project_id":"vestige","content":"Migration receipt 5ef3d48b-3c29-4b27-8ab9-6d61c8107f12 belongs to vector profile qwen-archive-a."}
+{"memory_id":"mem-exact-confuser","project_id":"vestige","content":"Migration receipt 5ef3d48b-3c29-4b27-8ab9-6d61c8107f13 belongs to a different run."}
+{"memory_id":"mem-incident","project_id":"vestige","content":"Incident INC-204: Backfill found commit 9a4c71c as an upstream evidence lead for the missing project scope. This lead does not establish causality."}
+{"memory_id":"mem-decision-old","project_id":"vestige","content":"2026-06-01 decision: use a global embedding selector for every vector."}
+{"memory_id":"mem-decision-current","project_id":"vestige","content":"2026-08-11 decision supersedes the global selector: embedding profiles are explicit, reversible, and profile-isolated."}
+{"memory_id":"mem-temporal-old","project_id":"vestige","content":"2026-01-15 release guidance: no profile migration checkpoints exist."}
+{"memory_id":"mem-temporal-current","project_id":"vestige","content":"2026-08-11 current guidance: profile migration checkpoints are required and failures remain repairable."}
+{"memory_id":"mem-project-a","project_id":"vestige","content":"Vestige storage uses a local SQLite database with profile-isolated vector indexes."}
+{"memory_id":"mem-project-b","project_id":"other-project","content":"Other Project storage uses a hosted vector API and must not be attributed to Vestige."}
+{"memory_id":"mem-multilingual","project_id":"vestige","content":"La configuración local permanece sin conexión: los recuerdos no se envían a una API de embeddings alojada."}
+{"memory_id":"mem-duplicate-target","project_id":"vestige","content":"The project boundary rule forbids mixing retrieval evidence across projects, even when the text is similar."}
+{"memory_id":"mem-duplicate-confuser","project_id":"vestige","content":"The project boundary guideline asks agents to consider similar text across projects before mixing evidence."}
+{"memory_id":"mem-semantic","project_id":"vestige","content":"Activating a ready profile atomically changes the active pointer; rollback restores the earlier ready profile without re-embedding."}
