@@ -1,6 +1,6 @@
 # Silent Rotation
 
-![Silent Rotation — three arms, same fleet, production oracle](figures/silent-rotation-hero.png)
+![Silent Rotation — seven memory backends, one coding fleet](figures/silent-rotation-seven-backends.png)
 
 A benchmark that isolates the memory layer of a multi-agent coding fleet.
 

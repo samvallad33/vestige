@@ -5,7 +5,7 @@ possible answer would mean before running it. All three single-axis arms scored 
 full arm scored 5 of 5. No single axis explains the result. The mechanism is a conjunction, which is
 a weaker claim than the one I started with, and it is the one the data supports.
 
-![Silent Rotation — converged wrong vs first-call hit](figures/silent-rotation-hero.png)
+![Silent Rotation — seven memory backends, one coding fleet](figures/silent-rotation-seven-backends.png)
 
 Companion to `PREREGISTRATION.md`. The interpretation applied below is the one committed in that
 file **before** these arms ran. Check `git log` on `PREREGISTRATION.md` (committed Jul 22) against

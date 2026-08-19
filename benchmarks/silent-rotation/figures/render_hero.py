@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 
 ROOT = Path(__file__).resolve().parent
-OUT_HERO = ROOT / "silent-rotation-hero.png"
-OUT_OG = ROOT / "silent-rotation-og.png"
+OUT_HERO = ROOT / "silent-rotation-seven-backends.png"
+OUT_OG = ROOT / "silent-rotation-seven-backends-og.png"
 
 # EVIDENCE.md §1
 ARMS = [
