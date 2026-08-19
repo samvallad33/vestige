@@ -1,33 +1,53 @@
 # Silent Rotation
 
-![Silent Rotation — seven memory backends, one coding fleet](figures/silent-rotation-seven-backends.png)
-
 A benchmark that isolates the memory layer of a multi-agent coding fleet.
 
 Three agents fix one failing end-to-end test in a TypeScript monorepo. The fix
 requires the currently live signing key id. That key is randomized per trial from
 a 50-key keyring, appears in no file the agents can read, and exists only in the
-memory layer. Seven arms: a no-memory control, dense cosine RAG, Vestige, mem0,
-supermemory, hindsight, and Zep/Graphiti.
+memory layer. Arms: a no-memory control, dense cosine RAG, Vestige, mem0,
+SuperMemory, Hindsight, and Zep/Graphiti.
 
-I built this benchmark and I also built one of the arms in it. That is why all
-246 raw agent transcripts ship here instead of a summary table.
-
-To show this is not one model’s lucky day, the same task is reported as two
-slices: [`GPT-5.6-SOL.md`](GPT-5.6-SOL.md) (5 trials, 3 arms, 45/45
-transcripts) and [`KIMI-K3.md`](KIMI-K3.md) (7 arms; SuperMemory also 5/5).
-The fairness retest is [`FAIRNESS.md`](FAIRNESS.md). Recount both tables with
+I built this benchmark and I also built one of the arms in it. That is why the
+raw agent transcripts ship here instead of a summary table. I ran the same task
+on two models. They are two experiments, not one pooled result. Limitations and
+unequal tool sets are in [`FAIRNESS.md`](FAIRNESS.md). Reprint both tables with
 `python3 tests/by_model_tables.py`.
+
+## GPT-5.6 Sol — no memory 0/5, dense RAG 0/5, Vestige 5/5
+
+![GPT-5.6 Sol — three arms, five trials](figures/silent-rotation-gpt-5.6-sol.png)
+
+Five trials, three memory conditions, 45 transcripts, all on disk. Full write-up:
+[`GPT-5.6-SOL.md`](GPT-5.6-SOL.md).
+
+## Kimi K3 — SuperMemory is also 5/5
+
+![Kimi K3 — transcript-backed](figures/silent-rotation-kimi-k3.png)
+
+On this model SuperMemory scored 5/5. Vestige scored 4/4 on the cells whose
+transcripts are on disk. What still separates Vestige is the first memory call:
+the live key was already in that payload 12/12 times. Full write-up:
+[`KIMI-K3.md`](KIMI-K3.md). The trial-1 deep dive, including the two-right
+one-wrong merges, is [`FINDING.md`](FINDING.md).
+
+## Ablation — three axes, 0/5 each
+
+On GLM-5.2, dropping event-anchoring, the causal edge, or the shared
+coordination bus each scored 0/5 against a 5/5 full Vestige run on the same
+keys. No single axis reproduces the result. Write-up:
+[`ABLATION.md`](ABLATION.md).
 
 
 ## Pre-registration
 
-The next experiment is an ablation designed to test whether the result survives without Vestige. The
-arms, the thresholds, and the interpretation of every outcome — including the ones that demote my own
-system — are committed in [`PREREGISTRATION.md`](PREREGISTRATION.md) **before the experiment runs**.
+The ablation was designed to test whether the result survives without Vestige.
+The arms, the thresholds, and the interpretation of every outcome — including
+the ones that demote my own system — are committed in
+[`PREREGISTRATION.md`](PREREGISTRATION.md) **before the experiment runs**.
 
-Check `git log` on that file against the results commit. If the interpretation was chosen after the
-numbers came back, the commit order will show it.
+Check `git log` on that file against the results commit. If the interpretation
+was chosen after the numbers came back, the commit order will show it.
 
 
 ---
@@ -77,17 +97,18 @@ production replay oracle, and is not a corpus.
 
 | Path | What it is |
 |---|---|
-| `FINDING.md` | The write-up. Start here if you want the argument. |
-| `GPT-5.6-SOL.md` | GPT-only benchmark: anarchy 0/5, RAG 0/5, Vestige 5/5. All transcripts present. |
-| `KIMI-K3.md` | Kimi-only benchmark: 7 arms. SuperMemory also 5/5. Transcript-backed Vestige 4/4. |
-| `FAIRNESS.md` | Rigged-factor retest: tool parity, planted edge, missing traces, what is actually clean. |
-| `figures/silent-rotation-seven-backends.png` | Mixed-model seven-backend figure. Numbers from `EVIDENCE.md`. |
-| `figures/silent-rotation-gpt-5.6-sol.png` | GPT-only figure. |
-| `figures/silent-rotation-kimi-k3.png` | Kimi-only figure (transcript-backed). |
+| `FINDING.md` | Trial 1 on Kimi K3, seven backends. Start here for the argument. |
+| `GPT-5.6-SOL.md` | GPT-5.6 Sol: no memory 0/5, dense RAG 0/5, Vestige 5/5. 45 transcripts. |
+| `KIMI-K3.md` | Kimi K3: seven backends. SuperMemory 5/5. Vestige 4/4 with transcripts on disk. |
+| `FAIRNESS.md` | Tool sets, planted causal edge, missing transcripts, withheld cells. |
+| `ABLATION.md` | GLM-5.2: three axes, 0/5 each. |
+| `figures/silent-rotation-gpt-5.6-sol.png` | GPT-5.6 Sol, three arms. |
+| `figures/silent-rotation-kimi-k3.png` | Kimi K3, transcript-backed. |
+| `figures/silent-rotation-seven-backends.png` | Pooled across models. Not one experiment. Numbers from `EVIDENCE.md`. |
 | `EVIDENCE.md` | Every claim in `FINDING.md` traced to a file and line. |
 | `QUOTES.md` | Verbatim agent reasoning, including the passages where an agent reads the decoy's caveat and uses the key anyway. |
 | `results/` | 25 trial folders across 6 models. Most cells have per-arm JSON plus one transcript per agent. Three cells have JSON scores and no transcripts (`runB-trial-1` anarchy/rag/sync); two more anarchy-only folders have JSON and no traces. `FAIRNESS.md` lists them. |
-| `results/WITHHELD-contaminated/` | Cells excluded from the headline numbers, with a README explaining exactly what my harness did wrong in each. |
+| `results/WITHHELD-contaminated/` | Cells excluded from the published scores, with a README explaining exactly what my harness did wrong in each. |
 | `harness/` | The full runner. See "running the whole thing" below. |
 | `tests/bm25_baseline.py` | The standalone lexical + dense baseline above. |
 | `tests/by_model_tables.py` | Reprints the GPT and Kimi tables from `results/` JSON. No network. |
@@ -150,9 +171,9 @@ These are stated at greater length in `FINDING.md`, and none of them are hidden.
   the shared bus are load-bearing together (`ABLATION.md`). No single axis
   reproduces the full arm. The edge is still hand-authored: this measures
   traversal, not discovery.
-- On Kimi K3 the dense cosine baseline never converged wrong (3 correct, 2 split of 5) and it
-  costs less per run. Across all 23 shared trials it is 4 correct to Vestige's 20, so the gap
-  is model-dependent rather than uniform. There is no "beats RAG on outcomes" claim here to defend.
+- On Kimi K3, dense RAG is 3/4 correct (transcript-backed) and never agreed on a
+  wrong key. On GPT-5.6 Sol the same RAG setup is 0/5. Those are different
+  experiments. I do not pool them into one RAG score.
 - I initially broke the mem0 and Zep arms by failing to flush state between
   trials, which disadvantaged them. The harnesses are fixed and those arms were
   re-run clean. Both the broken and the repaired cells are published.

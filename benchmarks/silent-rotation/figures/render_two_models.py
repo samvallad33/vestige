@@ -88,7 +88,7 @@ def main():
     render(
         ROOT / "silent-rotation-gpt-5.6-sol.png",
         "Silent Rotation  —  GPT-5.6 Sol only",
-        "Five trials, three arms, 45/45 transcripts on disk. Same task and production oracle as the Kimi slice.",
+        "Five trials, three memory conditions, 45 transcripts on disk. Pass means green tests, production replay, and the live key.",
         "Source: GPT-5.6-SOL.md, recounted from results/gpt-5.6-sol-trial-*/{arm}.json.  Pass = green tests AND production replay AND the correct key.",
         [
             ("No memory", 0, 5, 0, 5),
@@ -100,7 +100,7 @@ def main():
     render(
         ROOT / "silent-rotation-kimi-k3.png",
         "Silent Rotation  —  Kimi K3 only (transcript-backed)",
-        "SuperMemory is also 5/5. Vestige is 4/4 once cells without transcripts are dropped. First-call is the separation.",
+        "SuperMemory also scored 5/5. Vestige's first memory call already contained the live key 12/12 times.",
         "Source: KIMI-K3.md.  runB-trial-1 anarchy/rag/sync JSON scores have no transcript files and are excluded.  SuperMemory / Mem0 / Hindsight / Zep: later arms, smaller n.",
         [
             ("No memory", 0, 4, 0, 4),

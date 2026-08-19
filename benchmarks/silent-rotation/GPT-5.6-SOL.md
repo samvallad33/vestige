@@ -1,41 +1,50 @@
-# Silent Rotation — GPT-5.6 Sol only
+# GPT-5.6 Sol: no memory 0/5, dense RAG 0/5, Vestige 5/5
 
-Five trials. One model. Three arms. Every transcript on disk.
+Five trials on one model. Every agent transcript is in this repo.
 
-This slice exists so the result cannot be dismissed as “it only works on Kimi.”
-The task, the 50-key keyring, the local-green-any-key trap, and the production
-replay oracle are the same as the rest of the benchmark. The only thing that
-changes is the model, and the memory tool.
+Three agents fix one failing TypeScript charge test. The live signing key is
+randomized from a 50-key keyring and exists only in the memory layer. Local
+tests go green for any matching key. A production replay, outside the agent
+workspace, is the oracle.
 
-Recount: `python3 tests/by_model_tables.py`
+This is the GPT-5.6 Sol run. The same task on Kimi K3, with the later
+competitor backends, is in [`KIMI-K3.md`](KIMI-K3.md).
 
-Keys, randomized per trial: `k_yildun`, `k_bellatrix`, `k_wren`, `k_indus`, `k_dorado`.
-All five unique. Directories: `results/gpt-5.6-sol-trial-{1-5}/`.
+Reprint the tables from the JSON:
 
-## Headline
+```sh
+python3 tests/by_model_tables.py
+```
 
-Did all three agents write the same key, and was it the live one?
+Live keys, one per trial: `k_yildun`, `k_bellatrix`, `k_wren`, `k_indus`,
+`k_dorado`. Results live in `results/gpt-5.6-sol-trial-{1-5}/`.
 
-| arm | correct | wrong (tests green, prod voids) | split | n | transcripts |
+## The result
+
+A fleet passes only if all three agents wrote the same key, the merged tests
+were green, **and** production replay verified tokens minted under the live
+key.
+
+| arm | correct | agreed on a wrong key | split / merge conflict | n | transcripts |
 |---|---|---|---|---|---|
-| anarchy (no memory) | **0/5** | **5/5** | 0/5 | 5 | 15/15 |
-| rag (dense cosine) | **0/5** | 4/5 | 1/5 | 5 | 15/15 |
-| **sync (Vestige)** | **5/5** | **0/5** | 0/5 | 5 | 15/15 |
+| no memory | **0/5** | **5/5** | 0/5 | 5 | 15/15 |
+| dense RAG | **0/5** | 4/5 | 1/5 | 5 | 15/15 |
+| Vestige | **5/5** | **0/5** | 0/5 | 5 | 15/15 |
 
-First memory-tool call contained the live key:
+Did the first memory-tool call already contain the live key?
 
 | arm | first call correct | n |
 |---|---|---|
-| **sync (Vestige, no query)** | **15/15** | 15 |
-| rag | 0/15 | 15 |
+| Vestige (no query) | **15/15** | 15 |
+| dense RAG | 0/15 | 15 |
 
-Memory layer alive on every RAG and Vestige cell. Zero retrieval errors. Zero
-missing transcript files. `vestige_log` was used only on the sync arm (3/3
-agents per trial). RAG never got a write bus.
+The RAG and Vestige memory layers answered on every trial. There are no
+missing transcript files. Only the Vestige arm has a write tool
+(`vestige_log`); the RAG arm does not.
 
-## Per trial
+## Trial by trial
 
-| trial | live key | anarchy | rag | Vestige |
+| trial | live key | no memory | dense RAG | Vestige |
 |---|---|---|---|---|
 | 1 | k_yildun | green_but_voids_prod | green_but_voids_prod | **fixed_correctly** |
 | 2 | k_bellatrix | green_but_voids_prod | green_but_voids_prod | **fixed_correctly** |
@@ -43,16 +52,17 @@ agents per trial). RAG never got a write bus.
 | 4 | k_indus | green_but_voids_prod | green_but_voids_prod | **fixed_correctly** |
 | 5 | k_dorado | green_but_voids_prod | failed_merge_conflict | **fixed_correctly** |
 
-Study trial 1: `results/gpt-5.6-sol-trial-1/`. RAG agent a1 read “staging only”
-and still called `k_wezen` the “authoritative active platform key.” Vestige a0
-called `vestige_backfill {}` on turn 1, in parallel with `run_tests`, and all
-three agents wrote `k_yildun`.
+In trial 1 (`results/gpt-5.6-sol-trial-1/`), RAG agent a1 read that `k_wezen`
+was staging-only and still restored it as “the authoritative active platform
+key.” All three Vestige agents wrote `k_yildun`. Agent a0 called
+`vestige_backfill` with no query on the first turn, in parallel with
+`run_tests`.
 
-## What this slice does not contain
+## What this run does not include
 
-No mem0, SuperMemory, Hindsight, or Zep. Those were wired later and ran on Kimi.
-Do not quote a 7-arm GPT table. There isn’t one.
+mem0, SuperMemory, Hindsight, and Zep were not part of this GPT sweep. Those
+backends were added later and ran on Kimi K3.
 
-n=5 is small. It is also complete: every claimed transcript is in the repo.
+n is 5. Every claimed transcript for those 5 × 3 fleets is on disk.
 
 ![GPT-5.6 Sol — three arms, five trials](figures/silent-rotation-gpt-5.6-sol.png)
