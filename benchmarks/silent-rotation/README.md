@@ -1,5 +1,7 @@
 # Silent Rotation
 
+![Silent Rotation — three arms, same fleet, production oracle](figures/silent-rotation-hero.png)
+
 A benchmark that isolates the memory layer of a multi-agent coding fleet.
 
 Three agents fix one failing end-to-end test in a TypeScript monorepo. The fix
@@ -70,6 +72,7 @@ production replay oracle, and is not a corpus.
 | Path | What it is |
 |---|---|
 | `FINDING.md` | The write-up. Start here if you want the argument. |
+| `figures/silent-rotation-hero.png` | The side-by-side results card. Numbers from `EVIDENCE.md`. |
 | `EVIDENCE.md` | Every claim in `FINDING.md` traced to a file and line. |
 | `QUOTES.md` | Verbatim agent reasoning, including the passages where an agent reads the decoy's caveat and uses the key anyway. |
 | `results/` | 25 trials across 6 models. Every trial has per-arm results and one transcript per agent. |
