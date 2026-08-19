@@ -13,6 +13,12 @@ supermemory, hindsight, and Zep/Graphiti.
 I built this benchmark and I also built one of the arms in it. That is why all
 246 raw agent transcripts ship here instead of a summary table.
 
+To show this is not one model’s lucky day, the same task is reported as two
+slices: [`GPT-5.6-SOL.md`](GPT-5.6-SOL.md) (5 trials, 3 arms, 45/45
+transcripts) and [`KIMI-K3.md`](KIMI-K3.md) (7 arms; SuperMemory also 5/5).
+The fairness retest is [`FAIRNESS.md`](FAIRNESS.md). Recount both tables with
+`python3 tests/by_model_tables.py`.
+
 
 ## Pre-registration
 
@@ -72,13 +78,19 @@ production replay oracle, and is not a corpus.
 | Path | What it is |
 |---|---|
 | `FINDING.md` | The write-up. Start here if you want the argument. |
-| `figures/silent-rotation-hero.png` | The side-by-side results card. Numbers from `EVIDENCE.md`. |
+| `GPT-5.6-SOL.md` | GPT-only benchmark: anarchy 0/5, RAG 0/5, Vestige 5/5. All transcripts present. |
+| `KIMI-K3.md` | Kimi-only benchmark: 7 arms. SuperMemory also 5/5. Transcript-backed Vestige 4/4. |
+| `FAIRNESS.md` | Rigged-factor retest: tool parity, planted edge, missing traces, what is actually clean. |
+| `figures/silent-rotation-seven-backends.png` | Mixed-model seven-backend figure. Numbers from `EVIDENCE.md`. |
+| `figures/silent-rotation-gpt-5.6-sol.png` | GPT-only figure. |
+| `figures/silent-rotation-kimi-k3.png` | Kimi-only figure (transcript-backed). |
 | `EVIDENCE.md` | Every claim in `FINDING.md` traced to a file and line. |
 | `QUOTES.md` | Verbatim agent reasoning, including the passages where an agent reads the decoy's caveat and uses the key anyway. |
-| `results/` | 25 trials across 6 models. Every trial has per-arm results and one transcript per agent. |
+| `results/` | 25 trial folders across 6 models. Most cells have per-arm JSON plus one transcript per agent. Three cells have JSON scores and no transcripts (`runB-trial-1` anarchy/rag/sync); two more anarchy-only folders have JSON and no traces. `FAIRNESS.md` lists them. |
 | `results/WITHHELD-contaminated/` | Cells excluded from the headline numbers, with a README explaining exactly what my harness did wrong in each. |
 | `harness/` | The full runner. See "running the whole thing" below. |
 | `tests/bm25_baseline.py` | The standalone lexical + dense baseline above. |
+| `tests/by_model_tables.py` | Reprints the GPT and Kimi tables from `results/` JSON. No network. |
 | `tests/arm_liveness.py`, `tests/verify-arms.sh` | Checks that every arm actually retrieves, rather than failing silently and logging a loss. |
 
 ---
