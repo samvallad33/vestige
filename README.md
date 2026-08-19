@@ -192,15 +192,17 @@ Vestige exposes exactly 14 MCP tools. Your agent calls them; you rarely call the
 | `memory` | Read, inspect, promote, or demote individual memories |
 | `graph` | Explore the memory graph and its links |
 | `maintain` | Run consolidation and lifecycle maintenance |
-| `dedup` | Find and merge duplicate memories |
+| `dedup` | Find/merge duplicate memories and safely preview, apply, audit, or undo exact tag renames/merges |
 | `suppress` | Actively forget a memory (reversible for 24h) |
-| `memory_status` | Report health, counts, and model readiness |
+| `memory_status` | Report health, counts, model readiness, and full-store agent hygiene statistics |
 | `codebase` | Index and query codebase-scoped memory |
 | `intention` | Track goals and open intentions across sessions |
 | `source_sync` | Sync memories from external connected sources |
 | `session_start` | Prime the agent with relevant context at session start |
 
 Memories can carry a project namespace through `smart_ingest`'s `scope`. Retrieval defaults to the legacy `user` namespace, so a project memory does not appear in an unscoped recall; pass `includeCrossScope: true` only when cross-project retrieval is intentional. This is relevance isolation, not authentication or an ACL.
+
+For agent-driven store cleanup, see [Memory hygiene and tag maintenance](docs/MEMORY_HYGIENE.md). It documents strict `as of YYYY-MM-DD` inference, pre-write similar-tag nudges, confirmation-token tag operations, reversible audit history, and `memory_status(view="stats")`.
 
 ---
 

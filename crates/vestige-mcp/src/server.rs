@@ -332,11 +332,12 @@ impl McpServer {
             // ================================================================
             // STATUS / TEMPORAL — unified `memory_status` tool (v2.2)
             // Folds system_status + memory_health + memory_timeline +
-            // memory_changelog into one view-dispatched surface.
+            // memory_changelog into one view-dispatched surface, plus the
+            // full-store hygiene-statistics view.
             // ================================================================
             ToolDescription {
                 name: "memory_status".to_string(),
-                description: Some("Memory status & history. Views: 'health' (default — full system health + stats + FSRS preview + cognitive-module health + warnings + recommendations), 'retention' (lightweight retention dashboard: avg, distribution, trend), 'timeline' (browse memories chronologically, grouped by day), 'changelog' (audit trail of memory state changes — per-memory transitions or system-wide).".to_string()),
+                description: Some("Memory status & history. Views: 'health' (default — full system health + stats + FSRS preview + cognitive-module health + warnings + recommendations), 'retention' (lightweight retention dashboard: avg, distribution, trend), 'timeline' (browse memories chronologically, grouped by day), 'changelog' (audit trail of memory state changes — per-memory transitions or system-wide), 'stats' (full-store hygiene counts by type/tag/age/retention/lifecycle, bounded never-accessed and largest-node details, and recent tag-operation audit).".to_string()),
                 input_schema: tools::memory_status::schema(),
                 ..Default::default()
             },
@@ -2819,6 +2820,7 @@ mod tests {
             ("memory_status", serde_json::json!({"view": "retention"})),
             ("memory_status", serde_json::json!({"view": "timeline"})),
             ("memory_status", serde_json::json!({"view": "changelog"})),
+            ("memory_status", serde_json::json!({"view": "stats"})),
         ];
 
         for (name, args) in calls {

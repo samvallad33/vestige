@@ -98,6 +98,31 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 /// Namespace used by existing, unscoped callers and by rows written before
 /// project scopes were exposed. Scoped callers must opt into a different value.
 pub const DEFAULT_MEMORY_SCOPE: &str = "user";
+const MAX_TAG_MUTATION_MEMORIES: usize = 50_000;
+const MAX_TAG_MUTATION_AUDIT_BYTES: usize = 16 * 1024 * 1024;
+type TagMutationState = (
+    std::collections::BTreeMap<String, usize>,
+    usize,
+    Vec<(String, Vec<String>, Vec<String>)>,
+);
+
+/// Content-bounded row used to compute full-store hygiene statistics without
+/// loading every memory body or issuing per-memory access-log queries.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HygieneNodeSummary {
+    pub id: String,
+    pub node_type: String,
+    pub created_at: DateTime<Utc>,
+    pub retention_strength: f64,
+    pub tags: Vec<String>,
+    pub valid_from: Option<DateTime<Utc>>,
+    pub valid_until: Option<DateTime<Utc>>,
+    pub superseded: bool,
+    pub content_bytes: usize,
+    pub content_preview: String,
+    pub never_accessed: bool,
+}
 
 fn temporal_candidate_is_eligible(
     incoming_from: Option<DateTime<Utc>>,
@@ -5298,6 +5323,145 @@ impl SqliteMemoryStore {
             result.push(node?);
         }
         Ok(result)
+    }
+
+    /// Read the complete metadata population for hygiene aggregation in one
+    /// query. Content is bounded to a short preview; access history is reduced
+    /// with `NOT EXISTS` in SQL, avoiding both full-body loads and N+1 reads.
+    /// `None` is an explicit all-scopes request. `Some(scope)` uses the same
+    /// legacy-compatible normalized predicate as scoped recall.
+    pub fn hygiene_snapshot(&self, scope: Option<&str>) -> Result<Vec<HygieneNodeSummary>> {
+        let scope = scope.map(Self::normalize_scope).transpose()?;
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let sql = if scope.is_some() {
+            "SELECT n.id, n.node_type, n.created_at, n.retention_strength, n.tags,
+                    n.valid_from, n.valid_until, n.superseded_by IS NOT NULL,
+                    length(CAST(n.content AS BLOB)), substr(n.content, 1, 240),
+                    NOT EXISTS (
+                        SELECT 1 FROM memory_access_log AS access
+                        WHERE access.node_id = n.id
+                    )
+             FROM knowledge_nodes AS n
+             WHERE COALESCE(NULLIF(trim(n.scope), ''), 'user') = ?1
+             ORDER BY n.id"
+        } else {
+            "SELECT n.id, n.node_type, n.created_at, n.retention_strength, n.tags,
+                    n.valid_from, n.valid_until, n.superseded_by IS NOT NULL,
+                    length(CAST(n.content AS BLOB)), substr(n.content, 1, 240),
+                    NOT EXISTS (
+                        SELECT 1 FROM memory_access_log AS access
+                        WHERE access.node_id = n.id
+                    )
+             FROM knowledge_nodes AS n
+             ORDER BY n.id"
+        };
+        let mut stmt = reader.prepare(sql)?;
+        let mut rows = match scope {
+            Some(scope) => stmt.query(params![scope])?,
+            None => stmt.query([])?,
+        };
+        let mut summaries = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let tags_raw: String = row.get(4)?;
+            let tags = serde_json::from_str(&tags_raw).map_err(|error| {
+                StorageError::Init(format!("invalid tags JSON for memory {id}: {error}"))
+            })?;
+            let valid_from = row
+                .get::<_, Option<String>>(5)?
+                .map(|value| Self::parse_timestamp(&value, "valid_from"))
+                .transpose()?;
+            let valid_until = row
+                .get::<_, Option<String>>(6)?
+                .map(|value| Self::parse_timestamp(&value, "valid_until"))
+                .transpose()?;
+            summaries.push(HygieneNodeSummary {
+                id,
+                node_type: row.get(1)?,
+                created_at: Self::parse_timestamp(&row.get::<_, String>(2)?, "created_at")?,
+                retention_strength: row.get(3)?,
+                tags,
+                valid_from,
+                valid_until,
+                superseded: row.get(7)?,
+                content_bytes: row.get::<_, i64>(8)?.max(0) as usize,
+                content_preview: row.get(9)?,
+                never_accessed: row.get(10)?,
+            });
+        }
+        Ok(summaries)
+    }
+
+    /// Return the complete, exact tag vocabulary for one scope (or all scopes
+    /// when explicitly requested). This powers non-mutating ingest nudges; it
+    /// parses JSON arrays rather than relying on substring SQL matching.
+    pub fn tag_vocabulary(&self, scope: Option<&str>) -> Result<Vec<String>> {
+        const MAX_TAG_VOCABULARY: usize = 10_000;
+        const MAX_TAG_LENGTH: usize = 200;
+        let scope = scope.map(Self::normalize_scope).transpose()?;
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let overlong_sql = if scope.is_some() {
+            "SELECT EXISTS(
+                 SELECT 1
+                 FROM knowledge_nodes AS node, json_each(node.tags) AS tags
+                 WHERE COALESCE(NULLIF(trim(node.scope), ''), 'user') = ?1
+                   AND tags.type = 'text'
+                   AND length(tags.value) > 200
+                 LIMIT 1
+             )"
+        } else {
+            "SELECT EXISTS(
+                 SELECT 1
+                 FROM knowledge_nodes AS node, json_each(node.tags) AS tags
+                 WHERE tags.type = 'text'
+                   AND length(tags.value) > 200
+                 LIMIT 1
+             )"
+        };
+        let contains_overlong: bool = match scope {
+            Some(scope) => reader.query_row(overlong_sql, params![scope], |row| row.get(0))?,
+            None => reader.query_row(overlong_sql, [], |row| row.get(0))?,
+        };
+        if contains_overlong {
+            return Err(StorageError::Init(format!(
+                "tag vocabulary contains a tag longer than the {MAX_TAG_LENGTH}-character similarity safety limit"
+            )));
+        }
+        let sql = if scope.is_some() {
+            "SELECT DISTINCT tags.value
+             FROM knowledge_nodes AS node, json_each(node.tags) AS tags
+             WHERE COALESCE(NULLIF(trim(node.scope), ''), 'user') = ?1
+               AND tags.type = 'text'
+             ORDER BY tags.value
+             LIMIT 10001"
+        } else {
+            "SELECT DISTINCT tags.value
+             FROM knowledge_nodes AS node, json_each(node.tags) AS tags
+             WHERE tags.type = 'text'
+             ORDER BY tags.value
+             LIMIT 10001"
+        };
+        let mut stmt = reader.prepare(sql)?;
+        let mut rows = match scope {
+            Some(scope) => stmt.query(params![scope])?,
+            None => stmt.query([])?,
+        };
+        let mut vocabulary = Vec::new();
+        while let Some(row) = rows.next()? {
+            vocabulary.push(row.get(0)?);
+        }
+        if vocabulary.len() > MAX_TAG_VOCABULARY {
+            return Err(StorageError::Init(format!(
+                "tag vocabulary exceeds the {MAX_TAG_VOCABULARY}-tag similarity safety limit"
+            )));
+        }
+        Ok(vocabulary)
     }
 
     /// Get nodes by type and optional tag filter
@@ -11326,6 +11490,485 @@ impl SqliteMemoryStore {
         Ok(status)
     }
 
+    /// Preview an exact tag rename/merge without mutating the store.
+    ///
+    /// Tags are JSON arrays in SQLite, so this intentionally parses every row
+    /// instead of using a substring `LIKE` query. That keeps `prixsix` distinct
+    /// from `prix-six` and avoids rewriting tags that merely share a prefix.
+    pub fn preview_tag_mutation(
+        &self,
+        source_tags: &[String],
+        target_tag: &str,
+        scope: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let (source_tags, target_tag) = Self::validate_tag_mutation(source_tags, target_tag)?;
+        for source_tag in &source_tags {
+            Self::enforce_secret_policy_for_content(source_tag, SecretPolicy::Reject)?;
+        }
+        Self::enforce_secret_policy_for_content(&target_tag, SecretPolicy::Reject)?;
+        let scope = scope
+            .map(Self::normalize_scope)
+            .transpose()?
+            .map(str::to_string);
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let (source_counts, target_count, affected) = Self::tag_mutation_state(
+            &reader,
+            &source_tags,
+            &target_tag,
+            scope.as_deref(),
+            MAX_TAG_MUTATION_MEMORIES,
+        )?;
+        let preview_token =
+            Self::tag_mutation_token(&source_tags, &target_tag, scope.as_deref(), &affected)?;
+        let affected_ids: Vec<&String> = affected.iter().map(|(id, _, _)| id).collect();
+        let affected_count = affected_ids.len();
+
+        let preview_limit = 200usize;
+        Ok(serde_json::json!({
+            "sourceTags": source_tags,
+            "targetTag": target_tag,
+            "scope": scope.clone(),
+            "allScopes": scope.is_none(),
+            "sourceTagCounts": source_counts,
+            "targetTagCount": target_count,
+            "affectedMemoryCount": affected_count,
+            "affectedMemoryIds": affected_ids.into_iter().take(preview_limit).collect::<Vec<_>>(),
+            "affectedMemoryIdsTruncated": affected_count > preview_limit,
+            "maximumAffectedMemoriesPerOperation": MAX_TAG_MUTATION_MEMORIES,
+            "withinOperationLimit": affected_count <= MAX_TAG_MUTATION_MEMORIES,
+            "previewToken": preview_token,
+            "requiresConfirmation": true,
+        }))
+    }
+
+    /// Atomically rename or merge exact tags and append a reversible operation
+    /// to the existing memory reflog. Callers must preview and confirmation-gate
+    /// this operation before invoking it.
+    pub fn apply_tag_mutation(
+        &self,
+        source_tags: &[String],
+        target_tag: &str,
+        scope: Option<&str>,
+        preview_token: &str,
+        op_type: &str,
+        reason: &str,
+    ) -> Result<crate::advanced::MergeOperation> {
+        self.apply_tag_mutation_with_limits(
+            source_tags,
+            target_tag,
+            scope,
+            preview_token,
+            op_type,
+            reason,
+            MAX_TAG_MUTATION_MEMORIES,
+            MAX_TAG_MUTATION_AUDIT_BYTES,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_tag_mutation_with_limits(
+        &self,
+        source_tags: &[String],
+        target_tag: &str,
+        scope: Option<&str>,
+        preview_token: &str,
+        op_type: &str,
+        reason: &str,
+        maximum_affected: usize,
+        maximum_audit_bytes: usize,
+    ) -> Result<crate::advanced::MergeOperation> {
+        if !matches!(op_type, "tag_rename" | "tag_merge") {
+            return Err(StorageError::Init(format!(
+                "invalid tag mutation operation type '{op_type}'"
+            )));
+        }
+        let (source_tags, target_tag) = Self::validate_tag_mutation(source_tags, target_tag)?;
+        let scope = scope
+            .map(Self::normalize_scope)
+            .transpose()?
+            .map(str::to_string);
+        let reason = Self::validate_tag_mutation_reason(reason)?;
+        for source_tag in &source_tags {
+            Self::enforce_secret_policy_for_content(source_tag, SecretPolicy::Reject)?;
+        }
+        Self::enforce_secret_policy_for_content(&target_tag, SecretPolicy::Reject)?;
+        Self::enforce_secret_policy_for_content(&reason, SecretPolicy::Reject)?;
+        let now = Utc::now();
+        let operation_id = Uuid::new_v4().to_string();
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = writer.transaction()?;
+
+        // Recompute the exact preview state while holding the write transaction.
+        // A token from an older/different scope, tag set, target, or row state
+        // cannot authorize a mutation after preview drift.
+        let (_, _, affected) = Self::tag_mutation_state(
+            &tx,
+            &source_tags,
+            &target_tag,
+            scope.as_deref(),
+            maximum_affected,
+        )?;
+        let current_token =
+            Self::tag_mutation_token(&source_tags, &target_tag, scope.as_deref(), &affected)?;
+        if preview_token != current_token {
+            return Err(StorageError::Init(
+                "tag preview is stale or does not match this scope/source/target; preview again"
+                    .into(),
+            ));
+        }
+        if affected.is_empty() {
+            return Err(StorageError::NotFound(format!(
+                "no memories contain source tag(s): {}",
+                source_tags.join(", ")
+            )));
+        }
+        let mut affected_ids = Vec::new();
+        let mut previous_tags = serde_json::Map::new();
+        let mut applied_tags = serde_json::Map::new();
+        for (id, tags, rewritten) in &affected {
+            previous_tags.insert(id.clone(), serde_json::json!(tags));
+            applied_tags.insert(id.clone(), serde_json::json!(rewritten));
+            affected_ids.push(id.clone());
+        }
+
+        let undo_payload = serde_json::json!({
+            "kind": "tag_mutation",
+            "source_tags": source_tags.clone(),
+            "target_tag": target_tag.clone(),
+            "scope": scope.clone(),
+            "all_scopes": scope.is_none(),
+            "preview_token": preview_token,
+            "previous_tags": previous_tags,
+            "applied_tags": applied_tags,
+        });
+        let undo_payload = undo_payload.to_string();
+        if undo_payload.len() > maximum_audit_bytes {
+            return Err(StorageError::Init(format!(
+                "tag mutation audit payload exceeds the {maximum_audit_bytes}-byte limit; narrow the scope before applying"
+            )));
+        }
+
+        // Size and plan validation are complete before the first write. The
+        // updates and durable audit record still share this one transaction.
+        for (id, _, rewritten) in &affected {
+            tx.execute(
+                "UPDATE knowledge_nodes SET tags = ?1, updated_at = ?2 WHERE id = ?3",
+                params![
+                    serde_json::to_string(&rewritten).map_err(|error| {
+                        StorageError::Init(format!("tag serialization failed: {error}"))
+                    })?,
+                    now.to_rfc3339(),
+                    id,
+                ],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO merge_operations
+                (id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
+                 survivor_id, affected_ids, confidence, signals, reason, undo_payload)
+             VALUES (?1, NULL, ?2, 'applied', ?3, NULL, NULL, NULL, ?4, NULL, ?5, ?6, ?7)",
+            params![
+                operation_id,
+                op_type,
+                now.to_rfc3339(),
+                serde_json::to_string(&affected_ids).unwrap_or_else(|_| "[]".into()),
+                serde_json::json!({
+                    "sourceTags": source_tags,
+                    "targetTag": target_tag,
+                    "scope": scope.clone(),
+                    "allScopes": scope.is_none(),
+                    "affectedMemoryCount": affected_ids.len(),
+                })
+                .to_string(),
+                reason,
+                undo_payload,
+            ],
+        )?;
+        tx.commit()?;
+        drop(writer);
+
+        self.read_operation(&operation_id)?
+            .ok_or_else(|| StorageError::Init("tag operation vanished after insert".into()))
+    }
+
+    /// Reverse a tag rename/merge from the durable memory reflog.
+    pub fn undo_tag_mutation(&self, operation_id: &str) -> Result<crate::advanced::MergeOperation> {
+        let operation = self
+            .read_operation(operation_id)?
+            .ok_or_else(|| StorageError::NotFound(format!("operation {operation_id}")))?;
+        if operation.status == "reverted" {
+            return Err(StorageError::Init(format!(
+                "operation {operation_id} was already reverted"
+            )));
+        }
+        if !matches!(operation.op_type.as_str(), "tag_rename" | "tag_merge") {
+            return Err(StorageError::Init(format!(
+                "operation {operation_id} is not a tag rename/merge"
+            )));
+        }
+
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = writer.transaction()?;
+        let payload: String = tx.query_row(
+            "SELECT undo_payload FROM merge_operations WHERE id = ?1",
+            params![operation_id],
+            |row| row.get(0),
+        )?;
+        let payload: serde_json::Value = serde_json::from_str(&payload)
+            .map_err(|error| StorageError::Init(format!("undo payload parse failed: {error}")))?;
+        let previous_tags = payload
+            .get("previous_tags")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| StorageError::Init("tag undo payload has no previous_tags".into()))?;
+        let applied_tags = payload
+            .get("applied_tags")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| StorageError::Init("tag undo payload has no applied_tags".into()))?;
+        let now = Utc::now();
+
+        // Refuse to erase later tag edits. Validate every post-state before
+        // restoring any row; a conflict or missing memory rolls back the whole
+        // transaction and leaves the original operation applied.
+        for (id, expected_tags) in applied_tags {
+            let current_raw: Option<String> = tx
+                .query_row(
+                    "SELECT tags FROM knowledge_nodes WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let current_raw = current_raw.ok_or_else(|| {
+                StorageError::NotFound(format!("memory {id} required by tag undo"))
+            })?;
+            let current: Vec<String> = serde_json::from_str(&current_raw).map_err(|error| {
+                StorageError::Init(format!("invalid current tags for memory {id}: {error}"))
+            })?;
+            let expected: Vec<String> =
+                serde_json::from_value(expected_tags.clone()).map_err(|error| {
+                    StorageError::Init(format!(
+                        "invalid applied tags in undo payload for memory {id}: {error}"
+                    ))
+                })?;
+            if current != expected {
+                return Err(StorageError::Init(format!(
+                    "tag undo conflict for memory {id}: tags changed after operation; no rows were restored"
+                )));
+            }
+        }
+
+        for (id, previous) in previous_tags {
+            let tags: Vec<String> = serde_json::from_value(previous.clone()).map_err(|error| {
+                StorageError::Init(format!("invalid previous tags for memory {id}: {error}"))
+            })?;
+            let changed = tx.execute(
+                "UPDATE knowledge_nodes SET tags = ?1, updated_at = ?2 WHERE id = ?3",
+                params![
+                    serde_json::to_string(&tags).map_err(|error| {
+                        StorageError::Init(format!("tag serialization failed: {error}"))
+                    })?,
+                    now.to_rfc3339(),
+                    id,
+                ],
+            )?;
+            if changed != 1 {
+                return Err(StorageError::NotFound(format!(
+                    "memory {id} required by tag undo"
+                )));
+            }
+        }
+
+        let reverted = tx.execute(
+            "UPDATE merge_operations
+             SET status = 'reverted', reverted_at = ?1
+             WHERE id = ?2 AND status = 'applied'",
+            params![now.to_rfc3339(), operation_id],
+        )?;
+        if reverted != 1 {
+            return Err(StorageError::Init(format!(
+                "operation {operation_id} could not be marked reverted"
+            )));
+        }
+
+        let undo_operation_id = Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT INTO merge_operations
+                (id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
+                 survivor_id, affected_ids, confidence, signals, reason, undo_payload)
+             VALUES (?1, NULL, 'undo', 'applied', ?2, NULL, ?3, NULL, ?4, NULL, NULL, ?5, '{}')",
+            params![
+                undo_operation_id,
+                now.to_rfc3339(),
+                operation_id,
+                serde_json::to_string(&operation.affected_ids).unwrap_or_else(|_| "[]".into()),
+                format!("Reverted {} operation {operation_id}", operation.op_type),
+            ],
+        )?;
+        tx.commit()?;
+        drop(writer);
+
+        self.read_operation(&undo_operation_id)?
+            .ok_or_else(|| StorageError::Init("tag undo operation vanished after insert".into()))
+    }
+
+    fn validate_tag_mutation(
+        source_tags: &[String],
+        target_tag: &str,
+    ) -> Result<(Vec<String>, String)> {
+        const MAX_TAG_LENGTH: usize = 200;
+        const MAX_SOURCE_TAGS: usize = 50;
+
+        if source_tags.is_empty() || source_tags.len() > MAX_SOURCE_TAGS {
+            return Err(StorageError::Init(format!(
+                "source_tags must contain 1 to {MAX_SOURCE_TAGS} tags"
+            )));
+        }
+
+        let normalize = |tag: &str| -> Result<String> {
+            let tag = tag.trim();
+            if tag.is_empty() {
+                return Err(StorageError::Init("tags cannot be empty".into()));
+            }
+            if tag.chars().count() > MAX_TAG_LENGTH || tag.chars().any(char::is_control) {
+                return Err(StorageError::Init(format!(
+                    "invalid tag: expected at most {MAX_TAG_LENGTH} visible characters"
+                )));
+            }
+            Ok(tag.to_string())
+        };
+
+        let target_tag = normalize(target_tag)?;
+        let mut unique = std::collections::BTreeSet::new();
+        for source in source_tags {
+            let source = normalize(source)?;
+            if source == target_tag {
+                return Err(StorageError::Init(
+                    "source tags must differ from target_tag".into(),
+                ));
+            }
+            unique.insert(source);
+        }
+        Ok((unique.into_iter().collect(), target_tag))
+    }
+
+    fn validate_tag_mutation_reason(reason: &str) -> Result<String> {
+        let reason = reason.trim();
+        if reason.is_empty()
+            || reason.chars().count() > 1_000
+            || reason.chars().any(char::is_control)
+        {
+            return Err(StorageError::Init(
+                "reason must be 1 to 1000 visible characters".into(),
+            ));
+        }
+        Ok(reason.to_string())
+    }
+
+    fn tag_mutation_state(
+        connection: &Connection,
+        source_tags: &[String],
+        target_tag: &str,
+        scope: Option<&str>,
+        maximum_affected: usize,
+    ) -> Result<TagMutationState> {
+        let mut source_counts: std::collections::BTreeMap<String, usize> =
+            source_tags.iter().cloned().map(|tag| (tag, 0)).collect();
+        let mut target_count = 0usize;
+        let mut affected = Vec::new();
+
+        let sql = if scope.is_some() {
+            "SELECT id, tags FROM knowledge_nodes
+             WHERE COALESCE(NULLIF(trim(scope), ''), 'user') = ?1
+             ORDER BY id"
+        } else {
+            "SELECT id, tags FROM knowledge_nodes ORDER BY id"
+        };
+        let mut stmt = connection.prepare(sql)?;
+        let mut rows = match scope {
+            Some(scope) => stmt.query(params![scope])?,
+            None => stmt.query([])?,
+        };
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let raw_tags: String = row.get(1)?;
+            let tags: Vec<String> = serde_json::from_str(&raw_tags).map_err(|error| {
+                StorageError::Init(format!("invalid tags JSON for memory {id}: {error}"))
+            })?;
+            if tags.iter().any(|tag| tag == target_tag) {
+                target_count += 1;
+            }
+            for source in source_tags {
+                if tags.iter().any(|tag| tag == source)
+                    && let Some(count) = source_counts.get_mut(source)
+                {
+                    *count += 1;
+                }
+            }
+            let rewritten = Self::rewrite_tags(&tags, source_tags, target_tag);
+            if rewritten != tags {
+                affected.push((id, tags, rewritten));
+                if affected.len() > maximum_affected {
+                    return Err(StorageError::Init(format!(
+                        "tag mutation affects more than {maximum_affected} memories; narrow the scope before previewing or applying"
+                    )));
+                }
+            }
+        }
+        Ok((source_counts, target_count, affected))
+    }
+
+    fn tag_mutation_token(
+        source_tags: &[String],
+        target_tag: &str,
+        scope: Option<&str>,
+        affected: &[(String, Vec<String>, Vec<String>)],
+    ) -> Result<String> {
+        let state = serde_json::json!({
+            "version": 1,
+            "source_tags": source_tags,
+            "target_tag": target_tag,
+            "scope": scope,
+            "all_scopes": scope.is_none(),
+            "affected_count": affected.len(),
+            "affected": affected.iter().map(|(id, before, _)| {
+                serde_json::json!({"id": id, "tags": before})
+            }).collect::<Vec<_>>(),
+        });
+        let encoded = serde_json::to_vec(&state)
+            .map_err(|error| StorageError::Init(format!("tag preview encoding failed: {error}")))?;
+        Ok(format!("tag-plan-v1:{}", blake3::hash(&encoded).to_hex()))
+    }
+
+    fn rewrite_tags(tags: &[String], source_tags: &[String], target_tag: &str) -> Vec<String> {
+        let sources: std::collections::HashSet<&str> =
+            source_tags.iter().map(String::as_str).collect();
+        if !tags.iter().any(|tag| sources.contains(tag.as_str())) {
+            return tags.to_vec();
+        }
+        let mut inserted_target = false;
+        let mut rewritten = Vec::with_capacity(tags.len());
+
+        for tag in tags {
+            if sources.contains(tag.as_str()) || tag == target_tag {
+                if !inserted_target {
+                    rewritten.push(target_tag.to_string());
+                    inserted_target = true;
+                }
+            } else {
+                rewritten.push(tag.clone());
+            }
+        }
+        rewritten
+    }
+
     /// Execute a previously-generated plan by id. Everything it does is recorded
     /// as a reversible [`MergeOperation`] in `merge_operations`. Returns the
     /// recorded operation id.
@@ -11475,6 +12118,9 @@ impl SqliteMemoryStore {
         let op = self
             .read_operation(op_id)?
             .ok_or_else(|| StorageError::NotFound(format!("operation {op_id}")))?;
+        if matches!(op.op_type.as_str(), "tag_rename" | "tag_merge") {
+            return self.undo_tag_mutation(op_id);
+        }
         if op.status == "reverted" {
             return Err(StorageError::Init(format!(
                 "operation {op_id} was already reverted"
@@ -11584,7 +12230,7 @@ impl SqliteMemoryStore {
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
         let mut stmt = reader.prepare(
             "SELECT id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
-                    survivor_id, affected_ids, confidence, reason
+                    survivor_id, affected_ids, confidence, signals, reason
              FROM merge_operations ORDER BY created_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], Self::row_to_operation)?;
@@ -11593,6 +12239,51 @@ impl SqliteMemoryStore {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    /// List tag rename/merge audit operations directly so they cannot be
+    /// hidden by a busy merge/supersede reflog. `None` is explicit all-scopes;
+    /// a named scope returns only operations recorded for that exact scope.
+    pub fn list_tag_operations(
+        &self,
+        limit: usize,
+        scope: Option<&str>,
+    ) -> Result<Vec<crate::advanced::MergeOperation>> {
+        let scope = scope.map(Self::normalize_scope).transpose()?;
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let sql = if scope.is_some() {
+            "SELECT id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
+                    survivor_id, affected_ids, confidence, signals, reason
+             FROM merge_operations
+             WHERE op_type IN ('tag_rename', 'tag_merge')
+               AND json_extract(signals, '$.allScopes') = 0
+               AND json_extract(signals, '$.scope') = ?1
+             ORDER BY created_at DESC, id DESC LIMIT ?2"
+        } else {
+            "SELECT id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
+                    survivor_id, affected_ids, confidence, signals, reason
+             FROM merge_operations
+             WHERE op_type IN ('tag_rename', 'tag_merge')
+             ORDER BY created_at DESC, id DESC LIMIT ?1"
+        };
+        let mut stmt = reader.prepare(sql)?;
+        let rows = match scope {
+            Some(scope) => stmt.query_map(params![scope, limit as i64], Self::row_to_operation)?,
+            None => stmt.query_map(params![limit as i64], Self::row_to_operation)?,
+        };
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(StorageError::from)
+    }
+
+    /// Read one durable merge/tag operation from the memory reflog.
+    pub fn get_merge_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<crate::advanced::MergeOperation>> {
+        self.read_operation(operation_id)
     }
 
     /// Read a single operation by id.
@@ -11604,7 +12295,7 @@ impl SqliteMemoryStore {
         let op = reader
             .query_row(
                 "SELECT id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
-                        survivor_id, affected_ids, confidence, reason
+                        survivor_id, affected_ids, confidence, signals, reason
                  FROM merge_operations WHERE id = ?1",
                 params![op_id],
                 Self::row_to_operation,
@@ -11631,6 +12322,11 @@ impl SqliteMemoryStore {
                 .ok()
                 .flatten()
                 .map(|v| v as f32),
+            signals: row
+                .get::<_, Option<String>>("signals")
+                .ok()
+                .flatten()
+                .and_then(|value| serde_json::from_str(&value).ok()),
             reason: row.get("reason").ok().flatten(),
         })
     }
@@ -14771,6 +15467,456 @@ mod tests {
             )
             .unwrap();
         assert_eq!(remaining, 0, "purge must cascade to every profile vector");
+    }
+
+    fn ingest_tagged_in_scope(
+        storage: &Storage,
+        scope: &str,
+        content: &str,
+        tags: &[&str],
+    ) -> KnowledgeNode {
+        storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: content.to_string(),
+                    node_type: "fact".to_string(),
+                    tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                    ..Default::default()
+                },
+                scope,
+            )
+            .unwrap()
+    }
+
+    fn preview_token(preview: &serde_json::Value) -> &str {
+        preview["previewToken"].as_str().unwrap()
+    }
+
+    #[test]
+    fn tag_rename_is_previewed_scoped_exact_atomic_audited_and_reversible() {
+        let storage = create_test_storage();
+        let user = ingest_tagged_in_scope(
+            &storage,
+            "user",
+            "scoped tag rename fixture",
+            &[
+                "keep",
+                "legacytag156",
+                "canonicaltag156",
+                "canonicaltag156",
+                "tail",
+            ],
+        );
+        let prefix = ingest_tagged_in_scope(
+            &storage,
+            "user",
+            "exact matching fixture",
+            &["legacytag156-extra"],
+        );
+        let project = ingest_tagged_in_scope(
+            &storage,
+            "project-a",
+            "cross scope fixture",
+            &["legacytag156"],
+        );
+        let sources = vec!["legacytag156".to_string()];
+
+        let preview = storage
+            .preview_tag_mutation(&sources, "canonicaltag156", Some(" user "))
+            .unwrap();
+        assert_eq!(preview["affectedMemoryCount"], 1);
+        assert_eq!(
+            storage.get_node(&user.id).unwrap().unwrap().tags,
+            vec![
+                "keep",
+                "legacytag156",
+                "canonicaltag156",
+                "canonicaltag156",
+                "tail"
+            ],
+            "preview must not mutate"
+        );
+
+        let operation = storage
+            .apply_tag_mutation(
+                &sources,
+                "canonicaltag156",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "standardize the issue 156 fixture tag",
+            )
+            .unwrap();
+        assert_eq!(operation.op_type, "tag_rename");
+        assert_eq!(operation.affected_ids, vec![user.id.clone()]);
+        assert_eq!(
+            storage.get_node(&user.id).unwrap().unwrap().tags,
+            vec!["keep", "canonicaltag156", "tail"],
+            "the union of source and existing target tags is one target at the first affected position"
+        );
+        assert_eq!(
+            storage.get_node(&prefix.id).unwrap().unwrap().tags,
+            vec!["legacytag156-extra"],
+            "prefix tags must not match"
+        );
+        assert_eq!(
+            storage.get_node(&project.id).unwrap().unwrap().tags,
+            vec!["legacytag156"],
+            "default scoped maintenance must not cross project boundaries"
+        );
+        assert!(
+            storage
+                .keyword_search("canonicaltag156", 10, 0.0)
+                .unwrap()
+                .iter()
+                .any(|node| node.id == user.id),
+            "the existing knowledge_nodes update trigger must keep FTS tag search consistent"
+        );
+        let logged = storage.get_merge_operation(&operation.id).unwrap().unwrap();
+        assert_eq!(
+            logged.reason.as_deref(),
+            Some("standardize the issue 156 fixture tag")
+        );
+
+        storage.undo_tag_mutation(&operation.id).unwrap();
+        assert_eq!(
+            storage.get_node(&user.id).unwrap().unwrap().tags,
+            vec![
+                "keep",
+                "legacytag156",
+                "canonicaltag156",
+                "canonicaltag156",
+                "tail"
+            ],
+            "undo restores the exact pre-operation array"
+        );
+    }
+
+    #[test]
+    fn tag_merge_normalizes_sources_and_rejects_stale_preview_or_undo_conflict() {
+        let storage = create_test_storage();
+        let node = ingest_tagged_in_scope(
+            &storage,
+            "user",
+            "multi source tag merge",
+            &["keep", "beta", "alpha", "target", "target", "tail"],
+        );
+        let sources = vec![
+            " beta ".to_string(),
+            "alpha".to_string(),
+            "alpha".to_string(),
+        ];
+        let preview = storage
+            .preview_tag_mutation(&sources, "target", Some("user"))
+            .unwrap();
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET tags = ?1 WHERE id = ?2",
+                    params![
+                        serde_json::json!(["keep", "beta", "alpha", "drift"]).to_string(),
+                        &node.id
+                    ],
+                )
+                .unwrap();
+        }
+        let stale_error = storage
+            .apply_tag_mutation(
+                &sources,
+                "target",
+                Some("user"),
+                preview_token(&preview),
+                "tag_merge",
+                "merge aliases",
+            )
+            .unwrap_err();
+        assert!(stale_error.to_string().contains("stale"));
+        assert!(storage.list_merge_operations(20).unwrap().is_empty());
+
+        let fresh = storage
+            .preview_tag_mutation(&sources, "target", Some("user"))
+            .unwrap();
+        let operation = storage
+            .apply_tag_mutation(
+                &sources,
+                "target",
+                Some("user"),
+                preview_token(&fresh),
+                "tag_merge",
+                "merge aliases",
+            )
+            .unwrap();
+        assert_eq!(
+            storage.get_node(&node.id).unwrap().unwrap().tags,
+            vec!["keep", "target", "drift"]
+        );
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET tags = ?1 WHERE id = ?2",
+                    params![
+                        serde_json::json!(["keep", "target", "later-edit"]).to_string(),
+                        &node.id
+                    ],
+                )
+                .unwrap();
+        }
+        let conflict = storage.undo_tag_mutation(&operation.id).unwrap_err();
+        assert!(conflict.to_string().contains("conflict"));
+        assert_eq!(
+            storage
+                .get_merge_operation(&operation.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "applied",
+            "failed undo must not mark the original operation reverted"
+        );
+    }
+
+    #[test]
+    fn tag_mutation_validation_and_malformed_json_fail_without_partial_writes() {
+        let storage = create_test_storage();
+        let first = ingest_tagged_in_scope(&storage, "user", "first atomic row", &["old"]);
+        let second = ingest_tagged_in_scope(&storage, "user", "second atomic row", &["old"]);
+        assert!(
+            storage
+                .preview_tag_mutation(&["same".into()], "same", Some("user"))
+                .is_err()
+        );
+        assert!(
+            storage
+                .preview_tag_mutation(&["bad\ncontrol".into()], "new", Some("user"))
+                .is_err()
+        );
+
+        let sources = vec!["old".to_string()];
+        let preview = storage
+            .preview_tag_mutation(&sources, "new", Some("user"))
+            .unwrap();
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET tags = 'not-json' WHERE id = ?1",
+                    params![&second.id],
+                )
+                .unwrap();
+        }
+        let error = storage
+            .apply_tag_mutation(
+                &sources,
+                "new",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "atomic malformed-json test",
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("invalid tags JSON"));
+        assert_eq!(
+            storage.get_node(&first.id).unwrap().unwrap().tags,
+            vec!["old"]
+        );
+        assert!(storage.list_merge_operations(20).unwrap().is_empty());
+
+        let valid_storage = create_test_storage();
+        ingest_tagged_in_scope(&valid_storage, "user", "no match", &["other"]);
+        let empty = valid_storage
+            .preview_tag_mutation(&sources, "new", Some("user"))
+            .unwrap();
+        assert_eq!(empty["affectedMemoryCount"], 0);
+        assert!(
+            valid_storage
+                .apply_tag_mutation(
+                    &sources,
+                    "new",
+                    Some("user"),
+                    preview_token(&empty),
+                    "tag_rename",
+                    "must reject no-op",
+                )
+                .is_err()
+        );
+        assert!(
+            valid_storage
+                .apply_tag_mutation(
+                    &["other".into()],
+                    "new",
+                    Some("user"),
+                    "tag-plan-v1:wrong",
+                    "tag_rename",
+                    "",
+                )
+                .is_err(),
+            "a nonempty audit reason is mandatory"
+        );
+    }
+
+    #[test]
+    fn tag_mutation_rejects_secret_shaped_persistent_fields_without_side_effects() {
+        let storage = create_test_storage();
+        let node = ingest_tagged_in_scope(&storage, "user", "secret policy fixture", &["old"]);
+        let source = vec!["old".to_string()];
+        let credential = format!("ghp_{}", "a".repeat(36));
+
+        let target_error = storage
+            .preview_tag_mutation(&source, &credential, Some("user"))
+            .unwrap_err()
+            .to_string();
+        assert!(target_error.contains("probable credential"));
+        assert!(!target_error.contains(&credential));
+
+        let source_error = storage
+            .preview_tag_mutation(std::slice::from_ref(&credential), "new", Some("user"))
+            .unwrap_err()
+            .to_string();
+        assert!(source_error.contains("probable credential"));
+        assert!(!source_error.contains(&credential));
+
+        let safe_preview = storage
+            .preview_tag_mutation(&source, "new", Some("user"))
+            .unwrap();
+        let reason_error = storage
+            .apply_tag_mutation(
+                &source,
+                "new",
+                Some("user"),
+                preview_token(&safe_preview),
+                "tag_rename",
+                &credential,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(reason_error.contains("probable credential"));
+        assert!(!reason_error.contains(&credential));
+        assert_eq!(
+            storage.get_node(&node.id).unwrap().unwrap().tags,
+            vec!["old"]
+        );
+        assert!(storage.list_merge_operations(20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn tag_mutation_row_and_audit_limits_fail_before_writes() {
+        let storage = create_test_storage();
+        let nodes: Vec<_> = (0..3)
+            .map(|index| {
+                ingest_tagged_in_scope(
+                    &storage,
+                    "user",
+                    &format!("row limit fixture {index}"),
+                    &["old"],
+                )
+            })
+            .collect();
+        let source = vec!["old".to_string()];
+        let preview = storage
+            .preview_tag_mutation(&source, "new", Some("user"))
+            .unwrap();
+
+        let row_limit_error = storage
+            .apply_tag_mutation_with_limits(
+                &source,
+                "new",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "row limit fixture",
+                2,
+                MAX_TAG_MUTATION_AUDIT_BYTES,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(row_limit_error.contains("more than 2 memories"));
+        assert!(storage.list_merge_operations(20).unwrap().is_empty());
+        for node in &nodes {
+            assert_eq!(
+                storage.get_node(&node.id).unwrap().unwrap().tags,
+                vec!["old"]
+            );
+        }
+
+        let applied = storage
+            .apply_tag_mutation_with_limits(
+                &source,
+                "new",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "exact row limit fixture",
+                3,
+                MAX_TAG_MUTATION_AUDIT_BYTES,
+            )
+            .unwrap();
+        assert_eq!(applied.affected_ids.len(), 3);
+
+        let audit_storage = create_test_storage();
+        let audit_node = ingest_tagged_in_scope(
+            &audit_storage,
+            "user",
+            "audit payload limit fixture",
+            &["old"],
+        );
+        let audit_preview = audit_storage
+            .preview_tag_mutation(&source, "new", Some("user"))
+            .unwrap();
+        let audit_limit_error = audit_storage
+            .apply_tag_mutation_with_limits(
+                &source,
+                "new",
+                Some("user"),
+                preview_token(&audit_preview),
+                "tag_rename",
+                "audit payload limit fixture",
+                MAX_TAG_MUTATION_MEMORIES,
+                1,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(audit_limit_error.contains("1-byte limit"));
+        assert_eq!(
+            audit_storage
+                .get_node(&audit_node.id)
+                .unwrap()
+                .unwrap()
+                .tags,
+            vec!["old"]
+        );
+        assert!(audit_storage.list_merge_operations(20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn hygiene_snapshot_covers_more_than_five_hundred_without_full_content() {
+        let storage = create_test_storage();
+        let now = Utc::now().to_rfc3339();
+        {
+            let mut writer = storage.writer.lock().unwrap();
+            let tx = writer.transaction().unwrap();
+            for index in 0..501 {
+                tx.execute(
+                    "INSERT INTO knowledge_nodes
+                        (id, content, node_type, created_at, updated_at, last_accessed, tags, scope)
+                     VALUES (?1, ?2, 'fact', ?3, ?3, ?3, ?4, 'user')",
+                    params![
+                        format!("hygiene-{index:04}"),
+                        format!("bounded content {index}"),
+                        &now,
+                        serde_json::json!(["bulk"]).to_string(),
+                    ],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        let snapshot = storage.hygiene_snapshot(Some("user")).unwrap();
+        assert_eq!(snapshot.len(), 501);
+        assert!(snapshot.iter().all(|row| row.content_preview.len() <= 240));
+        assert!(snapshot.iter().all(|row| row.never_accessed));
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]

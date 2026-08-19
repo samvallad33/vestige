@@ -281,7 +281,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
 //
 // Folds the 8 former dedup/merge tools into a single action-dispatched surface:
 //   action = scan (default) | plan_merge | plan_supersede | apply | undo
-//          | protect | policy
+//          | tag_rename | tag_merge | protect | policy
 //
 // `scan` combines cosine-similarity duplicate clusters (this module's
 // `execute`) with Fellegi-Sunter merge candidates (`merge::merge_candidates`),
@@ -297,9 +297,9 @@ pub fn unified_schema() -> Value {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["scan", "plan_merge", "plan_supersede", "apply", "undo", "protect", "policy"],
+                "enum": ["scan", "plan_merge", "plan_supersede", "apply", "undo", "tag_rename", "tag_merge", "protect", "policy"],
                 "default": "scan",
-                "description": "What to do. 'scan' (default): surface duplicate clusters (cosine) AND merge candidates (Fellegi-Sunter), read-only. 'plan_merge'/'plan_supersede': preview a reversible plan without applying (returns plan_id). 'apply': execute a plan_id. 'undo': reverse a prior operation (omit operation_id to list the reflog). 'protect': pin a memory against auto-merge/supersede/forget. 'policy': get/set Fellegi-Sunter thresholds."
+                "description": "What to do. 'scan' (default): surface duplicate clusters (cosine) AND merge candidates (Fellegi-Sunter), read-only. 'plan_merge'/'plan_supersede': preview a reversible memory plan. 'apply': execute a plan_id. 'undo': reverse a prior memory or tag operation (omit operation_id to list the reflog). 'tag_rename'/'tag_merge': exact, scoped, preview-token-gated tag maintenance. 'protect': pin a memory. 'policy': get/set Fellegi-Sunter thresholds."
             },
             "similarity_threshold": {
                 "type": "number",
@@ -323,8 +323,15 @@ pub fn unified_schema() -> Value {
             "old_id": { "type": "string", "description": "[plan_supersede] Memory being superseded (kept, marked invalid)." },
             "new_id": { "type": "string", "description": "[plan_supersede] Memory that supersedes the old one." },
             "plan_id": { "type": "string", "description": "[apply] ID of a plan produced by plan_merge/plan_supersede." },
-            "confirm": { "type": "boolean", "default": false, "description": "[apply] Required true for 'possible'/'non_match' plans." },
+            "confirm": { "type": "boolean", "default": false, "description": "[apply/tag_*] Explicit mutation confirmation. Tag actions always preview when false and require the returned preview_token when true." },
             "operation_id": { "type": "string", "description": "[undo] Operation to reverse. Omit to list the reflog." },
+            "source_tag": { "type": "string", "description": "[tag_rename] Exact source tag to rename." },
+            "source_tags": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 50, "description": "[tag_merge] Two or more exact source tags to merge." },
+            "target_tag": { "type": "string", "description": "[tag_rename/tag_merge] Exact destination tag." },
+            "scope": { "type": "string", "default": "user", "description": "[tag_rename/tag_merge] Project scope. Defaults to the isolated 'user' scope." },
+            "all_scopes": { "type": "boolean", "default": false, "description": "[tag_rename/tag_merge] Explicitly operate across every scope. Default false." },
+            "preview_token": { "type": "string", "description": "[tag_rename/tag_merge confirm=true] Token returned by the immediately preceding matching preview." },
+            "reason": { "type": "string", "minLength": 1, "maxLength": 1000, "description": "[tag_rename/tag_merge confirm=true] Required durable audit reason." },
             "id": { "type": "string", "description": "[protect] Memory id to protect/unprotect." },
             "protected": { "type": "boolean", "default": true, "description": "[protect] true to pin, false to unpin." },
             "match_threshold": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "[policy] Score >= this => 'match'." },
@@ -361,17 +368,152 @@ pub async fn execute_unified(storage: &Arc<Storage>, args: Option<Value>) -> Res
         "plan_supersede" => super::merge::execute(storage, "plan_supersede", args).await,
         "apply" => super::merge::execute(storage, "apply_plan", args).await,
         "undo" => super::merge::execute(storage, "merge_undo", args).await,
+        "tag_rename" => execute_tag_mutation(storage, args, false),
+        "tag_merge" => execute_tag_mutation(storage, args, true),
         "protect" => super::merge::execute(storage, "protect", args).await,
         "policy" => super::merge::execute(storage, "merge_policy", args).await,
         other => Err(format!(
-            "Unknown dedup action '{other}'. Use scan|plan_merge|plan_supersede|apply|undo|protect|policy."
+            "Unknown dedup action '{other}'. Use scan|plan_merge|plan_supersede|apply|undo|tag_rename|tag_merge|protect|policy."
         )),
     }
+}
+
+fn execute_tag_mutation(
+    storage: &Arc<Storage>,
+    args: Option<Value>,
+    merge: bool,
+) -> Result<Value, String> {
+    let args = args
+        .as_ref()
+        .and_then(Value::as_object)
+        .ok_or("tag action arguments must be an object")?;
+    let target_tag = args
+        .get("target_tag")
+        .and_then(Value::as_str)
+        .ok_or("target_tag is required")?;
+    let source_tags = if merge {
+        let tags = args
+            .get("source_tags")
+            .and_then(Value::as_array)
+            .ok_or("source_tags is required for tag_merge")?
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or("source_tags must contain only strings")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if tags.len() < 2 {
+            return Err("tag_merge requires at least two source_tags".into());
+        }
+        tags
+    } else {
+        vec![
+            args.get("source_tag")
+                .and_then(Value::as_str)
+                .ok_or("source_tag is required for tag_rename")?
+                .to_string(),
+        ]
+    };
+    let all_scopes = args
+        .get("all_scopes")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let scope = if all_scopes {
+        None
+    } else {
+        Some(
+            args.get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or(vestige_core::DEFAULT_MEMORY_SCOPE),
+        )
+    };
+    let confirm = args
+        .get("confirm")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let op_type = if merge { "tag_merge" } else { "tag_rename" };
+
+    if !confirm {
+        let mut preview = storage
+            .preview_tag_mutation(&source_tags, target_tag, scope)
+            .map_err(|error| error.to_string())?;
+        if let Some(object) = preview.as_object_mut() {
+            object.insert("action".into(), Value::String(op_type.into()));
+            object.insert(
+                "nextStep".into(),
+                Value::String(format!(
+                    "Review this preview, then call dedup action='{op_type}' with confirm=true, this preview_token, and a nonempty reason."
+                )),
+            );
+        }
+        return Ok(preview);
+    }
+
+    let preview_token = args
+        .get("preview_token")
+        .and_then(Value::as_str)
+        .ok_or("preview_token is required when confirm=true")?;
+    let reason = args
+        .get("reason")
+        .and_then(Value::as_str)
+        .ok_or("reason is required when confirm=true")?;
+    let operation = storage
+        .apply_tag_mutation(
+            &source_tags,
+            target_tag,
+            scope,
+            preview_token,
+            op_type,
+            reason,
+        )
+        .map_err(|error| error.to_string())?;
+    let operation_id = operation.id.clone();
+    let operation_scope = operation
+        .signals
+        .as_ref()
+        .and_then(|signals| signals.get("scope"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let operation_all_scopes = operation
+        .signals
+        .as_ref()
+        .and_then(|signals| signals.get("allScopes"))
+        .and_then(Value::as_bool)
+        .unwrap_or(all_scopes);
+    let operation_source_tags = operation
+        .signals
+        .as_ref()
+        .and_then(|signals| signals.get("sourceTags"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!(source_tags));
+    let operation_target_tag = operation
+        .signals
+        .as_ref()
+        .and_then(|signals| signals.get("targetTag"))
+        .cloned()
+        .unwrap_or_else(|| Value::String(target_tag.to_string()));
+    Ok(serde_json::json!({
+        "action": op_type,
+        "status": "applied",
+        "operationId": operation_id,
+        "affectedMemoryCount": operation.affected_ids.len(),
+        "affectedMemoryIds": operation.affected_ids,
+        "scope": operation_scope,
+        "allScopes": operation_all_scopes,
+        "sourceTags": operation_source_tags,
+        "targetTag": operation_target_tag,
+        "reason": operation.reason,
+        "reversible": true,
+        "nextStep": format!("To reverse this operation without overwriting later tag edits, call dedup action='undo' with operation_id='{operation_id}'."),
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vestige_core::IngestInput;
 
     #[test]
     fn test_schema() {
@@ -385,7 +527,7 @@ mod tests {
         let schema = unified_schema();
         assert_eq!(schema["type"], "object");
         let actions = schema["properties"]["action"]["enum"].as_array().unwrap();
-        assert_eq!(actions.len(), 7);
+        assert_eq!(actions.len(), 9);
         assert_eq!(schema["properties"]["action"]["default"], "scan");
     }
 
@@ -397,6 +539,106 @@ mod tests {
         // Default action (scan) on empty storage must not error.
         let result = execute_unified(&storage, None).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn tag_rename_requires_preview_token_and_supports_agent_visible_undo() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = Arc::new(Storage::new(Some(dir.path().join("test.db"))).unwrap());
+        let node = storage
+            .ingest(IngestInput {
+                content: "MCP tag rename fixture".to_string(),
+                tags: vec!["old".to_string(), "keep".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let preview = execute_unified(
+            &storage,
+            Some(serde_json::json!({
+                "action": "tag_rename",
+                "source_tag": "old",
+                "target_tag": "new",
+                "scope": " user "
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview["requiresConfirmation"], true);
+        assert_eq!(preview["affectedMemoryCount"], 1);
+        assert_eq!(
+            storage.get_node(&node.id).unwrap().unwrap().tags,
+            vec!["old", "keep"]
+        );
+
+        let missing_token = execute_unified(
+            &storage,
+            Some(serde_json::json!({
+                "action": "tag_rename",
+                "source_tag": "old",
+                "target_tag": "new",
+                "scope": " user ",
+                "confirm": true,
+                "reason": "normalize tag"
+            })),
+        )
+        .await;
+        assert!(missing_token.unwrap_err().contains("preview_token"));
+
+        let applied = execute_unified(
+            &storage,
+            Some(serde_json::json!({
+                "action": "tag_rename",
+                "source_tag": "old",
+                "target_tag": "new",
+                "scope": " user ",
+                "confirm": true,
+                "preview_token": preview["previewToken"],
+                "reason": "normalize tag"
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(applied["status"], "applied");
+        assert_eq!(applied["scope"], "user");
+        assert_eq!(applied["sourceTags"], serde_json::json!(["old"]));
+        assert_eq!(applied["targetTag"], "new");
+        assert_eq!(
+            storage.get_node(&node.id).unwrap().unwrap().tags,
+            vec!["new", "keep"]
+        );
+
+        let undone = execute_unified(
+            &storage,
+            Some(serde_json::json!({
+                "action": "undo",
+                "operation_id": applied["operationId"]
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(undone["status"], "reverted");
+        assert_eq!(
+            storage.get_node(&node.id).unwrap().unwrap().tags,
+            vec!["old", "keep"]
+        );
+    }
+
+    #[tokio::test]
+    async fn tag_merge_requires_multiple_sources() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = Arc::new(Storage::new(Some(dir.path().join("test.db"))).unwrap());
+        let error = execute_unified(
+            &storage,
+            Some(serde_json::json!({
+                "action": "tag_merge",
+                "source_tags": ["one"],
+                "target_tag": "target"
+            })),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("at least two"));
     }
 
     #[test]

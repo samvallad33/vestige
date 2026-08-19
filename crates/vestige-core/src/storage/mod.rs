@@ -52,10 +52,10 @@ pub use sqlite::{
     CompositionOutcomeRecord, ConnectionRecord, ConnectorCursor, ConsolidationHistoryRecord,
     DEFAULT_MEMORY_SCOPE, DreamHistoryRecord, EmbeddingProfileIntegrityManifest,
     EmbeddingProfileMigrationNodeCheckpoint, EmbeddingProfileMigrationRecord,
-    EmbeddingProfileVector, FilePortableSyncBackend, InsightRecord, IntentionRecord,
-    NeverComposedCandidate, PortableSyncBackend, PortableSyncReport, ReconcileReport, Result,
-    SmartIngestResult, SourceUpsertOutcome, SourceUpsertResult, SqliteMemoryStore,
-    StateTransitionRecord, StorageError,
+    EmbeddingProfileVector, FilePortableSyncBackend, HygieneNodeSummary, InsightRecord,
+    IntentionRecord, NeverComposedCandidate, PortableSyncBackend, PortableSyncReport,
+    ReconcileReport, Result, SmartIngestResult, SourceUpsertOutcome, SourceUpsertResult,
+    SqliteMemoryStore, StateTransitionRecord, StorageError,
 };
 pub use synaptic_store::{
     DurableSynapticCapture, DurableSynapticPairReceipt, SYNAPTIC_CAPTURE_ALGORITHM_V1,

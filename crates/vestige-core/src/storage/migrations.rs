@@ -144,6 +144,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Embedding Profiles: isolated vector rows, integrity manifests, active pointer, and resumable migration checkpoints",
         up: MIGRATION_V28_UP,
     },
+    Migration {
+        version: 29,
+        description: "Memory hygiene: index the legacy-compatible normalized project scope",
+        up: MIGRATION_V29_UP,
+    },
 ];
 
 /// A database migration
@@ -1374,6 +1379,16 @@ INSERT OR IGNORE INTO embedding_profile_manifests (
 );
 UPDATE schema_version SET version = 28, applied_at = datetime('now');
 "#;
+
+/// V29: index the exact normalized scope expression used by scoped recall and
+/// hygiene/tag maintenance. The V27 data repair handles current databases;
+/// the expression preserves safe behavior for later direct/legacy blank rows.
+const MIGRATION_V29_UP: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_nodes_normalized_scope
+    ON knowledge_nodes(COALESCE(NULLIF(trim(scope), ''), 'user'));
+
+UPDATE schema_version SET version = 29, applied_at = datetime('now');
+"#;
 /// V21: durable source of truth for synaptic tag-and-capture.
 ///
 /// `synaptic_tags` survives process restarts. `synaptic_events` gives an
@@ -2420,7 +2435,10 @@ mod tests {
         assert_eq!(cursor_row_count(&conn), 2);
 
         let applied = apply_migrations(&conn).expect("V20+ apply on a V19 database");
-        assert_eq!(applied, 9, "V20 through V28 should apply on a V19 database");
+        assert_eq!(
+            applied, 10,
+            "V20 through V29 should apply on a V19 database"
+        );
         assert_eq!(
             get_current_version(&conn).expect("version"),
             MIGRATIONS.last().unwrap().version
@@ -2432,16 +2450,16 @@ mod tests {
         );
     }
 
-    /// Fresh database: all migrations apply cleanly through V28 and the cursor
+    /// Fresh database: all migrations apply cleanly through V29 and the cursor
     /// table exists and is empty (nothing to clear, no error).
     #[test]
     fn v20_applies_cleanly_on_a_fresh_database() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("fresh migrations succeed through V28");
+        apply_migrations(&conn).expect("fresh migrations succeed through V29");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            28,
-            "latest migration must be V28"
+            29,
+            "latest migration must be V29"
         );
         assert_eq!(cursor_row_count(&conn), 0);
     }
@@ -2492,8 +2510,12 @@ mod tests {
         )
         .expect("seed legacy vector");
 
-        apply_migrations(&conn).expect("apply V28");
-        assert_eq!(get_current_version(&conn).expect("version"), 28);
+        apply_migrations(&conn).expect("apply V28 and V29");
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            29,
+            "V28 profile migration is followed by the V29 normalized-scope index"
+        );
         let copied: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM embedding_profile_vectors \
@@ -2692,7 +2714,7 @@ mod tests {
         )
         .expect("mark V25 fixture current");
 
-        assert_eq!(apply_migrations(&conn).expect("apply V26 through V28"), 3);
+        assert_eq!(apply_migrations(&conn).expect("apply V26 through V29"), 4);
         let columns: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('receipt_envelopes')
@@ -2702,7 +2724,7 @@ mod tests {
             )
             .expect("inspect V26 column");
         assert_eq!(columns, 1);
-        assert_eq!(apply_migrations(&conn).expect("V28 replay is a no-op"), 0);
+        assert_eq!(apply_migrations(&conn).expect("V29 replay is a no-op"), 0);
     }
 
     #[test]

@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::cognitive::CognitiveEngine;
 use vestige_core::{
@@ -48,7 +49,7 @@ pub fn schema() -> Value {
             "tags": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Tags for categorization"
+                "description": "Tags for categorization. The response non-destructively suggests close existing tags in the same scope; suggestions are never auto-applied."
             },
             "source": {
                 "type": "string",
@@ -60,7 +61,7 @@ pub fn schema() -> Value {
             },
             "validFrom": {
                 "type": "string",
-                "description": "When this fact becomes true. Use RFC3339 or an exact YYYY-MM-DD date."
+                "description": "When this fact becomes true. Use RFC3339 or an exact YYYY-MM-DD date. When omitted, one unambiguous 'as of YYYY-MM-DD' phrase in content is inferred as validFrom and reported in the response."
             },
             "validUntil": {
                 "type": "string",
@@ -75,6 +76,16 @@ pub fn schema() -> Value {
                 "type": "boolean",
                 "description": "Allow a detected credential to be stored for this single item. Dangerous: normally redact the value or store a secret-manager reference instead.",
                 "default": false
+            },
+            "previewTagSuggestions": {
+                "type": "boolean",
+                "description": "Read-only preflight. Returns same-scope similar-tag suggestions and inferred validity without storing anything.",
+                "default": false
+            },
+            "acceptedTagSuggestions": {
+                "type": "object",
+                "additionalProperties": { "type": "string" },
+                "description": "Explicitly accepted input-tag to existing-tag mappings from a preflight response. Each mapping is revalidated against current same-scope suggestions before ingest."
             },
             "batchMergePolicy": {
                 "type": "string",
@@ -96,7 +107,7 @@ pub fn schema() -> Value {
                         "tags": {
                             "type": "array",
                             "items": { "type": "string" },
-                            "description": "Tags for categorization"
+                            "description": "Tags for categorization. Similar existing same-scope tags are returned as non-mutating suggestions."
                         },
                         "node_type": {
                             "type": "string",
@@ -113,7 +124,7 @@ pub fn schema() -> Value {
                         },
                         "validFrom": {
                             "type": "string",
-                            "description": "When this item becomes true (RFC3339 or YYYY-MM-DD)."
+                            "description": "When this item becomes true (RFC3339 or YYYY-MM-DD). If omitted, one unambiguous 'as of YYYY-MM-DD' phrase is inferred."
                         },
                         "validUntil": {
                             "type": "string",
@@ -128,6 +139,16 @@ pub fn schema() -> Value {
                             "type": "boolean",
                             "description": "Allow a detected credential for this item only. Defaults to false; do not use for ordinary session summaries.",
                             "default": false
+                        },
+                        "previewTagSuggestions": {
+                            "type": "boolean",
+                            "description": "Read-only per-item tag/validity preflight; this item is not stored.",
+                            "default": false
+                        },
+                        "acceptedTagSuggestions": {
+                            "type": "object",
+                            "additionalProperties": { "type": "string" },
+                            "description": "Explicitly accepted tag mappings from a prior preflight."
                         }
                     },
                     "required": ["content"]
@@ -150,6 +171,8 @@ struct SmartIngestArgs {
     valid_until: Option<String>,
     force_create: Option<bool>,
     allow_secrets: Option<bool>,
+    preview_tag_suggestions: Option<bool>,
+    accepted_tag_suggestions: Option<std::collections::BTreeMap<String, String>>,
     batch_merge_policy: Option<String>,
     items: Option<Vec<BatchItem>>,
 }
@@ -168,12 +191,22 @@ struct BatchItem {
     valid_until: Option<String>,
     force_create: Option<bool>,
     allow_secrets: Option<bool>,
+    preview_tag_suggestions: Option<bool>,
+    accepted_tag_suggestions: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ValidityRange {
     from: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+struct ValidityResolution {
+    range: ValidityRange,
+    source: &'static str,
+    inferred_phrase: Option<String>,
+    ambiguous_phrases: Vec<String>,
 }
 
 fn parse_validity_timestamp(
@@ -212,6 +245,354 @@ fn parse_validity_range(
         from: valid_from,
         until: valid_until,
     })
+}
+
+fn infer_as_of_dates(content: &str) -> Vec<(DateTime<Utc>, String)> {
+    let lowered = content.to_ascii_lowercase();
+    let bytes = content.as_bytes();
+    let mut inferred = std::collections::BTreeMap::new();
+    for (phrase_start, _) in lowered.match_indices("as of ") {
+        if phrase_start > 0
+            && content[..phrase_start]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric)
+        {
+            continue;
+        }
+        let date_start = phrase_start + "as of ".len();
+        let date_end = date_start + 10;
+        if date_end > bytes.len() {
+            continue;
+        }
+        let candidate = &bytes[date_start..date_end];
+        if !candidate.iter().enumerate().all(|(index, byte)| {
+            matches!(index, 4 | 7) && *byte == b'-'
+                || !matches!(index, 4 | 7) && byte.is_ascii_digit()
+        }) {
+            continue;
+        }
+        if bytes
+            .get(date_end)
+            .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'-')
+        {
+            continue;
+        }
+        let Ok(raw_date) = std::str::from_utf8(candidate) else {
+            continue;
+        };
+        let Ok(date) = NaiveDate::parse_from_str(raw_date, "%Y-%m-%d") else {
+            continue;
+        };
+        let timestamp = Utc.from_utc_datetime(
+            &date
+                .and_hms_opt(0, 0, 0)
+                .expect("a parsed date always has a valid midnight"),
+        );
+        let phrase = std::str::from_utf8(&bytes[phrase_start..date_end])
+            .unwrap_or("as of <date>")
+            .to_string();
+        inferred.entry(timestamp).or_insert(phrase);
+    }
+    inferred.into_iter().collect()
+}
+
+fn resolve_validity_range(
+    content: &str,
+    valid_from: Option<&str>,
+    valid_until: Option<&str>,
+) -> Result<ValidityResolution, String> {
+    let mut range = parse_validity_range(valid_from, valid_until)?;
+    let explicit = valid_from.is_some() || valid_until.is_some();
+    let inferred = infer_as_of_dates(content);
+    let mut source = if explicit { "explicit" } else { "none" };
+    let mut inferred_phrase = None;
+    let mut ambiguous_phrases = Vec::new();
+
+    if range.from.is_none() {
+        if inferred.len() == 1 {
+            range.from = Some(inferred[0].0);
+            inferred_phrase = Some(inferred[0].1.clone());
+            source = if explicit {
+                "explicit_and_inferred_as_of"
+            } else {
+                "inferred_as_of"
+            };
+        } else if inferred.len() > 1 {
+            ambiguous_phrases = inferred.into_iter().map(|(_, phrase)| phrase).collect();
+            source = if explicit {
+                "explicit_with_ambiguous_as_of_ignored"
+            } else {
+                "ambiguous_as_of_not_applied"
+            };
+        }
+    }
+    if let (Some(from), Some(until)) = (range.from, range.until)
+        && until <= from
+    {
+        return Err(
+            "Invalid validity range: inferred/explicit validFrom must be before validUntil"
+                .to_string(),
+        );
+    }
+    Ok(ValidityResolution {
+        range,
+        source,
+        inferred_phrase,
+        ambiguous_phrases,
+    })
+}
+
+fn validity_response(resolution: &ValidityResolution) -> Value {
+    serde_json::json!({
+        "validFrom": resolution.range.from.map(|value| value.to_rfc3339()),
+        "validUntil": resolution.range.until.map(|value| value.to_rfc3339()),
+        "source": resolution.source,
+        "inferredPhrase": resolution.inferred_phrase,
+        "ambiguousPhrases": resolution.ambiguous_phrases,
+    })
+}
+
+fn normalized_tag_fingerprint(tag: &str) -> String {
+    tag.nfkc()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+fn normalized_tag_text(tag: &str) -> String {
+    tag.nfkc().flat_map(char::to_lowercase).collect()
+}
+
+fn bounded_levenshtein(left: &str, right: &str, maximum: usize) -> Option<usize> {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    if left.len().abs_diff(right.len()) > maximum {
+        return None;
+    }
+
+    let outside_band = maximum + 1;
+    let mut previous: Vec<usize> = (0..=right.len())
+        .map(|index| {
+            if index <= maximum {
+                index
+            } else {
+                outside_band
+            }
+        })
+        .collect();
+    for (left_index, left_char) in left.iter().enumerate() {
+        let row = left_index + 1;
+        let mut current = vec![outside_band; right.len() + 1];
+        if row <= maximum {
+            current[0] = row;
+        }
+        let start = row.saturating_sub(maximum).max(1);
+        let end = (row + maximum).min(right.len());
+        for column in start..=end {
+            current[column] = std::cmp::min(
+                std::cmp::min(current[column - 1] + 1, previous[column] + 1),
+                previous[column - 1] + usize::from(*left_char != right[column - 1]),
+            );
+        }
+        previous = current;
+    }
+    (previous[right.len()] <= maximum).then_some(previous[right.len()])
+}
+
+#[derive(Debug, Clone)]
+struct TagSuggestionReport {
+    suggestions: Vec<Value>,
+    status: Value,
+}
+
+fn similar_tag_suggestions(
+    storage: &Storage,
+    scope: &str,
+    requested: &[String],
+) -> TagSuggestionReport {
+    if requested.is_empty() {
+        return TagSuggestionReport {
+            suggestions: Vec::new(),
+            status: serde_json::json!({
+                "status": "complete",
+                "scope": scope,
+                "vocabularyScanned": false,
+                "vocabularyCount": 0,
+                "maximumVocabulary": 10_000,
+                "requestedTagsTruncated": false,
+                "ignoredOverlongInputTags": 0,
+                "ignoredSecretShapedVocabularyTags": 0,
+                "unicodeNormalization": "NFKC plus Unicode lowercase",
+            }),
+        };
+    }
+    let vocabulary = match storage.tag_vocabulary(Some(scope)) {
+        Ok(vocabulary) => vocabulary,
+        Err(error) => {
+            return TagSuggestionReport {
+                suggestions: Vec::new(),
+                status: serde_json::json!({
+                    "status": "unavailable",
+                    "reason": error.to_string(),
+                    "scope": scope,
+                }),
+            };
+        }
+    };
+    let mut ignored_secret_shaped_vocabulary_tags = 0usize;
+    let normalized_vocabulary: Vec<_> = vocabulary
+        .iter()
+        .filter_map(|existing| {
+            if scan_secrets(existing)
+                .into_iter()
+                .any(|finding| finding.blocks_ingestion())
+            {
+                ignored_secret_shaped_vocabulary_tags += 1;
+                return None;
+            }
+            Some((
+                existing,
+                normalized_tag_text(existing),
+                normalized_tag_fingerprint(existing),
+            ))
+        })
+        .collect();
+    let mut suggestions = Vec::new();
+    let mut ignored_overlong = 0usize;
+    for input in requested.iter().take(50) {
+        if input.chars().count() > 200 {
+            ignored_overlong += 1;
+            continue;
+        }
+        if !scan_secrets(input).is_empty() {
+            continue;
+        }
+        let input_lower = normalized_tag_text(input);
+        let input_fingerprint = normalized_tag_fingerprint(input);
+        if input_fingerprint.chars().count() < 4 {
+            continue;
+        }
+        let mut candidates = Vec::new();
+        for (existing, existing_lower, existing_fingerprint) in &normalized_vocabulary {
+            if existing.as_str() == input.as_str() {
+                continue;
+            }
+            let input_suffix = input.rsplit_once(':').map(|(_, suffix)| suffix);
+            let existing_suffix = existing.rsplit_once(':').map(|(_, suffix)| suffix);
+            let exactly_one_namespaced = input_suffix.is_some() ^ existing_suffix.is_some();
+            let input_suffix = input_suffix.unwrap_or(input);
+            let existing_suffix = existing_suffix.unwrap_or(existing);
+            let namespace_variant = exactly_one_namespaced
+                && normalized_tag_fingerprint(input_suffix).chars().count() >= 4
+                && normalized_tag_fingerprint(input_suffix)
+                    == normalized_tag_fingerprint(existing_suffix);
+            let (score, reason) = if existing_lower.as_str() == input_lower.as_str() {
+                (1.0, "casing_variant")
+            } else if existing_fingerprint.as_str() == input_fingerprint.as_str() {
+                (1.0, "punctuation_variant")
+            } else if namespace_variant {
+                (0.95, "namespace_variant")
+            } else {
+                let longest = input_lower
+                    .chars()
+                    .count()
+                    .max(existing_lower.chars().count());
+                let allowed_distance = if longest <= 5 { 1 } else { 2 };
+                let Some(distance) =
+                    bounded_levenshtein(&input_lower, existing_lower, allowed_distance)
+                else {
+                    continue;
+                };
+                let score = 1.0 - distance as f64 / longest.max(1) as f64;
+                if score < 0.75 {
+                    continue;
+                }
+                (score, "edit_distance")
+            };
+            candidates.push((score, *existing, reason));
+        }
+        candidates.sort_by(|left, right| {
+            right
+                .0
+                .partial_cmp(&left.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.1.cmp(right.1))
+        });
+        for (score, existing, reason) in candidates.into_iter().take(3) {
+            suggestions.push(serde_json::json!({
+                "inputTag": input,
+                "similarExistingTag": existing,
+                "similarity": score,
+                "reason": reason,
+                "appliedAutomatically": false,
+            }));
+        }
+    }
+    TagSuggestionReport {
+        suggestions,
+        status: serde_json::json!({
+            "status": "complete",
+            "scope": scope,
+            "vocabularyScanned": true,
+            "vocabularyCount": vocabulary.len(),
+            "maximumVocabulary": 10_000,
+            "requestedTagsTruncated": requested.len() > 50,
+            "ignoredOverlongInputTags": ignored_overlong,
+            "ignoredSecretShapedVocabularyTags": ignored_secret_shaped_vocabulary_tags,
+            "unicodeNormalization": "NFKC plus Unicode lowercase",
+        }),
+    }
+}
+
+fn apply_accepted_tag_suggestions(
+    tags: Vec<String>,
+    report: &TagSuggestionReport,
+    accepted: Option<&std::collections::BTreeMap<String, String>>,
+) -> Result<Vec<String>, String> {
+    let Some(accepted) = accepted else {
+        return Ok(tags);
+    };
+    if accepted.iter().any(|(input, existing)| {
+        [input.as_str(), existing.as_str()]
+            .into_iter()
+            .any(|value| {
+                scan_secrets(value)
+                    .into_iter()
+                    .any(|finding| finding.blocks_ingestion())
+            })
+    }) {
+        return Err(
+            "Refused acceptedTagSuggestions containing a probable credential; secret bytes were not stored, logged, or returned"
+                .to_string(),
+        );
+    }
+    for (input, existing) in accepted {
+        let valid = report.suggestions.iter().any(|suggestion| {
+            suggestion["inputTag"].as_str() == Some(input.as_str())
+                && suggestion["similarExistingTag"].as_str() == Some(existing.as_str())
+        });
+        if !valid {
+            return Err(format!(
+                "acceptedTagSuggestions mapping '{input}' -> '{existing}' is not a current same-scope suggestion; run previewTagSuggestions again"
+            ));
+        }
+        if !tags.iter().any(|tag| tag == input) {
+            return Err(format!(
+                "acceptedTagSuggestions source '{input}' is not present in tags"
+            ));
+        }
+    }
+
+    let mut rewritten = Vec::with_capacity(tags.len());
+    let mut seen = std::collections::HashSet::new();
+    for tag in tags {
+        let canonical = accepted.get(&tag).cloned().unwrap_or(tag);
+        if seen.insert(canonical.clone()) {
+            rewritten.push(canonical);
+        }
+    }
+    Ok(rewritten)
 }
 
 pub async fn execute(
@@ -265,7 +646,11 @@ pub async fn execute(
     let content = args.content.ok_or(
         "Missing 'content' field. Provide 'content' for single mode or 'items' for batch mode.",
     )?;
-    let validity = parse_validity_range(args.valid_from.as_deref(), args.valid_until.as_deref())?;
+    let validity = resolve_validity_range(
+        &content,
+        args.valid_from.as_deref(),
+        args.valid_until.as_deref(),
+    )?;
     let secret_policy = if args.allow_secrets.unwrap_or(false) {
         SecretPolicy::AllowExplicitly
     } else {
@@ -293,7 +678,26 @@ pub async fn execute(
         attention: 0.0,
         composite: 0.0,
     };
-    let mut tags = args.tags.unwrap_or_default();
+    let requested_tags = args.tags.clone().unwrap_or_default();
+    let tag_suggestions = similar_tag_suggestions(storage, &scope, &requested_tags);
+    if args.preview_tag_suggestions.unwrap_or(false) {
+        return Ok(serde_json::json!({
+            "success": true,
+            "decision": "preflight",
+            "wouldWrite": false,
+            "scope": scope,
+            "validity": validity_response(&validity),
+            "tagSuggestions": tag_suggestions.suggestions,
+            "tagSuggestionStatus": tag_suggestions.status,
+            "nextStep": "Accept any mapping explicitly with acceptedTagSuggestions, or ingest unchanged without it. No tags were auto-applied and no memory was stored."
+        }));
+    }
+    let accepted_tag_suggestions = args.accepted_tag_suggestions.clone().unwrap_or_default();
+    let mut tags = apply_accepted_tag_suggestions(
+        args.tags.unwrap_or_default(),
+        &tag_suggestions,
+        (!accepted_tag_suggestions.is_empty()).then_some(&accepted_tag_suggestions),
+    )?;
 
     if let Ok(cog) = cognitive.try_lock() {
         // 4A. Full 4-channel importance scoring
@@ -335,8 +739,8 @@ pub async fn execute(
         // Store importance composite as sentiment_magnitude for FSRS encoding boost
         sentiment_magnitude: importance_composite,
         tags,
-        valid_from: validity.from,
-        valid_until: validity.until,
+        valid_from: validity.range.from,
+        valid_until: validity.range.until,
         source_envelope: None,
     };
 
@@ -375,7 +779,11 @@ pub async fn execute(
             "predictionError": 1.0,
             "importanceScore": importance_composite,
             "synapticCapture": synaptic_capture,
-            "reason": "Forced creation - skipped similarity check"
+            "reason": "Forced creation - skipped similarity check",
+            "validity": validity_response(&validity),
+            "tagSuggestions": tag_suggestions.suggestions,
+            "tagSuggestionStatus": tag_suggestions.status,
+            "acceptedTagSuggestions": accepted_tag_suggestions,
         }));
     }
 
@@ -427,6 +835,10 @@ pub async fn execute(
             "importanceScore": importance_composite,
             "synapticCapture": synaptic_capture,
             "reason": result.reason,
+            "validity": validity_response(&validity),
+            "tagSuggestions": tag_suggestions.suggestions,
+            "tagSuggestionStatus": tag_suggestions.status,
+            "acceptedTagSuggestions": accepted_tag_suggestions,
             "explanation": match result.decision.as_str() {
                 "create" => "Created new memory - content was different enough from existing memories",
                 "update" => "Updated existing memory - content was similar to an existing memory",
@@ -469,7 +881,11 @@ pub async fn execute(
             "predictionError": 1.0,
             "importanceScore": importance_composite,
             "synapticCapture": synaptic_capture,
-            "reason": "Embeddings not available - used regular ingest"
+            "reason": "Embeddings not available - used regular ingest",
+            "validity": validity_response(&validity),
+            "tagSuggestions": tag_suggestions.suggestions,
+            "tagSuggestionStatus": tag_suggestions.status,
+            "acceptedTagSuggestions": accepted_tag_suggestions,
         }))
     }
 }
@@ -509,19 +925,22 @@ async fn execute_batch(
             .scope
             .clone()
             .unwrap_or_else(|| default_scope.to_string());
-        let validity =
-            match parse_validity_range(item.valid_from.as_deref(), item.valid_until.as_deref()) {
-                Ok(range) => range,
-                Err(reason) => {
-                    errors += 1;
-                    results.push(serde_json::json!({
-                        "index": i,
-                        "status": "error",
-                        "reason": reason
-                    }));
-                    continue;
-                }
-            };
+        let validity = match resolve_validity_range(
+            &item.content,
+            item.valid_from.as_deref(),
+            item.valid_until.as_deref(),
+        ) {
+            Ok(range) => range,
+            Err(reason) => {
+                errors += 1;
+                results.push(serde_json::json!({
+                    "index": i,
+                    "status": "error",
+                    "reason": reason
+                }));
+                continue;
+            }
+        };
         // Skip empty content
         if item.content.trim().is_empty() {
             results.push(serde_json::json!({
@@ -564,7 +983,39 @@ async fn execute_batch(
             attention: 0.0,
             composite: 0.0,
         };
-        let mut tags = item.tags.unwrap_or_default();
+        let requested_tags = item.tags.clone().unwrap_or_default();
+        let tag_suggestions = similar_tag_suggestions(storage, &scope, &requested_tags);
+        if item.preview_tag_suggestions.unwrap_or(false) {
+            skipped += 1;
+            results.push(serde_json::json!({
+                "index": i,
+                "status": "previewed",
+                "decision": "preflight",
+                "wouldWrite": false,
+                "scope": scope,
+                "validity": validity_response(&validity),
+                "tagSuggestions": tag_suggestions.suggestions,
+                "tagSuggestionStatus": tag_suggestions.status,
+            }));
+            continue;
+        }
+        let accepted_tag_suggestions = item.accepted_tag_suggestions.clone().unwrap_or_default();
+        let mut tags = match apply_accepted_tag_suggestions(
+            item.tags.unwrap_or_default(),
+            &tag_suggestions,
+            (!accepted_tag_suggestions.is_empty()).then_some(&accepted_tag_suggestions),
+        ) {
+            Ok(tags) => tags,
+            Err(reason) => {
+                errors += 1;
+                results.push(serde_json::json!({
+                    "index": i,
+                    "status": "error",
+                    "reason": reason,
+                }));
+                continue;
+            }
+        };
 
         if let Ok(cog) = cognitive.try_lock() {
             let context = ImportanceContext::current();
@@ -601,8 +1052,8 @@ async fn execute_batch(
             sentiment_score: 0.0,
             sentiment_magnitude: importance_composite,
             tags,
-            valid_from: validity.from,
-            valid_until: validity.until,
+            valid_from: validity.range.from,
+            valid_until: validity.range.until,
             source_envelope: None,
         };
 
@@ -639,7 +1090,11 @@ async fn execute_batch(
                         "scope": scope,
                         "importanceScore": importance_composite,
                         "synapticCapture": synaptic_capture,
-                        "reason": "Forced creation - skipped similarity check"
+                        "reason": "Forced creation - skipped similarity check",
+                        "validity": validity_response(&validity),
+                        "tagSuggestions": tag_suggestions.suggestions,
+                        "tagSuggestionStatus": tag_suggestions.status,
+                        "acceptedTagSuggestions": accepted_tag_suggestions,
                     }));
                 }
                 Err(e) => {
@@ -711,7 +1166,11 @@ async fn execute_batch(
                         "mergePreview": merge_preview,
                         "importanceScore": importance_composite,
                         "synapticCapture": synaptic_capture,
-                        "reason": result.reason
+                        "reason": result.reason,
+                        "validity": validity_response(&validity),
+                        "tagSuggestions": tag_suggestions.suggestions,
+                        "tagSuggestionStatus": tag_suggestions.status,
+                        "acceptedTagSuggestions": accepted_tag_suggestions,
                     }));
                 }
                 Err(e) => {
@@ -753,7 +1212,11 @@ async fn execute_batch(
                         "scope": scope,
                         "importanceScore": importance_composite,
                         "synapticCapture": synaptic_capture,
-                        "reason": "Embeddings not available - used regular ingest"
+                        "reason": "Embeddings not available - used regular ingest",
+                        "validity": validity_response(&validity),
+                        "tagSuggestions": tag_suggestions.suggestions,
+                        "tagSuggestionStatus": tag_suggestions.status,
+                        "acceptedTagSuggestions": accepted_tag_suggestions,
                     }));
                 }
                 Err(e) => {
@@ -1432,6 +1895,543 @@ mod tests {
             node.valid_until.unwrap().to_rfc3339(),
             "2026-10-01T00:00:00+00:00"
         );
+    }
+
+    #[tokio::test]
+    async fn smart_ingest_infers_one_strict_as_of_date_and_reports_provenance() {
+        let (storage, _dir) = test_storage().await;
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "Current version is 4.2 as of 2026-03-04.",
+                "forceCreate": true
+            })),
+        )
+        .await
+        .unwrap();
+        let node = storage
+            .get_node(response["nodeId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            node.valid_from.unwrap().to_rfc3339(),
+            "2026-03-04T00:00:00+00:00"
+        );
+        assert_eq!(response["validity"]["source"], "inferred_as_of");
+        assert_eq!(response["validity"]["inferredPhrase"], "as of 2026-03-04");
+    }
+
+    #[test]
+    fn as_of_inference_is_case_insensitive_deduplicated_and_boundary_safe() {
+        let dates =
+            infer_as_of_dates("Inventory AS OF 2026-03-04, repeated as of 2026-03-04 for clarity.");
+        assert_eq!(dates.len(), 1, "the same date repeated is unambiguous");
+        assert_eq!(dates[0].0.to_rfc3339(), "2026-03-04T00:00:00+00:00");
+
+        assert!(
+            infer_as_of_dates("phaseas of 2026-03-04 must not match").is_empty(),
+            "an embedded word is not an 'as of' phrase boundary"
+        );
+        assert!(
+            infer_as_of_dates("éas of 2026-03-04 must not match").is_empty(),
+            "a preceding Unicode letter is not an 'as of' phrase boundary"
+        );
+        assert!(
+            infer_as_of_dates("invalid as of 2026-02-30").is_empty(),
+            "invalid calendar dates are ignored"
+        );
+        assert_eq!(
+            infer_as_of_dates("Résumé — as of 2026-03-04").len(),
+            1,
+            "a Unicode phrase before the ASCII marker must not break byte boundaries"
+        );
+    }
+
+    #[test]
+    fn inferred_as_of_must_not_cross_an_explicit_valid_until() {
+        let error = resolve_validity_range("Policy as of 2026-04-01", None, Some("2026-03-01"))
+            .unwrap_err();
+        assert!(error.contains("must be before validUntil"));
+    }
+
+    #[test]
+    fn tag_similarity_uses_nfkc_before_case_and_punctuation_comparison() {
+        assert_eq!(
+            normalized_tag_fingerprint("Ｐｒｉｘ－Ｓｉｘ"),
+            normalized_tag_fingerprint("prix-six")
+        );
+        assert_eq!(bounded_levenshtein("colour", "colur", 1), Some(1));
+        assert_eq!(bounded_levenshtein("unrelated", "banana", 2), None);
+    }
+
+    #[tokio::test]
+    async fn smart_ingest_does_not_guess_between_multiple_as_of_dates() {
+        let (storage, _dir) = test_storage().await;
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "Compared inventories as of 2026-03-04 and as of 2026-03-10.",
+                "forceCreate": true
+            })),
+        )
+        .await
+        .unwrap();
+        let node = storage
+            .get_node(response["nodeId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(node.valid_from.is_none());
+        assert_eq!(
+            response["validity"]["source"],
+            "ambiguous_as_of_not_applied"
+        );
+        assert_eq!(
+            response["validity"]["ambiguousPhrases"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_valid_from_overrides_as_of_inference() {
+        let (storage, _dir) = test_storage().await;
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "Reported as of 2026-03-04.",
+                "validFrom": "2026-04-01",
+                "forceCreate": true
+            })),
+        )
+        .await
+        .unwrap();
+        let node = storage
+            .get_node(response["nodeId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            node.valid_from.unwrap().to_rfc3339(),
+            "2026-04-01T00:00:00+00:00"
+        );
+        assert_eq!(response["validity"]["source"], "explicit");
+    }
+
+    #[tokio::test]
+    async fn smart_ingest_suggests_similar_same_scope_tags_without_rewriting() {
+        let (storage, _dir) = test_storage().await;
+        storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "existing user vocabulary".to_string(),
+                    tags: vec!["prixsix".to_string()],
+                    ..Default::default()
+                },
+                "user",
+            )
+            .unwrap();
+        storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "other project vocabulary".to_string(),
+                    tags: vec!["project-only".to_string()],
+                    ..Default::default()
+                },
+                "other-project",
+            )
+            .unwrap();
+
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "new project note",
+                "tags": ["prix-six", "project_onli"],
+                "scope": "user",
+                "forceCreate": true
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["tagSuggestions"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            response["tagSuggestions"][0]["similarExistingTag"],
+            "prixsix"
+        );
+        assert_eq!(response["tagSuggestions"][0]["appliedAutomatically"], false);
+        let node = storage
+            .get_node(response["nodeId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(node.tags.contains(&"prix-six".to_string()));
+        assert!(!node.tags.contains(&"prixsix".to_string()));
+    }
+
+    #[tokio::test]
+    async fn tag_suggestion_preflight_is_no_write_and_explicit_acceptance_is_revalidated() {
+        let (storage, _dir) = test_storage().await;
+        storage
+            .ingest(IngestInput {
+                content: "existing tag vocabulary".to_string(),
+                tags: vec!["prixsix".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        let before = storage.get_stats().unwrap().total_nodes;
+        let preview = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "preflight-only memory",
+                "tags": ["prix-six"],
+                "previewTagSuggestions": true,
+                "forceCreate": true
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview["decision"], "preflight");
+        assert_eq!(preview["wouldWrite"], false);
+        assert_eq!(storage.get_stats().unwrap().total_nodes, before);
+
+        let accepted = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "accepted tag memory",
+                "tags": ["prix-six"],
+                "acceptedTagSuggestions": {"prix-six": "prixsix"},
+                "forceCreate": true
+            })),
+        )
+        .await
+        .unwrap();
+        let node = storage
+            .get_node(accepted["nodeId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(node.tags.contains(&"prixsix".to_string()));
+        assert!(!node.tags.contains(&"prix-six".to_string()));
+
+        let rejected = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "invalid acceptance must not write",
+                "tags": ["prix-six"],
+                "acceptedTagSuggestions": {"prix-six": "not-current"},
+                "forceCreate": true
+            })),
+        )
+        .await;
+        assert!(rejected.is_err());
+        assert_eq!(storage.get_stats().unwrap().total_nodes, before + 1);
+    }
+
+    #[tokio::test]
+    async fn accepted_tag_suggestions_canonicalize_duplicates_in_first_seen_order() {
+        let (storage, _dir) = test_storage().await;
+        storage
+            .ingest(IngestInput {
+                content: "existing canonical tag".to_string(),
+                tags: vec!["prixsix".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        let report = similar_tag_suggestions(&storage, "user", &["prix-six".to_string()]);
+        let accepted =
+            std::collections::BTreeMap::from([("prix-six".to_string(), "prixsix".to_string())]);
+
+        for tags in [
+            vec![
+                "prix-six".to_string(),
+                "prixsix".to_string(),
+                "tail".to_string(),
+            ],
+            vec![
+                "prixsix".to_string(),
+                "prix-six".to_string(),
+                "tail".to_string(),
+            ],
+        ] {
+            assert_eq!(
+                apply_accepted_tag_suggestions(tags, &report, Some(&accepted)).unwrap(),
+                vec!["prixsix", "tail"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn accepted_tag_suggestions_reject_secret_keys_and_values_without_echo_or_write() {
+        let (storage, _dir) = test_storage().await;
+        let credential = format!("ghp_{}", "a".repeat(36));
+        let secret_key = serde_json::to_value(std::collections::BTreeMap::from([(
+            credential.clone(),
+            "safe".to_string(),
+        )]))
+        .unwrap();
+        let secret_value = serde_json::to_value(std::collections::BTreeMap::from([(
+            "safe".to_string(),
+            credential.clone(),
+        )]))
+        .unwrap();
+        for (tags, accepted) in [
+            (vec![credential.clone()], secret_key),
+            (vec!["safe".to_string()], secret_value),
+        ] {
+            let result = execute(
+                &storage,
+                &test_cognitive(),
+                Some(serde_json::json!({
+                    "content": "accepted suggestion secret guard fixture",
+                    "tags": tags,
+                    "acceptedTagSuggestions": accepted,
+                    "forceCreate": true,
+                })),
+            )
+            .await
+            .unwrap_err();
+            assert!(result.contains("probable credential"));
+            assert!(!result.contains(&credential));
+            assert_eq!(storage.get_stats().unwrap().total_nodes, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn tag_suggestion_cost_bounds_are_explicit_and_tagless_ingest_skips_vocabulary() {
+        let (storage, _dir) = test_storage().await;
+        storage
+            .ingest(IngestInput {
+                content: "legacy overlong vocabulary fixture".to_string(),
+                tags: vec!["x".repeat(201)],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let tagless = similar_tag_suggestions(&storage, "user", &[]);
+        assert_eq!(tagless.status["status"], "complete");
+        assert_eq!(tagless.status["vocabularyScanned"], false);
+
+        let bounded = similar_tag_suggestions(&storage, "user", &["candidate".to_string()]);
+        assert_eq!(bounded.status["status"], "unavailable");
+        assert!(
+            bounded.status["reason"]
+                .as_str()
+                .unwrap()
+                .contains("longer than the 200-character")
+        );
+        assert!(bounded.suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tag_suggestions_never_echo_secret_shaped_existing_vocabulary() {
+        let (storage, _dir) = test_storage().await;
+        let credential = format!("ghp_{}", "a".repeat(36));
+        storage
+            .ingest_with_secret_policy(
+                IngestInput {
+                    content: "intentional local credential vocabulary fixture".to_string(),
+                    tags: vec![credential.clone()],
+                    ..Default::default()
+                },
+                SecretPolicy::AllowExplicitly,
+            )
+            .unwrap();
+
+        let near_match = format!("ghq_{}", "a".repeat(36));
+        let report = similar_tag_suggestions(&storage, "user", &[near_match]);
+        assert_eq!(report.status["status"], "complete");
+        assert_eq!(report.status["ignoredSecretShapedVocabularyTags"], 1);
+        assert!(report.suggestions.is_empty());
+        assert!(
+            !serde_json::to_string(&report.status)
+                .unwrap()
+                .contains(&credential)
+        );
+    }
+
+    #[tokio::test]
+    async fn tag_suggestions_cover_issue_variants_and_suppress_noise_deterministically() {
+        let (storage, _dir) = test_storage().await;
+        for tag in [
+            "prixsix",
+            "codebase:prix-six",
+            "Prix-Six",
+            "colour",
+            "coolur",
+            "exact",
+            "ab",
+        ] {
+            storage
+                .ingest(IngestInput {
+                    content: format!("vocabulary {tag}"),
+                    tags: vec![tag.to_string()],
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let report = similar_tag_suggestions(
+            &storage,
+            "user",
+            &[
+                "prix-six".to_string(),
+                "colur".to_string(),
+                "exact".to_string(),
+                "ac".to_string(),
+                "banana".to_string(),
+            ],
+        );
+        assert_eq!(report.status["status"], "complete");
+        let prix: Vec<_> = report
+            .suggestions
+            .iter()
+            .filter(|suggestion| suggestion["inputTag"] == "prix-six")
+            .collect();
+        assert!(prix.iter().any(|suggestion| {
+            suggestion["similarExistingTag"] == "prixsix"
+                && suggestion["reason"] == "punctuation_variant"
+        }));
+        assert!(prix.iter().any(|suggestion| {
+            suggestion["similarExistingTag"] == "codebase:prix-six"
+                && suggestion["reason"] == "namespace_variant"
+        }));
+        assert!(report.suggestions.iter().any(|suggestion| {
+            suggestion["inputTag"] == "colur" && suggestion["reason"] == "edit_distance"
+        }));
+        assert!(!report.suggestions.iter().any(|suggestion| {
+            matches!(
+                suggestion["inputTag"].as_str(),
+                Some("exact" | "ac" | "banana")
+            )
+        }));
+
+        let colur: Vec<&str> = report
+            .suggestions
+            .iter()
+            .filter(|suggestion| suggestion["inputTag"] == "colur")
+            .filter_map(|suggestion| suggestion["similarExistingTag"].as_str())
+            .collect();
+        let mut sorted = colur.clone();
+        sorted.sort();
+        assert_eq!(colur, sorted, "equal-score ties are lexicographic");
+    }
+
+    #[tokio::test]
+    async fn batch_preflight_has_as_of_and_tag_suggestion_parity_without_writes() {
+        let (storage, _dir) = test_storage().await;
+        storage
+            .ingest(IngestInput {
+                content: "batch vocabulary".to_string(),
+                tags: vec!["prixsix".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        let before = storage.get_stats().unwrap().total_nodes;
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "items": [{
+                    "content": "Batch inventory as of 2026-03-10",
+                    "tags": ["prix-six"],
+                    "previewTagSuggestions": true
+                }]
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["results"][0]["status"], "previewed");
+        assert_eq!(
+            response["results"][0]["validity"]["source"],
+            "inferred_as_of"
+        );
+        assert_eq!(
+            response["results"][0]["tagSuggestions"][0]["similarExistingTag"],
+            "prixsix"
+        );
+        assert_eq!(storage.get_stats().unwrap().total_nodes, before);
+    }
+
+    #[tokio::test]
+    async fn batch_tag_suggestion_acceptance_and_rejection_match_single_mode() {
+        let (storage, _dir) = test_storage().await;
+        storage
+            .ingest(IngestInput {
+                content: "batch acceptance vocabulary".to_string(),
+                tags: vec!["prixsix".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        let before = storage.get_stats().unwrap().total_nodes;
+
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "items": [
+                    {
+                        "content": "batch accepted suggestion",
+                        "tags": ["prix-six"],
+                        "acceptedTagSuggestions": {"prix-six": "prixsix"},
+                        "forceCreate": true
+                    },
+                    {
+                        "content": "batch rejected suggestion",
+                        "tags": ["prix-six"],
+                        "acceptedTagSuggestions": {"prix-six": "not-current"},
+                        "forceCreate": true
+                    }
+                ]
+            })),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response["results"][0]["status"], "saved");
+        let accepted = storage
+            .get_node(response["results"][0]["nodeId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(accepted.tags, vec!["prixsix"]);
+        assert_eq!(response["results"][1]["status"], "error");
+        assert!(
+            response["results"][1]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("not a current same-scope suggestion")
+        );
+        assert_eq!(storage.get_stats().unwrap().total_nodes, before + 1);
+    }
+
+    #[tokio::test]
+    async fn batch_as_of_inference_persists_when_the_item_is_saved() {
+        let (storage, _dir) = test_storage().await;
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "items": [{
+                    "content": "Saved batch inventory As Of 2026-03-10",
+                    "forceCreate": true
+                }]
+            })),
+        )
+        .await
+        .unwrap();
+        let item = &response["results"][0];
+        let node = storage
+            .get_node(item["nodeId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            node.valid_from.unwrap().to_rfc3339(),
+            "2026-03-10T00:00:00+00:00"
+        );
+        assert_eq!(item["validity"]["source"], "inferred_as_of");
     }
 
     #[tokio::test]
