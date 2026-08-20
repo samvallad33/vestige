@@ -20492,6 +20492,58 @@ mod tests {
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
+    fn inferred_as_of_must_not_resurrect_an_expired_similar_node() {
+        let dir = tempdir().unwrap();
+        let storage = storage_with_marker_gate_runtime(&dir);
+        let expired_from = Utc::now() - Duration::days(90);
+        let expired_until = Utc::now() - Duration::days(7);
+        let target = storage
+            .ingest(IngestInput {
+                content: "alpha deployment policy is retries with backoff".to_string(),
+                valid_from: Some(expired_from),
+                valid_until: Some(expired_until),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            !storage
+                .get_node(&target.id)
+                .unwrap()
+                .unwrap()
+                .is_currently_valid(),
+            "fixture must start expired"
+        );
+
+        // Live #170 failure: inferred validFrom + PEG update used to
+        // REPLACE valid_until with NULL and un-expire the similar row.
+        let result = storage
+            .smart_ingest(IngestInput {
+                content: "alpha deployment policy is retries with backoff as of 2026-03-04"
+                    .to_string(),
+                valid_from: Some(Utc::now() - Duration::days(10)),
+                validity_inferred: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(result.decision, "reinforce");
+        assert_eq!(result.node.id, target.id);
+
+        let node = storage.get_node(&target.id).unwrap().unwrap();
+        assert_eq!(
+            node.valid_from.map(|value| value.to_rfc3339()),
+            Some(expired_from.to_rfc3339()),
+            "inferred as-of must not move the expired node's valid_from"
+        );
+        assert_eq!(
+            node.valid_until.map(|value| value.to_rfc3339()),
+            Some(expired_until.to_rfc3339()),
+            "inferred as-of must not un-expire the similar node"
+        );
+        assert!(!node.is_currently_valid());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
     fn explicit_valid_from_on_reinforce_updates_without_clearing_valid_until() {
         let dir = tempdir().unwrap();
         let storage = storage_with_marker_gate_runtime(&dir);
