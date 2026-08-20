@@ -509,6 +509,7 @@ mod tests {
             tags: tags.into_iter().map(|s| s.to_string()).collect(),
             valid_from: None,
             valid_until: None,
+            validity_inferred: false,
             source_envelope: None,
         };
         let node = storage.ingest(input).unwrap();
@@ -716,6 +717,7 @@ mod tests {
             tags: vec!["pattern".to_string(), "codebase:vestige".to_string()],
             valid_from: None,
             valid_until: None,
+            validity_inferred: false,
             source_envelope: None,
         };
         storage.ingest(input).unwrap();

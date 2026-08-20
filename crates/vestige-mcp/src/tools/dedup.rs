@@ -420,6 +420,12 @@ fn execute_tag_mutation(
         .get("all_scopes")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // An explicit scope alongside all_scopes=true is contradictory: silently
+    // dropping the scope would rewrite every scope while the caller believes
+    // the mutation is project-scoped.
+    if all_scopes && args.get("scope").is_some_and(|value| !value.is_null()) {
+        return Err("pass either scope or all_scopes=true, not both".into());
+    }
     let scope = if all_scopes {
         None
     } else {
@@ -621,6 +627,109 @@ mod tests {
         assert_eq!(
             storage.get_node(&node.id).unwrap().unwrap().tags,
             vec!["old", "keep"]
+        );
+    }
+
+    #[tokio::test]
+    async fn tag_actions_reject_scope_combined_with_all_scopes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = Arc::new(Storage::new(Some(dir.path().join("test.db"))).unwrap());
+        storage
+            .ingest(IngestInput {
+                content: "scope conflict fixture".to_string(),
+                tags: vec!["old".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let conflict = execute_unified(
+            &storage,
+            Some(serde_json::json!({
+                "action": "tag_rename",
+                "source_tag": "old",
+                "target_tag": "new",
+                "scope": "project-a",
+                "all_scopes": true
+            })),
+        )
+        .await
+        .unwrap_err();
+        assert!(conflict.contains("not both"));
+
+        let scoped_only = execute_unified(
+            &storage,
+            Some(serde_json::json!({
+                "action": "tag_rename",
+                "source_tag": "old",
+                "target_tag": "new",
+                "scope": "user"
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(scoped_only["allScopes"], false);
+        assert_eq!(scoped_only["affectedMemoryCount"], 1);
+
+        let all_scopes_only = execute_unified(
+            &storage,
+            Some(serde_json::json!({
+                "action": "tag_rename",
+                "source_tag": "old",
+                "target_tag": "new",
+                "all_scopes": true
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(all_scopes_only["allScopes"], true);
+        assert_eq!(all_scopes_only["affectedMemoryCount"], 1);
+    }
+
+    #[tokio::test]
+    async fn overlong_source_tag_is_renameable_end_to_end() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = Arc::new(Storage::new(Some(dir.path().join("test.db"))).unwrap());
+        let overlong = "z".repeat(250);
+        let node = storage
+            .ingest(IngestInput {
+                content: "overlong tag repair fixture".to_string(),
+                tags: vec![overlong.clone()],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let preview = execute_unified(
+            &storage,
+            Some(serde_json::json!({
+                "action": "tag_rename",
+                "source_tag": overlong,
+                "target_tag": "short-tag",
+                "scope": "user"
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview["affectedMemoryCount"], 1);
+
+        let applied = execute_unified(
+            &storage,
+            Some(serde_json::json!({
+                "action": "tag_rename",
+                "source_tag": overlong,
+                "target_tag": "short-tag",
+                "scope": "user",
+                "confirm": true,
+                "preview_token": preview["previewToken"],
+                "reason": "repair an overlong stored tag"
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(applied["status"], "applied");
+        assert_eq!(
+            storage.get_node(&node.id).unwrap().unwrap().tags,
+            vec!["short-tag"],
+            "the overlong tag must be gone after the rename"
         );
     }
 

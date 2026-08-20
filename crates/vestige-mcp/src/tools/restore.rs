@@ -173,6 +173,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             tags: memory.tags.clone().unwrap_or_default(),
             valid_from: None,
             valid_until: None,
+            validity_inferred: false,
             source_envelope: None,
         };
 
@@ -350,6 +351,7 @@ mod tests {
                 tags: vec!["portable".to_string()],
                 valid_from: None,
                 valid_until: None,
+                validity_inferred: false,
                 source_envelope: None,
             })
             .unwrap();

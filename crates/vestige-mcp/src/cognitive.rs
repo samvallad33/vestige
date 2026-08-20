@@ -208,6 +208,7 @@ mod tests {
                 tags: vec!["test".to_string()],
                 valid_from: None,
                 valid_until: None,
+                validity_inferred: false,
                 source_envelope: None,
             })
             .unwrap();

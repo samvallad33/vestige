@@ -283,6 +283,7 @@ mod tests {
                     tags: vec!["dream-test".to_string()],
                     valid_from: None,
                     valid_until: None,
+                    validity_inferred: false,
                     source_envelope: None,
                 })
                 .unwrap();
@@ -421,6 +422,7 @@ mod tests {
                     tags: vec!["dream-roundtrip".to_string()],
                     valid_from: None,
                     valid_until: None,
+                    validity_inferred: false,
                     source_envelope: None,
                 })
                 .unwrap();
@@ -487,6 +489,7 @@ mod tests {
                     tags: vec!["save-conn-test".to_string()],
                     valid_from: None,
                     valid_until: None,
+                    validity_inferred: false,
                     source_envelope: None,
                 })
                 .unwrap();
@@ -591,6 +594,7 @@ mod tests {
                     tags: tags.iter().map(|t| t.to_string()).collect(),
                     valid_from: None,
                     valid_until: None,
+                    validity_inferred: false,
                     source_envelope: None,
                 })
                 .unwrap();
@@ -717,6 +721,7 @@ mod tests {
                     tags: tags.iter().map(|t| t.to_string()).collect(),
                     valid_from: None,
                     valid_until: None,
+                    validity_inferred: false,
                     source_envelope: None,
                 })
                 .unwrap();

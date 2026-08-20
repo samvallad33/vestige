@@ -469,6 +469,23 @@ struct ScoredMemory {
     created_at: chrono::DateTime<Utc>,
     retention: f64,
     combined_score: f32,
+    valid_until: Option<chrono::DateTime<Utc>>,
+    currently_valid: bool,
+}
+
+/// Default validity penalty, mirroring search_unified's
+/// `apply_default_validity_penalty`: historical and future facts remain
+/// available for audit, but should not outrank a current fact on relevance
+/// alone. Applied exactly once — when SearchResults are folded into
+/// ScoredMemory (STAGE 3) — so candidate pools, primary selection, and the
+/// final composite all see the same penalized relevance without a chance of
+/// double-penalizing.
+pub(crate) fn validity_adjusted_score(combined_score: f32, currently_valid: bool) -> f32 {
+    if currently_valid {
+        combined_score
+    } else {
+        combined_score * 0.1
+    }
 }
 
 // ============================================================================
@@ -572,6 +589,7 @@ pub async fn execute(
                 r.node.reps,
                 r.node.lapses,
             );
+            let currently_valid = r.node.is_currently_valid();
             ScoredMemory {
                 id: r.node.id.clone(),
                 content: r.node.content.clone(),
@@ -580,7 +598,9 @@ pub async fn execute(
                 updated_at: r.node.updated_at,
                 created_at: r.node.created_at,
                 retention: r.node.retention_strength,
-                combined_score: r.combined_score,
+                combined_score: validity_adjusted_score(r.combined_score, currently_valid),
+                valid_until: r.node.valid_until,
+                currently_valid,
             }
         })
         .collect();
@@ -854,6 +874,8 @@ pub async fn execute(
                 "trust": (s.trust * 100.0).round() / 100.0,
                 "relevanceScore": ((composite(s) * 100.0).round() / 100.0),
                 "date": s.updated_at.to_rfc3339(),
+                "validUntil": s.valid_until.map(|dt| dt.to_rfc3339()),
+                "currentlyValid": s.currently_valid,
                 "role": if i == 0 { "primary" } else { "supporting" },
             })
         })
@@ -959,6 +981,8 @@ pub async fn execute(
             "memory_id": rec.id,
             "trust_score": (rec.trust * 100.0).round() / 100.0,
             "date": rec.updated_at.to_rfc3339(),
+            "validUntil": rec.valid_until.map(|dt| dt.to_rfc3339()),
+            "currentlyValid": rec.currently_valid,
         });
     }
 
@@ -1169,10 +1193,43 @@ mod tests {
                 tags: tags.iter().map(|s| s.to_string()).collect(),
                 valid_from: None,
                 valid_until: None,
+                validity_inferred: false,
                 source_envelope: None,
             })
             .unwrap()
             .id
+    }
+
+    async fn ingest_with_validity(
+        storage: &Arc<Storage>,
+        content: &str,
+        tags: &[&str],
+        valid_until: Option<chrono::DateTime<Utc>>,
+    ) -> String {
+        storage
+            .ingest(vestige_core::IngestInput {
+                content: content.to_string(),
+                node_type: "fact".to_string(),
+                source: None,
+                sentiment_score: 0.0,
+                sentiment_magnitude: 0.0,
+                tags: tags.iter().map(|s| s.to_string()).collect(),
+                valid_from: None,
+                valid_until,
+                validity_inferred: false,
+                source_envelope: None,
+            })
+            .unwrap()
+            .id
+    }
+
+    fn evidence_entry<'a>(result: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+        result["evidence"]
+            .as_array()
+            .expect("evidence array should be present")
+            .iter()
+            .find(|e| e["id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("memory {} missing from evidence", id))
     }
 
     // ========================================================================
@@ -1627,5 +1684,167 @@ mod tests {
             0.7,
         );
         assert!(matches!(rel.relation, Relation::Contradicts));
+    }
+
+    // ========================================================================
+    // VALIDITY (issue #156 Ask 1): expired facts must not compose at full rank.
+    // Mirrors search_unified's default validity penalty on the reason path.
+    // ========================================================================
+
+    #[test]
+    fn test_validity_adjusted_score_only_penalizes_invalid() {
+        assert_eq!(validity_adjusted_score(0.8, true), 0.8);
+        let penalized = validity_adjusted_score(0.8, false);
+        assert!(
+            (penalized - 0.08).abs() < 1e-6,
+            "invalid facts must be downranked to 0.1x, got {}",
+            penalized
+        );
+    }
+
+    #[tokio::test]
+    async fn test_expired_memory_ranked_below_current_and_flagged() {
+        let (storage, _dir) = test_storage().await;
+
+        let expired_id = ingest_with_validity(
+            &storage,
+            "Kubernetes ingress gateway timeout policy for the payments cluster \
+             is ninety seconds.",
+            &["kubernetes", "payments"],
+            Some(Utc::now() - chrono::Duration::days(30)),
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let current_id = ingest_with_validity(
+            &storage,
+            "Kubernetes ingress gateway timeout policy for the payments cluster \
+             is thirty seconds.",
+            &["kubernetes", "payments"],
+            None,
+        )
+        .await;
+
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "query": "Kubernetes ingress gateway timeout policy payments cluster"
+            })),
+        )
+        .await
+        .expect("execute should succeed");
+
+        let expired = evidence_entry(&result, &expired_id);
+        let current = evidence_entry(&result, &current_id);
+
+        assert_eq!(
+            expired["currentlyValid"].as_bool(),
+            Some(false),
+            "expired memory must carry currentlyValid=false: {:?}",
+            expired
+        );
+        assert!(
+            expired["validUntil"].as_str().is_some(),
+            "expired memory must surface its validUntil (RFC3339): {:?}",
+            expired
+        );
+        assert_eq!(
+            current["currentlyValid"].as_bool(),
+            Some(true),
+            "current memory must carry currentlyValid=true: {:?}",
+            current
+        );
+
+        let expired_score = expired["relevanceScore"].as_f64().unwrap();
+        let current_score = current["relevanceScore"].as_f64().unwrap();
+        assert!(
+            expired_score < current_score,
+            "an expired fact must rank below its current replacement \
+             (expired={}, current={}). Without the validity penalty, both \
+             carry identical trust/terms and the expired one can win.",
+            expired_score,
+            current_score
+        );
+        assert_eq!(
+            result["recommended"]["memory_id"].as_str(),
+            Some(current_id.as_str()),
+            "the current fact must win primary selection over the expired one"
+        );
+        assert_eq!(
+            result["recommended"]["currentlyValid"].as_bool(),
+            Some(true),
+            "recommended block must surface validity too"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_future_valid_until_not_penalized() {
+        let (storage, _dir) = test_storage().await;
+
+        let expired_id = ingest_with_validity(
+            &storage,
+            "Redis cache eviction policy for the checkout service keeps entries \
+             for sixty minutes.",
+            &["redis", "checkout"],
+            Some(Utc::now() - chrono::Duration::days(30)),
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let future_id = ingest_with_validity(
+            &storage,
+            "Redis cache eviction policy for the checkout service keeps entries \
+             for ninety minutes.",
+            &["redis", "checkout"],
+            Some(Utc::now() + chrono::Duration::days(365)),
+        )
+        .await;
+
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "query": "Redis cache eviction policy checkout service entries"
+            })),
+        )
+        .await
+        .expect("execute should succeed");
+
+        let future = evidence_entry(&result, &future_id);
+        let expired = evidence_entry(&result, &expired_id);
+
+        assert_eq!(
+            future["currentlyValid"].as_bool(),
+            Some(true),
+            "a fact whose valid_until is in the FUTURE is currently valid: {:?}",
+            future
+        );
+        assert!(
+            future["validUntil"].as_str().is_some(),
+            "future validUntil must still be surfaced for the reasoning layer: {:?}",
+            future
+        );
+
+        let future_score = future["relevanceScore"].as_f64().unwrap();
+        let expired_score = expired["relevanceScore"].as_f64().unwrap();
+        // If future validity were wrongly penalized (e.g. keying the penalty on
+        // valid_until.is_some() instead of is_currently_valid()), both twins
+        // would sit in the same 0.1x band and the gap collapses to <=~0.03.
+        // Unpenalized, the future-valid fact keeps its full 0.5-weighted
+        // relevance slot: the gap over the penalized expired twin is >=~0.09.
+        assert!(
+            future_score - expired_score >= 0.05,
+            "a future-valid fact must NOT be penalized (future={}, expired={})",
+            future_score,
+            expired_score
+        );
+        assert_eq!(
+            result["recommended"]["memory_id"].as_str(),
+            Some(future_id.as_str()),
+            "the future-valid fact must win primary selection over the expired one"
+        );
     }
 }

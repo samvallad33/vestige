@@ -154,6 +154,7 @@ async fn execute_remember_pattern(
         tags,
         valid_from: None,
         valid_until: None,
+        validity_inferred: false,
         source_envelope: None,
     };
 
@@ -251,6 +252,7 @@ async fn execute_remember_decision(
         tags,
         valid_from: None,
         valid_until: None,
+        validity_inferred: false,
         source_envelope: None,
     };
 

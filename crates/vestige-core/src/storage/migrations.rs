@@ -1380,9 +1380,12 @@ INSERT OR IGNORE INTO embedding_profile_manifests (
 UPDATE schema_version SET version = 28, applied_at = datetime('now');
 "#;
 
-/// V29: index the exact normalized scope expression used by scoped recall and
-/// hygiene/tag maintenance. The V27 data repair handles current databases;
-/// the expression preserves safe behavior for later direct/legacy blank rows.
+/// V29: index the exact normalized scope expression used by the hygiene/tag
+/// maintenance full-scope scans (`hygiene_snapshot`, `tag_vocabulary`, and
+/// `tag_mutation_state`). Scoped recall does NOT use this index — its scope
+/// filter is a per-id primary-key probe (`node_is_in_scope`). The V27 data
+/// repair handles current databases; the expression preserves safe behavior
+/// for later direct/legacy blank rows.
 const MIGRATION_V29_UP: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_nodes_normalized_scope
     ON knowledge_nodes(COALESCE(NULLIF(trim(scope), ''), 'user'));
@@ -2748,6 +2751,65 @@ mod tests {
             .collect::<rusqlite::Result<_>>()
             .expect("collect scopes");
         assert_eq!(scopes, vec!["user", "user"]);
+    }
+
+    #[test]
+    fn v29_creates_the_normalized_scope_expression_index() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("apply_migrations");
+
+        let index_sql: Vec<String> = conn
+            .prepare(
+                "SELECT sql FROM sqlite_master
+                 WHERE type='index' AND name='idx_nodes_normalized_scope'",
+            )
+            .expect("prepare index lookup")
+            .query_map([], |row| row.get(0))
+            .expect("read index sql")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect index sql");
+        assert_eq!(
+            index_sql.len(),
+            1,
+            "V29 must create exactly one idx_nodes_normalized_scope"
+        );
+        assert!(
+            index_sql[0].contains("COALESCE(NULLIF(trim(scope), ''), 'user')"),
+            "the index expression must match the hygiene/tag scan predicate byte-for-byte, got: {}",
+            index_sql[0]
+        );
+    }
+
+    #[test]
+    fn v29_index_serves_the_scoped_hygiene_scan_query_plan() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("apply_migrations");
+        conn.execute(
+            "INSERT INTO knowledge_nodes (id, content, node_type, created_at, updated_at, last_accessed, scope)
+             VALUES ('plan-a', 'row', 'fact', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'user'),
+                    ('plan-b', 'row', 'fact', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'project-a'),
+                    ('plan-c', 'row', 'fact', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL)",
+            [],
+        )
+        .expect("seed scoped rows");
+
+        // The scoped hygiene/tag scans all filter on this exact expression.
+        let plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM knowledge_nodes
+                 WHERE COALESCE(NULLIF(trim(scope), ''), 'user') = ?1",
+            )
+            .expect("prepare query plan")
+            .query_map(["user"], |row| row.get::<_, String>(3))
+            .expect("read query plan")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect query plan");
+        assert!(
+            plan.iter()
+                .any(|step| step.contains("idx_nodes_normalized_scope")),
+            "the scoped hygiene scan must use the V29 expression index, got plan: {plan:?}"
+        );
     }
 
     #[test]

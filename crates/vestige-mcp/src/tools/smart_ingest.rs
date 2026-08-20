@@ -256,7 +256,9 @@ fn infer_as_of_dates(content: &str) -> Vec<(DateTime<Utc>, String)> {
             && content[..phrase_start]
                 .chars()
                 .next_back()
-                .is_some_and(char::is_alphanumeric)
+                .is_some_and(|character| {
+                    character.is_alphanumeric() || character == '_' || character == '-'
+                })
         {
             continue;
         }
@@ -274,7 +276,7 @@ fn infer_as_of_dates(content: &str) -> Vec<(DateTime<Utc>, String)> {
         }
         if bytes
             .get(date_end)
-            .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'-')
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
         {
             continue;
         }
@@ -311,13 +313,22 @@ fn resolve_validity_range(
 
     if range.from.is_none() {
         if inferred.len() == 1 {
-            range.from = Some(inferred[0].0);
-            inferred_phrase = Some(inferred[0].1.clone());
-            source = if explicit {
-                "explicit_and_inferred_as_of"
+            let (timestamp, phrase) = inferred[0].clone();
+            if range.until.is_some_and(|until| until <= timestamp) {
+                // An incidental prose date at or after the explicit validUntil
+                // is not caller intent; abstain from inference instead of
+                // failing the whole ingest, and surface the skipped phrase.
+                ambiguous_phrases.push(phrase);
+                source = "inferred_as_of_conflicts_with_explicit_validity_ignored";
             } else {
-                "inferred_as_of"
-            };
+                range.from = Some(timestamp);
+                inferred_phrase = Some(phrase);
+                source = if explicit {
+                    "explicit_and_inferred_as_of"
+                } else {
+                    "inferred_as_of"
+                };
+            }
         } else if inferred.len() > 1 {
             ambiguous_phrases = inferred.into_iter().map(|(_, phrase)| phrase).collect();
             source = if explicit {
@@ -326,14 +337,6 @@ fn resolve_validity_range(
                 "ambiguous_as_of_not_applied"
             };
         }
-    }
-    if let (Some(from), Some(until)) = (range.from, range.until)
-        && until <= from
-    {
-        return Err(
-            "Invalid validity range: inferred/explicit validFrom must be before validUntil"
-                .to_string(),
-        );
     }
     Ok(ValidityResolution {
         range,
@@ -381,21 +384,28 @@ fn bounded_levenshtein(left: &str, right: &str, maximum: usize) -> Option<usize>
             }
         })
         .collect();
+    // Two rows are swapped instead of allocating a fresh row per left char.
+    // Each row only rewrites its banded window, so the cells just outside the
+    // band are pinned to `outside_band` to keep off-band reads unchanged.
+    let mut current = vec![outside_band; right.len() + 1];
     for (left_index, left_char) in left.iter().enumerate() {
         let row = left_index + 1;
-        let mut current = vec![outside_band; right.len() + 1];
-        if row <= maximum {
-            current[0] = row;
-        }
+        current[0] = if row <= maximum { row } else { outside_band };
         let start = row.saturating_sub(maximum).max(1);
         let end = (row + maximum).min(right.len());
+        if start > 1 {
+            current[start - 1] = outside_band;
+        }
+        if end < right.len() {
+            current[end + 1] = outside_band;
+        }
         for column in start..=end {
             current[column] = std::cmp::min(
                 std::cmp::min(current[column - 1] + 1, previous[column] + 1),
                 previous[column - 1] + usize::from(*left_char != right[column - 1]),
             );
         }
-        previous = current;
+        std::mem::swap(&mut previous, &mut current);
     }
     (previous[right.len()] <= maximum).then_some(previous[right.len()])
 }
@@ -422,13 +432,18 @@ fn similar_tag_suggestions(
                 "maximumVocabulary": 10_000,
                 "requestedTagsTruncated": false,
                 "ignoredOverlongInputTags": 0,
+                "ignoredOverlongVocabularyTags": 0,
                 "ignoredSecretShapedVocabularyTags": 0,
                 "unicodeNormalization": "NFKC plus Unicode lowercase",
             }),
         };
     }
-    let vocabulary = match storage.tag_vocabulary(Some(scope)) {
-        Ok(vocabulary) => vocabulary,
+    // Overlong STORED tags are skipped and counted by the storage layer
+    // (mirroring overlong-input and secret-shaped handling), so one legacy
+    // tag cannot disable suggestions for the whole scope. Only the hard
+    // 10,000-tag vocabulary bound still surfaces as "unavailable".
+    let (vocabulary, ignored_overlong_vocabulary_tags) = match storage.tag_vocabulary(Some(scope)) {
+        Ok(vocabulary) => (vocabulary.tags, vocabulary.skipped_overlong),
         Err(error) => {
             return TagSuggestionReport {
                 suggestions: Vec::new(),
@@ -473,20 +488,27 @@ fn similar_tag_suggestions(
         if input_fingerprint.chars().count() < 4 {
             continue;
         }
+        // The input-side suffix fingerprint is loop-invariant; computing it
+        // per vocabulary entry repeats the NFKC normalization up to the full
+        // 10k-entry bound on the hot ingest path.
+        let input_is_namespaced = input.rsplit_once(':').is_some();
+        let input_suffix_fingerprint = normalized_tag_fingerprint(
+            input
+                .rsplit_once(':')
+                .map_or(input.as_str(), |(_, suffix)| suffix),
+        );
+        let input_suffix_is_comparable = input_suffix_fingerprint.chars().count() >= 4;
         let mut candidates = Vec::new();
         for (existing, existing_lower, existing_fingerprint) in &normalized_vocabulary {
             if existing.as_str() == input.as_str() {
                 continue;
             }
-            let input_suffix = input.rsplit_once(':').map(|(_, suffix)| suffix);
             let existing_suffix = existing.rsplit_once(':').map(|(_, suffix)| suffix);
-            let exactly_one_namespaced = input_suffix.is_some() ^ existing_suffix.is_some();
-            let input_suffix = input_suffix.unwrap_or(input);
+            let exactly_one_namespaced = input_is_namespaced ^ existing_suffix.is_some();
             let existing_suffix = existing_suffix.unwrap_or(existing);
             let namespace_variant = exactly_one_namespaced
-                && normalized_tag_fingerprint(input_suffix).chars().count() >= 4
-                && normalized_tag_fingerprint(input_suffix)
-                    == normalized_tag_fingerprint(existing_suffix);
+                && input_suffix_is_comparable
+                && input_suffix_fingerprint == normalized_tag_fingerprint(existing_suffix);
             let (score, reason) = if existing_lower.as_str() == input_lower.as_str() {
                 (1.0, "casing_variant")
             } else if existing_fingerprint.as_str() == input_fingerprint.as_str() {
@@ -539,6 +561,7 @@ fn similar_tag_suggestions(
             "maximumVocabulary": 10_000,
             "requestedTagsTruncated": requested.len() > 50,
             "ignoredOverlongInputTags": ignored_overlong,
+            "ignoredOverlongVocabularyTags": ignored_overlong_vocabulary_tags,
             "ignoredSecretShapedVocabularyTags": ignored_secret_shaped_vocabulary_tags,
             "unicodeNormalization": "NFKC plus Unicode lowercase",
         }),
@@ -741,6 +764,7 @@ pub async fn execute(
         tags,
         valid_from: validity.range.from,
         valid_until: validity.range.until,
+        validity_inferred: validity.inferred_phrase.is_some(),
         source_envelope: None,
     };
 
@@ -832,6 +856,7 @@ pub async fn execute(
             "previousContent": previous_content,
             "mergedFrom": result.merged_from,
             "mergePreview": merge_preview,
+            "autoClosedUntil": result.auto_closed_until.map(|value| value.to_rfc3339()),
             "importanceScore": importance_composite,
             "synapticCapture": synaptic_capture,
             "reason": result.reason,
@@ -1054,6 +1079,7 @@ async fn execute_batch(
             tags,
             valid_from: validity.range.from,
             valid_until: validity.range.until,
+            validity_inferred: validity.inferred_phrase.is_some(),
             source_envelope: None,
         };
 
@@ -1164,6 +1190,7 @@ async fn execute_batch(
                         "previousContent": previous_content,
                         "mergedFrom": result.merged_from,
                         "mergePreview": merge_preview,
+                        "autoClosedUntil": result.auto_closed_until.map(|value| value.to_rfc3339()),
                         "importanceScore": importance_composite,
                         "synapticCapture": synaptic_capture,
                         "reason": result.reason,
@@ -1946,13 +1973,96 @@ mod tests {
             1,
             "a Unicode phrase before the ASCII marker must not break byte boundaries"
         );
+
+        assert!(
+            infer_as_of_dates("as of 2026-03-04T09:15:00Z must not match").is_empty(),
+            "a trailing timestamp component is not a bare date"
+        );
+        assert!(
+            infer_as_of_dates("as of 2026-03-04abc must not match").is_empty(),
+            "a trailing letter means the token is not a date"
+        );
+        assert!(
+            infer_as_of_dates("save_as of 2026-03-04 must not match").is_empty(),
+            "a preceding underscore is not an 'as of' phrase boundary"
+        );
+        assert!(
+            infer_as_of_dates("x-as of 2026-03-04 must not match").is_empty(),
+            "a preceding hyphen is not an 'as of' phrase boundary"
+        );
+        assert_eq!(
+            infer_as_of_dates("Reported as of 2026-03-04.").len(),
+            1,
+            "trailing punctuation is a valid right boundary"
+        );
+        assert_eq!(
+            infer_as_of_dates("Inventory (as of 2026-03-04)").len(),
+            1,
+            "surrounding parentheses are valid boundaries"
+        );
+        assert!(
+            infer_as_of_dates("as of 2026-03-041 must not match").is_empty(),
+            "a trailing digit means the token is not a date"
+        );
+        assert!(
+            infer_as_of_dates("as of 2026-03-04-05 must not match").is_empty(),
+            "a trailing hyphen means the token is not a date"
+        );
     }
 
     #[test]
     fn inferred_as_of_must_not_cross_an_explicit_valid_until() {
-        let error = resolve_validity_range("Policy as of 2026-04-01", None, Some("2026-03-01"))
-            .unwrap_err();
-        assert!(error.contains("must be before validUntil"));
+        // An incidental prose date at or after the explicit validUntil is not
+        // caller intent: the inference abstains instead of failing the ingest.
+        let resolution =
+            resolve_validity_range("Policy as of 2026-04-01", None, Some("2026-03-01"))
+                .expect("a conflicting inferred date abstains instead of erroring");
+        assert!(resolution.range.from.is_none());
+        assert_eq!(
+            resolution.range.until.unwrap().to_rfc3339(),
+            "2026-03-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            resolution.source,
+            "inferred_as_of_conflicts_with_explicit_validity_ignored"
+        );
+        assert!(resolution.inferred_phrase.is_none());
+        assert_eq!(resolution.ambiguous_phrases, vec!["as of 2026-04-01"]);
+    }
+
+    #[tokio::test]
+    async fn conflicting_inferred_as_of_abstains_and_the_ingest_still_stores() {
+        let (storage, _dir) = test_storage().await;
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "Retrospective written as of 2026-04-01 about the old policy.",
+                "validUntil": "2026-03-01",
+                "forceCreate": true
+            })),
+        )
+        .await
+        .expect("the conflicting phrase must not hard-fail the whole ingest");
+        assert_eq!(
+            response["validity"]["source"],
+            "inferred_as_of_conflicts_with_explicit_validity_ignored"
+        );
+        assert_eq!(
+            response["validity"]["ambiguousPhrases"][0],
+            "as of 2026-04-01"
+        );
+        assert!(response["validity"]["inferredPhrase"].is_null());
+        let node = storage
+            .get_node(response["nodeId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(node.valid_from.is_none(), "the inference was dropped");
+        assert_eq!(
+            node.valid_until.unwrap().to_rfc3339(),
+            "2026-03-01T00:00:00+00:00",
+            "the explicit bound is kept"
+        );
     }
 
     #[test]
@@ -1963,6 +2073,49 @@ mod tests {
         );
         assert_eq!(bounded_levenshtein("colour", "colur", 1), Some(1));
         assert_eq!(bounded_levenshtein("unrelated", "banana", 2), None);
+    }
+
+    #[test]
+    fn bounded_levenshtein_matches_the_naive_distance_at_band_edges() {
+        fn naive(left: &str, right: &str) -> usize {
+            let left: Vec<char> = left.chars().collect();
+            let right: Vec<char> = right.chars().collect();
+            let mut previous: Vec<usize> = (0..=right.len()).collect();
+            for (row, left_char) in left.iter().enumerate() {
+                let mut current = vec![row + 1];
+                for (column, right_char) in right.iter().enumerate() {
+                    current.push(std::cmp::min(
+                        std::cmp::min(current[column] + 1, previous[column + 1] + 1),
+                        previous[column] + usize::from(left_char != right_char),
+                    ));
+                }
+                previous = current;
+            }
+            previous[right.len()]
+        }
+        for (left, right) in [
+            ("", ""),
+            ("", "ab"),
+            ("ab", ""),
+            ("kitten", "sitting"),
+            ("sitting", "kitten"),
+            ("colour", "colur"),
+            ("abcdef", "abcdef"),
+            ("axcdef", "abcdef"),
+            ("abc", "abcde"),
+            ("abcde", "abc"),
+            ("résumé", "resume"),
+            ("prix-six", "prixsix"),
+        ] {
+            for maximum in 0..=3 {
+                let expected = Some(naive(left, right)).filter(|distance| *distance <= maximum);
+                assert_eq!(
+                    bounded_levenshtein(left, right, maximum),
+                    expected,
+                    "left={left:?} right={right:?} maximum={maximum}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -2216,15 +2369,87 @@ mod tests {
         assert_eq!(tagless.status["status"], "complete");
         assert_eq!(tagless.status["vocabularyScanned"], false);
 
+        // One overlong stored tag degrades gracefully: it is skipped and
+        // counted instead of disabling suggestions for the whole scope.
         let bounded = similar_tag_suggestions(&storage, "user", &["candidate".to_string()]);
-        assert_eq!(bounded.status["status"], "unavailable");
+        assert_eq!(bounded.status["status"], "complete");
+        assert_eq!(bounded.status["vocabularyScanned"], true);
+        assert_eq!(bounded.status["vocabularyCount"], 0);
+        assert_eq!(bounded.status["ignoredOverlongVocabularyTags"], 1);
+        assert!(bounded.suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn vocabulary_beyond_ten_thousand_tags_is_reported_unavailable() {
+        let (storage, _dir) = test_storage().await;
+        // 21 memories x 500 distinct tags = 10,500 eligible vocabulary tags.
+        for batch in 0..21 {
+            let tags: Vec<String> = (0..500)
+                .map(|index| format!("bulk-{batch:02}-{index:03}"))
+                .collect();
+            storage
+                .ingest(IngestInput {
+                    content: format!("vocabulary bound fixture {batch}"),
+                    tags,
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+
+        let report = similar_tag_suggestions(&storage, "user", &["candidate".to_string()]);
+        assert_eq!(report.status["status"], "unavailable");
         assert!(
-            bounded.status["reason"]
+            report.status["reason"]
                 .as_str()
                 .unwrap()
-                .contains("longer than the 200-character")
+                .contains("exceeds the 10000-tag"),
+            "the 10,000-tag bound stays a hard error and is not masked by overlong skipping"
         );
-        assert!(bounded.suggestions.is_empty());
+        assert!(report.suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn requested_tags_beyond_the_50_bound_are_reported_truncated_and_skipped() {
+        let (storage, _dir) = test_storage().await;
+        storage
+            .ingest(IngestInput {
+                content: "vocabulary for the truncation bound".to_string(),
+                tags: vec!["colour".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+
+        // 50 requested tags stay within the bound: the last one is scanned.
+        let mut within: Vec<String> = (0..49)
+            .map(|index| format!("filler-tag-{index:02}"))
+            .collect();
+        within.push("colur".to_string());
+        let report = similar_tag_suggestions(&storage, "user", &within);
+        assert_eq!(report.status["status"], "complete");
+        assert_eq!(report.status["requestedTagsTruncated"], false);
+        assert!(
+            report
+                .suggestions
+                .iter()
+                .any(|suggestion| suggestion["inputTag"] == "colur"),
+            "the 50th requested tag is still scanned"
+        );
+
+        // A 51st tag crosses the bound: it is reported truncated and skipped.
+        let mut truncated: Vec<String> = (0..50)
+            .map(|index| format!("filler-tag-{index:02}"))
+            .collect();
+        truncated.push("colur".to_string());
+        let report = similar_tag_suggestions(&storage, "user", &truncated);
+        assert_eq!(report.status["status"], "complete");
+        assert_eq!(report.status["requestedTagsTruncated"], true);
+        assert!(
+            !report
+                .suggestions
+                .iter()
+                .any(|suggestion| suggestion["inputTag"] == "colur"),
+            "the 51st requested tag must not be scanned"
+        );
     }
 
     #[tokio::test]
