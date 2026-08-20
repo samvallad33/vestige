@@ -182,6 +182,7 @@ pub use trace::{
 
 // Storage layer
 pub use storage::{
+    ACCESS_LOG_RETENTION_DAYS,
     AgentRunSummary,
     ClassificationResult,
     CompositionEventRecord,
@@ -206,6 +207,7 @@ pub use storage::{
     FrozenReplayItem,
     HealthStatus,
     HygieneNodeSummary,
+    HygieneSnapshot,
     InsightRecord,
     IntentionRecord,
     LocalMemoryStore,
@@ -267,6 +269,7 @@ pub use storage::{
     SynapticIngestOutcome,
     SynapticIngestRequest,
     SynapticSignalSnapshot,
+    TagVocabulary,
     ablate_frozen_context,
     private_evidence_digest,
     replay_evidence_slot,

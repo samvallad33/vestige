@@ -2344,6 +2344,7 @@ fn run_restore(backup_path: PathBuf) -> anyhow::Result<()> {
             tags: memory.tags.unwrap_or_default(),
             valid_from: None,
             valid_until: None,
+            validity_inferred: false,
             source_envelope: None,
         };
 
@@ -3003,6 +3004,7 @@ fn run_ingest(
         tags: tag_list,
         valid_from: None,
         valid_until: None,
+        validity_inferred: false,
         source_envelope: None,
     };
 

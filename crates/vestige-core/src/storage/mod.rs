@@ -48,14 +48,15 @@ pub use replay_store::{
     replay_evidence_slot, replay_idempotency_key, replay_policy_digest,
 };
 pub use sqlite::{
-    CompositionEventRecord, CompositionMemberRecord, CompositionNeighborRecord,
-    CompositionOutcomeRecord, ConnectionRecord, ConnectorCursor, ConsolidationHistoryRecord,
-    DEFAULT_MEMORY_SCOPE, DreamHistoryRecord, EmbeddingProfileIntegrityManifest,
-    EmbeddingProfileMigrationNodeCheckpoint, EmbeddingProfileMigrationRecord,
-    EmbeddingProfileVector, FilePortableSyncBackend, HygieneNodeSummary, InsightRecord,
-    IntentionRecord, NeverComposedCandidate, PortableSyncBackend, PortableSyncReport,
-    ReconcileReport, Result, SmartIngestResult, SourceUpsertOutcome, SourceUpsertResult,
-    SqliteMemoryStore, StateTransitionRecord, StorageError,
+    ACCESS_LOG_RETENTION_DAYS, CompositionEventRecord, CompositionMemberRecord,
+    CompositionNeighborRecord, CompositionOutcomeRecord, ConnectionRecord, ConnectorCursor,
+    ConsolidationHistoryRecord, DEFAULT_MEMORY_SCOPE, DreamHistoryRecord,
+    EmbeddingProfileIntegrityManifest, EmbeddingProfileMigrationNodeCheckpoint,
+    EmbeddingProfileMigrationRecord, EmbeddingProfileVector, FilePortableSyncBackend,
+    HygieneNodeSummary, HygieneSnapshot, InsightRecord, IntentionRecord, NeverComposedCandidate,
+    PortableSyncBackend, PortableSyncReport, ReconcileReport, Result, SmartIngestResult,
+    SourceUpsertOutcome, SourceUpsertResult, SqliteMemoryStore, StateTransitionRecord,
+    StorageError, TagVocabulary,
 };
 pub use synaptic_store::{
     DurableSynapticCapture, DurableSynapticPairReceipt, SYNAPTIC_CAPTURE_ALGORITHM_V1,

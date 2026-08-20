@@ -10,11 +10,18 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
-use vestige_core::{DEFAULT_MEMORY_SCOPE, HygieneNodeSummary, Storage, scan_secrets};
+use vestige_core::{
+    ACCESS_LOG_RETENTION_DAYS, DEFAULT_MEMORY_SCOPE, HygieneNodeSummary, HygieneSnapshot, Storage,
+    scan_secrets,
+};
 
 const DEFAULT_DETAIL_LIMIT: usize = 50;
 const MAX_DETAIL_LIMIT: usize = 200;
 const TAG_AUDIT_WINDOW: usize = 50;
+/// The byTag aggregate is bounded to the top entries by count so a store with
+/// tens of thousands of distinct tags cannot blow the 200k payload cap and
+/// clip the entire stats JSON mid-document.
+const MAX_TAG_COUNT_ENTRIES: usize = 200;
 
 #[derive(Debug, Clone)]
 struct TagAuditSummary {
@@ -53,13 +60,13 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         })
     };
 
-    let nodes = storage
+    let snapshot = storage
         .hygiene_snapshot(selected_scope)
         .map_err(|error| format!("Failed to build hygiene snapshot: {error}"))?;
     let tag_audit = load_tag_audit(storage, selected_scope)?;
 
     Ok(build_response(
-        nodes,
+        snapshot,
         selected_scope,
         limit,
         Utc::now(),
@@ -170,12 +177,13 @@ fn load_tag_audit(
 }
 
 fn build_response(
-    nodes: Vec<HygieneNodeSummary>,
+    snapshot: HygieneSnapshot,
     selected_scope: Option<&str>,
     limit: usize,
     now: DateTime<Utc>,
     tag_audit: TagAuditWindow,
 ) -> Value {
+    let nodes = snapshot.nodes;
     let total = nodes.len();
     let mut type_counts = BTreeMap::<String, usize>::new();
     let mut tag_counts = BTreeMap::<String, usize>::new();
@@ -254,6 +262,23 @@ fn build_response(
         .map(detail_item)
         .collect();
 
+    // Memories created before the retained access-log window with zero
+    // durable counters: their access history was pruned, so they are
+    // reported separately, never claimed as never-accessed.
+    let mut access_unknown: Vec<&HygieneNodeSummary> =
+        nodes.iter().filter(|node| node.access_unknown).collect();
+    access_unknown.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let access_unknown_total = access_unknown.len();
+    let access_unknown_ids: Vec<&str> = access_unknown
+        .into_iter()
+        .take(limit)
+        .map(|node| node.id.as_str())
+        .collect();
+
     let mut largest: Vec<&HygieneNodeSummary> = nodes.iter().collect();
     largest.sort_by(|left, right| {
         right
@@ -262,6 +287,19 @@ fn build_response(
             .then_with(|| left.id.cmp(&right.id))
     });
     let largest_items: Vec<Value> = largest.into_iter().take(limit).map(detail_item).collect();
+
+    // Bound byTag to the top entries by count (ties broken by tag name asc)
+    // so an unbounded tag vocabulary cannot clip the whole stats payload.
+    let distinct_tag_total = tag_counts.len();
+    let by_tag_truncated = distinct_tag_total > MAX_TAG_COUNT_ENTRIES;
+    let tag_counts = if by_tag_truncated {
+        let mut ranked: Vec<(String, usize)> = tag_counts.into_iter().collect();
+        ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        ranked.truncate(MAX_TAG_COUNT_ENTRIES);
+        ranked.into_iter().collect::<BTreeMap<String, usize>>()
+    } else {
+        tag_counts
+    };
 
     let tag_operations: Vec<Value> = tag_audit
         .operations
@@ -293,10 +331,12 @@ fn build_response(
         },
         "semantics": {
             "population": "Every stored knowledge_nodes row in the selected scope, including expired, not-yet-valid, invalid-bound, and superseded rows.",
-            "tagCounts": "Number of memories carrying each exact tag; duplicate entries within one memory count once.",
+            "tagCounts": format!("Number of memories carrying each exact tag; duplicate entries within one memory count once. byTag is bounded to the top {MAX_TAG_COUNT_ENTRIES} tags by count (ties by tag name); distinctTagTotal and byTagTruncated report the full vocabulary size."),
             "age": "Whole elapsed days from createdAt to computedAt. Future-created rows are reported separately.",
             "validity": "Temporal buckets are mutually exclusive: expired first, then not-yet-valid, then within-window. Superseded and invalid-bound counts are independent overlays.",
-            "neverAccessed": "No durable memory_access_log row exists for the memory.",
+            "neverAccessed": format!("No access recorded in the retained {ACCESS_LOG_RETENTION_DAYS}-day access log, durable retrieval counters (times_retrieved/times_useful) are zero, AND the memory was created inside that window — so the absence of evidence is meaningful. Access-log rows are pruned after {ACCESS_LOG_RETENTION_DAYS} days; they are not durable."),
+            "accessUnknownPrunedLog": format!("Created before the retained {ACCESS_LOG_RETENTION_DAYS}-day access-log window with zero durable retrieval counters. Their pre-prune access history is unknowable, so they are reported here and never claimed as never-accessed. Do not suppress or purge them on access grounds."),
+            "dataQuality": "malformedTagRows counts rows whose stored tags column is NULL or unparseable JSON (treated as untagged in aggregates); retentionDefaultedRows counts rows whose NULL retention_strength was reported at the schema default 1.0.",
             "contentSize": "UTF-8 bytes. Returned content is a bounded preview, never the full body. Blocking credential shapes are redacted without echoing the matched bytes."
         },
         "population": {
@@ -307,8 +347,18 @@ fn build_response(
         "counts": {
             "byMemoryType": type_counts,
             "byTag": tag_counts,
+            "distinctTagTotal": distinct_tag_total,
+            "byTagTruncated": by_tag_truncated,
             "untagged": untagged,
             "byAge": age_counts,
+        },
+        "dataQuality": {
+            "malformedTagRows": {
+                "count": snapshot.malformed_tag_rows,
+                "memoryIds": snapshot.malformed_tag_row_ids,
+                "memoryIdsTruncated": snapshot.malformed_tag_row_ids_truncated,
+            },
+            "retentionDefaultedRows": snapshot.defaulted_retention_rows,
         },
         "retentionDistribution": {
             "buckets": retention_counts,
@@ -327,6 +377,13 @@ fn build_response(
             "truncated": never_accessed_total > never_accessed_items.len(),
             "memories": never_accessed_items,
         },
+        "accessUnknownPrunedLog": {
+            "total": access_unknown_total,
+            "returned": access_unknown_ids.len(),
+            "limit": limit,
+            "truncated": access_unknown_total > access_unknown_ids.len(),
+            "memoryIds": access_unknown_ids,
+        },
         "largestNodes": {
             "total": total,
             "returned": largest_items.len(),
@@ -340,7 +397,7 @@ fn build_response(
             "scannedOperations": tag_audit.scanned_operations,
             "returned": tag_operations.len(),
             "truncated": tag_audit.truncated,
-            "note": "Tag rename/merge operations are read directly from merge_operations so unrelated merge/supersede activity cannot bury them. Single-scope stats expose only operations recorded for that exact scope; all-scopes stats expose every tag scope. A reverted operation remains visible with status and revertedAt.",
+            "note": "Tag rename/merge operations are read directly from merge_operations so unrelated merge/supersede activity cannot bury them. Single-scope stats expose operations recorded for that exact scope plus every all-scopes operation (flagged allScopes=true), because an all-scopes mutation rewrote this scope's tags too; all-scopes stats expose every tag scope. A reverted operation remains visible with status and revertedAt.",
             "operations": tag_operations,
         },
     })
@@ -423,6 +480,16 @@ mod tests {
         }
     }
 
+    fn snapshot_of(nodes: Vec<HygieneNodeSummary>) -> HygieneSnapshot {
+        HygieneSnapshot {
+            nodes,
+            malformed_tag_rows: 0,
+            malformed_tag_row_ids: Vec::new(),
+            malformed_tag_row_ids_truncated: false,
+            defaulted_retention_rows: 0,
+        }
+    }
+
     fn summary(
         id: &str,
         node_type: &str,
@@ -443,6 +510,7 @@ mod tests {
             content_bytes,
             content_preview: format!("preview-{id}"),
             never_accessed: false,
+            access_unknown: false,
         }
     }
 
@@ -533,6 +601,76 @@ mod tests {
         .await
         .expect("other-scope stats");
         assert_eq!(other_stats["recentTagOperations"]["returned"], 0);
+
+        // An all-scopes operation rewrites every scope's tags, so it must be
+        // visible in EVERY single-scope audit view, flagged allScopes=true.
+        storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "other-project audit fixture".into(),
+                    tags: vec!["shared-tag".into()],
+                    ..Default::default()
+                },
+                "other-project",
+            )
+            .expect("seed other-project memory");
+        let shared_sources = vec!["shared-tag".to_string()];
+        let shared_preview = storage
+            .preview_tag_mutation(&shared_sources, "shared-canonical", None)
+            .expect("all-scopes preview");
+        storage
+            .apply_tag_mutation(
+                &shared_sources,
+                "shared-canonical",
+                None,
+                shared_preview["previewToken"].as_str().expect("token"),
+                "tag_rename",
+                "verify all-scopes audit visibility",
+            )
+            .expect("apply all-scopes rename");
+
+        let user_stats = execute(&storage, Some(json!({ "view": "stats" })))
+            .await
+            .expect("user-scope stats after all-scopes op");
+        let user_ops = user_stats["recentTagOperations"]["operations"]
+            .as_array()
+            .expect("operations array");
+        assert_eq!(user_ops.len(), 2, "scoped op plus the all-scopes op");
+        assert!(
+            user_ops
+                .iter()
+                .any(|op| op["allScopes"] == true && op["targetTag"] == "shared-canonical"),
+            "the all-scopes operation must be flagged in the scoped view"
+        );
+        assert!(
+            user_ops
+                .iter()
+                .any(|op| op["allScopes"] == false && op["scope"] == "user"),
+        );
+
+        let other_stats = execute(
+            &storage,
+            Some(json!({ "view": "stats", "scope": "other-project" })),
+        )
+        .await
+        .expect("other-scope stats after all-scopes op");
+        let other_ops = other_stats["recentTagOperations"]["operations"]
+            .as_array()
+            .expect("operations array");
+        assert_eq!(
+            other_ops.len(),
+            1,
+            "a different scope sees only the all-scopes operation"
+        );
+        assert_eq!(other_ops[0]["allScopes"], true);
+
+        let all_stats = execute(
+            &storage,
+            Some(json!({ "view": "stats", "all_scopes": true })),
+        )
+        .await
+        .expect("all-scopes stats");
+        assert_eq!(all_stats["recentTagOperations"]["returned"], 2);
     }
 
     #[test]
@@ -585,7 +723,7 @@ mod tests {
         nodes[4].never_accessed = true;
         nodes[3].never_accessed = true;
 
-        let response = build_response(nodes, None, 2, now, empty_audit());
+        let response = build_response(snapshot_of(nodes), None, 2, now, empty_audit());
 
         assert_eq!(response["scope"]["mode"], "all");
         assert_eq!(response["population"]["total"], 8);
@@ -640,7 +778,13 @@ mod tests {
         node.never_accessed = true;
         node.content_preview = format!("rotated token {credential}");
 
-        let response = build_response(vec![node], Some("user"), 50, now, empty_audit());
+        let response = build_response(
+            snapshot_of(vec![node]),
+            Some("user"),
+            50,
+            now,
+            empty_audit(),
+        );
         let encoded = serde_json::to_string(&response).expect("encode stats response");
         assert!(
             !encoded.contains(&credential),
@@ -721,5 +865,180 @@ mod tests {
         );
         assert!(parse_limit(&json!({ "limit": 0 })).is_err());
         assert!(parse_limit(&json!({ "limit": "many" })).is_err());
+    }
+
+    #[test]
+    fn pruned_log_unknowns_are_reported_separately_not_as_never_accessed() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 19, 12, 0, 0).unwrap();
+        let mut unknown = summary(
+            "pre-window",
+            "fact",
+            now - Duration::days(200),
+            0.9,
+            &["ops"],
+            10,
+        );
+        unknown.access_unknown = true;
+        let mut never = summary(
+            "fresh-never",
+            "fact",
+            now - Duration::days(2),
+            0.9,
+            &["ops"],
+            10,
+        );
+        never.never_accessed = true;
+
+        let response = build_response(
+            snapshot_of(vec![unknown, never]),
+            Some("user"),
+            50,
+            now,
+            empty_audit(),
+        );
+
+        assert_eq!(response["neverAccessed"]["total"], 1);
+        assert_eq!(
+            response["neverAccessed"]["memories"][0]["id"], "fresh-never",
+            "a pre-window row must never appear in neverAccessed"
+        );
+        assert_eq!(response["accessUnknownPrunedLog"]["total"], 1);
+        assert_eq!(
+            response["accessUnknownPrunedLog"]["memoryIds"][0],
+            "pre-window"
+        );
+        assert_eq!(response["accessUnknownPrunedLog"]["truncated"], false);
+        let never_semantics = response["semantics"]["neverAccessed"]
+            .as_str()
+            .expect("neverAccessed semantics");
+        assert!(never_semantics.contains("90-day access log"));
+        assert!(never_semantics.contains("durable retrieval counters"));
+        assert!(
+            never_semantics.contains("pruned"),
+            "the semantics must state that log rows are not durable"
+        );
+        assert!(
+            response["semantics"]["accessUnknownPrunedLog"]
+                .as_str()
+                .expect("accessUnknownPrunedLog semantics")
+                .contains("unknowable")
+        );
+    }
+
+    #[test]
+    fn by_tag_aggregate_is_bounded_to_the_top_entries_by_count() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 19, 12, 0, 0).unwrap();
+        let mut nodes = Vec::new();
+        for index in 0..250 {
+            let tag = format!("tag-{index:03}");
+            nodes.push(summary(
+                &format!("n-{index:03}"),
+                "fact",
+                now - Duration::days(1),
+                0.9,
+                &[tag.as_str()],
+                10,
+            ));
+        }
+        for index in 0..5 {
+            nodes.push(summary(
+                &format!("popular-{index}"),
+                "fact",
+                now - Duration::days(1),
+                0.9,
+                &["zzz-popular"],
+                10,
+            ));
+        }
+
+        let response = build_response(snapshot_of(nodes), Some("user"), 50, now, empty_audit());
+        let by_tag = response["counts"]["byTag"].as_object().expect("byTag map");
+        assert_eq!(by_tag.len(), MAX_TAG_COUNT_ENTRIES);
+        assert_eq!(response["counts"]["distinctTagTotal"], 251);
+        assert_eq!(response["counts"]["byTagTruncated"], true);
+        assert_eq!(
+            by_tag["zzz-popular"], 5,
+            "a high-count tag survives the bound regardless of its name"
+        );
+        assert_eq!(by_tag["tag-000"], 1);
+        assert!(
+            !by_tag.contains_key("tag-199"),
+            "count-1 ties beyond the bound are dropped by name order"
+        );
+
+        let small = build_response(
+            snapshot_of(vec![summary(
+                "solo",
+                "fact",
+                now - Duration::days(1),
+                0.9,
+                &["only-tag"],
+                10,
+            )]),
+            Some("user"),
+            50,
+            now,
+            empty_audit(),
+        );
+        assert_eq!(small["counts"]["distinctTagTotal"], 1);
+        assert_eq!(small["counts"]["byTagTruncated"], false);
+        assert_eq!(small["counts"]["byTag"]["only-tag"], 1);
+    }
+
+    #[test]
+    fn malformed_rows_and_defaulted_retention_are_surfaced_as_data_quality() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 19, 12, 0, 0).unwrap();
+        let mut snapshot = snapshot_of(vec![summary(
+            "clean",
+            "fact",
+            now - Duration::days(1),
+            0.9,
+            &["ok"],
+            10,
+        )]);
+        snapshot.malformed_tag_rows = 2;
+        snapshot.malformed_tag_row_ids = vec!["bad-json".into(), "null-tags".into()];
+        snapshot.defaulted_retention_rows = 1;
+
+        let response = build_response(snapshot, Some("user"), 50, now, empty_audit());
+        assert_eq!(response["dataQuality"]["malformedTagRows"]["count"], 2);
+        assert_eq!(
+            response["dataQuality"]["malformedTagRows"]["memoryIds"],
+            json!(["bad-json", "null-tags"])
+        );
+        assert_eq!(
+            response["dataQuality"]["malformedTagRows"]["memoryIdsTruncated"],
+            false
+        );
+        assert_eq!(response["dataQuality"]["retentionDefaultedRows"], 1);
+    }
+
+    #[test]
+    fn retention_bucket_boundaries_land_in_the_lower_bucket() {
+        assert_eq!(retention_bucket(0.0), "0-20%");
+        assert_eq!(retention_bucket(0.2), "0-20%");
+        assert_eq!(retention_bucket(0.4), ">20-40%");
+        assert_eq!(retention_bucket(0.6), ">40-60%");
+        assert_eq!(retention_bucket(0.8), ">60-80%");
+        assert_eq!(retention_bucket(1.0), ">80-100%");
+    }
+
+    #[test]
+    fn age_bucket_boundaries_land_in_the_lower_bucket() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 19, 12, 0, 0).unwrap();
+        let nodes = vec![
+            summary("age-7", "fact", now - Duration::days(7), 0.9, &[], 10),
+            summary("age-30", "fact", now - Duration::days(30), 0.9, &[], 10),
+            summary("age-90", "fact", now - Duration::days(90), 0.9, &[], 10),
+            summary("age-180", "fact", now - Duration::days(180), 0.9, &[], 10),
+            summary("age-181", "fact", now - Duration::days(181), 0.9, &[], 10),
+        ];
+        let response = build_response(snapshot_of(nodes), Some("user"), 50, now, empty_audit());
+        assert_eq!(response["counts"]["byAge"]["0-7d"], 1);
+        assert_eq!(response["counts"]["byAge"]["8-30d"], 1);
+        assert_eq!(response["counts"]["byAge"]["31-90d"], 1);
+        assert_eq!(response["counts"]["byAge"]["91-180d"], 1);
+        assert_eq!(response["counts"]["byAge"]["181d+"], 1);
+        assert_eq!(response["counts"]["byAge"]["futureDated"], 0);
     }
 }

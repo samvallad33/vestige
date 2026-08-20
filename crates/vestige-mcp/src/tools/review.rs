@@ -117,6 +117,7 @@ mod tests {
             tags: vec![],
             valid_from: None,
             valid_until: None,
+            validity_inferred: false,
             source_envelope: None,
         };
         let node = storage.ingest(input).unwrap();
