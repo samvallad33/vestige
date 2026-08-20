@@ -332,11 +332,12 @@ impl McpServer {
             // ================================================================
             // STATUS / TEMPORAL — unified `memory_status` tool (v2.2)
             // Folds system_status + memory_health + memory_timeline +
-            // memory_changelog into one view-dispatched surface.
+            // memory_changelog into one view-dispatched surface, plus the
+            // full-store hygiene-statistics view.
             // ================================================================
             ToolDescription {
                 name: "memory_status".to_string(),
-                description: Some("Memory status & history. Views: 'health' (default — full system health + stats + FSRS preview + cognitive-module health + warnings + recommendations), 'retention' (lightweight retention dashboard: avg, distribution, trend), 'timeline' (browse memories chronologically, grouped by day), 'changelog' (audit trail of memory state changes — per-memory transitions or system-wide).".to_string()),
+                description: Some("Memory status & history. Views: 'health' (default — full system health + stats + FSRS preview + cognitive-module health + warnings + recommendations), 'retention' (lightweight retention dashboard: avg, distribution, trend), 'timeline' (browse memories chronologically, grouped by day), 'changelog' (audit trail of memory state changes — per-memory transitions or system-wide), 'stats' (full-store hygiene counts by type/tag/age/retention/lifecycle, bounded never-accessed and largest-node details, and recent tag-operation audit).".to_string()),
                 input_schema: tools::memory_status::schema(),
                 ..Default::default()
             },
@@ -359,7 +360,7 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "dedup".to_string(),
-                description: Some("Deduplication & merge/supersede. Actions: 'scan' (default — surface duplicate clusters via cosine + merge candidates via Fellegi-Sunter, read-only), 'plan_merge' (preview a reversible merge plan for 2+ member_ids → plan_id), 'plan_supersede' (preview superseding old_id with new_id → plan_id), 'apply' (execute a plan_id; 'possible'/'non_match' need confirm=true), 'undo' (reverse an operation_id, or omit to list the reflog), 'protect' (pin a memory against auto-merge/supersede/forget), 'policy' (get/set Fellegi-Sunter thresholds). Old memories are invalidated, never deleted.".to_string()),
+                description: Some("Deduplication, merge/supersede, and exact tag maintenance. Actions: 'scan' (default — surface duplicate clusters via cosine + merge candidates via Fellegi-Sunter, read-only), 'plan_merge' (preview a reversible merge plan for 2+ member_ids → plan_id), 'plan_supersede' (preview superseding old_id with new_id → plan_id), 'apply' (execute a plan_id; 'possible'/'non_match' need confirm=true), 'undo' (reverse an operation_id, or omit to list the mixed reflog plus a dedicated tagOperations list that cannot be buried by merge activity), 'tag_rename'/'tag_merge' (exact, scoped, preview-token-gated tag maintenance), 'protect' (pin a memory against auto-merge/supersede/forget), 'policy' (get/set Fellegi-Sunter thresholds). Old memories are invalidated, never deleted.".to_string()),
                 input_schema: tools::dedup::unified_schema(),
                 ..Default::default()
             },
@@ -2701,6 +2702,15 @@ mod tests {
         // find_duplicates + the 7 Phase-3 merge tools folded in; still
         // dispatchable as hidden back-compat aliases, but off the advertised list.
         assert!(tool_names.contains(&"dedup"));
+        let dedup = tools
+            .iter()
+            .find(|tool| tool["name"] == "dedup")
+            .expect("dedup is advertised");
+        let dedup_description = dedup["description"].as_str().unwrap();
+        assert!(
+            dedup_description.contains("tag_rename") && dedup_description.contains("tag_merge"),
+            "tools/list description must advertise tag rename/merge, got: {dedup_description}"
+        );
         for old in [
             "find_duplicates",
             "merge_candidates",
@@ -2819,6 +2829,7 @@ mod tests {
             ("memory_status", serde_json::json!({"view": "retention"})),
             ("memory_status", serde_json::json!({"view": "timeline"})),
             ("memory_status", serde_json::json!({"view": "changelog"})),
+            ("memory_status", serde_json::json!({"view": "stats"})),
         ];
 
         for (name, args) in calls {

@@ -38,6 +38,7 @@ pub mod maintain;
 
 // v2.2: Unified status surface — folds system_status + memory_health +
 // memory_timeline + memory_changelog into one view-dispatched tool.
+pub mod hygiene_stats;
 pub mod memory_status;
 
 // v1.3: Auto-save and dedup tools
