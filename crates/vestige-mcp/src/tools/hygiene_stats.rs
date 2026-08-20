@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
-use vestige_core::{DEFAULT_MEMORY_SCOPE, HygieneNodeSummary, Storage};
+use vestige_core::{DEFAULT_MEMORY_SCOPE, HygieneNodeSummary, Storage, scan_secrets};
 
 const DEFAULT_DETAIL_LIMIT: usize = 50;
 const MAX_DETAIL_LIMIT: usize = 200;
@@ -297,7 +297,7 @@ fn build_response(
             "age": "Whole elapsed days from createdAt to computedAt. Future-created rows are reported separately.",
             "validity": "Temporal buckets are mutually exclusive: expired first, then not-yet-valid, then within-window. Superseded and invalid-bound counts are independent overlays.",
             "neverAccessed": "No durable memory_access_log row exists for the memory.",
-            "contentSize": "UTF-8 bytes. Returned content is a bounded preview, never the full body."
+            "contentSize": "UTF-8 bytes. Returned content is a bounded preview, never the full body. Blocking credential shapes are redacted without echoing the matched bytes."
         },
         "population": {
             "total": total,
@@ -340,19 +340,27 @@ fn build_response(
             "scannedOperations": tag_audit.scanned_operations,
             "returned": tag_operations.len(),
             "truncated": tag_audit.truncated,
-            "note": "Only tag_rename and tag_merge operations among the newest reflog entries are returned. Single-scope stats expose only operations recorded for that exact scope; all-scopes stats expose every tag scope. A reverted operation remains visible with status and revertedAt.",
+            "note": "Tag rename/merge operations are read directly from merge_operations so unrelated merge/supersede activity cannot bury them. Single-scope stats expose only operations recorded for that exact scope; all-scopes stats expose every tag scope. A reverted operation remains visible with status and revertedAt.",
             "operations": tag_operations,
         },
     })
 }
 
 fn detail_item(node: &HygieneNodeSummary) -> Value {
+    let redacted = scan_secrets(&node.content_preview)
+        .iter()
+        .any(vestige_core::SecretFinding::blocks_ingestion);
     json!({
         "id": node.id,
         "memoryType": node.node_type,
         "createdAt": node.created_at.to_rfc3339(),
         "contentBytes": node.content_bytes,
-        "contentPreview": node.content_preview,
+        "contentPreview": if redacted {
+            "[redacted — probable credential in stored content]"
+        } else {
+            node.content_preview.as_str()
+        },
+        "contentPreviewRedacted": redacted,
         "tags": node.tags,
         "superseded": node.superseded,
     })
@@ -611,6 +619,97 @@ mod tests {
         assert_eq!(response["largestNodes"]["memories"][0]["id"], "a-tie");
         assert_eq!(response["largestNodes"]["memories"][1]["id"], "b-tie");
         assert_eq!(response["largestNodes"]["truncated"], true);
+        assert_eq!(
+            response["neverAccessed"]["memories"][0]["contentPreviewRedacted"],
+            false
+        );
+    }
+
+    #[test]
+    fn detail_lists_redact_blocking_credentials_without_echoing_them() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 19, 12, 0, 0).unwrap();
+        let credential = format!("ghp_{}", "A".repeat(36));
+        let mut node = summary(
+            "secret-node",
+            "fact",
+            now - Duration::days(181),
+            0.9,
+            &["ops"],
+            60,
+        );
+        node.never_accessed = true;
+        node.content_preview = format!("rotated token {credential}");
+
+        let response = build_response(vec![node], Some("user"), 50, now, empty_audit());
+        let encoded = serde_json::to_string(&response).expect("encode stats response");
+        assert!(
+            !encoded.contains(&credential),
+            "hygiene stats must not echo a stored credential"
+        );
+        assert_eq!(
+            response["neverAccessed"]["memories"][0]["contentPreview"],
+            "[redacted — probable credential in stored content]"
+        );
+        assert_eq!(
+            response["neverAccessed"]["memories"][0]["contentPreviewRedacted"],
+            true
+        );
+        assert_eq!(
+            response["largestNodes"]["memories"][0]["contentPreviewRedacted"],
+            true
+        );
+    }
+
+    #[tokio::test]
+    async fn stats_population_stays_inside_the_requested_scope() {
+        let directory = tempfile::tempdir().expect("temporary database");
+        let storage =
+            Arc::new(Storage::new(Some(directory.path().join("scope.db"))).expect("test storage"));
+        storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "user-scope hygiene count".into(),
+                    tags: vec!["user-tag".into()],
+                    ..Default::default()
+                },
+                "user",
+            )
+            .expect("seed user memory");
+        storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "project-scope hygiene count".into(),
+                    tags: vec!["project-tag".into()],
+                    ..Default::default()
+                },
+                "project-a",
+            )
+            .expect("seed project memory");
+
+        let user_stats = execute(&storage, Some(json!({ "view": "stats" })))
+            .await
+            .expect("user-scope stats");
+        assert_eq!(user_stats["population"]["total"], 1);
+        assert_eq!(user_stats["counts"]["byTag"]["user-tag"], 1);
+        assert!(user_stats["counts"]["byTag"]["project-tag"].is_null());
+
+        let project_stats = execute(
+            &storage,
+            Some(json!({ "view": "stats", "scope": "project-a" })),
+        )
+        .await
+        .expect("project-scope stats");
+        assert_eq!(project_stats["population"]["total"], 1);
+        assert_eq!(project_stats["counts"]["byTag"]["project-tag"], 1);
+
+        let all_stats = execute(
+            &storage,
+            Some(json!({ "view": "stats", "all_scopes": true })),
+        )
+        .await
+        .expect("all-scopes stats");
+        assert_eq!(all_stats["population"]["total"], 2);
+        assert_eq!(all_stats["scope"]["mode"], "all");
     }
 
     #[test]

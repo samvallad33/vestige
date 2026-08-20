@@ -299,7 +299,7 @@ pub fn unified_schema() -> Value {
                 "type": "string",
                 "enum": ["scan", "plan_merge", "plan_supersede", "apply", "undo", "tag_rename", "tag_merge", "protect", "policy"],
                 "default": "scan",
-                "description": "What to do. 'scan' (default): surface duplicate clusters (cosine) AND merge candidates (Fellegi-Sunter), read-only. 'plan_merge'/'plan_supersede': preview a reversible memory plan. 'apply': execute a plan_id. 'undo': reverse a prior memory or tag operation (omit operation_id to list the reflog). 'tag_rename'/'tag_merge': exact, scoped, preview-token-gated tag maintenance. 'protect': pin a memory. 'policy': get/set Fellegi-Sunter thresholds."
+                "description": "What to do. 'scan' (default): surface duplicate clusters (cosine) AND merge candidates (Fellegi-Sunter), read-only. 'plan_merge'/'plan_supersede': preview a reversible memory plan. 'apply': execute a plan_id. 'undo': reverse a prior memory or tag operation (omit operation_id to list the mixed reflog plus tagOperations). 'tag_rename'/'tag_merge': exact, scoped, preview-token-gated tag maintenance. 'protect': pin a memory. 'policy': get/set Fellegi-Sunter thresholds."
             },
             "similarity_threshold": {
                 "type": "number",
@@ -324,7 +324,7 @@ pub fn unified_schema() -> Value {
             "new_id": { "type": "string", "description": "[plan_supersede] Memory that supersedes the old one." },
             "plan_id": { "type": "string", "description": "[apply] ID of a plan produced by plan_merge/plan_supersede." },
             "confirm": { "type": "boolean", "default": false, "description": "[apply/tag_*] Explicit mutation confirmation. Tag actions always preview when false and require the returned preview_token when true." },
-            "operation_id": { "type": "string", "description": "[undo] Operation to reverse. Omit to list the reflog." },
+            "operation_id": { "type": "string", "description": "[undo] Operation to reverse. Omit to list recent merge/supersede operations plus a dedicated tagOperations array that cannot be buried by merge activity." },
             "source_tag": { "type": "string", "description": "[tag_rename] Exact source tag to rename." },
             "source_tags": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 50, "description": "[tag_merge] Two or more exact source tags to merge." },
             "target_tag": { "type": "string", "description": "[tag_rename/tag_merge] Exact destination tag." },

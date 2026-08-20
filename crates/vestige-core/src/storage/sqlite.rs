@@ -15593,6 +15593,98 @@ mod tests {
     }
 
     #[test]
+    fn tag_rename_all_scopes_is_explicit_and_updates_every_matching_row() {
+        let storage = create_test_storage();
+        let user = ingest_tagged_in_scope(&storage, "user", "user shared tag", &["shared"]);
+        let project =
+            ingest_tagged_in_scope(&storage, "project-a", "project shared tag", &["shared"]);
+        let sources = vec!["shared".to_string()];
+
+        let scoped = storage
+            .preview_tag_mutation(&sources, "canonical", Some("user"))
+            .unwrap();
+        assert_eq!(scoped["affectedMemoryCount"], 1);
+        assert_eq!(scoped["allScopes"], false);
+
+        let preview = storage
+            .preview_tag_mutation(&sources, "canonical", None)
+            .unwrap();
+        assert_eq!(preview["allScopes"], true);
+        assert_eq!(preview["affectedMemoryCount"], 2);
+
+        storage
+            .apply_tag_mutation(
+                &sources,
+                "canonical",
+                None,
+                preview_token(&preview),
+                "tag_rename",
+                "explicit cross-scope rename",
+            )
+            .unwrap();
+        assert_eq!(
+            storage.get_node(&user.id).unwrap().unwrap().tags,
+            vec!["canonical"]
+        );
+        assert_eq!(
+            storage.get_node(&project.id).unwrap().unwrap().tags,
+            vec!["canonical"]
+        );
+    }
+
+    #[test]
+    fn list_tag_operations_is_not_buried_by_later_merge_rows() {
+        let storage = create_test_storage();
+        ingest_tagged_in_scope(&storage, "user", "tag burial fixture", &["old"]);
+        let sources = vec!["old".to_string()];
+        let preview = storage
+            .preview_tag_mutation(&sources, "new", Some("user"))
+            .unwrap();
+        let operation = storage
+            .apply_tag_mutation(
+                &sources,
+                "new",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "must remain listed after later merge rows",
+            )
+            .unwrap();
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            for index in 0..20 {
+                writer
+                    .execute(
+                        "INSERT INTO merge_operations
+                            (id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
+                             survivor_id, affected_ids, confidence, signals, reason, undo_payload)
+                         VALUES (?1, NULL, 'merge', 'applied', ?2, NULL, NULL, NULL, '[]', NULL, NULL, 'later merge', '{}')",
+                        params![
+                            format!("merge-later-{index:02}"),
+                            "2099-01-01T00:00:00+00:00"
+                        ],
+                    )
+                    .unwrap();
+            }
+        }
+
+        let mixed = storage.list_merge_operations(20).unwrap();
+        assert_eq!(mixed.len(), 20);
+        assert!(
+            mixed
+                .iter()
+                .all(|operation| operation.op_type != "tag_rename"),
+            "the mixed window fills with later merge rows"
+        );
+        let tags = storage.list_tag_operations(50, None).unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].id, operation.id);
+        let scoped = storage.list_tag_operations(50, Some("user")).unwrap();
+        assert_eq!(scoped.len(), 1);
+    }
+
+    #[test]
     fn tag_merge_normalizes_sources_and_rejects_stale_preview_or_undo_conflict() {
         let storage = create_test_storage();
         let node = ingest_tagged_in_scope(

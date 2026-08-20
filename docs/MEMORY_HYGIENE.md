@@ -54,7 +54,7 @@ Tags are parsed and reserialized as JSON arrays; substring replacement is never 
 
 The preview and apply paths both enforce Vestige's default-deny credential policy for source and target tags; apply also screens the durable audit reason. Rejections never copy the detected credential bytes into the MCP response or audit log.
 
-Use `dedup(action="undo", operation_id="...")` to restore the exact prior tag arrays. Undo first verifies every current post-operation array and refuses the entire reversal if a later tag edit or missing memory would be overwritten. Omitting `operation_id` lists the agent-visible reflog.
+Use `dedup(action="undo", operation_id="...")` to restore the exact prior tag arrays. Undo first verifies every current post-operation array and refuses the entire reversal if a later tag edit or missing memory would be overwritten. Omitting `operation_id` returns the mixed newest-20 reflog in `operations` plus a dedicated `tagOperations` list queried directly, so merge/supersede activity cannot bury a tag audit.
 
 ## Full-store hygiene statistics
 
@@ -70,4 +70,4 @@ Aggregates cover the full store and include:
 - largest-node total and deterministic bounded list by UTF-8 byte size;
 - recent tag rename/merge audit operations.
 
-Only detail lists are capped (`limit` defaults to 50 and is at most 200). Each list reports its total and whether it was truncated. The storage query loads bounded content previews rather than every full memory body and computes access status without per-row queries.
+Only detail lists are capped (`limit` defaults to 50 and is at most 200). Each list reports its total and whether it was truncated. The storage query loads bounded content previews rather than every full memory body and computes access status without per-row queries. If a preview contains a blocking credential shape, the preview is replaced with a redaction marker and `contentPreviewRedacted` is true; the matched secret bytes are not returned.

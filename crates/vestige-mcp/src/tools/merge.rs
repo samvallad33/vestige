@@ -102,7 +102,7 @@ pub fn merge_undo_schema() -> Value {
         "properties": {
             "operation_id": {
                 "type": "string",
-                "description": "ID of the merge/supersede operation to reverse. Omit to list recent operations (the reflog)."
+                "description": "ID of the merge/supersede or tag rename/merge operation to reverse. Omit to list recent mixed reflog entries plus a dedicated tagOperations list that cannot be buried by merge activity."
             }
         }
     })
@@ -421,39 +421,25 @@ fn merge_undo(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, Stri
             }
         }
         None => {
-            // No id => return the reflog so the caller can pick one. This is
-            // available in every build, including builds without embeddings.
+            // No id => return the mixed reflog plus a dedicated tag-operation
+            // window. Tag audits are queried directly so a busy merge/supersede
+            // log cannot bury the operation an agent needs to undo.
+            const TAG_UNDO_LIST_WINDOW: usize = 50;
             let ops = storage
                 .list_merge_operations(20)
                 .map_err(|e| e.to_string())?;
-            let log: Vec<Value> = ops
-                .iter()
-                .map(|op| {
-                    let signals = op.signals.as_ref();
-                    json!({
-                        "operationId": op.id,
-                        "opType": op.op_type,
-                        "status": op.status,
-                        "survivorId": op.survivor_id,
-                        "affectedIds": op.affected_ids,
-                        "confidence": op.confidence.map(|c| format!("{:.3}", c)),
-                        "reason": op.reason,
-                        "createdAt": op.created_at,
-                        "revertedAt": op.reverted_at,
-                        "sourceTags": signals.and_then(|value| value.get("sourceTags")),
-                        "targetTag": signals.and_then(|value| value.get("targetTag")),
-                        "scope": signals.and_then(|value| value.get("scope")),
-                        "allScopes": signals
-                            .and_then(|value| value.get("allScopes"))
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
-                    })
-                })
-                .collect();
+            let mut tag_ops = storage
+                .list_tag_operations(TAG_UNDO_LIST_WINDOW + 1, None)
+                .map_err(|e| e.to_string())?;
+            let tag_operations_truncated = tag_ops.len() > TAG_UNDO_LIST_WINDOW;
+            tag_ops.truncate(TAG_UNDO_LIST_WINDOW);
             Ok(json!({
-                "operations": log,
-                "totalOperations": log.len(),
-                "note": "This is the reversible operation log (the memory reflog), including tag rename/merge operations. Pass operation_id to reverse one."
+                "operations": ops.iter().map(operation_log_entry).collect::<Vec<_>>(),
+                "totalOperations": ops.len(),
+                "tagOperations": tag_ops.iter().map(operation_log_entry).collect::<Vec<_>>(),
+                "tagOperationsReturned": tag_ops.len(),
+                "tagOperationsTruncated": tag_operations_truncated,
+                "note": "operations is the mixed reversible log (newest 20). tagOperations lists tag_rename/tag_merge directly so merge activity cannot hide them. Pass operation_id to reverse one."
             }))
         }
     }
@@ -462,6 +448,28 @@ fn merge_undo(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, Stri
 // ============================================================================
 // protect
 // ============================================================================
+
+fn operation_log_entry(op: &vestige_core::advanced::MergeOperation) -> Value {
+    let signals = op.signals.as_ref();
+    json!({
+        "operationId": op.id,
+        "opType": op.op_type,
+        "status": op.status,
+        "survivorId": op.survivor_id,
+        "affectedIds": op.affected_ids,
+        "confidence": op.confidence.map(|c| format!("{:.3}", c)),
+        "reason": op.reason,
+        "createdAt": op.created_at,
+        "revertedAt": op.reverted_at,
+        "sourceTags": signals.and_then(|value| value.get("sourceTags")),
+        "targetTag": signals.and_then(|value| value.get("targetTag")),
+        "scope": signals.and_then(|value| value.get("scope")),
+        "allScopes": signals
+            .and_then(|value| value.get("allScopes"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
 
 fn protect(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
     let a = obj(&args);
@@ -597,5 +605,8 @@ mod tests {
         assert_eq!(response["operations"][0]["targetTag"], "new");
         assert_eq!(response["operations"][0]["scope"], "user");
         assert_eq!(response["operations"][0]["allScopes"], false);
+        assert_eq!(response["tagOperations"].as_array().unwrap().len(), 1);
+        assert_eq!(response["tagOperations"][0]["opType"], "tag_rename");
+        assert_eq!(response["tagOperationsTruncated"], false);
     }
 }
