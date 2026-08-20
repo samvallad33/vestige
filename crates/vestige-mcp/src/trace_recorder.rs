@@ -1806,6 +1806,10 @@ mod tests {
 
     #[test]
     fn receipt_and_final_capsule_persist_atomically_without_raw_replay_material() {
+        // configured_receipt_signer reads process env. Serialize with the
+        // signing-env tests so a parallel missing-key fixture cannot turn this
+        // unsigned persist into "temporarily unavailable".
+        let _lock = receipt_signing_env_lock().lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("retrieval-capsule.db");
         let storage = Arc::new(vestige_core::Storage::new(Some(db_path.clone())).unwrap());
