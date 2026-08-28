@@ -85,6 +85,10 @@ cargo build --release -p vestige-mcp
 # The release binary is at target/release/vestige-mcp
 ```
 
+Linux release assets are built in Ubuntu 22.04 (glibc 2.35) so `vestige-mcp`
+starts on 22.04 LTS and Debian 12. musl is not a release target: ONNX Runtime
+has no musl prebuilts, so embeddings would not ship.
+
 ### Release Profile
 
 The release profile uses `lto = true`, `codegen-units = 1`, `opt-level = "z"`, and `strip = true` for minimum binary size.

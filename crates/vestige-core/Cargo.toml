@@ -29,17 +29,23 @@ encryption = ["rusqlite/bundled-sqlcipher"]
 embeddings = ["dep:fastembed", "fastembed/hf-hub-native-tls", "fastembed/image-models"]
 
 # Default ort backend: ort-sys downloads prebuilt ONNX Runtime at build time.
-# Requires glibc >= 2.38. Fails on x86_64-apple-darwin (Microsoft is
-# discontinuing Intel Mac prebuilts after ONNX Runtime v1.23.0).
+# The pyke linux-gnu archive is itself built on Ubuntu 24.04 and references
+# GLIBC_2.38 __isoc23_strto* symbols. Published linux-gnu binaries still
+# target Ubuntu 22.04 (glibc 2.35) / Debian 12: CI builds in ubuntu:22.04
+# and vestige-core's isoc23 shim forwards those symbols to classic strto*.
+# Fails on x86_64-apple-darwin (Microsoft is discontinuing Intel Mac
+# prebuilts after ONNX Runtime v1.23.0). musl is not a release target:
+# ONNX Runtime ships no musl prebuilts, so embeddings would not work.
 ort-download = ["embeddings", "fastembed/ort-download-binaries-native-tls"]
 
 # HNSW vector search with USearch (20x faster than FAISS)
 vector-search = ["dep:usearch"]
 
 # Alternative ort backend: runtime-linked against a system libonnxruntime via
-# dlopen. Required on Intel Mac and on systems with glibc < 2.38 (Ubuntu
-# 22.04, Debian 12, RHEL/Rocky 9). Transitively enables `embeddings` so the
-# #[cfg] gates stay active.
+# dlopen. Required on Intel Mac (no x86_64 prebuilts) and as a source-build
+# escape hatch. Published linux-gnu binaries use `ort-download` plus the
+# isoc23 shim so Ubuntu 22.04 / Debian 12 do not need a system ONNX Runtime.
+# Transitively enables `embeddings` so the #[cfg] gates stay active.
 #
 # Usage:   cargo build --no-default-features \
 #              --features ort-dynamic,vector-search,bundled-sqlite
@@ -200,6 +206,9 @@ path = "src/lib.rs"
 
 # Enable doctests
 doctest = true
+
+[build-dependencies]
+cc = "1.2"
 
 [package.metadata.docs.rs]
 all-features = true

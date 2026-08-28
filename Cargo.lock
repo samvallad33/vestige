@@ -5090,6 +5090,7 @@ dependencies = [
  "blake3",
  "candle-core",
  "candle-nn",
+ "cc",
  "chacha20poly1305",
  "chrono",
  "criterion",

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Linux binaries start on Ubuntu 22.04 and Debian 12 (#174, #175)
+
+The published `x86_64-unknown-linux-gnu` asset was built on `ubuntu-latest`
+(glibc 2.39). `npm install -g vestige-mcp-server` then `vestige-mcp` died
+before any MCP handshake with `GLIBC_2.38 not found`. The MCP spec-test
+failures were that crash, not protocol.
+
+Linux-gnu is now produced in an `ubuntu:22.04` container (glibc 2.35, the
+22.04 floor). The pyke ONNX Runtime archive still references C23
+`__isoc23_strto*` symbols; a small shim forwards them to classic `strto*`
+so embeddings keep working. musl was evaluated and rejected: ONNX Runtime
+ships no musl prebuilts.
+
+CI execs the binary on Ubuntu 22.04 and Debian 12 bookworm (`initialize`
+over stdio, not just `--version`). npm 2.3.0 stays broken until the next
+tagged release; this branch does not tag or publish.
+
 ### Fixed — Memory PR write gate wired into the real tool path (#117)
 
 `gate_writes` — the risk gate that quarantines risky memory writes and opens

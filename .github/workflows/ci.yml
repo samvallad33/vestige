@@ -111,9 +111,6 @@ jobs:
           - os: macos-14
             target: x86_64-apple-darwin
             cargo_flags: "--no-default-features --features ort-dynamic,vector-search,cloud-sync"
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            cargo_flags: ""
     steps:
       - uses: actions/checkout@v4
 
@@ -153,3 +150,102 @@ jobs:
         with:
           name: vestige-mcp-${{ matrix.target }}
           path: vestige-mcp-${{ matrix.target }}.tar.gz
+
+  # Linux-gnu is built in Ubuntu 22.04 (glibc 2.35), not ubuntu-latest.
+  # ubuntu-latest is 24.04+/glibc 2.39, which is why the published 2.3.0
+  # asset dies on 22.04 and Debian 12 with GLIBC_2.38 not found (#174, #175).
+  # musl is not used: ONNX Runtime (embeddings) ships no musl prebuilts.
+  # The ubuntu-22.04 *runner* begins deprecation in 2026; a container keeps
+  # the glibc floor after that label is retired.
+  release-build-linux:
+    name: Release Build (x86_64-unknown-linux-gnu, glibc 2.35)
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    if: |
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'pull_request'
+    needs: [test]
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install build dependencies
+        run: bash -lc "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev"
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Add target to the pinned toolchain
+        run: rustup target add x86_64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: linux-gnu-glibc235-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release --target x86_64-unknown-linux-gnu -p vestige-mcp
+
+      - name: Package
+        run: |
+          cd target/x86_64-unknown-linux-gnu/release
+          tar czf ../../../vestige-mcp-x86_64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore
+
+      - name: Check glibc ceiling
+        run: ./scripts/check-linux-glibc.sh target/x86_64-unknown-linux-gnu/release/vestige-mcp
+
+      - name: Exec vestige-mcp on Ubuntu 22.04
+        run: ./scripts/smoke-vestige-mcp.sh target/x86_64-unknown-linux-gnu/release/vestige-mcp
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-mcp-x86_64-unknown-linux-gnu
+          path: vestige-mcp-x86_64-unknown-linux-gnu.tar.gz
+
+  linux-compat-smoke:
+    name: Linux compat smoke (Ubuntu 22.04 / Debian 12)
+    runs-on: ubuntu-latest
+    needs: [release-build-linux]
+    if: |
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download linux-gnu artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vestige-mcp-x86_64-unknown-linux-gnu
+          path: dist
+
+      - name: Extract
+        run: tar -xzf dist/vestige-mcp-x86_64-unknown-linux-gnu.tar.gz -C dist
+
+      - name: Check glibc ceiling
+        run: ./scripts/check-linux-glibc.sh dist/vestige-mcp
+
+      - name: Exec vestige-mcp on Ubuntu 22.04
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD/dist:/opt/vestige:ro" \
+            -v "$PWD/scripts:/opt/scripts:ro" \
+            ubuntu:22.04 \
+            bash -lc 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libstdc++6 >/dev/null && bash /opt/scripts/smoke-vestige-mcp.sh /opt/vestige/vestige-mcp'
+
+      - name: Exec vestige-mcp on Debian 12 bookworm
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD/dist:/opt/vestige:ro" \
+            -v "$PWD/scripts:/opt/scripts:ro" \
+            debian:bookworm \
+            bash -lc 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libstdc++6 >/dev/null && bash /opt/scripts/smoke-vestige-mcp.sh /opt/vestige/vestige-mcp'

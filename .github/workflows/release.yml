@@ -23,11 +23,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            archive: tar.gz
-            cargo_flags: ""
-            needs_onnxruntime: false
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: zip
@@ -186,5 +181,182 @@ jobs:
           files: |
             vestige-mcp-${{ matrix.target }}.${{ matrix.archive }}
             vestige-mcp-${{ matrix.target }}.${{ matrix.archive }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Linux-gnu is built in Ubuntu 22.04 (glibc 2.35), not ubuntu-latest.
+  # The 2.3.0 asset was produced on ubuntu-latest and dies on 22.04 / Debian 12
+  # with GLIBC_2.38 not found (#174, #175). musl is not used: ONNX Runtime
+  # ships no musl prebuilts, so embeddings would not work. The ubuntu-22.04
+  # runner label begins deprecation in 2026; a container keeps this floor.
+  build-linux:
+    name: Build x86_64-unknown-linux-gnu (glibc 2.35)
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install build dependencies
+        run: bash -lc "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.inputs.tag || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Add target to the pinned toolchain
+        run: rustup target add x86_64-unknown-linux-gnu
+
+      - name: Validate release version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const tag = process.env.RELEASE_TAG || '';
+          const expected = tag.replace(/^refs\/tags\//, '').replace(/^v/, '');
+          if (!expected) {
+            throw new Error('Release tag is empty');
+          }
+
+          const packageFiles = [
+            'package.json',
+            'apps/dashboard/package.json',
+            'packages/vestige-init/package.json',
+            'packages/vestige-mcp-npm/package.json'
+          ];
+          for (const file of packageFiles) {
+            const actual = require(`./${file}`).version;
+            if (actual !== expected) {
+              throw new Error(`${file} version ${actual} does not match ${tag}`);
+            }
+          }
+
+          const metadata = JSON.parse(execFileSync('cargo', [
+            'metadata',
+            '--format-version',
+            '1',
+            '--locked',
+            '--no-deps'
+          ], { encoding: 'utf8' }));
+          for (const name of ['vestige-core', 'vestige-mcp']) {
+            const pkg = metadata.packages.find((candidate) => candidate.name === name);
+            if (!pkg) throw new Error(`Missing Cargo package ${name}`);
+            if (pkg.version !== expected) {
+              throw new Error(`${name} version ${pkg.version} does not match ${tag}`);
+            }
+          }
+          NODE
+
+      - name: Build embedded dashboard
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @vestige/dashboard check
+          pnpm --filter @vestige/dashboard test
+          pnpm --filter @vestige/dashboard build
+          node <<'NODE'
+          const fs = require('node:fs');
+          const tag = process.env.RELEASE_TAG || '';
+          const expected = tag.replace(/^refs\/tags\//, '').replace(/^v/, '');
+          const versionFile = 'apps/dashboard/build/_app/version.json';
+          const version = JSON.parse(fs.readFileSync(versionFile, 'utf8')).version;
+          if (version !== expected) {
+            throw new Error(`${versionFile} version ${version} does not match ${tag}`);
+          }
+          for (const file of ['apps/dashboard/build/index.html', versionFile]) {
+            if (!fs.existsSync(file)) {
+              throw new Error(`Dashboard build did not produce ${file}`);
+            }
+          }
+          NODE
+
+      - name: Build
+        run: cargo build --locked --package vestige-mcp --release --target x86_64-unknown-linux-gnu
+
+      - name: Package
+        run: |
+          cd target/x86_64-unknown-linux-gnu/release
+          tar -czf ../../../vestige-mcp-x86_64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore
+
+      - name: Check glibc ceiling
+        run: bash scripts/check-linux-glibc.sh target/x86_64-unknown-linux-gnu/release/vestige-mcp
+
+      - name: Exec vestige-mcp on Ubuntu 22.04
+        run: bash scripts/smoke-vestige-mcp.sh target/x86_64-unknown-linux-gnu/release/vestige-mcp
+
+      - name: Upload linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-mcp-x86_64-unknown-linux-gnu
+          path: vestige-mcp-x86_64-unknown-linux-gnu.tar.gz
+
+  publish-linux:
+    name: Smoke + publish x86_64-unknown-linux-gnu
+    runs-on: ubuntu-latest
+    needs: [build-linux]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.inputs.tag || github.ref }}
+
+      - name: Download linux-gnu artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vestige-mcp-x86_64-unknown-linux-gnu
+          path: dist
+
+      - name: Extract
+        run: tar -xzf dist/vestige-mcp-x86_64-unknown-linux-gnu.tar.gz -C dist
+
+      - name: Check glibc ceiling
+        run: bash scripts/check-linux-glibc.sh dist/vestige-mcp
+
+      - name: Exec vestige-mcp on Ubuntu 22.04
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD/dist:/opt/vestige:ro" \
+            -v "$PWD/scripts:/opt/scripts:ro" \
+            ubuntu:22.04 \
+            bash -lc 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libstdc++6 >/dev/null && bash /opt/scripts/smoke-vestige-mcp.sh /opt/vestige/vestige-mcp'
+
+      - name: Exec vestige-mcp on Debian 12 bookworm
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD/dist:/opt/vestige:ro" \
+            -v "$PWD/scripts:/opt/scripts:ro" \
+            debian:bookworm \
+            bash -lc 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libstdc++6 >/dev/null && bash /opt/scripts/smoke-vestige-mcp.sh /opt/vestige/vestige-mcp'
+
+      - name: Generate checksum
+        working-directory: dist
+        run: sha256sum vestige-mcp-x86_64-unknown-linux-gnu.tar.gz > vestige-mcp-x86_64-unknown-linux-gnu.tar.gz.sha256
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            dist/vestige-mcp-x86_64-unknown-linux-gnu.tar.gz
+            dist/vestige-mcp-x86_64-unknown-linux-gnu.tar.gz.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
