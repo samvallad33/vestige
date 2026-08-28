@@ -24,6 +24,15 @@ CI execs the binary on Ubuntu 22.04 and Debian 12 bookworm (`initialize`
 over stdio, not just `--version`). npm 2.3.0 stays broken until the next
 tagged release; this branch does not tag or publish.
 
+### Added — Official MCP Registry publish from GitHub Releases
+
+Creating a GitHub Release now publishes repo-root `server.json` to
+https://registry.modelcontextprotocol.io via GitHub OIDC
+(`mcp-publisher login github-oidc`). No stored PAT. npm
+`vestige-mcp-server@<version>` must already exist; the job fails rather
+than racing the registry's npm `mcpName` check. Already-listed versions
+(including 2.3.0) are not republished.
+
 ### Fixed — Memory PR write gate wired into the real tool path (#117)
 
 `gate_writes` — the risk gate that quarantines risky memory writes and opens

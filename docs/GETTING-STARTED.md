@@ -13,7 +13,7 @@ Vestige is local-first: one binary, your data on your disk, no account, no cloud
 Install is one command and connecting is one JSON block. The canonical, always-current
 steps live in the README so this guide never drifts from them:
 
-- **[Install + connect →](../README.md#-get-it-running-in-60-seconds)**
+- **[Install + connect →](../README.md#install)**
 - Using a specific editor? Pick your per-agent guide —
   [Cursor](integrations/cursor.md), [VS Code](integrations/vscode.md),
   [Windsurf](integrations/windsurf.md), [JetBrains](integrations/jetbrains.md),
@@ -68,7 +68,7 @@ vestige backfill --contrast
 
 `--contrast` shows you, side by side, what a plain similarity search returns versus
 the real causal cause. That contrast is the whole pitch — more on the mechanism in
-**[the README](../README.md#-the-thing-nothing-else-does-memory-with-hindsight)**.
+**[the README](../README.md#backward-reach-the-backfill-feature)**.
 
 You can also just talk to your agent normally; it will write and recall memories for
 you through MCP. The CLI is for when you want to drive it directly.
@@ -120,7 +120,7 @@ including multi-instance setups, are in **[Storage Modes](STORAGE.md)** and
 | Understand a specific feature or the research | [The Science](SCIENCE.md) |
 | Tune knobs, env vars, ports | [Configuration](CONFIGURATION.md) |
 | Global vs per-project vs multi-instance | [Storage Modes](STORAGE.md) |
-| Make your agent use memory automatically | [README → automatic memory](../README.md#-make-your-ai-use-memory-automatically) |
+| Make your agent use memory automatically | [README → automatic memory](../README.md#optional-make-the-agent-use-memory-automatically) |
 | Ask a real question | [FAQ](FAQ.md) |
 
 Welcome. Vestige gets more useful the longer you use it — that's the point.

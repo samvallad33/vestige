@@ -1,0 +1,163 @@
+{
+  "identifier": "samvallad33-vestige",
+  "name": "Vestige",
+  "version": "2.3.0",
+  "author": "samvallad33",
+  "authorUrl": "https://github.com/samvallad33",
+  "category": "developer",
+  "homepage": "https://github.com/samvallad33/vestige",
+  "icon": "🧠",
+  "description": "Local-first Rust MCP memory for AI agents. Stdio only — not a hosted service and not production. Causal Backfill reaches backward to the quiet change that caused today's failure. Tools: recall, smart_ingest, backfill. Launch with vestige-mcp or npx -y vestige-mcp-server. GUI clients should use the absolute path from `which vestige-mcp`. Linux on Ubuntu 22.04 / Debian 12: wait for v2.4.0 (glibc). Your data stays on disk.",
+  "tags": [
+    "memory",
+    "local-first",
+    "stdio",
+    "rust",
+    "mcp",
+    "recall",
+    "smart-ingest",
+    "backfill",
+    "causal-memory"
+  ],
+  "tools": [
+    {
+      "name": "recall",
+      "description": "Retrieve memories relevant to the current context. Default mode is fast hybrid lookup. mode=reason runs deeper causal reasoning; mode=contradictions surfaces trust-weighted disagreement pairs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "What to recall. Required for lookup and reason modes."
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["lookup", "reason", "contradictions"],
+            "default": "lookup",
+            "description": "lookup (default): hybrid search. reason: deeper causal reasoning. contradictions: disagreement pairs for a topic."
+          },
+          "includeCrossScope": {
+            "type": "boolean",
+            "description": "If true, search across project namespaces. Default recall stays in the user namespace."
+          },
+          "topic": {
+            "type": "string",
+            "description": "Topic for contradictions mode."
+          }
+        }
+      }
+    },
+    {
+      "name": "smart_ingest",
+      "description": "Store a fact with prediction-error gating: merge redundant writes, flag contradictions, create only what is novel. Local-first; nothing is sent to a remote API.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The content to remember (single mode)."
+          },
+          "node_type": {
+            "type": "string",
+            "description": "Type of knowledge: fact, concept, event, person, place, note, pattern, decision",
+            "default": "fact"
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Tags for categorization."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Project namespace. Defaults to user. Retrieval stays in that namespace unless includeCrossScope is set on recall."
+          },
+          "items": {
+            "type": "array",
+            "description": "Batch mode: up to 20 items.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "content": { "type": "string" }
+              },
+              "required": ["content"]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "backfill",
+      "description": "Causal Backfill: reach backward from a failure to the earlier memory that most plausibly caused it — even when the cause shares no vocabulary with the symptom. Local stdio; not a production hosted service.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "failure_id": {
+            "type": "string",
+            "description": "ID of the failure memory. If omitted, uses the most recent failure-like memory."
+          },
+          "manual": {
+            "type": "boolean",
+            "default": false,
+            "description": "Force the backfill even if the event is not auto-detected as salient."
+          },
+          "lookback_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365,
+            "default": 30,
+            "description": "How many days back to reach for the cause."
+          },
+          "promote": {
+            "type": "boolean",
+            "default": true,
+            "description": "Promote the surfaced cause in storage. Set false for a dry-run preview."
+          }
+        }
+      }
+    },
+    {
+      "name": "receipt",
+      "description": "Inspect a persisted retrieval receipt or run controlled evidence replay."
+    },
+    {
+      "name": "memory",
+      "description": "Read, inspect, promote, or demote individual memories."
+    },
+    {
+      "name": "graph",
+      "description": "Explore the local memory graph and its links."
+    },
+    {
+      "name": "maintain",
+      "description": "Run local consolidation and lifecycle maintenance."
+    },
+    {
+      "name": "dedup",
+      "description": "Find/merge duplicate memories and preview, apply, audit, or undo tag renames/merges."
+    },
+    {
+      "name": "suppress",
+      "description": "Actively forget a memory (reversible for 24h)."
+    },
+    {
+      "name": "memory_status",
+      "description": "Report health, counts, model readiness, and store hygiene statistics."
+    },
+    {
+      "name": "codebase",
+      "description": "Index and query codebase-scoped memory."
+    },
+    {
+      "name": "intention",
+      "description": "Track goals and open intentions across sessions."
+    },
+    {
+      "name": "source_sync",
+      "description": "Sync memories from external connected sources into the local store."
+    },
+    {
+      "name": "session_start",
+      "description": "Prime the agent with relevant local context at session start."
+    }
+  ]
+}

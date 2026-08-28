@@ -93,6 +93,34 @@ has no musl prebuilts, so embeddings would not ship.
 
 The release profile uses `lto = true`, `codegen-units = 1`, `opt-level = "z"`, and `strip = true` for minimum binary size.
 
+## Publishing a GitHub Release
+
+Version tags (`vX.Y.Z`) drive two independent workflows:
+
+1. **Release** (`.github/workflows/release.yml`) — builds and uploads
+   binaries. Intel Mac and Windows feature flags live only there; do not
+   fold registry publish into those jobs.
+2. **Publish MCP Registry**
+   (`.github/workflows/publish-mcp-registry.yml`) — authenticates with
+   `mcp-publisher login github-oidc` and publishes repo-root
+   `server.json` to `https://registry.modelcontextprotocol.io`.
+
+npm is **not** published by CI. The official registry checks `mcpName`
+(`io.github.samvallad33/vestige`) on the published `vestige-mcp-server`
+package, so `vestige-mcp-server@X.Y.Z` must already exist on npm
+**before** this job can succeed. If npm is late, the registry job fails
+with an error; publish npm, then re-run **Publish MCP Registry**.
+
+GitHub OIDC for `io.github.samvallad33/*` is automatic from this
+repository (`id-token: write` on the registry job). No PAT, no GitHub
+App, and no extra org/repo OIDC trust binding is required.
+
+`server.json` version (and each `packages[].version`) must match the
+release tag with a leading `v` stripped. An already-listed version is
+skipped rather than republished. Merging the workflow does not publish;
+the next tag is the first automated publish. Dry-run: Actions → Publish
+MCP Registry → Run workflow, with `dry_run` enabled.
+
 ## Code Style
 
 ### Rust
