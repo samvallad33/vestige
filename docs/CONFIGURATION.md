@@ -49,6 +49,7 @@ Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the stand
 | `VESTIGE_TRACE` | `on` | Agent Black Box trace recording. **On by default**: every MCP tool call writes rows to `agent_traces`/`agent_runs` in your local database. Set `0`/`false`/`off`/`no` to turn the recorder off. Read once per process, so changing it mid-process has no effect |
 | `VESTIGE_TRACE_RETENTION_DAYS` | `30` | How long Black Box traces are kept. The consolidation cycle deletes trace events older than this and drops any `agent_runs` roll-up left with no events. `0` keeps traces forever (sweep disabled); unset, empty, negative, or malformed values fall back to `30` |
 | `VESTIGE_DISABLE_VECTOR_SEARCH` | unset (vector search on) | Kill switch for the HNSW vector index. Set to `1`/`true`/`yes`/`on`/`enable`/`enabled` to force semantic/vector search off and fall back to keyword search. Useful on older x86 CPUs — the index also disables itself automatically when AVX2+FMA are missing |
+| `ORT_DYLIB_PATH` | unset | Intel Mac (`x86_64-apple-darwin`) only: absolute path to Homebrew `libonnxruntime.dylib`. Resolve with `brew --prefix onnxruntime` (do not hardcode `/opt/homebrew` vs `/usr/local`). GUI clients (Cursor, Claude Desktop) do not inherit `.zshrc` — set this in the MCP JSON `env` block. See [Intel Mac install](INSTALL-INTEL-MAC.md) |
 
 > **Storage location precedence:** `--data-dir <path>` wins over `VESTIGE_DATA_DIR`; if neither is set, Vestige uses your OS's per-user data directory: `~/Library/Application Support/com.vestige.core/` on macOS, `~/.local/share/vestige/core/` on Linux, `%APPDATA%\vestige\core\` on Windows. Custom paths are directories, are created if missing, expand a leading `~`, and store the database at `<dir>/vestige.db`.
 
@@ -196,7 +197,7 @@ limit = 50
 
 ```bash
 vestige-mcp --data-dir /custom/path   # Custom storage location
-VESTIGE_DATA_DIR=~/.vestige vestige-mcp # Env fallback storage location
+VESTIGE_DATA_DIR="$HOME/.vestige" vestige-mcp # Env fallback (shell); GUI JSON does not expand ~
 VESTIGE_DATA_DIR=./.vestige vestige stats # Point the CLI at the same custom DB
 vestige-mcp --help                     # Show all options
 ```
@@ -260,25 +261,60 @@ Add to `~/.claude/settings.json`:
 
 ### Claude Desktop (macOS)
 
+Claude Desktop is a GUI app: it does not inherit your shell PATH and does not expand `~` in JSON. After `npm install -g vestige-mcp-server@latest`, paste the absolute path from `which vestige-mcp`. nvm/fnm/Homebrew npm will not be `/usr/local/bin`.
+
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "vestige": {
-      "command": "vestige-mcp"
+      "command": "<absolute path from which vestige-mcp>"
     }
   }
 }
 ```
 
+Per-project memory — live storage flag is `--data-dir`, and the directory must be absolute:
+
+```json
+{
+  "mcpServers": {
+    "vestige": {
+      "command": "<absolute path from which vestige-mcp>",
+      "args": ["--data-dir", "/Users/you/projects/my-app/.vestige"]
+    }
+  }
+}
+```
+
+**Intel Mac:** Claude Desktop does not inherit `.zshrc`. Put `ORT_DYLIB_PATH` in the MCP `env` block. Run `brew --prefix onnxruntime` and paste the result — do not hardcode `/opt/homebrew` vs `/usr/local`. See [Intel Mac install](INSTALL-INTEL-MAC.md).
+
+```json
+{
+  "mcpServers": {
+    "vestige": {
+      "command": "<absolute path from which vestige-mcp>",
+      "args": [],
+      "env": {
+        "ORT_DYLIB_PATH": "<brew --prefix onnxruntime>/lib/libonnxruntime.dylib"
+      }
+    }
+  }
+}
+```
+
+Drop-in skeleton: [`claude-desktop-config.json`](claude-desktop-config.json).
+
 ### Claude Desktop (Windows)
+
+Same GUI PATH rule: paste the absolute path from `where vestige-mcp`. Official install is npm, not cargo.
 
 Add to `%APPDATA%\Claude\claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "vestige": {
-      "command": "vestige-mcp"
+      "command": "<absolute path from where vestige-mcp>"
     }
   }
 }
