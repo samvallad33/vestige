@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Official MCP Registry publish from GitHub Releases
+
+Creating a GitHub Release now publishes repo-root `server.json` to
+https://registry.modelcontextprotocol.io via GitHub OIDC
+(`mcp-publisher login github-oidc`). No stored PAT. npm
+`vestige-mcp-server@<version>` must already exist; the job fails rather
+than racing the registry's npm `mcpName` check. Already-listed versions
+(including 2.3.0) are not republished.
+
 ### Fixed — Memory PR write gate wired into the real tool path (#117)
 
 `gate_writes` — the risk gate that quarantines risky memory writes and opens

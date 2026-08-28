@@ -1,0 +1,222 @@
+# Publish repo-root server.json to the official MCP Registry after a GitHub
+# Release is created. Sibling of release.yml — binary build/upload jobs are
+# unchanged and do not get id-token: write.
+#
+# Official docs (confirmed 2026-08-28 against v1.8.1):
+#   https://modelcontextprotocol.io/registry/github-actions
+#   mcp-publisher login github-oidc
+#   mcp-publisher publish
+#
+# The GitHub Release asset named mcp-publisher is the CLI. `go install
+# github.com/modelcontextprotocol/registry/cmd/publisher@v1.8.1` produces a
+# binary named `publisher`; CI uses the documented release tarball instead.
+#
+# npm is NOT published by this repo's CI. The official registry validates the
+# published vestige-mcp-server package (mcpName + version), so this job fails
+# if that version is missing on npm. Publish npm first, then create the GitHub
+# Release — or re-run this workflow after npm is up.
+#
+# Merging this workflow does not publish anything. 2.3.0 is already listed
+# (isLatest) and must not be republished; this is for the next tag. Re-runs of
+# an already-listed version skip publish.
+
+name: Publish MCP Registry
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v2.4.0). npm vestige-mcp-server@that-version must already exist unless dry_run.'
+        required: true
+        type: string
+      dry_run:
+        description: 'Validate server.json and authenticate with GitHub OIDC; do not publish'
+        required: false
+        type: boolean
+        default: false
+
+# Least privilege at workflow scope; the job grants id-token: write for OIDC.
+permissions: {}
+
+concurrency:
+  group: mcp-registry-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  MCP_REGISTRY_URL: https://registry.modelcontextprotocol.io
+  MCP_SERVER_NAME: io.github.samvallad33/vestige
+  NPM_PACKAGE: vestige-mcp-server
+  # Pin the publisher CLI. Official docs use releases/latest; we pin + SHA-256
+  # so a compromised latest asset cannot mint an OIDC token as this repo.
+  MCP_PUBLISHER_VERSION: "1.8.1"
+  MCP_PUBLISHER_TARBALL: mcp-publisher_linux_amd64.tar.gz
+  MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+
+jobs:
+  publish:
+    name: Publish server.json
+    if: github.repository == 'samvallad33/vestige'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve version and require server.json match
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          EXPECTED_NAME: ${{ env.MCP_SERVER_NAME }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"].removeprefix("refs/tags/")
+          expected = tag[1:] if tag.startswith("v") else tag
+          if not expected:
+              raise SystemExit("Release tag is empty")
+
+          server_path = Path("server.json")
+          if not server_path.is_file():
+              raise SystemExit("server.json is missing at repo root")
+
+          server = json.loads(server_path.read_text())
+          name = server.get("name")
+          version = server.get("version")
+          expected_name = os.environ["EXPECTED_NAME"]
+          if name != expected_name:
+              raise SystemExit(
+                  f"server.json name {name!r} does not match {expected_name!r}"
+              )
+          if version != expected:
+              raise SystemExit(
+                  f"server.json version {version} does not match tag {tag} "
+                  f"(expected {expected})"
+              )
+
+          packages = server.get("packages") or []
+          if not packages:
+              raise SystemExit("server.json has no packages[] entry")
+          for index, package in enumerate(packages):
+              pkg_version = package.get("version")
+              if pkg_version != expected:
+                  raise SystemExit(
+                      f"server.json packages[{index}].version {pkg_version} "
+                      f"does not match tag {tag} (expected {expected})"
+                  )
+              identifier = package.get("identifier")
+              registry_type = package.get("registryType")
+              if registry_type == "npm" and identifier != os.environ["NPM_PACKAGE"]:
+                  raise SystemExit(
+                      f"server.json packages[{index}].identifier {identifier!r} "
+                      f"does not match npm package {os.environ['NPM_PACKAGE']!r}"
+                  )
+
+          Path(os.environ["GITHUB_OUTPUT"]).open("a").write(
+              f"tag={tag}\nversion={expected}\n"
+          )
+          print(f"server.json version {version} matches tag {tag}")
+          PY
+
+      - name: Install mcp-publisher
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "${MCP_PUBLISHER_TARBALL}" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/${MCP_PUBLISHER_TARBALL}"
+          echo "${MCP_PUBLISHER_SHA256}  ${MCP_PUBLISHER_TARBALL}" | sha256sum -c -
+          tar -xzf "${MCP_PUBLISHER_TARBALL}" mcp-publisher
+          chmod +x mcp-publisher
+          ./mcp-publisher --help
+
+      - name: Validate server.json
+        run: ./mcp-publisher validate ./server.json
+
+      - name: Login to MCP Registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc --registry "${MCP_REGISTRY_URL}"
+
+      - name: Publish server.json
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "dry_run=true: OIDC login and server.json validation succeeded; skipping publish."
+            echo "This does not republish ${MCP_SERVER_NAME}@${RELEASE_VERSION}."
+            exit 0
+          fi
+
+          encoded_name="$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["MCP_SERVER_NAME"], safe=""))')"
+          registry_status="$(curl -sS -o /tmp/mcp-registry-version.json -w "%{http_code}" \
+            "${MCP_REGISTRY_URL}/v0.1/servers/${encoded_name}/versions/${RELEASE_VERSION}")"
+          if [ "${registry_status}" = "200" ]; then
+            echo "MCP Registry already lists ${MCP_SERVER_NAME}@${RELEASE_VERSION}; skipping publish."
+            echo "Refusing to republish (2.3.0 and any later listed version stay as-is)."
+            exit 0
+          fi
+          if [ "${registry_status}" != "404" ]; then
+            echo "MCP Registry version lookup returned HTTP ${registry_status}:"
+            cat /tmp/mcp-registry-version.json
+            exit 1
+          fi
+
+          python3 <<'PY'
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["RELEASE_VERSION"]
+          package = os.environ["NPM_PACKAGE"]
+          expected_name = os.environ["MCP_SERVER_NAME"]
+          url = f"https://registry.npmjs.org/{package}/{version}"
+          last_error = "npm lookup did not run"
+
+          for attempt in range(1, 7):
+              try:
+                  with urllib.request.urlopen(url, timeout=30) as response:
+                      payload = json.load(response)
+              except urllib.error.HTTPError as error:
+                  last_error = f"HTTP {error.code}"
+                  if error.code != 404:
+                      raise SystemExit(f"npm registry returned HTTP {error.code} for {url}")
+              except urllib.error.URLError as error:
+                  last_error = str(error.reason)
+              else:
+                  mcp_name = payload.get("mcpName")
+                  if mcp_name != expected_name:
+                      raise SystemExit(
+                          f"npm {package}@{version} mcpName {mcp_name!r} does not match "
+                          f"{expected_name!r}. The official registry will reject publish."
+                      )
+                  print(f"npm {package}@{version} is published with mcpName={mcp_name}")
+                  break
+              print(
+                  f"npm {package}@{version} not available yet ({last_error}); "
+                  f"attempt {attempt}/6",
+                  file=sys.stderr,
+              )
+              if attempt == 6:
+                  raise SystemExit(
+                      f"npm package {package}@{version} is not on registry.npmjs.org.\n"
+                      "The official MCP Registry validates npm mcpName + version, so this "
+                      "job must run only after that version exists on npm.\n"
+                      f"Publish {package}@{version}, then re-run this workflow "
+                      "(Actions → Publish MCP Registry → Run workflow)."
+                  )
+              time.sleep(20)
+          PY
+
+          ./mcp-publisher publish ./server.json
+          echo "Published ${MCP_SERVER_NAME}@${RELEASE_VERSION} to ${MCP_REGISTRY_URL}"
