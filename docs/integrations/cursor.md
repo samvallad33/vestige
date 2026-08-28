@@ -8,6 +8,8 @@ Cursor has native MCP support. Add Vestige and your AI assistant remembers your 
 
 ## Setup
 
+After `npm install -g vestige-mcp-server@latest`, the `vestige-mcp` binary is on your **shell** PATH. Cursor's GUI does not reliably inherit that PATH and does not expand `~`. Paste the absolute path; do not guess `/usr/local/bin`.
+
 ### 1. Create or edit the config file
 
 **Global (all projects):**
@@ -23,30 +25,50 @@ mkdir -p ~/.cursor
 open -e ~/.cursor/mcp.json
 ```
 
-### 2. Add Vestige
+### 2. Resolve the binary, then add Vestige
+
+```bash
+which vestige-mcp          # macOS / Linux
+where vestige-mcp          # Windows
+```
+
+nvm, fnm, and Homebrew npm almost never install into `/usr/local/bin`. Paste whatever the command above prints.
 
 ```json
 {
   "mcpServers": {
     "vestige": {
-      "command": "/usr/local/bin/vestige-mcp",
-      "args": [],
-      "env": {}
+      "command": "<absolute path from which vestige-mcp>",
+      "args": []
     }
   }
 }
 ```
 
-> **Use absolute paths.** Cursor does not reliably resolve relative paths or `~`. Run `which vestige-mcp` to find your binary location.
+**Windows:** same shape. Official install is npm, not cargo — paste the absolute path from `where vestige-mcp`. A `.cargo\bin` path is only correct if you built from source.
 
-**Windows:**
 ```json
 {
   "mcpServers": {
     "vestige": {
-      "command": "C:\\Users\\you\\.cargo\\bin\\vestige-mcp.exe",
+      "command": "<absolute path from where vestige-mcp>",
+      "args": []
+    }
+  }
+}
+```
+
+**Intel Mac:** Cursor does not inherit `.zshrc`. Put `ORT_DYLIB_PATH` in this same `env` block. Run `brew --prefix onnxruntime` and paste the result — do not hardcode `/opt/homebrew` vs `/usr/local`. See [Intel Mac install](../INSTALL-INTEL-MAC.md).
+
+```json
+{
+  "mcpServers": {
+    "vestige": {
+      "command": "<absolute path from which vestige-mcp>",
       "args": [],
-      "env": {}
+      "env": {
+        "ORT_DYLIB_PATH": "<brew --prefix onnxruntime>/lib/libonnxruntime.dylib"
+      }
     }
   }
 }
@@ -62,7 +84,7 @@ Open Cursor's AI chat and ask:
 
 > "What MCP tools do you have access to?"
 
-You should see Vestige's tools listed (search, smart_ingest, memory, etc.).
+You should see Vestige's tools listed (`smart_ingest`, `recall`, `backfill`).
 
 ---
 
@@ -82,15 +104,14 @@ It remembers.
 
 ## Project-Specific Memory
 
-To isolate memory per project, use `--data-dir`:
+To isolate memory per project, pass `--data-dir` with an **absolute** directory (Cursor does not expand `~` or relative paths in `args`):
 
 ```json
 {
   "mcpServers": {
     "vestige": {
-      "command": "/usr/local/bin/vestige-mcp",
-      "args": ["--data-dir", "/Users/you/projects/my-app/.vestige"],
-      "env": {}
+      "command": "<absolute path from which vestige-mcp>",
+      "args": ["--data-dir", "/Users/you/projects/my-app/.vestige"]
     }
   }
 }
@@ -105,9 +126,10 @@ Or place a `.cursor/mcp.json` in the project root for project-level config.
 <details>
 <summary>Vestige tools not appearing</summary>
 
-1. Verify the binary exists:
+1. Verify the binary exists and copy that exact path into `command`:
    ```bash
-   which vestige-mcp
+   which vestige-mcp          # macOS / Linux
+   where vestige-mcp          # Windows
    ```
 2. Test the binary manually:
    ```bash
