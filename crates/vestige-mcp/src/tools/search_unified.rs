@@ -1129,10 +1129,6 @@ fn is_literal_query(query: &str) -> bool {
 /// string value starts with `prefix`. Empty prefix matches every result with
 /// at least one tag (and never matches a tagless result).
 ///
-/// Case-sensitive by design: the existing tag-match semantics in
-/// `memory_timeline` / `export` / `gc` are exact-match (case-sensitive), so
-/// keeping this consistent avoids surprise. Operators wanting case-insensitive
-/// prefix-search should normalize tags at ingest time.
 /// Case-INSENSITIVE tag prefix match.
 ///
 /// Reported from production (2026-08-15): filtering on `Reflection` returned zero

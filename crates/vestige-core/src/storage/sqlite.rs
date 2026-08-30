@@ -4805,6 +4805,7 @@ impl SqliteMemoryStore {
             )
             .optional()?;
 
+        #[cfg(feature = "embeddings")]
         let active_embedding_model = active_profile.as_ref().and_then(|active| {
             reader
                 .query_row(
@@ -4815,7 +4816,7 @@ impl SqliteMemoryStore {
                 .ok()
         });
         #[cfg(not(feature = "embeddings"))]
-        let active_embedding_model = None;
+        let active_embedding_model: Option<String> = None;
 
         #[cfg(feature = "embeddings")]
         let (nodes_with_active_embeddings, nodes_with_mismatched_embeddings) = {
@@ -6526,8 +6527,6 @@ impl SqliteMemoryStore {
         }
     }
 
-    /// Semantic search returning scores
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     /// Bring the in-process vector index up to date with vectors written by OTHER
     /// processes since this one last looked.
     ///
@@ -6636,6 +6635,8 @@ impl SqliteMemoryStore {
         added
     }
 
+    /// Semantic search returning scores
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn semantic_search_raw(&self, query: &str, limit: i32) -> Result<Vec<(String, f32)>> {
         if !self.vector_search_available() {
             return Ok(vec![]);

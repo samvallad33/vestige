@@ -817,8 +817,12 @@ mod tests {
         candidate.embedding = vec![0.82, (1.0_f32 - 0.82_f32.powi(2)).sqrt()];
         candidate.content = "The approach is to retain the storage policy node.".to_string();
 
+        // A same-subject revision: enough token overlap for the correction
+        // marker to count, and a marker on exactly one side. (A marker with no
+        // shared subject no longer fires — that shape was measured to be a
+        // false positive on real content.)
         let decision = gate.evaluate(
-            "Actually, the correct approach is to write a dated session summary.",
+            "Actually, the correct approach is to retire the storage policy node.",
             &new_embedding,
             &[candidate],
         );
@@ -884,8 +888,8 @@ mod tests {
         ));
 
         assert!(gate.detect_contradiction(
-            "Actually, the correct approach is...",
-            "The approach is to..."
+            "Actually, the correct approach is Redis",
+            "The approach is Redis"
         ));
 
         assert!(!gate.detect_contradiction(

@@ -1887,16 +1887,16 @@ fn tag_prefix_filtering_is_case_insensitive_on_the_hybrid_path() {
 /// | … PostgreSQL 14 … | … PostgreSQL 16 … | reinforce | 0.940 |
 /// | Priya holds a Bachelor degree … | Priya holds a Master of Science degree … | reinforce | 0.976 |
 ///
-/// The richer detector in
-/// `crates/vestige-mcp/src/tools/cross_reference.rs::appears_contradictory`
-/// already handles every one of these shapes — it has explicit unit tests for
-/// the antonym and Bachelor/Master cases — but it is only consulted at
-/// RETRIEVAL time. The retrieval-side contradiction protection can only protect
-/// memories that made it into the store; here the dissent is destroyed at
-/// ingest, one stage earlier, so that guard never gets the chance to run.
+/// That was the pre-fix state: the richer retrieval-side detector could see
+/// every one of these shapes, but the write path had its own blind copy, and
+/// retrieval-side protection cannot protect a memory destroyed at ingest one
+/// stage earlier. Both paths now consult the shared detector in
+/// `vestige-core/src/advanced/contradiction.rs`; this test locks the write
+/// path's behaviour over the real binary.
 #[test]
-#[ignore = "FAILS: documents a real ingest-gate defect (corrections are swallowed). \
-            Also needs the embedding runtime. Run with --ignored to reproduce."]
+#[ignore = "loads the real embedding runtime (~670 MB model); run with --ignored. \
+            (Documented the ingest-gate defect before the shared-detector fix; \
+            it now passes and guards the regression.)"]
 fn correction_must_not_be_swallowed_by_the_ingest_gate() {
     const NEGATIVE: &str =
         "Never use prompt diversity when the sampling temperature exceeds zero point six";

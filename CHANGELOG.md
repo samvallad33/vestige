@@ -47,6 +47,18 @@ this was about which one arrived second, not about the threshold being wrong.
 
 There is one detector now. Both paths use it, so they cannot drift again.
 
+The shared detector itself then failed its pre-release audit and was tightened
+before tagging. Measured against a real 2,929-memory store, its negation scan
+fired on the mere presence of a word like "never" or "removed" in one of two
+long notes — flagging 83% of same-subject pairs as contradictions and turning
+84% of near-identical re-saves into duplicates instead of reinforcements. A
+negation word now only counts when the OTHER text carries its paired positive
+term ("never" against "always"), matched as whole words, and a correction
+marker ("fixed", "actually") only counts when token overlap shows the two
+texts genuinely share a subject. On the same store that brings the flag rate
+from 83% to 13%, while every correction shape in the table above is still
+detected in both orders.
+
 Version numbers needed a further fix. Words of three characters or fewer were
 being dropped before comparison, so "version is 4.2" and "version is 5.0"
 looked like identical text with the only meaningful difference thrown away.
@@ -101,6 +113,10 @@ three categories has three questions in it, and the harness warns you.
 The reranker's own configuration asks for 50 candidates and was being handed
 30. It now gets 50. Measured on MemConflict this improved every category with
 a real sample size, and costs about 38% more time on a 2,900-memory store.
+For the record: the three-question category went down (1.0 to 0.667, one
+question), and at 98 questions total the improvement is directionally
+consistent rather than statistically settled — the depth-vs-recall curve from
+T2-RAGBench is what carries the direction.
 
 `precise` mode is unchanged. The same change cost it 103% and speed is that
 mode's whole purpose.

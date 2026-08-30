@@ -13,15 +13,26 @@
 //! two call sites is how each establishes that the two texts are *about the
 //! same subject*, which [`SubjectIdentity`] names explicitly.
 
-/// Explicit polarity flips: one text takes a negative stance, the other the
-/// paired positive one.
+/// Explicit polarity flips: one text takes the negative stance AND the other
+/// text takes the paired positive one. Both sides are required.
+///
+/// The pairing is load-bearing, not decorative. An earlier revision scanned
+/// for the asymmetric PRESENCE of the negative term alone, and on real memory
+/// content that misread ordinary prose as contradiction: measured against a
+/// 2,929-memory store, bare asymmetric presence fired on 64% of same-subject
+/// pairs (any long note saying "never", "wrong" or "removed" that its
+/// neighbour happened not to), and blocked reinforcement of 84% of
+/// near-identical pairs — recreating, at the shared detector, the exact
+/// defect the write path's pre-unification comment warned about. Requiring
+/// the paired positive term on the opposite side drops that to 6% while
+/// still detecting every measured correction shape.
 ///
 /// Bare triggers with no paired positive term ("not ", "instead of", "rather
-/// than") are deliberately absent: they match ordinary complementary phrasing
-/// and made benign additive notes ("Do not forget to configure X") read as
-/// corrections.
+/// than") are deliberately absent for the same reason, and ("don't", "do")
+/// was removed because "do" is too common a word for its presence to carry
+/// any signal.
 const NEGATION_PAIRS: &[(&str, &str)] = &[
-    ("don't", "do"),
+    ("don't use", "use"),
     ("never", "always"),
     ("avoid", "use"),
     ("wrong", "right"),
@@ -98,20 +109,31 @@ impl SubjectIdentity {
             Self::AlreadyEstablished => 0,
         }
     }
-
-    /// Shared substantive words required before a correction *marker* counts.
-    /// Higher than the base floor because these phrases appear in plenty of
-    /// memories that revise nothing.
-    fn min_shared_words_for_correction_signal(self) -> usize {
-        match self {
-            Self::FromTextOverlap => 6,
-            Self::AlreadyEstablished => 0,
-        }
-    }
 }
 
 fn substantive_words(lowered: &str) -> std::collections::HashSet<&str> {
     lowered.split_whitespace().filter(|w| w.len() > 3).collect()
+}
+
+/// Every word as a whole token, punctuation trimmed from the ends, SHORT WORDS
+/// KEPT. Used for the negation-pair test, where the paired positive term is
+/// often short ("use", "added") and substring matching would find it inside
+/// unrelated words ("because", "loaded").
+fn all_words(lowered: &str) -> std::collections::HashSet<&str> {
+    lowered
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// Whole-word match for single terms, substring match for phrases.
+fn has_term(lowered: &str, words: &std::collections::HashSet<&str>, term: &str) -> bool {
+    if term.contains(' ') {
+        lowered.contains(term)
+    } else {
+        words.contains(term)
+    }
 }
 
 /// Tokens used for the divergence test.
@@ -147,10 +169,21 @@ pub fn appears_contradictory(a: &str, b: &str, identity: SubjectIdentity) -> boo
         return false;
     }
 
-    // Polarity flip: one side carries a negative stance the other lacks.
-    for (neg, _opp) in NEGATION_PAIRS {
-        if (a_lower.contains(neg) && !b_lower.contains(neg))
-            || (b_lower.contains(neg) && !a_lower.contains(neg))
+    // Polarity flip: one side carries the negative stance AND the other side
+    // carries the paired positive one, with neither side carrying both. When
+    // the negative term textually contains its positive ("don't use" contains
+    // "use"), the firing side necessarily carries the positive too, so that
+    // side is exempt from the both-terms exclusion.
+    let a_all = all_words(&a_lower);
+    let b_all = all_words(&b_lower);
+    for (neg, opp) in NEGATION_PAIRS {
+        let a_neg = has_term(&a_lower, &a_all, neg);
+        let b_neg = has_term(&b_lower, &b_all, neg);
+        let a_opp = has_term(&a_lower, &a_all, opp);
+        let b_opp = has_term(&b_lower, &b_all, opp);
+        let neg_carries_opp = neg.contains(opp);
+        if (a_neg && b_opp && !b_neg && (neg_carries_opp || !a_opp))
+            || (b_neg && a_opp && !a_neg && (neg_carries_opp || !b_opp))
         {
             return true;
         }
@@ -177,16 +210,16 @@ pub fn appears_contradictory(a: &str, b: &str, identity: SubjectIdentity) -> boo
     // are asserting different things in the same slot. If one IS a subset, it
     // is an elaboration ("works in Leeds" versus "works in Leeds and London")
     // and must not be flagged.
+    let a_tokens = divergence_tokens(&a_lower);
+    let b_tokens = divergence_tokens(&b_lower);
+    let shared = a_tokens.intersection(&b_tokens).count();
+    let union = a_tokens.union(&b_tokens).count();
+    let overlap = if union == 0 {
+        0.0
+    } else {
+        shared as f32 / union as f32
+    };
     {
-        let a_tokens = divergence_tokens(&a_lower);
-        let b_tokens = divergence_tokens(&b_lower);
-        let shared = a_tokens.intersection(&b_tokens).count();
-        let union = a_tokens.union(&b_tokens).count();
-        let overlap = if union == 0 {
-            0.0
-        } else {
-            shared as f32 / union as f32
-        };
         let a_only = a_tokens.difference(&b_tokens).count();
         let b_only = b_tokens.difference(&a_tokens).count();
         // Both sides distinctive => divergence, not elaboration.
@@ -200,8 +233,17 @@ pub fn appears_contradictory(a: &str, b: &str, identity: SubjectIdentity) -> boo
         }
     }
 
-    // Explicit revision marker, present in exactly one side.
-    if shared_words >= identity.min_shared_words_for_correction_signal() {
+    // Explicit revision marker, present in exactly one side — but only when
+    // token overlap proves the two texts share a subject. These phrases
+    // ("fixed", "actually", "no longer") occur constantly in memories that
+    // revise nothing; a shared-word COUNT was measured to be no defence on
+    // real content, because paragraph-length memories trivially share 6+
+    // words with any same-topic neighbour. The overlap RATIO is the defence:
+    // at >= 0.5 the marker adds zero false positives on a 2,929-memory store
+    // while still catching the short reworded correction ("Actually, the
+    // correct approach is Redis" against "The approach is Redis" sits at
+    // exactly 0.5).
+    if overlap >= 0.5 {
         for signal in CORRECTION_SIGNALS {
             if a_lower.contains(signal) != b_lower.contains(signal) {
                 return true;
@@ -318,6 +360,73 @@ mod tests {
             ),
             "retrieval path: too little shared vocabulary to risk a false positive"
         );
+    }
+
+    /// The write path must see the short phrasal correction the strict floor
+    /// cannot: "Don't use X" against "Use X" shares too few substantive words
+    /// for the retrieval gate, but the embedding gate has already established
+    /// subject identity at write time.
+    #[test]
+    fn short_phrasal_negation_is_seen_by_the_write_path() {
+        let pair = ("Don't use synchronous code", "Use synchronous code for simplicity");
+        for (x, y) in [pair, (pair.1, pair.0)] {
+            assert!(
+                appears_contradictory(x, y, SubjectIdentity::AlreadyEstablished),
+                "write path must catch the phrasal don't-use correction"
+            );
+        }
+    }
+
+    /// REGRESSION (v2.5.0 audit, measured on a 2,929-memory store): the bare
+    /// asymmetric presence of a negation word fired on 64% of same-subject
+    /// pairs and blocked 84% of near-identical reinforcements. A negation
+    /// word with no paired positive on the OTHER side is ordinary prose, not
+    /// a contradiction — even at zero shared-word floor.
+    #[test]
+    fn bare_negation_word_presence_is_not_a_contradiction() {
+        let cases = [
+            (
+                "The deploy pipeline never ran on weekends before the cron migration",
+                "The deploy pipeline runs from the cron scheduler after the migration",
+            ),
+            (
+                "We removed the legacy flag parser during the cleanup sprint",
+                "The config loader caches parsed flags between restarts",
+            ),
+            (
+                "That approach is wrong for streaming workloads at scale",
+                "Streaming workloads need backpressure handling at scale",
+            ),
+        ];
+        for (a, b) in cases {
+            assert!(
+                !appears_contradictory(a, b, SubjectIdentity::AlreadyEstablished),
+                "unpaired negation word must not read as contradiction: {a:?}"
+            );
+            assert!(!appears_contradictory(b, a, SubjectIdentity::AlreadyEstablished));
+        }
+    }
+
+    /// REGRESSION (v2.5.0 audit): "fixed", "actually", "no longer" appear
+    /// constantly in memories that revise nothing. A correction marker only
+    /// counts when token overlap proves the texts share a subject.
+    #[test]
+    fn correction_signals_need_subject_overlap() {
+        let a = "We fixed the flaky retry loop in the uploader last sprint";
+        let b = "The dashboard uses websockets for live updates with a retry loop";
+        assert!(!appears_contradictory(a, b, SubjectIdentity::AlreadyEstablished));
+        assert!(!appears_contradictory(b, a, SubjectIdentity::AlreadyEstablished));
+    }
+
+    /// Two instances of the same template with different values ("different
+    /// lead, same pitch") are DIFFERENT facts. The divergence branch fires so
+    /// the gate creates a second memory instead of reinforcing the first one
+    /// into a merged falsehood.
+    #[test]
+    fn template_instances_with_different_values_diverge() {
+        let a = "Premium lead — Alice Chen | Spotify. Route: linkedin outreach";
+        let b = "Premium lead — Dana Smith | Spotify. Route: linkedin outreach";
+        assert!(appears_contradictory(a, b, SubjectIdentity::AlreadyEstablished));
     }
 
     /// Unrelated memories that merely share a topic word must never pair up.
