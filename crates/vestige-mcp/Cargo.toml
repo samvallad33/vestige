@@ -104,7 +104,7 @@ clap = { version = "4", features = ["derive"] }
 colored = "3"
 
 # SQLite (for backup WAL checkpoint)
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Dashboard (v2.0) - HTTP server + WebSocket + embedded SvelteKit
 axum = { version = "0.8", default-features = false, features = ["json", "query", "tokio", "http1", "ws"] }
