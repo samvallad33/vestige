@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-08-30 — "Linux starts"
+
+A packaging fix. v2.4.0 and every release before it shipped a Linux binary
+that could not start on common distributions, so none of its correctness work
+reached those users at all.
+
 ### Fixed — Linux binaries start on Ubuntu 22.04 and Debian 12 (#174, #175)
 
 The published `x86_64-unknown-linux-gnu` asset was built on `ubuntu-latest`
@@ -23,6 +29,96 @@ ships no musl prebuilts.
 CI execs the binary on Ubuntu 22.04 and Debian 12 bookworm (`initialize`
 over stdio, not just `--version`). npm 2.3.0 stays broken until the next
 tagged release; this branch does not tag or publish.
+
+## [2.4.0] - 2026-08-30 — "Memory that keeps its word"
+
+A correctness release. Nine defects are fixed across the write path, keyword
+search, the causal-reach engine and the storage layer — including one that
+would have made this release refuse to start for existing users.
+
+### Fixed — Upgrade no longer bricks an existing database (release blocker)
+
+`run_integrity_checks` treated any `PRAGMA foreign_key_check` violation as
+fatal at startup, with no environment override, no warning-only mode and no
+repair path. Deletion residue from older builds is common — a real 2,868-memory
+store carried 84 violations across 83 rows — so this release would have refused
+to open for every affected user, recoverable only by manual SQLite surgery.
+v2.3.0 opens that same store; the unreleased code did not.
+
+Orphaned child rows are now repaired before migrations, and **only** where that
+row's own foreign key is declared `ON DELETE CASCADE` — the schema already
+states such a row should have gone with its parent, so it is unreachable
+residue. Violations that are not cascade-declared still fail loudly. The
+post-migration and runtime checks are unchanged and remain strict. Verified
+end to end: the store that aborted now opens, `repaired=83 remaining=0`, all
+2,868 memories preserved.
+
+### Fixed — Corrections are no longer swallowed as reinforcements
+
+`PredictionErrorGate::evaluate` returned `Update{Reinforce}` on similarity
+alone, short-circuiting before anything consulted `appears_contradictory` —
+which is already computed for that candidate. A correction is *lexically*
+near-identical to what it corrects ("Never use the fp16lib feature on Windows"
+against a stored "Always use the fp16lib feature on Windows" sits around 0.94
+cosine), so the gate read corrections as agreement, discarded them, and
+strengthened the very memory the user had just said was wrong. Contradictory
+input now falls through to the contradiction branch, which keeps both.
+
+### Fixed — Supersession no longer inverts which memory is authoritative
+
+`assess_relation` gated supersession on "is B more trusted?" but chose the
+newer/older labels independently, by date. When the newer memory was the *less*
+trusted one, it reported the less-trusted memory as superseding the more-trusted
+one and printed the older memory's own trust advantage as if it belonged to the
+newer claim — exactly backwards for the case this guard exists to catch.
+Supersession now requires the newer memory to also be the more trusted one; a
+newer, weakly-supported claim yields no supersession and both are kept.
+
+### Fixed — Suppression and demotion survive consolidation
+
+`suppress_memory` and `demote_memory` stamped `last_accessed = now`.
+`apply_decay` does not decay the stored value — it recomputes
+`retrieval_strength` and `retention_strength` from `days_since(last_accessed)`.
+Stamping "now" made an inhibited memory look freshly recalled, so the next
+consolidation pass overwrote the whole penalty and silently un-suppressed it
+within hours. An inhibition is not a recall.
+
+### Fixed — Nightly consolidation no longer merges or deletes across projects
+
+`auto_dedup_consolidation` clustered every embedding at cosine ≥ 0.85 with no
+scope predicate and then hard-deleted the losers — unattended, with no audit
+row. Two projects' near-identical notes naming different credentials would be
+fused and one destroyed. Clustering is now scope-bounded.
+
+### Fixed — Keyword search is unicode-aware (schema V30)
+
+Three coupled defects, fixed together because the query sanitizers deliberately
+mirror the index tokenizer:
+
+- The FTS index used `porter ascii`, which folds multi-byte characters into the
+  adjacent token instead of separating on them. An em dash, curly apostrophe,
+  ellipsis, non-breaking space, leading emoji or accented letter therefore glued
+  itself to the neighbouring word and made that word permanently unfindable.
+  Rebuilt as `porter unicode61 remove_diacritics 2`.
+- `sanitize_fts5_terms` used a deny list that missed 14 characters still
+  meaningful to the FTS5 grammar — most damagingly the apostrophe, which opens a
+  string literal: a query containing one returned zero keyword results. Replaced
+  with a conservative allow list.
+- `sanitize_fts5_or_query` truncated non-ASCII tokens to their ASCII prefix to
+  match the old index; those are real tokens under `unicode61`.
+
+### Fixed — Causal backfill joins on identifiers, not vocabulary
+
+The backward reach links a failure to its cause through *shared entities*, but
+the extractor was harvesting ordinary English: `is_env` accepted any all-caps
+run of three or more characters (so `VERIFIED`, `BUG`, `CRITICAL` registered as
+environment variables), tags were inserted unfiltered (so any shared topical tag
+counted), and `is_path` accepted prose abbreviations like `e.g.`. Because the
+causal score is a raw count of shared entities, junk matches outranked genuine
+rare identifiers — the join preferred vocabulary over causality, the exact
+failure backfill exists to avoid. Entities must now be identifier-shaped, and
+the same test is applied to tags. Adds the first test exercising extraction on
+realistic prose.
 
 ### Added — Official MCP Registry publish from GitHub Releases
 

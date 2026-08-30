@@ -182,25 +182,40 @@ fn assess_relation(
     }
 
     let time_delta_days = (b_date - a_date).num_days().abs();
-    let trust_diff = b_trust - a_trust;
     let has_correction = appears_contradictory(a_content, b_content);
 
-    // Supersession: same topic + newer + higher trust
-    if topic_sim > 0.4 && time_delta_days > 0 && trust_diff > 0.05 && !has_correction {
-        let (newer, older) = if b_date > a_date {
-            ("B", "A")
-        } else {
-            ("A", "B")
-        };
+    // Resolve temporal order FIRST, then measure trust on the newer side.
+    //
+    // The previous code gated on `b_trust - a_trust > 0.05` (is B more trusted?)
+    // but chose the newer/older LABELS independently, by date. When A was newer
+    // but B was more trusted, the gate passed on B's trust while the label said
+    // "A supersedes B" -- reporting the LESS-trusted memory as superseding the
+    // MORE-trusted one, and printing the older memory's own trust advantage as
+    // if it belonged to the newer claim. That is exactly backwards for the case
+    // this guard exists to catch: an authoritative older finding versus a fresh,
+    // weakly-supported claim on the same topic.
+    //
+    // Supersession now requires the newer memory to ALSO be the more trusted
+    // one. When a newer claim is less trusted than what it contradicts, this
+    // returns no supersession at all and the caller keeps both.
+    let (newer, older, newer_trust, older_trust) = if b_date > a_date {
+        ("B", "A", b_trust, a_trust)
+    } else {
+        ("A", "B", a_trust, b_trust)
+    };
+    let trust_gain = newer_trust - older_trust;
+
+    // Supersession: same topic + newer + the newer one is more trusted
+    if topic_sim > 0.4 && time_delta_days > 0 && trust_gain > 0.05 && !has_correction {
         return RelationAssessment {
             relation: Relation::Supersedes,
-            confidence: topic_sim as f64 * (0.5 + trust_diff.min(0.5)),
+            confidence: topic_sim as f64 * (0.5 + trust_gain.min(0.5)),
             reasoning: format!(
                 "{} supersedes {} (newer by {}d, trust +{:.0}%)",
                 newer,
                 older,
                 time_delta_days,
-                trust_diff * 100.0
+                trust_gain * 100.0
             ),
         };
     }
@@ -434,6 +449,27 @@ pub(crate) fn appears_contradictory(a: &str, b: &str) -> bool {
         }
     }
     false
+}
+
+/// What fraction of the QUERY's substantive words appear in `content`?
+///
+/// Deliberately asymmetric, unlike [`topic_overlap`]. Symmetric Jaccard is the
+/// wrong instrument for scoring a short query against a document: it divides by
+/// the UNION, so a 5-word claim against a 26-word memory maxes out around 0.19
+/// even when every word of the claim appears. Any gate at 0.4 is therefore
+/// unreachable for realistic memory lengths, and a claim-vs-memory conflict
+/// check built on it is dead code that always passes silently.
+pub(crate) fn query_coverage(query: &str, content: &str) -> f32 {
+    let q_lower = query.to_lowercase();
+    let c_lower = content.to_lowercase();
+    let q_words: std::collections::HashSet<&str> =
+        q_lower.split_whitespace().filter(|w| w.len() > 3).collect();
+    if q_words.is_empty() {
+        return 0.0;
+    }
+    let c_words: std::collections::HashSet<&str> =
+        c_lower.split_whitespace().filter(|w| w.len() > 3).collect();
+    q_words.intersection(&c_words).count() as f32 / q_words.len() as f32
 }
 
 pub(crate) fn topic_overlap(a: &str, b: &str) -> f32 {
@@ -692,8 +728,14 @@ pub async fn execute(
         if m.trust < 0.3 {
             continue;
         }
-        let overlap = topic_overlap(&args.query, &m.content);
-        if overlap < 0.4 {
+        // Coverage, NOT symmetric Jaccard. This gate scores a short query against
+        // a full memory, and Jaccard divides by the union: restating this very
+        // memory's claim in 8 words scores 0.214 against its 26 substantive
+        // words, so the old `< 0.4` test skipped EVERY realistic memory and this
+        // whole stage never fired. Confident silence is exactly the failure the
+        // stage exists to prevent.
+        let overlap = query_coverage(&args.query, &m.content);
+        if overlap < 0.5 {
             continue;
         }
         if appears_contradictory(&args.query, &m.content) {
@@ -1165,6 +1207,45 @@ fn preview_text(value: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::{query_coverage, topic_overlap};
+
+    /// STAGE 5b's claim-vs-memory conflict gate was built on symmetric Jaccard,
+    /// which divides by the UNION. A short claim can therefore never clear a 0.4
+    /// bar against a normal-length memory, so the stage never fired and a query
+    /// contradicting a high-trust memory passed in silence. This pins the
+    /// arithmetic so the gate cannot quietly die again.
+    #[test]
+    fn claim_conflict_gate_is_reachable_for_a_real_claim() {
+        let memory = "Paper arxiv 2603.27844 tested on GPT-OSS-120B for AIMO3 on H100 and \
+                      found that prompt diversity monotonically hurts accuracy at temperature \
+                      0.6 and above; every intervention fails, so submit the unmodified \
+                      baseline repeatedly instead of stacking changes.";
+        let claim = "prompt diversity improves accuracy at temperature 0.6 and above on \
+                     GPT-OSS-120B for AIMO3";
+
+        // The old instrument: unreachable, nowhere near the 0.4 gate it was tested against.
+        let jaccard = topic_overlap(claim, memory);
+        assert!(
+            jaccard < 0.4,
+            "symmetric Jaccard should be unreachable here, got {jaccard}"
+        );
+
+        // The correct instrument: most of the claim's substantive words are present.
+        let coverage = query_coverage(claim, memory);
+        assert!(
+            coverage >= 0.5,
+            "a claim restating this memory must clear the coverage gate, got {coverage}"
+        );
+    }
+
+    /// Coverage must still reject a claim that simply is not about the memory.
+    #[test]
+    fn claim_conflict_gate_still_rejects_unrelated_claims() {
+        let memory = "Paper arxiv 2603.27844 tested prompt diversity on AIMO3 and found it hurts.";
+        let unrelated = "the dashboard accent colour should be cyan instead of indigo";
+        assert!(query_coverage(unrelated, memory) < 0.5);
+    }
+
     use super::*;
     use crate::cognitive::CognitiveEngine;
     use std::sync::Arc;
