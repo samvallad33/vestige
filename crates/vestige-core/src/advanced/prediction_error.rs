@@ -577,59 +577,24 @@ impl PredictionErrorGate {
         }
     }
 
-    /// Detect if two pieces of content appear contradictory
+    /// Detect if two pieces of content appear contradictory.
     ///
-    /// Uses simple heuristics; could be enhanced with NLI model
+    /// Delegates to the shared detector in [`crate::advanced::contradiction`],
+    /// which the retrieval path uses as well. This function previously carried
+    /// its own, narrower copy: it fired only when the NEW content held the
+    /// negative term, had no antonym branch and no mutually-exclusive-value
+    /// branch. Ingesting "Always use X" over a stored "Never use X" therefore
+    /// read as agreement and *reinforced the claim being corrected* — measured
+    /// at 0.965 similarity against a 0.92 near-identical threshold, with the
+    /// same pair in the reverse order correctly kept. Subject identity is
+    /// already established here by the caller's embedding-similarity gate, so
+    /// no lexical-overlap floor is applied on top of it.
     fn detect_contradiction(&self, new_content: &str, old_content: &str) -> bool {
-        let new_lower = new_content.to_lowercase();
-        let old_lower = old_content.to_lowercase();
-
-        // Check for explicit negation patterns — a real polarity FLIP, not the
-        // mere presence of a negation word. We require the negation term in the
-        // new content AND its paired positive term in the old content (old: "use
-        // X"; new: "avoid X"). The previous logic fired whenever the new content
-        // merely contained a negation word the old one lacked, so ordinary
-        // additive notes ("Do not forget to configure X" — contains "not ") were
-        // misread as corrections and demoted a correct memory. Bare triggers with
-        // no paired positive term ("not ", "instead of", "rather than") are
-        // dropped for the same reason: they match complementary phrasing.
-        let negation_pairs = [
-            ("don't use", "use"),
-            ("don't", "do"),
-            ("never", "always"),
-            ("avoid", "use"),
-            ("wrong", "right"),
-            ("incorrect", "correct"),
-            ("deprecated", "recommended"),
-            ("outdated", "current"),
-        ];
-
-        for (neg, pos) in negation_pairs.iter() {
-            if new_lower.contains(neg) && old_lower.contains(pos) && !old_lower.contains(neg) {
-                return true;
-            }
-        }
-
-        // Check for correction phrases
-        let correction_phrases = [
-            "actually",
-            "correction",
-            "update:",
-            "fixed",
-            "was wrong",
-            "should be",
-            "better approach",
-            "improved",
-            "the right way",
-        ];
-
-        for phrase in correction_phrases.iter() {
-            if new_lower.contains(phrase) {
-                return true;
-            }
-        }
-
-        false
+        crate::advanced::contradiction::appears_contradictory(
+            new_content,
+            old_content,
+            crate::advanced::contradiction::SubjectIdentity::AlreadyEstablished,
+        )
     }
 
     /// Get statistics

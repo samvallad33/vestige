@@ -1014,8 +1014,10 @@ impl SqliteMemoryStore {
             let ok = match cascade_ok.get(&table) {
                 Some(v) => *v,
                 None => {
-                    let mut stmt = tx.prepare(&format!("PRAGMA foreign_key_list(\"{}\")",
-                        table.replace('"', "\"\"")))?;
+                    let mut stmt = tx.prepare(&format!(
+                        "PRAGMA foreign_key_list(\"{}\")",
+                        table.replace('"', "\"\"")
+                    ))?;
                     let rows = stmt.query_map([], |row| {
                         Ok((row.get::<_, String>(2)?, row.get::<_, String>(6)?))
                     })?;
@@ -1037,7 +1039,10 @@ impl SqliteMemoryStore {
                 continue;
             }
             let n = tx.execute(
-                &format!("DELETE FROM \"{}\" WHERE rowid = ?1", table.replace('"', "\"\"")),
+                &format!(
+                    "DELETE FROM \"{}\" WHERE rowid = ?1",
+                    table.replace('"', "\"\"")
+                ),
                 params![rowid],
             )?;
             repaired += n as u64;
@@ -19198,7 +19203,9 @@ mod tests {
             })
             .unwrap();
 
-        let results = storage.concrete_search_filtered(needle, 10, None, None).unwrap();
+        let results = storage
+            .concrete_search_filtered(needle, 10, None, None)
+            .unwrap();
         assert!(!results.is_empty(), "exact lookup must return something");
         assert_eq!(
             results[0].node.id, target.id,
@@ -21118,7 +21125,17 @@ mod tests {
         assert!(!node.is_currently_valid());
 
         // Reverse order on a fresh store: the newer dated claim arriving
-        // second keeps the normal gate behavior (reinforce, no auto-close).
+        // second must NOT auto-close anything. That is this half's subject.
+        //
+        // It previously also asserted `reinforce`, which encoded a defect. The
+        // pair here ("version is 4.2" against "version is 5.0") is a mutually
+        // exclusive VALUE conflict, the same shape as PostgreSQL 14 -> 16, and
+        // the write-path detector could not see it: short numeric tokens were
+        // dropped by the substantive-word length filter, so the two texts
+        // looked identical and the gate reinforced on similarity alone. The
+        // effect was that telling Vestige "the version is now 5.0" discarded
+        // that update and made it believe 4.2 MORE strongly. The gate now
+        // keeps both claims. See advanced::contradiction.
         let dir = tempdir().unwrap();
         let storage = storage_with_marker_gate_runtime(&dir);
         let target = storage
@@ -21135,14 +21152,27 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(result.decision, "reinforce");
-        assert_eq!(result.node.id, target.id);
-        assert!(result.auto_closed_until.is_none());
-        let node = storage.get_node(&target.id).unwrap().unwrap();
         assert_eq!(
-            node.valid_from.map(|value| value.to_rfc3339()),
-            Some(newer_from.to_rfc3339())
+            result.decision, "create",
+            "a version change is a value conflict, not a reinforcement"
         );
+        assert_ne!(
+            result.node.id, target.id,
+            "the superseded 4.2 claim must not be overwritten in place"
+        );
+        assert!(
+            result.auto_closed_until.is_none(),
+            "a newer dated claim arriving second closes nothing"
+        );
+        assert_eq!(
+            result.node.valid_from.map(|value| value.to_rfc3339()),
+            Some(newer_from.to_rfc3339()),
+            "the new node carries its own validity"
+        );
+        // The older claim survives intact, still open, still retrievable.
+        let previous = storage.get_node(&target.id).unwrap().unwrap();
+        assert!(previous.valid_until.is_none());
+        assert!(previous.content.contains("4.2"));
     }
 
     #[test]

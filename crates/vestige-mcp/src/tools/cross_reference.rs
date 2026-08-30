@@ -371,190 +371,26 @@ fn generate_reasoning_chain(
 // (or vice versa). Previously we had wildcard entries like ("not ", "") that
 // fired on any asymmetric presence of "not " — matched millions of innocent
 // sentences ("FSRS-6 is not yet..." vs anything without the word "not").
-const NEGATION_PAIRS: &[(&str, &str)] = &[
-    ("don't", "do"),
-    ("never", "always"),
-    ("avoid", "use"),
-    ("wrong", "right"),
-    ("incorrect", "correct"),
-    ("deprecated", "recommended"),
-    ("outdated", "current"),
-    ("removed", "added"),
-    ("disabled", "enabled"),
-];
-
-/// Directional antonym pairs, used ONLY with the strict both-sides test below.
+/// Do two memories appear to assert incompatible things?
 ///
-/// These are deliberately NOT in NEGATION_PAIRS. That list is scanned for the
-/// asymmetric PRESENCE of its first element, which is safe for explicit negations
-/// ("never", "don't") but would over-fire badly on ordinary evaluative words:
-/// plenty of innocent memories say something "hurts" or is "slower" without
-/// contradicting anything.
+/// Thin wrapper over the shared detector in `vestige_core::advanced::contradiction`,
+/// which the WRITE path (`PredictionErrorGate::detect_contradiction`) now uses
+/// as well. These were two separate implementations of the same concept and
+/// they drifted: this side grew negation symmetry, antonym pairs and a
+/// divergence test while the write side kept a single directional negation
+/// scan. Retrieval-side contradiction protection can only protect a memory
+/// that survived ingestion, so the weaker copy guarding the door decided the
+/// outcome. One implementation now, with the only real difference between the
+/// call sites named by `SubjectIdentity`.
 ///
-/// Requiring one memory to contain one side and the other memory to contain the
-/// other side is a far stricter test, and it catches the class the negation scan
-/// structurally cannot: two memories asserting OPPOSITE DIRECTIONS about the same
-/// subject, with no negation word in either. That is the shape of the failure
-/// this system exists to prevent -- "prompt diversity HURTS accuracy" against
-/// "prompt diversity IMPROVES accuracy" contains no negation at all.
-const ANTONYM_PAIRS: &[(&str, &str)] = &[
-    ("hurts", "improves"),
-    ("hurt", "improved"),
-    ("degrades", "enhances"),
-    ("decreases", "increases"),
-    ("reduces", "raises"),
-    ("worse", "better"),
-    ("slower", "faster"),
-    ("fails", "succeeds"),
-    ("breaks", "fixes"),
-    ("unsafe", "safe"),
-    ("unstable", "stable"),
-    ("unsupported", "supported"),
-];
-
-const CORRECTION_SIGNALS: &[&str] = &[
-    "actually",
-    "correction",
-    "update:",
-    "updated:",
-    "fixed",
-    "was wrong",
-    "changed to",
-    "now uses",
-    "replaced by",
-    "superseded",
-    "no longer",
-    "instead of",
-    "switched to",
-    "migrated to",
-];
-
+/// Retrieval infers subject identity from the text alone, because a candidate
+/// pair here is drawn from thousands of unrelated memories.
 pub(crate) fn appears_contradictory(a: &str, b: &str) -> bool {
-    let a_lower = a.to_lowercase();
-    let b_lower = b.to_lowercase();
-
-    let a_words: std::collections::HashSet<&str> =
-        a_lower.split_whitespace().filter(|w| w.len() > 3).collect();
-    let b_words: std::collections::HashSet<&str> =
-        b_lower.split_whitespace().filter(|w| w.len() > 3).collect();
-    let shared_words = a_words.intersection(&b_words).count();
-
-    // Require ≥4 substantive shared words — two memories must be about the
-    // same thing, not merely brushing the same domain. Previous floor of 2
-    // flagged "FSRS-6 upgrade research sources" and "ARC-AGI-3 FSRS-6 v11
-    // fixes" as contradictions of "Vestige uses FSRS-6 with 21 parameters"
-    // because they all mention "FSRS-6" — different applications, same word.
-    if shared_words < 4 {
-        return false;
-    }
-
-    // Negation: one memory carries a negative stance ("don't", "never",
-    // "avoid", etc.) and the other doesn't. Combined with the shared_words
-    // ≥ 4 gate above, this means "same subject, opposite position." The
-    // wildcard `("not ", "")` and `("no longer", "")` entries were dropped
-    // from NEGATION_PAIRS specifically because "not" / "no longer" are too
-    // common in natural prose to indicate a stance flip without other
-    // signals.
-    for (neg, _opp) in NEGATION_PAIRS {
-        if (a_lower.contains(neg) && !b_lower.contains(neg))
-            || (b_lower.contains(neg) && !a_lower.contains(neg))
-        {
-            return true;
-        }
-    }
-
-    // Opposite-direction claims with NO negation word in either memory.
-    //
-    // The scan above keys off the asymmetric presence of an explicit negation,
-    // so it cannot see "X hurts accuracy" against "X improves accuracy" -- there
-    // is nothing negated in either. That is precisely the shape of the real-world
-    // failure this guard exists for: an authoritative finding and a fresh claim
-    // asserting opposite directions about the same subject.
-    //
-    // Both sides are required to be present, in opposite memories. That is much
-    // stricter than the asymmetric-presence test and is why these words can be
-    // checked at all: on their own, "hurts" or "slower" appear in plenty of
-    // memories that contradict nothing. Combined with the >= 4 shared substantive
-    // words gate above, this means "same subject, opposite direction".
-    for (neg, opp) in ANTONYM_PAIRS {
-        let a_neg = a_lower.contains(neg);
-        let b_neg = b_lower.contains(neg);
-        let a_opp = a_lower.contains(opp);
-        let b_opp = b_lower.contains(opp);
-        if (a_neg && b_opp && !b_neg && !a_opp) || (b_neg && a_opp && !a_neg && !b_opp) {
-            return true;
-        }
-    }
-    // Mutually exclusive VALUES for the same attribute.
-    //
-    // This is the most common real-world contradiction and neither test above can
-    // see it: "Priya holds a Bachelor degree in computer science from Leeds"
-    // against "Priya holds a Master of Science degree in computer science from
-    // Leeds" contains no negation and no antonym, yet both cannot be true. It is
-    // also the shape MemConflict is built to measure, where every published system
-    // scores poorly.
-    //
-    // The distinguishing signal is DIVERGENCE versus ELABORATION. If the two
-    // memories overlap heavily but NEITHER's substantive vocabulary is a subset of
-    // the other's, they are asserting different things in the same slot. If one IS
-    // a subset of the other, it is an elaboration ("works in Leeds" versus "works
-    // in Leeds and London") and must not be flagged.
-    //
-    // Requires a high overlap floor so this only fires on memories that are
-    // demonstrably about the same subject, and requires each side to contribute at
-    // least one distinctive term so trivial rewordings do not qualify.
-    {
-        // Strip surrounding punctuation before comparing. Without this, "X" and
-        // "X," are distinct tokens, so a strict elaboration (A plus two extra
-        // words) looks like mutual divergence and gets flagged as a conflict.
-        // Caught by antonym_detection_does_not_fire_on_agreement_or_unrelated_text.
-        let norm = |set: &std::collections::HashSet<&str>| -> std::collections::HashSet<String> {
-            set.iter()
-                .map(|w| {
-                    w.trim_matches(|c: char| !c.is_alphanumeric())
-                        .to_string()
-                })
-                .filter(|w| w.len() > 3)
-                .collect()
-        };
-        let a_words = norm(&a_words);
-        let b_words = norm(&b_words);
-        let shared = a_words.intersection(&b_words).count();
-        let union = a_words.union(&b_words).count();
-        let overlap = if union == 0 {
-            0.0
-        } else {
-            shared as f32 / union as f32
-        };
-        let a_only = a_words.difference(&b_words).count();
-        let b_only = b_words.difference(&a_words).count();
-        // Both sides distinctive => divergence, not elaboration.
-        let diverges = a_only > 0 && b_only > 0;
-        // Keep the divergence small relative to the shared core: two memories that
-        // merely touch the same topic will diverge in many terms, whereas a
-        // same-attribute conflict differs in only a few.
-        let small_divergence = (a_only + b_only) <= shared;
-        if overlap >= 0.6 && diverges && small_divergence {
-            return true;
-        }
-    }
-
-    // Correction signal: require ≥6 shared substantive words so we know the
-    // two memories are on the SAME subject, and require the signal to appear
-    // in exactly one of them (asymmetric — the memory with the correction
-    // marker is the one superseding the other). Previously fired on ANY
-    // signal in EITHER memory, which caught every bug-fix memory against
-    // every related memory as a pairwise contradiction.
-    if shared_words >= 6 {
-        for signal in CORRECTION_SIGNALS {
-            let in_a = a_lower.contains(signal);
-            let in_b = b_lower.contains(signal);
-            if in_a != in_b {
-                return true;
-            }
-        }
-    }
-    false
+    vestige_core::advanced::contradiction::appears_contradictory(
+        a,
+        b,
+        vestige_core::advanced::contradiction::SubjectIdentity::FromTextOverlap,
+    )
 }
 
 /// What fraction of the QUERY's substantive words appear in `content`?
@@ -1364,7 +1200,8 @@ mod tests {
     #[test]
     fn elaboration_is_not_flagged_as_contradiction() {
         let base = "Priya works in the Leeds office on the payments platform team";
-        let more = "Priya works in the Leeds office on the payments platform team and mentors interns";
+        let more =
+            "Priya works in the Leeds office on the payments platform team and mentors interns";
         assert!(
             !super::appears_contradictory(base, more),
             "a superset elaboration must not be a contradiction"
