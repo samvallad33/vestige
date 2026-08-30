@@ -1,6 +1,6 @@
 [package]
 name = "vestige-core"
-version = "2.4.1"
+version = "2.5.0"
 edition = "2024"
 rust-version = "1.91"
 authors = ["Vestige Team"]
@@ -117,7 +117,7 @@ thiserror = "2"
 
 # Database - SQLite with FTS5 full-text search and JSON
 # Note: "bundled" or "bundled-sqlcipher" added via feature flags above
-rusqlite = { version = "0.38", features = ["chrono", "serde_json"] }
+rusqlite = { version = "0.40", features = ["chrono", "serde_json"] }
 
 # Platform-specific directories
 directories = "6"

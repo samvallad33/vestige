@@ -680,6 +680,15 @@ pub struct SqliteMemoryStore {
     attached_profile_runtime: RwLock<Option<AttachedProfileRuntime>>,
     /// Cached model signature. `None` until the first embedding is written.
     registered_model: std::sync::RwLock<Option<crate::storage::memory_store::ModelSignature>>,
+    /// Last `PRAGMA data_version` observed on the reader connection.
+    ///
+    /// SQLite increments this on a connection whenever ANOTHER connection commits
+    /// to the database. It is the cheapest possible cross-process change signal --
+    /// no table scan, no file stat -- and it is what lets a long-lived process
+    /// notice that a peer has written memories it has never seen. See
+    /// `refresh_vector_index_if_stale`.
+    #[cfg(feature = "vector-search")]
+    last_seen_data_version: Mutex<i64>,
 }
 
 #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -1005,8 +1014,10 @@ impl SqliteMemoryStore {
             let ok = match cascade_ok.get(&table) {
                 Some(v) => *v,
                 None => {
-                    let mut stmt = tx.prepare(&format!("PRAGMA foreign_key_list(\"{}\")",
-                        table.replace('"', "\"\"")))?;
+                    let mut stmt = tx.prepare(&format!(
+                        "PRAGMA foreign_key_list(\"{}\")",
+                        table.replace('"', "\"\"")
+                    ))?;
                     let rows = stmt.query_map([], |row| {
                         Ok((row.get::<_, String>(2)?, row.get::<_, String>(6)?))
                     })?;
@@ -1028,7 +1039,10 @@ impl SqliteMemoryStore {
                 continue;
             }
             let n = tx.execute(
-                &format!("DELETE FROM \"{}\" WHERE rowid = ?1", table.replace('"', "\"\"")),
+                &format!(
+                    "DELETE FROM \"{}\" WHERE rowid = ?1",
+                    table.replace('"', "\"\"")
+                ),
                 params![rowid],
             )?;
             repaired += n as u64;
@@ -1037,17 +1051,98 @@ impl SqliteMemoryStore {
         Ok(repaired)
     }
 
+    /// Run `PRAGMA quick_check` and return its rows.
+    fn quick_check_rows(conn: &Connection) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        let mut stmt = conn.prepare("PRAGMA quick_check")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Names of every FTS5 virtual table in the schema.
+    fn fts5_table_names(conn: &Connection) -> Result<Vec<String>> {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master \
+             WHERE type = 'table' AND sql LIKE '%USING fts5%'",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Is every failing quick_check row attributable to an FTS5 index we can
+    /// rebuild? A single row we cannot attribute means real damage, and the
+    /// caller must fail rather than paper over it.
+    fn quick_check_failure_is_only_fts5(rows: &[String], fts_tables: &[String]) -> bool {
+        if fts_tables.is_empty() {
+            return false;
+        }
+        rows.iter().filter(|r| r.as_str() != "ok").all(|r| {
+            let lower = r.to_lowercase();
+            lower.contains("fts5") && fts_tables.iter().any(|t| lower.contains(&t.to_lowercase()))
+        })
+    }
+
     fn run_integrity_checks(conn: &Connection, phase: &str) -> Result<SqliteIntegrityStatus> {
-        let mut quick_rows = Vec::new();
-        {
-            let mut stmt = conn.prepare("PRAGMA quick_check")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-            for row in rows {
-                quick_rows.push(row?);
+        let mut quick_rows = Self::quick_check_rows(conn)?;
+
+        // An FTS5 external-content index is DERIVED STATE. `knowledge_fts` is
+        // declared `content='knowledge_nodes'`, so every token in it is
+        // reconstructible from a table quick_check just verified. Refusing to
+        // open the whole store because a rebuildable index is damaged strands
+        // the user's memories behind an index we can regenerate in seconds --
+        // and that is exactly what happened in the field: a store with 2,926
+        // intact memories became unopenable over one corrupt fts5 blob.
+        //
+        // So: rebuild and re-check. Only if the rebuild fails, or the re-check
+        // still fails, is this real corruption worth refusing over. This
+        // deliberately mirrors the CASCADE-orphan repair below -- repair derived
+        // state, fail loudly on genuine damage.
+        //
+        // Writer phases only. The runtime reader must never attempt a write.
+        let repairable_phase = phase == "pre-migration" || phase == "post-migration";
+        let quick_ok =
+            |rows: &[String]| rows.len() == 1 && rows.first().map(String::as_str) == Some("ok");
+        if !quick_ok(&quick_rows) && repairable_phase {
+            let fts_tables = Self::fts5_table_names(conn)?;
+            if Self::quick_check_failure_is_only_fts5(&quick_rows, &fts_tables) {
+                let detail = quick_rows.join("; ");
+                let mut rebuilt = Vec::new();
+                for table in &fts_tables {
+                    // Identifier is read back from sqlite_master, not user input.
+                    let quoted = table.replace('"', "\"\"");
+                    match conn.execute_batch(&format!(
+                        "INSERT INTO \"{quoted}\"(\"{quoted}\") VALUES('rebuild');"
+                    )) {
+                        Ok(()) => rebuilt.push(table.clone()),
+                        Err(error) => {
+                            return Err(StorageError::Init(format!(
+                                "SQLite {phase} quick_check failed ({detail}) and rebuilding \
+                                 FTS index '{table}' also failed: {error}"
+                            )));
+                        }
+                    }
+                }
+                quick_rows = Self::quick_check_rows(conn)?;
+                if quick_ok(&quick_rows) {
+                    tracing::warn!(
+                        phase,
+                        rebuilt = ?rebuilt,
+                        detail,
+                        "rebuilt corrupt FTS index from its content table; store opened normally"
+                    );
+                }
             }
         }
+
         let quick_check = quick_rows.join("; ");
-        if quick_rows.len() != 1 || quick_rows.first().map(String::as_str) != Some("ok") {
+        if !quick_ok(&quick_rows) {
             return Err(StorageError::Init(format!(
                 "SQLite {phase} quick_check failed: {quick_check}"
             )));
@@ -1410,6 +1505,8 @@ impl SqliteMemoryStore {
             embedding_service,
             #[cfg(feature = "vector-search")]
             vector_index,
+            #[cfg(feature = "vector-search")]
+            last_seen_data_version: Mutex::new(-1),
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
             query_cache,
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -4258,7 +4355,6 @@ impl SqliteMemoryStore {
     /// Significantly reduces retrieval strength so better alternatives surface
     /// Does NOT delete - the memory stays for reference but ranks lower
     pub fn demote_memory(&self, id: &str) -> Result<KnowledgeNode> {
-
         // Strong penalty: -0.3 retrieval, -0.15 retention, halve stability
         {
             let writer = self
@@ -4709,6 +4805,7 @@ impl SqliteMemoryStore {
             )
             .optional()?;
 
+        #[cfg(feature = "embeddings")]
         let active_embedding_model = active_profile.as_ref().and_then(|active| {
             reader
                 .query_row(
@@ -4719,7 +4816,7 @@ impl SqliteMemoryStore {
                 .ok()
         });
         #[cfg(not(feature = "embeddings"))]
-        let active_embedding_model = None;
+        let active_embedding_model: Option<String> = None;
 
         #[cfg(feature = "embeddings")]
         let (nodes_with_active_embeddings, nodes_with_mismatched_embeddings) = {
@@ -6430,6 +6527,114 @@ impl SqliteMemoryStore {
         }
     }
 
+    /// Bring the in-process vector index up to date with vectors written by OTHER
+    /// processes since this one last looked.
+    ///
+    /// THE BUG THIS FIXES (#181). The HNSW index is process-local: it is built once
+    /// at startup from `embedding_profile_vectors` and thereafter only ever appended
+    /// to by THIS process's own ingests. A second MCP server writing to the same
+    /// SQLite file is therefore invisible to it. In a normal setup -- a desktop
+    /// client, an editor integration, a CLI and a dashboard all pointed at one store
+    /// -- every long-lived process is semantically blind to everything its peers have
+    /// written since it booted. The consequences are silent: the prediction-error
+    /// gate sees no similar candidate and creates a duplicate instead of reinforcing,
+    /// and recall returns an incomplete answer with no indication anything is missing.
+    /// The FTS5 leg reads SQLite directly and is unaffected, which is exactly why the
+    /// failure is partial and hard to notice.
+    ///
+    /// THE SIGNAL. `PRAGMA data_version` is incremented on a connection whenever a
+    /// DIFFERENT connection commits. Reading it is a single pragma with no table
+    /// access, so this check is affordable on every query, and when nothing has
+    /// changed it costs one integer comparison.
+    ///
+    /// LOCK DISCIPLINE. This deliberately acquires the reader lock and the index lock
+    /// SEQUENTIALLY and never holds both at once: read the version, drop; read the
+    /// missing rows, drop; then take the index and add. `semantic_search_raw` holds
+    /// only the index lock, so no ordering cycle exists and this cannot deadlock
+    /// against it.
+    ///
+    /// FAILS OPEN. A refresh problem must degrade to a possibly-stale index, never
+    /// break the query -- returning an error here would turn a peer's write into an
+    /// outage. Returns the number of vectors added.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn refresh_vector_index_if_stale(&self) -> usize {
+        let Some(index_mutex) = self.vector_index.as_ref() else {
+            return 0;
+        };
+
+        // --- reader lock: has anyone else committed? ---
+        let current_version: i64 = {
+            let Ok(reader) = self.reader.lock() else {
+                return 0;
+            };
+            match reader.query_row("PRAGMA data_version", [], |row| row.get(0)) {
+                Ok(v) => v,
+                Err(_) => return 0,
+            }
+        };
+        {
+            let Ok(mut seen) = self.last_seen_data_version.lock() else {
+                return 0;
+            };
+            if *seen == current_version {
+                return 0; // nothing has changed since we last looked
+            }
+            *seen = current_version;
+        }
+
+        let Ok(Some(active)) = self.active_embedding_profile() else {
+            return 0;
+        };
+
+        // --- reader lock: which vectors exist for the active profile? ---
+        let rows: Vec<(String, Vec<u8>)> = {
+            let Ok(reader) = self.reader.lock() else {
+                return 0;
+            };
+            let Ok(mut stmt) = reader.prepare(
+                "SELECT node_id, embedding FROM embedding_profile_vectors WHERE profile_id = ?1",
+            ) else {
+                return 0;
+            };
+            let Ok(mapped) = stmt.query_map(params![active.profile_id.as_str()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            }) else {
+                return 0;
+            };
+            mapped.filter_map(|r| r.ok()).collect()
+        };
+
+        // --- index lock: add only what we do not already have ---
+        let Ok(mut index) = index_mutex.lock() else {
+            return 0;
+        };
+        let mut added = 0usize;
+        for (node_id, blob) in rows {
+            if index.contains(&node_id) {
+                continue;
+            }
+            // Same decoder the startup index builder uses, so a vector added here
+            // is byte-identical to one added by a full rebuild.
+            let Some(embedding) = Embedding::from_bytes(&blob) else {
+                continue; // unreadable vector: skip it, never fail the query
+            };
+            if embedding.dimensions != index.dimensions() {
+                continue; // wrong profile/dimension: not ours to add
+            }
+            if index.add(&node_id, &embedding.vector).is_ok() {
+                added += 1;
+            }
+        }
+        if added > 0 {
+            tracing::debug!(
+                added,
+                data_version = current_version,
+                "refreshed vector index with memories written by another process"
+            );
+        }
+        added
+    }
+
     /// Semantic search returning scores
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn semantic_search_raw(&self, query: &str, limit: i32) -> Result<Vec<(String, f32)>> {
@@ -6464,6 +6669,12 @@ impl SqliteMemoryStore {
             }
             _ => self.get_query_embedding(query)?,
         };
+
+        // Pick up anything a peer process wrote since we last searched (#181).
+        // Cheap when nothing changed: one PRAGMA and an integer comparison. Runs
+        // BEFORE the index lock is taken, and takes its own locks sequentially,
+        // so it cannot deadlock against the search below.
+        self.refresh_vector_index_if_stale();
 
         let index = self.vector_index.as_ref().unwrap();
         let index = index
@@ -18903,6 +19114,61 @@ mod tests {
     /// at 3.0, and both fed the same combined_score: measured on a 202-document
     /// corpus, a note citing a UUID three times scored 27.5 against the exact
     /// match's 3.0. That inverted the documented exact-lookup guarantee.
+    /// A corrupt FTS index must NOT strand the user's memories. `knowledge_fts`
+    /// is declared `content='knowledge_nodes'`, so it is derived state and is
+    /// always reconstructible. This reproduces the field failure: a store with
+    /// intact memories became unopenable because one fts5 blob was damaged.
+    #[test]
+    fn corrupt_fts_index_is_rebuilt_instead_of_bricking_the_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("vestige.db");
+
+        // Seed a store and close it cleanly.
+        {
+            let storage = Storage::new(Some(path.clone())).expect("open");
+            for i in 0..5 {
+                storage
+                    .ingest(IngestInput {
+                        content: format!("memory number {i} about deployment"),
+                        node_type: "fact".to_string(),
+                        ..Default::default()
+                    })
+                    .expect("ingest");
+            }
+        }
+
+        // Corrupt the FTS index the way an interrupted rebuild does.
+        {
+            let conn = Connection::open(&path).expect("raw open");
+            conn.execute_batch(
+                "UPDATE knowledge_fts_data SET block = randomblob(200) \
+                 WHERE id = (SELECT id FROM knowledge_fts_data WHERE id > 1 LIMIT 1);",
+            )
+            .expect("corrupt");
+            let corrupt = conn
+                .execute_batch(
+                    "INSERT INTO knowledge_fts(knowledge_fts) VALUES('integrity-check');",
+                )
+                .is_err();
+            assert!(corrupt, "the fixture must actually corrupt the index");
+        }
+
+        // Reopening must succeed by rebuilding, not fail.
+        let storage = Storage::new(Some(path.clone()))
+            .expect("a corrupt DERIVED index must not prevent opening the store");
+        let all = storage.get_all_nodes(100, 0).expect("list nodes");
+        assert_eq!(all.len(), 5, "every memory must survive the rebuild");
+
+        // And the rebuilt index must actually be usable again.
+        let hits = storage
+            .concrete_search_filtered("deployment", 10, None, None)
+            .expect("keyword search after rebuild");
+        assert!(
+            !hits.is_empty(),
+            "the rebuilt index must find the seeded memories"
+        );
+    }
+
     #[test]
     fn test_concrete_search_exact_match_beats_a_doc_that_only_cites_it() {
         let storage = create_test_storage();
@@ -18938,7 +19204,9 @@ mod tests {
             })
             .unwrap();
 
-        let results = storage.concrete_search_filtered(needle, 10, None, None).unwrap();
+        let results = storage
+            .concrete_search_filtered(needle, 10, None, None)
+            .unwrap();
         assert!(!results.is_empty(), "exact lookup must return something");
         assert_eq!(
             results[0].node.id, target.id,
@@ -20858,7 +21126,17 @@ mod tests {
         assert!(!node.is_currently_valid());
 
         // Reverse order on a fresh store: the newer dated claim arriving
-        // second keeps the normal gate behavior (reinforce, no auto-close).
+        // second must NOT auto-close anything. That is this half's subject.
+        //
+        // It previously also asserted `reinforce`, which encoded a defect. The
+        // pair here ("version is 4.2" against "version is 5.0") is a mutually
+        // exclusive VALUE conflict, the same shape as PostgreSQL 14 -> 16, and
+        // the write-path detector could not see it: short numeric tokens were
+        // dropped by the substantive-word length filter, so the two texts
+        // looked identical and the gate reinforced on similarity alone. The
+        // effect was that telling Vestige "the version is now 5.0" discarded
+        // that update and made it believe 4.2 MORE strongly. The gate now
+        // keeps both claims. See advanced::contradiction.
         let dir = tempdir().unwrap();
         let storage = storage_with_marker_gate_runtime(&dir);
         let target = storage
@@ -20875,14 +21153,27 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(result.decision, "reinforce");
-        assert_eq!(result.node.id, target.id);
-        assert!(result.auto_closed_until.is_none());
-        let node = storage.get_node(&target.id).unwrap().unwrap();
         assert_eq!(
-            node.valid_from.map(|value| value.to_rfc3339()),
-            Some(newer_from.to_rfc3339())
+            result.decision, "create",
+            "a version change is a value conflict, not a reinforcement"
         );
+        assert_ne!(
+            result.node.id, target.id,
+            "the superseded 4.2 claim must not be overwritten in place"
+        );
+        assert!(
+            result.auto_closed_until.is_none(),
+            "a newer dated claim arriving second closes nothing"
+        );
+        assert_eq!(
+            result.node.valid_from.map(|value| value.to_rfc3339()),
+            Some(newer_from.to_rfc3339()),
+            "the new node carries its own validity"
+        );
+        // The older claim survives intact, still open, still retrievable.
+        let previous = storage.get_node(&target.id).unwrap().unwrap();
+        assert!(previous.valid_until.is_none());
+        assert!(previous.content.contains("4.2"));
     }
 
     #[test]

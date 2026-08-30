@@ -1,0 +1,18 @@
+{
+  "_comment": "Pinned upstream dataset revision. Do not edit by hand; regenerate with fetch_dataset.py --repin.",
+  "name": "MemConflict",
+  "paper": "arXiv:2605.20926",
+  "paper_url": "https://arxiv.org/abs/2605.20926",
+  "repo": "https://github.com/TaoZhen1110/MemConflict",
+  "revision": "ec51d5d36e87f7665d1337f3a88cbde95fc2a964",
+  "files": {
+    "Data/Step4_4.jsonl": {
+      "sha256": "8ef9ec8589eccb86f63ab3a819a9180217405351a8d5846866721ea74babe092",
+      "bytes": 39671712,
+      "instances": 30,
+      "questions": 3750
+    }
+  },
+  "license": "upstream repository declares no LICENSE file as of this revision; data is fetched at run time and is NOT vendored into this repo",
+  "retrieved_utc": "2026-08-30"
+}

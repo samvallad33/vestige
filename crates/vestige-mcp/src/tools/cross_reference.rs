@@ -371,84 +371,26 @@ fn generate_reasoning_chain(
 // (or vice versa). Previously we had wildcard entries like ("not ", "") that
 // fired on any asymmetric presence of "not " — matched millions of innocent
 // sentences ("FSRS-6 is not yet..." vs anything without the word "not").
-const NEGATION_PAIRS: &[(&str, &str)] = &[
-    ("don't", "do"),
-    ("never", "always"),
-    ("avoid", "use"),
-    ("wrong", "right"),
-    ("incorrect", "correct"),
-    ("deprecated", "recommended"),
-    ("outdated", "current"),
-    ("removed", "added"),
-    ("disabled", "enabled"),
-];
-
-const CORRECTION_SIGNALS: &[&str] = &[
-    "actually",
-    "correction",
-    "update:",
-    "updated:",
-    "fixed",
-    "was wrong",
-    "changed to",
-    "now uses",
-    "replaced by",
-    "superseded",
-    "no longer",
-    "instead of",
-    "switched to",
-    "migrated to",
-];
-
+/// Do two memories appear to assert incompatible things?
+///
+/// Thin wrapper over the shared detector in `vestige_core::advanced::contradiction`,
+/// which the WRITE path (`PredictionErrorGate::detect_contradiction`) now uses
+/// as well. These were two separate implementations of the same concept and
+/// they drifted: this side grew negation symmetry, antonym pairs and a
+/// divergence test while the write side kept a single directional negation
+/// scan. Retrieval-side contradiction protection can only protect a memory
+/// that survived ingestion, so the weaker copy guarding the door decided the
+/// outcome. One implementation now, with the only real difference between the
+/// call sites named by `SubjectIdentity`.
+///
+/// Retrieval infers subject identity from the text alone, because a candidate
+/// pair here is drawn from thousands of unrelated memories.
 pub(crate) fn appears_contradictory(a: &str, b: &str) -> bool {
-    let a_lower = a.to_lowercase();
-    let b_lower = b.to_lowercase();
-
-    let a_words: std::collections::HashSet<&str> =
-        a_lower.split_whitespace().filter(|w| w.len() > 3).collect();
-    let b_words: std::collections::HashSet<&str> =
-        b_lower.split_whitespace().filter(|w| w.len() > 3).collect();
-    let shared_words = a_words.intersection(&b_words).count();
-
-    // Require ≥4 substantive shared words — two memories must be about the
-    // same thing, not merely brushing the same domain. Previous floor of 2
-    // flagged "FSRS-6 upgrade research sources" and "ARC-AGI-3 FSRS-6 v11
-    // fixes" as contradictions of "Vestige uses FSRS-6 with 21 parameters"
-    // because they all mention "FSRS-6" — different applications, same word.
-    if shared_words < 4 {
-        return false;
-    }
-
-    // Negation: one memory carries a negative stance ("don't", "never",
-    // "avoid", etc.) and the other doesn't. Combined with the shared_words
-    // ≥ 4 gate above, this means "same subject, opposite position." The
-    // wildcard `("not ", "")` and `("no longer", "")` entries were dropped
-    // from NEGATION_PAIRS specifically because "not" / "no longer" are too
-    // common in natural prose to indicate a stance flip without other
-    // signals.
-    for (neg, _opp) in NEGATION_PAIRS {
-        if (a_lower.contains(neg) && !b_lower.contains(neg))
-            || (b_lower.contains(neg) && !a_lower.contains(neg))
-        {
-            return true;
-        }
-    }
-    // Correction signal: require ≥6 shared substantive words so we know the
-    // two memories are on the SAME subject, and require the signal to appear
-    // in exactly one of them (asymmetric — the memory with the correction
-    // marker is the one superseding the other). Previously fired on ANY
-    // signal in EITHER memory, which caught every bug-fix memory against
-    // every related memory as a pairwise contradiction.
-    if shared_words >= 6 {
-        for signal in CORRECTION_SIGNALS {
-            let in_a = a_lower.contains(signal);
-            let in_b = b_lower.contains(signal);
-            if in_a != in_b {
-                return true;
-            }
-        }
-    }
-    false
+    vestige_core::advanced::contradiction::appears_contradictory(
+        a,
+        b,
+        vestige_core::advanced::contradiction::SubjectIdentity::FromTextOverlap,
+    )
 }
 
 /// What fraction of the QUERY's substantive words appear in `content`?
@@ -1208,6 +1150,83 @@ fn preview_text(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{query_coverage, topic_overlap};
+
+    /// The AIMO3 shape: two memories asserting OPPOSITE DIRECTIONS about the same
+    /// subject, with no negation word in either. The negation scan structurally
+    /// cannot see this, and it is the exact case where acting on the wrong side
+    /// suppresses the memory that would have corrected it.
+    #[test]
+    fn opposite_direction_claims_are_contradictions_without_any_negation() {
+        let hurts = "Prompt diversity monotonically hurts AIMO3 accuracy at temperature \
+                     0.6 and above on GPT-OSS-120B during the competition run";
+        let improves = "Prompt diversity monotonically improves AIMO3 accuracy at temperature \
+                        0.6 and above on GPT-OSS-120B during the competition run";
+        assert!(
+            super::appears_contradictory(hurts, improves),
+            "opposite-direction claims about the same subject must be contradictory"
+        );
+
+        // Neither memory contains a negation word, which is why the older
+        // negation-asymmetry scan missed this entirely.
+        for text in [hurts, improves] {
+            let t = text.to_lowercase();
+            assert!(!t.contains("never") && !t.contains("don't") && !t.contains("avoid"));
+        }
+    }
+
+    /// Mutually exclusive values for the same attribute -- the shape MemConflict
+    /// measures and the one both other detection paths structurally miss. Verified
+    /// against the live server: both memories were retrievable via lookup while
+    /// recall(mode="contradictions") returned ZERO pairs.
+    #[test]
+    fn same_attribute_different_value_is_a_contradiction() {
+        let bachelor = "Priya holds a Bachelor degree in computer science from Leeds University";
+        let master = "Priya holds a Master degree in computer science from Leeds University";
+        assert!(
+            super::appears_contradictory(bachelor, master),
+            "two incompatible values for the same attribute must be contradictory"
+        );
+
+        // No negation and no antonym in either -- this is why the other two paths
+        // cannot see it.
+        for t in [bachelor, master] {
+            let l = t.to_lowercase();
+            assert!(!l.contains("never") && !l.contains("not ") && !l.contains("hurts"));
+        }
+    }
+
+    /// Elaboration is not contradiction. A memory that ADDS detail to another must
+    /// never be flagged, or every refinement becomes a conflict.
+    #[test]
+    fn elaboration_is_not_flagged_as_contradiction() {
+        let base = "Priya works in the Leeds office on the payments platform team";
+        let more =
+            "Priya works in the Leeds office on the payments platform team and mentors interns";
+        assert!(
+            !super::appears_contradictory(base, more),
+            "a superset elaboration must not be a contradiction"
+        );
+    }
+
+    /// The antonym test must not fire on agreement, or on two memories that merely
+    /// share a domain. Both sides must be present in OPPOSITE memories.
+    #[test]
+    fn antonym_detection_does_not_fire_on_agreement_or_unrelated_text() {
+        let a = "Prompt diversity monotonically hurts AIMO3 accuracy at temperature \
+                 0.6 and above on GPT-OSS-120B";
+        let same = "Prompt diversity monotonically hurts AIMO3 accuracy at temperature \
+                    0.6 and above on GPT-OSS-120B, confirmed twice";
+        assert!(
+            !super::appears_contradictory(a, same),
+            "two memories agreeing must not be flagged as contradictory"
+        );
+
+        let unrelated = "The dashboard accent colour improves legibility in dark mode";
+        assert!(
+            !super::appears_contradictory(a, unrelated),
+            "different subjects must not be flagged merely because antonyms appear"
+        );
+    }
 
     /// STAGE 5b's claim-vs-memory conflict gate was built on symmetric Jaccard,
     /// which divides by the UNION. A short claim can therefore never clear a 0.4

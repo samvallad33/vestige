@@ -154,6 +154,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "FTS5: replace the ascii tokenizer with unicode61 so typographic punctuation and accents stop swallowing adjacent words",
         up: MIGRATION_V30_UP,
     },
+    Migration {
+        version: 31,
+        description: "Self-verifying code memory: content-hashed source anchors so a code memory can be checked against the code it describes instead of being served with false confidence",
+        up: MIGRATION_V31_UP,
+    },
 ];
 
 /// A database migration
@@ -1997,6 +2002,58 @@ END;
 UPDATE schema_version SET version = 30, applied_at = datetime('now');
 "#;
 
+/// V31: Self-verifying code memory anchors.
+///
+/// A code memory used to anchor to source with nothing but a file path printed
+/// into its markdown body. Nothing could tell whether the code it describes
+/// still existed, so a rotted memory was retrieved with exactly the same
+/// confidence as a correct one.
+///
+/// This table stores, per memory, the information needed to *re-check* the
+/// claim later: the path, the optional symbol name, the capture-time line span
+/// (a hint for reporting only, never the identity), and a content hash of the
+/// normalized anchored span. Verification re-hashes the file today and compares.
+///
+/// Migration safety is the whole point of the nullable columns:
+///
+/// * Every existing code memory simply has **no row here**. Absence means
+///   "unverifiable", never "stale" - an old, correct memory must not be
+///   accused of being wrong.
+/// * `content_hash`, `span_lines`, `symbol`, `start_line` and `end_line` are
+///   all nullable. A path-only anchor (no readable span at capture time) is
+///   still recorded, and still degrades to "unverifiable" rather than "stale".
+/// * `node_id` cascades on delete so `purge_node`'s
+///   `DELETE FROM knowledge_nodes` (sqlite.rs) removes the anchored path and
+///   hash with the memory. `PRAGMA foreign_keys = ON` is asserted on both
+///   connections at open time, so the cascade is enforced, not decorative.
+const MIGRATION_V31_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS code_memory_anchors (
+    id                TEXT PRIMARY KEY,
+    node_id           TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+    -- Repository-relative path as recorded by the caller.
+    file_path         TEXT NOT NULL,
+    -- Symbol the memory is about. NULL for a path-only anchor.
+    symbol            TEXT,
+    symbol_kind       TEXT,
+    -- Capture-time position. Advisory only: relocation is decided by content
+    -- hash, so a shifted line number never by itself marks a memory stale.
+    start_line        INTEGER,
+    end_line          INTEGER,
+    -- Number of normalized (blank-stripped, trimmed) lines the hash covers.
+    span_lines        INTEGER,
+    -- blake3 of the normalized anchored span. NULL => unverifiable, not stale.
+    content_hash      TEXT,
+    captured_at       TEXT NOT NULL,
+    last_verified_at  TEXT,
+    last_status       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_code_anchors_node ON code_memory_anchors(node_id);
+CREATE INDEX IF NOT EXISTS idx_code_anchors_path ON code_memory_anchors(file_path);
+
+UPDATE schema_version SET version = 31, applied_at = datetime('now');
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2499,8 +2556,8 @@ mod tests {
 
         let applied = apply_migrations(&conn).expect("V20+ apply on a V19 database");
         assert_eq!(
-            applied, 11,
-            "V20 through V30 should apply on a V19 database"
+            applied, 12,
+            "V20 through V31 should apply on a V19 database"
         );
         assert_eq!(
             get_current_version(&conn).expect("version"),
@@ -2513,16 +2570,16 @@ mod tests {
         );
     }
 
-    /// Fresh database: all migrations apply cleanly through V30 and the cursor
+    /// Fresh database: all migrations apply cleanly through V31 and the cursor
     /// table exists and is empty (nothing to clear, no error).
     #[test]
     fn v20_applies_cleanly_on_a_fresh_database() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("fresh migrations succeed through V30");
+        apply_migrations(&conn).expect("fresh migrations succeed through V31");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            30,
-            "latest migration must be V30"
+            31,
+            "latest migration must be V31"
         );
         assert_eq!(cursor_row_count(&conn), 0);
     }
@@ -2573,11 +2630,11 @@ mod tests {
         )
         .expect("seed legacy vector");
 
-        apply_migrations(&conn).expect("apply V28 through V30");
+        apply_migrations(&conn).expect("apply V28 through V31");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            30,
-            "V28 profile migration is followed by the V29 scope index and the V30 FTS rebuild"
+            31,
+            "V28 profile migration is followed by the V29 scope index, the V30 FTS rebuild, and the V31 code anchors"
         );
         let copied: i64 = conn
             .query_row(
@@ -2777,7 +2834,7 @@ mod tests {
         )
         .expect("mark V25 fixture current");
 
-        assert_eq!(apply_migrations(&conn).expect("apply V26 through V30"), 5);
+        assert_eq!(apply_migrations(&conn).expect("apply V26 through V31"), 6);
         let columns: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('receipt_envelopes')

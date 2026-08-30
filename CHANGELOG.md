@@ -7,6 +7,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-08-30 — "Corrections stick"
+
+Telling Vestige it was wrong now works.
+
+Until this release, saving a correction could do the opposite of what you
+asked. A correction is worded almost identically to the thing it corrects, so
+the write path read it as a repeat, threw it away, and made the wrong memory
+stronger. This release fixes that, adds a benchmark so retrieval claims are
+measured instead of argued, and picks up a SQLite security fix.
+
+### Fixed — A correction no longer strengthens the claim it corrects
+
+Contradiction detection existed twice in the codebase, and the two copies had
+drifted apart.
+
+The retrieval side could spot a conflict properly. The write side could not.
+It only noticed a conflict when the incoming memory carried the negative word,
+and it had no idea what to do with opposites or with two different values for
+the same fact.
+
+The write side is the one that decides whether your memory gets stored at all,
+so the weaker copy was the one guarding the door. Protecting a memory during
+search does not help if it was already discarded on the way in.
+
+Measured against the real binary, every one of these was read as agreement,
+and each one reinforced the claim it contradicted:
+
+| You saved | Over the stored | Similarity |
+|---|---|---|
+| "Always use prompt diversity" | "Never use prompt diversity" | 0.965 |
+| "prompt diversity improves accuracy" | "prompt diversity hurts accuracy" | 0.962 |
+| "runs PostgreSQL 16" | "runs PostgreSQL 14" | 0.940 |
+| "holds a Master degree" | "holds a Bachelor degree" | 0.976 |
+
+All four sit above the 0.92 near-identical threshold, which is why they
+short-circuited. Saving the same two in the opposite order worked fine, so
+this was about which one arrived second, not about the threshold being wrong.
+
+There is one detector now. Both paths use it, so they cannot drift again.
+
+The shared detector itself then failed its pre-release audit and was tightened
+before tagging. Measured against a real 2,929-memory store, its negation scan
+fired on the mere presence of a word like "never" or "removed" in one of two
+long notes — flagging 83% of same-subject pairs as contradictions and turning
+84% of near-identical re-saves into duplicates instead of reinforcements. A
+negation word now only counts when the OTHER text carries its paired positive
+term ("never" against "always"), matched as whole words, and a correction
+marker ("fixed", "actually") only counts when token overlap shows the two
+texts genuinely share a subject. On the same store that brings the flag rate
+from 83% to 13%, while every correction shape in the table above is still
+detected in both orders.
+
+Version numbers needed a further fix. Words of three characters or fewer were
+being dropped before comparison, so "version is 4.2" and "version is 5.0"
+looked like identical text with the only meaningful difference thrown away.
+
+### Fixed — A corrupt search index no longer strands your memories
+
+Startup treated a damaged full-text index as fatal and refused to open the
+database. That index is derived data. It can be rebuilt from the memories
+themselves, and it now is. Real corruption elsewhere still fails loudly.
+
+### Fixed — Vestige sees writes from your other apps (#181)
+
+If you run Claude Desktop and the CLI against the same store, one process
+could not find memories the other had just written until you restarted it.
+The in-memory vector index is now refreshed when a peer process writes.
+
+### Fixed — A capital letter no longer blanks a tag search
+
+`tag_prefix` compared case-sensitively while everything around it did not, so
+searching `Reflection` missed a memory tagged `reflection`.
+
+### Fixed — Memories that disagree are no longer suppressed for disagreeing
+
+Search applies a penalty to results that compete with each other. A memory
+contradicting another counted as competition, so the dissenting view got
+pushed down exactly when you most needed to see it. Contradiction pairs are
+now exempt, and the response says when this happened.
+
+### Added — Code memories know when the code moved (schema V31)
+
+A memory about a function can now tell you whether that function still looks
+the way it did when you saved it. Three layers are checked in order: the file
+path, the symbol, then a hash of the code itself.
+
+### Added — `server/discover`, for MCP revision 2026-07-28
+
+The current MCP revision requires it. `tools/list` is now sorted and
+cacheable, so clients stop refetching it.
+
+### Added — MemConflict benchmark harness
+
+Retrieval changes can now be measured on a public benchmark instead of
+argued about. Runs four arms, including a no-memory control and a BM25
+control, because a memory system that cannot beat plain keyword search is
+not earning its complexity.
+
+Read the per-bucket sample size before quoting a number from it. One of its
+three categories has three questions in it, and the harness warns you.
+
+### Changed — Balanced search considers more candidates
+
+The reranker's own configuration asks for 50 candidates and was being handed
+30. It now gets 50. Measured on MemConflict this improved every category with
+a real sample size, and costs about 38% more time on a 2,900-memory store.
+For the record: the three-question category went down (1.0 to 0.667, one
+question), and at 98 questions total the improvement is directionally
+consistent rather than statistically settled — the depth-vs-recall curve from
+T2-RAGBench is what carries the direction.
+
+`precise` mode is unchanged. The same change cost it 103% and speed is that
+mode's whole purpose.
+
+### Security
+
+SQLite 3.51.1 to 3.53.2, covering CVE-2026-11822, a memory corruption bug in
+FTS5.
+
+### Testing
+
+A new end-to-end suite spawns the real binary and talks to it over stdio the
+way a client does, covering protocol framing, migrations under a second live
+process, and the embedding runtime. It is what caught the correction bug
+above.
+
 ## [2.4.1] - 2026-08-30 — "Linux starts"
 
 A packaging fix. v2.4.0 and every release before it shipped a Linux binary
