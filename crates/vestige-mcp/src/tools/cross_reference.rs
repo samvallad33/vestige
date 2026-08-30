@@ -383,6 +383,35 @@ const NEGATION_PAIRS: &[(&str, &str)] = &[
     ("disabled", "enabled"),
 ];
 
+/// Directional antonym pairs, used ONLY with the strict both-sides test below.
+///
+/// These are deliberately NOT in NEGATION_PAIRS. That list is scanned for the
+/// asymmetric PRESENCE of its first element, which is safe for explicit negations
+/// ("never", "don't") but would over-fire badly on ordinary evaluative words:
+/// plenty of innocent memories say something "hurts" or is "slower" without
+/// contradicting anything.
+///
+/// Requiring one memory to contain one side and the other memory to contain the
+/// other side is a far stricter test, and it catches the class the negation scan
+/// structurally cannot: two memories asserting OPPOSITE DIRECTIONS about the same
+/// subject, with no negation word in either. That is the shape of the failure
+/// this system exists to prevent -- "prompt diversity HURTS accuracy" against
+/// "prompt diversity IMPROVES accuracy" contains no negation at all.
+const ANTONYM_PAIRS: &[(&str, &str)] = &[
+    ("hurts", "improves"),
+    ("hurt", "improved"),
+    ("degrades", "enhances"),
+    ("decreases", "increases"),
+    ("reduces", "raises"),
+    ("worse", "better"),
+    ("slower", "faster"),
+    ("fails", "succeeds"),
+    ("breaks", "fixes"),
+    ("unsafe", "safe"),
+    ("unstable", "stable"),
+    ("unsupported", "supported"),
+];
+
 const CORRECTION_SIGNALS: &[&str] = &[
     "actually",
     "correction",
@@ -433,6 +462,83 @@ pub(crate) fn appears_contradictory(a: &str, b: &str) -> bool {
             return true;
         }
     }
+
+    // Opposite-direction claims with NO negation word in either memory.
+    //
+    // The scan above keys off the asymmetric presence of an explicit negation,
+    // so it cannot see "X hurts accuracy" against "X improves accuracy" -- there
+    // is nothing negated in either. That is precisely the shape of the real-world
+    // failure this guard exists for: an authoritative finding and a fresh claim
+    // asserting opposite directions about the same subject.
+    //
+    // Both sides are required to be present, in opposite memories. That is much
+    // stricter than the asymmetric-presence test and is why these words can be
+    // checked at all: on their own, "hurts" or "slower" appear in plenty of
+    // memories that contradict nothing. Combined with the >= 4 shared substantive
+    // words gate above, this means "same subject, opposite direction".
+    for (neg, opp) in ANTONYM_PAIRS {
+        let a_neg = a_lower.contains(neg);
+        let b_neg = b_lower.contains(neg);
+        let a_opp = a_lower.contains(opp);
+        let b_opp = b_lower.contains(opp);
+        if (a_neg && b_opp && !b_neg && !a_opp) || (b_neg && a_opp && !a_neg && !b_opp) {
+            return true;
+        }
+    }
+    // Mutually exclusive VALUES for the same attribute.
+    //
+    // This is the most common real-world contradiction and neither test above can
+    // see it: "Priya holds a Bachelor degree in computer science from Leeds"
+    // against "Priya holds a Master of Science degree in computer science from
+    // Leeds" contains no negation and no antonym, yet both cannot be true. It is
+    // also the shape MemConflict is built to measure, where every published system
+    // scores poorly.
+    //
+    // The distinguishing signal is DIVERGENCE versus ELABORATION. If the two
+    // memories overlap heavily but NEITHER's substantive vocabulary is a subset of
+    // the other's, they are asserting different things in the same slot. If one IS
+    // a subset of the other, it is an elaboration ("works in Leeds" versus "works
+    // in Leeds and London") and must not be flagged.
+    //
+    // Requires a high overlap floor so this only fires on memories that are
+    // demonstrably about the same subject, and requires each side to contribute at
+    // least one distinctive term so trivial rewordings do not qualify.
+    {
+        // Strip surrounding punctuation before comparing. Without this, "X" and
+        // "X," are distinct tokens, so a strict elaboration (A plus two extra
+        // words) looks like mutual divergence and gets flagged as a conflict.
+        // Caught by antonym_detection_does_not_fire_on_agreement_or_unrelated_text.
+        let norm = |set: &std::collections::HashSet<&str>| -> std::collections::HashSet<String> {
+            set.iter()
+                .map(|w| {
+                    w.trim_matches(|c: char| !c.is_alphanumeric())
+                        .to_string()
+                })
+                .filter(|w| w.len() > 3)
+                .collect()
+        };
+        let a_words = norm(&a_words);
+        let b_words = norm(&b_words);
+        let shared = a_words.intersection(&b_words).count();
+        let union = a_words.union(&b_words).count();
+        let overlap = if union == 0 {
+            0.0
+        } else {
+            shared as f32 / union as f32
+        };
+        let a_only = a_words.difference(&b_words).count();
+        let b_only = b_words.difference(&a_words).count();
+        // Both sides distinctive => divergence, not elaboration.
+        let diverges = a_only > 0 && b_only > 0;
+        // Keep the divergence small relative to the shared core: two memories that
+        // merely touch the same topic will diverge in many terms, whereas a
+        // same-attribute conflict differs in only a few.
+        let small_divergence = (a_only + b_only) <= shared;
+        if overlap >= 0.6 && diverges && small_divergence {
+            return true;
+        }
+    }
+
     // Correction signal: require ≥6 shared substantive words so we know the
     // two memories are on the SAME subject, and require the signal to appear
     // in exactly one of them (asymmetric — the memory with the correction
@@ -1208,6 +1314,82 @@ fn preview_text(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{query_coverage, topic_overlap};
+
+    /// The AIMO3 shape: two memories asserting OPPOSITE DIRECTIONS about the same
+    /// subject, with no negation word in either. The negation scan structurally
+    /// cannot see this, and it is the exact case where acting on the wrong side
+    /// suppresses the memory that would have corrected it.
+    #[test]
+    fn opposite_direction_claims_are_contradictions_without_any_negation() {
+        let hurts = "Prompt diversity monotonically hurts AIMO3 accuracy at temperature \
+                     0.6 and above on GPT-OSS-120B during the competition run";
+        let improves = "Prompt diversity monotonically improves AIMO3 accuracy at temperature \
+                        0.6 and above on GPT-OSS-120B during the competition run";
+        assert!(
+            super::appears_contradictory(hurts, improves),
+            "opposite-direction claims about the same subject must be contradictory"
+        );
+
+        // Neither memory contains a negation word, which is why the older
+        // negation-asymmetry scan missed this entirely.
+        for text in [hurts, improves] {
+            let t = text.to_lowercase();
+            assert!(!t.contains("never") && !t.contains("don't") && !t.contains("avoid"));
+        }
+    }
+
+    /// Mutually exclusive values for the same attribute -- the shape MemConflict
+    /// measures and the one both other detection paths structurally miss. Verified
+    /// against the live server: both memories were retrievable via lookup while
+    /// recall(mode="contradictions") returned ZERO pairs.
+    #[test]
+    fn same_attribute_different_value_is_a_contradiction() {
+        let bachelor = "Priya holds a Bachelor degree in computer science from Leeds University";
+        let master = "Priya holds a Master degree in computer science from Leeds University";
+        assert!(
+            super::appears_contradictory(bachelor, master),
+            "two incompatible values for the same attribute must be contradictory"
+        );
+
+        // No negation and no antonym in either -- this is why the other two paths
+        // cannot see it.
+        for t in [bachelor, master] {
+            let l = t.to_lowercase();
+            assert!(!l.contains("never") && !l.contains("not ") && !l.contains("hurts"));
+        }
+    }
+
+    /// Elaboration is not contradiction. A memory that ADDS detail to another must
+    /// never be flagged, or every refinement becomes a conflict.
+    #[test]
+    fn elaboration_is_not_flagged_as_contradiction() {
+        let base = "Priya works in the Leeds office on the payments platform team";
+        let more = "Priya works in the Leeds office on the payments platform team and mentors interns";
+        assert!(
+            !super::appears_contradictory(base, more),
+            "a superset elaboration must not be a contradiction"
+        );
+    }
+
+    /// The antonym test must not fire on agreement, or on two memories that merely
+    /// share a domain. Both sides must be present in OPPOSITE memories.
+    #[test]
+    fn antonym_detection_does_not_fire_on_agreement_or_unrelated_text() {
+        let a = "Prompt diversity monotonically hurts AIMO3 accuracy at temperature \
+                 0.6 and above on GPT-OSS-120B";
+        let same = "Prompt diversity monotonically hurts AIMO3 accuracy at temperature \
+                    0.6 and above on GPT-OSS-120B, confirmed twice";
+        assert!(
+            !super::appears_contradictory(a, same),
+            "two memories agreeing must not be flagged as contradictory"
+        );
+
+        let unrelated = "The dashboard accent colour improves legibility in dark mode";
+        assert!(
+            !super::appears_contradictory(a, unrelated),
+            "different subjects must not be flagged merely because antonyms appear"
+        );
+    }
 
     /// STAGE 5b's claim-vs-memory conflict gate was built on symmetric Jaccard,
     /// which divides by the UNION. A short claim can therefore never clear a 0.4
