@@ -108,7 +108,7 @@ impl Server {
     /// which makes any test of it load-dependent. See the note on
     /// [`contradictions_are_returned_intact_and_flagged_as_protected`].
     fn spawn(data_dir: &Path) -> Self {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_vestige-mcp"));
+        let mut command = Command::new(server_binary());
         command
             .env("VESTIGE_DATA_DIR", data_dir)
             .env("VESTIGE_DASHBOARD_ENABLED", "false")
@@ -439,6 +439,42 @@ impl Drop for Server {
 }
 
 /// A temporary Vestige data directory.
+/// A private copy of the server binary, made once per test process.
+///
+/// `CARGO_BIN_EXE_vestige-mcp` is the correct path and Cargo guarantees the
+/// binary is built before this test runs. It does NOT guarantee the file stays
+/// in place: under `cargo test --workspace` the binary at `target/<profile>/`
+/// can be relinked while these tests are already running, and a spawn landing
+/// in that window fails with a bare `NotFound` that reads like a missing
+/// build. Observed once in a full workspace run, never when this suite runs
+/// alone, which is exactly the signature of a race against the build directory
+/// rather than a defect in the product.
+///
+/// Copying once into this process's own temp directory removes the race
+/// instead of retrying around it, so a `NotFound` from here again would mean
+/// something genuinely wrong rather than a known flake.
+fn server_binary() -> &'static Path {
+    static BINARY: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    BINARY.get_or_init(|| {
+        let source = Path::new(env!("CARGO_BIN_EXE_vestige-mcp"));
+        // Leaked deliberately: this must outlive every test in the process, and
+        // the OS reclaims it when the run ends.
+        let dir = Box::leak(Box::new(
+            tempfile::tempdir().expect("temporary directory for the server binary"),
+        ));
+        let destination = dir.path().join("vestige-mcp");
+        std::fs::copy(source, &destination)
+            .unwrap_or_else(|error| panic!("copy {} for the test run: {error}", source.display()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755))
+                .expect("make the copied server executable");
+        }
+        destination
+    })
+}
+
 fn data_dir() -> tempfile::TempDir {
     tempfile::tempdir().expect("temporary Vestige data directory")
 }
