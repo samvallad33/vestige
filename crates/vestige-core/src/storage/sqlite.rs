@@ -1037,17 +1037,99 @@ impl SqliteMemoryStore {
         Ok(repaired)
     }
 
+    /// Run `PRAGMA quick_check` and return its rows.
+    fn quick_check_rows(conn: &Connection) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        let mut stmt = conn.prepare("PRAGMA quick_check")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Names of every FTS5 virtual table in the schema.
+    fn fts5_table_names(conn: &Connection) -> Result<Vec<String>> {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master \
+             WHERE type = 'table' AND sql LIKE '%USING fts5%'",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Is every failing quick_check row attributable to an FTS5 index we can
+    /// rebuild? A single row we cannot attribute means real damage, and the
+    /// caller must fail rather than paper over it.
+    fn quick_check_failure_is_only_fts5(rows: &[String], fts_tables: &[String]) -> bool {
+        if fts_tables.is_empty() {
+            return false;
+        }
+        rows.iter().filter(|r| r.as_str() != "ok").all(|r| {
+            let lower = r.to_lowercase();
+            lower.contains("fts5") && fts_tables.iter().any(|t| lower.contains(&t.to_lowercase()))
+        })
+    }
+
     fn run_integrity_checks(conn: &Connection, phase: &str) -> Result<SqliteIntegrityStatus> {
-        let mut quick_rows = Vec::new();
-        {
-            let mut stmt = conn.prepare("PRAGMA quick_check")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-            for row in rows {
-                quick_rows.push(row?);
+        let mut quick_rows = Self::quick_check_rows(conn)?;
+
+        // An FTS5 external-content index is DERIVED STATE. `knowledge_fts` is
+        // declared `content='knowledge_nodes'`, so every token in it is
+        // reconstructible from a table quick_check just verified. Refusing to
+        // open the whole store because a rebuildable index is damaged strands
+        // the user's memories behind an index we can regenerate in seconds --
+        // and that is exactly what happened in the field: a store with 2,926
+        // intact memories became unopenable over one corrupt fts5 blob.
+        //
+        // So: rebuild and re-check. Only if the rebuild fails, or the re-check
+        // still fails, is this real corruption worth refusing over. This
+        // deliberately mirrors the CASCADE-orphan repair below -- repair derived
+        // state, fail loudly on genuine damage.
+        //
+        // Writer phases only. The runtime reader must never attempt a write.
+        let repairable_phase = phase == "pre-migration" || phase == "post-migration";
+        let quick_ok = |rows: &[String]| {
+            rows.len() == 1 && rows.first().map(String::as_str) == Some("ok")
+        };
+        if !quick_ok(&quick_rows) && repairable_phase {
+            let fts_tables = Self::fts5_table_names(conn)?;
+            if Self::quick_check_failure_is_only_fts5(&quick_rows, &fts_tables) {
+                let detail = quick_rows.join("; ");
+                let mut rebuilt = Vec::new();
+                for table in &fts_tables {
+                    // Identifier is read back from sqlite_master, not user input.
+                    let quoted = table.replace('"', "\"\"");
+                    match conn.execute_batch(&format!(
+                        "INSERT INTO \"{quoted}\"(\"{quoted}\") VALUES('rebuild');"
+                    )) {
+                        Ok(()) => rebuilt.push(table.clone()),
+                        Err(error) => {
+                            return Err(StorageError::Init(format!(
+                                "SQLite {phase} quick_check failed ({detail}) and rebuilding \
+                                 FTS index '{table}' also failed: {error}"
+                            )));
+                        }
+                    }
+                }
+                quick_rows = Self::quick_check_rows(conn)?;
+                if quick_ok(&quick_rows) {
+                    tracing::warn!(
+                        phase,
+                        rebuilt = ?rebuilt,
+                        detail,
+                        "rebuilt corrupt FTS index from its content table; store opened normally"
+                    );
+                }
             }
         }
+
         let quick_check = quick_rows.join("; ");
-        if quick_rows.len() != 1 || quick_rows.first().map(String::as_str) != Some("ok") {
+        if !quick_ok(&quick_rows) {
             return Err(StorageError::Init(format!(
                 "SQLite {phase} quick_check failed: {quick_check}"
             )));
@@ -18903,6 +18985,59 @@ mod tests {
     /// at 3.0, and both fed the same combined_score: measured on a 202-document
     /// corpus, a note citing a UUID three times scored 27.5 against the exact
     /// match's 3.0. That inverted the documented exact-lookup guarantee.
+    /// A corrupt FTS index must NOT strand the user's memories. `knowledge_fts`
+    /// is declared `content='knowledge_nodes'`, so it is derived state and is
+    /// always reconstructible. This reproduces the field failure: a store with
+    /// intact memories became unopenable because one fts5 blob was damaged.
+    #[test]
+    fn corrupt_fts_index_is_rebuilt_instead_of_bricking_the_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("vestige.db");
+
+        // Seed a store and close it cleanly.
+        {
+            let storage = Storage::new(Some(path.clone())).expect("open");
+            for i in 0..5 {
+                storage
+                    .ingest(IngestInput {
+                        content: format!("memory number {i} about deployment"),
+                        node_type: "fact".to_string(),
+                        ..Default::default()
+                    })
+                    .expect("ingest");
+            }
+        }
+
+        // Corrupt the FTS index the way an interrupted rebuild does.
+        {
+            let conn = Connection::open(&path).expect("raw open");
+            conn.execute_batch(
+                "UPDATE knowledge_fts_data SET block = randomblob(200) \
+                 WHERE id = (SELECT id FROM knowledge_fts_data WHERE id > 1 LIMIT 1);",
+            )
+            .expect("corrupt");
+            let corrupt = conn
+                .execute_batch("INSERT INTO knowledge_fts(knowledge_fts) VALUES('integrity-check');")
+                .is_err();
+            assert!(corrupt, "the fixture must actually corrupt the index");
+        }
+
+        // Reopening must succeed by rebuilding, not fail.
+        let storage = Storage::new(Some(path.clone()))
+            .expect("a corrupt DERIVED index must not prevent opening the store");
+        let all = storage.get_all_nodes(100, 0).expect("list nodes");
+        assert_eq!(all.len(), 5, "every memory must survive the rebuild");
+
+        // And the rebuilt index must actually be usable again.
+        let hits = storage
+            .concrete_search_filtered("deployment", 10, None, None)
+            .expect("keyword search after rebuild");
+        assert!(
+            !hits.is_empty(),
+            "the rebuilt index must find the seeded memories"
+        );
+    }
+
     #[test]
     fn test_concrete_search_exact_match_beats_a_doc_that_only_cites_it() {
         let storage = create_test_storage();
