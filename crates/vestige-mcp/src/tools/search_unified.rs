@@ -746,6 +746,10 @@ pub async fn execute(
     // Skipped in precise mode (no need) and exhaustive mode (want all results)
     // ====================================================================
     let mut suppressed_count = 0_usize;
+    // Memories that WOULD have been suppressed by retrieval competition but were
+    // spared because they are the dissenting side of a live contradiction. These
+    // are surfaced so the caller can see it was shown the other side.
+    let mut contradiction_protected: Vec<String> = Vec::new();
     if retrieval_mode == "balanced"
         && filtered_results.len() > 1
         && let Ok(mut cog) = cognitive.try_lock()
@@ -759,8 +763,72 @@ pub async fn execute(
             })
             .collect();
         if let Some(result) = cog.competition_mgr.run_competition(&candidates, 0.7) {
-            // Apply suppression: losers get penalized
-            for suppressed_id in &result.suppressed_ids {
+            // The winner's text, needed to test whether a loser CONTRADICTS it
+            // rather than merely resembling it.
+            let winner_content = filtered_results
+                .iter()
+                .find(|r| r.node.id == result.winner_id)
+                .map(|r| r.node.content.clone());
+            let winner_live = filtered_results
+                .iter()
+                .find(|r| r.node.id == result.winner_id)
+                .map(|r| r.node.is_currently_valid())
+                .unwrap_or(false);
+
+            // Apply suppression: losers get penalized, EXCEPT the losing side of
+            // a live contradiction.
+            //
+            // Retrieval-induced forgetting suppresses the loser of a competition
+            // between SIMILAR memories, and a contradiction is near-identical text
+            // with opposite meaning -- "Never use X on Windows" against a stored
+            // "Always use X on Windows" measures 0.928 cosine here. Contradicting
+            // memories are therefore not merely vulnerable to this penalty, they
+            // are the most suppressible class of memory in the store. Every time
+            // an agent retrieves and acts on one side, the evidence that would
+            // correct it gets demoted and can fall out of the returned window.
+            // That is precisely how a memory system buries its own correction.
+            //
+            // Anderson & McCulloch (1999), JEP:LMC 25:608-629, "Integration as a
+            // general boundary condition on retrieval-induced forgetting": material
+            // the rememberer has INTEGRATED shows little or no RIF. A detected
+            // contradiction pair is integrated by construction -- there is an
+            // explicit epistemic edge between the two. Exempting it is the faithful
+            // reading of the mechanism, not a special case bolted onto it.
+            //
+            // LIVE-vs-LIVE ONLY. If either side is expired or superseded, the
+            // penalty still applies. Protecting a pair whose loser has valid_until
+            // set would re-float a fact that is deliberately dead -- reintroducing
+            // the as-of resurrection bug fixed in #173.
+            for (suppressed_id, similarity) in result
+                .suppressed_ids
+                .iter()
+                .zip(result.suppressed_similarities.iter())
+            {
+                let protected = match (&winner_content, winner_live) {
+                    (Some(winner_text), true) => filtered_results
+                        .iter()
+                        .find(|r| &r.node.id == suppressed_id)
+                        .map(|r| {
+                            r.node.is_currently_valid()
+                                && crate::tools::cross_reference::appears_contradictory(
+                                    winner_text,
+                                    &r.node.content,
+                                )
+                        })
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                if protected {
+                    tracing::debug!(
+                        winner = %result.winner_id,
+                        dissent = %suppressed_id,
+                        similarity,
+                        "contradiction-protected: withholding retrieval-competition \
+                         suppression from the losing side of a live contradiction"
+                    );
+                    contradiction_protected.push(suppressed_id.clone());
+                    continue;
+                }
                 if let Some(r) = filtered_results
                     .iter_mut()
                     .find(|r| &r.node.id == suppressed_id)
@@ -954,6 +1022,21 @@ pub async fn execute(
         response["contextReinstatement"] = ri;
     }
     // Include competition stats
+    // Dissent slot. When retrieval competition would have demoted the losing side
+    // of a live contradiction and we withheld that penalty, say so explicitly.
+    // The value of protecting the dissenting memory is only realised if the caller
+    // can SEE that a contradiction was in play -- otherwise the agent reads a
+    // slightly-reordered list and never learns it was shown two incompatible
+    // claims. This makes "the agent was presented with the other side" an
+    // auditable fact rather than an inference.
+    if !contradiction_protected.is_empty() {
+        response["contradictionProtected"] = serde_json::json!({
+            "memoryIds": contradiction_protected,
+            "notice": "These memories contradict a higher-ranked result and were \
+                       exempted from retrieval-competition suppression. Read both \
+                       sides before acting; do not treat the top result as settled.",
+        });
+    }
     if suppressed_count > 0 {
         response["competitionSuppressed"] = serde_json::json!(suppressed_count);
     }
@@ -1018,8 +1101,27 @@ fn is_literal_query(query: &str) -> bool {
 /// `memory_timeline` / `export` / `gc` are exact-match (case-sensitive), so
 /// keeping this consistent avoids surprise. Operators wanting case-insensitive
 /// prefix-search should normalize tags at ingest time.
+/// Case-INSENSITIVE tag prefix match.
+///
+/// Reported from production (2026-08-15): filtering on `Reflection` returned zero
+/// results while `reflection` returned the expected set, with no error and no
+/// warning. One capital letter silently blanked an entire recall. For a memory
+/// system that is the worst possible failure shape -- the caller cannot tell an
+/// empty result caused by a typo from an empty result meaning "you never learned
+/// this", so a silent zero reads as confident absence.
+///
+/// Everything adjacent already normalises: `query_time_range` compares node_type
+/// with `LOWER(node_type) = LOWER(?)`, and the storage-layer tag filter relies on
+/// SQL `LIKE`, which is case-insensitive for ASCII by default. This Rust-side
+/// filter was the one path that did not, so identical-looking queries behaved
+/// differently depending on which code path served them.
+///
+/// ASCII-lowercase specifically, matching SQLite's `LIKE` semantics, so the two
+/// paths agree rather than diverging in a new way for non-ASCII tags.
 fn tags_match_prefix(tags: &[String], prefix: &str) -> bool {
-    tags.iter().any(|t| t.starts_with(prefix))
+    let needle = prefix.to_ascii_lowercase();
+    tags.iter()
+        .any(|t| t.to_ascii_lowercase().starts_with(&needle))
 }
 
 /// Retrieval namespace policy. Every ordinary query is scoped, including a
@@ -2412,8 +2514,21 @@ mod tests {
         // wildcard" semantics — a tagless memory has no tag-prefix to satisfy.
         assert!(tags_match_prefix(&with_meeting, ""));
         assert!(!tags_match_prefix(&tagless, ""));
-        // Case-sensitive (consistent with existing exact-tag matching).
-        assert!(!tags_match_prefix(&with_meeting, "Meeting:"));
+        // Case-INSENSITIVE. This assertion previously required the opposite,
+        // justified as "consistent with existing exact-tag matching" -- but that
+        // premise was false. The storage-layer tag filter is
+        // `tags LIKE '%"tag"%'`, and SQLite's LIKE is case-insensitive for ASCII
+        // by default (verified directly: both '%"reflection"%' and
+        // '%"Reflection"%' match a stored "reflection"). So this Rust-side filter
+        // was the ONE path that was case-sensitive, and it disagreed with the
+        // SQL path it claimed to be consistent with.
+        //
+        // A user hit this in production on 2026-08-15: filtering on `Reflection`
+        // returned zero results, `reflection` returned the expected set, and
+        // nothing reported an error. For a memory system a silent zero is the
+        // worst possible answer -- it is indistinguishable from "you never
+        // learned this".
+        assert!(tags_match_prefix(&with_meeting, "Meeting:"));
         // Prefix must match from the start, not anywhere in the tag value.
         assert!(!tags_match_prefix(&with_meeting, "standup"));
     }
@@ -2867,5 +2982,26 @@ mod tests {
         if let Some(first) = value["results"].as_array().and_then(|a| a.first()) {
             assert!(first.get("createdAt").is_some(), "default keeps timestamps");
         }
+    }
+}
+
+#[cfg(test)]
+mod tag_case_tests {
+    use super::tags_match_prefix;
+
+    /// Reported 2026-08-15: a capital letter in a tag filter silently returned
+    /// zero results. A memory system must never make "you typed it differently"
+    /// indistinguishable from "you never learned this".
+    #[test]
+    fn tag_prefix_match_ignores_case_in_both_directions() {
+        let stored = vec!["reflection".to_string(), "vestige".to_string()];
+        assert!(tags_match_prefix(&stored, "Reflection"), "capitalised query must match");
+        assert!(tags_match_prefix(&stored, "reflection"), "lowercase query must still match");
+        assert!(tags_match_prefix(&stored, "REFLECT"), "shouty prefix must match");
+
+        let stored_caps = vec!["Reflection".to_string()];
+        assert!(tags_match_prefix(&stored_caps, "reflection"), "capitalised STORED tag must match");
+
+        assert!(!tags_match_prefix(&stored, "unrelated"), "a genuine miss must still miss");
     }
 }
