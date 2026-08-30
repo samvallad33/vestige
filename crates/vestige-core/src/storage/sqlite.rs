@@ -2096,8 +2096,18 @@ impl SqliteMemoryStore {
                 // candidate to a currently-valid newer fact is created as a
                 // closed historical snapshot, never as an open current fact.
                 // Undated content and explicitly bounded claims are untouched.
-                let auto_closed_until = superseding_valid_from
-                    .filter(|_| input.valid_from.is_some() && input.valid_until.is_none());
+                // `candidates.is_empty()` enforces the precondition this comment
+                // already states. `superseding_valid_from` is recorded while
+                // skipping INELIGIBLE candidates, so it can be set even when other
+                // nodes were eligible, went into `candidates`, and the gate chose
+                // Create on its own merits. Without this check an unrelated newer
+                // fact elsewhere in the store stamps a brand-new memory as already
+                // expired at creation -- it is born invisible to ordinary recall.
+                let auto_closed_until = superseding_valid_from.filter(|_| {
+                    candidates.is_empty()
+                        && input.valid_from.is_some()
+                        && input.valid_until.is_none()
+                });
                 // Create new memory
                 let mut node = self.ingest_in_scope_with_secret_policy(input, scope, policy)?;
                 if let Some(closes_at) = auto_closed_until {
@@ -18911,7 +18921,7 @@ mod tests {
         let needle = "PAYMENTS_REDIS_URL";
         let target = storage
             .ingest(IngestInput {
-                content: format!("{needle}"),
+                content: needle.to_string(),
                 node_type: "fact".to_string(),
                 ..Default::default()
             })
