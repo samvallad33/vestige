@@ -278,6 +278,7 @@ impl EmbeddingProfile {
 pub enum BuiltinEmbeddingProfile {
     NomicLegacyRaw256,
     NomicRetrieval256,
+    GraniteMultilingual256,
     QwenBalanced256,
     QwenBalanced1024,
     QwenMax1024,
@@ -289,6 +290,7 @@ impl BuiltinEmbeddingProfile {
         match self {
             Self::NomicLegacyRaw256 => "nomic-v1.5-legacy-raw-256",
             Self::NomicRetrieval256 => "nomic-v1.5-retrieval-v1-256",
+            Self::GraniteMultilingual256 => "granite-311m-multilingual-r2-256",
             Self::QwenBalanced256 => "qwen3-0.6b-retrieval-v1-256",
             Self::QwenBalanced1024 => "qwen3-0.6b-retrieval-v1-1024",
             Self::QwenMax1024 => "qwen3-4b-retrieval-v1-1024",
@@ -341,6 +343,35 @@ impl BuiltinEmbeddingProfile {
                 chunking_strategy: ChunkingStrategy::WholeDocument,
                 created_at,
             },
+            // IBM granite-embedding-311m-multilingual-r2 (arXiv 2605.13521,
+            // Apache-2.0). ModernBERT encoder, 32,768-token context (4x the
+            // Nomic profiles), official Matryoshka truncation to the existing
+            // 256d storage, CLS pooling, and NO query/document prefixes —
+            // verified against the pinned revision's 1_Pooling/config.json
+            // and config.json. Runs through fastembed's user-defined ONNX
+            // path from an explicitly installed, hash-verified artifact
+            // directory; the model is absent from fastembed's catalogue.
+            //
+            // Defensible public claim, recorded so it is not overstated
+            // later: Granite beats EmbeddingGemma-300m 65.2 vs 62.5 on MMTEB
+            // Multilingual Retrieval in the paper's own table, plus the 4x
+            // context. There is NO same-source benchmark against Nomic, so no
+            // number versus Nomic may be claimed.
+            Self::GraniteMultilingual256 => EmbeddingProfile {
+                profile_id,
+                display_name: "Granite Multilingual Compact".to_string(),
+                model_id: "ibm-granite/granite-embedding-311m-multilingual-r2".to_string(),
+                immutable_model_revision: "44399559930365213510b1ee2eb15ded83374f0e".to_string(),
+                verified_model_artifact_hashes: granite_artifact_hashes(),
+                runtime_backend: EmbeddingRuntimeBackend::FastembedOnnx,
+                embedding_dimension: 256,
+                normalization_method: EmbeddingNormalization::L2,
+                document_encoding_template: EncodingTemplate::Raw,
+                query_encoding_template: EncodingTemplate::Raw,
+                maximum_token_limit: 32768,
+                chunking_strategy: ChunkingStrategy::WholeDocument,
+                created_at,
+            },
             Self::QwenBalanced256 => qwen_profile(
                 profile_id,
                 qwen_query,
@@ -367,6 +398,35 @@ impl BuiltinEmbeddingProfile {
             ),
         }
     }
+}
+
+/// SHA-256 digests of the Granite artifact set at the pinned revision,
+/// computed from the files served for
+/// `44399559930365213510b1ee2eb15ded83374f0e` (onnx digest from the Hub's
+/// LFS object id, tokenizer set hashed locally after download).
+fn granite_artifact_hashes() -> Vec<ModelArtifactHash> {
+    vec![
+        ModelArtifactHash::sha256(
+            "onnx/model.onnx",
+            "75f9f258bf5013f5fe8a4dad61dd0fd16ac0cbaa7a106e3d3f41c2d04a42d541",
+        ),
+        ModelArtifactHash::sha256(
+            "tokenizer.json",
+            "0087c868b33bad550a78a08d19798cfd7f713cde4f020803b8f51f405503e15f",
+        ),
+        ModelArtifactHash::sha256(
+            "config.json",
+            "e1e3fc842a8e0537e25d6e4c93879698b92ae96722e8c162bef334b57978a3b0",
+        ),
+        ModelArtifactHash::sha256(
+            "special_tokens_map.json",
+            "cb9e60dcf4d8d314315cb3e761fe4c2e664fda8dbf66d7815372b2639e381182",
+        ),
+        ModelArtifactHash::sha256(
+            "tokenizer_config.json",
+            "7947bdf0378520e69ca412b8c4dacd1cffa8aef099f851fdd5c65aa27c6b36a0",
+        ),
+    ]
 }
 
 struct QwenProfileSpec {
@@ -491,6 +551,7 @@ pub fn builtin_embedding_profiles() -> Vec<EmbeddingProfile> {
     [
         BuiltinEmbeddingProfile::NomicLegacyRaw256,
         BuiltinEmbeddingProfile::NomicRetrieval256,
+        BuiltinEmbeddingProfile::GraniteMultilingual256,
         BuiltinEmbeddingProfile::QwenBalanced256,
         BuiltinEmbeddingProfile::QwenBalanced1024,
         BuiltinEmbeddingProfile::QwenMax1024,
@@ -505,6 +566,7 @@ pub fn builtin_embedding_profile_by_id(id: &str) -> Option<EmbeddingProfile> {
     [
         BuiltinEmbeddingProfile::NomicLegacyRaw256,
         BuiltinEmbeddingProfile::NomicRetrieval256,
+        BuiltinEmbeddingProfile::GraniteMultilingual256,
         BuiltinEmbeddingProfile::QwenBalanced256,
         BuiltinEmbeddingProfile::QwenBalanced1024,
         BuiltinEmbeddingProfile::QwenMax1024,
@@ -1110,10 +1172,52 @@ mod tests {
             .iter()
             .map(|profile| profile.profile_id.clone())
             .collect::<std::collections::HashSet<_>>();
-        assert_eq!(ids.len(), 6);
+        assert_eq!(ids.len(), 7);
         for profile in profiles {
             profile.validate().unwrap();
             assert_eq!(profile.contract_hash().len(), 64);
+        }
+    }
+
+    /// The Granite profile's public contract, pinned so a lookalike edit
+    /// cannot silently change what an installed store verifies against.
+    #[test]
+    fn granite_profile_contract_is_pinned() {
+        let profile = builtin_embedding_profile_by_id("granite-311m-multilingual-r2-256")
+            .expect("granite profile resolves by id");
+        assert_eq!(
+            profile.model_id,
+            "ibm-granite/granite-embedding-311m-multilingual-r2"
+        );
+        assert_eq!(
+            profile.immutable_model_revision,
+            "44399559930365213510b1ee2eb15ded83374f0e"
+        );
+        assert_eq!(profile.runtime_backend, EmbeddingRuntimeBackend::FastembedOnnx);
+        assert_eq!(profile.embedding_dimension, 256);
+        assert_eq!(profile.maximum_token_limit, 32768, "4x the Nomic context");
+        // No query/document prefixes: raw text on both sides.
+        assert_eq!(profile.document_encoding_template, EncodingTemplate::Raw);
+        assert_eq!(profile.query_encoding_template, EncodingTemplate::Raw);
+        // Exactly the five hash-pinned artifacts the runner requires.
+        let names: Vec<&str> = profile
+            .verified_model_artifact_hashes
+            .iter()
+            .map(|hash| hash.artifact.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "onnx/model.onnx",
+                "tokenizer.json",
+                "config.json",
+                "special_tokens_map.json",
+                "tokenizer_config.json"
+            ]
+        );
+        for hash in &profile.verified_model_artifact_hashes {
+            assert_eq!(hash.algorithm, "sha256");
+            assert_eq!(hash.digest.len(), 64);
         }
     }
 

@@ -4,10 +4,14 @@ use std::future::Future;
 use std::pin::Pin;
 
 mod fastembed;
+#[cfg(feature = "embeddings")]
+mod granite_onnx;
 #[cfg(feature = "qwen3-embeddings")]
 mod qwen3_local;
 
 pub use fastembed::FastembedEmbedder;
+#[cfg(feature = "embeddings")]
+pub use granite_onnx::{GRANITE_ARTIFACTS, GraniteOnnxEmbedder};
 #[cfg(feature = "qwen3-embeddings")]
 pub use qwen3_local::Qwen3LocalEmbedder;
 

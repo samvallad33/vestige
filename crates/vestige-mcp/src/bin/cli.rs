@@ -650,18 +650,28 @@ fn run_embeddings_install(
 ) -> anyhow::Result<()> {
     require_embedding_confirmation(yes, "Embedding profile installation", &profile_id)?;
     let profile = builtin_embedding_profile(&profile_id)?;
-    if profile.runtime_backend != vestige_core::EmbeddingRuntimeBackend::FastembedCandle {
+    // Route by what the profile contract actually requires, not by backend
+    // alone: FastembedOnnx covers both the released catalogue Nomic profile
+    // (no artifacts, not installable here) and artifact-pinned user-defined
+    // models like Granite (installable from a verified local directory).
+    let uses_local_artifacts = !profile.verified_model_artifact_hashes.is_empty();
+    if !uses_local_artifacts {
         anyhow::bail!(
-            "'{}' is the released legacy Nomic profile and is not installable through the Qwen local-artifact workflow",
+            "'{}' is the released legacy Nomic profile and is not installable through the local-artifact workflow",
             profile_id
         );
     }
     let source = require_embedding_artifact_root(from)?;
     let storage = open_storage()?;
     let lifecycle = vestige_core::EmbeddingProfileLifecycle::new(&storage);
-    let manifest = lifecycle
-        .install_qwen3_local(profile, &source)
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let manifest = match profile.runtime_backend {
+        vestige_core::EmbeddingRuntimeBackend::FastembedCandle => lifecycle
+            .install_qwen3_local(profile, &source)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+        vestige_core::EmbeddingRuntimeBackend::FastembedOnnx => lifecycle
+            .install_granite_onnx(profile, &source)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+    };
     if json {
         return print_embedding_json(
             &serde_json::json!({"command":"embeddings.install","profile":manifest.profile.profile_id,"manifest":manifest,"activeProfileUnchanged":true,"localOnly":true}),
@@ -751,13 +761,26 @@ fn run_embeddings_migrate(
         })
         .transpose()?;
     let lifecycle = vestige_core::EmbeddingProfileLifecycle::new(&storage);
-    match lifecycle.migrate_qwen3_local(
-        &destination_id,
-        &source.profile_id,
-        &artifact_root,
-        migration_id,
-        interrupt_after,
-    ) {
+    let destination_backend = builtin_embedding_profile(destination_id.as_str())
+        .map(|profile| profile.runtime_backend)
+        .unwrap_or(vestige_core::EmbeddingRuntimeBackend::FastembedCandle);
+    let migration = match destination_backend {
+        vestige_core::EmbeddingRuntimeBackend::FastembedOnnx => lifecycle.migrate_granite_onnx(
+            &destination_id,
+            &source.profile_id,
+            &artifact_root,
+            migration_id,
+            interrupt_after,
+        ),
+        vestige_core::EmbeddingRuntimeBackend::FastembedCandle => lifecycle.migrate_qwen3_local(
+            &destination_id,
+            &source.profile_id,
+            &artifact_root,
+            migration_id,
+            interrupt_after,
+        ),
+    };
+    match migration {
         Ok(receipt) => {
             if json {
                 return print_embedding_json(
@@ -3470,13 +3493,28 @@ fn run_recall(
                 )
             })?;
         match manifest.profile.runtime_backend {
-            vestige_core::EmbeddingRuntimeBackend::FastembedOnnx => {
+            vestige_core::EmbeddingRuntimeBackend::FastembedOnnx
+                if manifest.profile.verified_model_artifact_hashes.is_empty() =>
+            {
                 if embedding_from.is_some() {
                     anyhow::bail!(
-                        "--embedding-from is only valid for an active Qwen Candle profile; '{}' uses the Nomic ONNX runtime",
+                        "--embedding-from is only valid for a local-artifact profile; '{}' uses the Nomic catalogue runtime",
                         active.profile_id
                     );
                 }
+            }
+            vestige_core::EmbeddingRuntimeBackend::FastembedOnnx => {
+                let artifact_root = require_embedding_artifact_root(embedding_from)?;
+                let lifecycle = vestige_core::EmbeddingProfileLifecycle::new(&storage);
+                lifecycle
+                    .attach_active_granite_onnx(&artifact_root)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "cannot execute recall for active profile '{}': {}",
+                            active.profile_id,
+                            error
+                        )
+                    })?;
             }
             vestige_core::EmbeddingRuntimeBackend::FastembedCandle => {
                 let artifact_root = require_embedding_artifact_root(embedding_from)?;
