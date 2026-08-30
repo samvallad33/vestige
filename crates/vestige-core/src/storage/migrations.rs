@@ -1942,6 +1942,61 @@ fn apply_migrations_once(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
     Ok(applied)
 }
 
+
+/// V30: FTS5 tokenizer fix.
+///
+/// V7 built `knowledge_fts` with `tokenize='porter ascii'`. The `ascii`
+/// tokenizer only treats ASCII alphanumerics as token characters, and it does
+/// NOT treat multi-byte characters as separators -- it folds them into the
+/// adjacent token. So an em dash, a curly apostrophe, an ellipsis, a
+/// non-breaking space, a leading emoji or an accented letter glues itself onto
+/// the neighbouring word, and that word becomes permanently unfindable by
+/// keyword search. LLM-authored memory text is saturated with exactly those
+/// characters, so in practice a large fraction of stored content is invisible
+/// to the BM25 leg of hybrid search.
+///
+/// `unicode61` treats every non-alphanumeric codepoint as a separator and
+/// `remove_diacritics 2` folds accents, so "parser-which we fixed" tokenizes as
+/// parser/which/we/fixed and "cafe" matches "cafe". `porter` stemming is kept.
+///
+/// The query sanitizers in `crate::fts` are updated in the same change to split
+/// on Unicode alphanumerics rather than ASCII, because they deliberately mirror
+/// this tokenizer -- changing either one alone breaks matching.
+const MIGRATION_V30_UP: &str = r#"
+DROP TRIGGER IF EXISTS knowledge_ai;
+DROP TRIGGER IF EXISTS knowledge_ad;
+DROP TRIGGER IF EXISTS knowledge_au;
+DROP TABLE IF EXISTS knowledge_fts;
+
+CREATE VIRTUAL TABLE knowledge_fts USING fts5(
+    id, content, tags,
+    content='knowledge_nodes',
+    content_rowid='rowid',
+    tokenize='porter unicode61 remove_diacritics 2'
+);
+
+INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild');
+
+CREATE TRIGGER knowledge_ai AFTER INSERT ON knowledge_nodes BEGIN
+    INSERT INTO knowledge_fts(rowid, id, content, tags)
+    VALUES (NEW.rowid, NEW.id, NEW.content, NEW.tags);
+END;
+
+CREATE TRIGGER knowledge_ad AFTER DELETE ON knowledge_nodes BEGIN
+    INSERT INTO knowledge_fts(knowledge_fts, rowid, id, content, tags)
+    VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.tags);
+END;
+
+CREATE TRIGGER knowledge_au AFTER UPDATE ON knowledge_nodes BEGIN
+    INSERT INTO knowledge_fts(knowledge_fts, rowid, id, content, tags)
+    VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.tags);
+    INSERT INTO knowledge_fts(rowid, id, content, tags)
+    VALUES (NEW.rowid, NEW.id, NEW.content, NEW.tags);
+END;
+
+UPDATE schema_version SET version = 30, applied_at = datetime('now');
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2867,57 +2922,3 @@ mod tests {
         assert_eq!(domain_scores, "{}");
     }
 }
-
-/// V30: FTS5 tokenizer fix.
-///
-/// V7 built `knowledge_fts` with `tokenize='porter ascii'`. The `ascii`
-/// tokenizer only treats ASCII alphanumerics as token characters, and it does
-/// NOT treat multi-byte characters as separators -- it folds them into the
-/// adjacent token. So an em dash, a curly apostrophe, an ellipsis, a
-/// non-breaking space, a leading emoji or an accented letter glues itself onto
-/// the neighbouring word, and that word becomes permanently unfindable by
-/// keyword search. LLM-authored memory text is saturated with exactly those
-/// characters, so in practice a large fraction of stored content is invisible
-/// to the BM25 leg of hybrid search.
-///
-/// `unicode61` treats every non-alphanumeric codepoint as a separator and
-/// `remove_diacritics 2` folds accents, so "parser-which we fixed" tokenizes as
-/// parser/which/we/fixed and "cafe" matches "cafe". `porter` stemming is kept.
-///
-/// The query sanitizers in `crate::fts` are updated in the same change to split
-/// on Unicode alphanumerics rather than ASCII, because they deliberately mirror
-/// this tokenizer -- changing either one alone breaks matching.
-const MIGRATION_V30_UP: &str = r#"
-DROP TRIGGER IF EXISTS knowledge_ai;
-DROP TRIGGER IF EXISTS knowledge_ad;
-DROP TRIGGER IF EXISTS knowledge_au;
-DROP TABLE IF EXISTS knowledge_fts;
-
-CREATE VIRTUAL TABLE knowledge_fts USING fts5(
-    id, content, tags,
-    content='knowledge_nodes',
-    content_rowid='rowid',
-    tokenize='porter unicode61 remove_diacritics 2'
-);
-
-INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild');
-
-CREATE TRIGGER knowledge_ai AFTER INSERT ON knowledge_nodes BEGIN
-    INSERT INTO knowledge_fts(rowid, id, content, tags)
-    VALUES (NEW.rowid, NEW.id, NEW.content, NEW.tags);
-END;
-
-CREATE TRIGGER knowledge_ad AFTER DELETE ON knowledge_nodes BEGIN
-    INSERT INTO knowledge_fts(knowledge_fts, rowid, id, content, tags)
-    VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.tags);
-END;
-
-CREATE TRIGGER knowledge_au AFTER UPDATE ON knowledge_nodes BEGIN
-    INSERT INTO knowledge_fts(knowledge_fts, rowid, id, content, tags)
-    VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.tags);
-    INSERT INTO knowledge_fts(rowid, id, content, tags)
-    VALUES (NEW.rowid, NEW.id, NEW.content, NEW.tags);
-END;
-
-UPDATE schema_version SET version = 30, applied_at = datetime('now');
-"#;
