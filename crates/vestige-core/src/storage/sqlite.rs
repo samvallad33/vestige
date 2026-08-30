@@ -5373,12 +5373,37 @@ impl SqliteMemoryStore {
                 Ok((node, rank))
             })?;
 
-            for (idx, row) in rows.enumerate() {
-                let (node, rank) = row?;
-                if !Self::node_matches_type_filters(&node, include_types, exclude_types) {
-                    continue;
-                }
-                let base_score = (1.0 / (idx as f32 + 1.0)).max((-rank as f32).max(0.0));
+            // Collect first, then NORMALIZE. Raw BM25 magnitude is unbounded,
+            // while literal_match_score returns fixed constants in 1.2..=3.0, and
+            // both land in the same `combined_score`. Measured on a 202-document
+            // corpus: a note that merely CITES a UUID three times scores 27.5,
+            // against the fixed 3.0 given to the memory whose id IS that UUID --
+            // so on the documented exact-lookup path the thing you asked for was
+            // routinely outranked by something that only mentions it, 9x over.
+            //
+            // Map the FTS leg into 0.0..=1.0, strictly below the 1.2 literal
+            // floor. Relative BM25 ordering is preserved among pure keyword hits,
+            // but any literal match now outranks any non-literal one.
+            let scored_rows: Vec<(KnowledgeNode, f64)> = rows
+                .filter_map(|r| r.ok())
+                .filter(|(node, _)| {
+                    Self::node_matches_type_filters(node, include_types, exclude_types)
+                })
+                .collect();
+            let max_magnitude = scored_rows
+                .iter()
+                .map(|(_, rank)| (-*rank as f32).max(0.0))
+                .fold(0.0_f32, f32::max);
+            const FTS_BAND_TOP: f32 = 1.0; // < LITERAL_FLOOR (1.2)
+            for (idx, (node, rank)) in scored_rows.into_iter().enumerate() {
+                let magnitude = (-rank as f32).max(0.0);
+                let base_score = if max_magnitude > 0.0 {
+                    (magnitude / max_magnitude) * FTS_BAND_TOP
+                } else {
+                    // No usable BM25 (e.g. a term present in every row): fall back
+                    // to rank order, still inside the band.
+                    FTS_BAND_TOP / (idx as f32 + 1.0)
+                };
                 Self::upsert_concrete_result(&mut by_id, node, base_score, Some(base_score));
             }
         }
@@ -18861,6 +18886,54 @@ mod tests {
         assert_eq!(results[0].node.id, target.id);
         assert_eq!(results[0].match_type, MatchType::Keyword);
         assert!(results[0].semantic_score.is_none());
+    }
+
+    /// A memory that merely CITES an identifier must not outrank the memory that
+    /// IS it. Raw BM25 magnitude is unbounded while literal_match_score is capped
+    /// at 3.0, and both fed the same combined_score: measured on a 202-document
+    /// corpus, a note citing a UUID three times scored 27.5 against the exact
+    /// match's 3.0. That inverted the documented exact-lookup guarantee.
+    #[test]
+    fn test_concrete_search_exact_match_beats_a_doc_that_only_cites_it() {
+        let storage = create_test_storage();
+
+        // Filler so BM25's IDF term is meaningful rather than degenerate.
+        for i in 0..40 {
+            storage
+                .ingest(IngestInput {
+                    content: format!("Routine note {i} about deployment pipelines and review"),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+
+        let needle = "PAYMENTS_REDIS_URL";
+        let target = storage
+            .ingest(IngestInput {
+                content: format!("{needle}"),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        // Cites the identifier repeatedly -> large BM25 magnitude.
+        storage
+            .ingest(IngestInput {
+                content: format!(
+                    "See {needle} for the rollout; {needle} was rotated in review, and \
+                     {needle} supersedes the older connection note entirely"
+                ),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let results = storage.concrete_search_filtered(needle, 10, None, None).unwrap();
+        assert!(!results.is_empty(), "exact lookup must return something");
+        assert_eq!(
+            results[0].node.id, target.id,
+            "the memory that IS the identifier must rank first, not the one citing it"
+        );
     }
 
     #[test]
