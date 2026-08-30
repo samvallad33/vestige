@@ -149,6 +149,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Memory hygiene: index the legacy-compatible normalized project scope",
         up: MIGRATION_V29_UP,
     },
+    Migration {
+        version: 30,
+        description: "FTS5: replace the ascii tokenizer with unicode61 so typographic punctuation and accents stop swallowing adjacent words",
+        up: MIGRATION_V30_UP,
+    },
 ];
 
 /// A database migration
@@ -2439,8 +2444,8 @@ mod tests {
 
         let applied = apply_migrations(&conn).expect("V20+ apply on a V19 database");
         assert_eq!(
-            applied, 10,
-            "V20 through V29 should apply on a V19 database"
+            applied, 11,
+            "V20 through V30 should apply on a V19 database"
         );
         assert_eq!(
             get_current_version(&conn).expect("version"),
@@ -2453,16 +2458,16 @@ mod tests {
         );
     }
 
-    /// Fresh database: all migrations apply cleanly through V29 and the cursor
+    /// Fresh database: all migrations apply cleanly through V30 and the cursor
     /// table exists and is empty (nothing to clear, no error).
     #[test]
     fn v20_applies_cleanly_on_a_fresh_database() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("fresh migrations succeed through V29");
+        apply_migrations(&conn).expect("fresh migrations succeed through V30");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            29,
-            "latest migration must be V29"
+            30,
+            "latest migration must be V30"
         );
         assert_eq!(cursor_row_count(&conn), 0);
     }
@@ -2513,11 +2518,11 @@ mod tests {
         )
         .expect("seed legacy vector");
 
-        apply_migrations(&conn).expect("apply V28 and V29");
+        apply_migrations(&conn).expect("apply V28 through V30");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            29,
-            "V28 profile migration is followed by the V29 normalized-scope index"
+            30,
+            "V28 profile migration is followed by the V29 scope index and the V30 FTS rebuild"
         );
         let copied: i64 = conn
             .query_row(
@@ -2717,7 +2722,7 @@ mod tests {
         )
         .expect("mark V25 fixture current");
 
-        assert_eq!(apply_migrations(&conn).expect("apply V26 through V29"), 4);
+        assert_eq!(apply_migrations(&conn).expect("apply V26 through V30"), 5);
         let columns: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('receipt_envelopes')
@@ -2862,3 +2867,57 @@ mod tests {
         assert_eq!(domain_scores, "{}");
     }
 }
+
+/// V30: FTS5 tokenizer fix.
+///
+/// V7 built `knowledge_fts` with `tokenize='porter ascii'`. The `ascii`
+/// tokenizer only treats ASCII alphanumerics as token characters, and it does
+/// NOT treat multi-byte characters as separators -- it folds them into the
+/// adjacent token. So an em dash, a curly apostrophe, an ellipsis, a
+/// non-breaking space, a leading emoji or an accented letter glues itself onto
+/// the neighbouring word, and that word becomes permanently unfindable by
+/// keyword search. LLM-authored memory text is saturated with exactly those
+/// characters, so in practice a large fraction of stored content is invisible
+/// to the BM25 leg of hybrid search.
+///
+/// `unicode61` treats every non-alphanumeric codepoint as a separator and
+/// `remove_diacritics 2` folds accents, so "parser-which we fixed" tokenizes as
+/// parser/which/we/fixed and "cafe" matches "cafe". `porter` stemming is kept.
+///
+/// The query sanitizers in `crate::fts` are updated in the same change to split
+/// on Unicode alphanumerics rather than ASCII, because they deliberately mirror
+/// this tokenizer -- changing either one alone breaks matching.
+const MIGRATION_V30_UP: &str = r#"
+DROP TRIGGER IF EXISTS knowledge_ai;
+DROP TRIGGER IF EXISTS knowledge_ad;
+DROP TRIGGER IF EXISTS knowledge_au;
+DROP TABLE IF EXISTS knowledge_fts;
+
+CREATE VIRTUAL TABLE knowledge_fts USING fts5(
+    id, content, tags,
+    content='knowledge_nodes',
+    content_rowid='rowid',
+    tokenize='porter unicode61 remove_diacritics 2'
+);
+
+INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild');
+
+CREATE TRIGGER knowledge_ai AFTER INSERT ON knowledge_nodes BEGIN
+    INSERT INTO knowledge_fts(rowid, id, content, tags)
+    VALUES (NEW.rowid, NEW.id, NEW.content, NEW.tags);
+END;
+
+CREATE TRIGGER knowledge_ad AFTER DELETE ON knowledge_nodes BEGIN
+    INSERT INTO knowledge_fts(knowledge_fts, rowid, id, content, tags)
+    VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.tags);
+END;
+
+CREATE TRIGGER knowledge_au AFTER UPDATE ON knowledge_nodes BEGIN
+    INSERT INTO knowledge_fts(knowledge_fts, rowid, id, content, tags)
+    VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.tags);
+    INSERT INTO knowledge_fts(rowid, id, content, tags)
+    VALUES (NEW.rowid, NEW.id, NEW.content, NEW.tags);
+END;
+
+UPDATE schema_version SET version = 30, applied_at = datetime('now');
+"#;
