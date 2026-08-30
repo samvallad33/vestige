@@ -96,7 +96,7 @@ pub fn schema() -> Value {
             },
             "tag_prefix": {
                 "type": "string",
-                "description": "Optional tag-prefix filter. When set, only results carrying at least one tag whose value starts with this prefix are returned (case-sensitive). Example: tag_prefix=\"meeting:\" matches memories tagged 'meeting:standup', 'meeting:1-on-1', etc. Applied as a post-filter; combine with a larger 'limit' if you expect heavy thinning."
+                "description": "Optional tag-prefix filter. When set, only results carrying at least one tag whose value starts with this prefix are returned (case-insensitive). Example: tag_prefix=\"meeting:\" matches memories tagged 'meeting:standup', 'meeting:1-on-1', etc. Applied as a post-filter; combine with a larger 'limit' if you expect heavy thinning."
             },
             "scope": {
                 "type": "string",
@@ -3027,13 +3027,28 @@ mod tag_case_tests {
     #[test]
     fn tag_prefix_match_ignores_case_in_both_directions() {
         let stored = vec!["reflection".to_string(), "vestige".to_string()];
-        assert!(tags_match_prefix(&stored, "Reflection"), "capitalised query must match");
-        assert!(tags_match_prefix(&stored, "reflection"), "lowercase query must still match");
-        assert!(tags_match_prefix(&stored, "REFLECT"), "shouty prefix must match");
+        assert!(
+            tags_match_prefix(&stored, "Reflection"),
+            "capitalised query must match"
+        );
+        assert!(
+            tags_match_prefix(&stored, "reflection"),
+            "lowercase query must still match"
+        );
+        assert!(
+            tags_match_prefix(&stored, "REFLECT"),
+            "shouty prefix must match"
+        );
 
         let stored_caps = vec!["Reflection".to_string()];
-        assert!(tags_match_prefix(&stored_caps, "reflection"), "capitalised STORED tag must match");
+        assert!(
+            tags_match_prefix(&stored_caps, "reflection"),
+            "capitalised STORED tag must match"
+        );
 
-        assert!(!tags_match_prefix(&stored, "unrelated"), "a genuine miss must still miss");
+        assert!(
+            !tags_match_prefix(&stored, "unrelated"),
+            "a genuine miss must still miss"
+        );
     }
 }
