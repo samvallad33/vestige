@@ -15,6 +15,101 @@ Synthesized from seven parallel research lanes. Ranked by user-visible benefit �
 
 ---
 
+## POST-2.5.0 — the next phase (agreed Aug 30 2026)
+
+v2.5.0 shipped Tier 1 items 0, 1 and 2 (eval harness, reranker depth, #181). Four
+items were explicitly deferred to the release after it. Items 1 to 3 were agreed
+in conversation; item 4 was measured afterwards and is the best-evidenced of the
+four.
+
+### 1. Granite-embedding-311m-multilingual-r2 as an opt-in profile
+
+Full write-up in **TIER 2 #2** below, including the zero-downtime staging plan on
+PR #168's reversible profiles. Nothing to restate here.
+
+### 2. RRF-native fusion
+
+Replace the remaining multiplicative score blending with rank-based fusion, on the
+principle that independent signals should join as ranked lists and never as
+multipliers: a multiplier lets one signal's scale silently dominate, while a rank
+is scale-free by construction.
+
+Validate with **team-draft interleaving**, which is 10-100x more sensitive than
+split A/B for ranker comparison because both rankers serve the same query and only
+the click attribution differs.
+
+Note the constraint already recorded in the headline above: core hybrid search is
+ALREADY RRF (`sqlite.rs:6044`, `k=60`), and the 0.3/0.7 weights are dead outside
+benches. So this item is about the stages layered on top of that fusion, not about
+the fusion itself. Scope it precisely before starting, or it becomes a rewrite of
+finished work. **TIER 2 #6** (make RRF `k` configurable and measure) is the
+adjacent, smaller piece.
+
+### 3. Staleness prediction via backcalculation
+
+Brookmeyer & Gail 1986, the epidemiological method for inferring current unobserved
+prevalence from an observed lag distribution. Applied here: infer which memories
+have most likely gone stale from the distribution of observed staleness discoveries,
+rather than waiting to be told a memory is wrong.
+
+Speculative and unmeasured. It should be gated behind the eval harness like every
+other ranking change, and it is the weakest-evidenced of these four. Sequence it
+last unless it acquires supporting measurement.
+
+### 4. The accessibility state machine runs 2 of its 4 states
+
+**Measured Aug 30 2026, read-only against the live 2,930-memory store.** This
+supersedes an earlier, wrong claim in conversation that the stage was inert and
+changed no ordering; that came from a 50-result sample, not the corpus.
+
+| bucket | multiplier | count | share |
+|---|---|---|---|
+| Active | x1.00 | 873 | 29.8% |
+| Dormant | x0.70 | 2,057 | 70.2% |
+| Silent | x0.30 | **0** | 0% |
+| Unavailable | x0.05 | **0** | 0% |
+
+`retention_strength` spans **0.6129 to 1.0**, mean 0.7005. State is derived from it
+alone (`search_unified.rs:700-708`) at thresholds 0.7 / 0.4 / 0.1.
+
+Two consequences, and they point in opposite directions:
+
+- The stage is **not** inert. A binary x1.00 / x0.70 across a 70/30 split does
+  reorder results: a Dormant hit at score 1.0 falls to 0.7 and loses to an Active
+  hit at 0.8. It discriminates.
+- But **half the designed model is unreachable.** Silent and Unavailable cannot
+  fire, because nothing in the store falls below 0.61. Memories reach **217 days**
+  since last access (mean 37.9) and still do not decay into them. A four-state
+  forgetting model is operating as a two-state one, and the two states carrying
+  the actual forgetting semantics are decorative.
+
+Proximate cause, in source: the FSRS review path hardcodes
+`let new_retrieval_strength = 1.0;` (`sqlite.rs:4095`), so
+`retention = 0.7 + min(storage/10, 1.0) * 0.3` is **floored at 0.7** for anything
+reviewed. `apply_decay` pulls it down from there, but empirically never past 0.61.
+
+**The work is a decision, not a retune.** Determine whether this is a defect (decay
+too flat, or `retrieval_strength` wrongly pinned) or deliberate conservatism, then
+either fix the decay curve or delete the two dead states and stop advertising a
+four-state model. Do not blind-tune the constants.
+
+Two hard constraints:
+
+- This changes ranking for **every** memory of **every** user. It is gated on the
+  eval harness (`benchmarks/memconflict/`) like every other ranking change, and it
+  needs a before/after on the same seeds.
+- It interacts with the v2.4.0 suppression fix. `suppress` and `demote` deliberately
+  no longer stamp `last_accessed`, because `apply_decay` recomputes retention from
+  `days_since(last_accessed)`. Any change to that recomputation must not silently
+  re-break inhibition. See the v2.4.0 CHANGELOG entry before touching it.
+
+**Recommended order:** 4, then 1, then 2, then 3. Item 4 is measured, self-contained,
+and affects every query today. Item 1 is well-specified and independent of ranking.
+Item 2 needs scoping before it can be estimated. Item 3 needs evidence before it
+deserves a slot.
+
+---
+
 ## TIER 1 — do next
 
 ### 0. Stand up the retrieval eval harness (medium, prerequisite for 4 items below)
