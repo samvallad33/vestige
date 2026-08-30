@@ -7070,6 +7070,27 @@ impl SqliteMemoryStore {
         // v1.5.0: Use SleepConsolidation for structured consolidation
         let sleep = crate::SleepConsolidation::new();
 
+        // Repair stability values that escaped the MAX_STABILITY invariant
+        // before the sentiment-boost clamp existed (issue #121): a real store
+        // was measured carrying five outliers up to 1.4e24 days. Idempotent,
+        // and a no-op on healthy stores.
+        {
+            let writer = self
+                .writer
+                .lock()
+                .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            let repaired = writer.execute(
+                "UPDATE knowledge_nodes SET stability = ?1 WHERE stability > ?1",
+                params![crate::fsrs::MAX_STABILITY],
+            )?;
+            if repaired > 0 {
+                tracing::warn!(
+                    repaired,
+                    "clamped runaway stability values back to MAX_STABILITY"
+                );
+            }
+        }
+
         // 1. Apply FSRS-6 decay with real formula + personalized w20
         let decay_applied = self.apply_decay()? as i64;
 
@@ -7878,13 +7899,20 @@ impl SqliteMemoryStore {
 
         let mut optimizer = FSRSOptimizer::new();
 
+        // Most RECENT window, not the oldest. The previous `ASC LIMIT 1000`
+        // trained forever on the earliest era of the log — and because the
+        // 90-day log pruning slides that window, the training set drifted
+        // under the optimizer's feet, producing fits that swung between
+        // 0.0104 and 0.137 on the same store with no behavior change.
         let logs: Vec<(String, String, String)> = reader
             .prepare(
-                "SELECT mal.node_id, mal.access_type, mal.accessed_at
-                 FROM memory_access_log mal
-                 WHERE mal.access_type NOT IN ('search_hit', 'retrieval_shown')
-                 ORDER BY mal.accessed_at ASC
-                 LIMIT 1000",
+                "SELECT node_id, access_type, accessed_at FROM (
+                     SELECT mal.node_id, mal.access_type, mal.accessed_at
+                     FROM memory_access_log mal
+                     WHERE mal.access_type NOT IN ('search_hit', 'retrieval_shown')
+                     ORDER BY mal.accessed_at DESC
+                     LIMIT 1000
+                 ) ORDER BY accessed_at ASC",
             )?
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .filter_map(|r| r.ok())
@@ -7909,10 +7937,15 @@ impl SqliteMemoryStore {
                     .map(|dt| dt.with_timezone(&Utc))
                     .unwrap_or(ts);
 
+                // Suppression is the strongest forgetting signal a user can
+                // send; feeding it to the optimizer as a SUCCESSFUL recall
+                // (the old catch-all) taught the curve that nothing is ever
+                // forgotten. A reversed suppression is a correction of that
+                // signal, not a recall outcome either way; score it neutral.
                 let rating = match access_type.as_str() {
                     "promote" => 4,
                     "search_hit" => 3,
-                    "demote" => 1,
+                    "demote" | "suppress" => 1,
                     _ => 3,
                 };
 

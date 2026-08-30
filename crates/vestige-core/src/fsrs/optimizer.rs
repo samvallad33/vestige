@@ -6,6 +6,15 @@
 use super::algorithm::{FSRS6_WEIGHTS, retrievability_with_decay};
 use chrono::{DateTime, Utc};
 
+/// Lowest decay exponent the optimizer may fit. Roughly half the FSRS-6
+/// default of 0.1542; below this the forgetting curve is flat enough that a
+/// year of neglect barely moves retention, which disables every downstream
+/// consumer of decay (accessibility states, hygiene stats, forgetting).
+pub const MIN_DECAY_BOUND: f64 = 0.08;
+
+/// Failed-recall events (rating 1) required before a decay fit is trusted.
+pub const MIN_FORGETTING_EVIDENCE: usize = 5;
+
 // ============================================================================
 // REVIEW LOG
 // ============================================================================
@@ -79,6 +88,23 @@ impl FSRSOptimizer {
         self.reviews.len() >= self.min_reviews
     }
 
+    /// Does the history contain enough FORGETTING evidence to fit a decay
+    /// curve at all?
+    ///
+    /// The loss treats rating 1 as "forgot" and everything else as
+    /// "remembered". A history with no failures makes "nothing is ever
+    /// forgotten" the perfect fit, and the golden-section search rides w20
+    /// straight into its lower bound. That is not a hypothetical: an agent
+    /// memory store's access log is success-dominated by construction, and a
+    /// real 2,929-memory store was measured running with w20 = 0.0104 for a
+    /// month — flat enough that 217 days of neglect moved retention by less
+    /// than 0.09, leaving the Silent and Unavailable accessibility states
+    /// unreachable. Success-only data is insufficient evidence, not evidence
+    /// of immortal memory.
+    pub fn has_forgetting_evidence(&self) -> bool {
+        self.reviews.iter().filter(|r| r.rating == 1).count() >= MIN_FORGETTING_EVIDENCE
+    }
+
     /// Get the number of reviews in history
     pub fn review_count(&self) -> usize {
         self.reviews.len()
@@ -115,8 +141,16 @@ impl FSRSOptimizer {
         if !self.has_enough_data() {
             return self.weights[20];
         }
+        if !self.has_forgetting_evidence() {
+            // Refuse to fit rather than fit a degenerate curve; the caller
+            // keeps (or is restored to) the current default.
+            return self.weights[20];
+        }
 
-        let (mut a, mut b) = (0.01, 1.0);
+        // Lower bound is decay-meaningful, roughly half the FSRS-6 default
+        // (0.1542). The previous bound of 0.01 was a numeric convenience the
+        // degenerate fit slammed into; no human forgetting curve is that flat.
+        let (mut a, mut b) = (MIN_DECAY_BOUND, 1.0);
         let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
 
         let mut x1 = b - (b - a) / phi;
@@ -243,6 +277,49 @@ mod tests {
 
         // Optimization should have changed the value
         assert_ne!(original_decay, optimized_decay);
+    }
+
+    /// REGRESSION (v2.6.0): a success-only history must not produce a fit.
+    /// The measured failure: a real store's access log fed the optimizer
+    /// success-dominated data, the fit collapsed into the old 0.01 lower
+    /// bound, and store-wide decay silently stopped for a month.
+    #[test]
+    fn success_only_history_refuses_to_fit() {
+        let mut optimizer = FSRSOptimizer::new();
+        let now = Utc::now();
+        optimizer.add_reviews((0..200).map(|i| ReviewLog {
+            timestamp: now - Duration::days(i as i64),
+            rating: 3, // remembered, every single time
+            stability: 5.0,
+            difficulty: 5.0,
+            elapsed_days: 1.0 + (i as f64 * 0.5),
+        }));
+        assert!(optimizer.has_enough_data());
+        assert!(!optimizer.has_forgetting_evidence());
+
+        let default_decay = optimizer.weights()[20];
+        let result = optimizer.optimize_decay();
+        assert_eq!(
+            result, default_decay,
+            "with no forgetting evidence the fit must be refused, not degenerate"
+        );
+    }
+
+    /// Even with forgetting evidence, the fit may never go below the
+    /// decay-meaningful floor.
+    #[test]
+    fn fit_respects_the_decay_floor() {
+        let mut optimizer = FSRSOptimizer::new();
+        let reviews = create_test_reviews(200);
+        optimizer.add_reviews(reviews);
+        assert!(optimizer.has_forgetting_evidence());
+
+        let optimized = optimizer.optimize_decay();
+        assert!(
+            optimized >= MIN_DECAY_BOUND,
+            "fit {optimized} fell below the floor {MIN_DECAY_BOUND}"
+        );
+        assert!(optimized < 1.0);
     }
 
     #[test]
