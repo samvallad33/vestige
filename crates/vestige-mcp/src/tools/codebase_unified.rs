@@ -767,20 +767,73 @@ async fn execute_verify(storage: &Arc<Storage>, args: &CodebaseArgs) -> Result<V
 
     let mut stale = Vec::new();
     let mut fresh = 0usize;
-    let mut unanchored = Vec::new();
+    let mut unanchored: Vec<(String, f64)> = Vec::new();
+    // Every anchored verdict in this sweep is one observation about the
+    // capture-to-rot lag distribution (Brookmeyer & Gail backcalculation:
+    // rot is only ever OBSERVED at verification time). Fresh verdicts are
+    // right-censored; stale verdicts are events.
+    let mut staleness_observations = Vec::new();
+    let now = chrono::Utc::now();
 
     for node in &nodes {
+        let age_days = (now - node.created_at).num_seconds() as f64 / 86400.0;
         match verified.get(&node.id) {
-            Some((status, verdicts)) if status.is_stale() => stale.push(serde_json::json!({
-                "id": node.id,
-                "status": status.as_str(),
-                "content": node.content,
-                "anchors": verdicts.iter().map(verification_json).collect::<Vec<_>>(),
-            })),
-            Some((status, _)) if status.is_fresh() => fresh += 1,
-            _ => unanchored.push(node.id.clone()),
+            Some((status, verdicts)) if status.is_stale() => {
+                staleness_observations.push(
+                    vestige_core::codebase::staleness::StalenessObservation {
+                        age_days,
+                        drifted: true,
+                    },
+                );
+                stale.push(serde_json::json!({
+                    "id": node.id,
+                    "status": status.as_str(),
+                    "content": node.content,
+                    "anchors": verdicts.iter().map(verification_json).collect::<Vec<_>>(),
+                }))
+            }
+            Some((status, _)) if status.is_fresh() => {
+                staleness_observations.push(
+                    vestige_core::codebase::staleness::StalenessObservation {
+                        age_days,
+                        drifted: false,
+                    },
+                );
+                fresh += 1;
+            }
+            _ => unanchored.push((node.id.clone(), age_days)),
         }
     }
+
+    // Predict for the memories verification cannot reach. The predictor
+    // refuses to fit without enough evidence, and a prediction is a
+    // probability shown next to the memory, never an action taken on it.
+    let predictor = vestige_core::codebase::staleness::StalenessPredictor::fit(
+        &staleness_observations,
+    );
+    let unverifiable_memories: Vec<Value> = unanchored
+        .iter()
+        .map(|(id, age_days)| match &predictor {
+            Some(fitted) => serde_json::json!({
+                "id": id,
+                "predictedStaleProbability":
+                    (fitted.predict_stale_probability(*age_days) * 1000.0).round() / 1000.0,
+            }),
+            None => serde_json::json!({ "id": id }),
+        })
+        .collect();
+    let staleness_prediction = match &predictor {
+        Some(fitted) => serde_json::json!({
+            "fitted": true,
+            "driftEventsObserved": fitted.events(),
+            "verificationsObserved": fitted.observations(),
+            "basis": "Kaplan-Meier over this sweep's anchored verdicts (stale = event, fresh = censored)",
+        }),
+        None => serde_json::json!({
+            "fitted": false,
+            "reason": "insufficient verification history: predictions need at least 12 anchored verdicts including 4 observed drift events",
+        }),
+    };
 
     Ok(serde_json::json!({
         "action": "verify",
@@ -791,7 +844,8 @@ async fn execute_verify(storage: &Arc<Storage>, args: &CodebaseArgs) -> Result<V
         "stale": stale.len(),
         "unverifiable": unanchored.len(),
         "staleMemories": stale,
-        "unverifiableMemories": unanchored,
+        "unverifiableMemories": unverifiable_memories,
+        "stalenessPrediction": staleness_prediction,
         "message": if stale.is_empty() {
             format!("{fresh} of {} code memories still match their source. Nothing was modified or deleted.", nodes.len())
         } else {
