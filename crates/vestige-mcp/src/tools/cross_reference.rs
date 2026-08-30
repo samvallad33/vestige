@@ -182,25 +182,40 @@ fn assess_relation(
     }
 
     let time_delta_days = (b_date - a_date).num_days().abs();
-    let trust_diff = b_trust - a_trust;
     let has_correction = appears_contradictory(a_content, b_content);
 
-    // Supersession: same topic + newer + higher trust
-    if topic_sim > 0.4 && time_delta_days > 0 && trust_diff > 0.05 && !has_correction {
-        let (newer, older) = if b_date > a_date {
-            ("B", "A")
-        } else {
-            ("A", "B")
-        };
+    // Resolve temporal order FIRST, then measure trust on the newer side.
+    //
+    // The previous code gated on `b_trust - a_trust > 0.05` (is B more trusted?)
+    // but chose the newer/older LABELS independently, by date. When A was newer
+    // but B was more trusted, the gate passed on B's trust while the label said
+    // "A supersedes B" -- reporting the LESS-trusted memory as superseding the
+    // MORE-trusted one, and printing the older memory's own trust advantage as
+    // if it belonged to the newer claim. That is exactly backwards for the case
+    // this guard exists to catch: an authoritative older finding versus a fresh,
+    // weakly-supported claim on the same topic.
+    //
+    // Supersession now requires the newer memory to ALSO be the more trusted
+    // one. When a newer claim is less trusted than what it contradicts, this
+    // returns no supersession at all and the caller keeps both.
+    let (newer, older, newer_trust, older_trust) = if b_date > a_date {
+        ("B", "A", b_trust, a_trust)
+    } else {
+        ("A", "B", a_trust, b_trust)
+    };
+    let trust_gain = newer_trust - older_trust;
+
+    // Supersession: same topic + newer + the newer one is more trusted
+    if topic_sim > 0.4 && time_delta_days > 0 && trust_gain > 0.05 && !has_correction {
         return RelationAssessment {
             relation: Relation::Supersedes,
-            confidence: topic_sim as f64 * (0.5 + trust_diff.min(0.5)),
+            confidence: topic_sim as f64 * (0.5 + trust_gain.min(0.5)),
             reasoning: format!(
                 "{} supersedes {} (newer by {}d, trust +{:.0}%)",
                 newer,
                 older,
                 time_delta_days,
-                trust_diff * 100.0
+                trust_gain * 100.0
             ),
         };
     }
