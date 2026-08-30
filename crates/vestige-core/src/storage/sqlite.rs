@@ -961,6 +961,82 @@ impl SqliteMemoryStore {
         Ok(exists != 0)
     }
 
+    fn count_foreign_key_violations(conn: &Connection) -> Result<u64> {
+        let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+        let mut rows = stmt.query([])?;
+        let mut count = 0_u64;
+        while rows.next()?.is_some() {
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Delete orphaned child rows whose own foreign key is declared
+    /// `ON DELETE CASCADE`. Such a row is unreachable -- its parent is already
+    /// gone and the schema states it should have gone with it -- so removing it
+    /// restores the invariant without discarding anything a reader could reach.
+    /// Rows whose FK is NOT cascade-declared are deliberately left alone so the
+    /// caller still fails loudly on genuine corruption.
+    fn repair_cascade_orphans(conn: &Connection) -> Result<u64> {
+        // (child_table, rowid) pairs reported by the checker.
+        let violations: Vec<(String, Option<i64>)> = {
+            let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+            let mapped = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+            })?;
+            let mut v = Vec::new();
+            for r in mapped {
+                v.push(r?);
+            }
+            v
+        };
+        if violations.is_empty() {
+            return Ok(0);
+        }
+
+        // A table is repairable only if EVERY one of its foreign keys that
+        // points at knowledge_nodes is ON DELETE CASCADE.
+        let mut cascade_ok: std::collections::HashMap<String, bool> =
+            std::collections::HashMap::new();
+        let mut repaired = 0_u64;
+        let tx = conn.unchecked_transaction()?;
+        for (table, rowid) in violations {
+            let Some(rowid) = rowid else { continue };
+            let ok = match cascade_ok.get(&table) {
+                Some(v) => *v,
+                None => {
+                    let mut stmt = tx.prepare(&format!("PRAGMA foreign_key_list(\"{}\")",
+                        table.replace('"', "\"\"")))?;
+                    let rows = stmt.query_map([], |row| {
+                        Ok((row.get::<_, String>(2)?, row.get::<_, String>(6)?))
+                    })?;
+                    let mut all_cascade = false;
+                    for r in rows {
+                        let (parent, on_delete) = r?;
+                        if parent.eq_ignore_ascii_case("knowledge_nodes") {
+                            all_cascade = on_delete.eq_ignore_ascii_case("CASCADE");
+                            if !all_cascade {
+                                break;
+                            }
+                        }
+                    }
+                    cascade_ok.insert(table.clone(), all_cascade);
+                    all_cascade
+                }
+            };
+            if !ok {
+                continue;
+            }
+            let n = tx.execute(
+                &format!("DELETE FROM \"{}\" WHERE rowid = ?1", table.replace('"', "\"\"")),
+                params![rowid],
+            )?;
+            repaired += n as u64;
+        }
+        tx.commit()?;
+        Ok(repaired)
+    }
+
     fn run_integrity_checks(conn: &Connection, phase: &str) -> Result<SqliteIntegrityStatus> {
         let mut quick_rows = Vec::new();
         {
@@ -977,15 +1053,27 @@ impl SqliteMemoryStore {
             )));
         }
 
-        let foreign_key_violations = {
-            let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
-            let mut rows = stmt.query([])?;
-            let mut count = 0_u64;
-            while rows.next()?.is_some() {
-                count += 1;
+        let mut foreign_key_violations = Self::count_foreign_key_violations(conn)?;
+        if foreign_key_violations != 0 && phase == "pre-migration" {
+            // Deletion residue from older builds (and from any delete path that
+            // ran without `PRAGMA foreign_keys = ON`) leaves child rows whose
+            // knowledge_nodes parent is already gone. Those rows are unreachable
+            // by construction, and their own schema says ON DELETE CASCADE --
+            // "if the parent goes, I go". Refusing to open the database over
+            // them bricks every store that predates FK enforcement, with no
+            // recovery path short of manual SQLite surgery. Repair them here,
+            // BEFORE migrations, then re-check. Only CASCADE-declared FKs are
+            // repaired; anything else still fails loudly below.
+            let repaired = Self::repair_cascade_orphans(conn)?;
+            foreign_key_violations = Self::count_foreign_key_violations(conn)?;
+            if repaired > 0 {
+                tracing::warn!(
+                    repaired,
+                    remaining = foreign_key_violations,
+                    "repaired orphaned child rows left by an earlier delete (ON DELETE CASCADE residue)"
+                );
             }
-            count
-        };
+        }
         if foreign_key_violations != 0 {
             return Err(StorageError::Init(format!(
                 "SQLite {phase} foreign_key_check found {foreign_key_violations} violation(s)"
@@ -4160,7 +4248,6 @@ impl SqliteMemoryStore {
     /// Significantly reduces retrieval strength so better alternatives surface
     /// Does NOT delete - the memory stays for reference but ranks lower
     pub fn demote_memory(&self, id: &str) -> Result<KnowledgeNode> {
-        let now = Utc::now();
 
         // Strong penalty: -0.3 retrieval, -0.15 retention, halve stability
         {
@@ -4168,14 +4255,16 @@ impl SqliteMemoryStore {
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            // last_accessed intentionally untouched -- see suppress_memory: a
+            // demotion is an inhibition event, not a recall, and apply_decay
+            // would otherwise recompute the penalty away.
             writer.execute(
                 "UPDATE knowledge_nodes SET
-                    last_accessed = ?1,
                     retrieval_strength = MAX(0.05, retrieval_strength - 0.30),
                     retention_strength = MAX(0.05, retention_strength - 0.15),
                     stability = stability * 0.5
-                WHERE id = ?2",
-                params![now.to_rfc3339(), id],
+                WHERE id = ?1",
+                params![id],
             )?;
         }
 
@@ -4215,8 +4304,13 @@ impl SqliteMemoryStore {
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
             let tx = writer.transaction()?;
             let changed = tx.execute(
+                // NOTE: last_accessed is deliberately NOT touched here. apply_decay
+                // RECOMPUTES retrieval_strength/retention_strength from
+                // days_since(last_accessed) rather than decaying the stored value,
+                // so stamping "now" would make an inhibited memory look freshly
+                // recalled and the next consolidation pass would overwrite this
+                // whole penalty -- silently un-suppressing it within hours.
                 "UPDATE knowledge_nodes SET
-                    last_accessed = ?1,
                     suppression_count = COALESCE(suppression_count, 0) + 1,
                     suppressed_at = ?1,
                     retrieval_strength = MAX(0.05, retrieval_strength - 0.35),
@@ -7207,6 +7301,34 @@ impl SqliteMemoryStore {
         // merge this cycle rather than risk absorbing a pin. #142
         let protected = self.protected_node_ids()?;
 
+        // Scope map, fetched ONCE alongside `protected` and for the same reason:
+        // the per-cluster reader lock below is non-reentrant, so this cannot be
+        // looked up inside the loop. This pass merges content and then HARD
+        // DELETES the weak nodes, unattended and with no audit row. Without a
+        // scope guard it will happily fuse two different projects' near-identical
+        // notes -- e.g. the same convention worded alike but naming different
+        // credentials -- and destroy one of them. Memories only ever cluster with
+        // memories in their OWN scope.
+        let scopes: std::collections::HashMap<String, String> = {
+            let reader = self
+                .reader
+                .lock()
+                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+            let mut stmt = reader.prepare(
+                "SELECT id, COALESCE(NULLIF(TRIM(scope), ''), 'user') FROM knowledge_nodes",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut m = std::collections::HashMap::new();
+            for r in rows {
+                let (id, sc) = r?;
+                m.insert(id, sc);
+            }
+            m
+        };
+        let scope_of = |id: &str| -> &str { scopes.get(id).map(String::as_str).unwrap_or("user") };
+
         const SIMILARITY_THRESHOLD: f32 = 0.85;
         let mut merged_count = 0i64;
         let mut consumed: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -7218,10 +7340,15 @@ impl SqliteMemoryStore {
 
             let mut cluster: Vec<(usize, f32)> = Vec::new();
 
+            let anchor_scope = scope_of(&all_embeddings[i].0);
             for j in (i + 1)..n {
                 if consumed.contains(&all_embeddings[j].0)
                     || protected.contains(&all_embeddings[j].0)
                 {
+                    continue;
+                }
+                // Never cluster across project scopes: the merge below deletes.
+                if scope_of(&all_embeddings[j].0) != anchor_scope {
                     continue;
                 }
                 let sim = crate::embeddings::cosine_similarity(
