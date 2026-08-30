@@ -5083,13 +5083,14 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vestige-core"
-version = "2.4.0"
+version = "2.4.1"
 dependencies = [
  "argon2",
  "base64 0.22.1",
  "blake3",
  "candle-core",
  "candle-nn",
+ "cc",
  "chacha20poly1305",
  "chrono",
  "criterion",
@@ -5130,7 +5131,7 @@ dependencies = [
 
 [[package]]
 name = "vestige-mcp"
-version = "2.4.0"
+version = "2.4.1"
 dependencies = [
  "anyhow",
  "axum",

@@ -33,7 +33,7 @@ No Docker, no API key, no signup.
 npm install -g vestige-mcp-server@latest
 ```
 
-This installs the `vestige-mcp` command. Prebuilt binaries ship for macOS (Apple Silicon and Intel), Linux x86_64, and Windows x86_64, so there is no compile step.
+This installs the `vestige-mcp` command. Prebuilt binaries ship for macOS (Apple Silicon and Intel), Linux x86_64 (Ubuntu 22.04, Debian 12, and newer), and Windows x86_64, so there is no compile step.
 
 If a global pnpm install skipped its postinstall hook, the command launcher retries the local binary installation on its first invocation. It reports that recovery on stderr, preserving MCP stdout for protocol messages.
 

@@ -7,11 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-08-30 — "Linux starts"
+
+A packaging fix. v2.4.0 and every release before it shipped a Linux binary
+that could not start on common distributions, so none of its correctness work
+reached those users at all.
+
+### Fixed — Linux binaries start on Ubuntu 22.04 and Debian 12 (#174, #175)
+
+The published `x86_64-unknown-linux-gnu` asset was built on `ubuntu-latest`
+(glibc 2.39). `npm install -g vestige-mcp-server` then `vestige-mcp` died
+before any MCP handshake with `GLIBC_2.38 not found`. The MCP spec-test
+failures were that crash, not protocol.
+
+Linux-gnu is now produced in an `ubuntu:22.04` container (glibc 2.35, the
+22.04 floor). The pyke ONNX Runtime archive still references C23
+`__isoc23_strto*` symbols; a small shim forwards them to classic `strto*`
+so embeddings keep working. musl was evaluated and rejected: ONNX Runtime
+ships no musl prebuilts.
+
+CI execs the binary on Ubuntu 22.04 and Debian 12 bookworm (`initialize`
+over stdio, not just `--version`). npm 2.3.0 stays broken until the next
+tagged release; this branch does not tag or publish.
+
 ## [2.4.0] - 2026-08-30 — "Memory that keeps its word"
 
-A correctness release. Nine defects are fixed across the write path, keyword
-search, the causal-reach engine and the storage layer — including one that
-would have made this release refuse to start for existing users.
+A correctness release. Fourteen defects are fixed across the write path, keyword
+search, the causal-reach engine and the storage layer. Twelve of them were live
+in the shipped v2.3.0 binary; the remaining two existed only in unreleased code,
+including one that would have made this release refuse to start for existing
+users.
 
 ### Fixed — Upgrade no longer bricks an existing database (release blocker)
 
@@ -35,9 +60,10 @@ end to end: the store that aborted now opens, `repaired=83 remaining=0`, all
 `PredictionErrorGate::evaluate` returned `Update{Reinforce}` on similarity
 alone, short-circuiting before anything consulted `appears_contradictory` —
 which is already computed for that candidate. A correction is *lexically*
-near-identical to what it corrects ("Never use the fp16lib feature on Windows"
-against a stored "Always use the fp16lib feature on Windows" sits around 0.94
-cosine), so the gate read corrections as agreement, discarded them, and
+near-identical to what it corrects: "Never use the fp16lib feature for usearch on
+Windows" against a stored "Always use the fp16lib feature for usearch on Windows"
+measures 0.928 cosine, over the 0.92 near-identical threshold. So the gate read
+corrections as agreement, discarded them, and
 strengthened the very memory the user had just said was wrong. Contradictory
 input now falls through to the contradiction branch, which keeps both.
 
@@ -76,13 +102,57 @@ mirror the index tokenizer:
   adjacent token instead of separating on them. An em dash, curly apostrophe,
   ellipsis, non-breaking space, leading emoji or accented letter therefore glued
   itself to the neighbouring word and made that word permanently unfindable.
+  Note that a character with spaces around it is harmless, since the tokenizer
+  separates on the space regardless; only a character glued directly between
+  letters hides anything. Measured on a real 2,868-memory store, 201 memories
+  (7%) contain words hidden this way, 161 of them through accented or Cyrillic
+  text, which the ascii tokenizer cannot index at all.
   Rebuilt as `porter unicode61 remove_diacritics 2`.
-- `sanitize_fts5_terms` used a deny list that missed 14 characters still
-  meaningful to the FTS5 grammar — most damagingly the apostrophe, which opens a
-  string literal: a query containing one returned zero keyword results. Replaced
-  with a conservative allow list.
+- `sanitize_fts5_terms` used a deny list that left 16 ASCII punctuation
+  characters unblanked. The demonstrated failure is the apostrophe, which opens a
+  string literal in FTS5: `recall("cargo can't find crate")` returned zero
+  keyword hits while the same query without it matched. Replaced with a
+  conservative allow list, which does not depend on enumerating the grammar
+  correctly.
 - `sanitize_fts5_or_query` truncated non-ASCII tokens to their ASCII prefix to
   match the old index; those are real tokens under `unicode61`.
+
+### Fixed — Exact lookup is no longer outranked by memories that merely cite it
+
+`concrete_search_filtered` is the documented exact-lookup path: a UUID, env var,
+path or quoted phrase routes here. It fed two incompatible scales into one
+`combined_score`. The FTS leg used raw BM25 magnitude, which is unbounded, while
+`literal_match_score` returns fixed constants (id-exact 3.0, content-exact 2.5,
+prefix 2.0, contains 1.6, source 1.4, tag 1.2), and the merge takes the maximum.
+
+Measured with SQLite FTS5 on a 202-document corpus, a note citing a UUID three
+times scores a BM25 magnitude of 27.475. The memory whose id *is* that UUID
+scores exactly 3.0 and never appears in the FTS leg at all, because the
+identifier is its id rather than its text. The FTS leg is now normalized into
+0.0..=1.0, strictly below the 1.2 literal floor, so relative BM25 order is kept
+among pure keyword hits while any literal match outranks any non-literal one.
+
+### Fixed — The claim-vs-memory conflict check can actually fire
+
+`recall(mode="reason")` tests the caller's query against each analyzed memory so
+that a claim contradicting a high-trust memory surfaces instead of passing in
+silence. Its gate used a symmetric Jaccard that divides by the union, so the
+score is bounded by (query length / memory length). A claim restating a real
+26-substantive-word memory's own position in 8 words scores 0.214 against a gate
+of 0.4. The stage never fired for any realistic memory. It now gates on query
+coverage instead, which scores that same claim at 0.75.
+
+The pre-existing test covered only the negative case, an agreeing claim not being
+flagged, which passes trivially when the gate never fires at all.
+
+### Fixed — A new memory is no longer stamped as already expired
+
+smart_ingest auto-closes a dated claim's validity when a currently-valid newer
+fact starts later. The comment stated the precondition — a claim that lost every
+candidate — but the filter never checked it, and the trigger is recorded while
+skipping *ineligible* candidates. So an unrelated newer fact elsewhere in the
+store could close a brand-new memory at creation, leaving it invisible to
+ordinary recall. This existed only in unreleased code.
 
 ### Fixed — Causal backfill joins on identifiers, not vocabulary
 

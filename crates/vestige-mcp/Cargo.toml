@@ -1,6 +1,6 @@
 [package]
 name = "vestige-mcp"
-version = "2.4.0"
+version = "2.4.1"
 edition = "2024"
 description = "Cognitive memory MCP server for AI agents - FSRS-6, spreading activation, synaptic tagging, 3D dashboard, and 130 years of memory research"
 authors = ["samvallad33"]
@@ -24,9 +24,11 @@ connectors = ["vestige-core/connectors"]
 cloud-sync = ["vestige-core/cloud-sync"]
 # Default ort backend: downloads prebuilt ONNX Runtime at build time.
 # Fails on targets without prebuilts (notably x86_64-apple-darwin).
+# Published linux-gnu binaries are built in Ubuntu 22.04 (glibc 2.35) so they
+# start on 22.04 and Debian 12; see vestige-core's isoc23 shim.
 ort-download = ["embeddings", "vestige-core/ort-download"]
 # Alternative ort backend: runtime-linked system libonnxruntime via dlopen.
-# Required on Intel Mac and on systems with glibc < 2.38.
+# Required on Intel Mac (no x86_64 prebuilts).
 # Usage:   cargo build --no-default-features --features ort-dynamic,vector-search
 # Runtime: export ORT_DYLIB_PATH=$(brew --prefix onnxruntime)/lib/libonnxruntime.dylib
 ort-dynamic = ["embeddings", "vestige-core/ort-dynamic"]
@@ -60,7 +62,7 @@ path = "src/bin/cli.rs"
 # Only `bundled-sqlite` is always on. `embeddings` and `vector-search` are
 # toggled via vestige-mcp's own feature flags below so `--no-default-features`
 # actually works (previously hardcoded here, which silently defeated the flag).
-vestige-core = { version = "2.4.0", path = "../vestige-core", default-features = false, features = ["bundled-sqlite"] }
+vestige-core = { version = "2.4.1", path = "../vestige-core", default-features = false, features = ["bundled-sqlite"] }
 
 # ============================================================================
 # MCP Server Dependencies
