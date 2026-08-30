@@ -680,6 +680,15 @@ pub struct SqliteMemoryStore {
     attached_profile_runtime: RwLock<Option<AttachedProfileRuntime>>,
     /// Cached model signature. `None` until the first embedding is written.
     registered_model: std::sync::RwLock<Option<crate::storage::memory_store::ModelSignature>>,
+    /// Last `PRAGMA data_version` observed on the reader connection.
+    ///
+    /// SQLite increments this on a connection whenever ANOTHER connection commits
+    /// to the database. It is the cheapest possible cross-process change signal --
+    /// no table scan, no file stat -- and it is what lets a long-lived process
+    /// notice that a peer has written memories it has never seen. See
+    /// `refresh_vector_index_if_stale`.
+    #[cfg(feature = "vector-search")]
+    last_seen_data_version: Mutex<i64>,
 }
 
 #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -1093,9 +1102,8 @@ impl SqliteMemoryStore {
         //
         // Writer phases only. The runtime reader must never attempt a write.
         let repairable_phase = phase == "pre-migration" || phase == "post-migration";
-        let quick_ok = |rows: &[String]| {
-            rows.len() == 1 && rows.first().map(String::as_str) == Some("ok")
-        };
+        let quick_ok =
+            |rows: &[String]| rows.len() == 1 && rows.first().map(String::as_str) == Some("ok");
         if !quick_ok(&quick_rows) && repairable_phase {
             let fts_tables = Self::fts5_table_names(conn)?;
             if Self::quick_check_failure_is_only_fts5(&quick_rows, &fts_tables) {
@@ -1492,6 +1500,8 @@ impl SqliteMemoryStore {
             embedding_service,
             #[cfg(feature = "vector-search")]
             vector_index,
+            #[cfg(feature = "vector-search")]
+            last_seen_data_version: Mutex::new(-1),
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
             query_cache,
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -4340,7 +4350,6 @@ impl SqliteMemoryStore {
     /// Significantly reduces retrieval strength so better alternatives surface
     /// Does NOT delete - the memory stays for reference but ranks lower
     pub fn demote_memory(&self, id: &str) -> Result<KnowledgeNode> {
-
         // Strong penalty: -0.3 retrieval, -0.15 retention, halve stability
         {
             let writer = self
@@ -6514,6 +6523,114 @@ impl SqliteMemoryStore {
 
     /// Semantic search returning scores
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    /// Bring the in-process vector index up to date with vectors written by OTHER
+    /// processes since this one last looked.
+    ///
+    /// THE BUG THIS FIXES (#181). The HNSW index is process-local: it is built once
+    /// at startup from `embedding_profile_vectors` and thereafter only ever appended
+    /// to by THIS process's own ingests. A second MCP server writing to the same
+    /// SQLite file is therefore invisible to it. In a normal setup -- a desktop
+    /// client, an editor integration, a CLI and a dashboard all pointed at one store
+    /// -- every long-lived process is semantically blind to everything its peers have
+    /// written since it booted. The consequences are silent: the prediction-error
+    /// gate sees no similar candidate and creates a duplicate instead of reinforcing,
+    /// and recall returns an incomplete answer with no indication anything is missing.
+    /// The FTS5 leg reads SQLite directly and is unaffected, which is exactly why the
+    /// failure is partial and hard to notice.
+    ///
+    /// THE SIGNAL. `PRAGMA data_version` is incremented on a connection whenever a
+    /// DIFFERENT connection commits. Reading it is a single pragma with no table
+    /// access, so this check is affordable on every query, and when nothing has
+    /// changed it costs one integer comparison.
+    ///
+    /// LOCK DISCIPLINE. This deliberately acquires the reader lock and the index lock
+    /// SEQUENTIALLY and never holds both at once: read the version, drop; read the
+    /// missing rows, drop; then take the index and add. `semantic_search_raw` holds
+    /// only the index lock, so no ordering cycle exists and this cannot deadlock
+    /// against it.
+    ///
+    /// FAILS OPEN. A refresh problem must degrade to a possibly-stale index, never
+    /// break the query -- returning an error here would turn a peer's write into an
+    /// outage. Returns the number of vectors added.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn refresh_vector_index_if_stale(&self) -> usize {
+        let Some(index_mutex) = self.vector_index.as_ref() else {
+            return 0;
+        };
+
+        // --- reader lock: has anyone else committed? ---
+        let current_version: i64 = {
+            let Ok(reader) = self.reader.lock() else {
+                return 0;
+            };
+            match reader.query_row("PRAGMA data_version", [], |row| row.get(0)) {
+                Ok(v) => v,
+                Err(_) => return 0,
+            }
+        };
+        {
+            let Ok(mut seen) = self.last_seen_data_version.lock() else {
+                return 0;
+            };
+            if *seen == current_version {
+                return 0; // nothing has changed since we last looked
+            }
+            *seen = current_version;
+        }
+
+        let Ok(Some(active)) = self.active_embedding_profile() else {
+            return 0;
+        };
+
+        // --- reader lock: which vectors exist for the active profile? ---
+        let rows: Vec<(String, Vec<u8>)> = {
+            let Ok(reader) = self.reader.lock() else {
+                return 0;
+            };
+            let Ok(mut stmt) = reader.prepare(
+                "SELECT node_id, embedding FROM embedding_profile_vectors WHERE profile_id = ?1",
+            ) else {
+                return 0;
+            };
+            let Ok(mapped) = stmt.query_map(params![active.profile_id.as_str()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            }) else {
+                return 0;
+            };
+            mapped.filter_map(|r| r.ok()).collect()
+        };
+
+        // --- index lock: add only what we do not already have ---
+        let Ok(mut index) = index_mutex.lock() else {
+            return 0;
+        };
+        let mut added = 0usize;
+        for (node_id, blob) in rows {
+            if index.contains(&node_id) {
+                continue;
+            }
+            // Same decoder the startup index builder uses, so a vector added here
+            // is byte-identical to one added by a full rebuild.
+            let Some(embedding) = Embedding::from_bytes(&blob) else {
+                continue; // unreadable vector: skip it, never fail the query
+            };
+            if embedding.dimensions != index.dimensions() {
+                continue; // wrong profile/dimension: not ours to add
+            }
+            if index.add(&node_id, &embedding.vector).is_ok() {
+                added += 1;
+            }
+        }
+        if added > 0 {
+            tracing::debug!(
+                added,
+                data_version = current_version,
+                "refreshed vector index with memories written by another process"
+            );
+        }
+        added
+    }
+
     fn semantic_search_raw(&self, query: &str, limit: i32) -> Result<Vec<(String, f32)>> {
         if !self.vector_search_available() {
             return Ok(vec![]);
@@ -6546,6 +6663,12 @@ impl SqliteMemoryStore {
             }
             _ => self.get_query_embedding(query)?,
         };
+
+        // Pick up anything a peer process wrote since we last searched (#181).
+        // Cheap when nothing changed: one PRAGMA and an integer comparison. Runs
+        // BEFORE the index lock is taken, and takes its own locks sequentially,
+        // so it cannot deadlock against the search below.
+        self.refresh_vector_index_if_stale();
 
         let index = self.vector_index.as_ref().unwrap();
         let index = index
@@ -19017,7 +19140,9 @@ mod tests {
             )
             .expect("corrupt");
             let corrupt = conn
-                .execute_batch("INSERT INTO knowledge_fts(knowledge_fts) VALUES('integrity-check');")
+                .execute_batch(
+                    "INSERT INTO knowledge_fts(knowledge_fts) VALUES('integrity-check');",
+                )
                 .is_err();
             assert!(corrupt, "the fixture must actually corrupt the index");
         }
