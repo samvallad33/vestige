@@ -168,10 +168,19 @@ impl McpServer {
             return None;
         }
 
-        // Check initialization for non-initialize requests
+        // Check initialization for non-initialize requests.
+        //
+        // `server/discover` is deliberately exempt. Its entire purpose is to let
+        // a client learn what this server speaks BEFORE committing to a protocol
+        // revision, and MCP 2026-07-28 -- which removes the handshake altogether
+        // -- explicitly sanctions using it as a backward-compatibility probe on
+        // stdio. Gating it behind the very handshake it exists to precede makes
+        // it useless: a modern client probing this server would get
+        // "Server not initialized" and have to guess.
         if !self.initialized
             && request.method != "initialize"
             && request.method != "notifications/initialized"
+            && request.method != "server/discover"
         {
             warn!(
                 "Rejecting request '{}': server not initialized",
@@ -192,6 +201,7 @@ impl McpServer {
             "tools/call" => self.handle_tools_call(request.params).await,
             "resources/list" => self.handle_resources_list().await,
             "resources/read" => self.handle_resources_read(request.params).await,
+            "server/discover" => self.handle_server_discover(),
             "ping" => Ok(serde_json::json!({})),
             method => {
                 warn!("Unknown method: {}", method);
@@ -203,6 +213,39 @@ impl McpServer {
             Ok(result) => JsonRpcResponse::success(request.id, result),
             Err(error) => JsonRpcResponse::error(request.id, error),
         })
+    }
+
+    /// `server/discover` — advertise supported protocol versions, capabilities and
+    /// identity WITHOUT a handshake.
+    ///
+    /// MCP 2026-07-28 makes this mandatory: it removes the
+    /// `initialize`/`notifications/initialized` handshake entirely and makes the
+    /// protocol stateless, so a client needs some way to learn what a server
+    /// speaks before it commits to a revision. On stdio the spec explicitly
+    /// allows using this as a backward-compatibility probe, which is exactly how
+    /// a 2026-era client will meet this 2025-11-25 server.
+    ///
+    /// Answering it truthfully costs nothing and is strictly better than the
+    /// alternative, which is a modern client getting `method_not_found` and
+    /// having to guess. It deliberately does NOT claim 2026-07-28 support: the
+    /// stateless core, `resultType`, and MRTR are not implemented yet, and
+    /// advertising a revision we do not serve would be a false claim that fails
+    /// conformance for real.
+    ///
+    /// Unlike `initialize`, this neither takes params nor mutates session state,
+    /// so it is safe to call at any point, including before initialization.
+    fn handle_server_discover(&self) -> Result<serde_json::Value, JsonRpcError> {
+        Ok(serde_json::json!({
+            "protocolVersions": supported_protocol_versions(),
+            "serverInfo": {
+                "name": "vestige",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+            "capabilities": {
+                "tools": { "listChanged": false },
+                "resources": { "listChanged": false },
+            },
+        }))
     }
 
     /// Handle initialize request
@@ -471,8 +514,35 @@ impl McpServer {
             }
         }
 
-        let result = ListToolsResult { tools };
-        serde_json::to_value(result).map_err(|e| JsonRpcError::internal_error(&e.to_string()))
+        // Deterministic order. MCP 2026-07-28 says servers SHOULD return tools
+        // from tools/list in a stable order so clients can cache the list and so
+        // the bytes land identically in an LLM prompt cache. The vec above is
+        // hand-ordered by theme, which is good for a human reading the source and
+        // useless as a cache key the moment anyone reorders it.
+        tools.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let mut result = serde_json::to_value(ListToolsResult { tools })
+            .map_err(|e| JsonRpcError::internal_error(&e.to_string()))?;
+
+        // Freshness hints (MCP 2026-07-28 `CacheableResult`). Measured on a real
+        // install: this response is 28,506 bytes and was served 1,161 times from
+        // one log -- roughly 7,000 tokens of tool schema pushed into model context
+        // on every single session start, re-sent forever, with nothing telling the
+        // client it could have kept the previous copy.
+        //
+        // The advertised surface only changes when the binary changes, so an hour
+        // is conservative rather than aggressive. `private` because the list can
+        // vary with per-install configuration; a shared intermediary must not
+        // serve one install's tool list to another.
+        //
+        // Emitting these at 2025-11-25 is forward-compatible: unknown result
+        // fields are ignored by older clients, and the fields become required at
+        // 2026-07-28.
+        if let Some(object) = result.as_object_mut() {
+            object.insert("ttlMs".to_string(), serde_json::json!(3_600_000u64));
+            object.insert("cacheScope".to_string(), serde_json::json!("private"));
+        }
+        Ok(result)
     }
 
     /// Handle tools/call request
