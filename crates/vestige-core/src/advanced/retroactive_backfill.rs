@@ -114,22 +114,67 @@ pub struct FailureEvent {
 
 /// Pull shared-entity join keys from content + tags (single source of truth used
 /// by the MCP tool, CLI, and offline pass so they never diverge).
+/// Does this token look like a real identifier -- an env var, a path, a
+/// filename, a dotted symbol -- as opposed to an ordinary English word?
+///
+/// The backward reach joins a failure to its cause on SHARED ENTITIES. That only
+/// works if an "entity" is something specific. Anything that admits common
+/// vocabulary turns the causal join into "these two memories used the same
+/// word", which is precisely what a vector search already does and what backfill
+/// exists to complement.
+fn is_identifier_shaped(tok: &str) -> bool {
+    if tok.len() < 3 {
+        return false;
+    }
+    // UPPER_SNAKE env var. The underscore is REQUIRED: the previous check
+    // accepted any all-caps run of >=3 chars, so ordinary emphasis -- VERIFIED,
+    // BUG, FALSE, CRITICAL, SHIPPED, DANGEROUS -- was harvested as an "env var".
+    // Memory text written in a house style that shouts for emphasis therefore
+    // filled the entity pool with vocabulary, and since the causal score is a
+    // raw count of shared entities, three such junk matches outranked one
+    // genuine rare identifier.
+    let is_env = tok.contains('_')
+        && tok
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+        && tok.chars().any(|c| c.is_ascii_uppercase());
+
+    // Path or dotted/slashed identifier. Requires a segment on BOTH sides of the
+    // separator and at least one multi-character segment, so ordinary prose
+    // abbreviations ("e.g.", "i.e.", "U.S.", "v2.3.0" trailing dots) no longer
+    // qualify as causal join keys.
+    let is_path = if tok.contains('/') || tok.contains('.') {
+        let segs: Vec<&str> = tok.split(['/', '.']).filter(|x| !x.is_empty()).collect();
+        segs.len() >= 2
+            && segs.iter().any(|x| x.len() >= 3)
+            && tok.chars().any(|c| c.is_ascii_alphabetic())
+    } else {
+        false
+    };
+
+    is_env || is_path
+}
+
 pub fn extract_entities(content: &str, tags: &[String]) -> Vec<String> {
     use std::collections::HashSet;
-    let mut set: HashSet<String> = tags.iter().map(|t| t.to_lowercase()).collect();
+    // Tags are NOT trusted verbatim. Ingest guidance encourages a topical tag on
+    // every save, so tags are overwhelmingly broad vocabulary ("vestige",
+    // "bug", "verified"). Inserting them raw made every memory sharing a topic a
+    // "causal" match. Run them through the same shape test as content tokens.
+    // Shape-test the tag AS WRITTEN, then lowercase for storage. Testing the
+    // lowercased form would reject every uppercase env var (is_env requires an
+    // ASCII uppercase char), which is the most valuable join key there is.
+    let mut set: HashSet<String> = tags
+        .iter()
+        .map(|t| t.trim())
+        .filter(|t| is_identifier_shaped(t))
+        .map(|t| t.to_lowercase())
+        .collect();
     for raw in content.split(|c: char| {
         !(c.is_alphanumeric() || c == '_' || c == '.' || c == '/' || c == '-')
     }) {
         let tok = raw.trim_matches(|c: char| c == '.' || c == '/' || c == '-');
-        if tok.len() < 3 {
-            continue;
-        }
-        let is_env = tok.len() >= 3
-            && tok.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
-            && tok.chars().any(|c| c.is_ascii_uppercase());
-        let is_path = (tok.contains('/') || tok.contains('.'))
-            && tok.chars().any(|c| c.is_ascii_alphabetic());
-        if is_env || is_path {
+        if is_identifier_shaped(tok) {
             set.insert(tok.to_lowercase());
         }
     }
@@ -435,6 +480,48 @@ mod tests {
         );
         // it gets a real stability boost (stops decaying, will surface next time)
         assert!(top.promoted_stability > 5.0, "the cause must be promoted (boosted stability)");
+    }
+
+    /// extract_entities had NO test exercising it on realistic prose -- every
+    /// existing test hand-supplies a clean `entities` vec -- which is exactly how
+    /// a vocabulary-harvesting extractor shipped. The causal join is only
+    /// meaningful if an "entity" is specific.
+    #[test]
+    fn extract_entities_keeps_identifiers_and_rejects_prose() {
+        let content = "VESTIGE BUG VERIFIED: this is a DANGEROUS FALSE NEGATIVE. \
+                       Set RUST_LOG and VESTIGE_DATA_DIR before running, e.g. the \
+                       store at com.vestige.core/backups, see sqlite.rs for detail.";
+        let tags = vec![
+            "vestige".to_string(),
+            "bug".to_string(),
+            "verified".to_string(),
+            // TAG-ONLY identifier: deliberately absent from `content` so this
+            // exercises the tag path in isolation. Shape-testing the LOWERCASED
+            // tag silently drops every uppercase env var (is_env needs an ASCII
+            // uppercase char) -- a regression the content path would otherwise
+            // mask.
+            "PAYMENTS_REDIS_URL".to_string(),
+        ];
+        let ents = extract_entities(content, &tags);
+
+        // Real identifiers survive.
+        for want in [
+            "rust_log",
+            "vestige_data_dir",
+            "payments_redis_url", // tag-only: proves tags are not shape-tested post-lowercase
+            "com.vestige.core/backups",
+            "sqlite.rs",
+        ] {
+            assert!(ents.iter().any(|e| e == want), "missing entity {want:?}: {ents:?}");
+        }
+        // Emphasis words, prose abbreviations and broad topical tags do NOT
+        // become causal join keys.
+        for junk in ["verified", "bug", "false", "dangerous", "negative", "vestige", "e.g"] {
+            assert!(
+                !ents.iter().any(|e| e == junk),
+                "vocabulary {junk:?} must not be an entity: {ents:?}"
+            );
+        }
     }
 
     #[test]

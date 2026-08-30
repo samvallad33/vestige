@@ -392,7 +392,17 @@ impl PredictionErrorGate {
 
         // Check for near-identical match
         if let Some(best) = top_candidates.first() {
-            if best.similarity >= self.config.near_identical_threshold {
+            // A CORRECTION is lexically near-identical to what it corrects:
+            // "Never use fp16lib on Windows" vs "Always use fp16lib on Windows"
+            // sits around cosine 0.94, comfortably over near_identical_threshold.
+            // Reinforcing on similarity alone therefore discards the correction
+            // AND strengthens the very memory the user just said is wrong --
+            // the single worst outcome this gate can produce. `appears_contradictory`
+            // is already computed for this candidate above, so honour it here and
+            // let the contradiction branch below decide.
+            if best.similarity >= self.config.near_identical_threshold
+                && !best.appears_contradictory
+            {
                 // Nearly identical - reinforce existing
                 self.stats.updates += 1;
                 return GateDecision::Update {
