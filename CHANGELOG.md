@@ -99,6 +99,11 @@ mirror the index tokenizer:
   adjacent token instead of separating on them. An em dash, curly apostrophe,
   ellipsis, non-breaking space, leading emoji or accented letter therefore glued
   itself to the neighbouring word and made that word permanently unfindable.
+  Note that a character with spaces around it is harmless, since the tokenizer
+  separates on the space regardless; only a character glued directly between
+  letters hides anything. Measured on a real 2,868-memory store, 201 memories
+  (7%) contain words hidden this way, 161 of them through accented or Cyrillic
+  text, which the ascii tokenizer cannot index at all.
   Rebuilt as `porter unicode61 remove_diacritics 2`.
 - `sanitize_fts5_terms` used a deny list that missed 14 characters still
   meaningful to the FTS5 grammar — most damagingly the apostrophe, which opens a
