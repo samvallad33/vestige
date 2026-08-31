@@ -17,6 +17,14 @@
 		downloadClip,
 		loopExportSupported
 	} from '$lib/observatory/export/loop-export';
+	import {
+		captureBrainPrint,
+		isBrainPrintSeed,
+		loopExportFilename,
+		printPermalink,
+		type BrainPrint
+	} from '$lib/observatory/brain-print';
+	import BrainPrintPanel from '$lib/observatory/overlays/BrainPrintPanel.svelte';
 	import type { GraphNode, GraphResponse } from '$types';
 
 	type ObservatoryTextItem = TextLayerItem & { action?: 'demo' | 'exit'; demo?: DemoMode };
@@ -25,7 +33,7 @@
 	const receiptParam = params.get('receipt');
 	const demoParam = receiptParam ? 'recall-path' : (params.get('demo') ?? 'recall-path');
 	let demo = $state<DemoMode>(isDemoMode(demoParam) ? demoParam : 'recall-path');
-	const seedValue = params.get('seed') ?? 'vestige-observatory-v1';
+	let seedValue = $state(params.get('seed') ?? 'vestige-observatory-v1');
 	const frameParam = params.get('frame');
 	const freezeFrame = frameParam !== null && frameParam !== '' ? Number(frameParam) : null;
 	// Capture/footage mode HIDES the cursor + chrome for clean hero recordings.
@@ -642,7 +650,7 @@
 				engine,
 				onProgress: (p) => (exportProgress = p)
 			});
-			downloadClip(clip, `vestige-${demo}-loop.mp4`);
+			downloadClip(clip, loopExportFilename(seedValue, demo));
 		} catch (e) {
 			exportError = e instanceof Error ? e.message : 'Export failed';
 		} finally {
@@ -683,6 +691,61 @@
 	function pickDemo(mode: DemoMode) {
 		if (receipt) return;
 		switchDemo(mode);
+	}
+
+	// ── Brain print — share mechanic #2 ──────────────────────────────────
+	// Structure-only signature of the live store. Applying it writes
+	// ?seed=vb1-<8 hex> and remounts the field on that seed. Permalink is
+	// the URL; the clip name follows the print when one is active.
+	let brainPrint = $state<BrainPrint | null>(null);
+	let printing = $state(false);
+	let printError = $state<string | null>(null);
+	let permalinkCopied = $state(false);
+	const activePrintId = $derived(
+		brainPrint?.printId ?? (isBrainPrintSeed(seedValue) ? seedValue : null)
+	);
+
+	function applyPrintSeed(printId: string) {
+		seedValue = printId;
+		const url = new URL(window.location.href);
+		url.searchParams.set('seed', printId);
+		history.replaceState(history.state, '', url);
+	}
+
+	async function startBrainPrint() {
+		if (printing) return;
+		printing = true;
+		printError = null;
+		permalinkCopied = false;
+		try {
+			const topology =
+				receipt || !graphData
+					? undefined
+					: { nodeCount: graphData.nodeCount, edgeCount: graphData.edgeCount };
+			const print = await captureBrainPrint(topology);
+			brainPrint = print;
+			applyPrintSeed(print.printId);
+			console.info(
+				`[brain-print] ${print.printId} traits=${print.traits.map((t) => t.id).join(',')} vector=${print.vector.length}`
+			);
+		} catch (e) {
+			printError = e instanceof Error ? e.message : 'Brain print failed';
+		} finally {
+			printing = false;
+		}
+	}
+
+	async function copyPrintPermalink() {
+		const id = activePrintId;
+		if (!id) return;
+		const href = printPermalink(window.location.href, demo, id);
+		try {
+			await navigator.clipboard.writeText(href);
+			permalinkCopied = true;
+			console.info(`[brain-print] permalink ${href}`);
+		} catch {
+			printError = 'Clipboard unavailable — copy the URL from the address bar.';
+		}
 	}
 
 	function pointerToNdc(e: PointerEvent | MouseEvent): { x: number; y: number } | null {
@@ -756,7 +819,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div bind:this={hostEl} class="fixed inset-0 bg-[#020307]" onpointerdown={handlePointerDown} onpointermove={handlePointerMove} onpointerleave={handlePointerLeave}>
-	{#key `${demo}:${receipt?.receipt_id ?? 'all'}`}
+	{#key `${demo}:${seedValue}:${receipt?.receipt_id ?? 'all'}`}
 		<ObservatoryStage
 			{demo}
 			seed={seedValue}
@@ -831,6 +894,16 @@
 				</button>
 			{/each}
 		{/if}
+		<BrainPrintPanel
+			print={brainPrint}
+			{activePrintId}
+			{printing}
+			error={printError}
+			copied={permalinkCopied}
+			disabled={loading || exporting}
+			onprint={startBrainPrint}
+			oncopy={copyPrintPermalink}
+		/>
 		<button class="obs-exit" onclick={startExport} disabled={exporting} type="button">
 			{exporting
 				? exportProgress
@@ -997,6 +1070,11 @@
 	}
 	.obs-exit:hover {
 		text-decoration: underline;
+	}
+	.obs-exit:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+		text-decoration: none;
 	}
 
 	@media (max-aspect-ratio: 85/100) {
