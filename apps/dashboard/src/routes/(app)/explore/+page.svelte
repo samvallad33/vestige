@@ -345,12 +345,18 @@
 	// opens the detail panel). Walking is the explicit labelled button in the panel.
 	function handlePointerDown(e: PointerEvent) {
 		const ndc = pointerToNdc(e);
-		if (!ndc || !textPass) return;
-		const hit = textPass.pickAt(ndc.x, ndc.y);
-		if (hit?.kind !== 'explore-neighbor') return;
-		const item = hit.payload as ExploreTextItem;
-		if (!item.memoryId) return;
-		selectNeighbor(item.memoryId);
+		if (!ndc) return;
+		const hit = textPass?.pickAt(ndc.x, ndc.y);
+		if (hit?.kind === 'explore-neighbor') {
+			const item = hit.payload as ExploreTextItem;
+			if (item.memoryId) selectNeighbor(item.memoryId);
+			return;
+		}
+		// Fall through to the galaxy itself: every cell is a real neighbor,
+		// and pickAt tracks the animated orbit — the field is clickable tissue,
+		// not a backdrop.
+		const cell = fieldPass?.pickAt(ndc.x, ndc.y);
+		if (cell && typeof cell.id === 'string') selectNeighbor(cell.id);
 	}
 
 	// --- DOM interactions ---

@@ -665,13 +665,23 @@
 
 	async function handlePointerDown(e: PointerEvent) {
 		const ndc = pointerToNdc(e);
-		if (!ndc || !textPass) return;
-		const hit = textPass.pickAt(ndc.x, ndc.y);
+		if (!ndc) return;
+		const hit = textPass?.pickAt(ndc.x, ndc.y);
 		const item = hit?.payload as ObservatoryTextItem | undefined;
 		if (item?.action === 'demo' && item.demo) {
 			switchDemo(item.demo);
-		} else if (item?.action === 'exit') {
+			return;
+		}
+		if (item?.action === 'exit') {
 			await goto(`${base}/graph`);
+			return;
+		}
+		// Fall through to the cortex itself: every salience cell is a real
+		// memory — clicking one cuts to its record in the library
+		// (click-as-incision: the home canvas is an instrument, not a poster).
+		const cell = fieldPass?.pickAt(ndc.x, ndc.y);
+		if (cell && typeof cell.id === 'string') {
+			await goto(`${base}/memories?memory=${encodeURIComponent(cell.id)}`);
 		}
 	}
 </script>

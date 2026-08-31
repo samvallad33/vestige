@@ -51,7 +51,23 @@
 	const selectedMemory = $derived(memories.find((memory) => memory.id === selectedMemoryId) ?? null);
 
 	onMount(() => {
-		void loadMemories();
+		void loadMemories().then(async () => {
+			// Deep-link contract: /memories?memory=<id> opens that memory's
+			// inspector — Witness and the Observatory both link here. If the
+			// id is not in the loaded page, fetch the real record and prepend
+			// it (never a silent miss on a receipt link).
+			const wanted = new URLSearchParams(window.location.search).get('memory');
+			if (!wanted) return;
+			if (!memories.some((m) => m.id === wanted)) {
+				try {
+					const record = await api.memories.get(wanted);
+					memories = [record, ...memories];
+				} catch {
+					return; // unknown id — leave the library as-is
+				}
+			}
+			selectedMemoryId = wanted;
+		});
 	});
 
 	onDestroy(() => {
@@ -336,6 +352,14 @@
 
 	async function handlePointerDown(e: PointerEvent) {
 		const ndc = pointerToNdc(e);
+		if (!ndc) return;
+		// Field cells ARE real memories — clicking one opens its inspector.
+		// pickAt mirrors the animated orbit on CPU, so the click lands on the
+		// cell where it is NOW, not its static home.
+		const hit = fieldPass?.pickAt(ndc.x, ndc.y);
+		if (hit && typeof hit.id === 'string') {
+			selectedMemoryId = hit.id;
+		}
 	}
 
 	async function suppressSelected() {
