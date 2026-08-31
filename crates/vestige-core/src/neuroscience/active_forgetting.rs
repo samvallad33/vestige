@@ -9,14 +9,21 @@
 //!
 //! ## References
 //!
-//! - Anderson, M. C., Hanslmayr, S., & Quaegebeur, L. (2025). Brain mechanisms
-//!   underlying the inhibitory control of thought. *Nature Reviews Neuroscience*.
-//!   DOI: 10.1038/s41583-025-00929-y. Establishes rDLPFC as the domain-general
-//!   inhibitory controller; SIF scales with stopping attempts; incentive-resistant.
-//! - Cervantes-Sandoval, I., Chakraborty, M., MacMullen, C., & Davis, R. L.
-//!   (2020). Rac1 Impairs Forgetting-Induced Cellular Plasticity in Mushroom
-//!   Body Output Neurons. *Front Cell Neurosci*. PMC7477079. Establishes Rac1
-//!   GTPase as the active synaptic destabilization mechanism.
+//! - Anderson, M. C., Crespo-Garcia, M., & Subbulakshmi, S. (2025). Brain
+//!   mechanisms underlying the inhibitory control of thought. *Nature Reviews
+//!   Neuroscience* 26(7):415-437. DOI: 10.1038/s41583-025-00929-y. Establishes
+//!   rDLPFC as the domain-general inhibitory controller; SIF scales with
+//!   stopping attempts; incentive-resistant.
+//! - Cervantes-Sandoval, I., Davis, R. L., & Berry, J. A. (2020). Rac1 Impairs
+//!   Forgetting-Induced Cellular Plasticity in Mushroom Body Output Neurons.
+//!   *Front Cell Neurosci* 14:258. DOI 10.3389/fncel.2020.00258. Implicates
+//!   Rac1 in active, biologically driven forgetting rather than passive decay.
+//!
+//! Honesty note: the compounding-with-repeated-attempts property is a real
+//! operationalisation of the SIF finding. The neighbour cascade is our own
+//! design, named after Rac1 by analogy only — the cited paper does not
+//! demonstrate forgetting spreading to co-activated neighbours. Every constant
+//! below is our tuning, not a published value.
 //!
 //! ## Contrast with existing modules
 //!
@@ -33,8 +40,8 @@ use serde::{Deserialize, Serialize};
 /// Default SIF penalty coefficient per suppression increment.
 pub const DEFAULT_SIF_K: f64 = 0.15;
 
-/// Maximum cumulative penalty from compounding suppression.
-/// Matches Anderson's empirical SIF saturation.
+/// Maximum cumulative penalty from compounding suppression. Our tuning; the
+/// saturating shape follows the SIF literature, the value does not come from it.
 pub const DEFAULT_MAX_PENALTY: f64 = 0.8;
 
 /// Cascade attenuation factor for Rac1 spreading to co-activated neighbors.

@@ -1,6 +1,13 @@
-//! 4-Phase Biologically-Accurate Dream Cycle
+//! 4-Phase Dream Cycle — PROTOTYPE, NOT WIRED INTO THE RUNNING SERVER
 //!
-//! Implements a neuroscience-grounded sleep cycle based on:
+//! ⚠️ Status: `DreamEngine` has no production caller. The consolidation that
+//! actually runs is [`crate::consolidation::sleep::SleepConsolidation`], reached
+//! via `Storage::run_consolidation`. Within this module the synaptic-downscaling
+//! step is also still a no-op: it counts candidates without applying decay (see
+//! `stage_nrem3`). Treat the phase model below as a design sketch, and do not
+//! describe it anywhere as a shipped feature until it is wired and completed.
+//!
+//! Sketches a sleep-staged consolidation cycle loosely after:
 //! - **NREM1 (Light Sleep / Triage)**: Score & categorize memories, build replay queue
 //! - **NREM3 (Deep Sleep / Consolidation)**: SO-spindle-ripple coupling, FSRS decay, synaptic downscaling
 //! - **REM (Dreaming / Creative)**: Cross-domain pairing, pattern extraction, emotional processing

@@ -6097,7 +6097,9 @@ impl SqliteMemoryStore {
             }
         }
 
-        // Three-signal reranking (Park et al. Generative Agents 2023)
+        // Three-signal reranking. Structure and the 0.995 recency decay come
+        // from Park et al., Generative Agents (2023); that paper weights the
+        // three signals equally, so the 0.2/0.3/0.5 split below is ours.
         // final_score = 0.2*recency + 0.3*importance + 0.5*relevance
         //
         // relevance MUST live in [0,1] for the weights to balance. The raw

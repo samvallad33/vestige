@@ -26,7 +26,8 @@ cloud-sync = ["vestige-core/cloud-sync"]
 # Fails on targets without prebuilts (notably x86_64-apple-darwin).
 ort-download = ["embeddings", "vestige-core/ort-download"]
 # Alternative ort backend: runtime-linked system libonnxruntime via dlopen.
-# Required on Intel Mac and on systems with glibc < 2.38.
+# Required on Intel Mac, and on any Linux below the GLIBC_2.34 floor that
+# `ort-download` binaries carry (older than RHEL 9 / Ubuntu 22.04 / Debian 12).
 # Usage:   cargo build --no-default-features --features ort-dynamic,vector-search
 # Runtime: export ORT_DYLIB_PATH=$(brew --prefix onnxruntime)/lib/libonnxruntime.dylib
 ort-dynamic = ["embeddings", "vestige-core/ort-dynamic"]

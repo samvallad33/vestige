@@ -29,7 +29,7 @@ const archStr = ARCH_MAP[ARCH];
 
 if (!platformStr || !archStr) {
   console.error(`Unsupported platform: ${PLATFORM}-${ARCH}`);
-  console.error('Supported release assets: macOS x64/arm64, Linux x64, Windows x64');
+  console.error('Supported release assets: macOS x64/arm64, Linux x64/arm64, Windows x64');
   process.exit(1);
 }
 
@@ -38,6 +38,7 @@ const SUPPORTED_TARGETS = new Set([
   'aarch64-apple-darwin',
   'x86_64-apple-darwin',
   'x86_64-unknown-linux-gnu',
+  'aarch64-unknown-linux-gnu',
   'x86_64-pc-windows-msvc',
 ]);
 if (!SUPPORTED_TARGETS.has(target)) {
@@ -220,6 +221,71 @@ function verifyChecksum(archivePath, checksumPath) {
   }
 }
 
+/**
+ * Confirm the downloaded binary can actually start.
+ *
+ * Downloading and extracting cleanly is not the same as being runnable: a
+ * binary built against a newer glibc than the host provides extracts fine and
+ * then dies on every invocation with
+ *   "libc.so.6: version `GLIBC_2.38' not found"
+ * That is exactly how the v2.3.0 Linux build reached users (issues #174, #175)
+ * — the installer said "installed successfully" and every later `vestige-mcp`
+ * call aborted before it could answer a single MCP request.
+ *
+ * Set VESTIGE_SKIP_BINARY_SMOKE_TEST=1 to bypass (e.g. installing on one host
+ * to run somewhere else).
+ */
+function verifyBinaryRuns(mcpBinary) {
+  if (process.env.VESTIGE_SKIP_BINARY_SMOKE_TEST === '1') return;
+
+  try {
+    execFileSync(mcpBinary, ['--version'], { stdio: 'pipe', timeout: 30000 });
+  } catch (err) {
+    const detail = [err.stderr, err.stdout]
+      .map((buf) => (buf ? buf.toString().trim() : ''))
+      .filter(Boolean)
+      .join('\n');
+
+    console.error('');
+    console.error('The Vestige binary downloaded but will not start on this machine.');
+    if (detail) {
+      console.error('');
+      console.error(detail);
+    }
+    // Report what the binary actually asked for rather than restating our
+    // intended floor: the two differ exactly when the download is the buggy
+    // artifact this check exists to catch.
+    const glibc = /version `GLIBC_([0-9.]+)'/.exec(detail);
+    const glibcxx = /version `GLIBCXX_([0-9.]+)'/.exec(detail);
+    const missingLib = /error while loading shared libraries: ([^:]+): cannot open/.exec(detail);
+
+    if (glibc) {
+      console.error('');
+      console.error(`This binary requires glibc ${glibc[1]}, which this system does not provide.`);
+      console.error('Vestige Linux builds target glibc 2.34 — RHEL/Rocky/Alma 9, Amazon');
+      console.error('Linux 2023, Ubuntu 22.04 and later, Debian 12 and later. A published');
+      console.error('binary asking for more than that is a packaging bug: please report it.');
+    } else if (glibcxx) {
+      console.error('');
+      console.error(`This binary requires libstdc++ ${glibcxx[1]}, which this system does not provide.`);
+      console.error('Linux builds are compiled inside AlmaLinux 9 so they stay within what');
+      console.error('RHEL 9 era distros ship, so this should not happen: please report it.');
+    } else if (missingLib) {
+      console.error('');
+      console.error(`This system is missing ${missingLib[1]}, which this binary needs.`);
+    }
+
+    console.error('');
+    console.error('To build from source instead:');
+    console.error('  https://github.com/samvallad33/vestige#platform-support');
+    console.error('');
+    console.error('Please report this with the output above:');
+    console.error('  https://github.com/samvallad33/vestige/issues/new');
+    console.error('');
+    throw new Error('vestige-mcp failed its post-install smoke test');
+  }
+}
+
 async function main() {
   try {
     // Download
@@ -247,6 +313,8 @@ async function main() {
     if (!fs.existsSync(mcpBinary)) {
       throw new Error('vestige-mcp binary not found after extraction');
     }
+
+    verifyBinaryRuns(mcpBinary);
 
     console.log('');
     console.log('Vestige MCP installed successfully!');

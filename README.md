@@ -33,9 +33,23 @@ No Docker, no API key, no signup.
 npm install -g vestige-mcp-server@latest
 ```
 
-This installs the `vestige-mcp` command. Prebuilt binaries ship for macOS (Apple Silicon and Intel), Linux x86_64, and Windows x86_64, so there is no compile step.
+This installs the `vestige-mcp` command. Prebuilt binaries ship for every target listed under [Platform support](#platform-support), so there is no compile step.
 
 If a global pnpm install skipped its postinstall hook, the command launcher retries the local binary installation on its first invocation. It reports that recovery on stderr, preserving MCP stdout for protocol messages.
+
+#### Platform support
+
+| Platform | Architectures |
+|---|---|
+| macOS | Apple Silicon (arm64), Intel (x86_64) |
+| Linux | x86_64, arm64 |
+| Windows | x86_64 |
+
+Linux binaries need **glibc 2.34 or newer**: RHEL, Rocky and AlmaLinux 9, Amazon Linux 2023, Ubuntu 22.04 and later, and Debian 12 and later. They are built inside AlmaLinux 9 so the C++ runtime requirements stay inside what those distros ship, and every release is checked by actually starting it on `rockylinux:9`, `debian:12` and `ubuntu:22.04`.
+
+On anything older, build from source: see [CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
+
+The installer runs the binary once after downloading it and fails loudly if it cannot start, so a mismatch shows up at install time rather than on your first query.
 
 ### 2. Connect it to your agent
 

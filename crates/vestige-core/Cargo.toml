@@ -29,17 +29,23 @@ encryption = ["rusqlite/bundled-sqlcipher"]
 embeddings = ["dep:fastembed", "fastembed/hf-hub-native-tls", "fastembed/image-models"]
 
 # Default ort backend: ort-sys downloads prebuilt ONNX Runtime at build time.
-# Requires glibc >= 2.38. Fails on x86_64-apple-darwin (Microsoft is
-# discontinuing Intel Mac prebuilts after ONNX Runtime v1.23.0).
+# Fails on x86_64-apple-darwin (Microsoft is discontinuing Intel Mac prebuilts
+# after ONNX Runtime v1.23.0).
+#
+# The prebuilt archive imports the C23 `__isoc23_*` symbols at GLIBC_2.38, which
+# used to make every Linux release binary abort at startup on older distros
+# (issues #174, #175). crates/vestige-mcp/src/glibc_compat.rs now defines those
+# symbols locally, so the effective floor is GLIBC_2.34, enforced by
+# scripts/check-glibc-floor.sh.
 ort-download = ["embeddings", "fastembed/ort-download-binaries-native-tls"]
 
 # HNSW vector search with USearch (20x faster than FAISS)
 vector-search = ["dep:usearch"]
 
 # Alternative ort backend: runtime-linked against a system libonnxruntime via
-# dlopen. Required on Intel Mac and on systems with glibc < 2.38 (Ubuntu
-# 22.04, Debian 12, RHEL/Rocky 9). Transitively enables `embeddings` so the
-# #[cfg] gates stay active.
+# dlopen. Required on Intel Mac, and on any Linux below the GLIBC_2.34 floor
+# `ort-download` binaries carry (older than RHEL 9 / Ubuntu 22.04 / Debian 12).
+# Transitively enables `embeddings` so the #[cfg] gates stay active.
 #
 # Usage:   cargo build --no-default-features \
 #              --features ort-dynamic,vector-search,bundled-sqlite

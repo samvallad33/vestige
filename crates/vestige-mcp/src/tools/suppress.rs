@@ -25,7 +25,7 @@ use vestige_core::neuroscience::active_forgetting::{ActiveForgettingSystem, DEFA
 pub fn schema() -> Value {
     json!({
         "type": "object",
-        "description": "Actively suppress a memory via top-down inhibitory control (Anderson 2025 SIF + Davis Rac1). Distinct from delete: the memory persists but is inhibited from retrieval and actively decays. Each call compounds suppression strength. A background Rac1 worker cascades accelerated decay to co-activated neighbors over the next 72 hours. Reversible within 24 hours via reverse=true.",
+        "description": "Actively suppress a memory via top-down inhibitory control, following the compounding Suppression-Induced Forgetting effect in Anderson et al. 2025. Distinct from delete: the memory persists but is inhibited from retrieval and actively decays. Each call compounds suppression strength. A background worker also spreads accelerated decay to co-activated neighbors over the next 72 hours (our own design, named after Rac1 by analogy). Reversible within 24 hours via reverse=true.",
         "properties": {
             "id": {
                 "type": "string",

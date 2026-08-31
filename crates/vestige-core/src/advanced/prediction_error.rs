@@ -14,10 +14,21 @@
 //!
 //! ## Scientific Background
 //!
-//! Based on:
-//! - Sinclair & Bhavnani (2020): "The Reconsolidation Dilemma"
-//! - Lee et al. (2017): Prediction error and memory updating
-//! - Google Titans (2025): Surprise-based storage
+//! Surprise-gated writes, in the spirit of the reconsolidation literature:
+//! - Sinclair, A. H., & Barense, M. D. (2019). "Prediction Error and Memory
+//!   Reactivation: How Incomplete Reminders Drive Reconsolidation."
+//!   *Trends in Neurosciences* 42(10):727-739. DOI 10.1016/j.tins.2019.08.007
+//! - Lee, J. L. C., Nader, K., & Schiller, D. (2017). "An Update on Memory
+//!   Reconsolidation Updating." *Trends in Cognitive Sciences* 21(7):531-545.
+//!   DOI 10.1016/j.tics.2017.04.006
+//! - Behrouz, A., Zhong, P., & Mirrokni, V. (2025). "Titans: Learning to
+//!   Memorize at Test Time." arXiv:2501.00663
+//!
+//! Honesty note: the gate here scores novelty as `1 - cosine_similarity` to the
+//! nearest existing memory. That is not a prediction error against a learned
+//! model, which is what Titans computes and what the reconsolidation literature
+//! means, and the routing is monotone rather than reproducing that literature's
+//! inverted-U. The papers motivate the design; they are not implemented here.
 //!
 //! ## Example
 //!

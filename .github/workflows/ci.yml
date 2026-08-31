@@ -111,9 +111,19 @@ jobs:
           - os: macos-14
             target: x86_64-apple-darwin
             cargo_flags: "--no-default-features --features ort-dynamic,vector-search,cloud-sync"
+          # Linux targets carry the issue #174 / #175 guard: the prebuilt
+          # libonnxruntime.a they link imports C23 __isoc23_* symbols at
+          # GLIBC_2.38, so the binary must be checked, not just compiled.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             cargo_flags: ""
+            max_glibc: "2.34"
+            cc_target: x86_64_unknown_linux_gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            cargo_flags: ""
+            max_glibc: "2.34"
+            cc_target: aarch64_unknown_linux_gnu
     steps:
       - uses: actions/checkout@v4
 
@@ -140,8 +150,107 @@ jobs:
             target/
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build release
+      # Linux binaries are compiled inside AlmaLinux 9, not on the runner.
+      #
+      # The runner is Ubuntu 24.04, whose GCC 13 binds C++ symbols at
+      # GLIBCXX_3.4.30 / CXXABI_1.3.15. RHEL, Rocky and AlmaLinux 9 ship
+      # libstdc++ 6.0.29, which stops at GLIBCXX_3.4.29 / CXXABI_1.3.13, so a
+      # runner-built binary cannot start there at all. That gap predates the
+      # #174 / #175 crash and went unnoticed because nothing checked it.
+      #
+      # gcc-toolset-14 is the standard answer, and the same trick manylinux uses:
+      # a modern compiler — needed for symbols like __truncdfhf2 that EL9's stock
+      # GCC 11 libgcc lacks and the prebuilt ONNX Runtime archive calls — linked
+      # against EL9's older libstdc++ ABI. EL9's glibc is 2.34, the floor these
+      # binaries already reach.
+      #
+      # Verified on a real aarch64 build: GLIBC 2.34, GLIBCXX 3.4.29,
+      # CXXABI 1.3.11, and all three binaries start on rockylinux:9, debian:12
+      # and ubuntu:22.04.
+      #
+      # CXXFLAGS_<target>=-U__FAST_MATH__ is a separate fix riding along. usearch
+      # 2.23.0's build.rs compiles its C++ with `-O3 -ffast-math`, which defines
+      # __FAST_MATH__; glibc's math-vector.h declares its vector-math simd clones
+      # behind that macro, so GCC vectorized the std::log loop in usearch's
+      # Jensen-Shannon metric into _ZGV* symbols that live only in libmvec.so.1 —
+      # a library aarch64 did not get until glibc 2.38. Vestige never selects the
+      # divergence metric, so dead template code was adding a shared-library
+      # dependency for nothing.
+      #
+      # cc-rs appends env CXXFLAGS last, so this lands after -ffast-math and
+      # closes the gate. It changes no math semantics, only whether glibc
+      # declares the clones, so the distance kernels are untouched: measured on
+      # the real usearch header, k_cos disassembly is 104 lines at baseline, 104
+      # with -U__FAST_MATH__, and 126 with -fmath-errno, which also removes the
+      # symbols but adds an errno branch around sqrt. MetricKind::Cos is the only
+      # metric Vestige uses, so that cost would land on the hot path.
+      # -fno-tree-vectorize works too and is far worse: 5.6x slower there.
+      #
+      # The dashboard is built on the runner in the step above and embedded from
+      # the working tree, so the container only has to compile Rust.
+      - name: Build (Linux, inside AlmaLinux 9 for an old libstdc++ ABI)
+        if: contains(matrix.target, 'linux-gnu')
+        env:
+          CC_TARGET: ${{ matrix.cc_target }}
+        run: |
+          # Pre-create it so Docker does not, which would leave a root-owned
+          # directory behind for the cache step to trip over.
+          mkdir -p "$HOME/.cargo/registry"
+          docker run --rm \
+            -v "$PWD:/repo" -w /repo \
+            -v "$HOME/.cargo/registry:/root/.cargo/registry" \
+            -e "CXXFLAGS_${CC_TARGET}=-U__FAST_MATH__" \
+            -e CARGO_TERM_COLOR=always \
+            almalinux:9 bash -eo pipefail -c '
+              dnf -y install --allowerasing gcc gcc-c++ gcc-toolset-14 make cmake \
+                perl-core pkgconfig openssl-devel binutils curl git >/dev/null
+              source /opt/rh/gcc-toolset-14/enable
+              # Read the channel key specifically. A bare version-number grep
+              # picks up the 1.97.0 mentioned in the comment above it and
+              # silently installs the wrong toolchain.
+              TOOLCHAIN=$(sed -n "s/^ *channel *= *\"\([^\"]*\)\".*/\1/p" rust-toolchain.toml | head -1)
+              test -n "$TOOLCHAIN"
+              curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+                --default-toolchain "$TOOLCHAIN" >/dev/null
+              . "$HOME/.cargo/env"
+              rustup target add ${{ matrix.target }}
+              cargo build --locked --package vestige-mcp --release \
+                --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
+              # The container runs as root; hand artifacts back to whoever owns
+              # the mounted checkout so later steps need no sudo.
+              OWNER=$(stat -c "%u:%g" /repo)
+              chown -R "$OWNER" target /root/.cargo/registry
+            '
+
+      - name: Build release (non-Linux)
+        if: ${{ !contains(matrix.target, 'linux-gnu') }}
         run: cargo build --release --target ${{ matrix.target }} -p vestige-mcp ${{ matrix.cargo_flags }}
+
+      # Catches a raised glibc floor at PR time. v2.3.0 shipped a binary that
+      # imported GLIBC_2.38 and aborted on every distro older than Ubuntu 24.04
+      # while still building and running perfectly on the release runner.
+      - name: Verify glibc floor (Linux)
+        if: contains(matrix.target, 'linux-gnu')
+        env:
+          VESTIGE_MAX_GLIBC: ${{ matrix.max_glibc }}
+        run: |
+          scripts/check-glibc-floor.sh \
+            target/${{ matrix.target }}/release/vestige-mcp \
+            target/${{ matrix.target }}/release/vestige \
+            target/${{ matrix.target }}/release/vestige-restore
+
+      # The static check above bounds symbol versions it knows to look for, and
+      # that proxy has already been wrong twice: it once passed a binary that
+      # could not start on RHEL 9, and it cannot see a DT_NEEDED library that is
+      # simply absent on the target. Running the binary is the only check that
+      # cannot be fooled by a symbol class nobody enumerated.
+      - name: Verify it starts on the oldest supported distros (Linux)
+        if: contains(matrix.target, 'linux-gnu')
+        run: |
+          scripts/check-runs-on-baseline.sh \
+            target/${{ matrix.target }}/release/vestige-mcp \
+            target/${{ matrix.target }}/release/vestige \
+            target/${{ matrix.target }}/release/vestige-restore
 
       - name: Package
         run: |

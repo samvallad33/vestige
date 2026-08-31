@@ -7,6 +7,180 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Linux binaries no longer abort at startup on glibc < 2.38 (#174, #175)
+
+Every released `x86_64-unknown-linux-gnu` binary through v2.3.0 died before it
+could answer a single request on any distro older than Ubuntu 24.04:
+
+```text
+./vestige-mcp: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found
+```
+
+That crash is what issues #174 and #175 actually reported. Both arrived as MCP
+spec-conformance failures (10 against revision 2026-07-28, 5 against 2025-11-25),
+but every one of them was the harness observing a process that had already
+exited — not a protocol defect.
+
+The binary imported three C23 symbols, `__isoc23_strtol`, `__isoc23_strtoll` and
+`__isoc23_strtoull`, at `GLIBC_2.38`. They came from the prebuilt
+`libonnxruntime.a` that `ort-sys` downloads and links statically: 30 undefined
+`__isoc23_*` references live in objects that are always pulled in. Nothing in
+Vestige's own source referenced them, which is why no test caught it.
+
+That also rules out the obvious fixes. Building on an older runner does not help,
+because the references sit in a prebuilt archive we do not compile, and linking
+it against a pre-2.38 glibc fails outright with `undefined reference to
+'__isoc23_strtol'`. Pinning `ubuntu-22.04` would be a dead end anyway: that image
+begins deprecation on 2026-09-17.
+
+- `crates/vestige-mcp/src/glibc_compat.rs` defines the `__isoc23_*` entry points
+  and forwards them to the classic ones. Rust `extern "C"` declarations are not
+  subject to the `<stdlib.h>` C23 redirect, so they bind plain
+  `strtol@GLIBC_2.2.5`. The module is compiled into each binary root rather than
+  the library, so the definitions are always part of the final link.
+- The Linux floor is now **GLIBC_2.34**: RHEL/Rocky/Alma 9, Amazon Linux 2023,
+  Ubuntu 22.04+ and Debian 12+.
+
+Verified by running the reporter's own harness, `@hasmcp/mcp-spec-test@0.1.1`,
+against a rebuilt binary on Debian 12. The verdict moves from "not conformant —
+10/5 requirements violated" to **conformant: 18 passed, 0 failed, 2 not
+verified**. The two remaining are `prompts/list` and `prompts/get`, skipped
+because Vestige advertises no `prompts` capability — it genuinely has none, so
+that is correct behavior rather than a gap.
+
+The suite picks the revision it tests from the server, so the separate
+`2026-07-28` report in #174 was itself a symptom of the crash: with the server
+dead it could not learn which revision Vestige speaks and ran the newest one,
+`server/discover` cases included, against an already-exited process. It now reads
+"testing 2025-11-25 — the newest supported revision this server offers, per
+`server/discover`".
+
+### Fixed — the build linked libmvec.so.1 for a metric Vestige never calls
+
+Adding the arm64 target surfaced a second packaging trap. `usearch` 2.23.0's
+`build.rs` compiles its C++ with `-O3 -ffast-math`, and glibc's aarch64
+`bits/math-vector.h` declares its vector-math simd clones behind
+`#if defined __aarch64__ && defined __FAST_MATH__`. GCC 13 therefore vectorized
+the `std::log` loop in usearch's Jensen-Shannon metric into `_ZGVnN2v_logf` and
+`_ZGVnN4v_logf`, which live only in `libmvec.so.1` — a library aarch64 did not
+get until glibc 2.38, and which lacked the 2-lane variant until 2.39.
+
+Vestige never selects the divergence metric, so dead template code was pinning
+the whole arm64 binary to glibc 2.39. The release build now sets
+`CXXFLAGS_<target>=-U__FAST_MATH__`; cc-rs appends env `CXXFLAGS` last, so it
+lands after `-ffast-math` and closes the gate. It changes no math semantics, only
+whether glibc declares the clones, so the distance kernels are untouched.
+
+Measured on the real usearch header, `k_cos` disassembly: 104 lines at baseline,
+104 with `-U__FAST_MATH__`, 126 with `-fmath-errno`. `-fmath-errno` removes the
+symbols too but adds an errno branch around `sqrt`, and `MetricKind::Cos` is the
+only metric Vestige uses, so that cost would have landed squarely on the hot
+path. `-fno-tree-vectorize` also works and is far worse: 5.6x slower there.
+
+### Fixed — the `vestige` CLI required glibc 2.39 (found while fixing the above)
+
+Separately from the C23 symbols, the `vestige` CLI imported
+`pidfd_getpid@GLIBC_2.39` and `pidfd_spawnp@GLIBC_2.39`, so it failed to start on
+anything below Ubuntu 24.04 — including on x86_64, in the shipped v2.3.0, where
+`vestige-mcp` itself still ran. Confirmed against the published release binary on
+Ubuntu 23.10.
+
+Rust std reaches these through `weak!`, which is `#[linkage = "extern_weak"]` on
+ELF. The symbols really are weak, but the linker still records a **non-weak**
+`GLIBC_2.39` version need (`readelf -V` shows `Flags: none`), and the loader
+rejects the process on older glibc regardless of the symbol's binding. Only
+`bin/cli.rs` uses `std::process::Command`, which is why only that binary carried
+them. `glibc_compat.rs` now defines both as `ENOSYS` stubs; std only calls them
+under the unstable `Command::create_pidfd(true)`, which Vestige does not use, and
+answers `ENOSYS` by falling back to fork/exec.
+
+### Fixed — MCP spec deviations surfaced by the conformance suite
+
+With the server running, the suite could finally check Vestige's actual protocol
+behavior. Two real deviations came out of that and are fixed here:
+
+- `tools/list` and `resources/list` silently ignored a `cursor` and returned page
+  one. Vestige returns a single page and never issues a `nextCursor`, so any
+  cursor it receives is one it never handed out; the spec says answer `-32602`.
+  Ignoring it was worse than pedantic — a client that believed it was paginating
+  would loop on page one forever. `null` and `""` are still treated as absent.
+- `resources/templates/list` answered `-32601 Method not found`, leaving that
+  surface unverifiable. It now returns an empty `resourceTemplates` list, which
+  is the honest answer: every Vestige resource is a fixed `memory://` URI.
+
+### Added — `server/discover`, so newer clients can negotiate down instead of guessing
+
+MCP revision `2026-07-28` adds `server/discover`, an RPC that advertises the
+protocol versions, capabilities and identity a server offers. Vestige now answers
+it, deliberately **before any handshake** — the spec positions it as a probe a
+client may send first, and on stdio it is the only way for a newer client to
+learn which revisions an older server speaks.
+
+Answering it is not a claim to implement `2026-07-28`, and `supportedVersions`
+does not list that revision. `2026-07-28` removes the `initialize` handshake
+outright and makes the protocol stateless, carrying the version and client
+capabilities in `_meta` on every request; it also requires a `resultType` on
+every result, replaces server-initiated requests with the multi round-trip
+pattern, drops `ping` and `logging/setLevel`, and swaps `resources/subscribe` for
+`subscriptions/listen`. Adopting it is a breaking rewrite that every current
+client would have to follow, so it stays out of a crash fix. What Vestige can
+honestly do today is tell a `2026-07-28` client the truth about itself, which is
+what this method now does.
+
+The result follows the `DiscoverResult` shape from that revision's schema:
+`resultType`, `supportedVersions`, `capabilities`, `ttlMs` and `cacheScope` are
+required, with identity in `_meta` under `io.modelcontextprotocol/serverInfo`.
+`initialize` and `server/discover` now read their capability set from one shared
+helper so the two can never disagree.
+
+### Fixed — Linux builds moved into AlmaLinux 9, restoring RHEL 9 support
+
+Even with every glibc symbol fixed, the binaries still could not start on RHEL,
+Rocky or AlmaLinux 9. The Ubuntu 24.04 runner's GCC 13 binds C++ symbols at
+`GLIBCXX_3.4.30` and `CXXABI_1.3.15`; EL9 ships libstdc++ 6.0.29, which stops at
+`GLIBCXX_3.4.29` / `CXXABI_1.3.13`. That gap predates this crash — it was true of
+v2.3.0 and every release before it — and nothing caught it because the old check
+only looked at `GLIBC_` versions.
+
+Linux release builds now run inside `almalinux:9` with `gcc-toolset-14`: a modern
+compiler, needed for symbols like `__truncdfhf2` that EL9's stock GCC 11 libgcc
+lacks and the prebuilt ONNX Runtime archive calls, linked against EL9's older
+libstdc++ ABI. It is the same trick manylinux uses.
+
+Measured on a real aarch64 build: `GLIBC_2.34`, `GLIBCXX_3.4.29`,
+`CXXABI_1.3.11`, no `libmvec.so.1`, and all three binaries start on
+`rockylinux:9`, `debian:12` and `ubuntu:22.04`.
+
+### Added — Linux arm64 release binaries
+
+`packages/vestige-mcp-npm/package.json` advertised `linux` + `arm64`, but no such
+asset was ever built, so `npm install -g vestige-mcp-server` aborted in
+postinstall with "Unsupported Vestige release target: aarch64-unknown-linux-gnu"
+on Graviton, Ampere, arm64 CI containers and Asahi. Releases now build
+`aarch64-unknown-linux-gnu` on `ubuntu-24.04-arm`, through the same AlmaLinux 9
+container, and the installer accepts it.
+
+### Added — glibc floor tripwire and an install-time smoke test
+
+- `scripts/check-glibc-floor.sh` fails the build if a Linux binary imports any
+  `__isoc23_*` symbol, requires a `GLIBC_`/`GLIBCXX_`/`CXXABI_` version above the
+  documented floor, or links a shared library not guaranteed to exist there. Its
+  first version checked only `GLIBC_`, which would have passed a binary that
+  still could not start on RHEL 9 — all three namespaces are now bounded.
+  Verified against the shipped v2.3.0 binary, which it correctly rejects.
+- `scripts/check-runs-on-baseline.sh` runs each built binary inside `debian:12`
+  and `ubuntu:22.04`. Symbol-version bookkeeping is a proxy and that proxy has
+  been wrong twice; actually starting the process is the only check that cannot
+  be fooled by a symbol class nobody thought to enumerate.
+
+Both run in `ci.yml` and `release.yml`, so a dependency bump cannot silently
+reintroduce any of this.
+- The npm postinstall now runs the downloaded binary once and fails loudly with
+  the loader error if it cannot start, instead of printing "installed
+  successfully" for a binary that aborts on every later invocation. Bypass with
+  `VESTIGE_SKIP_BINARY_SMOKE_TEST=1`.
+
+
 ### Fixed — Memory PR write gate wired into the real tool path (#117)
 
 `gate_writes` — the risk gate that quarantines risky memory writes and opens
@@ -906,8 +1080,8 @@ Every AI memory system stores too much. Vestige now treats forgetting as a first
 
 ### Scientific grounding
 
-- **Anderson, M. C., Hanslmayr, S., & Quaegebeur, L. (2025).** *"Brain mechanisms underlying the inhibitory control of thought."* Nature Reviews Neuroscience. DOI: [10.1038/s41583-025-00929-y](https://www.nature.com/articles/s41583-025-00929-y). Establishes the right lateral PFC as the domain-general inhibitory controller, and Suppression-Induced Forgetting (SIF) as compounding with each stopping attempt.
-- **Cervantes-Sandoval, I., Chakraborty, M., MacMullen, C., & Davis, R. L. (2020).** *"Rac1 Impairs Forgetting-Induced Cellular Plasticity in Mushroom Body Output Neurons."* Front Cell Neurosci. [PMC7477079](https://pmc.ncbi.nlm.nih.gov/articles/PMC7477079/). Establishes Rac1 GTPase as the active synaptic destabilization mechanism — forgetting is a biological PROCESS, not passive decay.
+- **Anderson, M. C., Crespo-Garcia, M., & Subbulakshmi, S. (2025).** *"Brain mechanisms underlying the inhibitory control of thought."* Nature Reviews Neuroscience 26(7):415-437. DOI: [10.1038/s41583-025-00929-y](https://www.nature.com/articles/s41583-025-00929-y). Establishes the right lateral PFC as the domain-general inhibitory controller, and Suppression-Induced Forgetting (SIF) as compounding with each stopping attempt.
+- **Cervantes-Sandoval, I., Davis, R. L., & Berry, J. A. (2020).** *"Rac1 Impairs Forgetting-Induced Cellular Plasticity in Mushroom Body Output Neurons."* Front Cell Neurosci 14:258. DOI: [10.3389/fncel.2020.00258](https://doi.org/10.3389/fncel.2020.00258). Implicates Rac1 in active, biologically driven forgetting rather than passive decay. The neighbour cascade in Vestige is named after it by analogy; the paper does not demonstrate forgetting spreading to co-activated neighbours.
 
 ### Added
 
