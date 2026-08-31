@@ -472,6 +472,31 @@ export class ObservatoryEngine {
 			this.rafId = requestAnimationFrame(this.frame);
 			return;
 		}
+		if (!this.encodeAndSubmit(frame, state.totalFrames)) {
+			// canvas hidden/zero-sized this frame — try again next frame
+			this.rafId = requestAnimationFrame(this.frame);
+			return;
+		}
+
+		// Honest fps: measured across frames actually PRESENTED, so telemetry
+		// shows the settled rate when quiet passes throttle the render.
+		if (Number.isFinite(this.lastRenderTs) && ts > this.lastRenderTs) {
+			this.fpsEstimate = Math.round(1000 / (ts - this.lastRenderTs));
+		}
+		this.lastRenderTs = ts;
+		this.onFrame?.(frame, this.fpsEstimate);
+		this.rafId = requestAnimationFrame(this.frame);
+	};
+
+	/**
+	 * The one true frame core — params write, compute passes, HDR render, post
+	 * stack, single submit. Shared verbatim between the live rAF loop and the
+	 * offline export path so an exported clip is the SAME pixels the live loop
+	 * would present, never a lookalike. Returns false when the canvas has no
+	 * texture this frame (hidden/zero-sized).
+	 */
+	private encodeAndSubmit(frame: number, totalFrames: number): boolean {
+		if (!this.device || !this.context || !this.paramsBuffer || !this.post) return false;
 		const phase = frame / this.clock.framesPerLoop;
 
 		// Per-frame params (layout must match WGSL Params; types.ts doc block).
@@ -494,10 +519,12 @@ export class ObservatoryEngine {
 		// Ambient seconds. LIVE mode uses monotonic totalFrames so slow ambient
 		// motion (LivingField ring_spin/twinkle, msdf sway, organ orbits) never
 		// snaps at the 720-frame loop seam — the 12-second pop every organ had.
-		// CAPTURE mode (?frame=N) pins to the wrapped loop frame so stills stay
-		// byte-stable. Choreography must keep keying off p[0]/p[1] (loop frame/
-		// phase), never this lane — ambience is allowed off-loop, stories are not.
-		p[10] = this.freezeFrame !== null ? frame / 60 : state.totalFrames / 60;
+		// CAPTURE mode (?frame=N) and EXPORT mode pin to the wrapped loop frame
+		// so stills stay byte-stable and exported clips loop seamlessly.
+		// Choreography must keep keying off p[0]/p[1], never this lane —
+		// ambience is allowed off-loop, stories are not.
+		p[10] =
+			this.freezeFrame !== null || this.exportMode ? frame / 60 : totalFrames / 60;
 		// p[11] capture_mode — 1.0 when freezeFrame is active (capture mode).
 		// When 1.0, the compute shader skips physics integration so the
 		// storage-buffer state stays frozen at the initial upload values,
@@ -509,7 +536,9 @@ export class ObservatoryEngine {
 		// monotonic sim frame so envelopes never pop at the loop seam. Lanes
 		// 12..15 persist across frames in `this.params` (the loop above only
 		// writes 0..11), so a settled field with no live events stays calm.
-		this.preFrameHook?.(state.totalFrames);
+		// SKIPPED during export: a live event mutating node buffers mid-export
+		// would make the clip non-deterministic.
+		if (!this.exportMode) this.preFrameHook?.(totalFrames);
 
 		this.device.queue.writeBuffer(this.paramsBuffer, 0, p);
 
@@ -517,9 +546,7 @@ export class ObservatoryEngine {
 		try {
 			swapTex = this.context.getCurrentTexture();
 		} catch {
-			// canvas hidden/zero-sized this frame — try again next frame
-			this.rafId = requestAnimationFrame(this.frame);
-			return;
+			return false;
 		}
 		// No-op unless the size changed — covers the boot frame before any resize.
 		this.post.ensure(swapTex.width, swapTex.height);
@@ -550,16 +577,61 @@ export class ObservatoryEngine {
 		this.post.encode(encoder, swapView);
 
 		this.device.queue.submit([encoder.finish()]);
+		return true;
+	}
 
-		// Honest fps: measured across frames actually PRESENTED, so telemetry
-		// shows the settled rate when quiet passes throttle the render.
-		if (Number.isFinite(this.lastRenderTs) && ts > this.lastRenderTs) {
-			this.fpsEstimate = Math.round(1000 / (ts - this.lastRenderTs));
+	// ------------------------------------------------------------------------
+	// Offline loop export — "share your brain, not your memories".
+	//
+	// The deterministic clock means an exported clip is not a screen recording:
+	// we step the loop frame by frame and hand each rendered frame to the
+	// encoder at its exact timestamp. Every machine exports the byte-identical
+	// video of the same loop, regardless of its live frame rate.
+	// ------------------------------------------------------------------------
+
+	/** true while an offline export is stepping the loop. */
+	private exportMode = false;
+
+	/** The canvas the engine renders into — the export encoder reads from it. */
+	get canvasElement(): HTMLCanvasElement {
+		return this.canvas;
+	}
+
+	/**
+	 * Enter export mode: stop the live rAF loop, wrap ambient time to the loop
+	 * (seamless clip), freeze live-event mutation, and rewind the clock so the
+	 * export starts at frame 0 of the story.
+	 */
+	beginExport(): void {
+		this.stopLoop();
+		this.exportMode = true;
+		this.clock.reset();
+	}
+
+	/** Leave export mode and hand the canvas back to the live loop. */
+	endExport(): void {
+		this.exportMode = false;
+		this.resumeLoop();
+	}
+
+	/**
+	 * Render exactly one export frame and wait for the GPU to finish so the
+	 * caller can read the canvas. `advance` ticks the clock first (pass false
+	 * for the very first frame so the clip starts at frame 0, matching a live
+	 * boot). Returns the loop frame that was rendered.
+	 */
+	async renderExportFrame(advance: boolean): Promise<number> {
+		if (!this.exportMode) throw new Error('renderExportFrame outside beginExport()');
+		if (!this.device) throw new Error('export: no GPU device');
+		if (advance) this.clock.tick();
+		const state = this.clock.state;
+		const frame = state.frame;
+		if (!this.encodeAndSubmit(frame, state.totalFrames)) {
+			throw new Error('export: canvas has no texture (zero-sized or hidden)');
 		}
-		this.lastRenderTs = ts;
-		this.onFrame?.(frame, this.fpsEstimate);
-		this.rafId = requestAnimationFrame(this.frame);
-	};
+		await this.device.queue.onSubmittedWorkDone();
+		return frame;
+	}
 
 	private stopLoop(): void {
 		this.running = false;

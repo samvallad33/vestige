@@ -79,6 +79,12 @@
 		/** Route-local all-WebGPU instrument overlays can attach their own passes. */
 		onready?: (engine: ObservatoryEngine) => void;
 		/**
+		 * Devicepixel clamp forwarded to the engine. Export mounts pin this to 1
+		 * so a 1920×1080 host renders a bitmap of exactly 1920×1080 — the fixed
+		 * resolution the byte-identical clip contract requires.
+		 */
+		maxDpr?: number;
+		/**
 		 * When a Memory Receipt opens the Observatory, constrain the field to the
 		 * receipt's real retrieved/suppressed ids. No topology-derived stand-ins.
 		 */
@@ -109,6 +115,7 @@
 		chrome = 'full',
 		onpick,
 		onready,
+		maxDpr = 2,
 		focusIds = [],
 		backfillEvidence,
 		live = false
@@ -757,6 +764,7 @@
 			{demo}
 			{seed}
 			{freezeFrame}
+			{maxDpr}
 			onframe={handleFrame}
 			onready={handleReady}
 		/>

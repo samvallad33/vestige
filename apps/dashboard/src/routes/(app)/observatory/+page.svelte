@@ -12,6 +12,11 @@
 	import { layoutGalaxy, type FieldDatum } from '$lib/observatory/field/cell-layout';
 	import { saliencePalette, salienceEnergy } from '$lib/observatory/cognitive-palette';
 	import { api, type Receipt } from '$stores/api';
+	import {
+		exportLoopMp4,
+		downloadClip,
+		loopExportSupported
+	} from '$lib/observatory/export/loop-export';
 	import type { GraphNode, GraphResponse } from '$types';
 
 	type ObservatoryTextItem = TextLayerItem & { action?: 'demo' | 'exit'; demo?: DemoMode };
@@ -588,6 +593,65 @@
 		return items;
 	}
 
+	// ── Loop export — share your brain, not your memories ──────────────────
+	// A hidden 1920×1080 stage (maxDpr 1, live OFF, chrome none) boots the SAME
+	// deterministic moment, then the engine steps its 720-frame loop offline
+	// into the encoder. Fixed resolution + deterministic clock = every machine
+	// exports the byte-identical clip. No DOM instruments, no memory text.
+	let exporting = $state(false);
+	let exportProgress = $state<{ done: number; total: number; stage: string } | null>(null);
+	let exportError = $state<string | null>(null);
+	let exportEngine: ObservatoryEngine | null = null;
+	let exportNonce = $state(0);
+
+	function handleExportEngine(e: ObservatoryEngine) {
+		exportEngine = e;
+	}
+
+	// Indirection on purpose: exportEngine is written by the stage's onready
+	// callback, which TS control-flow analysis cannot see — direct reads
+	// narrow to `never` inside the wait loop.
+	const currentExportEngine = (): ObservatoryEngine | null => exportEngine;
+
+	async function startExport() {
+		if (exporting) return;
+		if (!loopExportSupported()) {
+			exportError = 'This browser cannot encode video (WebCodecs unavailable).';
+			return;
+		}
+		exporting = true;
+		exportError = null;
+		exportProgress = null;
+		exportEngine = null;
+		exportNonce += 1; // fresh export stage every run — deterministic from frame 0
+		try {
+			// Wait for the hidden stage to boot + upload its graph (nodeCount
+			// lands in params[2] at upload). Timeout keeps failures honest.
+			// (Read the callback-assigned ref fresh each pass — TS narrowing
+			// cannot see the onready closure write.)
+			const deadline = Date.now() + 20_000;
+			let engine: ObservatoryEngine | null = currentExportEngine();
+			while (!engine || engine.params[2] <= 0) {
+				if (Date.now() > deadline) throw new Error('export stage never became ready');
+				await new Promise((r) => setTimeout(r, 120));
+				engine = currentExportEngine();
+			}
+			// A short settle so the boot frame + atlas fetches are behind us.
+			await new Promise((r) => setTimeout(r, 400));
+			const clip = await exportLoopMp4({
+				engine,
+				onProgress: (p) => (exportProgress = p)
+			});
+			downloadClip(clip, `vestige-${demo}-loop.mp4`);
+		} catch (e) {
+			exportError = e instanceof Error ? e.message : 'Export failed';
+		} finally {
+			exporting = false;
+			exportProgress = null;
+			exportEngine = null;
+		}
+	}
+
 	function switchDemo(next: DemoMode) {
 		if (next === demo) return;
 		demo = next;
@@ -767,9 +831,45 @@
 				</button>
 			{/each}
 		{/if}
+		<button class="obs-exit" onclick={startExport} disabled={exporting} type="button">
+			{exporting
+				? exportProgress
+					? exportProgress.stage === 'finalize'
+						? 'Sealing clip…'
+						: `Rendering ${exportProgress.done}/${exportProgress.total}`
+					: 'Preparing…'
+				: 'Export loop ↓'}
+		</button>
+		{#if exportError}
+			<span class="obs-export-error">{exportError}</span>
+		{/if}
 		<a class="obs-exit" href="{base}/graph">Open full graph →</a>
 	</nav>
 </div>
+
+{#if exporting}
+	<!-- Hidden export stage: fixed 1920×1080, DPR 1, deterministic (live off),
+	     pure canvas. Positioned off-viewport but NOT display:none — the canvas
+	     must keep a real layout size to render. -->
+	<div
+		style="position: fixed; left: -100000px; top: 0; width: 1920px; height: 1080px;"
+		aria-hidden="true"
+	>
+		{#key exportNonce}
+			<ObservatoryStage
+				{demo}
+				seed={seedValue}
+				showSwitcher={false}
+				chrome="none"
+				embedded
+				maxDpr={1}
+				focusIds={receiptIds}
+				{backfillEvidence}
+				onready={handleExportEngine}
+			/>
+		{/key}
+	</div>
+{/if}
 
 <style>
 	/* The DOM control layer. Sits above the WebGPU canvas (z 0) but its container
@@ -906,5 +1006,11 @@
 		.obs-demos {
 			width: 100%;
 		}
+	}
+
+	.obs-export-error {
+		color: #ff6a5e;
+		font-size: 0.72rem;
+		max-width: 22rem;
 	}
 </style>
