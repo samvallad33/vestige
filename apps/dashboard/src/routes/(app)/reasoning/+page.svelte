@@ -3,6 +3,7 @@
 	import { api } from '$stores/api';
 	import PageHeader from '$components/PageHeader.svelte';
 	import Icon from '$components/Icon.svelte';
+	import AmbientField from '$components/AmbientField.svelte';
 	import {
 		normalizeDeepReferenceResponse,
 		type ReasoningScene,
@@ -79,13 +80,32 @@
 	}
 
 	onMount(() => input?.focus());
+
+	// Living base coat — real store vitals drive the ambient field (never
+	// decorative randomness). One cheap fetch; zeros render a calm field.
+	let ambient = $state({ endangered: 0, fracture: 0, due: 0, count: 0 });
+	onMount(async () => {
+		try {
+			const [s, rd] = await Promise.all([api.stats(), api.retentionDistribution()]);
+			const total = Math.max(1, s.totalMemories);
+			ambient = {
+				endangered: Math.min(1, (rd.endangered?.length ?? 0) / total),
+				fracture: 0,
+				due: Math.min(1, (s.dueForReview ?? 0) / total),
+				count: s.totalMemories
+			};
+		} catch {
+			/* field stays calm — never invents vitals */
+		}
+	});
 </script>
 
 <svelte:head>
 	<title>Memory Replay · Vestige</title>
 </svelte:head>
 
-<main class="replay-shell">
+<main class="replay-shell" style="position: relative">
+	<AmbientField {...ambient} accent={[0.36, 0.94, 0.65]} opacity={0.5} />
 	<PageHeader
 		icon="reasoning"
 		title="Memory Replay"

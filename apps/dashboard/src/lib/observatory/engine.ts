@@ -491,7 +491,13 @@ export class ObservatoryEngine {
 		p[7] = this.canvas.height;
 		// p[8] brightness — set by the canvas component
 		p[9] = demoModeId(this.demo);
-		p[10] = frame / 60; // fixed sim seconds within the loop (wraps with it)
+		// Ambient seconds. LIVE mode uses monotonic totalFrames so slow ambient
+		// motion (LivingField ring_spin/twinkle, msdf sway, organ orbits) never
+		// snaps at the 720-frame loop seam — the 12-second pop every organ had.
+		// CAPTURE mode (?frame=N) pins to the wrapped loop frame so stills stay
+		// byte-stable. Choreography must keep keying off p[0]/p[1] (loop frame/
+		// phase), never this lane — ambience is allowed off-loop, stories are not.
+		p[10] = this.freezeFrame !== null ? frame / 60 : state.totalFrames / 60;
 		// p[11] capture_mode — 1.0 when freezeFrame is active (capture mode).
 		// When 1.0, the compute shader skips physics integration so the
 		// storage-buffer state stays frozen at the initial upload values,
