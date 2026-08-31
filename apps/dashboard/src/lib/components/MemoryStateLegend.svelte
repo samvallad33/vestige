@@ -20,7 +20,7 @@
 		MEMORY_STATE_COLORS,
 		MEMORY_STATE_DESCRIPTIONS,
 		type MemoryState,
-	} from '$lib/graph/nodes';
+	} from '$lib/memory-state';
 
 	// Ordered highest-accessibility first so the legend reads top-to-bottom
 	// as "healthy → needs-work", matching the intuition of a status panel.

@@ -16,7 +16,13 @@
 	// ─────────────────────────────────────────────────────────────────────────
 	import { base } from '$app/paths';
 	import { page } from '$app/stores';
-	import { COGNITIVE_OS_ROUTES } from '$lib/observatory/nav/nav-layer';
+	import { OS_ROUTES } from '$lib/os-routes';
+
+	// Full reachable set for the sheet: the dock spine + every nav organ.
+	// Derived from the ONE registry so registry hides propagate to mobile.
+	const COGNITIVE_OS_ROUTES = OS_ROUTES.filter(
+		(r) => r.visibility === 'dock' || r.visibility === 'nav'
+	).map((r) => ({ href: r.href, label: r.label, shortcut: r.shortcut }));
 
 	// Show only on coarse-pointer (touch) OR narrow viewports. Reactive to resize
 	// and orientation so a desktop window shrunk narrow also gets the bar. Driven

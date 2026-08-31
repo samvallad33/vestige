@@ -14,7 +14,7 @@
  */
 
 import type { GraphResponse } from '$types';
-import { getMemoryState, getAhaGraphColor, MEMORY_STATE_COLORS } from '$lib/graph/nodes';
+import { getMemoryState, getAhaGraphColor, MEMORY_STATE_COLORS } from '$lib/memory-state';
 import {
 	FLOATS_PER_NODE,
 	NODE_LANE,

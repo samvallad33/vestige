@@ -60,18 +60,18 @@ export const OS_ROUTES: OsRoute[] = [
 	{ href: '/reasoning', label: 'Reasoning', purpose: 'Watch a live deep_reference decision trace form from evidence.', group: 'Understand', shortcut: 'R', icon: 'reasoning', stage: 'route-stage', visibility: 'nav', ready: true },
 	{ href: '/explore', label: 'Explore', purpose: 'A shareable semantic walk through memory neighborhoods.', group: 'Understand', shortcut: 'E', icon: 'explore', stage: 'observatory', visibility: 'nav', ready: true },
 	{ href: '/contradictions', label: 'Contradictions', purpose: 'Trust-weighted conflict pairs — where your memory disagrees with itself.', group: 'Understand', shortcut: 'C', icon: 'contradictions', stage: 'route-stage', visibility: 'nav', ready: true },
-	{ href: '/patterns', label: 'Patterns', purpose: 'Cross-project patterns mined from the corpus.', group: 'Understand', icon: 'patterns', stage: 'route-stage', visibility: 'nav', ready: true },
+	{ href: '/patterns', label: 'Patterns', purpose: 'Cross-project patterns mined from the corpus.', group: 'Understand', icon: 'patterns', stage: 'route-stage', visibility: 'hidden', ready: true },
 
 	// MAINTAIN — the memory-hygiene organs.
 	{ href: '/duplicates', label: 'Duplicates', purpose: 'Cosine-similarity clusters quarantined for review before merge.', group: 'Maintain', shortcut: 'D', icon: 'duplicates', stage: 'route-stage', visibility: 'nav', ready: true },
 	{ href: '/memory-prs', label: 'Memory PRs', purpose: 'Proposed memory changes held for review before they touch the graph.', group: 'Maintain', icon: 'memorypr', stage: 'route-stage', visibility: 'nav', ready: true },
-	{ href: '/importance', label: 'Importance', purpose: 'Which memories rank highest by the 4-channel importance model, and why.', group: 'Maintain', icon: 'importance', stage: 'route-stage', visibility: 'nav', ready: true },
+	{ href: '/importance', label: 'Importance', purpose: 'Which memories rank highest by the 4-channel importance model, and why.', group: 'Maintain', icon: 'importance', stage: 'route-stage', visibility: 'hidden', ready: true },
 	{ href: '/activation', label: 'Activation', purpose: 'The activation field — which memories light up for a query.', group: 'Maintain', shortcut: 'A', icon: 'activation', stage: 'observatory', visibility: 'nav', ready: true },
 
 	// REFLECT — the temporal / ambient organs.
 	{ href: '/feed', label: 'Activity', purpose: 'The live event stream — recalls, dreams, suppressions, as they happen.', group: 'Reflect', shortcut: 'F', icon: 'feed', stage: 'route-stage', visibility: 'nav', ready: true },
 	{ href: '/dreams', label: 'Dreams', purpose: 'Replay consolidation cycles and the connections they discover.', group: 'Reflect', icon: 'dreams', stage: 'route-stage', visibility: 'nav', ready: true },
-	{ href: '/schedule', label: 'Schedule', purpose: 'Review urgency — what is due now, overdue, and coming next.', group: 'Reflect', shortcut: 'H', icon: 'schedule', stage: 'route-stage', visibility: 'nav', ready: true },
+	{ href: '/schedule', label: 'Schedule', purpose: 'Review urgency — what is due now, overdue, and coming next.', group: 'Reflect', shortcut: 'H', icon: 'schedule', stage: 'route-stage', visibility: 'hidden', ready: true },
 	{ href: '/intentions', label: 'Intentions', purpose: 'Active and predicted intentions grouped by state.', group: 'Reflect', shortcut: 'I', icon: 'intentions', stage: 'route-stage', visibility: 'nav', ready: true },
 	{ href: '/stats', label: 'Stats', purpose: 'System vitals — retention distribution, coverage, throughput.', group: 'Reflect', shortcut: 'S', icon: 'stats', stage: 'route-stage', visibility: 'nav', ready: true },
 

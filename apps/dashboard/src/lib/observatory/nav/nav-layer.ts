@@ -28,24 +28,16 @@ export interface NavLayerPass extends FramePass {
 	dispose(): void;
 }
 
-// LAUNCH CURATION (Sam, Jul 10 2026): the in-canvas nav rail mirrors the palace's
-// curated hero set (ORGAN_REGIONS in palace-map.ts) so there is ONE surfaced set
-// across the palace and every organ's nav. The 10 hidden power-user/hygiene
-// organs (contradictions, blackbox, duplicates, memory-prs, activation, dreams,
-// schedule, importance, patterns, intentions) still work by direct URL — they are
-// just not listed here or in the palace. Restore one by adding it back to BOTH
-// this list and ORGAN_REGIONS. Shortcuts kept from the original mapping.
-export const COGNITIVE_OS_ROUTES: NavRoute[] = [
-	{ href: '/observatory', label: 'Observatory', shortcut: 'O' },
-	{ href: '/graph', label: 'Graph', shortcut: 'G' },
-	{ href: '/memories', label: 'Memories', shortcut: 'M' },
-	{ href: '/timeline', label: 'Timeline', shortcut: 'T' },
-	{ href: '/feed', label: 'Feed', shortcut: 'F' },
-	{ href: '/explore', label: 'Explore', shortcut: 'E' },
-	{ href: '/reasoning', label: 'Reasoning', shortcut: 'R' },
-	{ href: '/stats', label: 'Stats', shortcut: 'S' },
-	{ href: '/settings', label: 'Settings', shortcut: ',' }
-];
+// ONE registry (os-routes.ts) governs every nav surface — supersedes the
+// July 10 hand-curated list, which had drifted from the registry that
+// declares itself canonical. The in-canvas rail shows the dock spine;
+// the command palette and mobile sheet carry the full nav set. Hiding a
+// route in the registry now removes it from every surface at once.
+import { OS_ROUTES } from '$lib/os-routes';
+
+export const COGNITIVE_OS_ROUTES: NavRoute[] = OS_ROUTES.filter(
+	(r) => r.visibility === 'dock'
+).map((r) => ({ href: r.href, label: r.label, shortcut: r.shortcut }));
 
 const NAV_X = -0.93;
 const NAV_Y = 0.83;
