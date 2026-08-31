@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Consolidation can no longer delete your memories
+
+The background consolidation cycle contained two paths that could destroy
+memories unattended. Both are gone or opt-in now, because forgetting in
+Vestige means down-ranking, and destruction is reserved for explicit,
+previewable commands.
+
+The serious one was a "retention target" garbage collector: whenever average
+retention slipped below a target, it hard-deleted every memory below 0.3
+retention older than 30 days. It looked harmless for months only because
+decay was broken (see below) so nothing ever sank that low. The day decay
+came back to life, it silently destroyed 23 real memories from a live
+2,929-memory store in one cycle — no line in the output, no reason in the
+tombstone, and no exemption for pinned memories. Consolidation now reports
+how many low-retention memories exist and deletes nothing; the explicit
+`maintain {action:"gc"}` command (dry-run by default) is the only collector,
+and it now refuses to touch protected memories no matter how decayed.
+
+The second was the near-duplicate auto-merge from #142: it folds weaker
+copies into a keeper and hard-deletes them, and it was on by default with a
+fail-open gate (a typo in the env var still destroyed data). It is opt-in
+now (`VESTIGE_AUTO_CONSOLIDATE_MERGE=1`), the gate fails closed, and when
+enabled it only deletes a weak node after the keeper verifiably absorbed its
+content — the previous code discarded that failure and deleted anyway. The
+`dedup` tool remains the previewable, reversible path.
+
+If you run a store that predates this release: memories already collected by
+the old GC are recorded as content-free tombstones and cannot be recovered
+from the store itself. Check your backups directory; the daily backup from
+before your first post-decay-fix consolidation contains them.
+
 ### Fixed — Forgetting works again (the two dead accessibility states)
 
 The four-state accessibility model (Active, Dormant, Silent, Unavailable) was

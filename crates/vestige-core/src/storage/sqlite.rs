@@ -5012,7 +5012,15 @@ impl SqliteMemoryStore {
     /// invalidates replay evidence, detaches temporal-summary children, and
     /// writes an opaque deletion marker for audit/sync. It remains a legacy
     /// cleanup path and deliberately does not claim verified local unlearning.
-    pub fn purge_node(&self, id: &str, _reason: Option<&str>) -> Result<PurgeReport> {
+    pub fn purge_node(&self, id: &str, reason: Option<&str>) -> Result<PurgeReport> {
+        // The reason is logged, never persisted: deletion_tombstones are
+        // content-free by contract (an opaque marker, no reason, no tags), so
+        // a purged memory leaves nothing recoverable. The local log line is
+        // how an operator answers "what deleted this?" without the tombstone
+        // ever carrying it.
+        if let Some(reason) = reason {
+            tracing::info!(memory_id = %id, reason, "purging memory");
+        }
         let deleted_at = Utc::now();
         let mut writer = self
             .writer
@@ -7449,34 +7457,38 @@ impl SqliteMemoryStore {
         let auto_promoted = self.auto_promote_frequent_access().unwrap_or(0);
         promoted += auto_promoted;
 
-        // 19. Retention Target System — auto-GC if avg retention below target
-        let mut gc_triggered = false;
+        // 19. Retention Target System — REPORT ONLY. Consolidation never
+        // deletes memories.
+        //
+        // Until v2.6.0 this step hard-deleted every memory below 0.3
+        // retention older than 30 days whenever average retention slipped
+        // under a target. It looked dormant for months only because decay was
+        // broken (the w20 story in fsrs/optimizer.rs); the day decay came
+        // back to life it silently destroyed 23 real memories from a live
+        // 2,929-memory store in a single cycle — unattended, unrecoverable,
+        // invisible in the consolidation output, and with no protected-pin
+        // exemption. Forgetting in Vestige means DOWN-RANKING (the
+        // accessibility states); destruction is reserved for the explicit,
+        // previewable, dry-run-by-default `maintain {action:"gc"}` and
+        // `purge` paths. VESTIGE_RETENTION_TARGET no longer gates anything
+        // destructive.
         {
-            let retention_target: f64 = std::env::var("VESTIGE_RETENTION_TARGET")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0.8);
-
             let avg_retention = self.get_avg_retention().unwrap_or(1.0);
             let total = self.get_stats().map(|s| s.total_nodes).unwrap_or(0);
             let below_target = self.count_memories_below_retention(0.3).unwrap_or(0);
 
-            if avg_retention < retention_target && below_target > 0 {
-                let gc_count = self.gc_below_retention(0.3, 30).unwrap_or(0);
-                if gc_count > 0 {
-                    gc_triggered = true;
-                    tracing::info!(
-                        avg_retention = avg_retention,
-                        target = retention_target,
-                        gc_count = gc_count,
-                        "Retention target auto-GC: removed {} low-retention memories",
-                        gc_count
-                    );
-                }
+            if below_target > 0 {
+                tracing::info!(
+                    avg_retention,
+                    gc_candidates = below_target,
+                    "{} memories sit below 0.3 retention; review them with maintain {{action:\"gc\", dry_run:true}} — consolidation deletes nothing",
+                    below_target
+                );
             }
 
-            // 20. Save retention snapshot for trend tracking
-            let _ = self.save_retention_snapshot(avg_retention, total, below_target, gc_triggered);
+            // 20. Save retention snapshot for trend tracking. `gc_triggered`
+            // is permanently false: the autonomic GC no longer exists.
+            let _ = self.save_retention_snapshot(avg_retention, total, below_target, false);
         }
 
         let duration = start.elapsed().as_millis() as i64;
@@ -7524,25 +7536,26 @@ impl SqliteMemoryStore {
     /// never merges away or deletes protected (pinned) nodes (#142).
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn auto_dedup_consolidation(&self) -> Result<i64> {
-        // OPT-OUT (auto-consolidate-merge, #142): this pass concat-merges
+        // OPT-IN (v2.6.0, reversing the #142 opt-out): this pass concat-merges
         // near-duplicate memories and HARD-DELETES the weaker ones with no
-        // reflog. It is ON by default (behavior unchanged), but a consumer that
-        // does not want unattended, no-audit merges can turn it off with
-        // VESTIGE_AUTO_CONSOLIDATE_MERGE=0 (or false/off/no). Parsed exactly like
-        // the sibling VESTIGE_BACKFILL_AUTOFIRE: unset or any other/malformed
-        // value → on (fail-open to the documented default). The `dedup` MCP tool
-        // remains available for on-demand, previewable, reversible merges
-        // regardless of the gate. Gate here (not the caller) so it stays with the
-        // pin filter and self-protects against a future second caller.
+        // reflog. Unattended destruction of user memories is opt-IN, never a
+        // default: set VESTIGE_AUTO_CONSOLIDATE_MERGE=1 (or true/on/yes) to
+        // enable it. Unset or any other/malformed value fails CLOSED — the
+        // safe direction for a destructive gate (#142's opt-out parsed the
+        // same input as fail-OPEN, so a typo destroyed data). The `dedup` MCP
+        // tool remains the on-demand, previewable, reversible path and is
+        // unaffected by this gate. Gate here (not the caller) so it stays
+        // with the pin filter and self-protects against a future second
+        // caller.
         let auto_merge = std::env::var("VESTIGE_AUTO_CONSOLIDATE_MERGE")
             .map(|v| {
                 let v = v.trim();
-                !(v.eq_ignore_ascii_case("false")
-                    || v.eq_ignore_ascii_case("off")
-                    || v.eq_ignore_ascii_case("no")
-                    || v == "0")
+                v.eq_ignore_ascii_case("true")
+                    || v.eq_ignore_ascii_case("on")
+                    || v.eq_ignore_ascii_case("yes")
+                    || v == "1"
             })
-            .unwrap_or(true);
+            .unwrap_or(false);
         if !auto_merge {
             return Ok(0);
         }
@@ -7706,16 +7719,33 @@ impl SqliteMemoryStore {
             // Drop reader before taking writer locks in update/delete
             drop(reader);
 
-            // Update keeper with merged content
-            if merged_content != keeper_content {
-                let _ = self.update_node_content(&best_id, &merged_content);
-            }
+            // Update keeper with merged content. The update result is the
+            // gate for the deletions below: if the keeper never absorbed the
+            // weak nodes' content, deleting them destroys it. The previous
+            // `let _ =` discarded exactly that failure and deleted anyway.
+            let content_preserved = if merged_content != keeper_content {
+                self.update_node_content(&best_id, &merged_content).is_ok()
+            } else {
+                true
+            };
 
-            // Delete weak nodes
-            for weak_id in &weak_ids {
-                let _ = self.delete_node(weak_id);
-                consumed.insert(weak_id.clone());
-                merged_count += 1;
+            if content_preserved {
+                // Delete weak nodes — their content verifiably lives on in
+                // the keeper (or was already contained in it).
+                for weak_id in &weak_ids {
+                    let _ = self.delete_node(weak_id);
+                    consumed.insert(weak_id.clone());
+                    merged_count += 1;
+                }
+            } else {
+                tracing::warn!(
+                    keeper = %best_id,
+                    weak = weak_ids.len(),
+                    "auto-dedup: keeper content update failed; weak nodes kept (nothing deleted)"
+                );
+                for weak_id in &weak_ids {
+                    consumed.insert(weak_id.clone());
+                }
             }
 
             consumed.insert(best_id);
@@ -11258,6 +11288,13 @@ impl SqliteMemoryStore {
     pub fn gc_below_retention(&self, threshold: f64, min_age_days: i64) -> Result<i64> {
         let cutoff = (Utc::now() - Duration::days(min_age_days)).to_rfc3339();
 
+        // Explicitly protected (pinned) memories are never garbage-collected,
+        // no matter how far their retention has decayed. A pin is the user
+        // saying "keep this"; low retention only says "rarely retrieved", and
+        // the second must never override the first. (Until v2.6.0 this query
+        // had no such exemption.)
+        let protected = self.protected_node_ids()?;
+
         // Collect IDs first for sync tombstones and vector index cleanup.
         let doomed_ids: Vec<String> = {
             let reader = self
@@ -11269,6 +11306,7 @@ impl SqliteMemoryStore {
             )?;
             stmt.query_map(params![threshold, cutoff], |row| row.get(0))?
                 .filter_map(|r| r.ok())
+                .filter(|id: &String| !protected.contains(id))
                 .collect()
         };
 
@@ -17408,6 +17446,107 @@ mod tests {
         assert!(!archive.contains("sensitive-delete-tag"));
     }
 
+    /// REGRESSION (v2.6.0 data-safety): consolidation must never delete a
+    /// memory. Until this release, an autonomic "retention target" GC inside
+    /// run_consolidation hard-deleted everything below 0.3 retention older
+    /// than 30 days — dormant only while decay was broken, and it destroyed
+    /// 23 real memories from a live store the day decay was fixed. This test
+    /// constructs exactly that scenario and asserts nothing dies.
+    #[test]
+    fn consolidation_never_deletes_low_retention_memories() {
+        let storage = create_test_storage();
+        let mut ids = Vec::new();
+        for i in 0..4 {
+            let node = storage
+                .ingest(IngestInput {
+                    content: format!("Old low-retention memory number {i} that must survive"),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                })
+                .unwrap();
+            ids.push(node.id);
+        }
+        // Force the doomed profile the old reaper keyed on: retention far
+        // below 0.3 and created_at far older than 30 days.
+        {
+            let writer = storage.writer.lock().unwrap();
+            let old = (Utc::now() - Duration::days(120)).to_rfc3339();
+            for id in &ids {
+                writer
+                    .execute(
+                        "UPDATE knowledge_nodes
+                         SET retention_strength = 0.05, created_at = ?1, last_accessed = ?1
+                         WHERE id = ?2",
+                        params![old, id],
+                    )
+                    .unwrap();
+            }
+        }
+        let before: i64 = {
+            let reader = storage.reader.lock().unwrap();
+            reader
+                .query_row("SELECT COUNT(*) FROM knowledge_nodes", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        storage.run_consolidation().unwrap();
+
+        let after: i64 = {
+            let reader = storage.reader.lock().unwrap();
+            reader
+                .query_row("SELECT COUNT(*) FROM knowledge_nodes", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(before, after, "consolidation deleted memories");
+        for id in &ids {
+            assert!(
+                storage.get_node(id).unwrap().is_some(),
+                "low-retention memory {id} was reaped by consolidation"
+            );
+        }
+    }
+
+    /// The explicit GC path must never collect a protected (pinned) memory,
+    /// no matter how decayed it is. A pin says "keep this"; low retention
+    /// only says "rarely retrieved".
+    #[test]
+    fn gc_spares_protected_memories() {
+        let storage = create_test_storage();
+        let pinned = storage
+            .ingest(IngestInput {
+                content: "Pinned but heavily decayed memory".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let doomed = storage
+            .ingest(IngestInput {
+                content: "Unpinned decayed memory".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        {
+            let writer = storage.writer.lock().unwrap();
+            let old = (Utc::now() - Duration::days(120)).to_rfc3339();
+            for id in [&pinned.id, &doomed.id] {
+                writer
+                    .execute(
+                        "UPDATE knowledge_nodes
+                         SET retention_strength = 0.05, created_at = ?1 WHERE id = ?2",
+                        params![old, id],
+                    )
+                    .unwrap();
+            }
+        }
+        storage.set_protected(&pinned.id, true).unwrap();
+
+        let deleted = storage.gc_below_retention(0.3, 30).unwrap();
+        assert_eq!(deleted, 1, "only the unpinned memory is collected");
+        assert!(storage.get_node(&pinned.id).unwrap().is_some(), "pin survives GC");
+        assert!(storage.get_node(&doomed.id).unwrap().is_none());
+    }
+
     #[test]
     fn gc_uses_the_privacy_cleanup_deletion_path() {
         let storage = create_test_storage();
@@ -19984,10 +20123,12 @@ mod tests {
         }
     }
 
-    // --- A. Default (flag unset): near-duplicates still merge (regression) ---
+    // --- A. Default (flag unset): NOTHING merges, nothing is deleted ---------
+    // v2.6.0 flipped the #142 opt-out into an opt-in: unattended destruction
+    // of user memories must be asked for, never inherited.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
-    fn test_auto_dedup_default_on_merges_near_duplicates() {
+    fn test_auto_dedup_default_off_preserves_near_duplicates() {
         with_auto_merge_env(None, || {
             let storage = create_test_storage();
             let keeper = seed_node(
@@ -20002,22 +20143,58 @@ mod tests {
                 &["api"],
                 axis_vector(21, 0.01),
             );
-            // Make `keeper` win the retention tiebreak deterministically.
             set_retention(&storage, &keeper, 0.9);
             set_retention(&storage, &dup, 0.3);
 
             let merged = storage.auto_dedup_consolidation().unwrap();
-            assert_eq!(merged, 1, "one weak node folded into the keeper");
+            assert_eq!(merged, 0, "flag unset: the destructive pass must not run");
             assert!(
-                storage.get_node(&dup).unwrap().is_none(),
-                "weak duplicate is hard-deleted"
+                storage.get_node(&dup).unwrap().is_some(),
+                "near-duplicate survives by default"
             );
-            let survivor = storage.get_node(&keeper).unwrap().unwrap();
             assert!(
-                survivor.content.contains("[MERGED]"),
-                "keeper carries the folded-in [MERGED] block"
+                !storage
+                    .get_node(&keeper)
+                    .unwrap()
+                    .unwrap()
+                    .content
+                    .contains("[MERGED]"),
+                "keeper content untouched by default"
             );
         });
+        // Explicit opt-in (trimmed, case-insensitive 1/true/on/yes) enables it.
+        for value in ["1", "true", "ON", "  Yes  "] {
+            with_auto_merge_env(Some(value), || {
+                let storage = create_test_storage();
+                let keeper = seed_node(
+                    &storage,
+                    "Rate limiting uses a token bucket per client API key",
+                    &["api"],
+                    axis_vector(21, 0.02),
+                );
+                let dup = seed_node(
+                    &storage,
+                    "Rate limiting uses a token-bucket algorithm per client API key, refilled steadily",
+                    &["api"],
+                    axis_vector(21, 0.01),
+                );
+                set_retention(&storage, &keeper, 0.9);
+                set_retention(&storage, &dup, 0.3);
+
+                let merged = storage.auto_dedup_consolidation().unwrap();
+                assert_eq!(merged, 1, "opted in ({value:?}): weak node folds into keeper");
+                assert!(storage.get_node(&dup).unwrap().is_none());
+                assert!(
+                    storage
+                        .get_node(&keeper)
+                        .unwrap()
+                        .unwrap()
+                        .content
+                        .contains("[MERGED]"),
+                    "keeper carries the folded-in [MERGED] block"
+                );
+            });
+        }
     }
 
     // --- B. Flag off suppresses the merge (parametrized) ---------------------
@@ -20056,10 +20233,10 @@ mod tests {
         }
     }
 
-    // --- B (cont). A malformed value fails OPEN to the ON default ------------
+    // --- B (cont). A malformed value fails CLOSED: no destruction on a typo --
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
-    fn test_auto_dedup_env_garbage_fails_open_and_merges() {
+    fn test_auto_dedup_env_garbage_fails_closed_and_preserves() {
         with_auto_merge_env(Some("banana"), || {
             let storage = create_test_storage();
             let keeper = seed_node(
@@ -20078,8 +20255,8 @@ mod tests {
             set_retention(&storage, &dup, 0.3);
 
             let merged = storage.auto_dedup_consolidation().unwrap();
-            assert_eq!(merged, 1, "malformed value fails open to the ON default");
-            assert!(storage.get_node(&dup).unwrap().is_none());
+            assert_eq!(merged, 0, "malformed value fails closed for a destructive gate");
+            assert!(storage.get_node(&dup).unwrap().is_some(), "nothing deleted on a typo");
         });
     }
 
@@ -20087,7 +20264,7 @@ mod tests {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn test_auto_dedup_protected_would_be_keeper_untouched_others_merge() {
-        with_auto_merge_env(None, || {
+        with_auto_merge_env(Some("1"), || {
             let storage = create_test_storage();
             // P has the highest retention, so absent protection it would be the
             // keeper. Protected → skipped entirely; the two unprotected merge alone.
@@ -20137,7 +20314,7 @@ mod tests {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn auto_dedup_regression_142_protected_weak_member_not_absorbed() {
-        with_auto_merge_env(None, || {
+        with_auto_merge_env(Some("1"), || {
             let storage = create_test_storage();
             // Regression (#142): before the fix this pinned node — the weaker
             // member of the cluster — was silently absorbed into the stronger
@@ -20198,7 +20375,7 @@ mod tests {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn test_auto_dedup_two_protected_near_dups_neither_merges() {
-        with_auto_merge_env(None, || {
+        with_auto_merge_env(Some("1"), || {
             let storage = create_test_storage();
             let a = seed_node(
                 &storage,
@@ -20230,7 +20407,7 @@ mod tests {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn test_auto_dedup_protected_plus_single_unprotected_no_merge() {
-        with_auto_merge_env(None, || {
+        with_auto_merge_env(Some("1"), || {
             let storage = create_test_storage();
             let pinned = seed_node(
                 &storage,
@@ -20261,7 +20438,7 @@ mod tests {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn test_auto_dedup_protected_plus_two_unprotected_liveness() {
-        with_auto_merge_env(None, || {
+        with_auto_merge_env(Some("1"), || {
             let storage = create_test_storage();
             // The pin exclusion must not block a legitimate merge of the others.
             let pinned = seed_node(
