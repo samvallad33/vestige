@@ -2,7 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { replaceState } from '$app/navigation';
 	import { api } from '$stores/api';
-	import type { Memory, SearchResult } from '$types';
+	import type { GraphEdge, GraphNode, GraphResponse, Memory, SearchResult } from '$types';
 	import ObservatoryCanvas from '$lib/components/ObservatoryCanvas.svelte';
 	import PageHeader from '$components/PageHeader.svelte';
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
@@ -58,6 +58,87 @@
 	// seeds the walk from THAT thought instead of re-seeding from the newest one,
 	// so the selected memory survives the Graph → Explore handoff.
 	let seedMemoryId: string | null = $state(null);
+
+	// ── Spread mode (absorbed from the retired /activation organ) ──────────
+	// 'walk' asks the backend for semantic associations; 'spread' runs REAL
+	// edge-weighted BFS activation over the center's graph neighborhood —
+	// 1.0 at the seed, attenuating per hop, strong edges passing more through.
+	// Same list, same field, two different physics of "what lights up".
+	let mode = $state<'walk' | 'spread'>('walk');
+	let spreadHops = $state<Record<string, number>>({});
+
+	function setMode(next: 'walk' | 'spread') {
+		if (mode === next) return;
+		mode = next;
+		spreadHops = {};
+		if (centerId) void loadNeighbors();
+	}
+
+	/** Edge-weighted BFS activation from the seed — ported from /activation.
+	 * (clamp01 lives further down in this file — shared with the field build.) */
+	function computeActivation(
+		g: GraphResponse,
+		fromId: string
+	): { node: GraphNode; strength: number; hops: number }[] {
+		const adj = new Map<string, { to: string; weight: number }[]>();
+		const link = (from: string, to: string, weight: number) => {
+			const list = adj.get(from) ?? [];
+			list.push({ to, weight });
+			adj.set(from, list);
+		};
+		for (const e of g.edges as GraphEdge[]) {
+			const w = clamp01(e.weight);
+			link(e.source, e.target, w);
+			link(e.target, e.source, w);
+		}
+		const hop = new Map<string, number>();
+		const strength = new Map<string, number>();
+		hop.set(fromId, 0);
+		strength.set(fromId, 1);
+		const queue: string[] = [fromId];
+		while (queue.length) {
+			const cur = queue.shift()!;
+			const curHop = hop.get(cur)!;
+			const curStr = strength.get(cur)!;
+			for (const { to, weight } of adj.get(cur) ?? []) {
+				const next = curStr * (0.45 + 0.5 * weight);
+				if (next > (strength.get(to) ?? 0)) {
+					strength.set(to, next);
+					hop.set(to, curHop + 1);
+					queue.push(to);
+				}
+			}
+		}
+		return (g.nodes as GraphNode[])
+			.filter((n) => strength.has(n.id) && n.id !== fromId)
+			.map((n) => ({ node: n, strength: strength.get(n.id)!, hops: hop.get(n.id)! }))
+			.sort((a, b) => b.strength - a.strength);
+	}
+
+	/** Spread-mode neighborhood: real graph edges, not semantic similarity. */
+	async function spreadFrom(seedId: string): Promise<{ results: SearchMemory[] }> {
+		const graph = await api.graph({ center_id: seedId, depth: 3, max_nodes: 80 });
+		const activated = computeActivation(graph, seedId).slice(0, SEARCH_LIMIT);
+		const hops: Record<string, number> = {};
+		for (const a of activated) hops[a.node.id] = a.hops;
+		spreadHops = hops;
+		return {
+			results: activated.map(
+				(a) =>
+					// Graph nodes carry the fields the neighborhood UI reads
+					// (content preview, type, tags, retention); the rest of the
+					// Memory shape is unused here.
+					({
+						id: a.node.id,
+						content: a.node.label,
+						nodeType: a.node.type,
+						tags: a.node.tags,
+						retentionStrength: a.node.retention,
+						similarity: a.strength
+					}) as unknown as SearchMemory
+			)
+		};
+	}
 
 	// The neighbor the user has focused in the DOM list — drives the detail panel.
 	// Selection is NON-MUTATING: focusing a neighbor only reads it; walking (an
@@ -199,7 +280,9 @@
 			// the graph for its true associations; otherwise the raw query is a
 			// semantic search over the corpus.
 			const res = centerId
-				? await api.explore(centerId, 'associations', undefined, SEARCH_LIMIT)
+				? mode === 'spread'
+					? await spreadFrom(centerId)
+					: await api.explore(centerId, 'associations', undefined, SEARCH_LIMIT)
 				: await api.search(searchQuery, SEARCH_LIMIT);
 			if (gen !== loadGen) return; // stale response — the newer walk owns state
 			searchResult = 'query' in res ? (res as SearchResult) : null;
@@ -474,6 +557,32 @@
 			<Icon name="explore" size={15} />
 			{loading ? 'Walking…' : 'Explore'}
 		</button>
+		<div
+			class="flex rounded-lg border border-subtle/25 overflow-hidden text-xs"
+			role="group"
+			aria-label="Neighborhood physics"
+		>
+			<button
+				type="button"
+				onclick={() => setMode('walk')}
+				class="px-3 py-2.5 transition {mode === 'walk'
+					? 'bg-synapse/25 text-synapse-glow font-medium'
+					: 'text-dim hover:text-text'}"
+				title="Semantic associations — nearest neighbors by meaning"
+			>
+				Walk
+			</button>
+			<button
+				type="button"
+				onclick={() => setMode('spread')}
+				class="px-3 py-2.5 transition {mode === 'spread'
+					? 'bg-synapse/25 text-synapse-glow font-medium'
+					: 'text-dim hover:text-text'}"
+				title="Activation spread — edge-weighted BFS over the real graph"
+			>
+				Spread
+			</button>
+		</div>
 	</div>
 	{#if primaryDisabled && primaryDisabledReason}
 		<div class="pointer-events-auto -mt-4 text-[11px] text-muted pl-1">{primaryDisabledReason}</div>
@@ -591,7 +700,9 @@
 							></div>
 							<span class="text-[10px] uppercase tracking-wider text-muted">{memory.nodeType}</span>
 							<span class="ml-auto text-[11px] tabular-nums font-medium" style="color: #22C7DE">
-								{Math.round(sim * 100)}% match
+								{mode === 'spread'
+									? `${Math.round(sim * 100)}% activation · ${spreadHops[memory.id] ?? '?'} hop${spreadHops[memory.id] === 1 ? '' : 's'}`
+									: `${Math.round(sim * 100)}% match`}
 							</span>
 						</div>
 						<div class="text-xs text-text leading-relaxed">

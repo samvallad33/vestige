@@ -87,6 +87,27 @@
 		}
 	}
 
+	// Dream ritual — absorbed from the retired /settings organ (which held no
+	// settings, only duplicates of actions that belong with the vitals).
+	let dreaming = $state(false);
+	let dreamNotice = $state<string | null>(null);
+
+	async function runDream() {
+		if (dreaming || consolidating) return;
+		dreaming = true;
+		actionError = null;
+		dreamNotice = null;
+		try {
+			const d = await api.dream();
+			dreamNotice = `Dream complete: ${d.memoriesReplayed} memories replayed, ${d.stats?.newConnectionsFound ?? 0} new connections`;
+			await loadStats();
+		} catch (err) {
+			actionError = err instanceof Error ? err.message : 'Dream cycle failed';
+		} finally {
+			dreaming = false;
+		}
+	}
+
 	async function runConsolidate() {
 		if (consolidating || consolidateDisabledReason) return;
 		consolidating = true;
@@ -308,8 +329,20 @@
 						<Icon name="pulse" size={14} />
 						{consolidating ? 'Consolidating…' : 'Consolidate memory'}
 					</button>
+					<button
+						type="button"
+						onclick={runDream}
+						disabled={dreaming || consolidating}
+						class="inline-flex items-center gap-2 rounded-xl border border-dream/35 bg-dream/15 px-3.5 py-2 text-xs font-semibold text-dream-glow transition hover:bg-dream/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-dream/60 disabled:cursor-not-allowed disabled:opacity-45"
+					>
+						<Icon name="dreams" size={14} />
+						{dreaming ? 'Dreaming…' : 'Run dream cycle'}
+					</button>
 					{#if consolidateDisabledReason && !consolidating}
 						<span class="text-[9px] text-muted">{consolidateDisabledReason}</span>
+					{/if}
+					{#if dreamNotice}
+						<span class="text-[9px] text-recall">{dreamNotice}</span>
 					{/if}
 				</div>
 			</div>

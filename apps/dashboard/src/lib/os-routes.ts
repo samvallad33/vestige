@@ -66,7 +66,7 @@ export const OS_ROUTES: OsRoute[] = [
 	{ href: '/duplicates', label: 'Duplicates', purpose: 'Cosine-similarity clusters quarantined for review before merge.', group: 'Maintain', shortcut: 'D', icon: 'duplicates', stage: 'route-stage', visibility: 'nav', ready: true },
 	{ href: '/memory-prs', label: 'Memory PRs', purpose: 'Proposed memory changes held for review before they touch the graph.', group: 'Maintain', icon: 'memorypr', stage: 'route-stage', visibility: 'nav', ready: true },
 	{ href: '/importance', label: 'Importance', purpose: 'Which memories rank highest by the 4-channel importance model, and why.', group: 'Maintain', icon: 'importance', stage: 'route-stage', visibility: 'hidden', ready: true },
-	{ href: '/activation', label: 'Activation', purpose: 'The activation field — which memories light up for a query.', group: 'Maintain', shortcut: 'A', icon: 'activation', stage: 'observatory', visibility: 'nav', ready: true },
+	{ href: '/activation', label: 'Activation', purpose: 'The activation field — which memories light up for a query.', group: 'Maintain', shortcut: 'A', icon: 'activation', stage: 'observatory', visibility: 'hidden', ready: true },
 
 	// REFLECT — the temporal / ambient organs.
 	{ href: '/feed', label: 'Activity', purpose: 'The live event stream — recalls, dreams, suppressions, as they happen.', group: 'Reflect', shortcut: 'F', icon: 'feed', stage: 'route-stage', visibility: 'nav', ready: true },
@@ -77,7 +77,7 @@ export const OS_ROUTES: OsRoute[] = [
 
 	// SYSTEM
 	{ href: '/embeddings', label: 'Embeddings', purpose: 'Own local embedding profiles: install, evaluate, migrate, activate, and roll back with receipts.', group: 'System', icon: 'embeddings', stage: 'dom', visibility: 'nav', ready: true },
-	{ href: '/settings', label: 'Settings', purpose: 'Tune the cognitive engine and run the maintenance rituals.', group: 'System', shortcut: ',', icon: 'settings', stage: 'route-stage', visibility: 'nav', ready: true }
+	{ href: '/settings', label: 'Settings', purpose: 'Tune the cognitive engine and run the maintenance rituals.', group: 'System', shortcut: ',', icon: 'settings', stage: 'route-stage', visibility: 'hidden', ready: true }
 ];
 
 // ── Derived views (every consumer uses these, never re-lists routes) ──────────
