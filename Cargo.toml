@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/vestige-core",
+    "crates/vestige-spacetime",
     "crates/vestige-mcp",
     "tests/e2e",
     "tests/phase_1",
@@ -11,7 +12,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "2.2.1"
+version = "2.6.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 repository = "https://github.com/samvallad33/vestige"

@@ -102,7 +102,7 @@ pub fn merge_undo_schema() -> Value {
         "properties": {
             "operation_id": {
                 "type": "string",
-                "description": "ID of the merge/supersede operation to reverse. Omit to list recent operations (the reflog)."
+                "description": "ID of the merge/supersede or tag rename/merge operation to reverse. Omit to list recent mixed reflog entries plus a dedicated tagOperations list that cannot be buried by merge activity."
             }
         }
     })
@@ -381,11 +381,29 @@ fn apply_plan(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, Stri
 // ============================================================================
 
 fn merge_undo(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    {
-        let a = obj(&args);
-        match a.get("operation_id").and_then(|v| v.as_str()) {
-            Some(op_id) => {
+    let a = obj(&args);
+    match a.get("operation_id").and_then(|v| v.as_str()) {
+        Some(op_id) => {
+            let original = storage
+                .get_merge_operation(op_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("operation {op_id} not found"))?;
+            if matches!(original.op_type.as_str(), "tag_rename" | "tag_merge") {
+                let op = storage
+                    .undo_tag_mutation(op_id)
+                    .map_err(|e| e.to_string())?;
+                return Ok(json!({
+                    "undoOperationId": op.id,
+                    "revertedOperationId": op.reverts_op_id,
+                    "status": "reverted",
+                    "affectedIds": op.affected_ids,
+                    "reason": op.reason,
+                    "note": "The exact prior tag arrays were restored atomically. Undo refuses if any affected memory's tags changed after the original operation."
+                }));
+            }
+
+            #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+            {
                 let op = storage.merge_undo(op_id).map_err(|e| e.to_string())?;
                 Ok(json!({
                     "undoOperationId": op.id,
@@ -396,45 +414,62 @@ fn merge_undo(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, Stri
                     "note": "The original operation was reversed: survivor content/tags restored and invalidation cleared. The plan is re-openable."
                 }))
             }
-            None => {
-                // No id => return the reflog so the caller can pick one.
-                let ops = storage
-                    .list_merge_operations(20)
-                    .map_err(|e| e.to_string())?;
-                let log: Vec<Value> = ops
-                    .iter()
-                    .map(|op| {
-                        json!({
-                            "operationId": op.id,
-                            "opType": op.op_type,
-                            "status": op.status,
-                            "survivorId": op.survivor_id,
-                            "affectedIds": op.affected_ids,
-                            "confidence": op.confidence.map(|c| format!("{:.3}", c)),
-                            "reason": op.reason,
-                            "createdAt": op.created_at,
-                            "revertedAt": op.reverted_at
-                        })
-                    })
-                    .collect();
-                Ok(json!({
-                    "operations": log,
-                    "totalOperations": log.len(),
-                    "note": "This is the reversible operation log (the memory reflog). Pass operation_id to reverse one."
-                }))
+
+            #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
+            {
+                Err("Undoing merge/supersede operations requires embeddings and vector-search features; tag operation undo is available in this build.".into())
             }
         }
-    }
-    #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
-    {
-        let _ = (storage, args);
-        Err("Embeddings feature not enabled.".into())
+        None => {
+            // No id => return the mixed reflog plus a dedicated tag-operation
+            // window. Tag audits are queried directly so a busy merge/supersede
+            // log cannot bury the operation an agent needs to undo.
+            const TAG_UNDO_LIST_WINDOW: usize = 50;
+            let ops = storage
+                .list_merge_operations(20)
+                .map_err(|e| e.to_string())?;
+            let mut tag_ops = storage
+                .list_tag_operations(TAG_UNDO_LIST_WINDOW + 1, None)
+                .map_err(|e| e.to_string())?;
+            let tag_operations_truncated = tag_ops.len() > TAG_UNDO_LIST_WINDOW;
+            tag_ops.truncate(TAG_UNDO_LIST_WINDOW);
+            Ok(json!({
+                "operations": ops.iter().map(operation_log_entry).collect::<Vec<_>>(),
+                "totalOperations": ops.len(),
+                "tagOperations": tag_ops.iter().map(operation_log_entry).collect::<Vec<_>>(),
+                "tagOperationsReturned": tag_ops.len(),
+                "tagOperationsTruncated": tag_operations_truncated,
+                "note": "operations is the mixed reversible log (newest 20). tagOperations lists tag_rename/tag_merge directly so merge activity cannot hide them. Pass operation_id to reverse one."
+            }))
+        }
     }
 }
 
 // ============================================================================
 // protect
 // ============================================================================
+
+fn operation_log_entry(op: &vestige_core::advanced::MergeOperation) -> Value {
+    let signals = op.signals.as_ref();
+    json!({
+        "operationId": op.id,
+        "opType": op.op_type,
+        "status": op.status,
+        "survivorId": op.survivor_id,
+        "affectedIds": op.affected_ids,
+        "confidence": op.confidence.map(|c| format!("{:.3}", c)),
+        "reason": op.reason,
+        "createdAt": op.created_at,
+        "revertedAt": op.reverted_at,
+        "sourceTags": signals.and_then(|value| value.get("sourceTags")),
+        "targetTag": signals.and_then(|value| value.get("targetTag")),
+        "scope": signals.and_then(|value| value.get("scope")),
+        "allScopes": signals
+            .and_then(|value| value.get("allScopes"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
 
 fn protect(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
     let a = obj(&args);
@@ -537,5 +572,41 @@ mod tests {
                 .iter()
                 .any(|v| v == "member_ids")
         );
+    }
+
+    #[test]
+    fn tag_reflog_exposes_source_target_and_normalized_scope() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(Some(directory.path().join("reflog.db"))).unwrap());
+        storage
+            .ingest(vestige_core::IngestInput {
+                content: "tag reflog fixture".to_string(),
+                tags: vec!["old".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        let sources = vec!["old".to_string()];
+        let preview = storage
+            .preview_tag_mutation(&sources, "new", Some(" user "))
+            .unwrap();
+        storage
+            .apply_tag_mutation(
+                &sources,
+                "new",
+                Some(" user "),
+                preview["previewToken"].as_str().unwrap(),
+                "tag_rename",
+                "agent-visible reflog fixture",
+            )
+            .unwrap();
+
+        let response = merge_undo(&storage, None).unwrap();
+        assert_eq!(response["operations"][0]["sourceTags"], json!(["old"]));
+        assert_eq!(response["operations"][0]["targetTag"], "new");
+        assert_eq!(response["operations"][0]["scope"], "user");
+        assert_eq!(response["operations"][0]["allScopes"], false);
+        assert_eq!(response["tagOperations"].as_array().unwrap().len(), 1);
+        assert_eq!(response["tagOperations"][0]["opType"], "tag_rename");
+        assert_eq!(response["tagOperationsTruncated"], false);
     }
 }

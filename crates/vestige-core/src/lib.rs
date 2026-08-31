@@ -90,6 +90,7 @@ pub mod embedding;
 pub mod fsrs;
 pub mod fts;
 pub mod memory;
+pub mod security;
 pub mod storage;
 
 /// Agent Black Box, Memory Receipts & Memory PRs — the cognitive flight
@@ -146,6 +147,9 @@ pub use memory::{
     TemporalRange,
 };
 
+// Local secret-detection primitives used by every memory write boundary.
+pub use security::{SecretConfidence, SecretFinding, SecretKind, SecretPolicy, scan_secrets};
+
 // FSRS-6 algorithm
 pub use fsrs::{
     FSRSParameters,
@@ -168,14 +172,17 @@ pub use config::{CONFIG_FILE, OutputConfig, OutputDefaults, OutputProfile, Vesti
 
 // Agent Black Box / Receipts / Memory PRs (the cognitive flight recorder)
 pub use trace::{
-    BackfillCandidateEvidence, BackfillReceiptEvidence, DecayRisk, HIGH_TRUST_FLOOR,
-    LOW_CONFIDENCE_FLOOR, MemoryPr, MemoryPrAction, MemoryPrKind, MemoryPrStatus, MemoryTraceEvent,
-    Receipt, ReceiptMutation, ReviewMode, RiskClass, RiskSignal, SuppressReason,
-    SuppressedReceiptEntry, WriteContext, WriteSource, classify_write,
+    DecayRisk, HIGH_TRUST_FLOOR, LOW_CONFIDENCE_FLOOR, MemoryPr, MemoryPrAction, MemoryPrKind,
+    MemoryPrStatus, MemoryTraceEvent, Receipt, ReceiptEvidence, ReceiptMutation, ReviewMode,
+    RiskClass, RiskSignal, StrengthDelta, SuppressReason, SuppressedReceiptEntry,
+    SynapticCaptureCandidate, SynapticCaptureDisposition, SynapticCaptureEvidence,
+    SynapticCaptureTrigger, SynapticCaptureWindow, SynapticStrengthChange, WriteContext,
+    WriteSource, classify_write,
 };
 
 // Storage layer
 pub use storage::{
+    ACCESS_LOG_RETENTION_DAYS,
     AgentRunSummary,
     ClassificationResult,
     CompositionEventRecord,
@@ -185,13 +192,22 @@ pub use storage::{
     ConnectionRecord,
     ConnectorCursor,
     ConsolidationHistoryRecord,
+    CounterfactualReplayResult,
+    DEFAULT_MEMORY_SCOPE,
     Domain,
     DreamHistoryRecord,
+    DurableCounterfactualReplay,
+    DurableRetrievalReplayCapsule,
+    DurableSynapticCapture,
+    DurableSynapticPairReceipt,
     EmbeddingProfileIntegrityManifest,
     EmbeddingProfileMigrationNodeCheckpoint,
     EmbeddingProfileMigrationRecord,
     EmbeddingProfileVector,
+    FrozenReplayItem,
     HealthStatus,
+    HygieneNodeSummary,
+    HygieneSnapshot,
     InsightRecord,
     IntentionRecord,
     LocalMemoryStore,
@@ -203,12 +219,39 @@ pub use storage::{
     ModelSignature,
     NeverComposedCandidate,
     PORTABLE_ARCHIVE_FORMAT,
+    PendingMemoryMutationDecision,
+    PendingMemoryMutationEffect,
     PortableArchive,
     PortableImportMode,
     PortableImportReport,
     PortableSyncReport,
+    REPLAY_ALGORITHM_VERSION,
+    REPLAY_CLAIM_BOUNDARY,
+    REPLAY_SCHEMA_VERSION,
+    REPLAY_SELECTION_BOUNDARY,
     ReconcileReport,
+    ReplayBuildError,
+    ReplayDecayRisk,
+    ReplayEvidenceItemSummary,
+    ReplayEvidenceSetSummary,
+    ReplayInfluence,
+    ReplayInvalidationReason,
+    ReplayMaterializationCheck,
+    ReplayPrivacyInvalidation,
+    ReplayPrivacyState,
     Result,
+    RetrievalReplayCapsuleDraft,
+    RetrievalReplayCapsuleSummary,
+    RetrievalReplayItemDraft,
+    SYNAPTIC_CAPTURE_ALGORITHM_V1,
+    SYNAPTIC_CAPTURE_ALGORITHM_V2,
+    SYNAPTIC_CAPTURE_CLAIM_BOUNDARY,
+    SYNAPTIC_CAPTURE_SCHEMA_V1,
+    SYNAPTIC_CAPTURE_SCHEMA_V2,
+    SYNAPTIC_CONTEXT_ALGORITHM_V1,
+    SYNAPTIC_CONTEXT_THRESHOLD_V1,
+    // Note: storage::SearchResult is intentionally not re-exported here to avoid
+    // collision with memory::SearchResult. Use vestige_core::storage::SearchResult directly.
     SchedulingState,
     SearchQuery,
     SmartIngestResult,
@@ -219,8 +262,19 @@ pub use storage::{
     Storage,
     StorageError,
     StoreStats,
-    // Note: storage::SearchResult is intentionally not re-exported here to avoid
-    // collision with memory::SearchResult. Use vestige_core::storage::SearchResult directly.
+    StoredCounterfactualReplay,
+    SynapticCapturePolicy,
+    SynapticCaptureRequest,
+    SynapticImportanceEvent,
+    SynapticIngestOutcome,
+    SynapticIngestRequest,
+    SynapticSignalSnapshot,
+    TagVocabulary,
+    ablate_frozen_context,
+    private_evidence_digest,
+    replay_evidence_slot,
+    replay_idempotency_key,
+    replay_policy_digest,
 };
 
 // Embedder trait and implementations

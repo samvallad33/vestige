@@ -7,12 +7,12 @@
     "url": "https://github.com/samvallad33/vestige",
     "source": "github"
   },
-  "version": "2.2.1",
+  "version": "2.6.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "vestige-mcp-server",
-      "version": "2.2.1",
+      "version": "2.6.0",
       "transport": {
         "type": "stdio"
       }

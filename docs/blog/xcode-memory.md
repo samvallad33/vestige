@@ -80,7 +80,7 @@ Vestige remembers the way a brain does:
 
 - **FSRS-6 spaced repetition** — memories naturally decay and strengthen based on usage, trained on 700M+ reviews
 - **Prediction error gating** — automatically deduplicates and decides whether to create, update, or supersede memories
-- **Spreading activation** — searching for one memory strengthens related memories
+- **Spreading activation** — searching for one memory surfaces related memories without changing their durable strength
 - **Synaptic tagging** — important memories get tagged for long-term consolidation
 - **23 cognitive tools** — search, ingest, dream, predict, explore connections, garbage collect, and more
 

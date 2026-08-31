@@ -182,25 +182,40 @@ fn assess_relation(
     }
 
     let time_delta_days = (b_date - a_date).num_days().abs();
-    let trust_diff = b_trust - a_trust;
     let has_correction = appears_contradictory(a_content, b_content);
 
-    // Supersession: same topic + newer + higher trust
-    if topic_sim > 0.4 && time_delta_days > 0 && trust_diff > 0.05 && !has_correction {
-        let (newer, older) = if b_date > a_date {
-            ("B", "A")
-        } else {
-            ("A", "B")
-        };
+    // Resolve temporal order FIRST, then measure trust on the newer side.
+    //
+    // The previous code gated on `b_trust - a_trust > 0.05` (is B more trusted?)
+    // but chose the newer/older LABELS independently, by date. When A was newer
+    // but B was more trusted, the gate passed on B's trust while the label said
+    // "A supersedes B" -- reporting the LESS-trusted memory as superseding the
+    // MORE-trusted one, and printing the older memory's own trust advantage as
+    // if it belonged to the newer claim. That is exactly backwards for the case
+    // this guard exists to catch: an authoritative older finding versus a fresh,
+    // weakly-supported claim on the same topic.
+    //
+    // Supersession now requires the newer memory to ALSO be the more trusted
+    // one. When a newer claim is less trusted than what it contradicts, this
+    // returns no supersession at all and the caller keeps both.
+    let (newer, older, newer_trust, older_trust) = if b_date > a_date {
+        ("B", "A", b_trust, a_trust)
+    } else {
+        ("A", "B", a_trust, b_trust)
+    };
+    let trust_gain = newer_trust - older_trust;
+
+    // Supersession: same topic + newer + the newer one is more trusted
+    if topic_sim > 0.4 && time_delta_days > 0 && trust_gain > 0.05 && !has_correction {
         return RelationAssessment {
             relation: Relation::Supersedes,
-            confidence: topic_sim as f64 * (0.5 + trust_diff.min(0.5)),
+            confidence: topic_sim as f64 * (0.5 + trust_gain.min(0.5)),
             reasoning: format!(
                 "{} supersedes {} (newer by {}d, trust +{:.0}%)",
                 newer,
                 older,
                 time_delta_days,
-                trust_diff * 100.0
+                trust_gain * 100.0
             ),
         };
     }
@@ -356,84 +371,47 @@ fn generate_reasoning_chain(
 // (or vice versa). Previously we had wildcard entries like ("not ", "") that
 // fired on any asymmetric presence of "not " — matched millions of innocent
 // sentences ("FSRS-6 is not yet..." vs anything without the word "not").
-const NEGATION_PAIRS: &[(&str, &str)] = &[
-    ("don't", "do"),
-    ("never", "always"),
-    ("avoid", "use"),
-    ("wrong", "right"),
-    ("incorrect", "correct"),
-    ("deprecated", "recommended"),
-    ("outdated", "current"),
-    ("removed", "added"),
-    ("disabled", "enabled"),
-];
-
-const CORRECTION_SIGNALS: &[&str] = &[
-    "actually",
-    "correction",
-    "update:",
-    "updated:",
-    "fixed",
-    "was wrong",
-    "changed to",
-    "now uses",
-    "replaced by",
-    "superseded",
-    "no longer",
-    "instead of",
-    "switched to",
-    "migrated to",
-];
-
+/// Do two memories appear to assert incompatible things?
+///
+/// Thin wrapper over the shared detector in `vestige_core::advanced::contradiction`,
+/// which the WRITE path (`PredictionErrorGate::detect_contradiction`) now uses
+/// as well. These were two separate implementations of the same concept and
+/// they drifted: this side grew negation symmetry, antonym pairs and a
+/// divergence test while the write side kept a single directional negation
+/// scan. Retrieval-side contradiction protection can only protect a memory
+/// that survived ingestion, so the weaker copy guarding the door decided the
+/// outcome. One implementation now, with the only real difference between the
+/// call sites named by `SubjectIdentity`.
+///
+/// Retrieval infers subject identity from the text alone, because a candidate
+/// pair here is drawn from thousands of unrelated memories.
 pub(crate) fn appears_contradictory(a: &str, b: &str) -> bool {
-    let a_lower = a.to_lowercase();
-    let b_lower = b.to_lowercase();
+    vestige_core::advanced::contradiction::appears_contradictory(
+        a,
+        b,
+        vestige_core::advanced::contradiction::SubjectIdentity::FromTextOverlap,
+    )
+}
 
-    let a_words: std::collections::HashSet<&str> =
-        a_lower.split_whitespace().filter(|w| w.len() > 3).collect();
-    let b_words: std::collections::HashSet<&str> =
-        b_lower.split_whitespace().filter(|w| w.len() > 3).collect();
-    let shared_words = a_words.intersection(&b_words).count();
-
-    // Require ≥4 substantive shared words — two memories must be about the
-    // same thing, not merely brushing the same domain. Previous floor of 2
-    // flagged "FSRS-6 upgrade research sources" and "ARC-AGI-3 FSRS-6 v11
-    // fixes" as contradictions of "Vestige uses FSRS-6 with 21 parameters"
-    // because they all mention "FSRS-6" — different applications, same word.
-    if shared_words < 4 {
-        return false;
+/// What fraction of the QUERY's substantive words appear in `content`?
+///
+/// Deliberately asymmetric, unlike [`topic_overlap`]. Symmetric Jaccard is the
+/// wrong instrument for scoring a short query against a document: it divides by
+/// the UNION, so a 5-word claim against a 26-word memory maxes out around 0.19
+/// even when every word of the claim appears. Any gate at 0.4 is therefore
+/// unreachable for realistic memory lengths, and a claim-vs-memory conflict
+/// check built on it is dead code that always passes silently.
+pub(crate) fn query_coverage(query: &str, content: &str) -> f32 {
+    let q_lower = query.to_lowercase();
+    let c_lower = content.to_lowercase();
+    let q_words: std::collections::HashSet<&str> =
+        q_lower.split_whitespace().filter(|w| w.len() > 3).collect();
+    if q_words.is_empty() {
+        return 0.0;
     }
-
-    // Negation: one memory carries a negative stance ("don't", "never",
-    // "avoid", etc.) and the other doesn't. Combined with the shared_words
-    // ≥ 4 gate above, this means "same subject, opposite position." The
-    // wildcard `("not ", "")` and `("no longer", "")` entries were dropped
-    // from NEGATION_PAIRS specifically because "not" / "no longer" are too
-    // common in natural prose to indicate a stance flip without other
-    // signals.
-    for (neg, _opp) in NEGATION_PAIRS {
-        if (a_lower.contains(neg) && !b_lower.contains(neg))
-            || (b_lower.contains(neg) && !a_lower.contains(neg))
-        {
-            return true;
-        }
-    }
-    // Correction signal: require ≥6 shared substantive words so we know the
-    // two memories are on the SAME subject, and require the signal to appear
-    // in exactly one of them (asymmetric — the memory with the correction
-    // marker is the one superseding the other). Previously fired on ANY
-    // signal in EITHER memory, which caught every bug-fix memory against
-    // every related memory as a pairwise contradiction.
-    if shared_words >= 6 {
-        for signal in CORRECTION_SIGNALS {
-            let in_a = a_lower.contains(signal);
-            let in_b = b_lower.contains(signal);
-            if in_a != in_b {
-                return true;
-            }
-        }
-    }
-    false
+    let c_words: std::collections::HashSet<&str> =
+        c_lower.split_whitespace().filter(|w| w.len() > 3).collect();
+    q_words.intersection(&c_words).count() as f32 / q_words.len() as f32
 }
 
 pub(crate) fn topic_overlap(a: &str, b: &str) -> f32 {
@@ -469,6 +447,23 @@ struct ScoredMemory {
     created_at: chrono::DateTime<Utc>,
     retention: f64,
     combined_score: f32,
+    valid_until: Option<chrono::DateTime<Utc>>,
+    currently_valid: bool,
+}
+
+/// Default validity penalty, mirroring search_unified's
+/// `apply_default_validity_penalty`: historical and future facts remain
+/// available for audit, but should not outrank a current fact on relevance
+/// alone. Applied exactly once — when SearchResults are folded into
+/// ScoredMemory (STAGE 3) — so candidate pools, primary selection, and the
+/// final composite all see the same penalized relevance without a chance of
+/// double-penalizing.
+pub(crate) fn validity_adjusted_score(combined_score: f32, currently_valid: bool) -> f32 {
+    if currently_valid {
+        combined_score
+    } else {
+        combined_score * 0.1
+    }
 }
 
 // ============================================================================
@@ -572,6 +567,7 @@ pub async fn execute(
                 r.node.reps,
                 r.node.lapses,
             );
+            let currently_valid = r.node.is_currently_valid();
             ScoredMemory {
                 id: r.node.id.clone(),
                 content: r.node.content.clone(),
@@ -580,7 +576,9 @@ pub async fn execute(
                 updated_at: r.node.updated_at,
                 created_at: r.node.created_at,
                 retention: r.node.retention_strength,
-                combined_score: r.combined_score,
+                combined_score: validity_adjusted_score(r.combined_score, currently_valid),
+                valid_until: r.node.valid_until,
+                currently_valid,
             }
         })
         .collect();
@@ -672,8 +670,14 @@ pub async fn execute(
         if m.trust < 0.3 {
             continue;
         }
-        let overlap = topic_overlap(&args.query, &m.content);
-        if overlap < 0.4 {
+        // Coverage, NOT symmetric Jaccard. This gate scores a short query against
+        // a full memory, and Jaccard divides by the union: restating this very
+        // memory's claim in 8 words scores 0.214 against its 26 substantive
+        // words, so the old `< 0.4` test skipped EVERY realistic memory and this
+        // whole stage never fired. Confident silence is exactly the failure the
+        // stage exists to prevent.
+        let overlap = query_coverage(&args.query, &m.content);
+        if overlap < 0.5 {
             continue;
         }
         if appears_contradictory(&args.query, &m.content) {
@@ -854,6 +858,8 @@ pub async fn execute(
                 "trust": (s.trust * 100.0).round() / 100.0,
                 "relevanceScore": ((composite(s) * 100.0).round() / 100.0),
                 "date": s.updated_at.to_rfc3339(),
+                "validUntil": s.valid_until.map(|dt| dt.to_rfc3339()),
+                "currentlyValid": s.currently_valid,
                 "role": if i == 0 { "primary" } else { "supporting" },
             })
         })
@@ -926,9 +932,9 @@ pub async fn execute(
         "No strong evidence found. Verify with external sources.".to_string()
     };
 
-    // Auto-strengthen accessed memories (Testing Effect)
+    // Evidence shown to a caller is not automatically evidence of usefulness.
     let ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
-    let _ = storage.strengthen_batch_on_access(&ids);
+    let _ = storage.record_batch_retrieval(&ids);
 
     // Generate reasoning chain (the key differentiator — no LLM needed)
     let reasoning_chain = if let Some(rec) = recommended {
@@ -959,6 +965,8 @@ pub async fn execute(
             "memory_id": rec.id,
             "trust_score": (rec.trust * 100.0).round() / 100.0,
             "date": rec.updated_at.to_rfc3339(),
+            "validUntil": rec.valid_until.map(|dt| dt.to_rfc3339()),
+            "currentlyValid": rec.currently_valid,
         });
     }
 
@@ -1141,6 +1149,122 @@ fn preview_text(value: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::{query_coverage, topic_overlap};
+
+    /// The AIMO3 shape: two memories asserting OPPOSITE DIRECTIONS about the same
+    /// subject, with no negation word in either. The negation scan structurally
+    /// cannot see this, and it is the exact case where acting on the wrong side
+    /// suppresses the memory that would have corrected it.
+    #[test]
+    fn opposite_direction_claims_are_contradictions_without_any_negation() {
+        let hurts = "Prompt diversity monotonically hurts AIMO3 accuracy at temperature \
+                     0.6 and above on GPT-OSS-120B during the competition run";
+        let improves = "Prompt diversity monotonically improves AIMO3 accuracy at temperature \
+                        0.6 and above on GPT-OSS-120B during the competition run";
+        assert!(
+            super::appears_contradictory(hurts, improves),
+            "opposite-direction claims about the same subject must be contradictory"
+        );
+
+        // Neither memory contains a negation word, which is why the older
+        // negation-asymmetry scan missed this entirely.
+        for text in [hurts, improves] {
+            let t = text.to_lowercase();
+            assert!(!t.contains("never") && !t.contains("don't") && !t.contains("avoid"));
+        }
+    }
+
+    /// Mutually exclusive values for the same attribute -- the shape MemConflict
+    /// measures and the one both other detection paths structurally miss. Verified
+    /// against the live server: both memories were retrievable via lookup while
+    /// recall(mode="contradictions") returned ZERO pairs.
+    #[test]
+    fn same_attribute_different_value_is_a_contradiction() {
+        let bachelor = "Priya holds a Bachelor degree in computer science from Leeds University";
+        let master = "Priya holds a Master degree in computer science from Leeds University";
+        assert!(
+            super::appears_contradictory(bachelor, master),
+            "two incompatible values for the same attribute must be contradictory"
+        );
+
+        // No negation and no antonym in either -- this is why the other two paths
+        // cannot see it.
+        for t in [bachelor, master] {
+            let l = t.to_lowercase();
+            assert!(!l.contains("never") && !l.contains("not ") && !l.contains("hurts"));
+        }
+    }
+
+    /// Elaboration is not contradiction. A memory that ADDS detail to another must
+    /// never be flagged, or every refinement becomes a conflict.
+    #[test]
+    fn elaboration_is_not_flagged_as_contradiction() {
+        let base = "Priya works in the Leeds office on the payments platform team";
+        let more =
+            "Priya works in the Leeds office on the payments platform team and mentors interns";
+        assert!(
+            !super::appears_contradictory(base, more),
+            "a superset elaboration must not be a contradiction"
+        );
+    }
+
+    /// The antonym test must not fire on agreement, or on two memories that merely
+    /// share a domain. Both sides must be present in OPPOSITE memories.
+    #[test]
+    fn antonym_detection_does_not_fire_on_agreement_or_unrelated_text() {
+        let a = "Prompt diversity monotonically hurts AIMO3 accuracy at temperature \
+                 0.6 and above on GPT-OSS-120B";
+        let same = "Prompt diversity monotonically hurts AIMO3 accuracy at temperature \
+                    0.6 and above on GPT-OSS-120B, confirmed twice";
+        assert!(
+            !super::appears_contradictory(a, same),
+            "two memories agreeing must not be flagged as contradictory"
+        );
+
+        let unrelated = "The dashboard accent colour improves legibility in dark mode";
+        assert!(
+            !super::appears_contradictory(a, unrelated),
+            "different subjects must not be flagged merely because antonyms appear"
+        );
+    }
+
+    /// STAGE 5b's claim-vs-memory conflict gate was built on symmetric Jaccard,
+    /// which divides by the UNION. A short claim can therefore never clear a 0.4
+    /// bar against a normal-length memory, so the stage never fired and a query
+    /// contradicting a high-trust memory passed in silence. This pins the
+    /// arithmetic so the gate cannot quietly die again.
+    #[test]
+    fn claim_conflict_gate_is_reachable_for_a_real_claim() {
+        let memory = "Paper arxiv 2603.27844 tested on GPT-OSS-120B for AIMO3 on H100 and \
+                      found that prompt diversity monotonically hurts accuracy at temperature \
+                      0.6 and above; every intervention fails, so submit the unmodified \
+                      baseline repeatedly instead of stacking changes.";
+        let claim = "prompt diversity improves accuracy at temperature 0.6 and above on \
+                     GPT-OSS-120B for AIMO3";
+
+        // The old instrument: unreachable, nowhere near the 0.4 gate it was tested against.
+        let jaccard = topic_overlap(claim, memory);
+        assert!(
+            jaccard < 0.4,
+            "symmetric Jaccard should be unreachable here, got {jaccard}"
+        );
+
+        // The correct instrument: most of the claim's substantive words are present.
+        let coverage = query_coverage(claim, memory);
+        assert!(
+            coverage >= 0.5,
+            "a claim restating this memory must clear the coverage gate, got {coverage}"
+        );
+    }
+
+    /// Coverage must still reject a claim that simply is not about the memory.
+    #[test]
+    fn claim_conflict_gate_still_rejects_unrelated_claims() {
+        let memory = "Paper arxiv 2603.27844 tested prompt diversity on AIMO3 and found it hurts.";
+        let unrelated = "the dashboard accent colour should be cyan instead of indigo";
+        assert!(query_coverage(unrelated, memory) < 0.5);
+    }
+
     use super::*;
     use crate::cognitive::CognitiveEngine;
     use std::sync::Arc;
@@ -1169,10 +1293,43 @@ mod tests {
                 tags: tags.iter().map(|s| s.to_string()).collect(),
                 valid_from: None,
                 valid_until: None,
+                validity_inferred: false,
                 source_envelope: None,
             })
             .unwrap()
             .id
+    }
+
+    async fn ingest_with_validity(
+        storage: &Arc<Storage>,
+        content: &str,
+        tags: &[&str],
+        valid_until: Option<chrono::DateTime<Utc>>,
+    ) -> String {
+        storage
+            .ingest(vestige_core::IngestInput {
+                content: content.to_string(),
+                node_type: "fact".to_string(),
+                source: None,
+                sentiment_score: 0.0,
+                sentiment_magnitude: 0.0,
+                tags: tags.iter().map(|s| s.to_string()).collect(),
+                valid_from: None,
+                valid_until,
+                validity_inferred: false,
+                source_envelope: None,
+            })
+            .unwrap()
+            .id
+    }
+
+    fn evidence_entry<'a>(result: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+        result["evidence"]
+            .as_array()
+            .expect("evidence array should be present")
+            .iter()
+            .find(|e| e["id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("memory {} missing from evidence", id))
     }
 
     // ========================================================================
@@ -1627,5 +1784,167 @@ mod tests {
             0.7,
         );
         assert!(matches!(rel.relation, Relation::Contradicts));
+    }
+
+    // ========================================================================
+    // VALIDITY (issue #156 Ask 1): expired facts must not compose at full rank.
+    // Mirrors search_unified's default validity penalty on the reason path.
+    // ========================================================================
+
+    #[test]
+    fn test_validity_adjusted_score_only_penalizes_invalid() {
+        assert_eq!(validity_adjusted_score(0.8, true), 0.8);
+        let penalized = validity_adjusted_score(0.8, false);
+        assert!(
+            (penalized - 0.08).abs() < 1e-6,
+            "invalid facts must be downranked to 0.1x, got {}",
+            penalized
+        );
+    }
+
+    #[tokio::test]
+    async fn test_expired_memory_ranked_below_current_and_flagged() {
+        let (storage, _dir) = test_storage().await;
+
+        let expired_id = ingest_with_validity(
+            &storage,
+            "Kubernetes ingress gateway timeout policy for the payments cluster \
+             is ninety seconds.",
+            &["kubernetes", "payments"],
+            Some(Utc::now() - chrono::Duration::days(30)),
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let current_id = ingest_with_validity(
+            &storage,
+            "Kubernetes ingress gateway timeout policy for the payments cluster \
+             is thirty seconds.",
+            &["kubernetes", "payments"],
+            None,
+        )
+        .await;
+
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "query": "Kubernetes ingress gateway timeout policy payments cluster"
+            })),
+        )
+        .await
+        .expect("execute should succeed");
+
+        let expired = evidence_entry(&result, &expired_id);
+        let current = evidence_entry(&result, &current_id);
+
+        assert_eq!(
+            expired["currentlyValid"].as_bool(),
+            Some(false),
+            "expired memory must carry currentlyValid=false: {:?}",
+            expired
+        );
+        assert!(
+            expired["validUntil"].as_str().is_some(),
+            "expired memory must surface its validUntil (RFC3339): {:?}",
+            expired
+        );
+        assert_eq!(
+            current["currentlyValid"].as_bool(),
+            Some(true),
+            "current memory must carry currentlyValid=true: {:?}",
+            current
+        );
+
+        let expired_score = expired["relevanceScore"].as_f64().unwrap();
+        let current_score = current["relevanceScore"].as_f64().unwrap();
+        assert!(
+            expired_score < current_score,
+            "an expired fact must rank below its current replacement \
+             (expired={}, current={}). Without the validity penalty, both \
+             carry identical trust/terms and the expired one can win.",
+            expired_score,
+            current_score
+        );
+        assert_eq!(
+            result["recommended"]["memory_id"].as_str(),
+            Some(current_id.as_str()),
+            "the current fact must win primary selection over the expired one"
+        );
+        assert_eq!(
+            result["recommended"]["currentlyValid"].as_bool(),
+            Some(true),
+            "recommended block must surface validity too"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_future_valid_until_not_penalized() {
+        let (storage, _dir) = test_storage().await;
+
+        let expired_id = ingest_with_validity(
+            &storage,
+            "Redis cache eviction policy for the checkout service keeps entries \
+             for sixty minutes.",
+            &["redis", "checkout"],
+            Some(Utc::now() - chrono::Duration::days(30)),
+        )
+        .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let future_id = ingest_with_validity(
+            &storage,
+            "Redis cache eviction policy for the checkout service keeps entries \
+             for ninety minutes.",
+            &["redis", "checkout"],
+            Some(Utc::now() + chrono::Duration::days(365)),
+        )
+        .await;
+
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "query": "Redis cache eviction policy checkout service entries"
+            })),
+        )
+        .await
+        .expect("execute should succeed");
+
+        let future = evidence_entry(&result, &future_id);
+        let expired = evidence_entry(&result, &expired_id);
+
+        assert_eq!(
+            future["currentlyValid"].as_bool(),
+            Some(true),
+            "a fact whose valid_until is in the FUTURE is currently valid: {:?}",
+            future
+        );
+        assert!(
+            future["validUntil"].as_str().is_some(),
+            "future validUntil must still be surfaced for the reasoning layer: {:?}",
+            future
+        );
+
+        let future_score = future["relevanceScore"].as_f64().unwrap();
+        let expired_score = expired["relevanceScore"].as_f64().unwrap();
+        // If future validity were wrongly penalized (e.g. keying the penalty on
+        // valid_until.is_some() instead of is_currently_valid()), both twins
+        // would sit in the same 0.1x band and the gap collapses to <=~0.03.
+        // Unpenalized, the future-valid fact keeps its full 0.5-weighted
+        // relevance slot: the gap over the penalized expired twin is >=~0.09.
+        assert!(
+            future_score - expired_score >= 0.05,
+            "a future-valid fact must NOT be penalized (future={}, expired={})",
+            future_score,
+            expired_score
+        );
+        assert_eq!(
+            result["recommended"]["memory_id"].as_str(),
+            Some(future_id.as_str()),
+            "the future-valid fact must win primary selection over the expired one"
+        );
     }
 }

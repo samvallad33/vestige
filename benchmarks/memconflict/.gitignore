@@ -1,0 +1,7 @@
+# Datasets are fetched at run time and hash-verified, never vendored.
+data/
+
+# Live Vestige databases created by benchmark runs.
+*datadir-*/
+
+__pycache__/

@@ -102,7 +102,7 @@ open http://localhost:3927/dashboard
 
 ### If They Ask One Follow-Up Question
 **"How is this different from Mem0?"**
-> Mem0 is a cloud memory API. Great product, well-funded. But it's fundamentally a vector store with categories. Vestige implements the actual cognitive science — memories decay on the Ebbinghaus curve, get strengthened by retrieval, get consolidated in dream cycles, compete for activation. It's the difference between a filing cabinet and a brain.
+> Mem0 is a cloud memory API. Great product, well-funded. But it's fundamentally a vector store with categories. Vestige implements the actual cognitive science — memories decay on the Ebbinghaus curve, strengthen after explicit positive feedback, get consolidated in dream cycles, compete for activation. It's the difference between a filing cabinet and a brain.
 
 **"What's the MCP integration like?"**
 > One command: `claude mcp add vestige vestige-mcp -s user`. That's it. Twenty-one tools, but they're organized into five subsystems that Claude uses automatically. You don't even think about it — your AI just starts remembering.
@@ -365,7 +365,7 @@ You: Dream about my recent memories
 > 6. Competition — Anderson 1994, retrieval-induced forgetting
 > 7. Spreading activation — activate related memories, update predictive model
 >
-> And critically: searching strengthens the memories you find. This is called the Testing Effect — retrieval practice is the single most effective way to consolidate memory. Every search is a workout for the memories involved.
+> And critically: search does not mistake relevance for correctness. Retrieval is audit-only; once a memory proves useful, an explicit promote applies the Testing Effect without pinning stale results.
 
 ### ACT 6: The Numbers and the Close [9:00-10:00]
 

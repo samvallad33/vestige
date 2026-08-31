@@ -555,24 +555,8 @@ pub async fn list_memories(
         })
         .collect();
 
-    // `memories` is a page; `total` must describe the whole unfiltered brain,
-    // not merely the page length. Dashboard organs use this distinction to say
-    // "newest 36 of 4,812" without pretending they ranked every record.
-    // Filtered list counts remain page-scoped until the storage API grows an
-    // equivalent filtered COUNT query.
-    let total =
-        if params.node_type.is_none() && params.tag.is_none() && params.min_retention.is_none() {
-            state
-                .storage
-                .get_stats()
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                .total_nodes as usize
-        } else {
-            formatted.len()
-        };
-
     Ok(Json(serde_json::json!({
-        "total": total,
+        "total": formatted.len(),
         "memories": formatted,
     })))
 }
@@ -1361,24 +1345,35 @@ pub async fn get_stats(State(state): State<AppState>) -> Result<Json<Value>, Sta
         .get_stats()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    Ok(Json(dashboard_stats_response(&stats)))
+}
+
+fn dashboard_stats_response(stats: &vestige_core::memory::MemoryStats) -> Value {
+    // Coverage must describe the profile currently serving semantic retrieval.
+    // Qwen profile vectors intentionally stay out of the legacy
+    // `node_embeddings` mirror, so using `nodes_with_embeddings` here would
+    // falsely report zero coverage after a complete Qwen migration.
     let embedding_coverage = if stats.total_nodes > 0 {
-        (stats.nodes_with_embeddings as f64 / stats.total_nodes as f64) * 100.0
+        (stats.nodes_with_active_embeddings as f64 / stats.total_nodes as f64) * 100.0
     } else {
         0.0
     };
 
-    Ok(Json(serde_json::json!({
+    serde_json::json!({
         "totalMemories": stats.total_nodes,
         "dueForReview": stats.nodes_due_for_review,
         "averageRetention": stats.average_retention,
         "averageStorageStrength": stats.average_storage_strength,
         "averageRetrievalStrength": stats.average_retrieval_strength,
         "withEmbeddings": stats.nodes_with_embeddings,
+        "withActiveEmbeddings": stats.nodes_with_active_embeddings,
+        "mismatchedEmbeddings": stats.nodes_with_mismatched_embeddings,
         "embeddingCoverage": embedding_coverage,
         "embeddingModel": stats.embedding_model,
+        "activeEmbeddingModel": stats.active_embedding_model,
         "oldestMemory": stats.oldest_memory.map(|dt| dt.to_rfc3339()),
         "newestMemory": stats.newest_memory.map(|dt| dt.to_rfc3339()),
-    })))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1399,10 +1394,7 @@ pub async fn get_timeline(
     State(state): State<AppState>,
     Query(params): Query<TimelineParams>,
 ) -> Result<Json<Value>, StatusCode> {
-    // The Timeline organ exposes a 365-day range. Keep the HTTP contract in
-    // lockstep with that control: clamping at 90 silently made its "365D"
-    // state show only the last quarter while still labelling the field a year.
-    let days = params.days.unwrap_or(7).clamp(1, 365);
+    let days = params.days.unwrap_or(7).clamp(1, 90);
     let limit = params.limit.unwrap_or(200).clamp(1, 500);
 
     let start = Utc::now() - Duration::days(days);
@@ -1429,15 +1421,7 @@ pub async fn get_timeline(
             "content": content_preview,
             "nodeType": node.node_type,
             "retentionStrength": node.retention_strength,
-            "storageStrength": node.storage_strength,
-            "retrievalStrength": node.retrieval_strength,
             "createdAt": node.created_at.to_rfc3339(),
-            // Transaction time is distinct from valid time.  The timeline
-            // receipt renders both, so omitting this field made every loaded
-            // memory look rewritten and left the transaction-time line empty.
-            "updatedAt": node.updated_at.to_rfc3339(),
-            "validFrom": node.valid_from.map(|at| at.to_rfc3339()),
-            "validUntil": node.valid_until.map(|at| at.to_rfc3339()),
         }));
     }
 
@@ -1705,18 +1689,6 @@ pub async fn get_graph(
                 "createdAt": n.created_at.to_rfc3339(),
                 "updatedAt": n.updated_at.to_rfc3339(),
                 "isCenter": n.id == center_id,
-                // v2.3 living field — real FSRS state so the dashboard graph can
-                // render LIVE per-memory decay (retrievability recomputed each
-                // frame on the true forgetting curve). Already emitted by the
-                // single-node handlers; the field just needed it per-node too.
-                "stability": n.stability,
-                "lastAccessed": n.last_accessed.to_rfc3339(),
-                // The Observatory's Fossil Light treats active suppression as
-                // an inhibitory state, not an invented visual category. Keep
-                // it on every graph node so GPU source emission can be zeroed
-                // from the same canonical state as the memory inspector.
-                "suppression_count": n.suppression_count,
-                "suppressed_at": n.suppressed_at.as_ref().map(|at| at.to_rfc3339()),
             })
         })
         .collect();
@@ -2093,53 +2065,22 @@ pub async fn predict_memories(State(state): State<AppState>) -> Result<Json<Valu
         .get_all_nodes(10, 0)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // "Predicted need" is a REAL per-memory signal, not a constant. A memory is
-    // most likely to be needed (and most at risk of slipping away) when its
-    // retrieval strength has decayed OR its FSRS review is due/overdue — that is
-    // precisely when the system should surface it. We combine both:
-    //   - urgency from decay:   1 - retrieval_strength (low accessibility = high need)
-    //   - urgency from schedule: review overdue -> high, far future -> low
-    // and map the blended urgency onto high/medium/low bands.
-    let now = chrono::Utc::now();
     let predictions: Vec<Value> = recent
         .iter()
         .map(|n| {
-            let decay_urgency = (1.0 - n.retrieval_strength).clamp(0.0, 1.0);
-            let schedule_urgency = match n.next_review {
-                // Overdue -> 1.0; due within a day -> ~0.8; a week out -> ~0.3; far -> ~0.0
-                Some(next) => {
-                    let hours_until = (next - now).num_minutes() as f64 / 60.0;
-                    if hours_until <= 0.0 {
-                        1.0
-                    } else {
-                        (1.0 - (hours_until / (24.0 * 7.0))).clamp(0.0, 1.0)
-                    }
-                }
-                // No scheduled review yet — lean on decay alone.
-                None => decay_urgency,
-            };
-            let urgency = 0.55 * decay_urgency + 0.45 * schedule_urgency;
-            let predicted_need = if urgency >= 0.66 {
-                "high"
-            } else if urgency >= 0.33 {
-                "medium"
-            } else {
-                "low"
-            };
             serde_json::json!({
                 "id": n.id,
                 "content": n.content.chars().take(100).collect::<String>(),
                 "nodeType": n.node_type,
                 "retention": n.retention_strength,
-                "urgency": urgency,
-                "predictedNeed": predicted_need,
+                "predictedNeed": "high",
             })
         })
         .collect();
 
     Ok(Json(serde_json::json!({
         "predictions": predictions,
-        "basedOn": "fsrs_retrieval_and_review_schedule",
+        "basedOn": "recent_activity",
     })))
 }
 
@@ -2362,10 +2303,6 @@ pub async fn list_intentions(
 pub struct DeepReferenceBody {
     pub query: String,
     pub depth: Option<i32>,
-    /// Optional client-supplied run id so an agent can correlate a whole
-    /// session's calls under one runId. Omitted → a fresh run is minted.
-    #[serde(alias = "runId", default)]
-    pub run_id: Option<String>,
 }
 
 /// Run the 8-stage deep_reference cognitive pipeline over HTTP.
@@ -2388,70 +2325,16 @@ pub async fn deep_reference_query(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    // Receipt spine: honour a client-supplied runId (so an agent can correlate a
-    // whole session), else mint a fresh one. The same run id threads the opening
-    // mcp.call event, the downstream memory events, the receipt, and the returned
-    // response so Black Box can open THIS exact run.
-    let call_args = serde_json::json!({
-        "query": body.query.clone(),
-        "depth": body.depth.unwrap_or(20).clamp(5, 50),
-        "run_id": body.run_id.clone(),
-    });
-    let run_id = crate::trace_recorder::run_id_for(&Some(call_args.clone()));
-
-    // Record the opening mcp.call event for this HTTP deep_reference run, exactly
-    // like the MCP dispatch does, so /api/traces (agent_runs/agent_traces) has this
-    // run and Black Box can list + open it. Without this the run is invisible.
-    crate::trace_recorder::record_call(
-        &state.storage,
-        Some(&state.event_tx),
-        &run_id,
-        "deep_reference",
-        &Some(call_args.clone()),
-    );
-
     let args = serde_json::json!({
         "query": body.query.clone(),
         "depth": body.depth.unwrap_or(20).clamp(5, 50),
     });
 
     let start = std::time::Instant::now();
-    let mut response =
-        crate::tools::cross_reference::execute(&state.storage, cognitive, Some(args))
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let response = crate::tools::cross_reference::execute(&state.storage, cognitive, Some(args))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let duration_ms = start.elapsed().as_millis() as u64;
-
-    // Record the downstream memory events (retrieve/suppress/contradiction) under
-    // the SAME run_id, then build + persist the auditable receipt from the data the
-    // pipeline already computed. Together these make agent_runs/agent_traces AND
-    // the receipt all consistent for this run — the previously-dead seam.
-    crate::trace_recorder::record_result(
-        &state.storage,
-        Some(&state.event_tx),
-        &run_id,
-        "deep_reference",
-        &response,
-    );
-    let receipt = crate::trace_recorder::build_and_save_receipt(
-        &state.storage,
-        &run_id,
-        "deep_reference",
-        &response,
-    );
-    let receipt_id = receipt
-        .as_ref()
-        .and_then(|r| r.get("receipt_id"))
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    if let Some(obj) = response.as_object_mut() {
-        obj.insert("runId".to_string(), serde_json::json!(run_id));
-        obj.insert("receiptId".to_string(), serde_json::json!(receipt_id));
-        obj.insert(
-            "receipt".to_string(),
-            receipt.clone().unwrap_or(serde_json::Value::Null),
-        );
-    }
 
     // Pull evidence IDs out for the WebSocket event so Graph3D can glide,
     // pulse, and arc. We intentionally read from the serialized JSON rather
@@ -2546,147 +2429,6 @@ pub async fn deep_reference_query(
         duration_ms,
         timestamp: Utc::now(),
     });
-
-    Ok(Json(response))
-}
-
-// ============================================================================
-// RETROACTIVE SALIENCE BACKFILL — receipt-first dashboard surface
-// ============================================================================
-
-#[derive(Debug, Deserialize)]
-pub struct BackfillBody {
-    pub failure_id: Option<String>,
-    #[serde(default)]
-    pub manual: bool,
-    pub lookback_days: Option<i64>,
-    /// Dashboard requests are previews by default. Promotion is an explicit
-    /// user action because a candidate match must never silently rewrite memory.
-    pub promote: Option<bool>,
-    #[serde(alias = "runId", default)]
-    pub run_id: Option<String>,
-}
-
-/// Run Backfill from the dashboard and return the immutable receipt that every
-/// downstream surface uses. This is intentionally a thin adapter over the MCP
-/// tool: terminal, agent, Black Box, and Observatory all see the same result.
-pub async fn backfill_query(
-    State(state): State<AppState>,
-    Json(body): Json<BackfillBody>,
-) -> Result<Json<Value>, StatusCode> {
-    let lookback_days = body.lookback_days.unwrap_or(30).clamp(1, 365);
-    let promote = body.promote.unwrap_or(false);
-    let call_args = serde_json::json!({
-        "failure_id": body.failure_id,
-        "manual": body.manual,
-        "lookback_days": lookback_days,
-        "promote": promote,
-        "run_id": body.run_id,
-    });
-    let run_id = crate::trace_recorder::run_id_for(&Some(call_args.clone()));
-    crate::trace_recorder::record_call(
-        &state.storage,
-        Some(&state.event_tx),
-        &run_id,
-        "backfill",
-        &Some(call_args.clone()),
-    );
-
-    let mut response = crate::tools::backfill::execute(&state.storage, Some(call_args))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    crate::trace_recorder::record_result(
-        &state.storage,
-        Some(&state.event_tx),
-        &run_id,
-        "backfill",
-        &response,
-    );
-    let receipt = crate::trace_recorder::build_and_save_receipt(
-        &state.storage,
-        &run_id,
-        "backfill",
-        &response,
-    );
-    let receipt_id = receipt
-        .as_ref()
-        .and_then(|value| value.get("receipt_id"))
-        .and_then(|value| value.as_str())
-        .map(ToString::to_string);
-
-    if let Some(object) = response.as_object_mut() {
-        object.insert("runId".to_string(), serde_json::json!(run_id));
-        object.insert("receiptId".to_string(), serde_json::json!(receipt_id));
-        object.insert(
-            "receipt".to_string(),
-            receipt.clone().unwrap_or(Value::Null),
-        );
-    }
-
-    // Emit only an exact, persisted proof. A non-trigger/no-candidate result is
-    // still returned to the caller but never gets a fabricated victory event.
-    if let (Some(receipt_id), Some(proof)) = (
-        receipt_id,
-        receipt.as_ref().and_then(|value| value.get("backfill")),
-    ) {
-        let failure_id = proof
-            .get("failure_id")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let candidates = proof
-            .get("candidates")
-            .and_then(|value| value.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let candidate_ids: Vec<String> = candidates
-            .iter()
-            .filter_map(|candidate| candidate.get("memory_id").and_then(|value| value.as_str()))
-            .map(ToString::to_string)
-            .collect();
-        let shared_entities: Vec<String> = candidates
-            .iter()
-            .flat_map(|candidate| {
-                candidate
-                    .get("shared_entities")
-                    .and_then(|value| value.as_array())
-                    .cloned()
-                    .unwrap_or_default()
-            })
-            .filter_map(|entity| entity.as_str().map(ToString::to_string))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        let promoted = candidates.iter().any(|candidate| {
-            candidate
-                .get("promoted")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false)
-        });
-        let path_ids: Vec<String> = proof
-            .get("path_ids")
-            .and_then(|value| value.as_array())
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| id.as_str().map(ToString::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
-        // A live scene is only allowed to animate a receipt-authored route.
-        // Do not manufacture candidate -> failure topology in this adapter.
-        if path_ids.len() >= 2 {
-            state.emit(VestigeEvent::BackfillFired {
-                run_id,
-                receipt_id,
-                failure_id,
-                candidate_ids,
-                path_ids,
-                shared_entities,
-                promoted,
-                timestamp: Utc::now(),
-            });
-        }
-    }
 
     Ok(Json(response))
 }
@@ -2798,13 +2540,7 @@ pub async fn export_trace(
     // Content-Disposition header or the filename. Falls back to "trace".
     let safe: String = run_id
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
         .collect();
     let safe = if safe.trim_matches('_').is_empty() {
         "trace".to_string()
@@ -2914,8 +2650,8 @@ pub async fn act_on_memory_pr(
     State(state): State<AppState>,
     Path((id, action)): Path<(String, String)>,
 ) -> Result<Json<Value>, StatusCode> {
-    let action =
-        vestige_core::MemoryPrAction::from_label(&action).ok_or(StatusCode::BAD_REQUEST)?;
+    let action = vestige_core::MemoryPrAction::from_label(&action)
+        .ok_or(StatusCode::BAD_REQUEST)?;
 
     // Ask Agent Why is read-only — return the self-explaining signals.
     if matches!(action, vestige_core::MemoryPrAction::AskAgentWhy) {
@@ -2933,17 +2669,31 @@ pub async fn act_on_memory_pr(
         })));
     }
 
-    let decided = state
+    let pending_decision = state
         .storage
-        .decide_memory_pr(&id, action)
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .decide_pending_memory_mutation(&id, action)
+        .map_err(|e| {
+            tracing::warn!("failed to decide pending memory mutation {id}: {e}");
+            StatusCode::CONFLICT
+        })?;
+    let (decided, pending_effect) = match pending_decision {
+        Some(decision) => (decision.pr, Some(decision.effect)),
+        None => (
+            state
+                .storage
+                .decide_memory_pr(&id, action)
+                .map_err(|_| StatusCode::NOT_FOUND)?,
+            None,
+        ),
+    };
 
     // B1: an accept action (promote/merge/supersede) must RELEASE the subject
     // memory from quarantine — gate_writes suppressed it, so deciding the PR
     // without un-suppressing would leave it "promoted" yet still held out of
     // retrieval. Forget/Quarantine intentionally keep it suppressed.
     let mut released = false;
-    if action.releases_memory()
+    if pending_effect.is_none()
+        && action.releases_memory()
         && let Some(subject_id) = decided.subject_id.as_deref()
     {
         // Use the UNCONDITIONAL quarantine release, not reverse_suppression:
@@ -2972,6 +2722,33 @@ pub async fn act_on_memory_pr(
         }
     }
 
+    if let Some(effect) = pending_effect {
+        use vestige_core::PendingMemoryMutationEffect::*;
+        match effect {
+            Kept => {}
+            Purged => state.emit(VestigeEvent::MemoryDeleted {
+                id: decided.subject_id.clone().unwrap_or_default(),
+                timestamp: Utc::now(),
+            }),
+            Suppressed => {
+                if let Some(subject_id) = decided.subject_id.as_deref()
+                    && let Ok(Some(node)) = state.storage.get_node(subject_id)
+                {
+                    state.emit(VestigeEvent::MemorySuppressed {
+                        id: node.id,
+                        suppression_count: node.suppression_count,
+                        estimated_cascade: 0,
+                        reversible_until: node
+                            .suppressed_at
+                            .map(|at| at + Duration::hours(24))
+                            .unwrap_or_else(Utc::now),
+                        timestamp: Utc::now(),
+                    });
+                }
+            }
+        }
+    }
+
     state.emit(VestigeEvent::MemoryPrDecided {
         id: decided.id.clone(),
         decision: decided
@@ -2986,6 +2763,17 @@ pub async fn act_on_memory_pr(
     let mut out = serde_json::to_value(&decided).unwrap_or_default();
     if let Some(obj) = out.as_object_mut() {
         obj.insert("subjectReleased".to_string(), serde_json::json!(released));
+        if let Some(effect) = pending_effect {
+            let label = match effect {
+                vestige_core::PendingMemoryMutationEffect::Kept => "kept",
+                vestige_core::PendingMemoryMutationEffect::Purged => "purged",
+                vestige_core::PendingMemoryMutationEffect::Suppressed => "suppressed",
+            };
+            obj.insert(
+                "pendingMutationEffect".to_string(),
+                serde_json::json!(label),
+            );
+        }
     }
     Ok(Json(out))
 }
@@ -3029,10 +2817,7 @@ pub async fn set_review_mode(
     // B7: atomic write (temp + rename) so a concurrent read can never see a
     // partially-written / corrupt review_mode.json, reusing the same helper the
     // Sanhedrin receipt path uses.
-    write_atomic(
-        &path,
-        &serde_json::to_vec_pretty(&payload).unwrap_or_default(),
-    )?;
+    write_atomic(&path, &serde_json::to_vec_pretty(&payload).unwrap_or_default())?;
     Ok(Json(serde_json::json!({ "mode": mode.as_str() })))
 }
 
@@ -3042,14 +2827,12 @@ fn review_mode_path(state: &AppState) -> PathBuf {
 }
 
 /// Read the persisted review mode, defaulting to RiskGated.
+///
+/// Delegates to [`crate::trace_recorder::read_review_mode`] so the dashboard and
+/// the MCP write path read the mode through exactly one implementation. If these
+/// ever diverged, the UI could report "Paranoid" while writes were auto-landing.
 pub fn read_review_mode(state: &AppState) -> vestige_core::ReviewMode {
-    let path = review_mode_path(state);
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| v.get("mode").and_then(|m| m.as_str()).map(String::from))
-        .map(|s| vestige_core::ReviewMode::from_label(&s))
-        .unwrap_or_default()
+    crate::trace_recorder::read_review_mode(&state.storage)
 }
 
 // ============================================================================
@@ -3251,7 +3034,10 @@ fn shared_keywords(a: &str, b: &str) -> String {
     let b_lower = b.to_lowercase();
     let tokenize = |s: &'_ str| -> HashSet<String> {
         s.split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string())
+            .map(|w| {
+                w.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_string()
+            })
             .filter(|w| w.len() > 3)
             .collect()
     };
@@ -3566,12 +3352,12 @@ mod tests {
     use chrono::Utc;
     use std::sync::Arc;
     use tempfile::tempdir;
-    use uuid::Uuid;
     use vestige_core::memory::IngestInput;
     use vestige_core::{
-        ConnectionRecord, DreamHistoryRecord, EmbeddingMigrationState, EmbeddingProfileManifest,
-        ProfileMigrationCheckpoint, Storage,
+        ConnectionRecord, DreamHistoryRecord, EmbeddingMigrationState,
+        EmbeddingProfileManifest, ProfileMigrationCheckpoint, Storage,
     };
+    use uuid::Uuid;
 
     #[test]
     fn graph_sort_parse_defaults_to_recent() {
@@ -3651,6 +3437,133 @@ mod tests {
             })
             .unwrap();
         node.id
+    }
+
+    #[test]
+    fn dashboard_stats_reports_coverage_for_the_active_profile() {
+        let mut stats = vestige_core::memory::MemoryStats::default();
+        stats.total_nodes = 4;
+        stats.nodes_with_embeddings = 0;
+        stats.nodes_with_active_embeddings = 3;
+        stats.nodes_with_mismatched_embeddings = 1;
+        stats.active_embedding_model = Some("Qwen/Qwen3-Embedding-0.6B".to_string());
+
+        let body = dashboard_stats_response(&stats);
+        assert_eq!(body["withEmbeddings"], 0);
+        assert_eq!(body["withActiveEmbeddings"], 3);
+        assert_eq!(body["mismatchedEmbeddings"], 1);
+        assert_eq!(body["embeddingCoverage"], 75.0);
+        assert_eq!(body["activeEmbeddingModel"], "Qwen/Qwen3-Embedding-0.6B");
+    }
+
+    fn open_pending_mutation_pr(
+        storage: &Arc<Storage>,
+        node_id: &str,
+        pending_action: &str,
+    ) -> String {
+        let tool = if pending_action == "suppress" {
+            "suppress"
+        } else {
+            "memory"
+        };
+        let args = if pending_action == "suppress" {
+            serde_json::json!({ "id": node_id })
+        } else {
+            serde_json::json!({
+                "action": pending_action,
+                "id": node_id,
+                "confirm": true
+            })
+        };
+        crate::trace_recorder::gate_pending_memory_mutation(
+            storage,
+            None,
+            "run_review_outcome",
+            tool,
+            &Some(args),
+            vestige_core::ReviewMode::RiskGated,
+        )
+        .unwrap()
+        .expect("pending mutation should open a PR");
+        storage
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap()[0]
+            .id
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn pending_purge_forget_approves_and_executes_mutation() {
+        let (_dir, storage) = seed_storage();
+        let node_id = ingest(&storage, "purge after explicit review");
+        let pr_id = open_pending_mutation_pr(&storage, &node_id, "purge");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(body) = act_on_memory_pr(State(state), Path((pr_id, "forget".to_string())))
+            .await
+            .unwrap();
+
+        assert_eq!(body["pendingMutationEffect"], "purged");
+        assert!(storage.get_node(&node_id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_purge_promote_keeps_memory() {
+        let (_dir, storage) = seed_storage();
+        let node_id = ingest(&storage, "keep after explicit review");
+        let pr_id = open_pending_mutation_pr(&storage, &node_id, "purge");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(body) = act_on_memory_pr(State(state), Path((pr_id, "promote".to_string())))
+            .await
+            .unwrap();
+
+        assert_eq!(body["pendingMutationEffect"], "kept");
+        assert!(storage.get_node(&node_id).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn pending_purge_quarantine_keeps_but_suppresses_memory() {
+        let (_dir, storage) = seed_storage();
+        let node_id = ingest(&storage, "quarantine after explicit review");
+        let pr_id = open_pending_mutation_pr(&storage, &node_id, "purge");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(body) = act_on_memory_pr(State(state), Path((pr_id, "quarantine".to_string())))
+            .await
+            .unwrap();
+
+        assert_eq!(body["pendingMutationEffect"], "suppressed");
+        assert_eq!(
+            storage
+                .get_node(&node_id)
+                .unwrap()
+                .unwrap()
+                .suppression_count,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_suppress_forget_approves_and_executes_suppression() {
+        let (_dir, storage) = seed_storage();
+        let node_id = ingest(&storage, "suppress after explicit review");
+        let pr_id = open_pending_mutation_pr(&storage, &node_id, "suppress");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(body) = act_on_memory_pr(State(state), Path((pr_id, "forget".to_string())))
+            .await
+            .unwrap();
+
+        assert_eq!(body["pendingMutationEffect"], "suppressed");
+        assert_eq!(
+            storage
+                .get_node(&node_id)
+                .unwrap()
+                .unwrap()
+                .suppression_count,
+            1
+        );
     }
 
     #[tokio::test]
@@ -3821,64 +3734,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn memory_list_total_is_the_full_unfiltered_store_not_the_page_length() {
-        let (_dir, storage) = seed_storage();
-        ingest(&storage, "first");
-        ingest(&storage, "second");
-        ingest(&storage, "third");
-
-        let Json(body) = list_memories(
-            State(AppState::new(storage, None)),
-            Query(MemoryListParams {
-                q: None,
-                node_type: None,
-                tag: None,
-                min_retention: None,
-                sort: None,
-                limit: Some(1),
-                offset: None,
-            }),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(body["memories"].as_array().unwrap().len(), 1);
-        assert_eq!(body["total"], 3);
-    }
-
-    #[tokio::test]
-    async fn timeline_honors_year_range_and_returns_bitemporal_receipt_fields() {
-        let (_dir, storage) = seed_storage();
-        let valid_from = Utc::now() - Duration::days(2);
-        storage
-            .ingest(IngestInput {
-                content: "timeline receipt fixture".to_string(),
-                node_type: "fact".to_string(),
-                valid_from: Some(valid_from),
-                ..Default::default()
-            })
-            .unwrap();
-
-        let Json(body) = get_timeline(
-            State(AppState::new(storage, None)),
-            Query(TimelineParams {
-                days: Some(365),
-                limit: Some(500),
-            }),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(body["days"], 365, "the 365D dashboard control must be real");
-        let memory = &body["timeline"][0]["memories"][0];
-        assert!(memory["updatedAt"].is_string());
-        assert_eq!(memory["validFrom"], valid_from.to_rfc3339());
-        assert!(memory["validUntil"].is_null());
-        assert!(memory["storageStrength"].is_number());
-        assert!(memory["retrievalStrength"].is_number());
-    }
-
     #[test]
     fn default_center_id_recent_returns_newest_node() {
         let (_dir, storage) = seed_storage();
@@ -4044,7 +3899,11 @@ mod tests {
             "date_diff_days",
             "topic",
         ] {
-            assert!(!pair[field].is_null(), "missing contract field: {}", field);
+            assert!(
+                !pair[field].is_null(),
+                "missing contract field: {}",
+                field
+            );
         }
         // a = older, b = newer (chronological).
         let ids: Vec<&str> = vec![
@@ -4178,160 +4037,9 @@ mod tests {
         assert_eq!(err, StatusCode::NOT_FOUND);
     }
 
-    /// HTTP receipt-spine acceptance: the dashboard's deep-reference endpoint
-    /// must create one correlated Black Box trace and one receipt that can be
-    /// fetched by both its run and its exact receipt id.
-    #[tokio::test]
-    async fn deep_reference_http_run_produces_fetchable_receipt() {
-        let (_dir, storage) = seed_storage();
-        let seeded_id = ingest(
-            &storage,
-            "Receipt HTTP anchor: the dashboard query must open its exact evidence receipt.",
-        );
-        let state = AppState::new(
-            storage.clone(),
-            Some(Arc::new(tokio::sync::Mutex::new(
-                crate::cognitive::CognitiveEngine::new(),
-            ))),
-        );
-        let run_id = "run_http_receipt_spine".to_string();
-
-        let Json(response) = deep_reference_query(
-            State(state.clone()),
-            Json(DeepReferenceBody {
-                query: "Receipt HTTP anchor".to_string(),
-                depth: Some(5),
-                run_id: Some(run_id.clone()),
-            }),
-        )
-        .await
-        .expect("deep reference should complete");
-
-        assert_eq!(response["runId"], run_id);
-        let receipt_id = response["receiptId"]
-            .as_str()
-            .expect("response includes a persisted receipt id");
-        assert!(response["receipt"].is_object());
-        assert!(
-            !storage.get_trace(&run_id).unwrap().is_empty(),
-            "Black Box trace exists for the same HTTP run"
-        );
-
-        let Json(scoped) = list_receipts(
-            State(state.clone()),
-            Query(TraceListParams {
-                limit: Some(10),
-                run: Some(run_id.clone()),
-            }),
-        )
-        .await
-        .expect("run-scoped receipt list succeeds");
-        assert_eq!(scoped["total"], 1);
-        assert_eq!(scoped["receipts"][0]["receipt_id"], receipt_id);
-        assert!(
-            scoped["receipts"][0]["retrieved"]
-                .as_array()
-                .is_some_and(|ids| ids.iter().any(|id| id == &seeded_id)),
-            "receipt lists only evidence retrieved by this HTTP run"
-        );
-
-        let Json(receipt) = get_receipt(State(state), Path(receipt_id.to_string()))
-            .await
-            .expect("exact receipt fetch succeeds");
-        assert_eq!(receipt["receipt_id"], receipt_id);
-    }
-
-    /// Full proof-spine acceptance: a dashboard preview creates one durable
-    /// Backfill receipt, persists the candidate evidence edge, and broadcasts
-    /// only the route embedded in that receipt (never a graph-inferred route).
-    #[tokio::test]
-    async fn backfill_http_preview_persists_receipt_edge_and_exact_live_path() {
-        let (_dir, storage) = seed_storage();
-        let cause = storage
-            .ingest(IngestInput {
-                content: "Set API_TIMEOUT=2 in deploy environment.".to_string(),
-                node_type: "decision".to_string(),
-                tags: vec!["API_TIMEOUT".to_string()],
-                ..Default::default()
-            })
-            .unwrap();
-        storage
-            .set_created_at(&cause.id, Utc::now() - Duration::days(3))
-            .unwrap();
-        let failure = storage
-            .ingest(IngestInput {
-                content: "Checkout crashed with timeout on the auth endpoint.".to_string(),
-                node_type: "event".to_string(),
-                tags: vec!["API_TIMEOUT".to_string(), "crash".to_string()],
-                ..Default::default()
-            })
-            .unwrap();
-        let state = AppState::new(storage.clone(), None);
-        let mut events = state.subscribe();
-        let run_id = "run_backfill_http_proof".to_string();
-
-        let Json(response) = backfill_query(
-            State(state.clone()),
-            Json(BackfillBody {
-                failure_id: Some(failure.id.clone()),
-                manual: false,
-                lookback_days: Some(30),
-                promote: None,
-                run_id: Some(run_id.clone()),
-            }),
-        )
-        .await
-        .expect("backfill preview succeeds");
-
-        assert_eq!(response["runId"], run_id);
-        assert_eq!(response["causes"][0]["promoted"], false);
-        assert_eq!(
-            response["receipt"]["backfill"]["path_ids"],
-            serde_json::json!([cause.id, failure.id])
-        );
-        let receipt_id = response["receiptId"].as_str().expect("receipt id");
-        let persisted = storage
-            .get_receipt(receipt_id)
-            .unwrap()
-            .expect("receipt saved");
-        assert_eq!(
-            persisted.backfill.expect("backfill proof").path_ids,
-            vec![cause.id.clone(), failure.id.clone()]
-        );
-        assert!(
-            storage
-                .get_connections_for_memory(&cause.id)
-                .unwrap()
-                .iter()
-                .any(|edge| {
-                    edge.source_id == cause.id
-                        && edge.target_id == failure.id
-                        && edge.link_type == "backfill_candidate"
-                }),
-            "preview still persists explicit evidence, without a promotion"
-        );
-        // Trace events are broadcast first; keep consuming until we receive
-        // the receipt-backed domain event under test.
-        let emitted = loop {
-            match events.recv().await.expect("dashboard event") {
-                VestigeEvent::BackfillFired {
-                    receipt_id: emitted_receipt,
-                    path_ids,
-                    ..
-                } => break (emitted_receipt, path_ids),
-                _ => continue,
-            }
-        };
-        assert_eq!(emitted.0, receipt_id);
-        assert_eq!(emitted.1, vec![cause.id, failure.id]);
-    }
-
     #[test]
     fn audit_action_mapping_covers_real_reason_types() {
-        assert_eq!(
-            audit_action_for("access", "dormant", "active"),
-            Some("accessed")
-        );
+        assert_eq!(audit_action_for("access", "dormant", "active"), Some("accessed"));
         assert_eq!(
             audit_action_for("cue_reactivation", "silent", "active"),
             Some("accessed")

@@ -299,6 +299,8 @@ pub struct MergeOperation {
     pub affected_ids: Vec<String>,
     /// Match confidence.
     pub confidence: Option<f32>,
+    /// Structured operation evidence (for tag maintenance: source/target/scope).
+    pub signals: Option<serde_json::Value>,
     /// Human-readable reason.
     pub reason: Option<String>,
 }

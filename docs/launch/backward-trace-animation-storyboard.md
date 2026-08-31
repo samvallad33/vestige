@@ -1,12 +1,22 @@
 # Backward-Trace Animation — Storyboard ("The X Rocket")
 
+> ⚠️ **The CauseBench numbers this storyboard was written around are RETRACTED.**
+> CauseBench was withdrawn and its published figures retracted (see `CHANGELOG.md`,
+> v2.2.x). **Do not publish `root-cause recall@1`, `Vestige 60%`, `vector search 0%`,
+> or any other CauseBench figure**, from this document or anywhere else.
+>
+> The animation *design* below is still good and is kept for that reason. Where a
+> stat is called for, use the pre-registered, reproducible
+> [Silent Rotation](https://github.com/samvallad33/vestige/tree/benchmark/silent-rotation)
+> result instead: **no memory 21/25 converged wrong, dense cosine 12/23, Vestige 0/23**.
+> The stat lines below have already been updated; the surrounding prose still
+> describes the incident *shape*, which remains accurate.
+
 **Purpose:** the single most shareable launch artifact. A ~15s looping clip,
 pinned to the top of the launch thread on X and used as the Show HN demo. It
-shows the one interaction ordinary similarity search cannot provide: when a
-failure hits, Vestige can follow its *recorded evidence backward through time*
-past confounders to an earlier upstream **candidate** — while a similarity
-baseline remains on the symptom. The replay is evidence, not an automatic proof
-of causation.
+shows the ONE thing nothing else does: when a failure hits, Vestige's arrow
+snaps *backward through time* past the confounders to the quiet change that
+actually caused it — while a vector search sits stuck on the symptom.
 
 **Design law (from 2026 viral-demo research):** animate the *mechanism*
 legibly, no narration needed, payoff visible in the first 1.5s, loops clean, no
@@ -15,28 +25,34 @@ pitch.
 
 ---
 
-## The case shown (canonical reproducible fixture)
+## The case shown (canonical root-cause archetype)
 
-Use a committed, reproducible incident fixture: a config/limit/cert/migration/flag
-change shares a *recorded entity* with a later failure but none of its words, with
-a more-recent confounder planted to defeat naive recency. The film must identify
-it as a fixture unless a versioned benchmark harness and results are available.
+Uses the incident SHAPE that makes causal recall hard: a
+config/limit/cert/migration/flag change that shares an *entity* with a later
+failure but *none of its words*, with a more-recent confounder planted to defeat
+naive recency.
+
+(This shape was originally drawn from the CauseBench fixtures. That benchmark and
+its numbers are retracted and `benchmarks/causebench/` no longer exists, but the
+incident shape itself is unchanged and is the same one
+[Silent Rotation](https://github.com/samvallad33/vestige/tree/benchmark/silent-rotation)
+exercises.)
 
 Timeline of stored memories (left = 3 weeks ago, right = today):
 
 | When | Memory | Role |
 |---|---|---|
-| 21 days ago | `Lowered connection-pool max from 100 → 20 in db.config.yaml` | **recorded upstream candidate** (shares entity `db.config.yaml` / the DB, not words) |
+| 21 days ago | `Lowered connection-pool max from 100 → 20 in db.config.yaml` | **the true cause** (shares entity `db.config.yaml` / the DB, not words) |
 | 9 days ago | `Renamed UserService to AccountService across the API` | confounder (loud, recent, unrelated) |
 | 4 days ago | `Bumped Postgres driver to 5.2` | confounder (shares "Postgres", more recent than cause) |
 | **today** | `PagerDuty: checkout timing out under load — "connection acquisition timeout"` | **the failure (symptom)** |
 
-The similarity baseline ranks by resemblance and may surface the driver bump or
-timeout log because they share words such as "connection" and "Postgres". The
-film must render the **actual candidate list and rank from that run's receipt**;
-it must not pre-bake a losing rank. Backfill then follows the recorded entity
-(`db.config.yaml`) backward and presents the pool-size change as an upstream
-candidate, with the join key, path, and timestamp for a human to verify.
+Vector search ranks by resemblance → it surfaces the driver bump and the
+timeout log (they share words like "connection", "Postgres"). It ranks the
+pool-size change near the *bottom* — that memory shares no vocabulary with
+"timeout under load". Vestige's Retroactive Salience Backfill reaches backward
+along the shared entity (the database / `db.config.yaml`) and promotes the
+pool-size change to #1.
 
 ---
 
@@ -51,31 +67,27 @@ candidate, with the join key, path, and timestamp for a human to verify.
 - A horizontal time axis draws left→right. Four memory cards fade in at their dates: the pool-size change (far left, dim/dormant), the two confounders (mid), the failure (right, red).
 - The dormant cause is visibly *faded* — small, low-contrast. It looks unimportant. That's the point.
 
-**Beat 2 — 4.0s to 6.5s · SIMILARITY BASELINE**
-- Label appears: `similarity baseline` with a small magnifying-glass icon.
-- Thin gray "similarity" beams shoot from the failure card only to the baseline candidates named in the receipt. A rank badge shows the upstream candidate's **actual baseline rank** from that same receipt; omit the badge when the rank was not measured.
+**Beat 2 — 4.0s to 6.5s · VECTOR SEARCH TRIES (and fails)**
+- Label appears: `vector search` with a small magnifying-glass icon.
+- Three thin gray "similarity" beams shoot from the failure card to the cards that *share words*: the driver bump and (self) the log. A rank badge appears: the true cause gets tagged `#7` in gray, sinking to the bottom.
 - Caption: `finds what looks like the bug`
-- Do not draw a failure cross. The baseline and Backfill answer different
-  questions; the receipt makes that difference inspectable.
+- Beat ends with a gray ✕ over the search — it never touched the real cause.
 
 **Beat 3 — 6.5s to 10.5s · THE ARROW SNAPS BACK (the money moment)**
-- Everything else desaturates. A single bright teal arrow launches from the failure card and travels *right-to-left, backward in time*, deliberately skipping the two confounders (each pings faintly and is passed over — "not on this recorded path" micro-label flickers).
-- The arrow lands on the dormant pool-size card 21 days back. On contact the card **ignites**: scales up, fills teal, snaps from dim to bright. A link line labeled `recorded entity: db.config.yaml` connects them.
-- Caption: `Vestige reaches back to recorded upstream evidence`
+- Everything else desaturates. A single bright teal arrow launches from the failure card and travels *right-to-left, backward in time*, deliberately skipping the two confounders (each pings faintly and is passed over — "shares words, not entity" micro-label flickers).
+- The arrow lands on the dormant pool-size card 21 days back. On contact the card **ignites**: scales up, fills teal, snaps from dim to bright. A link line labeled `same entity: db.config.yaml` connects them.
+- Caption: `Vestige reaches back to what caused it`
 - This is the frame that gets clipped and reshared. Make the snap fast and physical (ease-in, slight overshoot).
 
-**Beat 4 — 10.5s to 13.0s · THE RECEIPT**
-- The promoted card is labeled `recorded upstream candidate`, not "root cause."
-- Show a receipt card with the exact `run ID`, `shared entity`, `time gap`,
-  `baseline rank` (when measured), and recorded `path IDs`.
-- A claim of "recorded upstream cause" is permitted only when the receipt
-  contains an explicit persisted causal edge. Otherwise the verdict remains
-  `candidate cause — verify linked change`.
-- Do not show CauseBench, `60%`, or `0%` in launch footage until the committed
-  benchmark harness, baselines, and versioned results reproduce those numbers.
+**Beat 4 — 10.5s to 13.0s · THE VERDICT**
+- The promoted cause card shows a teal `#1` badge; the vector `#7` badge greys beside it for contrast.
+- Two-line stat, big: `converged on the wrong cause` / `Vestige 0/23 · no memory 21/25`
+- Small honest sub-label: `dense cosine 12/23 · on Silent Rotation · pre-registered`
+- Keep the big line at roughly 30 characters. `.v` renders up to 72px in
+  `causal-brain-demo.html`; longer strings overflow the card.
 
 **Beat 5 — 13.0s to 15.0s · SIGNATURE + LOOP RESET**
-- Wordmark `vestige` fades in bottom-left, tiny. Tagline: `memory that follows evidence, not resemblance.`
+- Wordmark `vestige` fades in bottom-left, tiny. Tagline: `memory that finds the cause, not the resemblance.`
 - Everything gently fades and the failure card is already sliding back in at the right — the loop restart is seamless (no hard cut).
 
 ---
@@ -91,10 +103,11 @@ candidate, with the join key, path, and timestamp for a human to verify.
 - **Text:** monospace for the memory-card content (feels like real logs);
   sans for captions. No narration — captions carry it, so it works muted in a
   feed (most X video autoplays silent).
-- **Honesty guardrails (non-negotiable):** source every visible candidate,
-  rank, entity, timestamp, and path from one Backfill receipt. Label a seeded
-  demonstration as a fixture. Publish benchmark numbers only with their
-  committed harness, baselines, dataset version, and reproducible output.
+- **Honesty guardrails (non-negotiable, same as the chart):** the stat frame
+  must name `Silent Rotation` and keep the competitor arms beside Vestige's
+  number, never Vestige's alone. Never imply an industry benchmark. Never show
+  the FALSE cross-session claim. Never reinstate any CauseBench figure: that
+  benchmark was withdrawn and its numbers retracted.
 - **Loop length:** 15s is the sweet spot for X autoplay + a clean GIF under
   ~8MB. If the GIF is too heavy, cut Beat 1 to 2s and land at 13s total.
 
@@ -102,12 +115,14 @@ candidate, with the join key, path, and timestamp for a human to verify.
 
 ## The X post it pins to
 
-> Similarity search finds what *looks like* your bug.
+> Every AI memory tool is built on vector search. Vector search finds what
+> *looks like* your bug.
 >
-> But an upstream change does not always resemble the failure it precedes.
+> But a root cause never looks like the bug it creates.
 >
-> So I built memory that reaches *backward in time* through recorded entities
-> and shows you the receipt for the upstream candidate it found. 🧵👇
+> So I built memory that reaches *backward in time* to the change that actually
+> caused it. In a pre-registered test, agents with no memory converged on the
+> wrong cause 21 times out of 25. With Vestige, 0 out of 23. 🧵👇
 >
 > [pinned: the 15s clip]
 

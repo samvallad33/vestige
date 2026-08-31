@@ -2,7 +2,8 @@
 //!
 //! Merges recall, semantic_search, and hybrid_search into a single `search` tool.
 //! Always uses hybrid search internally (keyword + semantic + RRF fusion).
-//! Implements Testing Effect (Roediger & Karpicke 2006) by auto-strengthening memories on access.
+//! Records retrieval telemetry without reinforcing memories. Positive feedback
+//! through `memory(action="promote")` is the explicit strengthening signal.
 //!
 //! v1.5.0: Enhanced 7-stage cognitive pipeline:
 //!   1. Reranker (over-fetch 3x, rerank down)
@@ -13,7 +14,7 @@
 //!   6. Predictive memory recording
 //!   7. Reconsolidation (mark labile)
 
-use chrono::Utc;
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -21,8 +22,8 @@ use tokio::sync::Mutex;
 
 use crate::cognitive::CognitiveEngine;
 use vestige_core::{
-    CompetitionCandidate, EncodingContext, MemoryLifecycle, MemorySnapshot, MemoryState,
-    OutputConfig, Storage, TopicalContext,
+    CompetitionCandidate, DEFAULT_MEMORY_SCOPE, EncodingContext, MemoryLifecycle, MemorySnapshot,
+    MemoryState, OutputConfig, Storage, TopicalContext,
 };
 
 /// Input schema for unified search tool
@@ -93,9 +94,27 @@ pub fn schema() -> Value {
                 "description": "Force literal/concrete search. Skips semantic expansion, FSRS reweighting, spreading activation, and cognitive side effects. Auto-enabled for quoted strings, env vars, UUIDs, paths, and code identifiers.",
                 "default": false
             },
+            "rank_native_fusion": {
+                "type": "boolean",
+                "description": "Join the post-retrieval stages (temporal, accessibility, context, utility) as ranked lists via weighted RRF instead of score multipliers. Experimental; default off pending benchmark validation.",
+                "default": false
+            },
             "tag_prefix": {
                 "type": "string",
-                "description": "Optional tag-prefix filter. When set, only results carrying at least one tag whose value starts with this prefix are returned (case-sensitive). Example: tag_prefix=\"meeting:\" matches memories tagged 'meeting:standup', 'meeting:1-on-1', etc. Applied as a post-filter; combine with a larger 'limit' if you expect heavy thinning."
+                "description": "Optional tag-prefix filter. When set, only results carrying at least one tag whose value starts with this prefix are returned (case-insensitive). Example: tag_prefix=\"meeting:\" matches memories tagged 'meeting:standup', 'meeting:1-on-1', etc. Applied as a post-filter; combine with a larger 'limit' if you expect heavy thinning."
+            },
+            "scope": {
+                "type": "string",
+                "description": "Project namespace to search. Defaults to the legacy 'user' namespace, so project memories never bleed into an unscoped recall."
+            },
+            "includeCrossScope": {
+                "type": "boolean",
+                "description": "Search across all project namespaces. Defaults to false; set only when cross-project retrieval is intentional.",
+                "default": false
+            },
+            "validAt": {
+                "type": "string",
+                "description": "Return only facts valid at this time. Accepts 'now', RFC3339, or YYYY-MM-DD. When omitted, expired/future facts remain auditable but are conservatively downranked."
             },
             "source_system": {
                 "type": "string",
@@ -157,9 +176,18 @@ struct SearchArgs {
     token_budget: Option<i32>,
     #[serde(alias = "retrieval_mode")]
     retrieval_mode: Option<String>,
+    /// Join the post-retrieval stages (temporal, accessibility, context,
+    /// utility) as ranked lists via weighted RRF instead of score
+    /// multipliers. Default off pending MemConflict validation; also
+    /// enabled store-wide by VESTIGE_RANK_NATIVE_FUSION=1.
+    #[serde(alias = "rank_native_fusion")]
+    rank_native_fusion: Option<bool>,
     concrete: Option<bool>,
     #[serde(alias = "tag_prefix")]
     tag_prefix: Option<String>,
+    scope: Option<String>,
+    include_cross_scope: Option<bool>,
+    valid_at: Option<String>,
     // #57 Phase 4 — source-aware investigation filters (all post-filters).
     #[serde(alias = "source_system")]
     source_system: Option<String>,
@@ -179,6 +207,39 @@ struct SearchArgs {
     source_status: Option<String>,
 }
 
+fn parse_valid_at(raw: Option<&str>) -> Result<Option<DateTime<Utc>>, String> {
+    let Some(raw) = raw else { return Ok(None) };
+    if raw == "now" {
+        return Ok(Some(Utc::now()));
+    }
+    if raw.trim() != raw || raw.is_empty() {
+        return Err(
+            "Invalid validAt: expected 'now', RFC3339, or YYYY-MM-DD without surrounding whitespace"
+                .to_string(),
+        );
+    }
+    if let Ok(timestamp) = DateTime::parse_from_rfc3339(raw) {
+        return Ok(Some(timestamp.with_timezone(&Utc)));
+    }
+    if let Ok(date) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        return Ok(Some(Utc.from_utc_datetime(
+            &date.and_hms_opt(0, 0, 0).expect("midnight is valid"),
+        )));
+    }
+    Err("Invalid validAt: expected 'now', RFC3339, or YYYY-MM-DD".to_string())
+}
+
+fn apply_default_validity_penalty(
+    result: &mut vestige_core::SearchResult,
+    valid_at: Option<DateTime<Utc>>,
+) {
+    if valid_at.is_none() && !result.node.is_currently_valid() {
+        // Historical and future facts remain available for audit, but should
+        // not outrank a current policy on relevance alone.
+        result.combined_score *= 0.1;
+    }
+}
+
 /// Execute unified search with 7-stage cognitive pipeline.
 ///
 /// Pipeline:
@@ -190,7 +251,7 @@ struct SearchArgs {
 ///   6. Spreading activation (find associated memories)
 ///   7. Side effects: predictive memory recording + reconsolidation labile marking
 ///
-/// Also applies Testing Effect (Roediger & Karpicke 2006) by auto-strengthening on access.
+/// Retrieval is audit-only; callers explicitly promote memories that proved useful.
 pub async fn execute(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
@@ -244,6 +305,8 @@ pub async fn execute(
     // #57 Phase 4 — parse the source-aware investigation filter once (shared by
     // both the concrete and hybrid paths). Hard-errors on malformed input.
     let source_filter = SourceFilter::from_args(&args)?;
+    let scope_filter = ScopeFilter::from_args(&args)?;
+    let valid_at = parse_valid_at(args.valid_at.as_deref())?;
 
     let concrete = args
         .concrete
@@ -253,7 +316,10 @@ pub async fn execute(
         // pool so the post-filter has enough headroom to still return ~limit
         // results after thinning. Cap at the same upper bound the underlying
         // SQL path uses elsewhere (100).
-        let concrete_fetch_limit = if args.tag_prefix.is_some() || source_filter.is_active() {
+        let concrete_fetch_limit = if args.tag_prefix.is_some()
+            || source_filter.is_active()
+            || scope_filter.is_restrictive()
+        {
             (limit * 3).min(100)
         } else {
             limit
@@ -267,9 +333,17 @@ pub async fn execute(
             )
             .map_err(|e| e.to_string())?;
 
-        // Apply tag_prefix post-filter BEFORE strengthen-on-access so
-        // results the caller did not actually receive do not get a
-        // testing-effect boost.
+        // Apply post-filters before formatting the response. Retrieval
+        // telemetry is recorded later, after the final budget selection.
+        let mut results = filter_results_to_scope(storage, results, &scope_filter)?;
+        for result in &mut results {
+            apply_default_validity_penalty(result, valid_at);
+        }
+        results.sort_by(|a, b| {
+            b.combined_score
+                .partial_cmp(&a.combined_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let filtered_results: Vec<&vestige_core::SearchResult> = results
             .iter()
             .filter(|r| match args.tag_prefix.as_deref() {
@@ -277,14 +351,9 @@ pub async fn execute(
                 None => true,
             })
             .filter(|r| node_matches_source(&r.node, &source_filter))
+            .filter(|r| valid_at.is_none_or(|at| r.node.is_valid_at(at)))
             .take(limit as usize)
             .collect();
-
-        let ids: Vec<&str> = filtered_results
-            .iter()
-            .map(|r| r.node.id.as_str())
-            .collect();
-        let _ = storage.strengthen_batch_on_access(&ids);
 
         let mut formatted: Vec<Value> = filtered_results
             .iter()
@@ -317,6 +386,14 @@ pub async fn execute(
             formatted = budgeted;
         }
 
+        // Audit only memories that are actually present in the response, not
+        // candidates removed by retention or token-budget filtering.
+        let shown_ids: Vec<&str> = formatted
+            .iter()
+            .filter_map(|result| result.get("id").and_then(|id| id.as_str()))
+            .collect();
+        let _ = storage.record_batch_retrieval(&shown_ids);
+
         let mut response = serde_json::json!({
             "query": args.query,
             "method": "concrete",
@@ -324,6 +401,9 @@ pub async fn execute(
             "concrete": true,
             "detailLevel": detail_level,
             "profile": output_config.profile.as_str(),
+            "scope": scope_filter.scope,
+            "includeCrossScope": scope_filter.include_cross_scope,
+            "validAt": valid_at.map(|at| at.to_rfc3339()),
             "total": formatted.len(),
             "results": formatted,
         });
@@ -374,6 +454,12 @@ pub async fn execute(
         std::collections::HashSet::new();
     let mut keyword_priority_results: Vec<vestige_core::SearchResult> = Vec::new();
     for r in keyword_first_results {
+        if !scope_filter.matches(storage, &r.node.id)? {
+            continue;
+        }
+        if valid_at.is_some_and(|at| !r.node.is_valid_at(at)) {
+            continue;
+        }
         if r.keyword_score.unwrap_or(0.0) >= keyword_priority_threshold
             && r.node.retention_strength >= min_retention
         {
@@ -385,15 +471,50 @@ pub async fn execute(
     // ====================================================================
     // STAGE 1: Hybrid search with Nx over-fetch for reranking pool
     // ====================================================================
+    // Candidate depth fed to the cross-encoder reranker.
+    //
+    // The reranker's own configuration declares DEFAULT_RETRIEVAL_COUNT = 50
+    // (crates/vestige-core/src/search/reranker.rs:23), but this call path never
+    // gave it 50. At the default limit of 10 the old multipliers produced 10
+    // candidates in precise mode and 30 in balanced -- so precise mode ran a
+    // cross-encoder over a pool small enough that it could only REORDER what
+    // keyword+vector already found, never rescue anything they ranked poorly.
+    // That is most of the value of having a reranker at all.
+    //
+    // T2-RAGBench (arXiv 2604.01733, 23,088 queries) measured the depth curve:
+    // 20 candidates -> Recall@5 0.458, 50 -> 0.826, 100 -> 0.888. There is a
+    // cliff below 50. These multipliers put balanced at 50 and precise at 30.
+    //
+    // Cost is latency only: more pairs scored, no extra DB round trips beyond
+    // the larger fetch, and the .min(100) cap below still bounds the load.
+    // CAVEAT: that curve is one benchmark in one domain (financial text and
+    // tables). The direction is well supported; the exact constants should be
+    // re-validated against Vestige's own eval harness before being treated as
+    // tuned rather than merely better.
+    // Measured on a real 2,926-memory store, 7 queries, median latency:
+    //   balanced 3->5:  3399ms -> 4705ms  (+38%)
+    //   precise  1->3:  1472ms -> 2983ms  (+103%)
+    //
+    // Balanced takes the depth increase: it is the quality mode, the reranker's
+    // own config asks for 50 candidates, and T2-RAGBench measures a recall cliff
+    // below that depth (20 candidates -> Recall@5 0.458, 50 -> 0.826).
+    //
+    // Precise stays at 1. It is documented as the fast, token-efficient path, and
+    // doubling its latency to buy unmeasured recall is the wrong trade for a mode
+    // whose entire purpose is speed. Revisit once the eval harness can price the
+    // recall gain against that cost instead of assuming it.
     let overfetch_multiplier = match retrieval_mode {
-        "precise" => 1,    // No overfetch — return exactly what's asked
-        "exhaustive" => 5, // Deep overfetch for maximum recall
-        _ => 3,            // Balanced default
+        "precise" => 1,    // unchanged: speed is this mode's contract
+        "exhaustive" => 5, // unchanged
+        _ => 5,            // balanced: 50 @ limit=10, matching the reranker's config
     };
     // When a tag_prefix OR source filter is requested, double the overfetch
     // (capped at the same 100 ceiling) so the post-filter has enough headroom
     // to still return ~limit results after thinning.
-    let post_filter_multiplier = if args.tag_prefix.is_some() || source_filter.is_active() {
+    let post_filter_multiplier = if args.tag_prefix.is_some()
+        || source_filter.is_active()
+        || scope_filter.is_restrictive()
+    {
         2
     } else {
         1
@@ -412,6 +533,7 @@ pub async fn execute(
         .map_err(|e| e.to_string())?;
 
     // Filter by min_retention and min_similarity first (cheap filters)
+    let results = filter_results_to_scope(storage, results, &scope_filter)?;
     let mut filtered_results: Vec<_> = results
         .into_iter()
         .filter(|r| {
@@ -439,11 +561,19 @@ pub async fn execute(
     if source_filter.is_active() {
         filtered_results.retain(|r| node_matches_source(&r.node, &source_filter));
     }
+    if let Some(at) = valid_at {
+        filtered_results.retain(|result| result.node.is_valid_at(at));
+    }
+    for result in &mut filtered_results {
+        apply_default_validity_penalty(result, valid_at);
+    }
 
     // ====================================================================
     // Dedup: merge Stage 0 keyword-priority results into Stage 1 results
     // ====================================================================
-    for kp in &keyword_priority_results {
+    for keyword_priority in &keyword_priority_results {
+        let mut kp = keyword_priority.clone();
+        apply_default_validity_penalty(&mut kp, valid_at);
         // Respect tag_prefix here too — Stage 0 ran without it and can
         // re-introduce filtered-out memories on the "new result" branch.
         if let Some(prefix) = args.tag_prefix.as_deref()
@@ -453,6 +583,9 @@ pub async fn execute(
         }
         // Respect the source filter on re-inject for the same reason.
         if source_filter.is_active() && !node_matches_source(&kp.node, &source_filter) {
+            continue;
+        }
+        if valid_at.is_some_and(|at| !kp.node.is_valid_at(at)) {
             continue;
         }
         if let Some(existing) = filtered_results
@@ -468,7 +601,7 @@ pub async fn execute(
             }
         } else {
             // New result from Stage 0 not in Stage 1 — add it
-            filtered_results.push(kp.clone());
+            filtered_results.push(kp);
         }
     }
 
@@ -546,22 +679,43 @@ pub async fn execute(
         filtered_results.truncate(limit_usize);
     }
 
+    // Rank-native fusion (opt-in): the stages below normally fold their
+    // signal into `combined_score` as a multiplier. When enabled, each stage
+    // records its raw signal instead, and one weighted-RRF pass at the end
+    // joins base relevance and the recorded signals as ranked lists — the
+    // core hybrid fusion is already RRF, and rank joining is scale-free
+    // where multiplier stacking is not. Penalties (suppression, retrieval
+    // competition) are safety semantics, not ranked signals, and apply
+    // identically in both modes.
+    let rank_native = args.rank_native_fusion.unwrap_or(false)
+        || std::env::var("VESTIGE_RANK_NATIVE_FUSION")
+            .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    let mut fusion_signals: Vec<FusionSignals> = if rank_native {
+        vec![FusionSignals::default(); filtered_results.len()]
+    } else {
+        Vec::new()
+    };
+
     // ====================================================================
     // STAGE 3: Temporal boosting (recency + validity windows)
     // ====================================================================
     #[cfg(feature = "vector-search")]
     if let Ok(cog) = cognitive.try_lock() {
-        for result in &mut filtered_results {
+        for (index, result) in filtered_results.iter_mut().enumerate() {
             let recency = cog.temporal_searcher.recency_boost(result.node.created_at);
             let validity = cog.temporal_searcher.validity_boost(
                 result.node.valid_from,
                 result.node.valid_until,
-                None,
+                valid_at,
             );
-            // Blend: 85% relevance + 15% temporal signal
             let temporal_factor = recency * validity;
-            result.combined_score = result.combined_score * 0.85
-                + (result.combined_score * temporal_factor as f32) * 0.15;
+            if rank_native {
+                fusion_signals[index].temporal = temporal_factor;
+            } else {
+                // Blend: 85% relevance + 15% temporal signal
+                result.combined_score = result.combined_score * 0.85
+                    + (result.combined_score * temporal_factor as f32) * 0.15;
+            }
         }
     }
 
@@ -569,7 +723,7 @@ pub async fn execute(
     // STAGE 4: Memory state accessibility filtering
     // ====================================================================
     if let Ok(cog) = cognitive.try_lock() {
-        for result in &mut filtered_results {
+        for (index, result) in filtered_results.iter_mut().enumerate() {
             // Build a MemoryLifecycle from node data for the calculator
             let mut lifecycle = MemoryLifecycle::new();
             lifecycle.last_access = result.node.last_accessed;
@@ -585,14 +739,22 @@ pub async fn execute(
                 MemoryState::Unavailable
             };
 
-            let mut adjusted = cog
-                .accessibility_calc
-                .calculate(&lifecycle, result.combined_score as f64);
+            let mut adjusted = if rank_native {
+                // Record the state's multiplier as a signal; base relevance
+                // stays untouched for the rank join.
+                fusion_signals[index].accessibility =
+                    cog.accessibility_calc.calculate(&lifecycle, 1.0);
+                result.combined_score as f64
+            } else {
+                cog.accessibility_calc
+                    .calculate(&lifecycle, result.combined_score as f64)
+            };
 
             // v2.0.5: Active forgetting penalty (Anderson 2025 SIF).
             // Each prior suppress call compounds a retrieval-score penalty,
             // saturating at 80%. Applied AFTER accessibility so the penalty
-            // stacks on top of any passive FSRS decay.
+            // stacks on top of any passive FSRS decay. A penalty, not a
+            // signal: it applies in both fusion modes.
             if result.node.suppression_count > 0 {
                 let sys =
                     vestige_core::neuroscience::active_forgetting::ActiveForgettingSystem::new();
@@ -613,15 +775,19 @@ pub async fn execute(
         let retrieval_ctx =
             EncodingContext::new().with_topical(TopicalContext::with_topics(topics.clone()));
         if let Ok(cog) = cognitive.try_lock() {
-            for result in &mut filtered_results {
+            for (index, result) in filtered_results.iter_mut().enumerate() {
                 // Build encoding context from memory's tags
                 let encoding_ctx = EncodingContext::new()
                     .with_topical(TopicalContext::with_topics(result.node.tags.clone()));
                 let context_score = cog
                     .context_matcher
                     .match_contexts(&encoding_ctx, &retrieval_ctx);
-                // Blend: context match boosts relevance up to +30%
-                result.combined_score *= 1.0 + (context_score as f32 * 0.3);
+                if rank_native {
+                    fusion_signals[index].context = context_score;
+                } else {
+                    // Blend: context match boosts relevance up to +30%
+                    result.combined_score *= 1.0 + (context_score as f32 * 0.3);
+                }
             }
         }
     }
@@ -656,6 +822,10 @@ pub async fn execute(
     // Skipped in precise mode (no need) and exhaustive mode (want all results)
     // ====================================================================
     let mut suppressed_count = 0_usize;
+    // Memories that WOULD have been suppressed by retrieval competition but were
+    // spared because they are the dissenting side of a live contradiction. These
+    // are surfaced so the caller can see it was shown the other side.
+    let mut contradiction_protected: Vec<String> = Vec::new();
     if retrieval_mode == "balanced"
         && filtered_results.len() > 1
         && let Ok(mut cog) = cognitive.try_lock()
@@ -669,8 +839,72 @@ pub async fn execute(
             })
             .collect();
         if let Some(result) = cog.competition_mgr.run_competition(&candidates, 0.7) {
-            // Apply suppression: losers get penalized
-            for suppressed_id in &result.suppressed_ids {
+            // The winner's text, needed to test whether a loser CONTRADICTS it
+            // rather than merely resembling it.
+            let winner_content = filtered_results
+                .iter()
+                .find(|r| r.node.id == result.winner_id)
+                .map(|r| r.node.content.clone());
+            let winner_live = filtered_results
+                .iter()
+                .find(|r| r.node.id == result.winner_id)
+                .map(|r| r.node.is_currently_valid())
+                .unwrap_or(false);
+
+            // Apply suppression: losers get penalized, EXCEPT the losing side of
+            // a live contradiction.
+            //
+            // Retrieval-induced forgetting suppresses the loser of a competition
+            // between SIMILAR memories, and a contradiction is near-identical text
+            // with opposite meaning -- "Never use X on Windows" against a stored
+            // "Always use X on Windows" measures 0.928 cosine here. Contradicting
+            // memories are therefore not merely vulnerable to this penalty, they
+            // are the most suppressible class of memory in the store. Every time
+            // an agent retrieves and acts on one side, the evidence that would
+            // correct it gets demoted and can fall out of the returned window.
+            // That is precisely how a memory system buries its own correction.
+            //
+            // Anderson & McCulloch (1999), JEP:LMC 25:608-629, "Integration as a
+            // general boundary condition on retrieval-induced forgetting": material
+            // the rememberer has INTEGRATED shows little or no RIF. A detected
+            // contradiction pair is integrated by construction -- there is an
+            // explicit epistemic edge between the two. Exempting it is the faithful
+            // reading of the mechanism, not a special case bolted onto it.
+            //
+            // LIVE-vs-LIVE ONLY. If either side is expired or superseded, the
+            // penalty still applies. Protecting a pair whose loser has valid_until
+            // set would re-float a fact that is deliberately dead -- reintroducing
+            // the as-of resurrection bug fixed in #173.
+            for (suppressed_id, similarity) in result
+                .suppressed_ids
+                .iter()
+                .zip(result.suppressed_similarities.iter())
+            {
+                let protected = match (&winner_content, winner_live) {
+                    (Some(winner_text), true) => filtered_results
+                        .iter()
+                        .find(|r| &r.node.id == suppressed_id)
+                        .map(|r| {
+                            r.node.is_currently_valid()
+                                && crate::tools::cross_reference::appears_contradictory(
+                                    winner_text,
+                                    &r.node.content,
+                                )
+                        })
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                if protected {
+                    tracing::debug!(
+                        winner = %result.winner_id,
+                        dissent = %suppressed_id,
+                        similarity,
+                        "contradiction-protected: withholding retrieval-competition \
+                         suppression from the losing side of a live contradiction"
+                    );
+                    contradiction_protected.push(suppressed_id.clone());
+                    continue;
+                }
                 if let Some(r) = filtered_results
                     .iter_mut()
                     .find(|r| &r.node.id == suppressed_id)
@@ -687,11 +921,43 @@ pub async fn execute(
     // Memories that proved useful in past sessions get a retrieval boost.
     // utility_score = times_useful / times_retrieved (0.0 to 1.0)
     // ====================================================================
-    for result in &mut filtered_results {
+    for (index, result) in filtered_results.iter_mut().enumerate() {
         let utility = result.node.utility_score.unwrap_or(0.0) as f32;
-        if utility > 0.0 {
+        if rank_native {
+            fusion_signals[index].utility = utility as f64;
+        } else if utility > 0.0 {
             // Utility boost: up to +15% for memories with utility_score = 1.0
             result.combined_score *= 1.0 + (utility * 0.15);
+        }
+    }
+
+    // Rank-native join: base relevance and the recorded stage signals fuse
+    // as ranked lists. Weights mirror each stage's multiplicative influence
+    // (temporal 15%, context 30%, utility 15%, accessibility carries the
+    // forgetting semantics at 30%); the base list dominates at 1.0. Initial
+    // values, gated on the MemConflict harness like every ranking change.
+    if rank_native && filtered_results.len() > 1 {
+        let base: Vec<f64> = filtered_results
+            .iter()
+            .map(|result| result.combined_score as f64)
+            .collect();
+        let fused = fuse_rank_native(
+            &base,
+            &[
+                (
+                    fusion_signals.iter().map(|s| s.temporal).collect(),
+                    0.15,
+                ),
+                (
+                    fusion_signals.iter().map(|s| s.accessibility).collect(),
+                    0.30,
+                ),
+                (fusion_signals.iter().map(|s| s.context).collect(), 0.30),
+                (fusion_signals.iter().map(|s| s.utility).collect(), 0.15),
+            ],
+        );
+        for (result, score) in filtered_results.iter_mut().zip(fused) {
+            result.combined_score = score as f32;
         }
     }
 
@@ -735,15 +1001,6 @@ pub async fn execute(
     } else {
         vec![]
     };
-
-    // ====================================================================
-    // Auto-strengthen on access (Testing Effect)
-    // ====================================================================
-    let ids: Vec<&str> = filtered_results
-        .iter()
-        .map(|r| r.node.id.as_str())
-        .collect();
-    let _ = storage.strengthen_batch_on_access(&ids);
 
     // Drop storage lock before acquiring cognitive for side effects
 
@@ -829,6 +1086,14 @@ pub async fn execute(
         formatted = budgeted;
     }
 
+    // Audit only memories that are actually present in the response, not
+    // internal candidates removed by a token budget.
+    let shown_ids: Vec<&str> = formatted
+        .iter()
+        .filter_map(|result| result.get("id").and_then(|id| id.as_str()))
+        .collect();
+    let _ = storage.record_batch_retrieval(&shown_ids);
+
     // Check learning mode via attention signal
     let learning_mode = cognitive
         .try_lock()
@@ -842,6 +1107,9 @@ pub async fn execute(
         "retrievalMode": retrieval_mode,
         "detailLevel": detail_level,
         "profile": output_config.profile.as_str(),
+        "scope": scope_filter.scope,
+        "includeCrossScope": scope_filter.include_cross_scope,
+        "validAt": valid_at.map(|at| at.to_rfc3339()),
         "total": formatted.len(),
         "results": formatted,
     });
@@ -862,6 +1130,24 @@ pub async fn execute(
         response["contextReinstatement"] = ri;
     }
     // Include competition stats
+    // Dissent slot. When retrieval competition would have demoted the losing side
+    // of a live contradiction and we withheld that penalty, say so explicitly.
+    // The value of protecting the dissenting memory is only realised if the caller
+    // can SEE that a contradiction was in play -- otherwise the agent reads a
+    // slightly-reordered list and never learns it was shown two incompatible
+    // claims. This makes "the agent was presented with the other side" an
+    // auditable fact rather than an inference.
+    if !contradiction_protected.is_empty() {
+        response["contradictionProtected"] = serde_json::json!({
+            "memoryIds": contradiction_protected,
+            "notice": "These memories contradict a higher-ranked result and were \
+                       exempted from retrieval-competition suppression. Read both \
+                       sides before acting; do not treat the top result as settled.",
+        });
+    }
+    if rank_native {
+        response["fusionMode"] = serde_json::json!("rank_native");
+    }
     if suppressed_count > 0 {
         response["competitionSuppressed"] = serde_json::json!(suppressed_count);
     }
@@ -922,12 +1208,126 @@ fn is_literal_query(query: &str) -> bool {
 /// string value starts with `prefix`. Empty prefix matches every result with
 /// at least one tag (and never matches a tagless result).
 ///
-/// Case-sensitive by design: the existing tag-match semantics in
-/// `memory_timeline` / `export` / `gc` are exact-match (case-sensitive), so
-/// keeping this consistent avoids surprise. Operators wanting case-insensitive
-/// prefix-search should normalize tags at ingest time.
+/// Case-INSENSITIVE tag prefix match.
+///
+/// Reported from production (2026-08-15): filtering on `Reflection` returned zero
+/// results while `reflection` returned the expected set, with no error and no
+/// warning. One capital letter silently blanked an entire recall. For a memory
+/// system that is the worst possible failure shape -- the caller cannot tell an
+/// empty result caused by a typo from an empty result meaning "you never learned
+/// this", so a silent zero reads as confident absence.
+///
+/// Everything adjacent already normalises: `query_time_range` compares node_type
+/// with `LOWER(node_type) = LOWER(?)`, and the storage-layer tag filter relies on
+/// SQL `LIKE`, which is case-insensitive for ASCII by default. This Rust-side
+/// filter was the one path that did not, so identical-looking queries behaved
+/// differently depending on which code path served them.
+///
+/// ASCII-lowercase specifically, matching SQLite's `LIKE` semantics, so the two
+/// paths agree rather than diverging in a new way for non-ASCII tags.
 fn tags_match_prefix(tags: &[String], prefix: &str) -> bool {
-    tags.iter().any(|t| t.starts_with(prefix))
+    let needle = prefix.to_ascii_lowercase();
+    tags.iter()
+        .any(|t| t.to_ascii_lowercase().starts_with(&needle))
+}
+
+/// Per-result stage signals recorded when rank-native fusion is enabled,
+/// instead of being folded into `combined_score` as multipliers.
+#[derive(Debug, Clone, Copy, Default)]
+struct FusionSignals {
+    temporal: f64,
+    accessibility: f64,
+    context: f64,
+    utility: f64,
+}
+
+/// Weighted reciprocal-rank fusion of the base relevance list with any number
+/// of (signal values, weight) lists. Returns one fused score per result.
+///
+/// Each list contributes `weight / (k + rank)` with k = 60, the same constant
+/// the core hybrid fusion uses. A signal that is uniform across results (for
+/// example context when no topics were supplied) produces all-tied ranks and
+/// contributes the same constant to every result, so it cannot reorder
+/// anything — no special-casing needed.
+fn fuse_rank_native(base: &[f64], signals: &[(Vec<f64>, f64)]) -> Vec<f64> {
+    const RRF_K: f64 = 60.0;
+    // rank[i] = number of items strictly greater than item i (dense ranking,
+    // ties share a rank), so equal values contribute equally.
+    fn ranks(values: &[f64]) -> Vec<usize> {
+        values
+            .iter()
+            .map(|value| values.iter().filter(|other| **other > *value).count())
+            .collect()
+    }
+    let mut fused = vec![0.0; base.len()];
+    for (index, rank) in ranks(base).into_iter().enumerate() {
+        fused[index] += 1.0 / (RRF_K + rank as f64 + 1.0);
+    }
+    for (values, weight) in signals {
+        for (index, rank) in ranks(values).into_iter().enumerate() {
+            fused[index] += weight / (RRF_K + rank as f64 + 1.0);
+        }
+    }
+    fused
+}
+
+/// Retrieval namespace policy. Every ordinary query is scoped, including a
+/// query that omits `scope`: old clients continue to see their legacy `user`
+/// memories while project memories stay isolated until explicitly named.
+#[derive(Debug, Clone)]
+struct ScopeFilter {
+    scope: String,
+    include_cross_scope: bool,
+}
+
+impl ScopeFilter {
+    fn from_args(args: &SearchArgs) -> Result<Self, String> {
+        let scope = args
+            .scope
+            .as_deref()
+            .unwrap_or(DEFAULT_MEMORY_SCOPE)
+            .trim()
+            .to_string();
+        if scope.is_empty() || scope.len() > 200 || scope.chars().any(char::is_control) {
+            return Err(
+                "Invalid scope: expected a non-empty identifier of at most 200 visible characters"
+                    .to_string(),
+            );
+        }
+        Ok(Self {
+            scope,
+            include_cross_scope: args.include_cross_scope.unwrap_or(false),
+        })
+    }
+
+    fn is_restrictive(&self) -> bool {
+        !self.include_cross_scope
+    }
+
+    fn matches(&self, storage: &Storage, node_id: &str) -> Result<bool, String> {
+        if self.include_cross_scope {
+            Ok(true)
+        } else {
+            storage
+                .node_is_in_scope(node_id, &self.scope)
+                .map_err(|error| error.to_string())
+        }
+    }
+}
+
+fn filter_results_to_scope(
+    storage: &Storage,
+    results: Vec<vestige_core::SearchResult>,
+    scope_filter: &ScopeFilter,
+) -> Result<Vec<vestige_core::SearchResult>, String> {
+    results
+        .into_iter()
+        .try_fold(Vec::new(), |mut kept, result| {
+            if scope_filter.matches(storage, &result.node.id)? {
+                kept.push(result);
+            }
+            Ok(kept)
+        })
 }
 
 /// Validity filter for source-aware search (#57 Phase 4).
@@ -1194,6 +1594,8 @@ fn format_search_result(r: &vestige_core::SearchResult, detail_level: &str) -> V
                 "retentionStrength": r.node.retention_strength,
                 "createdAt": r.node.created_at.to_rfc3339(),
                 "updatedAt": r.node.updated_at.to_rfc3339(),
+                "validFrom": r.node.valid_from.map(|dt| dt.to_rfc3339()),
+                "validUntil": r.node.valid_until.map(|dt| dt.to_rfc3339()),
             });
             attach_source_record(&mut v, &r.node);
             v
@@ -1297,10 +1699,178 @@ mod tests {
             tags: vec![],
             valid_from: None,
             valid_until: None,
+            validity_inferred: false,
             source_envelope: None,
         };
         let node = storage.ingest(input).unwrap();
         node.id
+    }
+
+    #[tokio::test]
+    async fn valid_at_returns_the_fact_true_at_that_time() {
+        let (storage, _dir) = test_storage().await;
+        let historical = storage
+            .ingest(IngestInput {
+                content: "deployment policy requires one approver".to_string(),
+                valid_from: Some("2025-01-01T00:00:00Z".parse().unwrap()),
+                valid_until: Some("2026-01-01T00:00:00Z".parse().unwrap()),
+                ..Default::default()
+            })
+            .unwrap();
+        let current = storage
+            .ingest(IngestInput {
+                content: "deployment policy requires two approvers".to_string(),
+                valid_from: Some("2026-01-01T00:00:00Z".parse().unwrap()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(serde_json::json!({
+                "query": "deployment policy approvers",
+                "concrete": true,
+                "validAt": "2025-06-01"
+            })),
+        )
+        .await
+        .unwrap();
+        let ids: Vec<&str> = response["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|result| result["id"].as_str())
+            .collect();
+        assert!(ids.contains(&historical.id.as_str()));
+        assert!(!ids.contains(&current.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn current_recall_conservatively_downranks_expired_facts() {
+        let (storage, _dir) = test_storage().await;
+        storage
+            .ingest(IngestInput {
+                content: "release policy alpha".to_string(),
+                valid_until: Some(Utc::now() - chrono::Duration::days(1)),
+                ..Default::default()
+            })
+            .unwrap();
+        let current = storage
+            .ingest(IngestInput {
+                content: "release policy alpha current".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let response = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(serde_json::json!({
+                "query": "release policy alpha",
+                "concrete": true
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["results"][0]["id"], current.id);
+    }
+
+    #[tokio::test]
+    async fn malformed_valid_at_is_rejected() {
+        let (storage, _dir) = test_storage().await;
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(serde_json::json!({"query": "policy", "validAt": "last Tuesday"})),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("Invalid validAt"));
+    }
+
+    #[tokio::test]
+    async fn project_scope_prevents_cross_project_retrieval_by_default() {
+        let (storage, _dir) = test_storage().await;
+        let web = storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "backup retention is six daily snapshots for the web app".to_string(),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                },
+                "web-app",
+            )
+            .unwrap();
+        let photo = storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "backup retention is twelve originals for the photo manager"
+                        .to_string(),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                },
+                "photo-manager",
+            )
+            .unwrap();
+
+        let config = OutputConfig::default();
+        let scoped = execute(
+            &storage,
+            &test_cognitive(),
+            &config,
+            Some(serde_json::json!({
+                "query": "backup retention",
+                "concrete": true,
+                "scope": "web-app",
+            })),
+        )
+        .await
+        .expect("scoped recall succeeds");
+        let scoped_ids: Vec<&str> = scoped["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|result| result["id"].as_str())
+            .collect();
+        assert!(scoped_ids.contains(&web.id.as_str()));
+        assert!(!scoped_ids.contains(&photo.id.as_str()));
+
+        let default_scope = execute(
+            &storage,
+            &test_cognitive(),
+            &config,
+            Some(serde_json::json!({ "query": "backup retention", "concrete": true })),
+        )
+        .await
+        .expect("default scoped recall succeeds");
+        assert_eq!(default_scope["scope"], DEFAULT_MEMORY_SCOPE);
+        assert_eq!(
+            default_scope["total"], 0,
+            "unscoped recall must not bleed projects"
+        );
+
+        let cross_scope = execute(
+            &storage,
+            &test_cognitive(),
+            &config,
+            Some(serde_json::json!({
+                "query": "backup retention",
+                "concrete": true,
+                "includeCrossScope": true,
+            })),
+        )
+        .await
+        .expect("explicit cross-scope recall succeeds");
+        let cross_ids: Vec<&str> = cross_scope["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|result| result["id"].as_str())
+            .collect();
+        assert!(cross_ids.contains(&web.id.as_str()));
+        assert!(cross_ids.contains(&photo.id.as_str()));
     }
 
     // ========================================================================
@@ -2079,6 +2649,45 @@ mod tests {
     // ========================================================================
 
     #[test]
+    fn rank_native_fusion_joins_ranked_lists_not_multipliers() {
+        // Property 1: a single sub-1.0-weight signal can NEVER overturn an
+        // adjacent base step — that is the advisory contract, and exactly
+        // what multiplier stacking violated (one large multiplier could
+        // swamp base relevance entirely).
+        let base = vec![0.9, 0.5, 0.4];
+        let access = vec![0.05, 0.05, 1.0];
+        let fused = fuse_rank_native(&base, &[(access, 0.30)]);
+        assert!(fused[0] > fused[1] && fused[1] > fused[2]);
+
+        // Property 2: signals ACCUMULATE. When every stage agrees across a
+        // wide rank gap, the tail item genuinely overtakes: six results,
+        // last-by-relevance but first on all four signals beats the
+        // second-by-relevance that every signal ranks last.
+        let base = vec![0.9, 0.8, 0.7, 0.6, 0.5, 0.4];
+        let favoring_last = vec![0.1, 0.0, 0.2, 0.3, 0.4, 1.0];
+        let signals: Vec<(Vec<f64>, f64)> = vec![
+            (favoring_last.clone(), 0.15),
+            (favoring_last.clone(), 0.30),
+            (favoring_last.clone(), 0.30),
+            (favoring_last, 0.15),
+        ];
+        let fused = fuse_rank_native(&base, &signals);
+        assert!(
+            fused[5] > fused[1],
+            "agreeing signals across a wide gap must be able to reorder"
+        );
+        assert!(fused[0] > fused[5] || fused[0] > fused[1], "base still anchors the head");
+    }
+
+    #[test]
+    fn uniform_signals_cannot_reorder_anything() {
+        let base = vec![0.9, 0.5, 0.4];
+        let uniform = vec![0.0, 0.0, 0.0];
+        let fused = fuse_rank_native(&base, &[(uniform.clone(), 0.30), (uniform, 0.15)]);
+        assert!(fused[0] > fused[1] && fused[1] > fused[2]);
+    }
+
+    #[test]
     fn test_tags_match_prefix_unit() {
         let with_meeting = vec!["meeting:standup".to_string(), "team".to_string()];
         let without_meeting = vec!["adhoc".to_string(), "team".to_string()];
@@ -2091,8 +2700,21 @@ mod tests {
         // wildcard" semantics — a tagless memory has no tag-prefix to satisfy.
         assert!(tags_match_prefix(&with_meeting, ""));
         assert!(!tags_match_prefix(&tagless, ""));
-        // Case-sensitive (consistent with existing exact-tag matching).
-        assert!(!tags_match_prefix(&with_meeting, "Meeting:"));
+        // Case-INSENSITIVE. This assertion previously required the opposite,
+        // justified as "consistent with existing exact-tag matching" -- but that
+        // premise was false. The storage-layer tag filter is
+        // `tags LIKE '%"tag"%'`, and SQLite's LIKE is case-insensitive for ASCII
+        // by default (verified directly: both '%"reflection"%' and
+        // '%"Reflection"%' match a stored "reflection"). So this Rust-side filter
+        // was the ONE path that was case-sensitive, and it disagreed with the
+        // SQL path it claimed to be consistent with.
+        //
+        // A user hit this in production on 2026-08-15: filtering on `Reflection`
+        // returned zero results, `reflection` returned the expected set, and
+        // nothing reported an error. For a memory system a silent zero is the
+        // worst possible answer -- it is indistinguishable from "you never
+        // learned this".
+        assert!(tags_match_prefix(&with_meeting, "Meeting:"));
         // Prefix must match from the start, not anywhere in the tag value.
         assert!(!tags_match_prefix(&with_meeting, "standup"));
     }
@@ -2282,6 +2904,7 @@ mod tests {
             tags: tags.into_iter().map(String::from).collect(),
             valid_from: None,
             valid_until: None,
+            validity_inferred: false,
             source_envelope: None,
         };
         let node = storage.ingest(input).unwrap();
@@ -2545,5 +3168,41 @@ mod tests {
         if let Some(first) = value["results"].as_array().and_then(|a| a.first()) {
             assert!(first.get("createdAt").is_some(), "default keeps timestamps");
         }
+    }
+}
+
+#[cfg(test)]
+mod tag_case_tests {
+    use super::tags_match_prefix;
+
+    /// Reported 2026-08-15: a capital letter in a tag filter silently returned
+    /// zero results. A memory system must never make "you typed it differently"
+    /// indistinguishable from "you never learned this".
+    #[test]
+    fn tag_prefix_match_ignores_case_in_both_directions() {
+        let stored = vec!["reflection".to_string(), "vestige".to_string()];
+        assert!(
+            tags_match_prefix(&stored, "Reflection"),
+            "capitalised query must match"
+        );
+        assert!(
+            tags_match_prefix(&stored, "reflection"),
+            "lowercase query must still match"
+        );
+        assert!(
+            tags_match_prefix(&stored, "REFLECT"),
+            "shouty prefix must match"
+        );
+
+        let stored_caps = vec!["Reflection".to_string()];
+        assert!(
+            tags_match_prefix(&stored_caps, "reflection"),
+            "capitalised STORED tag must match"
+        );
+
+        assert!(
+            !tags_match_prefix(&stored, "unrelated"),
+            "a genuine miss must still miss"
+        );
     }
 }

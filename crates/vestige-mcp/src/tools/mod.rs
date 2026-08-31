@@ -2,10 +2,9 @@
 //!
 //! Tool implementations for the Vestige MCP server.
 //!
-//! v2.2 Tool Consolidation (Layer 1): the advertised surface is 12 tools —
-//! recall, memory, codebase, intention, smart_ingest, source_sync,
-//! memory_status, dedup, graph, maintain, session_start, suppress. The unified
-//! facade modules (recall, dedup, memory_status, graph_unified, maintain, plus
+//! v2.3 advertised surface is 14 tools: the v2.2 consolidated 12 plus the
+//! controlled `receipt` surface and the flagship `backfill` primitive. The
+//! unified facade modules (recall, dedup, memory_status, graph_unified, maintain, plus
 //! the earlier *_unified) dispatch on an action/mode/view discriminator and
 //! delegate to the granular handler modules below, which stay in the crate as
 //! the implementation layer and as hidden back-compat aliases (see the redirect
@@ -21,6 +20,7 @@ pub mod search_unified;
 // cross_reference + contradictions into one mode-dispatched tool.
 // mode=lookup (default) is a zero-overhead pass-through to search_unified.
 pub mod recall;
+pub mod receipt;
 pub mod smart_ingest;
 // #57: external-source connectors (GitHub Issues / Redmine retrieval layer)
 pub mod source_sync;
@@ -38,6 +38,7 @@ pub mod maintain;
 
 // v2.2: Unified status surface — folds system_status + memory_health +
 // memory_timeline + memory_changelog into one view-dispatched tool.
+pub mod hygiene_stats;
 pub mod memory_status;
 
 // v1.3: Auto-save and dedup tools

@@ -68,14 +68,20 @@
 //! # }
 //! ```
 
+pub mod anchor;
 pub mod context;
 pub mod git;
 pub mod patterns;
 pub mod relationships;
+pub mod staleness;
 pub mod types;
 pub mod watcher;
 
 // Re-export main types
+pub use anchor::{
+    AnchorDraft, AnchorStatus, AnchorVerification, CodeAnchor, MAX_ANCHORED_FILE_BYTES,
+    MAX_SPAN_LINES, capture_anchor, find_symbol_definition, hash_span, verify_anchor,
+};
 pub use context::{ContextCapture, FileContext, Framework, ProjectType, WorkingContext};
 pub use git::{CommitInfo, GitAnalyzer, GitContext, HistoryAnalysis};
 pub use patterns::{PatternDetector, PatternMatch, PatternSuggestion};

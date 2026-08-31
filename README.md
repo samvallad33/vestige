@@ -3,11 +3,11 @@
 Local-first long-term memory for AI agents, delivered over MCP. Vestige remembers your decisions, catches contradictions before they cost you, and traces a failure back to the older memory that actually caused it. One 25MB Rust binary. No cloud. Your data never leaves your machine.
 
 [![Release](https://img.shields.io/github/v/release/samvallad33/vestige?color=06b6d4)](https://github.com/samvallad33/vestige/releases/latest)
-[![Tests](https://img.shields.io/badge/tests-1558_passing-22c55e)](https://github.com/samvallad33/vestige/actions)
+[![Tests](https://img.shields.io/badge/tests-1550_passing-22c55e)](https://github.com/samvallad33/vestige/actions)
 [![Binary](https://img.shields.io/badge/binary-25MB_single_file-informational)](https://github.com/samvallad33/vestige/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6)](LICENSE)
 
-[What it is](#what-vestige-is) · [Install](#install) · [First interaction](#your-first-real-interaction) · [vs RAG](#how-it-differs-from-rag) · [Backward reach](#backward-reach-the-backfill-feature) · [Benchmark](#silent-rotation-a-reproducible-benchmark) · [Science](#the-science) · [Tools](#the-13-tools) · [Dashboard](#the-dashboard) · [Integrations](#works-with-every-agent) · [Docs](#go-deeper)
+[What it is](#what-vestige-is) · [Install](#install) · [First interaction](#your-first-real-interaction) · [vs RAG](#how-it-differs-from-rag) · [Backward reach](#backward-reach-the-backfill-feature) · [Benchmark](#silent-rotation-a-reproducible-benchmark) · [Science](#the-science) · [Tools](#the-14-tools) · [Receipts](docs/DECISION_RECEIPTS.md) · [Dashboard](#the-dashboard) · [Integrations](#works-with-every-agent) · [Pro](#vestige-pro) · [Docs](#go-deeper)
 
 ---
 
@@ -33,7 +33,9 @@ No Docker, no API key, no signup.
 npm install -g vestige-mcp-server@latest
 ```
 
-This installs the `vestige-mcp` command. Prebuilt binaries ship for macOS (Apple Silicon and Intel), Linux x86_64, and Windows x86_64, so there is no compile step.
+This installs the `vestige-mcp` command. Prebuilt binaries ship for macOS (Apple Silicon and Intel), Linux x86_64 (Ubuntu 22.04, Debian 12, and newer), and Windows x86_64, so there is no compile step.
+
+If a global pnpm install skipped its postinstall hook, the command launcher retries the local binary installation on its first invocation. It reports that recovery on stderr, preserving MCP stdout for protocol messages.
 
 ### 2. Connect it to your agent
 
@@ -61,7 +63,7 @@ If you prefer the CLI, use the one-line shortcut for your agent:
 
 ### 3. Verify
 
-Vestige starts without downloading or switching any model. Nomic Compact remains the local baseline; optional embedding profiles are installed only through an explicit, verified profile workflow. To confirm the server is healthy, open the dashboard:
+On first run, Vestige downloads its embedding model once (about 130MB). After that it never needs the network again. To confirm the server is healthy, open the dashboard:
 
 ```bash
 vestige dashboard
@@ -84,6 +86,8 @@ Later, someone tells the agent the opposite:
 > Our primary datastore is MySQL.
 
 When the agent tries to store that, Vestige does not silently append it. The engine returns a `claim_contradicts_memory` status and surfaces the older, conflicting memory, so the agent can resolve the conflict instead of quietly holding two incompatible facts.
+
+After a successful tool call, Vestige persists a retrieval receipt when that call has one, then records any Memory PR review evidence. That evidence is a post-commit record of the completed call; it is not a pre-execution block on the tool.
 
 The other command you will reach for is backfill. When something breaks, run:
 
@@ -175,25 +179,30 @@ Every mechanism below is a cited result, implemented in Rust, running locally. N
 
 ---
 
-## The 13 tools
+## The 14 tools
 
-Vestige exposes exactly 13 MCP tools. Your agent calls them; you rarely call them by hand.
+Vestige exposes exactly 14 MCP tools. Your agent calls them; you rarely call them by hand.
 
 | Tool | Purpose |
 |---|---|
 | `recall` | Retrieve memories relevant to the current context |
+| `receipt` | Inspect a persisted retrieval receipt or run controlled evidence replay ([guide](docs/DECISION_RECEIPTS.md)) |
 | `backfill` | Reach backward from a failure to its root-cause memory |
 | `smart_ingest` | Store a fact, with gating for novelty and contradiction |
 | `memory` | Read, inspect, promote, or demote individual memories |
 | `graph` | Explore the memory graph and its links |
 | `maintain` | Run consolidation and lifecycle maintenance |
-| `dedup` | Find and merge duplicate memories |
+| `dedup` | Find/merge duplicate memories and safely preview, apply, audit, or undo exact tag renames/merges |
 | `suppress` | Actively forget a memory (reversible for 24h) |
-| `memory_status` | Report health, counts, and model readiness |
+| `memory_status` | Report health, counts, model readiness, and full-store agent hygiene statistics |
 | `codebase` | Index and query codebase-scoped memory |
 | `intention` | Track goals and open intentions across sessions |
 | `source_sync` | Sync memories from external connected sources |
 | `session_start` | Prime the agent with relevant context at session start |
+
+Memories can carry a project namespace through `smart_ingest`'s `scope`. Retrieval defaults to the legacy `user` namespace, so a project memory does not appear in an unscoped recall; pass `includeCrossScope: true` only when cross-project retrieval is intentional. This is relevance isolation, not authentication or an ACL.
+
+For agent-driven store cleanup, see [Memory hygiene and tag maintenance](docs/MEMORY_HYGIENE.md). It documents strict `as of YYYY-MM-DD` inference, pre-write similar-tag nudges, confirmation-token tag operations, reversible audit history, and `memory_status(view="stats")`.
 
 ---
 
@@ -248,6 +257,26 @@ This is opt-in. Vestige works fine with no protocol at all.
 
 ---
 
+## Vestige Pro
+
+Everything above is free forever and never metered. The engine runs on your machine, with no account, no quota, and no upsell inside the product.
+
+Vestige Pro is for when that memory needs to follow you. It is managed, end-to-end encrypted continuity of your memory graph and your accountability history (Black Box traces, receipts, memory PRs) across every machine you work on. You record a decision on the laptop, and the agent on the desktop already knows it.
+
+| | Detail |
+|---|---|
+| Price | $19/month |
+| What syncs | Your memory graph plus your accountability history |
+| Encryption | XChaCha20-Poly1305, applied on your machine before anything is uploaded |
+| Key derivation | Argon2id over a passphrase you choose |
+| What the server holds | Ciphertext only |
+
+Zero-knowledge is the design, not a setting. You pick one passphrase, you use the same one on every device, and it never leaves your machine. The server stores bytes it cannot read, and the client refuses to sync anything in plaintext. If you lose that passphrase, the encrypted data is unrecoverable, by me and by anyone else. That is the property you are paying for, not a gap in it.
+
+**Availability.** Checkout is not open yet, so there is nothing to buy today and no payment link here pretending otherwise. The client half already ships in this release, which is why `vestige sync --cloud` exists and tells you what it needs. Subscriptions open shortly. To catch the announcement, watch [Releases](https://github.com/samvallad33/vestige/releases) or follow [Discussions](https://github.com/samvallad33/vestige/discussions).
+
+---
+
 ## Under the hood
 
 Vestige is a single Rust binary. No sidecar services, no external database, no cloud dependency.
@@ -260,11 +289,13 @@ Vestige is a single Rust binary. No sidecar services, no external database, no c
 | Reranker | Qwen3 reranker, optional |
 | Vector search | USearch HNSW |
 | Storage | SQLite with FTS5, optional SQLCipher encryption |
-| Embedding setup | No background model download; optional profiles are explicitly installed, verified, evaluated, migrated, and activated locally |
+| First run | Downloads about 130MB embedding model once, then fully offline forever |
 | Platforms | macOS (ARM + Intel), Linux x86_64, Windows x86_64, all prebuilt |
-| Quality | 1,558 tests passing, clippy clean with `-D warnings` |
+| Quality | 1,550 tests passing, clippy clean with `-D warnings` |
 
 Storage internals and encryption: [docs/STORAGE.md](docs/STORAGE.md).
+
+The workspace also contains `vestige-spacetime`, a compile-first Rust substrate that keeps its algorithms apart from the existing storage and MCP types. It has no migration, storage adapter, or MCP wiring here, so it does not claim runtime activation across every path.
 
 ---
 

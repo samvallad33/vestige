@@ -281,6 +281,10 @@ async fn main() {
         .with_writer(io::stderr)
         .with_target(false)
         .with_ansi(false)
+        // MCP stdio clients can close stderr before stdin.  The formatter's
+        // default fallback tries `eprintln!` after a failed stderr write,
+        // which panics on that same closed descriptor during shutdown.
+        .log_internal_errors(false)
         .init();
 
     info!(
@@ -309,11 +313,33 @@ async fn main() {
         }
     };
 
-    // Embedding models are an explicit, profile-scoped capability.  In
-    // particular, starting an MCP process must never download a model, mutate
-    // an index, or silently re-embed a user's corpus.  The Embedding Profiles
-    // workflow is the only path permitted to install, migrate, and activate a
-    // profile; until then retrieval safely remains keyword-only.
+    // Preserve the released Nomic default in the background so MCP clients can
+    // finish their stdio handshake before a first-run model download. Optional
+    // profiles reject this compatibility path: their artifact verification,
+    // evaluation, migration, and activation remain explicit local operations.
+    #[cfg(feature = "embeddings")]
+    {
+        let storage_clone = Arc::clone(&storage);
+        tokio::task::spawn_blocking(move || {
+            if let Err(error) = storage_clone.init_embeddings() {
+                tracing::debug!(%error, "No legacy Nomic embedding runtime started");
+                return;
+            }
+            info!("Legacy Nomic embedding service initialized successfully");
+
+            #[cfg(feature = "vector-search")]
+            match storage_clone.generate_embeddings(None, false) {
+                Ok(result) if result.successful > 0 || result.failed > 0 => info!(
+                    embeddings_generated = result.successful,
+                    embeddings_failed = result.failed,
+                    embeddings_skipped = result.skipped,
+                    "Background legacy Nomic embedding backfill complete"
+                ),
+                Ok(_) => {}
+                Err(error) => warn!(%error, "Background legacy Nomic embedding backfill failed"),
+            }
+        });
+    }
 
     // Spawn periodic auto-consolidation so FSRS-6 decay scores stay fresh.
     // Runs on startup (if needed) and then every N hours (default: 6).
@@ -496,9 +522,17 @@ async fn main() {
         info!("HTTP MCP transport disabled; set VESTIGE_HTTP_ENABLED=1 or pass --http to enable");
     }
 
-    // Do not pre-warm optional model-backed retrieval components here.  The
-    // server process is allowed to start without mutating model caches or
-    // reaching the network; explicit profile operations own those effects.
+    // Load cross-encoder reranker in the background (downloads ~150MB on first run)
+    #[cfg(all(feature = "vector-search", feature = "embeddings"))]
+    {
+        let cog_clone = Arc::clone(&cognitive);
+        tokio::spawn(async move {
+            // Small delay so we don't block the stdio handshake
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let mut cog = cog_clone.lock().await;
+            cog.reranker.init_cross_encoder();
+        });
+    }
 
     // Create MCP server with shared event channel for dashboard broadcasts
     let server = McpServer::new_with_events(storage, cognitive, event_tx);

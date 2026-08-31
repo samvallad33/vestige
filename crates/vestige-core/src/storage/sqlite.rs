@@ -36,6 +36,7 @@ use crate::memory::{
 };
 #[cfg(all(feature = "embeddings", feature = "vector-search"))]
 use crate::memory::{EmbeddingResult, SimilarityResult};
+use crate::security::{SecretFinding, SecretPolicy, scan_secrets};
 use crate::storage::portable::{
     PORTABLE_ARCHIVE_FORMAT, PortableArchive, PortableImportMode, PortableImportReport,
     PortableTable, PortableValue, encode_hex,
@@ -77,6 +78,14 @@ pub enum StorageError {
     /// Initialization error
     #[error("Initialization error: {0}")]
     Init(String),
+    /// A likely credential was detected before any write side effect.
+    #[error(
+        "Refused to store probable credential(s): {kinds:?}. Secret bytes were not stored, logged, or returned. Redact the value or use an explicit allow-secrets override only when intentional."
+    )]
+    SecretDetected { kinds: Vec<String> },
+    /// A project namespace must be a short, non-empty identifier.
+    #[error("Invalid memory scope: {0}")]
+    InvalidScope(String),
     /// A profile operation would violate the explicit/reversible embedding
     /// profile contract.
     #[error("Invalid embedding profile: {0}")]
@@ -85,6 +94,237 @@ pub enum StorageError {
 
 /// Storage result type
 pub type Result<T> = std::result::Result<T, StorageError>;
+
+/// Namespace used by existing, unscoped callers and by rows written before
+/// project scopes were exposed. Scoped callers must opt into a different value.
+pub const DEFAULT_MEMORY_SCOPE: &str = "user";
+const MAX_TAG_MUTATION_MEMORIES: usize = 50_000;
+const MAX_TAG_MUTATION_AUDIT_BYTES: usize = 16 * 1024 * 1024;
+/// Retention window for `memory_access_log` rows. `prune_access_log` deletes
+/// everything older on every consolidation, so any "never accessed" claim is
+/// only meaningful for memories created inside this window.
+pub const ACCESS_LOG_RETENTION_DAYS: i64 = 90;
+/// Cap on the malformed-row id list surfaced by [`HygieneSnapshot`].
+const MAX_MALFORMED_TAG_ROW_IDS: usize = 50;
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only fail point armed by regression tests to prove the tag
+    /// UPDATE loop and its audit INSERT share one SQLite transaction: an
+    /// injected failure between them must roll back both. Invisible in
+    /// release builds.
+    static FAIL_TAG_MUTATION_BEFORE_AUDIT: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+type TagMutationState = (
+    std::collections::BTreeMap<String, usize>,
+    usize,
+    Vec<(String, Vec<String>, Vec<String>)>,
+);
+
+/// Content-bounded row used to compute full-store hygiene statistics without
+/// loading every memory body or issuing per-memory access-log queries.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HygieneNodeSummary {
+    pub id: String,
+    pub node_type: String,
+    pub created_at: DateTime<Utc>,
+    pub retention_strength: f64,
+    pub tags: Vec<String>,
+    pub valid_from: Option<DateTime<Utc>>,
+    pub valid_until: Option<DateTime<Utc>>,
+    pub superseded: bool,
+    pub content_bytes: usize,
+    pub content_preview: String,
+    /// No access evidence exists AND the memory was created inside the
+    /// retained access-log window, so the absence of log rows is meaningful.
+    pub never_accessed: bool,
+    /// No access evidence exists but the memory predates the retained
+    /// access-log window: pruning makes past access unknowable, so this row
+    /// must never be claimed as never-accessed.
+    pub access_unknown: bool,
+}
+
+/// Full hygiene population plus row-corruption findings. Malformed rows are
+/// tolerated (mirroring `row_to_node`) and reported instead of aborting the
+/// whole stats view, because hand-edited stores are exactly where hygiene
+/// tooling is needed most.
+#[derive(Debug, Clone)]
+pub struct HygieneSnapshot {
+    pub nodes: Vec<HygieneNodeSummary>,
+    /// Rows whose stored `tags` column is NULL or unparseable JSON; their
+    /// tags are treated as empty in `nodes`.
+    pub malformed_tag_rows: usize,
+    /// Capped id list for the malformed rows (first
+    /// [`MAX_MALFORMED_TAG_ROW_IDS`] in id order).
+    pub malformed_tag_row_ids: Vec<String>,
+    pub malformed_tag_row_ids_truncated: bool,
+    /// Rows whose nullable `retention_strength` was NULL and fell back to the
+    /// schema default of 1.0.
+    pub defaulted_retention_rows: usize,
+}
+
+/// Exact tag vocabulary for one scope plus the count of stored tags that were
+/// skipped because they exceed the 200-character similarity safety limit.
+/// Overlong stored tags degrade gracefully (skip-and-count) instead of
+/// disabling suggestions for the whole scope.
+#[derive(Debug, Clone)]
+pub struct TagVocabulary {
+    pub tags: Vec<String>,
+    pub skipped_overlong: usize,
+}
+
+fn temporal_candidate_is_eligible(
+    incoming_from: Option<DateTime<Utc>>,
+    incoming_until: Option<DateTime<Utc>>,
+    existing_from: Option<DateTime<Utc>>,
+    existing_is_current: bool,
+    now: DateTime<Utc>,
+) -> bool {
+    let incoming_is_older = match (incoming_from, existing_from) {
+        (Some(incoming), Some(existing)) => incoming < existing,
+        _ => false,
+    };
+    let incoming_is_expired = incoming_until.is_some_and(|until| until < now);
+    !incoming_is_older && !(incoming_is_expired && existing_is_current)
+}
+
+#[cfg(test)]
+mod temporal_candidate_tests {
+    use super::temporal_candidate_is_eligible;
+    use chrono::{Duration, Utc};
+
+    #[test]
+    fn older_dated_summary_cannot_mutate_newer_current_policy() {
+        let now = Utc::now();
+        assert!(!temporal_candidate_is_eligible(
+            Some(now - Duration::days(365)),
+            Some(now - Duration::days(180)),
+            Some(now - Duration::days(30)),
+            true,
+            now,
+        ));
+    }
+
+    #[test]
+    fn newer_policy_remains_eligible_to_replace_an_older_fact() {
+        let now = Utc::now();
+        assert!(temporal_candidate_is_eligible(
+            Some(now),
+            None,
+            Some(now - Duration::days(30)),
+            true,
+            now,
+        ));
+    }
+}
+
+/// Environment variable selecting the SQLite commit-durability policy.
+pub const VESTIGE_SQLITE_DURABILITY_ENV: &str = "VESTIGE_SQLITE_DURABILITY";
+
+/// SQLite durability policy for persistent Vestige databases.
+///
+/// `Hardened` is the default and acknowledges a commit only after SQLite has
+/// used its FULL WAL synchronization path. `Balanced` preserves the historical
+/// WAL + NORMAL behavior for operators who explicitly accept the power-loss
+/// window in exchange for lower write latency.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SqliteDurabilityProfile {
+    /// WAL + FULL, with macOS full-fsync requests enabled.
+    #[default]
+    Hardened,
+    /// WAL + NORMAL, preserving the pre-hardening performance profile.
+    Balanced,
+}
+
+impl SqliteDurabilityProfile {
+    /// Stable lowercase profile name used in status output and configuration.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hardened => "hardened",
+            Self::Balanced => "balanced",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "hardened" => Ok(Self::Hardened),
+            "balanced" => Ok(Self::Balanced),
+            _ => Err(StorageError::Init(format!(
+                "Invalid {VESTIGE_SQLITE_DURABILITY_ENV} value '{value}'; expected hardened|balanced"
+            ))),
+        }
+    }
+
+    fn from_env() -> Result<Self> {
+        match std::env::var(VESTIGE_SQLITE_DURABILITY_ENV) {
+            Ok(value) => Self::parse(&value),
+            Err(std::env::VarError::NotPresent) => Ok(Self::default()),
+            Err(std::env::VarError::NotUnicode(_)) => Err(StorageError::Init(format!(
+                "{VESTIGE_SQLITE_DURABILITY_ENV} must be valid UTF-8 and one of hardened|balanced"
+            ))),
+        }
+    }
+}
+
+/// Effective SQLite PRAGMAs read back from one live connection.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteConnectionPragmas {
+    pub journal_mode: String,
+    pub synchronous: i64,
+    pub synchronous_label: String,
+    pub fullfsync_enabled: bool,
+    pub fullfsync_meaningful_on_this_platform: bool,
+    pub checkpoint_fullfsync_enabled: bool,
+    pub wal_autocheckpoint_pages: i64,
+    pub foreign_keys_enabled: bool,
+    pub busy_timeout_ms: i64,
+}
+
+/// Result of integrity and V21 receipt-consistency checks at one startup phase.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteIntegrityStatus {
+    pub quick_check: String,
+    pub foreign_key_violations: u64,
+    pub synaptic_checks_applied: bool,
+    pub synaptic_consistency_violations: u64,
+}
+
+/// SQLite WAL checkpoint mode exposed for explicit lifecycle operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalCheckpointMode {
+    /// Checkpoint as many frames as possible without blocking active readers.
+    Passive,
+    /// Checkpoint and truncate the WAL after application writes have stopped.
+    Truncate,
+}
+
+/// Raw `wal_checkpoint` counters reported by SQLite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WalCheckpointStatus {
+    pub busy: i64,
+    pub log_frames: i64,
+    pub checkpointed_frames: i64,
+}
+
+/// Verified startup durability and recovery state retained by the store.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteDurabilityStatus {
+    pub profile: SqliteDurabilityProfile,
+    pub writer: SqliteConnectionPragmas,
+    pub reader: SqliteConnectionPragmas,
+    pub before_migrations: SqliteIntegrityStatus,
+    pub after_migrations: SqliteIntegrityStatus,
+    pub startup_checkpoint: WalCheckpointStatus,
+    pub commit_acknowledgement: String,
+    pub claim_boundary: String,
+}
 
 /// Result of smart ingest with prediction error gating
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -111,6 +351,10 @@ pub struct SmartIngestResult {
     /// Full updated content after a merge/append/context write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge_preview: Option<String>,
+    /// World-time close stamped onto a newly created dated claim that is
+    /// already superseded by a currently-valid fact starting later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_closed_until: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,6 +497,14 @@ pub struct PurgeReport {
     pub insights_deleted: i64,
     /// Number of temporal-summary children detached from this parent.
     pub children_orphaned: i64,
+    /// This established purge path audits legacy local cleanup only.  It does
+    /// not claim the post-V25 lineage coverage required for verified local
+    /// machine unlearning.
+    pub unlearning_scope: crate::storage::UnlearningScope,
+    /// Legacy purge is intentionally never labeled `VerifiedWithinScope`.
+    pub unlearning_verdict: crate::storage::UnlearningVerdict,
+    /// Fixed boundary shown by MCP callers rather than a free-form guarantee.
+    pub unlearning_claim_boundary: &'static str,
 }
 
 /// Persistent vector row belonging to exactly one embedding profile.
@@ -381,6 +633,17 @@ struct PortableMergeState {
     locally_newer_nodes: HashSet<String>,
 }
 
+/// Effects produced by the shared local/portable deletion coordinator.
+///
+/// Keeping these counters separate from the public report lets portable sync
+/// execute the identical cleanup inside its existing merge transaction.
+pub(crate) struct PurgeCleanup {
+    edges_pruned: i64,
+    insights_rewritten: i64,
+    insights_deleted: i64,
+    children_orphaned: i64,
+}
+
 const DATA_DIR_ENV: &str = "VESTIGE_DATA_DIR";
 const DATABASE_FILE: &str = "vestige.db";
 const VESTIGE_DISABLE_VECTOR_SEARCH: &str = "VESTIGE_DISABLE_VECTOR_SEARCH";
@@ -396,6 +659,7 @@ pub const LEGACY_EMBEDDING_PROFILE_ID: &str = "nomic-v1.5-legacy-raw-256";
 /// so the MCP layer can use `Arc<Storage>` instead of `Arc<Mutex<Storage>>`.
 pub struct SqliteMemoryStore {
     db_path: PathBuf,
+    durability_status: SqliteDurabilityStatus,
     // `pub(crate)` so the sibling `trace_store` module (Black Box / Receipts /
     // Memory PRs CRUD) can lock the same writer/reader connections and follow
     // the established store idiom without duplicating connection management.
@@ -416,6 +680,15 @@ pub struct SqliteMemoryStore {
     attached_profile_runtime: RwLock<Option<AttachedProfileRuntime>>,
     /// Cached model signature. `None` until the first embedding is written.
     registered_model: std::sync::RwLock<Option<crate::storage::memory_store::ModelSignature>>,
+    /// Last `PRAGMA data_version` observed on the reader connection.
+    ///
+    /// SQLite increments this on a connection whenever ANOTHER connection commits
+    /// to the database. It is the cheapest possible cross-process change signal --
+    /// no table scan, no file stat -- and it is what lets a long-lived process
+    /// notice that a peer has written memories it has never seen. See
+    /// `refresh_vector_index_if_stale`.
+    #[cfg(feature = "vector-search")]
+    last_seen_data_version: Mutex<i64>,
 }
 
 #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -488,9 +761,11 @@ impl SqliteMemoryStore {
     fn regular_ingest_result(
         &self,
         input: IngestInput,
+        scope: &str,
         reason: impl Into<String>,
+        policy: SecretPolicy,
     ) -> Result<SmartIngestResult> {
-        let node = self.ingest(input)?;
+        let node = self.ingest_in_scope_with_secret_policy(input, scope, policy)?;
         Ok(SmartIngestResult {
             decision: "create".to_string(),
             node,
@@ -501,6 +776,7 @@ impl SqliteMemoryStore {
             previous_content: None,
             merged_from: None,
             merge_preview: None,
+            auto_closed_until: None,
         })
     }
 
@@ -568,8 +844,12 @@ impl SqliteMemoryStore {
         Self::prepare_data_dir(proj_dirs.data_dir().to_path_buf())
     }
 
-    /// Apply PRAGMAs and optional encryption to a connection
-    fn configure_connection(conn: &Connection) -> Result<()> {
+    /// Apply PRAGMAs and optional encryption to a connection.
+    fn configure_connection(
+        conn: &Connection,
+        profile: SqliteDurabilityProfile,
+        writer: bool,
+    ) -> Result<()> {
         // Apply encryption key if SQLCipher is enabled and key is provided
         #[cfg(feature = "encryption")]
         {
@@ -580,24 +860,559 @@ impl SqliteMemoryStore {
             }
         }
 
-        // Configure SQLite for performance
+        // WAL is persistent database state, so only the writer requests the
+        // transition. Every connection still receives its own synchronous,
+        // foreign-key, timeout, and full-fsync settings.
+        if writer {
+            conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+        }
+
+        let durability_pragmas = match profile {
+            SqliteDurabilityProfile::Hardened => {
+                "PRAGMA synchronous = FULL;
+                 PRAGMA fullfsync = ON;
+                 PRAGMA checkpoint_fullfsync = ON;"
+            }
+            SqliteDurabilityProfile::Balanced => {
+                "PRAGMA synchronous = NORMAL;
+                 PRAGMA fullfsync = OFF;
+                 PRAGMA checkpoint_fullfsync = OFF;"
+            }
+        };
+        conn.execute_batch(durability_pragmas)?;
         conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
-             PRAGMA cache_size = -64000;
+            "PRAGMA cache_size = -64000;
              PRAGMA temp_store = MEMORY;
              PRAGMA foreign_keys = ON;
              PRAGMA busy_timeout = 5000;
              PRAGMA mmap_size = 268435456;
-             PRAGMA journal_size_limit = 67108864;
-             PRAGMA optimize = 0x10002;",
+             PRAGMA wal_autocheckpoint = 1000;
+             PRAGMA journal_size_limit = 67108864;",
         )?;
 
         Ok(())
     }
 
+    fn read_effective_pragmas(conn: &Connection) -> Result<SqliteConnectionPragmas> {
+        let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+        let synchronous: i64 = conn.query_row("PRAGMA synchronous", [], |row| row.get(0))?;
+        let fullfsync: i64 = conn.query_row("PRAGMA fullfsync", [], |row| row.get(0))?;
+        let checkpoint_fullfsync: i64 =
+            conn.query_row("PRAGMA checkpoint_fullfsync", [], |row| row.get(0))?;
+        let wal_autocheckpoint_pages: i64 =
+            conn.query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))?;
+        let foreign_keys: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+        let busy_timeout_ms: i64 = conn.query_row("PRAGMA busy_timeout", [], |row| row.get(0))?;
+        let synchronous_label = match synchronous {
+            0 => "off",
+            1 => "normal",
+            2 => "full",
+            3 => "extra",
+            _ => "unknown",
+        }
+        .to_string();
+
+        Ok(SqliteConnectionPragmas {
+            journal_mode: journal_mode.to_ascii_lowercase(),
+            synchronous,
+            synchronous_label,
+            fullfsync_enabled: fullfsync != 0,
+            fullfsync_meaningful_on_this_platform: cfg!(target_os = "macos"),
+            checkpoint_fullfsync_enabled: checkpoint_fullfsync != 0,
+            wal_autocheckpoint_pages,
+            foreign_keys_enabled: foreign_keys != 0,
+            busy_timeout_ms,
+        })
+    }
+
+    fn verify_effective_pragmas(
+        profile: SqliteDurabilityProfile,
+        role: &str,
+        pragmas: &SqliteConnectionPragmas,
+    ) -> Result<()> {
+        if !pragmas.foreign_keys_enabled {
+            return Err(StorageError::Init(format!(
+                "SQLite {role} connection refused foreign_keys=ON"
+            )));
+        }
+        if profile == SqliteDurabilityProfile::Hardened {
+            if pragmas.journal_mode != "wal" {
+                return Err(StorageError::Init(format!(
+                    "Hardened SQLite startup refused durability downgrade: {role} journal_mode is '{}' instead of WAL",
+                    pragmas.journal_mode
+                )));
+            }
+            if pragmas.synchronous != 2 {
+                return Err(StorageError::Init(format!(
+                    "Hardened SQLite startup refused durability downgrade: {role} synchronous is '{}' instead of FULL",
+                    pragmas.synchronous_label
+                )));
+            }
+            #[cfg(target_os = "macos")]
+            if !pragmas.fullfsync_enabled || !pragmas.checkpoint_fullfsync_enabled {
+                return Err(StorageError::Init(format!(
+                    "Hardened SQLite startup refused durability downgrade: {role} fullfsync={} checkpoint_fullfsync={} instead of both enabled",
+                    pragmas.fullfsync_enabled, pragmas.checkpoint_fullfsync_enabled
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+        let exists: i64 = conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2
+             )",
+            params![table, column],
+            |row| row.get(0),
+        )?;
+        Ok(exists != 0)
+    }
+
+    fn count_foreign_key_violations(conn: &Connection) -> Result<u64> {
+        let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+        let mut rows = stmt.query([])?;
+        let mut count = 0_u64;
+        while rows.next()?.is_some() {
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Delete orphaned child rows whose own foreign key is declared
+    /// `ON DELETE CASCADE`. Such a row is unreachable -- its parent is already
+    /// gone and the schema states it should have gone with it -- so removing it
+    /// restores the invariant without discarding anything a reader could reach.
+    /// Rows whose FK is NOT cascade-declared are deliberately left alone so the
+    /// caller still fails loudly on genuine corruption.
+    fn repair_cascade_orphans(conn: &Connection) -> Result<u64> {
+        // (child_table, rowid) pairs reported by the checker.
+        let violations: Vec<(String, Option<i64>)> = {
+            let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+            let mapped = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+            })?;
+            let mut v = Vec::new();
+            for r in mapped {
+                v.push(r?);
+            }
+            v
+        };
+        if violations.is_empty() {
+            return Ok(0);
+        }
+
+        // A table is repairable only if EVERY one of its foreign keys that
+        // points at knowledge_nodes is ON DELETE CASCADE.
+        let mut cascade_ok: std::collections::HashMap<String, bool> =
+            std::collections::HashMap::new();
+        let mut repaired = 0_u64;
+        let tx = conn.unchecked_transaction()?;
+        for (table, rowid) in violations {
+            let Some(rowid) = rowid else { continue };
+            let ok = match cascade_ok.get(&table) {
+                Some(v) => *v,
+                None => {
+                    let mut stmt = tx.prepare(&format!(
+                        "PRAGMA foreign_key_list(\"{}\")",
+                        table.replace('"', "\"\"")
+                    ))?;
+                    let rows = stmt.query_map([], |row| {
+                        Ok((row.get::<_, String>(2)?, row.get::<_, String>(6)?))
+                    })?;
+                    let mut all_cascade = false;
+                    for r in rows {
+                        let (parent, on_delete) = r?;
+                        if parent.eq_ignore_ascii_case("knowledge_nodes") {
+                            all_cascade = on_delete.eq_ignore_ascii_case("CASCADE");
+                            if !all_cascade {
+                                break;
+                            }
+                        }
+                    }
+                    cascade_ok.insert(table.clone(), all_cascade);
+                    all_cascade
+                }
+            };
+            if !ok {
+                continue;
+            }
+            let n = tx.execute(
+                &format!(
+                    "DELETE FROM \"{}\" WHERE rowid = ?1",
+                    table.replace('"', "\"\"")
+                ),
+                params![rowid],
+            )?;
+            repaired += n as u64;
+        }
+        tx.commit()?;
+        Ok(repaired)
+    }
+
+    /// Run `PRAGMA quick_check` and return its rows.
+    fn quick_check_rows(conn: &Connection) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        let mut stmt = conn.prepare("PRAGMA quick_check")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Names of every FTS5 virtual table in the schema.
+    fn fts5_table_names(conn: &Connection) -> Result<Vec<String>> {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master \
+             WHERE type = 'table' AND sql LIKE '%USING fts5%'",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Is every failing quick_check row attributable to an FTS5 index we can
+    /// rebuild? A single row we cannot attribute means real damage, and the
+    /// caller must fail rather than paper over it.
+    fn quick_check_failure_is_only_fts5(rows: &[String], fts_tables: &[String]) -> bool {
+        if fts_tables.is_empty() {
+            return false;
+        }
+        rows.iter().filter(|r| r.as_str() != "ok").all(|r| {
+            let lower = r.to_lowercase();
+            lower.contains("fts5") && fts_tables.iter().any(|t| lower.contains(&t.to_lowercase()))
+        })
+    }
+
+    fn run_integrity_checks(conn: &Connection, phase: &str) -> Result<SqliteIntegrityStatus> {
+        let mut quick_rows = Self::quick_check_rows(conn)?;
+
+        // An FTS5 external-content index is DERIVED STATE. `knowledge_fts` is
+        // declared `content='knowledge_nodes'`, so every token in it is
+        // reconstructible from a table quick_check just verified. Refusing to
+        // open the whole store because a rebuildable index is damaged strands
+        // the user's memories behind an index we can regenerate in seconds --
+        // and that is exactly what happened in the field: a store with 2,926
+        // intact memories became unopenable over one corrupt fts5 blob.
+        //
+        // So: rebuild and re-check. Only if the rebuild fails, or the re-check
+        // still fails, is this real corruption worth refusing over. This
+        // deliberately mirrors the CASCADE-orphan repair below -- repair derived
+        // state, fail loudly on genuine damage.
+        //
+        // Writer phases only. The runtime reader must never attempt a write.
+        let repairable_phase = phase == "pre-migration" || phase == "post-migration";
+        let quick_ok =
+            |rows: &[String]| rows.len() == 1 && rows.first().map(String::as_str) == Some("ok");
+        if !quick_ok(&quick_rows) && repairable_phase {
+            let fts_tables = Self::fts5_table_names(conn)?;
+            if Self::quick_check_failure_is_only_fts5(&quick_rows, &fts_tables) {
+                let detail = quick_rows.join("; ");
+                let mut rebuilt = Vec::new();
+                for table in &fts_tables {
+                    // Identifier is read back from sqlite_master, not user input.
+                    let quoted = table.replace('"', "\"\"");
+                    match conn.execute_batch(&format!(
+                        "INSERT INTO \"{quoted}\"(\"{quoted}\") VALUES('rebuild');"
+                    )) {
+                        Ok(()) => rebuilt.push(table.clone()),
+                        Err(error) => {
+                            return Err(StorageError::Init(format!(
+                                "SQLite {phase} quick_check failed ({detail}) and rebuilding \
+                                 FTS index '{table}' also failed: {error}"
+                            )));
+                        }
+                    }
+                }
+                quick_rows = Self::quick_check_rows(conn)?;
+                if quick_ok(&quick_rows) {
+                    tracing::warn!(
+                        phase,
+                        rebuilt = ?rebuilt,
+                        detail,
+                        "rebuilt corrupt FTS index from its content table; store opened normally"
+                    );
+                }
+            }
+        }
+
+        let quick_check = quick_rows.join("; ");
+        if !quick_ok(&quick_rows) {
+            return Err(StorageError::Init(format!(
+                "SQLite {phase} quick_check failed: {quick_check}"
+            )));
+        }
+
+        let mut foreign_key_violations = Self::count_foreign_key_violations(conn)?;
+        if foreign_key_violations != 0 && phase == "pre-migration" {
+            // Deletion residue from older builds (and from any delete path that
+            // ran without `PRAGMA foreign_keys = ON`) leaves child rows whose
+            // knowledge_nodes parent is already gone. Those rows are unreachable
+            // by construction, and their own schema says ON DELETE CASCADE --
+            // "if the parent goes, I go". Refusing to open the database over
+            // them bricks every store that predates FK enforcement, with no
+            // recovery path short of manual SQLite surgery. Repair them here,
+            // BEFORE migrations, then re-check. Only CASCADE-declared FKs are
+            // repaired; anything else still fails loudly below.
+            let repaired = Self::repair_cascade_orphans(conn)?;
+            foreign_key_violations = Self::count_foreign_key_violations(conn)?;
+            if repaired > 0 {
+                tracing::warn!(
+                    repaired,
+                    remaining = foreign_key_violations,
+                    "repaired orphaned child rows left by an earlier delete (ON DELETE CASCADE residue)"
+                );
+            }
+        }
+        if foreign_key_violations != 0 {
+            return Err(StorageError::Init(format!(
+                "SQLite {phase} foreign_key_check found {foreign_key_violations} violation(s)"
+            )));
+        }
+
+        let synaptic_tables = [
+            "synaptic_tags",
+            "synaptic_events",
+            "synaptic_capture_items",
+            "memory_receipts",
+        ];
+        let mut synaptic_checks_applied = true;
+        for table in synaptic_tables {
+            if !Self::table_exists(conn, table)? {
+                synaptic_checks_applied = false;
+                break;
+            }
+        }
+
+        let synaptic_consistency_violations = if synaptic_checks_applied {
+            let missing_receipts: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM synaptic_events e
+                 LEFT JOIN memory_receipts r ON r.receipt_id = e.receipt_id
+                 WHERE e.receipt_id IS NULL OR r.receipt_id IS NULL",
+                [],
+                |row| row.get(0),
+            )?;
+            let invalid_event_receipt_predicates =
+                if Self::table_has_column(conn, "synaptic_events", "public_event_id")? {
+                    conn.query_row(
+                        "SELECT COUNT(*)
+                     FROM synaptic_events e
+                     JOIN memory_receipts r ON r.receipt_id = e.receipt_id
+                     WHERE CASE json_extract(r.payload, '$.evidence.predicate.schemaVersion')
+                         WHEN 1 THEN
+                                json_extract(r.payload, '$.evidence.kind')
+                                    IS NOT 'synaptic_capture'
+                             OR e.algorithm_version IS NOT 'vestige.synaptic_capture.v1'
+                             OR e.public_event_id IS NULL
+                             OR json_extract(r.payload, '$.evidence.predicate.algorithmVersion')
+                                    IS NOT 'vestige.synaptic_capture.v1'
+                             OR json_type(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT 'text'
+                             OR json_extract(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT e.public_event_id
+                         WHEN 2 THEN
+                                json_extract(r.payload, '$.evidence.kind')
+                                    IS NOT 'synaptic_capture'
+                             OR e.algorithm_version IS NOT 'vestige.synaptic_capture.v2'
+                             OR e.public_event_id IS NULL
+                             OR json_extract(r.payload, '$.evidence.predicate.algorithmVersion')
+                                    IS NOT 'vestige.synaptic_capture.v2'
+                             OR json_extract(r.payload, '$.evidence.predicate.receiptRole')
+                                    IS NOT 'root'
+                             OR json_type(
+                                    r.payload,
+                                    '$.evidence.predicate.parentReceiptId'
+                                ) IS NOT NULL
+                             OR json_type(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT 'text'
+                             OR json_extract(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT e.public_event_id
+                         ELSE 1
+                     END",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?
+                } else {
+                    0
+                };
+            let invalid_items: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM synaptic_capture_items i
+                 LEFT JOIN synaptic_events e ON e.event_id = i.event_id
+                 LEFT JOIN synaptic_tags t ON t.tag_id = i.tag_id
+                 LEFT JOIN memory_receipts r ON r.receipt_id = i.receipt_id
+                 WHERE e.event_id IS NULL OR t.tag_id IS NULL OR r.receipt_id IS NULL
+                    OR i.memory_id IS NOT t.memory_id",
+                [],
+                |row| row.get(0),
+            )?;
+            // V21 stores one root receipt id on both the event and every item.
+            // V22 may store a per-pair child receipt on an item, so the startup
+            // invariant becomes predicate-version aware once the V22 columns
+            // exist. Preparing this SQL conditionally keeps pre-V22 databases
+            // valid during checks that run before pending migrations.
+            let invalid_item_receipt_predicates = if Self::table_has_column(
+                conn,
+                "synaptic_events",
+                "public_event_id",
+            )? && Self::table_has_column(
+                conn,
+                "synaptic_capture_items",
+                "evaluation_direction",
+            )? {
+                conn.query_row(
+                    "SELECT COUNT(*)
+                     FROM synaptic_capture_items i
+                     JOIN synaptic_events e ON e.event_id = i.event_id
+                     JOIN memory_receipts r ON r.receipt_id = i.receipt_id
+                     WHERE CASE json_extract(r.payload, '$.evidence.predicate.schemaVersion')
+                         WHEN 1 THEN
+                                i.receipt_id <> e.receipt_id
+                             OR i.evaluation_direction IS NOT 'backward'
+                             OR i.algorithm_version IS NOT 'vestige.synaptic_capture.v1'
+                         WHEN 2 THEN
+                                json_extract(r.payload, '$.evidence.kind') IS NOT 'synaptic_capture'
+                             OR i.algorithm_version IS NOT 'vestige.synaptic_capture.v2'
+                             OR i.evaluation_direction NOT IN ('backward', 'forward')
+                             OR json_extract(r.payload, '$.evidence.predicate.algorithmVersion')
+                                    IS NOT 'vestige.synaptic_capture.v2'
+                             OR CASE i.evaluation_direction
+                                  WHEN 'backward' THEN
+                                         i.receipt_id <> e.receipt_id
+                                      OR json_extract(r.payload, '$.evidence.predicate.receiptRole')
+                                             IS NOT 'root'
+                                      OR json_type(
+                                             r.payload,
+                                             '$.evidence.predicate.parentReceiptId'
+                                         ) IS NOT NULL
+                                  WHEN 'forward' THEN
+                                         i.receipt_id = e.receipt_id
+                                      OR json_extract(r.payload, '$.evidence.predicate.receiptRole')
+                                             IS NOT 'pair'
+                                      OR json_extract(r.payload, '$.evidence.predicate.parentReceiptId')
+                                             IS NOT e.receipt_id
+                                  ELSE 1
+                                END
+                             OR e.public_event_id IS NULL
+                             OR json_type(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT 'text'
+                             OR json_extract(r.payload, '$.evidence.predicate.trigger.eventId')
+                                    IS NOT e.public_event_id
+                             OR json_extract(r.payload, '$.evidence.predicate.evaluationDirection')
+                                    IS NOT i.evaluation_direction
+                             OR json_array_length(
+                                    json_extract(r.payload, '$.evidence.predicate.candidates')
+                                ) IS NOT 1
+                             OR json_extract(
+                                    r.payload,
+                                    '$.evidence.predicate.candidates[0].evidenceSlot'
+                                ) IS NOT i.evidence_slot
+                         ELSE 1
+                     END",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?
+            } else {
+                conn.query_row(
+                    "SELECT COUNT(*)
+                     FROM synaptic_capture_items i
+                     JOIN synaptic_events e ON e.event_id = i.event_id
+                     WHERE i.receipt_id <> e.receipt_id",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?
+            };
+            let duplicate_active_tags: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM (
+                     SELECT memory_id
+                     FROM synaptic_tags
+                     WHERE state = 'active'
+                     GROUP BY memory_id
+                     HAVING COUNT(*) > 1
+                 )",
+                [],
+                |row| row.get(0),
+            )?;
+            let invalid_captured_tags: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM synaptic_tags t
+                 LEFT JOIN synaptic_events e ON e.event_id = t.capture_event_id
+                 LEFT JOIN synaptic_capture_items i
+                   ON i.event_id = t.capture_event_id
+                  AND i.tag_id = t.tag_id
+                  AND i.disposition = 'captured'
+                 WHERE (t.state = 'captured' AND (
+                           t.capture_event_id IS NULL
+                        OR t.captured_at_ms IS NULL
+                        OR e.event_id IS NULL
+                        OR i.tag_id IS NULL
+                       ))
+                    OR (t.state <> 'captured' AND (
+                           t.capture_event_id IS NOT NULL
+                        OR t.captured_at_ms IS NOT NULL
+                       ))",
+                [],
+                |row| row.get(0),
+            )?;
+            (missing_receipts
+                + invalid_event_receipt_predicates
+                + invalid_items
+                + invalid_item_receipt_predicates
+                + duplicate_active_tags
+                + invalid_captured_tags) as u64
+        } else {
+            0
+        };
+        if synaptic_consistency_violations != 0 {
+            return Err(StorageError::Init(format!(
+                "SQLite {phase} synaptic receipt consistency checks found {synaptic_consistency_violations} violation(s)"
+            )));
+        }
+
+        Ok(SqliteIntegrityStatus {
+            quick_check,
+            foreign_key_violations,
+            synaptic_checks_applied,
+            synaptic_consistency_violations,
+        })
+    }
+
+    fn checkpoint_connection(
+        conn: &Connection,
+        mode: WalCheckpointMode,
+    ) -> Result<WalCheckpointStatus> {
+        let sql = match mode {
+            WalCheckpointMode::Passive => "PRAGMA wal_checkpoint(PASSIVE)",
+            WalCheckpointMode::Truncate => "PRAGMA wal_checkpoint(TRUNCATE)",
+        };
+        let (busy, log_frames, checkpointed_frames) =
+            conn.query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        Ok(WalCheckpointStatus {
+            busy,
+            log_frames,
+            checkpointed_frames,
+        })
+    }
+
     /// Create new storage instance
     pub fn new(db_path: Option<PathBuf>) -> Result<Self> {
+        Self::new_with_durability(db_path, SqliteDurabilityProfile::from_env()?)
+    }
+
+    /// Create storage with an explicit durability policy.
+    ///
+    /// This is primarily useful for controlled benchmarks and embedded callers
+    /// that cannot use process environment configuration.
+    pub fn new_with_durability(
+        db_path: Option<PathBuf>,
+        profile: SqliteDurabilityProfile,
+    ) -> Result<Self> {
         let path = match db_path {
             Some(p) => p,
             None => Self::default_db_path()?,
@@ -614,14 +1429,46 @@ impl SqliteMemoryStore {
             let _ = std::fs::set_permissions(&path, perms);
         }
 
-        Self::configure_connection(&writer_conn)?;
+        Self::configure_connection(&writer_conn, profile, true)?;
+        let writer_pragmas = Self::read_effective_pragmas(&writer_conn)?;
+        Self::verify_effective_pragmas(profile, "writer", &writer_pragmas)?;
+
+        // Opening the database lets SQLite recover a committed WAL. Validate
+        // that recovered state before migrations can change the schema.
+        let before_migrations = Self::run_integrity_checks(&writer_conn, "pre-migration")?;
 
         // Apply migrations on writer only
         super::migrations::apply_migrations(&writer_conn)?;
+        writer_conn.execute_batch("PRAGMA optimize = 0x10002;")?;
+        let after_migrations = Self::run_integrity_checks(&writer_conn, "post-migration")?;
+        let startup_checkpoint =
+            Self::checkpoint_connection(&writer_conn, WalCheckpointMode::Passive)?;
 
         // Open reader connection to same path
         let reader_conn = Connection::open(&path)?;
-        Self::configure_connection(&reader_conn)?;
+        Self::configure_connection(&reader_conn, profile, false)?;
+        let reader_pragmas = Self::read_effective_pragmas(&reader_conn)?;
+        Self::verify_effective_pragmas(profile, "reader", &reader_pragmas)?;
+
+        let durability_status = SqliteDurabilityStatus {
+            profile,
+            writer: writer_pragmas,
+            reader: reader_pragmas,
+            before_migrations,
+            after_migrations,
+            startup_checkpoint,
+            commit_acknowledgement: match profile {
+                SqliteDurabilityProfile::Hardened => {
+                    "tx.commit() returned after SQLite FULL WAL synchronization"
+                }
+                SqliteDurabilityProfile::Balanced => {
+                    "tx.commit() returned under SQLite NORMAL WAL synchronization"
+                }
+            }
+            .to_string(),
+            claim_boundary: "Process-crash tests prove transaction atomicity and recovery at the tested commit boundaries. Power-loss durability still depends on the operating system, filesystem, controller, and storage device honoring completed flush requests; WAL requires local shared-memory and locking semantics."
+                .to_string(),
+        };
 
         #[cfg(feature = "embeddings")]
         let embedding_service = EmbeddingService::new();
@@ -650,6 +1497,7 @@ impl SqliteMemoryStore {
 
         let storage = Self {
             db_path: path,
+            durability_status,
             writer: Mutex::new(writer_conn),
             reader: Mutex::new(reader_conn),
             scheduler: Mutex::new(FSRSScheduler::default()),
@@ -657,6 +1505,8 @@ impl SqliteMemoryStore {
             embedding_service,
             #[cfg(feature = "vector-search")]
             vector_index,
+            #[cfg(feature = "vector-search")]
+            last_seen_data_version: Mutex::new(-1),
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
             query_cache,
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -680,6 +1530,34 @@ impl SqliteMemoryStore {
     /// Absolute path of the SQLite database this storage instance uses.
     pub fn db_path(&self) -> &Path {
         &self.db_path
+    }
+
+    /// Verified durability profile and startup-recovery results.
+    pub fn durability_status(&self) -> &SqliteDurabilityStatus {
+        &self.durability_status
+    }
+
+    /// Run an explicit SQLite WAL checkpoint and return SQLite's raw counters.
+    ///
+    /// `Passive` is safe for live status/recovery workflows. `Truncate` should
+    /// be used only after application writers have stopped (for example, at a
+    /// quiesced backup or graceful-shutdown boundary); it is not what makes an
+    /// already-acknowledged hardened commit durable.
+    pub fn checkpoint_wal(&self, mode: WalCheckpointMode) -> Result<WalCheckpointStatus> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        Self::checkpoint_connection(&writer, mode)
+    }
+
+    /// Re-run integrity and V21 consistency checks against the live database.
+    pub fn verify_integrity(&self) -> Result<SqliteIntegrityStatus> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        Self::run_integrity_checks(&reader, "runtime")
     }
 
     /// Data directory containing the SQLite database and sidecar folders.
@@ -796,8 +1674,220 @@ impl SqliteMemoryStore {
         Ok(index)
     }
 
-    /// Ingest a new memory
+    fn secret_findings_for_input(input: &IngestInput) -> Vec<SecretFinding> {
+        let mut findings = scan_secrets(&input.content);
+        let mut scan_field = |value: &str| {
+            for finding in scan_secrets(value) {
+                if !findings.contains(&finding) {
+                    findings.push(finding);
+                }
+            }
+        };
+
+        if let Some(source) = input.source.as_deref() {
+            scan_field(source);
+        }
+        for tag in &input.tags {
+            scan_field(tag);
+        }
+        if let Some(envelope) = input.source_envelope.as_ref() {
+            for value in [
+                envelope.source_url.as_deref(),
+                envelope.source_project.as_deref(),
+                envelope.source_type.as_deref(),
+                envelope.source_author.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                scan_field(value);
+            }
+        }
+        findings
+    }
+
+    fn enforce_secret_policy_for_input(input: &IngestInput, policy: SecretPolicy) -> Result<()> {
+        if policy == SecretPolicy::AllowExplicitly {
+            return Ok(());
+        }
+
+        let kinds: Vec<String> = Self::secret_findings_for_input(input)
+            .into_iter()
+            .filter(SecretFinding::blocks_ingestion)
+            .map(|finding| finding.kind.as_str().to_string())
+            .collect();
+        if kinds.is_empty() {
+            Ok(())
+        } else {
+            Err(StorageError::SecretDetected { kinds })
+        }
+    }
+
+    fn enforce_secret_policy_for_content(content: &str, policy: SecretPolicy) -> Result<()> {
+        if policy == SecretPolicy::AllowExplicitly {
+            return Ok(());
+        }
+        let kinds: Vec<String> = scan_secrets(content)
+            .into_iter()
+            .filter(SecretFinding::blocks_ingestion)
+            .map(|finding| finding.kind.as_str().to_string())
+            .collect();
+        if kinds.is_empty() {
+            Ok(())
+        } else {
+            Err(StorageError::SecretDetected { kinds })
+        }
+    }
+
+    /// Normalize a caller-provided project namespace before it reaches storage.
+    /// Namespaces are identifiers, not user content: blank, oversized, and
+    /// control-character values make audit and operator tooling ambiguous.
+    fn normalize_scope(scope: &str) -> Result<&str> {
+        let normalized = scope.trim();
+        if normalized.is_empty()
+            || normalized.len() > 200
+            || normalized.chars().any(char::is_control)
+        {
+            return Err(StorageError::InvalidScope(
+                "expected a non-empty identifier of at most 200 visible characters".to_string(),
+            ));
+        }
+        Ok(normalized)
+    }
+
+    fn enforce_secret_policy_for_record(
+        record: &crate::storage::memory_store::MemoryRecord,
+        policy: SecretPolicy,
+    ) -> Result<()> {
+        if policy == SecretPolicy::AllowExplicitly {
+            return Ok(());
+        }
+
+        // `MemoryStoreSend::insert` persists this selected set of record
+        // fields directly. Keep it on the same default-deny policy as
+        // `IngestInput`; otherwise a credential-shaped tag or source bypasses
+        // the public ingest choke point.
+        let mut findings = scan_secrets(&record.content);
+        let mut scan_field = |value: &str| {
+            for finding in scan_secrets(value) {
+                if !findings.contains(&finding) {
+                    findings.push(finding);
+                }
+            }
+        };
+        scan_field(&record.node_type);
+        for tag in &record.tags {
+            scan_field(tag);
+        }
+        for domain in &record.domains {
+            scan_field(domain);
+        }
+        if let Some(source) = record
+            .metadata
+            .get("source")
+            .and_then(|value| value.as_str())
+        {
+            scan_field(source);
+        }
+
+        let kinds: Vec<String> = findings
+            .into_iter()
+            .filter(SecretFinding::blocks_ingestion)
+            .map(|finding| finding.kind.as_str().to_string())
+            .collect();
+        if kinds.is_empty() {
+            Ok(())
+        } else {
+            Err(StorageError::SecretDetected { kinds })
+        }
+    }
+
+    fn enforce_secret_policy_for_portable_archive(
+        archive: &PortableArchive,
+        policy: SecretPolicy,
+    ) -> Result<()> {
+        if policy == SecretPolicy::AllowExplicitly {
+            return Ok(());
+        }
+
+        let mut kinds = Vec::new();
+        for table in archive
+            .tables
+            .iter()
+            .filter(|table| table.name == "knowledge_nodes")
+        {
+            for field in [
+                "content",
+                "source",
+                "tags",
+                "source_url",
+                "source_project",
+                "source_type",
+                "source_author",
+            ] {
+                let Some(index) = table.columns.iter().position(|column| column == field) else {
+                    continue;
+                };
+                for row in &table.rows {
+                    let Some(PortableValue::Text(value)) = row.get(index) else {
+                        continue;
+                    };
+                    for finding in scan_secrets(value)
+                        .into_iter()
+                        .filter(SecretFinding::blocks_ingestion)
+                    {
+                        let kind = finding.kind.as_str().to_string();
+                        if !kinds.contains(&kind) {
+                            kinds.push(kind);
+                        }
+                    }
+                }
+            }
+        }
+
+        if kinds.is_empty() {
+            Ok(())
+        } else {
+            Err(StorageError::SecretDetected { kinds })
+        }
+    }
+
+    /// Ingest a new memory, rejecting likely credentials by default.
     pub fn ingest(&self, input: IngestInput) -> Result<KnowledgeNode> {
+        self.ingest_in_scope_with_secret_policy(input, DEFAULT_MEMORY_SCOPE, SecretPolicy::Reject)
+    }
+
+    /// Ingest a new memory using an explicit credential-storage policy.
+    ///
+    /// Callers should use [`SecretPolicy::AllowExplicitly`] only for a direct,
+    /// intentional user action. Connector and background writers must retain
+    /// the default rejection policy.
+    pub fn ingest_with_secret_policy(
+        &self,
+        input: IngestInput,
+        policy: SecretPolicy,
+    ) -> Result<KnowledgeNode> {
+        self.ingest_in_scope_with_secret_policy(input, DEFAULT_MEMORY_SCOPE, policy)
+    }
+
+    /// Ingest a memory into a named project namespace.
+    pub fn ingest_in_scope(&self, input: IngestInput, scope: &str) -> Result<KnowledgeNode> {
+        self.ingest_in_scope_with_secret_policy(input, scope, SecretPolicy::Reject)
+    }
+
+    /// Ingest a memory into a named project namespace with an explicit secret policy.
+    pub fn ingest_in_scope_with_secret_policy(
+        &self,
+        input: IngestInput,
+        scope: &str,
+        policy: SecretPolicy,
+    ) -> Result<KnowledgeNode> {
+        Self::enforce_secret_policy_for_input(&input, policy)?;
+        self.ingest_unchecked_in_scope(input, Self::normalize_scope(scope)?)
+    }
+
+    /// Raw scoped insert after a caller has completed the credential preflight.
+    fn ingest_unchecked_in_scope(&self, input: IngestInput, scope: &str) -> Result<KnowledgeNode> {
         let now = Utc::now();
         let id = Uuid::new_v4().to_string();
 
@@ -838,7 +1928,7 @@ impl SqliteMemoryStore {
                     sentiment_score, sentiment_magnitude, next_review, scheduled_days,
                     source, tags, valid_from, valid_until, has_embedding, embedding_model,
                     domains, domain_scores,
-                    source_system, source_id, source_url, source_updated_at,
+                    scope, source_system, source_id, source_url, source_updated_at,
                     content_hash, synced_at, source_project, source_type, source_author
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
@@ -847,8 +1937,8 @@ impl SqliteMemoryStore {
                     ?15, ?16, ?17, ?18,
                     ?19, ?20, ?21, ?22, ?23, ?24,
                     '[]', '{}',
-                    ?25, ?26, ?27, ?28,
-                    ?29, ?30, ?31, ?32, ?33
+                    ?25, ?26, ?27, ?28, ?29,
+                    ?30, ?31, ?32, ?33, ?34
                 )",
                 params![
                     id,
@@ -878,6 +1968,7 @@ impl SqliteMemoryStore {
                     valid_until_str,
                     0,
                     Option::<String>::None,
+                    scope,
                     env.source_system,
                     env.source_id,
                     env.source_url,
@@ -911,7 +2002,42 @@ impl SqliteMemoryStore {
     /// This solves the "bad vs good similar memory" problem.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     pub fn smart_ingest(&self, input: IngestInput) -> Result<SmartIngestResult> {
-        self.smart_ingest_excluding(input, &[])
+        self.smart_ingest_in_scope_with_secret_policy(
+            input,
+            DEFAULT_MEMORY_SCOPE,
+            SecretPolicy::Reject,
+        )
+    }
+
+    /// Smart-ingest a memory while considering candidates only from the same namespace.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest_in_scope(
+        &self,
+        input: IngestInput,
+        scope: &str,
+    ) -> Result<SmartIngestResult> {
+        self.smart_ingest_in_scope_with_secret_policy(input, scope, SecretPolicy::Reject)
+    }
+
+    /// Smart ingest with an explicit credential-storage policy.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest_with_secret_policy(
+        &self,
+        input: IngestInput,
+        policy: SecretPolicy,
+    ) -> Result<SmartIngestResult> {
+        self.smart_ingest_in_scope_with_secret_policy(input, DEFAULT_MEMORY_SCOPE, policy)
+    }
+
+    /// Smart-ingest a memory into a named project namespace with an explicit secret policy.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest_in_scope_with_secret_policy(
+        &self,
+        input: IngestInput,
+        scope: &str,
+        policy: SecretPolicy,
+    ) -> Result<SmartIngestResult> {
+        self.smart_ingest_excluding_in_scope_with_secret_policy(input, scope, &[], policy)
     }
 
     /// Smart ingest with caller-provided candidate exclusions.
@@ -925,40 +2051,112 @@ impl SqliteMemoryStore {
         input: IngestInput,
         excluded_node_ids: &[String],
     ) -> Result<SmartIngestResult> {
+        self.smart_ingest_excluding_in_scope_with_secret_policy(
+            input,
+            DEFAULT_MEMORY_SCOPE,
+            excluded_node_ids,
+            SecretPolicy::Reject,
+        )
+    }
+
+    /// Smart ingest with exclusions and an explicit credential-storage policy.
+    /// The credential preflight happens before embedding, candidate selection,
+    /// or any possible supersede/demotion side effect.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest_excluding_with_secret_policy(
+        &self,
+        input: IngestInput,
+        excluded_node_ids: &[String],
+        policy: SecretPolicy,
+    ) -> Result<SmartIngestResult> {
+        self.smart_ingest_excluding_in_scope_with_secret_policy(
+            input,
+            DEFAULT_MEMORY_SCOPE,
+            excluded_node_ids,
+            policy,
+        )
+    }
+
+    /// Scoped smart-ingest with candidate exclusions and an explicit secret policy.
+    /// Candidate selection is scope-bound before the prediction-error gate runs,
+    /// preventing similarly-worded memories in another project from merging.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn smart_ingest_excluding_in_scope_with_secret_policy(
+        &self,
+        input: IngestInput,
+        scope: &str,
+        excluded_node_ids: &[String],
+        policy: SecretPolicy,
+    ) -> Result<SmartIngestResult> {
         use crate::advanced::prediction_error::{
             CandidateMemory, GateDecision, PredictionErrorGate, UpdateType,
         };
 
+        Self::enforce_secret_policy_for_input(&input, policy)?;
+        let scope = Self::normalize_scope(scope)?;
+
         // Generate embedding for new content
-        if !self.embedding_service.is_ready() {
+        if !self.active_embedding_runtime_ready()? {
             return self.regular_ingest_result(
                 input,
+                scope,
                 "Embeddings not available, falling back to regular ingest",
+                policy,
             );
         }
 
         if !self.vector_search_available() {
             return self.regular_ingest_result(
                 input,
+                scope,
                 "Vector search unavailable, falling back to regular ingest",
+                policy,
             );
         }
 
-        let new_embedding = self
-            .embedding_service
-            .embed(&input.content)
-            .map_err(|e| StorageError::Init(format!("Embedding failed: {}", e)))?;
+        // The prediction gate compares a candidate *document* with stored
+        // document vectors. Qwen's retrieval profile intentionally uses a
+        // different query template, so using get_query_embedding here would
+        // silently compare different encoded spaces.
+        let new_embedding = self.get_document_embedding(&input.content)?;
 
         // Find similar memories using semantic search
         let similar = self.semantic_search_raw(&input.content, 10)?;
 
         // Build candidate memories
         let mut candidates: Vec<CandidateMemory> = Vec::new();
+        // The earliest currently-valid similar fact starting AFTER the
+        // incoming dated claim. When only such newer facts exclude every
+        // candidate, the incoming claim is a stale snapshot whose world time
+        // is already known to end where the newer fact begins.
+        let mut superseding_valid_from: Option<DateTime<Utc>> = None;
         for (node_id, _similarity) in similar.iter() {
             if excluded_node_ids.iter().any(|id| id == node_id) {
                 continue;
             }
+            if !self.node_is_in_scope(node_id, scope)? {
+                continue;
+            }
             if let Some(node) = self.get_node(node_id)? {
+                // A historical snapshot must never mutate, reinforce, or demote
+                // a fact whose validity starts later. Likewise, an already
+                // expired input cannot supersede a currently-valid policy.
+                if !temporal_candidate_is_eligible(
+                    input.valid_from,
+                    input.valid_until,
+                    node.valid_from,
+                    node.is_currently_valid(),
+                    Utc::now(),
+                ) {
+                    if let (Some(incoming), Some(existing)) = (input.valid_from, node.valid_from)
+                        && incoming < existing
+                        && node.is_currently_valid()
+                        && superseding_valid_from.is_none_or(|earliest| existing < earliest)
+                    {
+                        superseding_valid_from = Some(existing);
+                    }
+                    continue;
+                }
                 // Get embedding for this node
                 if let Some(emb) = self.get_node_embedding(node_id)? {
                     // Check if this memory was previously demoted (low retrieval strength)
@@ -982,7 +2180,7 @@ impl SqliteMemoryStore {
 
         // Evaluate with prediction error gate
         let mut gate = PredictionErrorGate::new();
-        let decision = gate.evaluate(&input.content, &new_embedding.vector, &candidates);
+        let decision = gate.evaluate(&input.content, &new_embedding, &candidates);
 
         match decision {
             GateDecision::Create {
@@ -991,25 +2189,54 @@ impl SqliteMemoryStore {
                 reason,
                 ..
             } => {
+                // A dated claim (explicit or inferred) that lost every
+                // candidate to a currently-valid newer fact is created as a
+                // closed historical snapshot, never as an open current fact.
+                // Undated content and explicitly bounded claims are untouched.
+                // `candidates.is_empty()` enforces the precondition this comment
+                // already states. `superseding_valid_from` is recorded while
+                // skipping INELIGIBLE candidates, so it can be set even when other
+                // nodes were eligible, went into `candidates`, and the gate chose
+                // Create on its own merits. Without this check an unrelated newer
+                // fact elsewhere in the store stamps a brand-new memory as already
+                // expired at creation -- it is born invisible to ordinary recall.
+                let auto_closed_until = superseding_valid_from.filter(|_| {
+                    candidates.is_empty()
+                        && input.valid_from.is_some()
+                        && input.valid_until.is_none()
+                });
                 // Create new memory
-                let node = self.ingest(input)?;
+                let mut node = self.ingest_in_scope_with_secret_policy(input, scope, policy)?;
+                if let Some(closes_at) = auto_closed_until {
+                    self.close_node_validity(&node.id, closes_at)?;
+                    let id = node.id.clone();
+                    node = self.get_node(&id)?.ok_or(StorageError::NotFound(id))?;
+                }
+                let mut reason = if related_memory_ids.is_empty() {
+                    format!("Created new memory: {:?}", reason)
+                } else {
+                    format!(
+                        "Created new memory: {:?}. Semantically similar (not linked): {:?}",
+                        reason, related_memory_ids
+                    )
+                };
+                if let Some(closes_at) = auto_closed_until {
+                    reason.push_str(&format!(
+                        ". Closed validity at {} because a currently-valid newer fact starts then",
+                        closes_at.to_rfc3339()
+                    ));
+                }
                 Ok(SmartIngestResult {
                     decision: "create".to_string(),
                     node,
                     superseded_id: None,
                     similarity: None,
                     prediction_error: Some(prediction_error),
-                    reason: if related_memory_ids.is_empty() {
-                        format!("Created new memory: {:?}", reason)
-                    } else {
-                        format!(
-                            "Created new memory: {:?}. Semantically similar (not linked): {:?}",
-                            reason, related_memory_ids
-                        )
-                    },
+                    reason,
                     previous_content: None,
                     merged_from: None,
                     merge_preview: None,
+                    auto_closed_until,
                 })
             }
             GateDecision::Update {
@@ -1018,8 +2245,19 @@ impl SqliteMemoryStore {
                 update_type,
                 prediction_error,
             } => {
+                // A prose-inferred "as of" date describes the incoming text
+                // only; it may stamp a NEW node but must never rewrite an
+                // existing node's window. Only explicit caller validity may.
+                let explicit_valid_from = input.valid_from.filter(|_| !input.validity_inferred);
                 match update_type {
                     UpdateType::Reinforce => {
+                        if explicit_valid_from.is_some() || input.valid_until.is_some() {
+                            self.update_node_validity(
+                                &target_id,
+                                explicit_valid_from,
+                                input.valid_until,
+                            )?;
+                        }
                         // Just strengthen the existing memory
                         self.strengthen_on_access(&target_id)?;
                         let node = self
@@ -1036,6 +2274,7 @@ impl SqliteMemoryStore {
                             previous_content: None,
                             merged_from: None,
                             merge_preview: None,
+                            auto_closed_until: None,
                         })
                     }
                     UpdateType::Merge | UpdateType::Append => {
@@ -1052,7 +2291,18 @@ impl SqliteMemoryStore {
                             input.content
                         );
 
-                        self.update_node_content(&target_id, &merged_content)?;
+                        self.update_node_content_with_secret_policy(
+                            &target_id,
+                            &merged_content,
+                            policy,
+                        )?;
+                        if explicit_valid_from.is_some() || input.valid_until.is_some() {
+                            self.update_node_validity(
+                                &target_id,
+                                explicit_valid_from,
+                                input.valid_until,
+                            )?;
+                        }
                         self.strengthen_on_access(&target_id)?;
 
                         let node = self
@@ -1069,6 +2319,7 @@ impl SqliteMemoryStore {
                             previous_content: Some(previous_content),
                             merged_from: Some(target_id),
                             merge_preview: Some(merged_content),
+                            auto_closed_until: None,
                         })
                     }
                     UpdateType::Replace => {
@@ -1078,7 +2329,18 @@ impl SqliteMemoryStore {
                             .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
                         let previous_content = existing.content;
 
-                        self.update_node_content(&target_id, &input.content)?;
+                        self.update_node_content_with_secret_policy(
+                            &target_id,
+                            &input.content,
+                            policy,
+                        )?;
+                        if explicit_valid_from.is_some() || input.valid_until.is_some() {
+                            self.update_node_validity(
+                                &target_id,
+                                explicit_valid_from,
+                                input.valid_until,
+                            )?;
+                        }
                         let node = self
                             .get_node(&target_id)?
                             .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
@@ -1093,6 +2355,7 @@ impl SqliteMemoryStore {
                             previous_content: Some(previous_content),
                             merged_from: Some(target_id),
                             merge_preview: Some(input.content),
+                            auto_closed_until: None,
                         })
                     }
                     UpdateType::AddContext => {
@@ -1105,7 +2368,18 @@ impl SqliteMemoryStore {
                         let merged_content =
                             format!("{}\n\n---\nContext: {}", previous_content, input.content);
 
-                        self.update_node_content(&target_id, &merged_content)?;
+                        self.update_node_content_with_secret_policy(
+                            &target_id,
+                            &merged_content,
+                            policy,
+                        )?;
+                        if explicit_valid_from.is_some() || input.valid_until.is_some() {
+                            self.update_node_validity(
+                                &target_id,
+                                explicit_valid_from,
+                                input.valid_until,
+                            )?;
+                        }
                         let node = self
                             .get_node(&target_id)?
                             .ok_or_else(|| StorageError::NotFound(target_id.clone()))?;
@@ -1120,6 +2394,7 @@ impl SqliteMemoryStore {
                             previous_content: Some(previous_content),
                             merged_from: Some(target_id),
                             merge_preview: Some(merged_content),
+                            auto_closed_until: None,
                         })
                     }
                 }
@@ -1130,11 +2405,22 @@ impl SqliteMemoryStore {
                 supersede_reason,
                 prediction_error,
             } => {
-                // Demote the old memory and create new
+                // Close the old fact's world-time interval before demoting it.
+                // An explicitly dated replacement takes effect at its declared
+                // start; otherwise — including a prose-inferred "as of" date,
+                // which must never backdate another node's expiry — the
+                // supersession becomes effective now.
+                self.close_node_validity(
+                    &old_memory_id,
+                    input
+                        .valid_from
+                        .filter(|_| !input.validity_inferred)
+                        .unwrap_or_else(Utc::now),
+                )?;
                 self.demote_memory(&old_memory_id)?;
 
                 // Create the new improved memory
-                let node = self.ingest(input)?;
+                let node = self.ingest_in_scope_with_secret_policy(input, scope, policy)?;
 
                 Ok(SmartIngestResult {
                     decision: "supersede".to_string(),
@@ -1146,6 +2432,7 @@ impl SqliteMemoryStore {
                     previous_content: None,
                     merged_from: None,
                     merge_preview: None,
+                    auto_closed_until: None,
                 })
             }
             GateDecision::Merge {
@@ -1154,7 +2441,7 @@ impl SqliteMemoryStore {
                 strategy,
             } => {
                 // For now, create new and link to existing
-                let node = self.ingest(input)?;
+                let node = self.ingest_in_scope_with_secret_policy(input, scope, policy)?;
 
                 Ok(SmartIngestResult {
                     decision: "merge".to_string(),
@@ -1170,6 +2457,7 @@ impl SqliteMemoryStore {
                     previous_content: None,
                     merged_from: None,
                     merge_preview: None,
+                    auto_closed_until: None,
                 })
             }
         }
@@ -1272,8 +2560,96 @@ impl SqliteMemoryStore {
         Ok(None)
     }
 
-    /// Update the content of an existing node
+    /// Update the content of an existing node, rejecting likely credentials by
+    /// default.
     pub fn update_node_content(&self, id: &str, new_content: &str) -> Result<()> {
+        self.update_node_content_with_secret_policy(id, new_content, SecretPolicy::Reject)
+    }
+
+    /// Update node content using an explicit credential-storage policy.
+    pub fn update_node_content_with_secret_policy(
+        &self,
+        id: &str,
+        new_content: &str,
+        policy: SecretPolicy,
+    ) -> Result<()> {
+        Self::enforce_secret_policy_for_content(new_content, policy)?;
+        self.update_node_content_unchecked(id, new_content)
+    }
+
+    /// Update a node's declared world-time interval without changing its
+    /// project namespace or transaction-time history. A `None` bound keeps the
+    /// stored column: updating only `valid_from` never clears an existing
+    /// `valid_until`, and vice versa.
+    pub fn update_node_validity(
+        &self,
+        id: &str,
+        valid_from: Option<DateTime<Utc>>,
+        valid_until: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        if let (Some(from), Some(until)) = (valid_from, valid_until)
+            && until <= from
+        {
+            return Err(StorageError::InvalidTimestamp(
+                "valid_until must be after valid_from".to_string(),
+            ));
+        }
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        // Validate the EFFECTIVE post-merge window under the writer lock so
+        // a partial update cannot invert a window against the stored bound.
+        let stored: Option<(Option<String>, Option<String>)> = writer
+            .query_row(
+                "SELECT valid_from, valid_until FROM knowledge_nodes WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((stored_from, stored_until)) = stored {
+            let parse = |value: Option<String>| {
+                value.and_then(|value| {
+                    DateTime::parse_from_rfc3339(&value)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .ok()
+                })
+            };
+            let effective_from = valid_from.or_else(|| parse(stored_from));
+            let effective_until = valid_until.or_else(|| parse(stored_until));
+            if let (Some(from), Some(until)) = (effective_from, effective_until)
+                && until <= from
+            {
+                return Err(StorageError::InvalidTimestamp(
+                    "valid_until must be after valid_from".to_string(),
+                ));
+            }
+        }
+        writer.execute(
+            "UPDATE knowledge_nodes SET valid_from = COALESCE(?1, valid_from), valid_until = COALESCE(?2, valid_until), updated_at = ?3 WHERE id = ?4",
+            params![
+                valid_from.map(|value| value.to_rfc3339()),
+                valid_until.map(|value| value.to_rfc3339()),
+                Utc::now().to_rfc3339(),
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn close_node_validity(&self, id: &str, valid_until: DateTime<Utc>) -> Result<()> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        writer.execute(
+            "UPDATE knowledge_nodes SET valid_until = ?1, updated_at = ?2 WHERE id = ?3",
+            params![valid_until.to_rfc3339(), Utc::now().to_rfc3339(), id],
+        )?;
+        Ok(())
+    }
+
+    fn update_node_content_unchecked(&self, id: &str, new_content: &str) -> Result<()> {
         let now = Utc::now();
 
         {
@@ -1304,7 +2680,7 @@ impl SqliteMemoryStore {
             // has_embedding = 0 / missing rows / model mismatch) never refreshed
             // it. Flip has_embedding to 0 on the not-ready path so the stale vector
             // is picked up and rebuilt once the embedder comes online.
-            if self.embedding_service.is_ready() {
+            if self.active_embedding_runtime_ready().unwrap_or(false) {
                 if let Err(e) = self.generate_embedding_for_node(id, new_content) {
                     tracing::warn!("Failed to regenerate embedding for {}: {}", id, e);
                 }
@@ -1322,7 +2698,7 @@ impl SqliteMemoryStore {
     /// Generate embedding for a node
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn generate_embedding_for_node(&self, node_id: &str, content: &str) -> Result<()> {
-        if !self.embedding_service.is_ready() {
+        if !self.active_embedding_runtime_ready()? {
             return Ok(());
         }
 
@@ -1337,17 +2713,37 @@ impl SqliteMemoryStore {
             .encode_document(content)
             .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
 
-        let embedding = self
-            .embedding_service
-            .embed(&encoded_content)
-            .map_err(|e| StorageError::Init(format!("Embedding failed: {}", e)))?;
-        if embedding.dimensions != manifest.profile.embedding_dimension {
+        let (embedding_bytes, embedding_dimensions, model_name, vector) =
+            if let Some(embedder) = self.attached_embedder_for(&active.profile_id)? {
+                let runtime = tokio::runtime::Runtime::new().map_err(|error| {
+                    StorageError::Init(format!("Create local embedding runtime: {error}"))
+                })?;
+                let vector = runtime
+                    .block_on(embedder.embed_document(content))
+                    .map_err(|error| StorageError::Init(format!("Embedding failed: {error}")))?;
+                let bytes = vector
+                    .iter()
+                    .flat_map(|value| value.to_le_bytes())
+                    .collect::<Vec<_>>();
+                (bytes, vector.len(), active.profile_id.to_string(), vector)
+            } else {
+                let embedding = self
+                    .embedding_service
+                    .embed(&encoded_content)
+                    .map_err(|e| StorageError::Init(format!("Embedding failed: {e}")))?;
+                (
+                    embedding.to_bytes(),
+                    embedding.dimensions,
+                    self.embedding_service.model_name().to_string(),
+                    embedding.vector,
+                )
+            };
+        if embedding_dimensions != manifest.profile.embedding_dimension {
             return Err(StorageError::InvalidEmbeddingProfile(format!(
                 "active profile '{}' requires {} dimensions but its runtime produced {}",
-                active.profile_id, manifest.profile.embedding_dimension, embedding.dimensions
+                active.profile_id, manifest.profile.embedding_dimension, embedding_dimensions
             )));
         }
-        let model_name = self.embedding_service.model_name();
 
         let now = Utc::now();
 
@@ -1356,17 +2752,19 @@ impl SqliteMemoryStore {
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-            writer.execute(
-                "INSERT OR REPLACE INTO node_embeddings (node_id, embedding, dimensions, model, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    node_id,
-                    embedding.to_bytes(),
-                    embedding.dimensions as i32,
-                    model_name,
-                    now.to_rfc3339(),
-                ],
-            )?;
+            if active.profile_id.as_str() == LEGACY_EMBEDDING_PROFILE_ID {
+                writer.execute(
+                    "INSERT OR REPLACE INTO node_embeddings (node_id, embedding, dimensions, model, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        node_id,
+                        &embedding_bytes,
+                        embedding_dimensions as i32,
+                        &model_name,
+                        now.to_rfc3339(),
+                    ],
+                )?;
+            }
 
             let active_profile_id = Self::active_profile_id_from_conn(&writer)?
                 .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.to_string());
@@ -1377,16 +2775,16 @@ impl SqliteMemoryStore {
                 params![
                     active_profile_id,
                     node_id,
-                    embedding.to_bytes(),
-                    embedding.dimensions as i32,
-                    model_name,
+                    &embedding_bytes,
+                    embedding_dimensions as i32,
+                    &model_name,
                     now.to_rfc3339(),
                 ],
             )?;
 
             writer.execute(
                 "UPDATE knowledge_nodes SET has_embedding = 1, embedding_model = ?2 WHERE id = ?1",
-                params![node_id, model_name],
+                params![node_id, &model_name],
             )?;
         }
 
@@ -1395,7 +2793,7 @@ impl SqliteMemoryStore {
                 .lock()
                 .map_err(|_| StorageError::Init("Vector index lock poisoned".to_string()))?;
             index
-                .add(node_id, &embedding.vector)
+                .add(node_id, &vector)
                 .map_err(|e| StorageError::Init(format!("Vector index add failed: {}", e)))?;
         }
 
@@ -2386,6 +3784,26 @@ impl SqliteMemoryStore {
         Ok(node)
     }
 
+    /// Return whether a node belongs to a namespace. NULL and blank historic
+    /// values are treated as `user`, matching V27's compatibility migration.
+    pub fn node_is_in_scope(&self, id: &str, scope: &str) -> Result<bool> {
+        let scope = Self::normalize_scope(scope)?;
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let present: Option<i32> = reader
+            .query_row(
+                "SELECT 1 FROM knowledge_nodes
+                 WHERE id = ?1
+                   AND COALESCE(NULLIF(trim(scope), ''), 'user') = ?2",
+                params![id, scope],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(present.is_some())
+    }
+
     /// Parse a stored timestamp into a UTC `DateTime`.
     ///
     /// The canonical on-disk format is RFC 3339 (every Rust writer in this
@@ -2546,6 +3964,14 @@ impl SqliteMemoryStore {
 
     /// Recall memories matching a query
     pub fn recall(&self, input: RecallInput) -> Result<Vec<KnowledgeNode>> {
+        self.recall_in_scope(input, DEFAULT_MEMORY_SCOPE)
+    }
+
+    /// Recall only memories from one namespace. This is intentionally the
+    /// safe default for all core recall: callers that need a project must name
+    /// it, and cross-project retrieval is an explicit higher-level operation.
+    pub fn recall_in_scope(&self, input: RecallInput, scope: &str) -> Result<Vec<KnowledgeNode>> {
+        let scope = Self::normalize_scope(scope)?;
         let nodes = match input.search_mode {
             SearchMode::Keyword => {
                 self.keyword_search(&input.query, input.limit, input.min_retention)?
@@ -2568,10 +3994,21 @@ impl SqliteMemoryStore {
             _ => self.keyword_search(&input.query, input.limit, input.min_retention)?,
         };
 
-        // Auto-strengthen memories on access (Testing Effect - Roediger & Karpicke 2006)
-        // This implements "use it or lose it" - accessed memories get stronger
+        // Retrieval is evidence that a memory was shown, not evidence that it
+        // was correct or useful. Preserve the telemetry without changing its
+        // ranking or FSRS state; callers must send explicit positive feedback
+        // to reinforce a memory.
+        let nodes: Vec<KnowledgeNode> = nodes
+            .into_iter()
+            .filter_map(|node| match self.node_is_in_scope(&node.id, scope) {
+                Ok(true) => Some(Ok(node)),
+                Ok(false) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
-        let _ = self.strengthen_batch_on_access(&ids); // Ignore errors, don't fail recall
+        let _ = self.record_batch_retrieval(&ids); // Ignore errors, don't fail recall
 
         Ok(nodes)
     }
@@ -2701,8 +4138,12 @@ impl SqliteMemoryStore {
             .ok_or_else(|| StorageError::NotFound(id.to_string()))
     }
 
-    /// Passively strengthen a memory when it's accessed (recalled/searched).
-    /// Implements the Testing Effect (Roediger & Karpicke 2006) + v1.4.0
+    /// Reinforce a memory after an intentional confirmation of relevance.
+    ///
+    /// Ordinary retrieval must use [`Self::record_batch_retrieval`] instead:
+    /// being shown in search is not evidence that a memory was correct or
+    /// useful. This helper remains for explicit duplicate/reinforcement flows.
+    /// It implements the Testing Effect (Roediger & Karpicke 2006) + v1.4.0
     /// content-aware cross-memory reinforcement: semantically similar neighbors
     /// receive a diminished boost proportional to cosine similarity.
     pub fn strengthen_on_access(&self, id: &str) -> Result<()> {
@@ -2730,8 +4171,8 @@ impl SqliteMemoryStore {
             )?;
         }
 
-        // Log access for ACT-R activation computation
-        let _ = self.log_access(id, "search_hit");
+        // This is a deliberate reinforcement, not a passive search hit.
+        let _ = self.log_access(id, "reinforce");
 
         // Content-aware cross-memory reinforcement: boost semantically similar neighbors
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -2774,13 +4215,27 @@ impl SqliteMemoryStore {
         Ok(())
     }
 
-    /// Batch strengthen multiple memories on access
+    /// Batch-strengthen memories after an intentional confirmation of relevance.
     pub fn strengthen_batch_on_access(&self, ids: &[&str]) -> Result<()> {
         for id in ids {
             self.strengthen_on_access(id)?;
             // Also record access in memory_states for audit trail (Bug #1 fix)
             let _ = self.record_memory_access(id);
         }
+        Ok(())
+    }
+
+    /// Record that a memory was returned to a caller without reinforcing it.
+    ///
+    /// A search hit is not proof of correctness or usefulness. We retain only
+    /// access-log evidence for auditability, leaving node state and every
+    /// learning/ranking signal untouched. Call [`Self::promote_memory`] or
+    /// [`Self::mark_memory_useful`] only after an explicit positive signal.
+    pub fn record_batch_retrieval(&self, ids: &[&str]) -> Result<()> {
+        for id in ids {
+            self.log_access(id, "retrieval_shown")?;
+        }
+
         Ok(())
     }
 
@@ -2807,8 +4262,8 @@ impl SqliteMemoryStore {
         Ok(())
     }
 
-    /// Log a memory access event for ACT-R activation computation
-    fn log_access(&self, node_id: &str, access_type: &str) -> Result<()> {
+    /// Log a memory interaction for audit and explicit-feedback learning.
+    pub(crate) fn log_access(&self, node_id: &str, access_type: &str) -> Result<()> {
         let writer = self
             .writer
             .lock()
@@ -2827,7 +4282,8 @@ impl SqliteMemoryStore {
     pub fn promote_memory(&self, id: &str) -> Result<KnowledgeNode> {
         let now = Utc::now();
 
-        // Strong boost: +0.2 retrieval, +0.1 retention
+        // Explicit positive feedback: boost strength and record that this
+        // memory proved useful to the caller.
         {
             let writer = self
                 .writer
@@ -2838,7 +4294,13 @@ impl SqliteMemoryStore {
                     last_accessed = ?1,
                     retrieval_strength = MIN(1.0, retrieval_strength + 0.20),
                     retention_strength = MIN(1.0, retention_strength + 0.10),
-                    stability = stability * 1.5
+                    stability = stability * 1.5,
+                    times_useful = COALESCE(times_useful, 0) + 1,
+                    utility_score = CASE
+                        WHEN COALESCE(times_retrieved, 0) > 0
+                        THEN MIN(1.0, CAST(COALESCE(times_useful, 0) + 1 AS REAL) / COALESCE(times_retrieved, 0))
+                        ELSE 1.0
+                    END
                 WHERE id = ?2",
                 params![now.to_rfc3339(), id],
             )?;
@@ -2893,22 +4355,22 @@ impl SqliteMemoryStore {
     /// Significantly reduces retrieval strength so better alternatives surface
     /// Does NOT delete - the memory stays for reference but ranks lower
     pub fn demote_memory(&self, id: &str) -> Result<KnowledgeNode> {
-        let now = Utc::now();
-
         // Strong penalty: -0.3 retrieval, -0.15 retention, halve stability
         {
             let writer = self
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            // last_accessed intentionally untouched -- see suppress_memory: a
+            // demotion is an inhibition event, not a recall, and apply_decay
+            // would otherwise recompute the penalty away.
             writer.execute(
                 "UPDATE knowledge_nodes SET
-                    last_accessed = ?1,
                     retrieval_strength = MAX(0.05, retrieval_strength - 0.30),
                     retention_strength = MAX(0.05, retention_strength - 0.15),
                     stability = stability * 0.5
-                WHERE id = ?2",
-                params![now.to_rfc3339(), id],
+                WHERE id = ?1",
+                params![id],
             )?;
         }
 
@@ -2942,13 +4404,19 @@ impl SqliteMemoryStore {
     pub fn suppress_memory(&self, id: &str) -> Result<KnowledgeNode> {
         let now = Utc::now();
         {
-            let writer = self
+            let mut writer = self
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-            writer.execute(
+            let tx = writer.transaction()?;
+            let changed = tx.execute(
+                // NOTE: last_accessed is deliberately NOT touched here. apply_decay
+                // RECOMPUTES retrieval_strength/retention_strength from
+                // days_since(last_accessed) rather than decaying the stored value,
+                // so stamping "now" would make an inhibited memory look freshly
+                // recalled and the next consolidation pass would overwrite this
+                // whole penalty -- silently un-suppressing it within hours.
                 "UPDATE knowledge_nodes SET
-                    last_accessed = ?1,
                     suppression_count = COALESCE(suppression_count, 0) + 1,
                     suppressed_at = ?1,
                     retrieval_strength = MAX(0.05, retrieval_strength - 0.35),
@@ -2957,6 +4425,15 @@ impl SqliteMemoryStore {
                 WHERE id = ?2",
                 params![now.to_rfc3339(), id],
             )?;
+            if changed == 0 {
+                return Err(StorageError::NotFound(id.to_string()));
+            }
+            Self::invalidate_replay_evidence_for_memory_in_transaction(
+                &tx,
+                id,
+                crate::storage::ReplayInvalidationReason::Suppressed,
+            )?;
+            tx.commit()?;
         }
 
         let _ = self.log_access(id, "suppress");
@@ -3260,6 +4737,12 @@ impl SqliteMemoryStore {
     pub fn get_stats(&self) -> Result<MemoryStats> {
         let now = Utc::now().to_rfc3339();
 
+        // Resolve the active pointer before taking the shared reader lock.
+        // `active_embedding_profile` reads through that same mutex; calling it
+        // below after acquiring `reader` would self-deadlock every stats read.
+        #[cfg(feature = "embeddings")]
+        let active_profile = self.active_embedding_profile()?;
+
         let reader = self
             .reader
             .lock()
@@ -3323,36 +4806,57 @@ impl SqliteMemoryStore {
             .optional()?;
 
         #[cfg(feature = "embeddings")]
-        let active_embedding_model = Some(self.embedding_service.model_name().to_string());
+        let active_embedding_model = active_profile.as_ref().and_then(|active| {
+            reader
+                .query_row(
+                    "SELECT model_id FROM embedding_profiles WHERE profile_id = ?1",
+                    params![active.profile_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+        });
         #[cfg(not(feature = "embeddings"))]
-        let active_embedding_model = None;
+        let active_embedding_model: Option<String> = None;
 
         #[cfg(feature = "embeddings")]
         let (nodes_with_active_embeddings, nodes_with_mismatched_embeddings) = {
-            let active_model = active_embedding_model.as_deref().unwrap_or_default();
-            let model_pattern = Self::active_embedding_model_like_pattern(active_model);
+            let active_profile_id = active_profile
+                .as_ref()
+                .map(|active| active.profile_id.as_str());
+            let active_model = active_embedding_model.as_deref();
             let active_count: i64 = reader.query_row(
                 "SELECT COUNT(*)
                  FROM knowledge_nodes kn
-                 WHERE kn.has_embedding = 1
-                   AND EXISTS (
-                       SELECT 1 FROM node_embeddings ne
-                       WHERE ne.node_id = kn.id
-                         AND ne.model LIKE ?1
+                 WHERE EXISTS (
+                       SELECT 1 FROM embedding_profile_vectors epv
+                       WHERE epv.node_id = kn.id
+                         AND epv.profile_id = ?1
+                         AND epv.model = ?2
+                         AND epv.dimensions = (
+                             SELECT embedding_dimension FROM embedding_profiles
+                             WHERE profile_id = ?1
+                         )
                    )",
-                params![&model_pattern],
+                params![active_profile_id, active_model],
                 |row| row.get(0),
             )?;
             let mismatched_count: i64 = reader.query_row(
                 "SELECT COUNT(*)
                  FROM knowledge_nodes kn
-                 WHERE kn.has_embedding = 1
+                 WHERE (kn.has_embedding = 1 OR EXISTS (
+                       SELECT 1 FROM embedding_profile_vectors epv WHERE epv.node_id = kn.id
+                   ))
                    AND NOT EXISTS (
-                       SELECT 1 FROM node_embeddings ne
-                       WHERE ne.node_id = kn.id
-                         AND ne.model LIKE ?1
+                       SELECT 1 FROM embedding_profile_vectors epv
+                       WHERE epv.node_id = kn.id
+                         AND epv.profile_id = ?1
+                         AND epv.model = ?2
+                         AND epv.dimensions = (
+                             SELECT embedding_dimension FROM embedding_profiles
+                             WHERE profile_id = ?1
+                         )
                    )",
-                params![&model_pattern],
+                params![active_profile_id, active_model],
                 |row| row.get(0),
             )?;
             (active_count, mismatched_count)
@@ -3441,31 +4945,46 @@ impl SqliteMemoryStore {
             }
         }
 
-        // Convenience: embedding-coverage NULL count. Defined as the number
-        // of knowledge_nodes with NO matching row in node_embeddings. This is
-        // distinct from `nodes_with_embeddings` in MemoryStats (which uses
-        // the `has_embedding` column flag); we compute the join-based truth
-        // here so audit scripts can detect drift between the flag and the
-        // actual embeddings table.
+        // Convenience: active-profile coverage is the number of nodes with no
+        // vector in the currently selected isolated vector space.
+        let active_profile_id = Self::active_profile_id_from_conn(&reader)?;
         let embedding_null_count: i64 = reader
             .query_row(
                 "SELECT COUNT(*) FROM knowledge_nodes kn
                  WHERE NOT EXISTS (
-                     SELECT 1 FROM node_embeddings ne WHERE ne.node_id = kn.id
+                     SELECT 1 FROM embedding_profile_vectors epv
+                     WHERE epv.node_id = kn.id AND epv.profile_id = ?1
                  )",
-                [],
+                params![active_profile_id],
                 |row| row.get(0),
             )
             .unwrap_or(0);
 
         #[cfg(feature = "embeddings")]
-        let active_embedding_model = Some(self.embedding_service.model_name().to_string());
+        let active_embedding_model = active_profile_id.as_deref().and_then(|profile_id| {
+            reader
+                .query_row(
+                    "SELECT model_id FROM embedding_profiles WHERE profile_id = ?1",
+                    params![profile_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+        });
         #[cfg(not(feature = "embeddings"))]
         let active_embedding_model: Option<String> = None;
 
         #[cfg(feature = "embeddings")]
         let active_embedding_dimensions: Option<u32> =
-            Some(self.embedding_service.dimensions() as u32);
+            active_profile_id.as_deref().and_then(|profile_id| {
+                reader
+                    .query_row(
+                        "SELECT embedding_dimension FROM embedding_profiles WHERE profile_id = ?1",
+                        params![profile_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .ok()
+                    .and_then(|dimension| u32::try_from(dimension).ok())
+            });
         #[cfg(not(feature = "embeddings"))]
         let active_embedding_dimensions: Option<u32> = None;
 
@@ -3479,50 +4998,47 @@ impl SqliteMemoryStore {
         })
     }
 
-    /// Delete a node
+    /// Delete a node through the same privacy cleanup coordinator as an explicit
+    /// purge.  Keeping one deletion path prevents maintenance, dashboard, and
+    /// library callers from bypassing replay invalidation or durable-evidence
+    /// redaction.
     pub fn delete_node(&self, id: &str) -> Result<bool> {
-        let mut writer = self
-            .writer
-            .lock()
-            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction()?;
-        if Self::node_exists(&tx, id)? {
-            Self::record_sync_tombstone(&tx, "knowledge_nodes", id, "delete_node")?;
-        }
-        let rows = tx.execute("DELETE FROM knowledge_nodes WHERE id = ?1", params![id])?;
-        tx.commit()?;
-
-        // Clean up vector index to prevent stale search results
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-        if rows > 0
-            && let Some(index) = self.vector_index.as_ref()
-            && let Ok(mut index) = index.lock()
-        {
-            let _ = index.remove(id);
-        }
-
-        Ok(rows > 0)
+        Ok(self.purge_node(id, None)?.deleted)
     }
 
     /// Permanently purge a memory's content and embeddings.
     ///
-    /// Unlike `delete_node`, purge also scrubs non-FK JSON references in
-    /// `insights.source_memories`, detaches temporal-summary children, and
-    /// writes a content-free deletion tombstone for audit/sync.
+    /// This is the one local deletion coordinator. It scrubs non-FK references,
+    /// invalidates replay evidence, detaches temporal-summary children, and
+    /// writes an opaque deletion marker for audit/sync. It remains a legacy
+    /// cleanup path and deliberately does not claim verified local unlearning.
     pub fn purge_node(&self, id: &str, reason: Option<&str>) -> Result<PurgeReport> {
+        // The reason is logged, never persisted: deletion_tombstones are
+        // content-free by contract (an opaque marker, no reason, no tags), so
+        // a purged memory leaves nothing recoverable. The local log line is
+        // how an operator answers "what deleted this?" without the tombstone
+        // ever carrying it.
+        if let Some(reason) = reason {
+            tracing::info!(memory_id = %id, reason, "purging memory");
+        }
         let deleted_at = Utc::now();
         let mut writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
         let tx = writer.transaction()?;
+        let cleanup = Self::purge_node_in_transaction(&tx, id, deleted_at, true)?;
+        tx.commit()?;
 
-        let node = tx
-            .prepare("SELECT * FROM knowledge_nodes WHERE id = ?1")?
-            .query_row(params![id], Self::row_to_node)
-            .optional()?;
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        if cleanup.is_some()
+            && let Some(index) = self.vector_index.as_ref()
+            && let Ok(mut index) = index.lock()
+        {
+            let _ = index.remove(id);
+        }
 
-        let Some(node) = node else {
+        let Some(cleanup) = cleanup else {
             return Ok(PurgeReport {
                 memory_id: id.to_string(),
                 deleted: false,
@@ -3531,7 +5047,54 @@ impl SqliteMemoryStore {
                 insights_rewritten: 0,
                 insights_deleted: 0,
                 children_orphaned: 0,
+                unlearning_scope: crate::storage::UnlearningScope::LegacyAuditedPurge,
+                unlearning_verdict: crate::storage::UnlearningVerdict::Incomplete,
+                unlearning_claim_boundary: "No purge ran because the requested memory was not found; no unlearning audit or verified-local erasure claim was produced.",
             });
+        };
+
+        Ok(PurgeReport {
+            memory_id: id.to_string(),
+            deleted: true,
+            deleted_at,
+            edges_pruned: cleanup.edges_pruned,
+            insights_rewritten: cleanup.insights_rewritten,
+            insights_deleted: cleanup.insights_deleted,
+            children_orphaned: cleanup.children_orphaned,
+            unlearning_scope: crate::storage::UnlearningScope::LegacyAuditedPurge,
+            unlearning_verdict: crate::storage::UnlearningVerdict::Incomplete,
+            unlearning_claim_boundary: "Legacy cleanup completed, but this operation has no V25 lineage-completeness proof, full required-surface audit, or anti-resurrection ingress gate. It does not establish complete machine unlearning, erasure of unmanaged copies, media forensics, provider backups, external model weights, or re-ingest prevention.",
+        })
+    }
+
+    /// Remove a committed purge from the optional in-process vector index.
+    pub(crate) fn remove_purged_node_from_vector_index(&self, id: &str) {
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        if let Some(index) = self.vector_index.as_ref()
+            && let Ok(mut index) = index.lock()
+        {
+            let _ = index.remove(id);
+        }
+        #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
+        let _ = id;
+    }
+
+    /// Execute the privacy-critical delete work inside a caller-owned SQLite
+    /// transaction. Portable merge uses this exact path so a remote deletion
+    /// cannot leave local non-FK evidence behind.
+    pub(crate) fn purge_node_in_transaction(
+        tx: &rusqlite::Transaction<'_>,
+        id: &str,
+        deleted_at: DateTime<Utc>,
+        write_tombstones: bool,
+    ) -> Result<Option<PurgeCleanup>> {
+        let node = tx
+            .prepare("SELECT * FROM knowledge_nodes WHERE id = ?1")?
+            .query_row(params![id], Self::row_to_node)
+            .optional()?;
+
+        let Some(node) = node else {
+            return Ok(None);
         };
 
         let edges_pruned: i64 = tx.query_row(
@@ -3578,14 +5141,156 @@ impl SqliteMemoryStore {
             params![id],
         )? as i64;
 
+        // Review records are intentionally not FK-linked to memories, so a
+        // normal node delete would retain their subject id, previews, tags, and
+        // potentially user-provided rationale. An erasure request takes privacy
+        // precedence over that historical review record.
+        tx.execute(
+            r#"DELETE FROM memory_prs
+                WHERE subject_id = ?1
+                   OR (?2 <> '' AND instr(title, ?2) > 0)
+                   OR instr(diff, ?1) > 0 OR (?2 <> '' AND instr(diff, ?2) > 0)
+                   OR instr(signals, ?1) > 0 OR (?2 <> '' AND instr(signals, ?2) > 0)"#,
+            params![id, &node.content],
+        )?;
+
+        // Composition members intentionally preserve historical memory ids.
+        // Once a user requests erasure, retaining the surrounding event can
+        // still expose the memory through query/output/metadata fields. Delete
+        // the whole affected event (and FK-cascaded members/outcomes) rather
+        // than attempting partial JSON surgery.
+        tx.execute(
+            r#"DELETE FROM composition_events
+                WHERE id IN (
+                    SELECT event_id FROM composition_members WHERE memory_id = ?1
+                )
+                   OR (?2 <> '' AND instr(COALESCE(query, ''), ?2) > 0)
+                   OR (?2 <> '' AND instr(COALESCE(output_preview, ''), ?2) > 0)
+                   OR instr(metadata, ?1) > 0
+                   OR (?2 <> '' AND instr(metadata, ?2) > 0)"#,
+            params![id, &node.content],
+        )?;
+
+        // A purge must erase frozen replay dependency locators and invalidate
+        // every derived replay in the same transaction as the memory removal.
+        // This also upgrades a previously redacted capsule to `purged`.
+        Self::invalidate_replay_evidence_for_memory_in_transaction(
+            tx,
+            id,
+            crate::storage::ReplayInvalidationReason::Purged,
+        )?;
+
         tx.execute(
             "UPDATE composition_members SET preview = NULL WHERE memory_id = ?1",
             params![id],
         )?;
 
-        let tags_json = serde_json::to_string(&node.tags).unwrap_or_else(|_| "[]".to_string());
+        // Purge overrides historical receipt fidelity: remove the stable id
+        // from every persisted receipt payload while retaining its evidence
+        // slots, score, disposition, and measured deltas. Public reads also
+        // resolve current state, but this closes the raw V21 audit-row copy.
+        let receipt_refs: Vec<(String, String)> = {
+            let mut stmt = tx
+                .prepare("SELECT receipt_id, payload FROM memory_receipts WHERE payload LIKE ?1")?;
+            let pattern = format!("%{}%", id);
+            stmt.query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .filter_map(|row| row.ok())
+                .collect()
+        };
+        for (receipt_id, payload) in receipt_refs {
+            let Ok(mut receipt) = serde_json::from_str::<crate::trace::Receipt>(&payload) else {
+                continue;
+            };
+            receipt.redact_memory_id(id, "purged_1");
+            let rewritten = serde_json::to_string(&receipt)
+                .map_err(|e| StorageError::Init(format!("receipt redact serialize: {e}")))?;
+            tx.execute(
+                "UPDATE memory_receipts SET payload = ?1 WHERE receipt_id = ?2",
+                params![rewritten, receipt_id],
+            )?;
+        }
         tx.execute(
-            "INSERT INTO deletion_tombstones (
+            "UPDATE memory_receipts SET query = NULL
+             WHERE instr(COALESCE(query, ''), ?1) > 0
+                OR (?2 <> '' AND instr(COALESCE(query, ''), ?2) > 0)",
+            params![id, &node.content],
+        )?;
+
+        // Black Box traces are public/exportable evidence too. Rewrite every
+        // id-bearing payload and delete any trace containing the target text;
+        // a structured redactor cannot safely prove removal of arbitrary text
+        // from historical trace JSON.
+        let trace_refs: Vec<(String, String)> = {
+            let mut stmt =
+                tx.prepare("SELECT id, payload FROM agent_traces WHERE payload LIKE ?1")?;
+            let pattern = format!("%{}%", id);
+            stmt.query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .filter_map(|row| row.ok())
+                .collect()
+        };
+        for (trace_id, payload) in trace_refs {
+            let Ok(mut event) = serde_json::from_str::<crate::trace::MemoryTraceEvent>(&payload)
+            else {
+                continue;
+            };
+            event.redact_memory_id(id, "purged_1");
+            let rewritten = serde_json::to_string(&event)
+                .map_err(|e| StorageError::Init(format!("trace redact serialize: {e}")))?;
+            tx.execute(
+                "UPDATE agent_traces SET payload = ?1 WHERE id = ?2",
+                params![rewritten, trace_id],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM agent_traces WHERE ?1 <> '' AND instr(payload, ?1) > 0",
+            params![&node.content],
+        )?;
+
+        // A trigger event otherwise preserves the purged stable id outside the
+        // knowledge-node FK graph. Capture-item rows cascade with the event;
+        // candidate rows cascade through their synaptic tag on node deletion.
+        //
+        // A captured tag is only valid while it is bound to the capture item
+        // and event which prove that state.  Purging the trigger deletes that
+        // proof, so retaining `captured` would leave an invalid durable state
+        // that prevents a later startup integrity check from succeeding.  An
+        // expired tag cannot be recaptured, which preserves the one-promotion
+        // lifecycle without claiming evidence that no longer exists.
+        tx.execute(
+            "UPDATE synaptic_tags
+             SET state = 'expired', capture_event_id = NULL, captured_at_ms = NULL
+             WHERE capture_event_id IN (
+                 SELECT event_id FROM synaptic_events WHERE trigger_memory_id = ?1
+             )",
+            params![id],
+        )?;
+        tx.execute(
+            "DELETE FROM synaptic_events WHERE trigger_memory_id = ?1",
+            params![id],
+        )?;
+
+        // V24 deliberately keeps the immutable, identity-free DSSE envelope
+        // after erasure, but its private disclosure mapping is deletable. The
+        // FK also covers this when the node delete succeeds; doing it
+        // explicitly keeps the privacy operation visible and makes a schema
+        // regression fail before the canonical row is removed.
+        if Self::table_exists(tx, "receipt_disclosures")? {
+            tx.execute(
+                "DELETE FROM receipt_disclosures WHERE memory_id = ?1",
+                params![id],
+            )?;
+        }
+
+        if write_tombstones {
+            // The V13 table predates commitment-only V25 evidence, but it can
+            // still be made content-free without a migration: use an opaque
+            // stable marker as its primary key, store no caller reason, and
+            // retain no tags. `sync_tombstones` uses the same marker and
+            // resolves it locally during merge, so portable deletion
+            // propagation remains functional.
+            let tombstone_marker = Self::opaque_tombstone_marker(id);
+            tx.execute(
+                "INSERT INTO deletion_tombstones (
                 memory_id, deleted_at, reason, node_type, tags,
                 edges_pruned, insights_rewritten, insights_deleted, children_orphaned
              )
@@ -3599,39 +5304,28 @@ impl SqliteMemoryStore {
                 insights_rewritten = excluded.insights_rewritten,
                 insights_deleted = excluded.insights_deleted,
                 children_orphaned = excluded.children_orphaned",
-            params![
-                id,
-                deleted_at.to_rfc3339(),
-                reason,
-                node.node_type,
-                tags_json,
-                edges_pruned,
-                insights_rewritten,
-                insights_deleted,
-                children_orphaned,
-            ],
-        )?;
-
-        Self::record_sync_tombstone(&tx, "knowledge_nodes", id, "purge_node")?;
-        tx.execute("DELETE FROM knowledge_nodes WHERE id = ?1", params![id])?;
-        tx.commit()?;
-
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-        if let Some(index) = self.vector_index.as_ref()
-            && let Ok(mut index) = index.lock()
-        {
-            let _ = index.remove(id);
+                params![
+                    tombstone_marker,
+                    deleted_at.to_rfc3339(),
+                    Option::<&str>::None,
+                    node.node_type,
+                    "[]",
+                    edges_pruned,
+                    insights_rewritten,
+                    insights_deleted,
+                    children_orphaned,
+                ],
+            )?;
+            Self::record_sync_tombstone(tx, "knowledge_nodes", id)?;
         }
+        tx.execute("DELETE FROM knowledge_nodes WHERE id = ?1", params![id])?;
 
-        Ok(PurgeReport {
-            memory_id: id.to_string(),
-            deleted: true,
-            deleted_at,
+        Ok(Some(PurgeCleanup {
             edges_pruned,
             insights_rewritten,
             insights_deleted,
             children_orphaned,
-        })
+        }))
     }
 
     fn node_exists(conn: &Connection, id: &str) -> Result<bool> {
@@ -3643,21 +5337,53 @@ impl SqliteMemoryStore {
         Ok(count > 0)
     }
 
-    fn record_sync_tombstone(
-        conn: &Connection,
-        table_name: &str,
-        row_id: &str,
-        reason: &str,
-    ) -> Result<()> {
+    fn record_sync_tombstone(conn: &Connection, table_name: &str, row_id: &str) -> Result<()> {
+        let tombstone_row_id = if table_name == "knowledge_nodes" {
+            Self::opaque_tombstone_marker(row_id)
+        } else {
+            row_id.to_string()
+        };
         conn.execute(
             "INSERT INTO sync_tombstones (table_name, row_id, deleted_at, reason)
-             VALUES (?1, ?2, ?3, ?4)
+             VALUES (?1, ?2, ?3, NULL)
              ON CONFLICT(table_name, row_id) DO UPDATE SET
                 deleted_at = excluded.deleted_at,
                 reason = excluded.reason",
-            params![table_name, row_id, Utc::now().to_rfc3339(), reason],
+            params![table_name, tombstone_row_id, Utc::now().to_rfc3339()],
         )?;
         Ok(())
+    }
+
+    /// Deterministic, domain-separated marker for legacy deletion/sync rows.
+    /// Knowledge-node UUIDs are not content, but persisting them makes deletion
+    /// history linkable to a removed record and exposes them in portable
+    /// archives. The marker is enough to match an already-local UUID during
+    /// merge without retaining the UUID itself.
+    fn opaque_tombstone_marker(memory_id: &str) -> String {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"vestige.legacy-tombstone-marker.v1\\0");
+        hasher.update(memory_id.as_bytes());
+        format!("opaque:{}", hasher.finalize().to_hex())
+    }
+
+    fn resolve_tombstone_memory_id(
+        tx: &rusqlite::Transaction<'_>,
+        tombstone_row_id: &str,
+    ) -> Result<Option<String>> {
+        // Older archives retain raw ids. Keep their import behavior intact
+        // while ensuring all newly produced tombstones are opaque.
+        if !tombstone_row_id.starts_with("opaque:") {
+            return Ok(Some(tombstone_row_id.to_string()));
+        }
+        let mut statement = tx.prepare("SELECT id FROM knowledge_nodes")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            let id = row?;
+            if Self::opaque_tombstone_marker(&id) == tombstone_row_id {
+                return Ok(Some(id));
+            }
+        }
+        Ok(None)
     }
 
     /// Search with full-text search
@@ -3762,12 +5488,37 @@ impl SqliteMemoryStore {
                 Ok((node, rank))
             })?;
 
-            for (idx, row) in rows.enumerate() {
-                let (node, rank) = row?;
-                if !Self::node_matches_type_filters(&node, include_types, exclude_types) {
-                    continue;
-                }
-                let base_score = (1.0 / (idx as f32 + 1.0)).max((-rank as f32).max(0.0));
+            // Collect first, then NORMALIZE. Raw BM25 magnitude is unbounded,
+            // while literal_match_score returns fixed constants in 1.2..=3.0, and
+            // both land in the same `combined_score`. Measured on a 202-document
+            // corpus: a note that merely CITES a UUID three times scores 27.5,
+            // against the fixed 3.0 given to the memory whose id IS that UUID --
+            // so on the documented exact-lookup path the thing you asked for was
+            // routinely outranked by something that only mentions it, 9x over.
+            //
+            // Map the FTS leg into 0.0..=1.0, strictly below the 1.2 literal
+            // floor. Relative BM25 ordering is preserved among pure keyword hits,
+            // but any literal match now outranks any non-literal one.
+            let scored_rows: Vec<(KnowledgeNode, f64)> = rows
+                .filter_map(|r| r.ok())
+                .filter(|(node, _)| {
+                    Self::node_matches_type_filters(node, include_types, exclude_types)
+                })
+                .collect();
+            let max_magnitude = scored_rows
+                .iter()
+                .map(|(_, rank)| (-*rank as f32).max(0.0))
+                .fold(0.0_f32, f32::max);
+            const FTS_BAND_TOP: f32 = 1.0; // < LITERAL_FLOOR (1.2)
+            for (idx, (node, rank)) in scored_rows.into_iter().enumerate() {
+                let magnitude = (-rank as f32).max(0.0);
+                let base_score = if max_magnitude > 0.0 {
+                    (magnitude / max_magnitude) * FTS_BAND_TOP
+                } else {
+                    // No usable BM25 (e.g. a term present in every row): fall back
+                    // to rank order, still inside the band.
+                    FTS_BAND_TOP / (idx as f32 + 1.0)
+                };
                 Self::upsert_concrete_result(&mut by_id, node, base_score, Some(base_score));
             }
         }
@@ -3939,6 +5690,202 @@ impl SqliteMemoryStore {
         Ok(result)
     }
 
+    /// Read the complete metadata population for hygiene aggregation in one
+    /// query. Content is bounded to a short preview; access history is reduced
+    /// with `NOT EXISTS` in SQL, avoiding both full-body loads and N+1 reads.
+    /// `None` is an explicit all-scopes request. `Some(scope)` uses the same
+    /// legacy-compatible normalized predicate as the tag-maintenance scans.
+    ///
+    /// Access classification is honest about the pruned log: `never_accessed`
+    /// requires zero log rows AND zero durable retrieval counters
+    /// (`times_retrieved`/`times_useful`) AND creation inside the retained
+    /// [`ACCESS_LOG_RETENTION_DAYS`] window. Older rows without durable
+    /// evidence are reported as `access_unknown` instead — their pre-prune
+    /// access history is unknowable, never provably absent.
+    ///
+    /// Malformed legacy rows (NULL/unparseable `tags`, NULL
+    /// `retention_strength`) are tolerated exactly like `row_to_node` and
+    /// surfaced as counts, so one hand-edited row cannot abort the stats view.
+    pub fn hygiene_snapshot(&self, scope: Option<&str>) -> Result<HygieneSnapshot> {
+        let scope = scope.map(Self::normalize_scope).transpose()?;
+        let log_window_start = Utc::now() - Duration::days(ACCESS_LOG_RETENTION_DAYS);
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let sql = if scope.is_some() {
+            "SELECT n.id, n.node_type, n.created_at, n.retention_strength, n.tags,
+                    n.valid_from, n.valid_until, n.superseded_by IS NOT NULL,
+                    length(CAST(n.content AS BLOB)), substr(n.content, 1, 240),
+                    (NOT EXISTS (
+                        SELECT 1 FROM memory_access_log AS access
+                        WHERE access.node_id = n.id
+                    ))
+                    AND COALESCE(n.times_retrieved, 0) = 0
+                    AND COALESCE(n.times_useful, 0) = 0
+             FROM knowledge_nodes AS n
+             WHERE COALESCE(NULLIF(trim(n.scope), ''), 'user') = ?1
+             ORDER BY n.id"
+        } else {
+            "SELECT n.id, n.node_type, n.created_at, n.retention_strength, n.tags,
+                    n.valid_from, n.valid_until, n.superseded_by IS NOT NULL,
+                    length(CAST(n.content AS BLOB)), substr(n.content, 1, 240),
+                    (NOT EXISTS (
+                        SELECT 1 FROM memory_access_log AS access
+                        WHERE access.node_id = n.id
+                    ))
+                    AND COALESCE(n.times_retrieved, 0) = 0
+                    AND COALESCE(n.times_useful, 0) = 0
+             FROM knowledge_nodes AS n
+             ORDER BY n.id"
+        };
+        let mut stmt = reader.prepare(sql)?;
+        let mut rows = match scope {
+            Some(scope) => stmt.query(params![scope])?,
+            None => stmt.query([])?,
+        };
+        let mut summaries = Vec::new();
+        let mut malformed_tag_rows = 0usize;
+        let mut malformed_tag_row_ids = Vec::new();
+        let mut malformed_tag_row_ids_truncated = false;
+        let mut defaulted_retention_rows = 0usize;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let parsed_tags = match row.get::<_, Option<String>>(4)? {
+                Some(tags_raw) => match serde_json::from_str::<Vec<String>>(&tags_raw) {
+                    Ok(tags) => Some(tags),
+                    Err(error) => {
+                        tracing::warn!(
+                            memory_id = %id,
+                            "hygiene snapshot: unparseable tags JSON, treating as untagged: {error}"
+                        );
+                        None
+                    }
+                },
+                None => None,
+            };
+            let tags = parsed_tags.unwrap_or_else(|| {
+                malformed_tag_rows += 1;
+                if malformed_tag_row_ids.len() < MAX_MALFORMED_TAG_ROW_IDS {
+                    malformed_tag_row_ids.push(id.clone());
+                } else {
+                    malformed_tag_row_ids_truncated = true;
+                }
+                Vec::new()
+            });
+            let retention_strength = match row.get::<_, Option<f64>>(3)? {
+                Some(value) => value,
+                None => {
+                    // The column is nullable and hand-edited stores can hold
+                    // NULL; report those rows at the schema default of 1.0.
+                    defaulted_retention_rows += 1;
+                    1.0
+                }
+            };
+            let valid_from = row
+                .get::<_, Option<String>>(5)?
+                .map(|value| Self::parse_timestamp(&value, "valid_from"))
+                .transpose()?;
+            let valid_until = row
+                .get::<_, Option<String>>(6)?
+                .map(|value| Self::parse_timestamp(&value, "valid_until"))
+                .transpose()?;
+            let created_at = Self::parse_timestamp(&row.get::<_, String>(2)?, "created_at")?;
+            let no_access_evidence: bool = row.get(10)?;
+            let created_inside_log_window = created_at >= log_window_start;
+            summaries.push(HygieneNodeSummary {
+                id,
+                node_type: row.get(1)?,
+                created_at,
+                retention_strength,
+                tags,
+                valid_from,
+                valid_until,
+                superseded: row.get(7)?,
+                content_bytes: row.get::<_, i64>(8)?.max(0) as usize,
+                content_preview: row.get(9)?,
+                never_accessed: no_access_evidence && created_inside_log_window,
+                access_unknown: no_access_evidence && !created_inside_log_window,
+            });
+        }
+        Ok(HygieneSnapshot {
+            nodes: summaries,
+            malformed_tag_rows,
+            malformed_tag_row_ids,
+            malformed_tag_row_ids_truncated,
+            defaulted_retention_rows,
+        })
+    }
+
+    /// Return the complete, exact tag vocabulary for one scope (or all scopes
+    /// when explicitly requested). This powers non-mutating ingest nudges; it
+    /// parses JSON arrays rather than relying on substring SQL matching.
+    ///
+    /// Stored tags longer than the 200-character similarity safety limit are
+    /// skipped and counted instead of erroring the whole scope, mirroring how
+    /// overlong INPUT tags and secret-shaped vocabulary tags already degrade
+    /// gracefully. The 10,000-tag vocabulary bound stays a hard error and is
+    /// evaluated over the remaining (eligible) vocabulary, so skipping
+    /// overlong tags can never mask it.
+    pub fn tag_vocabulary(&self, scope: Option<&str>) -> Result<TagVocabulary> {
+        const MAX_TAG_VOCABULARY: usize = 10_000;
+        let scope = scope.map(Self::normalize_scope).transpose()?;
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let overlong_sql = if scope.is_some() {
+            "SELECT COUNT(DISTINCT tags.value)
+             FROM knowledge_nodes AS node, json_each(node.tags) AS tags
+             WHERE COALESCE(NULLIF(trim(node.scope), ''), 'user') = ?1
+               AND tags.type = 'text'
+               AND length(tags.value) > 200"
+        } else {
+            "SELECT COUNT(DISTINCT tags.value)
+             FROM knowledge_nodes AS node, json_each(node.tags) AS tags
+             WHERE tags.type = 'text'
+               AND length(tags.value) > 200"
+        };
+        let skipped_overlong: i64 = match scope {
+            Some(scope) => reader.query_row(overlong_sql, params![scope], |row| row.get(0))?,
+            None => reader.query_row(overlong_sql, [], |row| row.get(0))?,
+        };
+        let sql = if scope.is_some() {
+            "SELECT DISTINCT tags.value
+             FROM knowledge_nodes AS node, json_each(node.tags) AS tags
+             WHERE COALESCE(NULLIF(trim(node.scope), ''), 'user') = ?1
+               AND tags.type = 'text'
+               AND length(tags.value) <= 200
+             ORDER BY tags.value
+             LIMIT 10001"
+        } else {
+            "SELECT DISTINCT tags.value
+             FROM knowledge_nodes AS node, json_each(node.tags) AS tags
+             WHERE tags.type = 'text'
+               AND length(tags.value) <= 200
+             ORDER BY tags.value
+             LIMIT 10001"
+        };
+        let mut stmt = reader.prepare(sql)?;
+        let mut rows = match scope {
+            Some(scope) => stmt.query(params![scope])?,
+            None => stmt.query([])?,
+        };
+        let mut vocabulary = Vec::new();
+        while let Some(row) = rows.next()? {
+            vocabulary.push(row.get(0)?);
+        }
+        if vocabulary.len() > MAX_TAG_VOCABULARY {
+            return Err(StorageError::Init(format!(
+                "tag vocabulary exceeds the {MAX_TAG_VOCABULARY}-tag similarity safety limit"
+            )));
+        }
+        Ok(TagVocabulary {
+            tags: vocabulary,
+            skipped_overlong: skipped_overlong.max(0) as usize,
+        })
+    }
+
     /// Get nodes by type and optional tag filter
     ///
     /// This is used for codebase context retrieval where we need to query
@@ -4092,18 +6039,27 @@ impl SqliteMemoryStore {
         false
     }
 
-    /// Legacy compatibility entry point.
+    /// Initialize the released Nomic default without widening optional profile
+    /// activation into an implicit model-selection path.
     ///
-    /// It intentionally refuses to initialize an embedding runtime: callers
-    /// must use the explicit Embedding Profiles install/evaluate/migrate/
-    /// activate workflow. This prevents an arbitrary library caller from
-    /// turning a routine operation into a model download.
+    /// Existing installs have always initialized the active legacy Nomic
+    /// runtime from normal CLI/MCP startup. Preserve that contract exactly.
+    /// Every non-legacy profile, including all Qwen variants, remains an
+    /// explicit artifact-backed workflow and cannot be initialized here.
     #[cfg(feature = "embeddings")]
     pub fn init_embeddings(&self) -> Result<()> {
-        Err(StorageError::InvalidEmbeddingProfile(
-            "direct embedding initialization is disabled; use an explicit Embedding Profile install workflow"
-                .to_string(),
-        ))
+        let active = self.active_embedding_profile()?.ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("no active embedding profile pointer".to_string())
+        })?;
+        if active.profile_id.as_str() != LEGACY_EMBEDDING_PROFILE_ID {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "direct embedding initialization is supported only for the released legacy Nomic profile; '{}' requires the explicit profile workflow",
+                active.profile_id
+            )));
+        }
+        self.embedding_service.init().map_err(|error| {
+            StorageError::Init(format!("Initialize legacy Nomic embeddings: {error}"))
+        })
     }
 
     #[cfg(not(feature = "embeddings"))]
@@ -4177,6 +6133,50 @@ impl SqliteMemoryStore {
             cache.put(cache_key, vector.clone());
         }
 
+        Ok(vector)
+    }
+
+    /// Compute one document vector for the active profile without populating
+    /// the query cache. Document and query templates are distinct parts of a
+    /// profile contract, particularly for Qwen retrieval profiles.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn get_document_embedding(&self, content: &str) -> Result<Vec<f32>> {
+        let active = self.active_embedding_profile()?.ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("no active embedding profile pointer".to_string())
+        })?;
+        let manifest = self
+            .embedding_profile_manifest(&active.profile_id)?
+            .ok_or_else(|| StorageError::NotFound(active.profile_id.to_string()))?;
+        let vector = if let Some(embedder) = self.attached_embedder_for(&active.profile_id)? {
+            let runtime = tokio::runtime::Runtime::new().map_err(|error| {
+                StorageError::Init(format!("Create local document runtime: {error}"))
+            })?;
+            runtime
+                .block_on(embedder.embed_document(content))
+                .map_err(|error| StorageError::Init(format!("Failed to embed document: {error}")))?
+        } else if manifest.profile.runtime_backend == EmbeddingRuntimeBackend::FastembedCandle {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "active profile '{}' requires an explicitly attached verified local runtime; supply its artifact directory for this process",
+                active.profile_id
+            )));
+        } else {
+            self.embedding_service
+                .embed(
+                    &manifest.profile.encode_document(content).map_err(|error| {
+                        StorageError::InvalidEmbeddingProfile(error.to_string())
+                    })?,
+                )
+                .map_err(|error| StorageError::Init(format!("Failed to embed document: {error}")))?
+                .vector
+        };
+        if vector.len() != manifest.profile.embedding_dimension {
+            return Err(StorageError::InvalidEmbeddingProfile(format!(
+                "active profile '{}' requires {} dimensions but its runtime produced {}",
+                active.profile_id,
+                manifest.profile.embedding_dimension,
+                vector.len()
+            )));
+        }
         Ok(vector)
     }
 
@@ -4261,7 +6261,7 @@ impl SqliteMemoryStore {
         )?;
 
         let semantic_results =
-            if self.vector_search_available() && self.embedding_service.is_ready() {
+            if self.vector_search_available() && self.active_embedding_runtime_ready()? {
                 self.semantic_search_raw(query, limit * overfetch_factor)?
             } else {
                 vec![]
@@ -4535,6 +6535,114 @@ impl SqliteMemoryStore {
         }
     }
 
+    /// Bring the in-process vector index up to date with vectors written by OTHER
+    /// processes since this one last looked.
+    ///
+    /// THE BUG THIS FIXES (#181). The HNSW index is process-local: it is built once
+    /// at startup from `embedding_profile_vectors` and thereafter only ever appended
+    /// to by THIS process's own ingests. A second MCP server writing to the same
+    /// SQLite file is therefore invisible to it. In a normal setup -- a desktop
+    /// client, an editor integration, a CLI and a dashboard all pointed at one store
+    /// -- every long-lived process is semantically blind to everything its peers have
+    /// written since it booted. The consequences are silent: the prediction-error
+    /// gate sees no similar candidate and creates a duplicate instead of reinforcing,
+    /// and recall returns an incomplete answer with no indication anything is missing.
+    /// The FTS5 leg reads SQLite directly and is unaffected, which is exactly why the
+    /// failure is partial and hard to notice.
+    ///
+    /// THE SIGNAL. `PRAGMA data_version` is incremented on a connection whenever a
+    /// DIFFERENT connection commits. Reading it is a single pragma with no table
+    /// access, so this check is affordable on every query, and when nothing has
+    /// changed it costs one integer comparison.
+    ///
+    /// LOCK DISCIPLINE. This deliberately acquires the reader lock and the index lock
+    /// SEQUENTIALLY and never holds both at once: read the version, drop; read the
+    /// missing rows, drop; then take the index and add. `semantic_search_raw` holds
+    /// only the index lock, so no ordering cycle exists and this cannot deadlock
+    /// against it.
+    ///
+    /// FAILS OPEN. A refresh problem must degrade to a possibly-stale index, never
+    /// break the query -- returning an error here would turn a peer's write into an
+    /// outage. Returns the number of vectors added.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn refresh_vector_index_if_stale(&self) -> usize {
+        let Some(index_mutex) = self.vector_index.as_ref() else {
+            return 0;
+        };
+
+        // --- reader lock: has anyone else committed? ---
+        let current_version: i64 = {
+            let Ok(reader) = self.reader.lock() else {
+                return 0;
+            };
+            match reader.query_row("PRAGMA data_version", [], |row| row.get(0)) {
+                Ok(v) => v,
+                Err(_) => return 0,
+            }
+        };
+        {
+            let Ok(mut seen) = self.last_seen_data_version.lock() else {
+                return 0;
+            };
+            if *seen == current_version {
+                return 0; // nothing has changed since we last looked
+            }
+            *seen = current_version;
+        }
+
+        let Ok(Some(active)) = self.active_embedding_profile() else {
+            return 0;
+        };
+
+        // --- reader lock: which vectors exist for the active profile? ---
+        let rows: Vec<(String, Vec<u8>)> = {
+            let Ok(reader) = self.reader.lock() else {
+                return 0;
+            };
+            let Ok(mut stmt) = reader.prepare(
+                "SELECT node_id, embedding FROM embedding_profile_vectors WHERE profile_id = ?1",
+            ) else {
+                return 0;
+            };
+            let Ok(mapped) = stmt.query_map(params![active.profile_id.as_str()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            }) else {
+                return 0;
+            };
+            mapped.filter_map(|r| r.ok()).collect()
+        };
+
+        // --- index lock: add only what we do not already have ---
+        let Ok(mut index) = index_mutex.lock() else {
+            return 0;
+        };
+        let mut added = 0usize;
+        for (node_id, blob) in rows {
+            if index.contains(&node_id) {
+                continue;
+            }
+            // Same decoder the startup index builder uses, so a vector added here
+            // is byte-identical to one added by a full rebuild.
+            let Some(embedding) = Embedding::from_bytes(&blob) else {
+                continue; // unreadable vector: skip it, never fail the query
+            };
+            if embedding.dimensions != index.dimensions() {
+                continue; // wrong profile/dimension: not ours to add
+            }
+            if index.add(&node_id, &embedding.vector).is_ok() {
+                added += 1;
+            }
+        }
+        if added > 0 {
+            tracing::debug!(
+                added,
+                data_version = current_version,
+                "refreshed vector index with memories written by another process"
+            );
+        }
+        added
+    }
+
     /// Semantic search returning scores
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn semantic_search_raw(&self, query: &str, limit: i32) -> Result<Vec<(String, f32)>> {
@@ -4570,6 +6678,12 @@ impl SqliteMemoryStore {
             _ => self.get_query_embedding(query)?,
         };
 
+        // Pick up anything a peer process wrote since we last searched (#181).
+        // Cheap when nothing changed: one PRAGMA and an integer comparison. Runs
+        // BEFORE the index lock is taken, and takes its own locks sequentially,
+        // so it cannot deadlock against the search below.
+        self.refresh_vector_index_if_stale();
+
         let index = self.vector_index.as_ref().unwrap();
         let index = index
             .lock()
@@ -4587,7 +6701,7 @@ impl SqliteMemoryStore {
         node_ids: Option<&[String]>,
         force: bool,
     ) -> Result<EmbeddingResult> {
-        if !self.embedding_service.is_ready() {
+        if !self.active_embedding_runtime_ready()? {
             // Generating vectors is never authority to download or initialize
             // a model. Explicit profile installation/runtime preparation must
             // happen first; callers receive an honest empty result meanwhile.
@@ -4595,31 +6709,38 @@ impl SqliteMemoryStore {
             return Ok(EmbeddingResult::default());
         }
 
+        let active = self.active_embedding_profile()?.ok_or_else(|| {
+            StorageError::InvalidEmbeddingProfile("no active embedding profile pointer".to_string())
+        })?;
+        let active_manifest = self
+            .embedding_profile_manifest(&active.profile_id)?
+            .ok_or_else(|| StorageError::NotFound(active.profile_id.to_string()))?;
+        let active_model = active_manifest.profile.model_id.as_str();
         let mut result = EmbeddingResult::default();
-        let active_model = self.embedding_service.model_name();
-        let nodes = self.embedding_regeneration_candidates(node_ids, force)?;
+        let nodes = self.embedding_regeneration_candidates(
+            &active.profile_id,
+            active_manifest.profile.embedding_dimension,
+            active_model,
+            node_ids,
+            force,
+        )?;
 
         for (id, content, stored_model) in nodes {
             if !force {
-                let (has_emb, stored_model): (i32, Option<String>) = self
+                let stored_model: Option<String> = self
                     .reader
                     .lock()
                     .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?
                     .query_row(
-                        "SELECT COALESCE(kn.has_embedding, 0), COALESCE(ne.model, kn.embedding_model)
-                         FROM knowledge_nodes kn
-                         LEFT JOIN node_embeddings ne ON ne.node_id = kn.id
-                         WHERE kn.id = ?1",
-                        params![&id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
+                        "SELECT model FROM embedding_profile_vectors
+                         WHERE profile_id = ?1 AND node_id = ?2",
+                        params![active.profile_id.as_str(), &id],
+                        |row| row.get(0),
                     )
-                    .unwrap_or((0, stored_model));
+                    .optional()?
+                    .or(stored_model);
 
-                if has_emb == 1
-                    && stored_model.as_deref().is_some_and(|model| {
-                        Self::embedding_model_matches_active(model, active_model)
-                    })
-                {
+                if stored_model.as_deref() == Some(active_model) {
                     result.skipped += 1;
                     continue;
                 }
@@ -4640,6 +6761,9 @@ impl SqliteMemoryStore {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn embedding_regeneration_candidates(
         &self,
+        profile_id: &EmbeddingProfileId,
+        profile_dimension: usize,
+        profile_model: &str,
         node_ids: Option<&[String]>,
         force: bool,
     ) -> Result<Vec<(String, String, Option<String>)>> {
@@ -4655,16 +6779,18 @@ impl SqliteMemoryStore {
 
             let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
             let query = format!(
-                "SELECT kn.id, kn.content, COALESCE(ne.model, kn.embedding_model) AS embedding_model
+                "SELECT kn.id, kn.content, epv.model
                  FROM knowledge_nodes kn
-                 LEFT JOIN node_embeddings ne ON ne.node_id = kn.id
+                 LEFT JOIN embedding_profile_vectors epv
+                   ON epv.node_id = kn.id AND epv.profile_id = ?
                  WHERE kn.id IN ({})",
                 placeholders
             );
 
             let mut stmt = reader.prepare(&query)?;
-            let params: Vec<&dyn rusqlite::ToSql> =
-                ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            let profile = profile_id.as_str();
+            let mut params: Vec<&dyn rusqlite::ToSql> = vec![&profile];
+            params.extend(ids.iter().map(|id| id as &dyn rusqlite::ToSql));
             let rows = stmt.query_map(params.as_slice(), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -4676,9 +6802,13 @@ impl SqliteMemoryStore {
         }
 
         if force {
-            let mut stmt =
-                reader.prepare("SELECT id, content, embedding_model FROM knowledge_nodes")?;
-            let rows = stmt.query_map([], |row| {
+            let mut stmt = reader.prepare(
+                "SELECT kn.id, kn.content, epv.model
+                 FROM knowledge_nodes kn
+                 LEFT JOIN embedding_profile_vectors epv
+                   ON epv.node_id = kn.id AND epv.profile_id = ?1",
+            )?;
+            let rows = stmt.query_map(params![profile_id.as_str()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -4688,24 +6818,23 @@ impl SqliteMemoryStore {
             return Ok(rows.filter_map(|r| r.ok()).collect());
         }
 
-        let active_model = self.embedding_service.model_name();
-        let model_pattern = Self::active_embedding_model_like_pattern(active_model);
         let mut stmt = reader.prepare(
-            "SELECT kn.id, kn.content, COALESCE(ne.model, kn.embedding_model) AS embedding_model
+            "SELECT kn.id, kn.content, epv.model
              FROM knowledge_nodes kn
-             LEFT JOIN node_embeddings ne ON ne.node_id = kn.id
-             WHERE kn.has_embedding = 0
-                OR kn.has_embedding IS NULL
-                OR ne.node_id IS NULL
-                OR COALESCE(ne.model, kn.embedding_model, '') NOT LIKE ?1",
+             LEFT JOIN embedding_profile_vectors epv
+               ON epv.node_id = kn.id AND epv.profile_id = ?1
+             WHERE epv.node_id IS NULL OR epv.dimensions != ?2 OR epv.model != ?3",
         )?;
-        let rows = stmt.query_map(params![model_pattern], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
-        })?;
+        let rows = stmt.query_map(
+            params![profile_id.as_str(), profile_dimension as i64, profile_model],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
@@ -4941,8 +7070,34 @@ impl SqliteMemoryStore {
     pub fn run_consolidation(&self) -> Result<ConsolidationResult> {
         let start = std::time::Instant::now();
 
+        // Before decay, remove residual recency supplied only by the legacy
+        // passive-search behavior. Otherwise a memory last shown just before
+        // the upgrade would incorrectly avoid its first post-upgrade decay.
+        let _ = self.repair_legacy_passive_retrieval_state();
+
         // v1.5.0: Use SleepConsolidation for structured consolidation
         let sleep = crate::SleepConsolidation::new();
+
+        // Repair stability values that escaped the MAX_STABILITY invariant
+        // before the sentiment-boost clamp existed (issue #121): a real store
+        // was measured carrying five outliers up to 1.4e24 days. Idempotent,
+        // and a no-op on healthy stores.
+        {
+            let writer = self
+                .writer
+                .lock()
+                .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            let repaired = writer.execute(
+                "UPDATE knowledge_nodes SET stability = ?1 WHERE stability > ?1",
+                params![crate::fsrs::MAX_STABILITY],
+            )?;
+            if repaired > 0 {
+                tracing::warn!(
+                    repaired,
+                    "clamped runaway stability values back to MAX_STABILITY"
+                );
+            }
+        }
 
         // 1. Apply FSRS-6 decay with real formula + personalized w20
         let decay_applied = self.apply_decay()? as i64;
@@ -5000,6 +7155,11 @@ impl SqliteMemoryStore {
 
         // 6. Prune old access log entries (keep 90 days)
         let _ = self.prune_access_log();
+
+        // 6.5. Prune old Black Box trace events (keep 30 days by default;
+        // VESTIGE_TRACE_RETENTION_DAYS overrides, 0 = keep forever). Best-effort
+        // like the access-log sweep: a failure never blocks consolidation.
+        let _ = self.prune_agent_traces();
 
         // 7. Optimize w20 if enough usage data
         let w20_optimized = self.optimize_w20_if_ready().unwrap_or(None);
@@ -5297,34 +7457,38 @@ impl SqliteMemoryStore {
         let auto_promoted = self.auto_promote_frequent_access().unwrap_or(0);
         promoted += auto_promoted;
 
-        // 19. Retention Target System — auto-GC if avg retention below target
-        let mut gc_triggered = false;
+        // 19. Retention Target System — REPORT ONLY. Consolidation never
+        // deletes memories.
+        //
+        // Until v2.6.0 this step hard-deleted every memory below 0.3
+        // retention older than 30 days whenever average retention slipped
+        // under a target. It looked dormant for months only because decay was
+        // broken (the w20 story in fsrs/optimizer.rs); the day decay came
+        // back to life it silently destroyed 23 real memories from a live
+        // 2,929-memory store in a single cycle — unattended, unrecoverable,
+        // invisible in the consolidation output, and with no protected-pin
+        // exemption. Forgetting in Vestige means DOWN-RANKING (the
+        // accessibility states); destruction is reserved for the explicit,
+        // previewable, dry-run-by-default `maintain {action:"gc"}` and
+        // `purge` paths. VESTIGE_RETENTION_TARGET no longer gates anything
+        // destructive.
         {
-            let retention_target: f64 = std::env::var("VESTIGE_RETENTION_TARGET")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0.8);
-
             let avg_retention = self.get_avg_retention().unwrap_or(1.0);
             let total = self.get_stats().map(|s| s.total_nodes).unwrap_or(0);
             let below_target = self.count_memories_below_retention(0.3).unwrap_or(0);
 
-            if avg_retention < retention_target && below_target > 0 {
-                let gc_count = self.gc_below_retention(0.3, 30).unwrap_or(0);
-                if gc_count > 0 {
-                    gc_triggered = true;
-                    tracing::info!(
-                        avg_retention = avg_retention,
-                        target = retention_target,
-                        gc_count = gc_count,
-                        "Retention target auto-GC: removed {} low-retention memories",
-                        gc_count
-                    );
-                }
+            if below_target > 0 {
+                tracing::info!(
+                    avg_retention,
+                    gc_candidates = below_target,
+                    "{} memories sit below 0.3 retention; review them with maintain {{action:\"gc\", dry_run:true}} — consolidation deletes nothing",
+                    below_target
+                );
             }
 
-            // 20. Save retention snapshot for trend tracking
-            let _ = self.save_retention_snapshot(avg_retention, total, below_target, gc_triggered);
+            // 20. Save retention snapshot for trend tracking. `gc_triggered`
+            // is permanently false: the autonomic GC no longer exists.
+            let _ = self.save_retention_snapshot(avg_retention, total, below_target, false);
         }
 
         let duration = start.elapsed().as_millis() as i64;
@@ -5372,25 +7536,26 @@ impl SqliteMemoryStore {
     /// never merges away or deletes protected (pinned) nodes (#142).
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn auto_dedup_consolidation(&self) -> Result<i64> {
-        // OPT-OUT (auto-consolidate-merge, #142): this pass concat-merges
+        // OPT-IN (v2.6.0, reversing the #142 opt-out): this pass concat-merges
         // near-duplicate memories and HARD-DELETES the weaker ones with no
-        // reflog. It is ON by default (behavior unchanged), but a consumer that
-        // does not want unattended, no-audit merges can turn it off with
-        // VESTIGE_AUTO_CONSOLIDATE_MERGE=0 (or false/off/no). Parsed exactly like
-        // the sibling VESTIGE_BACKFILL_AUTOFIRE: unset or any other/malformed
-        // value → on (fail-open to the documented default). The `dedup` MCP tool
-        // remains available for on-demand, previewable, reversible merges
-        // regardless of the gate. Gate here (not the caller) so it stays with the
-        // pin filter and self-protects against a future second caller.
+        // reflog. Unattended destruction of user memories is opt-IN, never a
+        // default: set VESTIGE_AUTO_CONSOLIDATE_MERGE=1 (or true/on/yes) to
+        // enable it. Unset or any other/malformed value fails CLOSED — the
+        // safe direction for a destructive gate (#142's opt-out parsed the
+        // same input as fail-OPEN, so a typo destroyed data). The `dedup` MCP
+        // tool remains the on-demand, previewable, reversible path and is
+        // unaffected by this gate. Gate here (not the caller) so it stays
+        // with the pin filter and self-protects against a future second
+        // caller.
         let auto_merge = std::env::var("VESTIGE_AUTO_CONSOLIDATE_MERGE")
             .map(|v| {
                 let v = v.trim();
-                !(v.eq_ignore_ascii_case("false")
-                    || v.eq_ignore_ascii_case("off")
-                    || v.eq_ignore_ascii_case("no")
-                    || v == "0")
+                v.eq_ignore_ascii_case("true")
+                    || v.eq_ignore_ascii_case("on")
+                    || v.eq_ignore_ascii_case("yes")
+                    || v == "1"
             })
-            .unwrap_or(true);
+            .unwrap_or(false);
         if !auto_merge {
             return Ok(0);
         }
@@ -5416,6 +7581,34 @@ impl SqliteMemoryStore {
         // merge this cycle rather than risk absorbing a pin. #142
         let protected = self.protected_node_ids()?;
 
+        // Scope map, fetched ONCE alongside `protected` and for the same reason:
+        // the per-cluster reader lock below is non-reentrant, so this cannot be
+        // looked up inside the loop. This pass merges content and then HARD
+        // DELETES the weak nodes, unattended and with no audit row. Without a
+        // scope guard it will happily fuse two different projects' near-identical
+        // notes -- e.g. the same convention worded alike but naming different
+        // credentials -- and destroy one of them. Memories only ever cluster with
+        // memories in their OWN scope.
+        let scopes: std::collections::HashMap<String, String> = {
+            let reader = self
+                .reader
+                .lock()
+                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+            let mut stmt = reader.prepare(
+                "SELECT id, COALESCE(NULLIF(TRIM(scope), ''), 'user') FROM knowledge_nodes",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut m = std::collections::HashMap::new();
+            for r in rows {
+                let (id, sc) = r?;
+                m.insert(id, sc);
+            }
+            m
+        };
+        let scope_of = |id: &str| -> &str { scopes.get(id).map(String::as_str).unwrap_or("user") };
+
         const SIMILARITY_THRESHOLD: f32 = 0.85;
         let mut merged_count = 0i64;
         let mut consumed: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -5427,10 +7620,15 @@ impl SqliteMemoryStore {
 
             let mut cluster: Vec<(usize, f32)> = Vec::new();
 
+            let anchor_scope = scope_of(&all_embeddings[i].0);
             for j in (i + 1)..n {
                 if consumed.contains(&all_embeddings[j].0)
                     || protected.contains(&all_embeddings[j].0)
                 {
+                    continue;
+                }
+                // Never cluster across project scopes: the merge below deletes.
+                if scope_of(&all_embeddings[j].0) != anchor_scope {
                     continue;
                 }
                 let sim = crate::embeddings::cosine_similarity(
@@ -5521,16 +7719,33 @@ impl SqliteMemoryStore {
             // Drop reader before taking writer locks in update/delete
             drop(reader);
 
-            // Update keeper with merged content
-            if merged_content != keeper_content {
-                let _ = self.update_node_content(&best_id, &merged_content);
-            }
+            // Update keeper with merged content. The update result is the
+            // gate for the deletions below: if the keeper never absorbed the
+            // weak nodes' content, deleting them destroys it. The previous
+            // `let _ =` discarded exactly that failure and deleted anyway.
+            let content_preserved = if merged_content != keeper_content {
+                self.update_node_content(&best_id, &merged_content).is_ok()
+            } else {
+                true
+            };
 
-            // Delete weak nodes
-            for weak_id in &weak_ids {
-                let _ = self.delete_node(weak_id);
-                consumed.insert(weak_id.clone());
-                merged_count += 1;
+            if content_preserved {
+                // Delete weak nodes — their content verifiably lives on in
+                // the keeper (or was already contained in it).
+                for weak_id in &weak_ids {
+                    let _ = self.delete_node(weak_id);
+                    consumed.insert(weak_id.clone());
+                    merged_count += 1;
+                }
+            } else {
+                tracing::warn!(
+                    keeper = %best_id,
+                    weak = weak_ids.len(),
+                    "auto-dedup: keeper content update failed; weak nodes kept (nothing deleted)"
+                );
+                for weak_id in &weak_ids {
+                    consumed.insert(weak_id.clone());
+                }
             }
 
             consumed.insert(best_id);
@@ -5539,11 +7754,61 @@ impl SqliteMemoryStore {
         Ok(merged_count)
     }
 
+    /// Restore the last meaningful interaction for memories whose most recent
+    /// `last_accessed` value came from the old passive-search behavior.
+    ///
+    /// Pre-2.3.0 `search_hit` rows updated `last_accessed`, which also fed the
+    /// recency ranker and FSRS decay. `retrieval_shown` is intentionally not
+    /// included: the new event never writes node state. A passive event is
+    /// logged immediately after the old update, so we repair only nodes whose
+    /// timestamp is no later than their latest legacy hit. An unlogged FSRS
+    /// review updates `updated_at`, making it a safe fallback before
+    /// `created_at` when no explicit interaction is recorded.
+    fn repair_legacy_passive_retrieval_state(&self) -> Result<i64> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let repaired = writer.execute(
+            "UPDATE knowledge_nodes AS node
+             SET last_accessed = MAX(
+                 COALESCE(
+                     (
+                         SELECT MAX(explicit.accessed_at)
+                         FROM memory_access_log AS explicit
+                         WHERE explicit.node_id = node.id
+                           AND explicit.access_type NOT IN ('search_hit', 'retrieval_shown')
+                     ),
+                     node.created_at
+                 ),
+                 node.updated_at
+             )
+             WHERE EXISTS (
+                 SELECT 1
+                 FROM memory_access_log AS passive
+                 WHERE passive.node_id = node.id
+                   AND passive.access_type = 'search_hit'
+             )
+               AND node.last_accessed <= (
+                 SELECT MAX(passive.accessed_at)
+                 FROM memory_access_log AS passive
+                 WHERE passive.node_id = node.id
+                   AND passive.access_type = 'search_hit'
+             )",
+            [],
+        )?;
+        Ok(repaired as i64)
+    }
+
     /// Compute ACT-R base-level activation for all nodes from access history.
     /// B_i = ln(Σ t_j^(-d)) where t_j = days since j-th access, d = 0.5
     fn compute_act_r_activations(&self) -> Result<i64> {
         const ACT_R_DECAY: f64 = 0.5;
         let now = Utc::now();
+
+        // This also protects direct callers that compute ACT-R without using
+        // the full consolidation cycle.
+        self.repair_legacy_passive_retrieval_state()?;
 
         let node_ids: Vec<String> = {
             let reader = self
@@ -5551,15 +7816,14 @@ impl SqliteMemoryStore {
                 .lock()
                 .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
             reader
-                .prepare("SELECT DISTINCT node_id FROM memory_access_log")?
+                .prepare(
+                    "SELECT DISTINCT node_id FROM memory_access_log
+                     WHERE access_type NOT IN ('search_hit', 'retrieval_shown')",
+                )?
                 .query_map([], |row| row.get(0))?
                 .filter_map(|r| r.ok())
                 .collect()
         };
-
-        if node_ids.is_empty() {
-            return Ok(0);
-        }
 
         let mut count = 0i64;
         let mut writer = self
@@ -5568,11 +7832,28 @@ impl SqliteMemoryStore {
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
         let tx = writer.transaction()?;
 
+        // Discard residual activation from legacy search-hit rows as well as
+        // new retrieval-only telemetry. Otherwise historical passive reads
+        // would keep influencing rank after the behavior changes.
+        tx.execute(
+            "UPDATE knowledge_nodes SET activation = 0.0
+             WHERE id NOT IN (
+                SELECT DISTINCT node_id FROM memory_access_log
+                WHERE access_type NOT IN ('search_hit', 'retrieval_shown')
+             )",
+            [],
+        )?;
+
+        if node_ids.is_empty() {
+            tx.commit()?;
+            return Ok(0);
+        }
+
         for node_id in &node_ids {
             let timestamps: Vec<String> = tx
                 .prepare(
                     "SELECT accessed_at FROM memory_access_log
-                     WHERE node_id = ?1
+                     WHERE node_id = ?1 AND access_type NOT IN ('search_hit', 'retrieval_shown')
                      ORDER BY accessed_at DESC
                      LIMIT 500",
                 )?
@@ -5607,9 +7888,11 @@ impl SqliteMemoryStore {
         Ok(count)
     }
 
-    /// Prune old access log entries (keep last 90 days)
+    /// Prune old access log entries (keep the last [`ACCESS_LOG_RETENTION_DAYS`]).
+    /// `hygiene_snapshot` derives its "never accessed" window from the same
+    /// constant; keep the two in lockstep.
     fn prune_access_log(&self) -> Result<i64> {
-        let cutoff = (Utc::now() - Duration::days(90)).to_rfc3339();
+        let cutoff = (Utc::now() - Duration::days(ACCESS_LOG_RETENTION_DAYS)).to_rfc3339();
         let writer = self
             .writer
             .lock()
@@ -5632,9 +7915,12 @@ impl SqliteMemoryStore {
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
 
         let access_count: i64 = reader
-            .query_row("SELECT COUNT(*) FROM memory_access_log", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM memory_access_log
+                 WHERE access_type NOT IN ('search_hit', 'retrieval_shown')",
+                [],
+                |row| row.get(0),
+            )
             .unwrap_or(0);
 
         if access_count < 100 {
@@ -5643,12 +7929,20 @@ impl SqliteMemoryStore {
 
         let mut optimizer = FSRSOptimizer::new();
 
+        // Most RECENT window, not the oldest. The previous `ASC LIMIT 1000`
+        // trained forever on the earliest era of the log — and because the
+        // 90-day log pruning slides that window, the training set drifted
+        // under the optimizer's feet, producing fits that swung between
+        // 0.0104 and 0.137 on the same store with no behavior change.
         let logs: Vec<(String, String, String)> = reader
             .prepare(
-                "SELECT mal.node_id, mal.access_type, mal.accessed_at
-                 FROM memory_access_log mal
-                 ORDER BY mal.accessed_at ASC
-                 LIMIT 1000",
+                "SELECT node_id, access_type, accessed_at FROM (
+                     SELECT mal.node_id, mal.access_type, mal.accessed_at
+                     FROM memory_access_log mal
+                     WHERE mal.access_type NOT IN ('search_hit', 'retrieval_shown')
+                     ORDER BY mal.accessed_at DESC
+                     LIMIT 1000
+                 ) ORDER BY accessed_at ASC",
             )?
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .filter_map(|r| r.ok())
@@ -5673,10 +7967,15 @@ impl SqliteMemoryStore {
                     .map(|dt| dt.with_timezone(&Utc))
                     .unwrap_or(ts);
 
+                // Suppression is the strongest forgetting signal a user can
+                // send; feeding it to the optimizer as a SUCCESSFUL recall
+                // (the old catch-all) taught the curve that nothing is ever
+                // forgotten. A reversed suppression is a correction of that
+                // signal, not a recall outcome either way; score it neutral.
                 let rating = match access_type.as_str() {
                     "promote" => 4,
                     "search_hit" => 3,
-                    "demote" => 1,
+                    "demote" | "suppress" => 1,
                     _ => 3,
                 };
 
@@ -5724,9 +8023,9 @@ impl SqliteMemoryStore {
     /// Generate all missing or active-model-mismatched embeddings.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn generate_missing_embeddings(&self) -> Result<i64> {
-        if !self.embedding_service.is_ready() {
+        if !self.active_embedding_runtime_ready()? {
             tracing::debug!(
-                "Skipping consolidation embedding backfill: active runtime is not installed/ready"
+                "Skipping consolidation embedding generation: active profile runtime is unavailable"
             );
             return Ok(0);
         }
@@ -7833,6 +10132,19 @@ impl SqliteMemoryStore {
         archive: &PortableArchive,
         mode: PortableImportMode,
     ) -> Result<PortableImportReport> {
+        self.import_portable_archive_with_secret_policy(archive, mode, SecretPolicy::Reject)
+    }
+
+    /// Import an exact archive using an explicit credential-storage policy.
+    ///
+    /// The archive is preflighted before a writer or transaction is opened, so
+    /// a rejected archive cannot partially import safe sibling rows.
+    pub fn import_portable_archive_with_secret_policy(
+        &self,
+        archive: &PortableArchive,
+        mode: PortableImportMode,
+        policy: SecretPolicy,
+    ) -> Result<PortableImportReport> {
         if archive.archive_format != PORTABLE_ARCHIVE_FORMAT {
             return Err(StorageError::Init(format!(
                 "Unsupported portable archive format '{}'",
@@ -7845,6 +10157,8 @@ impl SqliteMemoryStore {
                 archive.mode
             )));
         }
+
+        Self::enforce_secret_policy_for_portable_archive(archive, policy)?;
 
         let mut seen_tables = std::collections::HashSet::new();
         let mut tables_by_name = std::collections::HashMap::new();
@@ -8142,9 +10456,16 @@ impl SqliteMemoryStore {
             };
             let incoming_updated = Self::portable_timestamp(table, row, "updated_at");
 
-            if let Some(deleted_at) = Self::tombstone_timestamp(tx, "knowledge_nodes", id)?
-                && incoming_updated.is_some_and(|updated| deleted_at >= updated)
-            {
+            // An opaque marker represents an explicit purge. Unlike legacy raw
+            // tombstones, it is intentionally permanent: no timestamp from a
+            // later archive can resurrect the same stable id.
+            let rejected_by_opaque_tombstone =
+                Self::has_opaque_tombstone(tx, "knowledge_nodes", id)?;
+            let rejected_by_legacy_tombstone =
+                Self::tombstone_timestamp(tx, "knowledge_nodes", id)?.is_some_and(|deleted_at| {
+                    incoming_updated.is_some_and(|updated| deleted_at >= updated)
+                });
+            if rejected_by_opaque_tombstone || rejected_by_legacy_tombstone {
                 report.conflicts_kept_local += 1;
                 report.rows_skipped += 1;
                 continue;
@@ -8197,25 +10518,23 @@ impl SqliteMemoryStore {
                 continue;
             };
             let incoming_deleted_at = Self::portable_timestamp(table, row, "deleted_at");
-            let incoming_reason = Self::portable_text(table, row, "reason").map(ToOwned::to_owned);
-
-            let existing_tombstone: Option<(String, Option<String>)> = tx
+            let existing_tombstone: Option<String> = tx
                 .query_row(
-                    "SELECT deleted_at, reason FROM sync_tombstones WHERE table_name = ?1 AND row_id = ?2",
+                    "SELECT deleted_at FROM sync_tombstones WHERE table_name = ?1 AND row_id = ?2",
                     params![table_name, row_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| row.get(0),
                 )
                 .optional()?;
             let existing_deleted_at = existing_tombstone
                 .as_ref()
-                .and_then(|(deleted_at, _)| Self::parse_rfc3339_opt(deleted_at));
+                .and_then(|deleted_at| Self::parse_rfc3339_opt(deleted_at));
             let incoming_wins = match (existing_deleted_at, incoming_deleted_at) {
                 (Some(existing), Some(incoming)) => incoming >= existing,
                 (Some(_), None) => false,
                 (None, _) => true,
             };
 
-            let (effective_deleted_at, effective_reason) = if incoming_wins {
+            let effective_deleted_at = if incoming_wins {
                 let affected = Self::insert_or_replace_row(tx, "sync_tombstones", table, row)?;
                 report.rows_imported += 1;
                 if affected == MergeWrite::Inserted {
@@ -8223,20 +10542,24 @@ impl SqliteMemoryStore {
                 } else {
                     report.rows_updated += 1;
                 }
-                (incoming_deleted_at, incoming_reason)
+                incoming_deleted_at
             } else {
                 report.rows_skipped += 1;
-                (
-                    existing_deleted_at,
-                    existing_tombstone.and_then(|(_, reason)| reason),
-                )
+                existing_deleted_at
             };
 
             if table_name == "knowledge_nodes" {
+                let Some(target_id) = Self::resolve_tombstone_memory_id(tx, row_id)? else {
+                    // The target may arrive in a later archive, but this merge
+                    // has no raw identifier to delete. The opaque tombstone is
+                    // still persisted; a future node merge consults it by
+                    // deriving the same marker from the candidate's local id.
+                    continue;
+                };
                 let local_updated: Option<String> = tx
                     .query_row(
                         "SELECT updated_at FROM knowledge_nodes WHERE id = ?1",
-                        params![row_id],
+                        params![target_id],
                         |row| row.get(0),
                     )
                     .optional()?;
@@ -8245,19 +10568,26 @@ impl SqliteMemoryStore {
                     effective_deleted_at,
                 ) {
                     (Some(local), Some(deleted)) => {
-                        effective_reason.as_deref() == Some("purge_node") || deleted >= local
+                        row_id.starts_with("opaque:") || deleted >= local
                     }
                     (Some(_), None) => true,
                     (None, _) => false,
                 };
                 if should_delete {
-                    tx.execute(
-                        "UPDATE composition_members SET preview = NULL WHERE memory_id = ?1",
-                        params![row_id],
-                    )?;
-                    let deleted =
-                        tx.execute("DELETE FROM knowledge_nodes WHERE id = ?1", params![row_id])?;
-                    report.rows_deleted += deleted;
+                    // The remote marker has already been persisted above.
+                    // Reuse the local coordinator without rewriting its
+                    // timestamp so merge performs the full evidence cleanup
+                    // atomically with the portable import.
+                    if Self::purge_node_in_transaction(
+                        tx,
+                        &target_id,
+                        effective_deleted_at.unwrap_or_else(Utc::now),
+                        false,
+                    )?
+                    .is_some()
+                    {
+                        report.rows_deleted += 1;
+                    }
                 }
             }
         }
@@ -8646,14 +10976,40 @@ impl SqliteMemoryStore {
         table_name: &str,
         row_id: &str,
     ) -> Result<Option<DateTime<Utc>>> {
+        let opaque_marker = if table_name == "knowledge_nodes" {
+            Some(Self::opaque_tombstone_marker(row_id))
+        } else {
+            None
+        };
         let deleted_at: Option<String> = tx
             .query_row(
-                "SELECT deleted_at FROM sync_tombstones WHERE table_name = ?1 AND row_id = ?2",
-                params![table_name, row_id],
+                "SELECT deleted_at FROM sync_tombstones
+                 WHERE table_name = ?1 AND (row_id = ?2 OR row_id = ?3)
+                 ORDER BY deleted_at DESC LIMIT 1",
+                params![table_name, row_id, opaque_marker],
                 |row| row.get(0),
             )
             .optional()?;
         Ok(deleted_at.as_deref().and_then(Self::parse_rfc3339_opt))
+    }
+
+    fn has_opaque_tombstone(
+        tx: &rusqlite::Transaction<'_>,
+        table_name: &str,
+        row_id: &str,
+    ) -> Result<bool> {
+        if table_name != "knowledge_nodes" {
+            return Ok(false);
+        }
+        let marker = Self::opaque_tombstone_marker(row_id);
+        let exists: Option<i64> = tx
+            .query_row(
+                "SELECT 1 FROM sync_tombstones WHERE table_name = ?1 AND row_id = ?2",
+                params![table_name, marker],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(exists.is_some())
     }
 
     fn current_schema_version(conn: &Connection) -> Result<u32> {
@@ -8726,24 +11082,23 @@ impl SqliteMemoryStore {
         format!("\"{}\"", identifier.replace('"', "\"\""))
     }
 
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[cfg(all(feature = "embeddings", feature = "vector-search", test))]
     fn embedding_model_matches_active(stored_model: &str, active_model: &str) -> bool {
-        // Compatibility code must never treat a model-family label as an
-        // interchangeable vector contract. New retrieval runs are isolated by
-        // profile ID; this exact comparison is only for legacy repair work.
+        // Profile-aware retrieval never uses model-family matching. This helper
+        // remains solely for legacy vector-repair bookkeeping.
         stored_model == active_model
     }
 
-    #[cfg(feature = "embeddings")]
-    fn active_embedding_model_like_pattern(active_model: &str) -> String {
-        let active = active_model.to_ascii_lowercase();
-        if active.contains("qwen3") {
-            "%qwen3%".to_string()
-        } else if active.contains("nomic-embed-text-v1.5") {
-            "%nomic%v1.5%".to_string()
-        } else {
-            active_model.to_string()
+    #[cfg(all(feature = "embeddings", feature = "vector-search", test))]
+    fn embedding_vector_for_active_model(
+        embedding_bytes: &[u8],
+        stored_model: &str,
+        active_model: &str,
+    ) -> Option<Vec<f32>> {
+        if !Self::embedding_model_matches_active(stored_model, active_model) {
+            return None;
         }
+        Embedding::from_bytes(embedding_bytes).map(|embedding| embedding.vector)
     }
 
     // ========================================================================
@@ -8933,6 +11288,13 @@ impl SqliteMemoryStore {
     pub fn gc_below_retention(&self, threshold: f64, min_age_days: i64) -> Result<i64> {
         let cutoff = (Utc::now() - Duration::days(min_age_days)).to_rfc3339();
 
+        // Explicitly protected (pinned) memories are never garbage-collected,
+        // no matter how far their retention has decayed. A pin is the user
+        // saying "keep this"; low retention only says "rarely retrieved", and
+        // the second must never override the first. (Until v2.6.0 this query
+        // had no such exemption.)
+        let protected = self.protected_node_ids()?;
+
         // Collect IDs first for sync tombstones and vector index cleanup.
         let doomed_ids: Vec<String> = {
             let reader = self
@@ -8944,42 +11306,29 @@ impl SqliteMemoryStore {
             )?;
             stmt.query_map(params![threshold, cutoff], |row| row.get(0))?
                 .filter_map(|r| r.ok())
+                .filter(|id: &String| !protected.contains(id))
                 .collect()
         };
 
-        let writer = self
-            .writer
-            .lock()
-            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        for id in &doomed_ids {
-            Self::record_sync_tombstone(&writer, "knowledge_nodes", id, "gc_below_retention")?;
-        }
-        let deleted = writer.execute(
-            "DELETE FROM knowledge_nodes WHERE retention_strength < ?1 AND created_at < ?2",
-            params![threshold, cutoff],
-        )? as i64;
-        drop(writer);
-
-        // Clean up vector index
-        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-        if deleted > 0
-            && let Some(index) = self.vector_index.as_ref()
-            && let Ok(mut index) = index.lock()
-        {
-            for id in &doomed_ids {
-                let _ = index.remove(id);
+        // Do not bulk-delete here. Every deletion must traverse `purge_node`
+        // so replay capsules, traces, review records, composition evidence,
+        // disclosures, and vector state cannot outlive the canonical node.
+        let mut deleted = 0_i64;
+        for id in doomed_ids {
+            if self.delete_node(&id)? {
+                deleted += 1;
             }
         }
-
         Ok(deleted)
     }
 
-    /// Check for auto-promote candidates: memories accessed 3+ times in last 24h
+    /// Check for auto-promote candidates: memories explicitly promoted 3+ times in 24h.
     pub fn auto_promote_frequent_access(&self) -> Result<i64> {
         let twenty_four_hours_ago = (Utc::now() - Duration::hours(24)).to_rfc3339();
         let now = Utc::now().to_rfc3339();
 
-        // Find memories with 3+ accesses in last 24h
+        // A search hit is not evidence of correctness. Only repeated explicit
+        // positive feedback is eligible for this optional extra boost.
         let candidates: Vec<String> = {
             let reader = self
                 .reader
@@ -8988,7 +11337,7 @@ impl SqliteMemoryStore {
             let mut stmt = reader.prepare(
                 "SELECT node_id, COUNT(*) as access_count
                  FROM memory_access_log
-                 WHERE accessed_at >= ?1
+                 WHERE accessed_at >= ?1 AND access_type = 'promote'
                  GROUP BY node_id
                  HAVING access_count >= 3",
             )?;
@@ -9775,6 +12124,507 @@ impl SqliteMemoryStore {
         Ok(status)
     }
 
+    /// Preview an exact tag rename/merge without mutating the store.
+    ///
+    /// Tags are JSON arrays in SQLite, so this intentionally parses every row
+    /// instead of using a substring `LIKE` query. That keeps `prixsix` distinct
+    /// from `prix-six` and avoids rewriting tags that merely share a prefix.
+    pub fn preview_tag_mutation(
+        &self,
+        source_tags: &[String],
+        target_tag: &str,
+        scope: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let (source_tags, target_tag) = Self::validate_tag_mutation(source_tags, target_tag)?;
+        // Secret policy applies to the TARGET (newly persisted) only. A
+        // secret-shaped SOURCE tag can legitimately already exist in the store
+        // (explicit-allow ingest, pre-scanning clients); matching it adds no
+        // new exposure, and rejecting it would make the credential-shaped tag
+        // impossible to rename AWAY — backwards for a cleanup tool.
+        Self::enforce_secret_policy_for_content(&target_tag, SecretPolicy::Reject)?;
+        let scope = scope
+            .map(Self::normalize_scope)
+            .transpose()?
+            .map(str::to_string);
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let (source_counts, target_count, affected) = Self::tag_mutation_state(
+            &reader,
+            &source_tags,
+            &target_tag,
+            scope.as_deref(),
+            MAX_TAG_MUTATION_MEMORIES,
+        )?;
+        let preview_token =
+            Self::tag_mutation_token(&source_tags, &target_tag, scope.as_deref(), &affected)?;
+        let affected_ids: Vec<&String> = affected.iter().map(|(id, _, _)| id).collect();
+        let affected_count = affected_ids.len();
+
+        let preview_limit = 200usize;
+        Ok(serde_json::json!({
+            "sourceTags": source_tags,
+            "targetTag": target_tag,
+            "scope": scope.clone(),
+            "allScopes": scope.is_none(),
+            "sourceTagCounts": source_counts,
+            "targetTagCount": target_count,
+            "affectedMemoryCount": affected_count,
+            "affectedMemoryIds": affected_ids.into_iter().take(preview_limit).collect::<Vec<_>>(),
+            "affectedMemoryIdsTruncated": affected_count > preview_limit,
+            "maximumAffectedMemoriesPerOperation": MAX_TAG_MUTATION_MEMORIES,
+            "withinOperationLimit": affected_count <= MAX_TAG_MUTATION_MEMORIES,
+            "previewToken": preview_token,
+            "requiresConfirmation": true,
+        }))
+    }
+
+    /// Atomically rename or merge exact tags and append a reversible operation
+    /// to the existing memory reflog. Callers must preview and confirmation-gate
+    /// this operation before invoking it.
+    pub fn apply_tag_mutation(
+        &self,
+        source_tags: &[String],
+        target_tag: &str,
+        scope: Option<&str>,
+        preview_token: &str,
+        op_type: &str,
+        reason: &str,
+    ) -> Result<crate::advanced::MergeOperation> {
+        self.apply_tag_mutation_with_limits(
+            source_tags,
+            target_tag,
+            scope,
+            preview_token,
+            op_type,
+            reason,
+            MAX_TAG_MUTATION_MEMORIES,
+            MAX_TAG_MUTATION_AUDIT_BYTES,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_tag_mutation_with_limits(
+        &self,
+        source_tags: &[String],
+        target_tag: &str,
+        scope: Option<&str>,
+        preview_token: &str,
+        op_type: &str,
+        reason: &str,
+        maximum_affected: usize,
+        maximum_audit_bytes: usize,
+    ) -> Result<crate::advanced::MergeOperation> {
+        if !matches!(op_type, "tag_rename" | "tag_merge") {
+            return Err(StorageError::Init(format!(
+                "invalid tag mutation operation type '{op_type}'"
+            )));
+        }
+        let (source_tags, target_tag) = Self::validate_tag_mutation(source_tags, target_tag)?;
+        let scope = scope
+            .map(Self::normalize_scope)
+            .transpose()?
+            .map(str::to_string);
+        let reason = Self::validate_tag_mutation_reason(reason)?;
+        // As in `preview_tag_mutation`: secret policy guards only the newly
+        // persisted TARGET and reason. A secret-shaped SOURCE tag already
+        // exists in the store, so matching it to remove it adds no exposure.
+        Self::enforce_secret_policy_for_content(&target_tag, SecretPolicy::Reject)?;
+        Self::enforce_secret_policy_for_content(&reason, SecretPolicy::Reject)?;
+        let now = Utc::now();
+        let operation_id = Uuid::new_v4().to_string();
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = writer.transaction()?;
+
+        // Recompute the exact preview state while holding the write transaction.
+        // A token from an older/different scope, tag set, target, or row state
+        // cannot authorize a mutation after preview drift.
+        let (_, _, affected) = Self::tag_mutation_state(
+            &tx,
+            &source_tags,
+            &target_tag,
+            scope.as_deref(),
+            maximum_affected,
+        )?;
+        let current_token =
+            Self::tag_mutation_token(&source_tags, &target_tag, scope.as_deref(), &affected)?;
+        if preview_token != current_token {
+            return Err(StorageError::Init(
+                "tag preview is stale or does not match this scope/source/target; preview again"
+                    .into(),
+            ));
+        }
+        if affected.is_empty() {
+            return Err(StorageError::NotFound(format!(
+                "no memories contain source tag(s): {}",
+                source_tags.join(", ")
+            )));
+        }
+        let mut affected_ids = Vec::new();
+        let mut previous_tags = serde_json::Map::new();
+        let mut applied_tags = serde_json::Map::new();
+        for (id, tags, rewritten) in &affected {
+            previous_tags.insert(id.clone(), serde_json::json!(tags));
+            applied_tags.insert(id.clone(), serde_json::json!(rewritten));
+            affected_ids.push(id.clone());
+        }
+
+        let undo_payload = serde_json::json!({
+            "kind": "tag_mutation",
+            "source_tags": source_tags.clone(),
+            "target_tag": target_tag.clone(),
+            "scope": scope.clone(),
+            "all_scopes": scope.is_none(),
+            "preview_token": preview_token,
+            "previous_tags": previous_tags,
+            "applied_tags": applied_tags,
+        });
+        let undo_payload = undo_payload.to_string();
+        if undo_payload.len() > maximum_audit_bytes {
+            return Err(StorageError::Init(format!(
+                "tag mutation audit payload exceeds the {maximum_audit_bytes}-byte limit; narrow the scope before applying"
+            )));
+        }
+
+        // Size and plan validation are complete before the first write. The
+        // updates and durable audit record still share this one transaction.
+        for (id, _, rewritten) in &affected {
+            tx.execute(
+                "UPDATE knowledge_nodes SET tags = ?1, updated_at = ?2 WHERE id = ?3",
+                params![
+                    serde_json::to_string(&rewritten).map_err(|error| {
+                        StorageError::Init(format!("tag serialization failed: {error}"))
+                    })?,
+                    now.to_rfc3339(),
+                    id,
+                ],
+            )?;
+        }
+        // Regression guard for the single-transaction guarantee: an armed test
+        // fail point errors out here, after every row UPDATE but before the
+        // audit INSERT, and the transaction drop must roll back both.
+        #[cfg(test)]
+        if FAIL_TAG_MUTATION_BEFORE_AUDIT.with(std::cell::Cell::get) {
+            return Err(StorageError::Init(
+                "test fail point: injected failure between tag updates and audit insert".into(),
+            ));
+        }
+        tx.execute(
+            "INSERT INTO merge_operations
+                (id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
+                 survivor_id, affected_ids, confidence, signals, reason, undo_payload)
+             VALUES (?1, NULL, ?2, 'applied', ?3, NULL, NULL, NULL, ?4, NULL, ?5, ?6, ?7)",
+            params![
+                operation_id,
+                op_type,
+                now.to_rfc3339(),
+                serde_json::to_string(&affected_ids).unwrap_or_else(|_| "[]".into()),
+                serde_json::json!({
+                    "sourceTags": source_tags,
+                    "targetTag": target_tag,
+                    "scope": scope.clone(),
+                    "allScopes": scope.is_none(),
+                    "affectedMemoryCount": affected_ids.len(),
+                })
+                .to_string(),
+                reason,
+                undo_payload,
+            ],
+        )?;
+        tx.commit()?;
+        drop(writer);
+
+        self.read_operation(&operation_id)?
+            .ok_or_else(|| StorageError::Init("tag operation vanished after insert".into()))
+    }
+
+    /// Reverse a tag rename/merge from the durable memory reflog.
+    pub fn undo_tag_mutation(&self, operation_id: &str) -> Result<crate::advanced::MergeOperation> {
+        let operation = self
+            .read_operation(operation_id)?
+            .ok_or_else(|| StorageError::NotFound(format!("operation {operation_id}")))?;
+        if operation.status == "reverted" {
+            return Err(StorageError::Init(format!(
+                "operation {operation_id} was already reverted"
+            )));
+        }
+        if !matches!(operation.op_type.as_str(), "tag_rename" | "tag_merge") {
+            return Err(StorageError::Init(format!(
+                "operation {operation_id} is not a tag rename/merge"
+            )));
+        }
+
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = writer.transaction()?;
+        let payload: String = tx.query_row(
+            "SELECT undo_payload FROM merge_operations WHERE id = ?1",
+            params![operation_id],
+            |row| row.get(0),
+        )?;
+        let payload: serde_json::Value = serde_json::from_str(&payload)
+            .map_err(|error| StorageError::Init(format!("undo payload parse failed: {error}")))?;
+        let previous_tags = payload
+            .get("previous_tags")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| StorageError::Init("tag undo payload has no previous_tags".into()))?;
+        let applied_tags = payload
+            .get("applied_tags")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| StorageError::Init("tag undo payload has no applied_tags".into()))?;
+        let now = Utc::now();
+
+        // Refuse to erase later tag edits. Validate every post-state before
+        // restoring any row; a conflict or missing memory rolls back the whole
+        // transaction and leaves the original operation applied.
+        for (id, expected_tags) in applied_tags {
+            let current_raw: Option<String> = tx
+                .query_row(
+                    "SELECT tags FROM knowledge_nodes WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let current_raw = current_raw.ok_or_else(|| {
+                StorageError::NotFound(format!("memory {id} required by tag undo"))
+            })?;
+            let current: Vec<String> = serde_json::from_str(&current_raw).map_err(|error| {
+                StorageError::Init(format!("invalid current tags for memory {id}: {error}"))
+            })?;
+            let expected: Vec<String> =
+                serde_json::from_value(expected_tags.clone()).map_err(|error| {
+                    StorageError::Init(format!(
+                        "invalid applied tags in undo payload for memory {id}: {error}"
+                    ))
+                })?;
+            if current != expected {
+                return Err(StorageError::Init(format!(
+                    "tag undo conflict for memory {id}: tags changed after operation; no rows were restored"
+                )));
+            }
+        }
+
+        for (id, previous) in previous_tags {
+            let tags: Vec<String> = serde_json::from_value(previous.clone()).map_err(|error| {
+                StorageError::Init(format!("invalid previous tags for memory {id}: {error}"))
+            })?;
+            let changed = tx.execute(
+                "UPDATE knowledge_nodes SET tags = ?1, updated_at = ?2 WHERE id = ?3",
+                params![
+                    serde_json::to_string(&tags).map_err(|error| {
+                        StorageError::Init(format!("tag serialization failed: {error}"))
+                    })?,
+                    now.to_rfc3339(),
+                    id,
+                ],
+            )?;
+            if changed != 1 {
+                return Err(StorageError::NotFound(format!(
+                    "memory {id} required by tag undo"
+                )));
+            }
+        }
+
+        let reverted = tx.execute(
+            "UPDATE merge_operations
+             SET status = 'reverted', reverted_at = ?1
+             WHERE id = ?2 AND status = 'applied'",
+            params![now.to_rfc3339(), operation_id],
+        )?;
+        if reverted != 1 {
+            return Err(StorageError::Init(format!(
+                "operation {operation_id} could not be marked reverted"
+            )));
+        }
+
+        let undo_operation_id = Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT INTO merge_operations
+                (id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
+                 survivor_id, affected_ids, confidence, signals, reason, undo_payload)
+             VALUES (?1, NULL, 'undo', 'applied', ?2, NULL, ?3, NULL, ?4, NULL, NULL, ?5, '{}')",
+            params![
+                undo_operation_id,
+                now.to_rfc3339(),
+                operation_id,
+                serde_json::to_string(&operation.affected_ids).unwrap_or_else(|_| "[]".into()),
+                format!("Reverted {} operation {operation_id}", operation.op_type),
+            ],
+        )?;
+        tx.commit()?;
+        drop(writer);
+
+        self.read_operation(&undo_operation_id)?
+            .ok_or_else(|| StorageError::Init("tag undo operation vanished after insert".into()))
+    }
+
+    fn validate_tag_mutation(
+        source_tags: &[String],
+        target_tag: &str,
+    ) -> Result<(Vec<String>, String)> {
+        const MAX_TAG_LENGTH: usize = 200;
+        const MAX_SOURCE_TAGS: usize = 50;
+
+        if source_tags.is_empty() || source_tags.len() > MAX_SOURCE_TAGS {
+            return Err(StorageError::Init(format!(
+                "source_tags must contain 1 to {MAX_SOURCE_TAGS} tags"
+            )));
+        }
+
+        // Only the TARGET is newly persisted, so only it gets shape rules for
+        // new values (trim + length cap). SOURCE tags are exact-match lookup
+        // keys for values that already exist in the store: they stay
+        // byte-exact (no trim, no length cap) so whitespace-padded or overlong
+        // stored tags remain reachable by rename/merge. Empty-after-trim and
+        // control characters are still rejected on both sides.
+        let target_tag = {
+            let tag = target_tag.trim();
+            if tag.is_empty() {
+                return Err(StorageError::Init("tags cannot be empty".into()));
+            }
+            if tag.chars().count() > MAX_TAG_LENGTH || tag.chars().any(char::is_control) {
+                return Err(StorageError::Init(format!(
+                    "invalid tag: expected at most {MAX_TAG_LENGTH} visible characters"
+                )));
+            }
+            tag.to_string()
+        };
+        let mut unique = std::collections::BTreeSet::new();
+        for source in source_tags {
+            if source.trim().is_empty() {
+                return Err(StorageError::Init("tags cannot be empty".into()));
+            }
+            if source.chars().any(char::is_control) {
+                return Err(StorageError::Init(
+                    "invalid source tag: control characters are not allowed".into(),
+                ));
+            }
+            if source == &target_tag {
+                return Err(StorageError::Init(
+                    "source tags must differ from target_tag".into(),
+                ));
+            }
+            unique.insert(source.clone());
+        }
+        Ok((unique.into_iter().collect(), target_tag))
+    }
+
+    fn validate_tag_mutation_reason(reason: &str) -> Result<String> {
+        let reason = reason.trim();
+        if reason.is_empty()
+            || reason.chars().count() > 1_000
+            || reason.chars().any(char::is_control)
+        {
+            return Err(StorageError::Init(
+                "reason must be 1 to 1000 visible characters".into(),
+            ));
+        }
+        Ok(reason.to_string())
+    }
+
+    fn tag_mutation_state(
+        connection: &Connection,
+        source_tags: &[String],
+        target_tag: &str,
+        scope: Option<&str>,
+        maximum_affected: usize,
+    ) -> Result<TagMutationState> {
+        let mut source_counts: std::collections::BTreeMap<String, usize> =
+            source_tags.iter().cloned().map(|tag| (tag, 0)).collect();
+        let mut target_count = 0usize;
+        let mut affected = Vec::new();
+
+        let sql = if scope.is_some() {
+            "SELECT id, tags FROM knowledge_nodes
+             WHERE COALESCE(NULLIF(trim(scope), ''), 'user') = ?1
+             ORDER BY id"
+        } else {
+            "SELECT id, tags FROM knowledge_nodes ORDER BY id"
+        };
+        let mut stmt = connection.prepare(sql)?;
+        let mut rows = match scope {
+            Some(scope) => stmt.query(params![scope])?,
+            None => stmt.query([])?,
+        };
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let raw_tags: String = row.get(1)?;
+            let tags: Vec<String> = serde_json::from_str(&raw_tags).map_err(|error| {
+                StorageError::Init(format!("invalid tags JSON for memory {id}: {error}"))
+            })?;
+            if tags.iter().any(|tag| tag == target_tag) {
+                target_count += 1;
+            }
+            for source in source_tags {
+                if tags.iter().any(|tag| tag == source)
+                    && let Some(count) = source_counts.get_mut(source)
+                {
+                    *count += 1;
+                }
+            }
+            let rewritten = Self::rewrite_tags(&tags, source_tags, target_tag);
+            if rewritten != tags {
+                affected.push((id, tags, rewritten));
+                if affected.len() > maximum_affected {
+                    return Err(StorageError::Init(format!(
+                        "tag mutation affects more than {maximum_affected} memories; narrow the scope before previewing or applying"
+                    )));
+                }
+            }
+        }
+        Ok((source_counts, target_count, affected))
+    }
+
+    fn tag_mutation_token(
+        source_tags: &[String],
+        target_tag: &str,
+        scope: Option<&str>,
+        affected: &[(String, Vec<String>, Vec<String>)],
+    ) -> Result<String> {
+        let state = serde_json::json!({
+            "version": 1,
+            "source_tags": source_tags,
+            "target_tag": target_tag,
+            "scope": scope,
+            "all_scopes": scope.is_none(),
+            "affected_count": affected.len(),
+            "affected": affected.iter().map(|(id, before, _)| {
+                serde_json::json!({"id": id, "tags": before})
+            }).collect::<Vec<_>>(),
+        });
+        let encoded = serde_json::to_vec(&state)
+            .map_err(|error| StorageError::Init(format!("tag preview encoding failed: {error}")))?;
+        Ok(format!("tag-plan-v1:{}", blake3::hash(&encoded).to_hex()))
+    }
+
+    fn rewrite_tags(tags: &[String], source_tags: &[String], target_tag: &str) -> Vec<String> {
+        let sources: std::collections::HashSet<&str> =
+            source_tags.iter().map(String::as_str).collect();
+        if !tags.iter().any(|tag| sources.contains(tag.as_str())) {
+            return tags.to_vec();
+        }
+        let mut inserted_target = false;
+        let mut rewritten = Vec::with_capacity(tags.len());
+
+        for tag in tags {
+            if sources.contains(tag.as_str()) || tag == target_tag {
+                if !inserted_target {
+                    rewritten.push(target_tag.to_string());
+                    inserted_target = true;
+                }
+            } else {
+                rewritten.push(tag.clone());
+            }
+        }
+        rewritten
+    }
+
     /// Execute a previously-generated plan by id. Everything it does is recorded
     /// as a reversible [`MergeOperation`] in `merge_operations`. Returns the
     /// recorded operation id.
@@ -9924,6 +12774,9 @@ impl SqliteMemoryStore {
         let op = self
             .read_operation(op_id)?
             .ok_or_else(|| StorageError::NotFound(format!("operation {op_id}")))?;
+        if matches!(op.op_type.as_str(), "tag_rename" | "tag_merge") {
+            return self.undo_tag_mutation(op_id);
+        }
         if op.status == "reverted" {
             return Err(StorageError::Init(format!(
                 "operation {op_id} was already reverted"
@@ -10033,7 +12886,7 @@ impl SqliteMemoryStore {
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
         let mut stmt = reader.prepare(
             "SELECT id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
-                    survivor_id, affected_ids, confidence, reason
+                    survivor_id, affected_ids, confidence, signals, reason
              FROM merge_operations ORDER BY created_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], Self::row_to_operation)?;
@@ -10042,6 +12895,53 @@ impl SqliteMemoryStore {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    /// List tag rename/merge audit operations directly so they cannot be
+    /// hidden by a busy merge/supersede reflog. `None` is explicit all-scopes;
+    /// a named scope returns operations recorded for that exact scope PLUS
+    /// every all-scopes operation, because an all-scopes mutation rewrote this
+    /// scope's tags too and must stay visible to an agent auditing it.
+    pub fn list_tag_operations(
+        &self,
+        limit: usize,
+        scope: Option<&str>,
+    ) -> Result<Vec<crate::advanced::MergeOperation>> {
+        let scope = scope.map(Self::normalize_scope).transpose()?;
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let sql = if scope.is_some() {
+            "SELECT id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
+                    survivor_id, affected_ids, confidence, signals, reason
+             FROM merge_operations
+             WHERE op_type IN ('tag_rename', 'tag_merge')
+               AND (json_extract(signals, '$.allScopes') = 1
+                    OR json_extract(signals, '$.scope') = ?1)
+             ORDER BY created_at DESC, id DESC LIMIT ?2"
+        } else {
+            "SELECT id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
+                    survivor_id, affected_ids, confidence, signals, reason
+             FROM merge_operations
+             WHERE op_type IN ('tag_rename', 'tag_merge')
+             ORDER BY created_at DESC, id DESC LIMIT ?1"
+        };
+        let mut stmt = reader.prepare(sql)?;
+        let rows = match scope {
+            Some(scope) => stmt.query_map(params![scope, limit as i64], Self::row_to_operation)?,
+            None => stmt.query_map(params![limit as i64], Self::row_to_operation)?,
+        };
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(StorageError::from)
+    }
+
+    /// Read one durable merge/tag operation from the memory reflog.
+    pub fn get_merge_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<crate::advanced::MergeOperation>> {
+        self.read_operation(operation_id)
     }
 
     /// Read a single operation by id.
@@ -10053,7 +12953,7 @@ impl SqliteMemoryStore {
         let op = reader
             .query_row(
                 "SELECT id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
-                        survivor_id, affected_ids, confidence, reason
+                        survivor_id, affected_ids, confidence, signals, reason
                  FROM merge_operations WHERE id = ?1",
                 params![op_id],
                 Self::row_to_operation,
@@ -10080,6 +12980,11 @@ impl SqliteMemoryStore {
                 .ok()
                 .flatten()
                 .map(|v| v as f32),
+            signals: row
+                .get::<_, Option<String>>("signals")
+                .ok()
+                .flatten()
+                .and_then(|value| serde_json::from_str(&value).ok()),
             reason: row.get("reason").ok().flatten(),
         })
     }
@@ -10405,6 +13310,8 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         record: &crate::storage::memory_store::MemoryRecord,
     ) -> crate::storage::memory_store::MemoryStoreResult<uuid::Uuid> {
         use crate::storage::memory_store::{MemoryStoreError, ModelSignature};
+        Self::enforce_secret_policy_for_record(record, SecretPolicy::Reject)
+            .map_err(MemoryStoreError::from)?;
         // Enforce model registry if embedding is provided
         if let Some(vec) = &record.embedding {
             // Derive a signature from metadata if present, or use a generic sentinel
@@ -11242,11 +14149,23 @@ impl SqliteMemoryStore {
     /// the input's `source_envelope`; otherwise this falls back to a plain
     /// `ingest` (an un-keyed record can't be deduplicated).
     pub fn upsert_by_source(&self, input: IngestInput) -> Result<SourceUpsertResult> {
+        self.upsert_by_source_with_secret_policy(input, SecretPolicy::Reject)
+    }
+
+    /// Upsert source content using an explicit credential-storage policy.
+    /// Connectors must retain the default reject policy; this escape hatch is
+    /// reserved for an explicit, trusted local import.
+    pub fn upsert_by_source_with_secret_policy(
+        &self,
+        input: IngestInput,
+        policy: SecretPolicy,
+    ) -> Result<SourceUpsertResult> {
+        Self::enforce_secret_policy_for_input(&input, policy)?;
         let env = match input.source_envelope.clone() {
             Some(e) if e.has_key() => e,
             // No idempotency key — behave like a normal create.
             _ => {
-                let node = self.ingest(input)?;
+                let node = self.ingest_with_secret_policy(input, policy)?;
                 return Ok(SourceUpsertResult {
                     outcome: SourceUpsertOutcome::Created,
                     node_id: node.id,
@@ -11260,8 +14179,11 @@ impl SqliteMemoryStore {
         // same system (e.g. github repos octocat/repoA and octocat/repoB, or two
         // Redmine instances) reuse bare per-project ids ("5"), so keying on
         // (source_system, source_id) alone made repoB's issue #5 overwrite
-        // repoA's row in place. `IS NOT DISTINCT FROM` matches NULL==NULL so
-        // legacy rows without a project still resolve.
+        // repoA's row in place. The lookup MUST use the exact same
+        // COALESCE(source_project, '') semantics as the V19 unique index, which
+        // buckets NULL and '' together: a plain `IS ?3` lookup missed a legacy
+        // NULL-project row when the envelope carried Some(""), so the fall-through
+        // INSERT then hit the UNIQUE constraint on that very bucket.
         let source_project = env.source_project.clone();
         let now = Utc::now();
 
@@ -11275,7 +14197,7 @@ impl SqliteMemoryStore {
                 .query_row(
                     "SELECT id, content_hash FROM knowledge_nodes \
                      WHERE source_system = ?1 AND source_id = ?2 \
-                       AND source_project IS ?3 LIMIT 1",
+                       AND COALESCE(source_project, '') = COALESCE(?3, '') LIMIT 1",
                     params![source_system, source_id, source_project],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
                 )
@@ -11285,7 +14207,7 @@ impl SqliteMemoryStore {
         let Some((node_id, stored_hash)) = existing else {
             // First time we've seen this record — plain insert carries the
             // envelope through the existing ingest path.
-            let node = self.ingest(input)?;
+            let node = self.ingest_with_secret_policy(input, policy)?;
             return Ok(SourceUpsertResult {
                 outcome: SourceUpsertOutcome::Created,
                 node_id: node.id,
@@ -11530,6 +14452,10 @@ mod tests {
     use crate::advanced::{MatchClass, MergePolicy};
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+    #[cfg(unix)]
+    use std::process::{Command, Stdio};
+    #[cfg(unix)]
+    use std::sync::mpsc;
     use tempfile::tempdir;
     // The public struct was renamed from Storage to SqliteMemoryStore; this
     // alias keeps all existing tests compiling without modification.
@@ -11546,6 +14472,623 @@ mod tests {
 
     fn create_test_storage_at(dir: &tempfile::TempDir, name: &str) -> Storage {
         Storage::new(Some(dir.path().join(name))).unwrap()
+    }
+
+    // ===================== SQLite durability/recovery ===================
+
+    #[test]
+    fn durability_profile_parser_is_explicit_and_fail_closed() {
+        assert_eq!(
+            SqliteDurabilityProfile::parse("hardened").unwrap(),
+            SqliteDurabilityProfile::Hardened
+        );
+        assert_eq!(
+            SqliteDurabilityProfile::parse(" BALANCED ").unwrap(),
+            SqliteDurabilityProfile::Balanced
+        );
+        let error = SqliteDurabilityProfile::parse("normal").unwrap_err();
+        assert!(
+            error.to_string().contains("expected hardened|balanced"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn hardened_profile_is_verified_before_store_is_returned() {
+        let dir = tempdir().unwrap();
+        let store = Storage::new_with_durability(
+            Some(dir.path().join("hardened.db")),
+            SqliteDurabilityProfile::Hardened,
+        )
+        .unwrap();
+        let status = store.durability_status();
+
+        assert_eq!(status.profile, SqliteDurabilityProfile::Hardened);
+        assert_eq!(status.writer.journal_mode, "wal");
+        assert_eq!(status.writer.synchronous, 2);
+        assert_eq!(status.writer.synchronous_label, "full");
+        assert!(status.writer.fullfsync_enabled);
+        assert!(status.writer.checkpoint_fullfsync_enabled);
+        assert_eq!(status.writer.wal_autocheckpoint_pages, 1000);
+        assert!(status.writer.foreign_keys_enabled);
+        assert_eq!(status.writer.busy_timeout_ms, 5000);
+        assert_eq!(status.reader.journal_mode, "wal");
+        assert_eq!(status.reader.synchronous, 2);
+        assert_eq!(status.before_migrations.quick_check, "ok");
+        assert!(!status.before_migrations.synaptic_checks_applied);
+        assert_eq!(status.after_migrations.quick_check, "ok");
+        assert!(status.after_migrations.synaptic_checks_applied);
+        assert_eq!(status.after_migrations.synaptic_consistency_violations, 0);
+        assert_eq!(store.verify_integrity().unwrap().quick_check, "ok");
+    }
+
+    #[test]
+    fn balanced_profile_preserves_normal_sync_only_when_explicit() {
+        let dir = tempdir().unwrap();
+        let store = Storage::new_with_durability(
+            Some(dir.path().join("balanced.db")),
+            SqliteDurabilityProfile::Balanced,
+        )
+        .unwrap();
+        let status = store.durability_status();
+
+        assert_eq!(status.profile, SqliteDurabilityProfile::Balanced);
+        assert_eq!(status.writer.journal_mode, "wal");
+        assert_eq!(status.writer.synchronous, 1);
+        assert_eq!(status.writer.synchronous_label, "normal");
+        assert!(!status.writer.fullfsync_enabled);
+        assert!(!status.writer.checkpoint_fullfsync_enabled);
+        assert_eq!(status.reader.synchronous, 1);
+    }
+
+    #[test]
+    fn explicit_checkpoint_reports_sqlite_counters() {
+        let dir = tempdir().unwrap();
+        let store = Storage::new_with_durability(
+            Some(dir.path().join("checkpoint.db")),
+            SqliteDurabilityProfile::Hardened,
+        )
+        .unwrap();
+        store
+            .ingest(IngestInput {
+                content: "checkpoint one acknowledged write".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let passive = store.checkpoint_wal(WalCheckpointMode::Passive).unwrap();
+        assert_eq!(passive.busy, 0);
+        assert!(passive.log_frames >= passive.checkpointed_frames);
+
+        let truncate = store.checkpoint_wal(WalCheckpointMode::Truncate).unwrap();
+        assert_eq!(truncate.busy, 0);
+    }
+
+    #[test]
+    fn backup_to_captures_committed_wal_frames_in_a_consistent_snapshot() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("source.db");
+        let backup_path = dir.path().join("snapshot.db");
+        let store = Storage::new_with_durability(
+            Some(source_path.clone()),
+            SqliteDurabilityProfile::Hardened,
+        )
+        .unwrap();
+        let node = store
+            .ingest(IngestInput {
+                content: "backup WAL snapshot sentinel".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let wal_path = PathBuf::from(format!("{}-wal", source_path.display()));
+        assert!(
+            std::fs::metadata(&wal_path)
+                .map(|metadata| metadata.len() > 0)
+                .unwrap_or(false),
+            "the source must retain committed WAL frames for this regression"
+        );
+
+        store.backup_to(&backup_path).unwrap();
+        let backup = Connection::open(&backup_path).unwrap();
+        let copied: String = backup
+            .query_row(
+                "SELECT content FROM knowledge_nodes WHERE id = ?1",
+                params![node.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(copied, "backup WAL snapshot sentinel");
+    }
+
+    #[test]
+    fn startup_rejects_corrupt_database_before_migrations() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("corrupt.db");
+        std::fs::write(&path, b"not a sqlite database").unwrap();
+
+        let error = Storage::new_with_durability(Some(path), SqliteDurabilityProfile::Hardened)
+            .err()
+            .expect("corrupt database must not produce a store");
+        assert!(
+            error.to_string().contains("file is not a database")
+                || error.to_string().contains("malformed"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn startup_rejects_v21_event_without_receipt() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("inconsistent-v21.db");
+        {
+            let store =
+                Storage::new_with_durability(Some(path.clone()), SqliteDurabilityProfile::Hardened)
+                    .unwrap();
+            store.checkpoint_wal(WalCheckpointMode::Truncate).unwrap();
+        }
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO synaptic_events
+                     (event_id, trigger_memory_id, event_type, occurred_at_ms,
+                      window_from_ms, window_to_ms, strength, algorithm_version,
+                      receipt_id, recorded_at)
+                 VALUES ('broken-event', 'missing-trigger', 'test', 1, 1, 1,
+                         1.0, 'test', 'missing-receipt', '1970-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let error = Storage::new_with_durability(Some(path), SqliteDurabilityProfile::Hardened)
+            .err()
+            .expect("inconsistent V21 rows must fail startup");
+        assert!(
+            error
+                .to_string()
+                .contains("pre-migration synaptic receipt consistency"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn v22_pair_receipt_bindings_are_version_aware() {
+        let dir = tempdir().unwrap();
+        let store = Storage::new_with_durability(
+            Some(dir.path().join("v22-pair-binding.db")),
+            SqliteDurabilityProfile::Hardened,
+        )
+        .unwrap();
+        let memory = store
+            .ingest(IngestInput {
+                content: "V22 pair binding fixture".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let root_payload = serde_json::json!({
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schemaVersion": 2,
+                    "algorithmVersion": "vestige.synaptic_capture.v2",
+                    "receiptRole": "root",
+                    "trigger": { "eventId": "public-event" },
+                    "candidates": []
+                }
+            }
+        })
+        .to_string();
+        let child_payload = serde_json::json!({
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schemaVersion": 2,
+                    "algorithmVersion": "vestige.synaptic_capture.v2",
+                    "receiptRole": "pair",
+                    "parentReceiptId": "root-receipt",
+                    "evaluationDirection": "forward",
+                    "trigger": { "eventId": "public-event" },
+                    "candidates": [{ "evidenceSlot": "candidate_1" }]
+                }
+            }
+        })
+        .to_string();
+        {
+            let writer = store.writer.lock().unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_receipts(receipt_id, payload, created_at)
+                     VALUES ('root-receipt', ?1, '1970-01-01T00:00:00Z')",
+                    params![root_payload],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_receipts(receipt_id, payload, created_at)
+                     VALUES ('child-receipt', ?1, '1970-01-01T00:00:00Z')",
+                    params![child_payload],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO synaptic_events(
+                         event_id, trigger_memory_id, event_type, occurred_at_ms,
+                         window_from_ms, window_to_ms, strength, algorithm_version,
+                         receipt_id, recorded_at, public_event_id, event_state
+                     ) VALUES (
+                         'private-event', ?1, 'test', 2, 1, 2, 1.0,
+                         'vestige.synaptic_capture.v2', 'root-receipt',
+                         '1970-01-01T00:00:00Z', 'public-event', 'closed'
+                     )",
+                    params![memory.id],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO synaptic_tags(
+                         tag_id, memory_id, created_at_ms, initial_strength,
+                         algorithm_version, state, recorded_at
+                     ) VALUES (
+                         'tag-1', ?1, 1, 1.0, 'vestige.synaptic_capture.v2',
+                         'active', '1970-01-01T00:00:00Z'
+                     )",
+                    params![memory.id],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO synaptic_capture_items(
+                         event_id, tag_id, memory_id, evidence_slot, receipt_id,
+                         encoded_at_ms, temporal_distance_hours, capture_probability,
+                         tag_strength_at_evaluation, capture_score, disposition,
+                         recorded_at, evaluation_direction, algorithm_version
+                     ) VALUES (
+                         'private-event', 'tag-1', ?1, 'candidate_1', 'child-receipt',
+                         1, 0.0, 1.0, 1.0, 1.0, 'below_threshold',
+                         '1970-01-01T00:00:00Z', 'forward',
+                         'vestige.synaptic_capture.v2'
+                     )",
+                    params![memory.id],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            store
+                .verify_integrity()
+                .unwrap()
+                .synaptic_consistency_violations,
+            0
+        );
+
+        let invalid_child_payload = serde_json::json!({
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schemaVersion": 2,
+                    "algorithmVersion": "vestige.synaptic_capture.v2",
+                    "receiptRole": "pair",
+                    "parentReceiptId": "wrong-root",
+                    "evaluationDirection": "forward",
+                    "trigger": { "eventId": "public-event" },
+                    "candidates": [{ "evidenceSlot": "candidate_1" }]
+                }
+            }
+        })
+        .to_string();
+        store
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE memory_receipts SET payload = ?1 WHERE receipt_id = 'child-receipt'",
+                params![invalid_child_payload],
+            )
+            .unwrap();
+        let error = store.verify_integrity().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("synaptic receipt consistency checks found 1"),
+            "unexpected error: {error}"
+        );
+
+        let legacy_child_payload = serde_json::json!({
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schemaVersion": 1,
+                    "algorithmVersion": "vestige.synaptic_capture.v1",
+                    "trigger": { "eventId": "public-event" },
+                    "candidates": [{ "evidenceSlot": "candidate_1" }]
+                }
+            }
+        })
+        .to_string();
+        store
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE memory_receipts SET payload = ?1 WHERE receipt_id = 'child-receipt'",
+                params![legacy_child_payload],
+            )
+            .unwrap();
+        let error = store.verify_integrity().unwrap_err();
+        assert!(
+            error.to_string().contains("synaptic receipt consistency"),
+            "a schema-v1 receipt must not validate a V22 forward item: {error}"
+        );
+
+        // SQL `NULL IS NOT NULL` is false, so an explicit non-null/type guard
+        // is required or a missing event id on both sides becomes fail-open.
+        let missing_event_payload = serde_json::json!({
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schemaVersion": 2,
+                    "algorithmVersion": "vestige.synaptic_capture.v2",
+                    "receiptRole": "root",
+                    "trigger": {},
+                    "candidates": []
+                }
+            }
+        })
+        .to_string();
+        {
+            let writer = store.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE synaptic_events SET public_event_id = NULL
+                     WHERE event_id = 'private-event'",
+                    [],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "UPDATE memory_receipts SET payload = ?1
+                     WHERE receipt_id = 'root-receipt'",
+                    params![missing_event_payload],
+                )
+                .unwrap();
+        }
+        let error = store.verify_integrity().unwrap_err();
+        assert!(
+            error.to_string().contains("synaptic receipt consistency"),
+            "missing V22 event ids must fail closed: {error}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hardened_profile_rejects_missing_fullfsync_readback_on_macos() {
+        let mut pragmas = SqliteConnectionPragmas {
+            journal_mode: "wal".into(),
+            synchronous: 2,
+            synchronous_label: "full".into(),
+            fullfsync_enabled: true,
+            fullfsync_meaningful_on_this_platform: true,
+            checkpoint_fullfsync_enabled: true,
+            wal_autocheckpoint_pages: 1000,
+            foreign_keys_enabled: true,
+            busy_timeout_ms: 5000,
+        };
+        pragmas.fullfsync_enabled = false;
+        assert!(
+            Storage::verify_effective_pragmas(SqliteDurabilityProfile::Hardened, "test", &pragmas)
+                .is_err()
+        );
+        pragmas.fullfsync_enabled = true;
+        pragmas.checkpoint_fullfsync_enabled = false;
+        assert!(
+            Storage::verify_effective_pragmas(SqliteDurabilityProfile::Hardened, "test", &pragmas)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn hardened_writer_refuses_read_only_non_wal_database() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("readonly-delete.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "PRAGMA journal_mode = DELETE;
+                 CREATE TABLE seed(id INTEGER PRIMARY KEY);",
+            )
+            .unwrap();
+        }
+        let conn =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+
+        let error = Storage::configure_connection(&conn, SqliteDurabilityProfile::Hardened, true)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("readonly")
+                || error.to_string().contains("read-only")
+                || error.to_string().contains("attempt to write"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[cfg(unix)]
+    const SQLITE_CRASH_CHILD_SCENARIO: &str = "VESTIGE_SQLITE_CRASH_CHILD_SCENARIO";
+    #[cfg(unix)]
+    const SQLITE_CRASH_CHILD_PATH: &str = "VESTIGE_SQLITE_CRASH_CHILD_PATH";
+    #[cfg(unix)]
+    const SQLITE_CRASH_READY: &str = "VESTIGE_SQLITE_CRASH_READY";
+
+    /// Subprocess-only entry point for the process-crash durability harness.
+    #[cfg(unix)]
+    #[test]
+    fn sqlite_crash_child() {
+        let Ok(scenario) = std::env::var(SQLITE_CRASH_CHILD_SCENARIO) else {
+            return;
+        };
+        let path = PathBuf::from(
+            std::env::var_os(SQLITE_CRASH_CHILD_PATH)
+                .expect("crash child requires a database path"),
+        );
+        let store =
+            Storage::new_with_durability(Some(path), SqliteDurabilityProfile::Hardened).unwrap();
+        let mut writer = store.writer.lock().unwrap();
+        let tx = writer
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        tx.execute(
+            "INSERT INTO durability_probe_transactions(id, value)
+             VALUES ('ack-boundary', 'parent')",
+            [],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO durability_probe_items(transaction_id, item_index, value)
+             VALUES ('ack-boundary', 1, 'first'), ('ack-boundary', 2, 'second')",
+            [],
+        )
+        .unwrap();
+
+        if scenario == "before_commit" {
+            println!("{SQLITE_CRASH_READY}=before_commit");
+            std::io::stdout().flush().unwrap();
+            loop {
+                std::thread::park_timeout(std::time::Duration::from_secs(60));
+            }
+        }
+
+        assert_eq!(scenario, "after_commit");
+        tx.commit().unwrap();
+        drop(writer);
+        println!("{SQLITE_CRASH_READY}=after_commit");
+        std::io::stdout().flush().unwrap();
+        loop {
+            std::thread::park_timeout(std::time::Duration::from_secs(60));
+        }
+    }
+
+    #[cfg(unix)]
+    fn spawn_and_kill_at_commit_boundary(path: &Path, scenario: &str) {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("storage::sqlite::tests::sqlite_crash_child")
+            .arg("--nocapture")
+            .env(SQLITE_CRASH_CHILD_SCENARIO, scenario)
+            .env(SQLITE_CRASH_CHILD_PATH, path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            for line in BufReader::new(stdout)
+                .lines()
+                .map_while(std::result::Result::ok)
+            {
+                if line.contains(SQLITE_CRASH_READY) {
+                    let _ = ready_tx.send(line);
+                    return;
+                }
+            }
+        });
+
+        let marker = ready_rx
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap_or_else(|error| {
+                let _ = child.kill();
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut stderr| {
+                        let mut text = String::new();
+                        let _ = std::io::Read::read_to_string(&mut stderr, &mut text);
+                        text
+                    })
+                    .unwrap_or_default();
+                panic!("crash child did not reach {scenario}: {error}; stderr={stderr}")
+            });
+        assert!(marker.contains(scenario), "unexpected marker: {marker}");
+        child.kill().unwrap();
+        let status = child.wait().unwrap();
+        assert!(
+            !status.success(),
+            "crash child should be killed, not exit cleanly"
+        );
+    }
+
+    #[cfg(unix)]
+    fn prepare_crash_probe(path: &Path) {
+        let store = Storage::new_with_durability(
+            Some(path.to_path_buf()),
+            SqliteDurabilityProfile::Hardened,
+        )
+        .unwrap();
+        store
+            .writer
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE durability_probe_transactions(
+                     id TEXT PRIMARY KEY,
+                     value TEXT NOT NULL
+                 ) STRICT;
+                 CREATE TABLE durability_probe_items(
+                     transaction_id TEXT NOT NULL,
+                     item_index INTEGER NOT NULL,
+                     value TEXT NOT NULL,
+                     PRIMARY KEY(transaction_id, item_index),
+                     FOREIGN KEY(transaction_id)
+                         REFERENCES durability_probe_transactions(id)
+                         ON DELETE CASCADE
+                 ) STRICT;",
+            )
+            .unwrap();
+        store.checkpoint_wal(WalCheckpointMode::Truncate).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn crash_probe_counts(path: &Path) -> (i64, i64) {
+        let store = Storage::new_with_durability(
+            Some(path.to_path_buf()),
+            SqliteDurabilityProfile::Hardened,
+        )
+        .unwrap();
+        assert_eq!(store.verify_integrity().unwrap().quick_check, "ok");
+        let reader = store.reader.lock().unwrap();
+        let transactions = reader
+            .query_row(
+                "SELECT COUNT(*) FROM durability_probe_transactions",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let items = reader
+            .query_row("SELECT COUNT(*) FROM durability_probe_items", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        (transactions, items)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sigkill_before_and_after_commit_respects_atomic_ack_boundary() {
+        let dir = tempdir().unwrap();
+
+        let before_path = dir.path().join("before-commit.db");
+        prepare_crash_probe(&before_path);
+        spawn_and_kill_at_commit_boundary(&before_path, "before_commit");
+        assert_eq!(crash_probe_counts(&before_path), (0, 0));
+
+        let after_path = dir.path().join("after-commit.db");
+        prepare_crash_probe(&after_path);
+        spawn_and_kill_at_commit_boundary(&after_path, "after_commit");
+        assert_eq!(crash_probe_counts(&after_path), (1, 2));
     }
 
     // ===================== Connector sync (#57) =========================
@@ -11579,6 +15122,140 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap()
+    }
+
+    // ===================== Secret-ingest policy (#154) ==================
+
+    #[test]
+    fn ingest_rejects_probable_github_secret_without_persisting_or_echoing_it() {
+        let store = create_test_storage();
+        let secret = format!("ghp_{}", "A".repeat(36));
+
+        let err = store
+            .ingest(IngestInput {
+                content: format!("The temporary token is {secret}"),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, StorageError::SecretDetected { .. }));
+        assert!(
+            !err.to_string().contains(&secret),
+            "rejection must not echo the credential"
+        );
+        assert_eq!(
+            store.get_stats().unwrap().total_nodes,
+            0,
+            "rejection must happen before creating a node"
+        );
+    }
+
+    #[test]
+    fn update_node_content_rejects_probable_github_secret_without_mutating_node() {
+        let store = create_test_storage();
+        let node = store
+            .ingest(IngestInput {
+                content: "safe original content".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let secret = format!("ghp_{}", "A".repeat(36));
+
+        let err = store
+            .update_node_content(&node.id, &format!("replacement includes {secret}"))
+            .unwrap_err();
+
+        assert!(matches!(err, StorageError::SecretDetected { .. }));
+        assert!(
+            !err.to_string().contains(&secret),
+            "rejection must not echo the credential"
+        );
+        assert_eq!(
+            store.get_node(&node.id).unwrap().unwrap().content,
+            "safe original content",
+            "rejection must leave existing content intact"
+        );
+    }
+
+    #[test]
+    fn connector_upsert_rejects_probable_github_secret_without_mutating_existing_record() {
+        let store = create_test_storage();
+        let created = store
+            .upsert_by_source(source_input(
+                "secret-policy",
+                "safe connector body",
+                "safe-hash",
+            ))
+            .unwrap();
+        let secret = format!("ghp_{}", "A".repeat(36));
+
+        let err = store
+            .upsert_by_source(source_input(
+                "secret-policy",
+                &format!("updated connector body includes {secret}"),
+                "secret-hash",
+            ))
+            .unwrap_err();
+
+        assert!(matches!(err, StorageError::SecretDetected { .. }));
+        assert!(
+            !err.to_string().contains(&secret),
+            "rejection must not echo the credential"
+        );
+        let stored = store.get_node(&created.node_id).unwrap().unwrap();
+        assert_eq!(stored.content, "safe connector body");
+        assert_eq!(
+            stored
+                .source_envelope
+                .as_ref()
+                .and_then(|envelope| envelope.content_hash.as_deref()),
+            Some("safe-hash"),
+            "preflight rejection must happen before connector metadata changes"
+        );
+    }
+
+    #[test]
+    fn portable_import_rejects_secret_archive_atomically_before_safe_rows_import() {
+        let source_dir = tempdir().unwrap();
+        let target_dir = tempdir().unwrap();
+        let source = create_test_storage_at(&source_dir, "source.db");
+        source
+            .ingest(IngestInput {
+                content: "safe portable memory".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let secret = format!("ghp_{}", "A".repeat(36));
+        source
+            .ingest_with_secret_policy(
+                IngestInput {
+                    content: format!("intentionally archived credential {secret}"),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                },
+                SecretPolicy::AllowExplicitly,
+            )
+            .unwrap();
+        let archive = source.export_portable_archive().unwrap();
+
+        let target = create_test_storage_at(&target_dir, "target.db");
+        let err = target
+            .import_portable_archive(&archive, PortableImportMode::EmptyOnly)
+            .unwrap_err();
+
+        assert!(matches!(err, StorageError::SecretDetected { .. }));
+        assert!(
+            !err.to_string().contains(&secret),
+            "rejection must not echo the credential"
+        );
+        assert_eq!(
+            target.get_stats().unwrap().total_nodes,
+            0,
+            "archive preflight must prevent a partial import of safe sibling rows"
+        );
     }
 
     #[test]
@@ -11804,6 +15481,121 @@ mod tests {
         );
     }
 
+    /// Build a `source_input` whose envelope carries an explicit project.
+    fn source_input_in_project(
+        id: &str,
+        content: &str,
+        hash: &str,
+        project: Option<&str>,
+    ) -> IngestInput {
+        let mut input = source_input(id, content, hash);
+        input.source_envelope.as_mut().unwrap().source_project = project.map(str::to_string);
+        input
+    }
+
+    #[test]
+    fn upsert_by_source_scopes_key_by_project() {
+        // V19: two sources of the same system reuse bare per-project ids, so
+        // the same (system, id) under DIFFERENT projects must yield two
+        // distinct nodes, and re-syncing each must hit its own row (Unchanged).
+        let store = create_test_storage();
+
+        let a = store
+            .upsert_by_source(source_input_in_project(
+                "5",
+                "repoA issue 5",
+                "hA",
+                Some("octocat/repoA"),
+            ))
+            .unwrap();
+        let b = store
+            .upsert_by_source(source_input_in_project(
+                "5",
+                "repoB issue 5",
+                "hB",
+                Some("octocat/repoB"),
+            ))
+            .unwrap();
+        assert_eq!(a.outcome, SourceUpsertOutcome::Created);
+        assert_eq!(b.outcome, SourceUpsertOutcome::Created);
+        assert_ne!(a.node_id, b.node_id, "projects must not share a row");
+        assert_eq!(node_count(&store), 2);
+
+        // Re-sync both records with unchanged hashes → each resolves to ITS row.
+        let ra = store
+            .upsert_by_source(source_input_in_project(
+                "5",
+                "repoA issue 5",
+                "hA",
+                Some("octocat/repoA"),
+            ))
+            .unwrap();
+        assert_eq!(ra.outcome, SourceUpsertOutcome::Unchanged);
+        assert_eq!(ra.node_id, a.node_id);
+        let rb = store
+            .upsert_by_source(source_input_in_project(
+                "5",
+                "repoB issue 5",
+                "hB",
+                Some("octocat/repoB"),
+            ))
+            .unwrap();
+        assert_eq!(rb.outcome, SourceUpsertOutcome::Unchanged);
+        assert_eq!(rb.node_id, b.node_id);
+        assert_eq!(node_count(&store), 2, "resync must not duplicate");
+    }
+
+    #[test]
+    fn upsert_by_source_matches_legacy_null_project_row_with_empty_string() {
+        // Regression: the V19 unique index buckets NULL and '' together via
+        // COALESCE(source_project, ''), but the lookup used `source_project IS
+        // ?3`, which treats NULL and '' as distinct. A legacy NULL-project row
+        // plus an ''-project envelope for the same (system, id) made the lookup
+        // miss, and the fall-through INSERT then hit the UNIQUE constraint.
+        let store = create_test_storage();
+        let created = store
+            .upsert_by_source(source_input("41", "legacy body", "h-legacy"))
+            .unwrap();
+        assert_eq!(created.outcome, SourceUpsertOutcome::Created);
+
+        // Simulate a pre-V19 legacy row: source_project stored as NULL.
+        {
+            let writer = store.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET source_project = NULL WHERE id = ?1",
+                    params![created.node_id],
+                )
+                .unwrap();
+        }
+
+        // New connector run sends Some("") for the same (system, id). Must
+        // UPDATE the legacy row in place — not error on the unique index.
+        let res = store
+            .upsert_by_source(source_input_in_project(
+                "41",
+                "legacy body edited",
+                "h-new",
+                Some(""),
+            ))
+            .expect("''-project envelope must resolve the NULL-project row, not UNIQUE-fail");
+        assert_eq!(res.outcome, SourceUpsertOutcome::Updated);
+        assert_eq!(res.node_id, created.node_id, "must reuse the legacy row");
+        assert_eq!(node_count(&store), 1, "no duplicate row in the NULL bucket");
+
+        // And the Unchanged path resolves through the same bucket too.
+        let res2 = store
+            .upsert_by_source(source_input_in_project(
+                "41",
+                "legacy body edited",
+                "h-new",
+                Some(""),
+            ))
+            .unwrap();
+        assert_eq!(res2.outcome, SourceUpsertOutcome::Unchanged);
+        assert_eq!(res2.node_id, created.node_id);
+    }
+
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn with_vector_search_disabled<T>(f: impl FnOnce() -> T) -> T {
         let _guard = ENV_LOCK.lock().unwrap();
@@ -11888,19 +15680,37 @@ mod tests {
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
-    fn test_legacy_embedding_model_matching_is_exact() {
+    fn test_embedding_model_identity_matching() {
         assert!(Storage::embedding_model_matches_active(
-            "nomic-ai/nomic-embed-text-v1.5",
-            "nomic-ai/nomic-embed-text-v1.5",
+            "Qwen/Qwen3-Embedding-0.6B",
+            "Qwen/Qwen3-Embedding-0.6B",
         ));
         assert!(!Storage::embedding_model_matches_active(
             "nomic-embed-text-v1.5",
             "nomic-ai/nomic-embed-text-v1.5",
         ));
         assert!(!Storage::embedding_model_matches_active(
+            "nomic-ai/nomic-embed-text-v1.5",
             "Qwen/Qwen3-Embedding-0.6B",
-            "qwen/qwen3-embedding-0.6b",
         ));
+
+        let bytes = Embedding::new(vec![1.0; EMBEDDING_DIMENSIONS]).to_bytes();
+        assert!(
+            Storage::embedding_vector_for_active_model(
+                &bytes,
+                "nomic-ai/nomic-embed-text-v1.5",
+                "Qwen/Qwen3-Embedding-0.6B",
+            )
+            .is_none()
+        );
+        assert!(
+            Storage::embedding_vector_for_active_model(
+                &bytes,
+                "Qwen/Qwen3-Embedding-0.6B",
+                "Qwen/Qwen3-Embedding-0.6B",
+            )
+            .is_some()
+        );
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -11942,14 +15752,32 @@ mod tests {
                     rusqlite::params![&node.id, stale_model],
                 )
                 .unwrap();
+            // In a process where the legacy runtime was initialized by an
+            // earlier test, ingest also writes a matching V28 profile vector.
+            // Remove it so this fixture consistently represents a pre-V28
+            // mirror-only stale corpus.
+            writer
+                .execute(
+                    "DELETE FROM embedding_profile_vectors
+                     WHERE profile_id = ?1 AND node_id = ?2",
+                    rusqlite::params![LEGACY_EMBEDDING_PROFILE_ID, &node.id],
+                )
+                .unwrap();
         }
 
         let stats = storage.get_stats().unwrap();
         assert_eq!(stats.nodes_with_mismatched_embeddings, 125);
         assert_eq!(stats.nodes_with_active_embeddings, 0);
 
+        let legacy = EmbeddingProfileId::new(LEGACY_EMBEDDING_PROFILE_ID).unwrap();
         let candidates = storage
-            .embedding_regeneration_candidates(None, false)
+            .embedding_regeneration_candidates(
+                &legacy,
+                EMBEDDING_DIMENSIONS,
+                "nomic-ai/nomic-embed-text-v1.5",
+                None,
+                false,
+            )
             .unwrap();
         assert_eq!(candidates.len(), 125);
     }
@@ -12115,6 +15943,74 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn init_embeddings_permits_the_released_legacy_nomic_profile() {
+        let storage = create_test_storage();
+
+        // `init_embeddings` still owns the released Nomic startup path. The
+        // actual backend may be unavailable in an offline test environment,
+        // but that must surface as backend initialization failure, never as a
+        // profile-policy rejection.
+        match storage.init_embeddings() {
+            Ok(()) | Err(StorageError::Init(_)) => {}
+            Err(error) => {
+                panic!("legacy Nomic profile must be permitted to use init_embeddings: {error}")
+            }
+        }
+    }
+
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn init_embeddings_rejects_an_active_qwen_profile() {
+        let storage = create_test_storage();
+        let qwen = BuiltinEmbeddingProfile::QwenBalanced1024
+            .profile()
+            .profile_id;
+        storage
+            .save_embedding_profile_manifest(&ready_profile_manifest(
+                BuiltinEmbeddingProfile::QwenBalanced1024,
+            ))
+            .unwrap();
+
+        // This intentionally sets only the persisted active pointer. It does
+        // not satisfy the activation gate; the point is to verify that the
+        // legacy convenience initializer fails closed before it can select or
+        // initialize a different vector-space runtime.
+        let writer = storage.writer.lock().unwrap();
+        writer
+            .execute(
+                "UPDATE embedding_profiles SET status = 'ready' WHERE profile_id = ?1",
+                params![LEGACY_EMBEDDING_PROFILE_ID],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "UPDATE embedding_profiles SET status = 'active' WHERE profile_id = ?1",
+                params![qwen.as_str()],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "UPDATE embedding_profile_state
+                 SET active_profile_id = ?1, previous_profile_id = ?2,
+                     activated_at = ?3, updated_at = ?3
+                 WHERE singleton = 1",
+                params![
+                    qwen.as_str(),
+                    LEGACY_EMBEDDING_PROFILE_ID,
+                    Utc::now().to_rfc3339(),
+                ],
+            )
+            .unwrap();
+        drop(writer);
+
+        let error = storage.init_embeddings().unwrap_err();
+        assert!(matches!(error, StorageError::InvalidEmbeddingProfile(_)));
+        assert!(error.to_string().contains(qwen.as_str()));
+        assert!(error.to_string().contains("explicit profile workflow"));
+    }
+
     #[test]
     fn migration_vector_and_node_checkpoint_commit_together() {
         let storage = create_test_storage();
@@ -12231,6 +16127,943 @@ mod tests {
         assert_eq!(remaining, 0, "purge must cascade to every profile vector");
     }
 
+    fn ingest_tagged_in_scope(
+        storage: &Storage,
+        scope: &str,
+        content: &str,
+        tags: &[&str],
+    ) -> KnowledgeNode {
+        storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: content.to_string(),
+                    node_type: "fact".to_string(),
+                    tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                    ..Default::default()
+                },
+                scope,
+            )
+            .unwrap()
+    }
+
+    fn preview_token(preview: &serde_json::Value) -> &str {
+        preview["previewToken"].as_str().unwrap()
+    }
+
+    #[test]
+    fn tag_rename_is_previewed_scoped_exact_atomic_audited_and_reversible() {
+        let storage = create_test_storage();
+        let user = ingest_tagged_in_scope(
+            &storage,
+            "user",
+            "scoped tag rename fixture",
+            &[
+                "keep",
+                "legacytag156",
+                "canonicaltag156",
+                "canonicaltag156",
+                "tail",
+            ],
+        );
+        let prefix = ingest_tagged_in_scope(
+            &storage,
+            "user",
+            "exact matching fixture",
+            &["legacytag156-extra"],
+        );
+        let project = ingest_tagged_in_scope(
+            &storage,
+            "project-a",
+            "cross scope fixture",
+            &["legacytag156"],
+        );
+        let sources = vec!["legacytag156".to_string()];
+
+        let preview = storage
+            .preview_tag_mutation(&sources, "canonicaltag156", Some(" user "))
+            .unwrap();
+        assert_eq!(preview["affectedMemoryCount"], 1);
+        assert_eq!(
+            storage.get_node(&user.id).unwrap().unwrap().tags,
+            vec![
+                "keep",
+                "legacytag156",
+                "canonicaltag156",
+                "canonicaltag156",
+                "tail"
+            ],
+            "preview must not mutate"
+        );
+
+        let operation = storage
+            .apply_tag_mutation(
+                &sources,
+                "canonicaltag156",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "standardize the issue 156 fixture tag",
+            )
+            .unwrap();
+        assert_eq!(operation.op_type, "tag_rename");
+        assert_eq!(operation.affected_ids, vec![user.id.clone()]);
+        assert_eq!(
+            storage.get_node(&user.id).unwrap().unwrap().tags,
+            vec!["keep", "canonicaltag156", "tail"],
+            "the union of source and existing target tags is one target at the first affected position"
+        );
+        assert_eq!(
+            storage.get_node(&prefix.id).unwrap().unwrap().tags,
+            vec!["legacytag156-extra"],
+            "prefix tags must not match"
+        );
+        assert_eq!(
+            storage.get_node(&project.id).unwrap().unwrap().tags,
+            vec!["legacytag156"],
+            "default scoped maintenance must not cross project boundaries"
+        );
+        assert!(
+            storage
+                .keyword_search("canonicaltag156", 10, 0.0)
+                .unwrap()
+                .iter()
+                .any(|node| node.id == user.id),
+            "the existing knowledge_nodes update trigger must keep FTS tag search consistent"
+        );
+        let logged = storage.get_merge_operation(&operation.id).unwrap().unwrap();
+        assert_eq!(
+            logged.reason.as_deref(),
+            Some("standardize the issue 156 fixture tag")
+        );
+
+        storage.undo_tag_mutation(&operation.id).unwrap();
+        assert_eq!(
+            storage.get_node(&user.id).unwrap().unwrap().tags,
+            vec![
+                "keep",
+                "legacytag156",
+                "canonicaltag156",
+                "canonicaltag156",
+                "tail"
+            ],
+            "undo restores the exact pre-operation array"
+        );
+    }
+
+    #[test]
+    fn tag_rename_all_scopes_is_explicit_and_updates_every_matching_row() {
+        let storage = create_test_storage();
+        let user = ingest_tagged_in_scope(&storage, "user", "user shared tag", &["shared"]);
+        let project =
+            ingest_tagged_in_scope(&storage, "project-a", "project shared tag", &["shared"]);
+        let sources = vec!["shared".to_string()];
+
+        let scoped = storage
+            .preview_tag_mutation(&sources, "canonical", Some("user"))
+            .unwrap();
+        assert_eq!(scoped["affectedMemoryCount"], 1);
+        assert_eq!(scoped["allScopes"], false);
+
+        let preview = storage
+            .preview_tag_mutation(&sources, "canonical", None)
+            .unwrap();
+        assert_eq!(preview["allScopes"], true);
+        assert_eq!(preview["affectedMemoryCount"], 2);
+
+        storage
+            .apply_tag_mutation(
+                &sources,
+                "canonical",
+                None,
+                preview_token(&preview),
+                "tag_rename",
+                "explicit cross-scope rename",
+            )
+            .unwrap();
+        assert_eq!(
+            storage.get_node(&user.id).unwrap().unwrap().tags,
+            vec!["canonical"]
+        );
+        assert_eq!(
+            storage.get_node(&project.id).unwrap().unwrap().tags,
+            vec!["canonical"]
+        );
+    }
+
+    #[test]
+    fn list_tag_operations_is_not_buried_by_later_merge_rows() {
+        let storage = create_test_storage();
+        ingest_tagged_in_scope(&storage, "user", "tag burial fixture", &["old"]);
+        let sources = vec!["old".to_string()];
+        let preview = storage
+            .preview_tag_mutation(&sources, "new", Some("user"))
+            .unwrap();
+        let operation = storage
+            .apply_tag_mutation(
+                &sources,
+                "new",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "must remain listed after later merge rows",
+            )
+            .unwrap();
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            for index in 0..20 {
+                writer
+                    .execute(
+                        "INSERT INTO merge_operations
+                            (id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
+                             survivor_id, affected_ids, confidence, signals, reason, undo_payload)
+                         VALUES (?1, NULL, 'merge', 'applied', ?2, NULL, NULL, NULL, '[]', NULL, NULL, 'later merge', '{}')",
+                        params![
+                            format!("merge-later-{index:02}"),
+                            "2099-01-01T00:00:00+00:00"
+                        ],
+                    )
+                    .unwrap();
+            }
+        }
+
+        let mixed = storage.list_merge_operations(20).unwrap();
+        assert_eq!(mixed.len(), 20);
+        assert!(
+            mixed
+                .iter()
+                .all(|operation| operation.op_type != "tag_rename"),
+            "the mixed window fills with later merge rows"
+        );
+        let tags = storage.list_tag_operations(50, None).unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].id, operation.id);
+        let scoped = storage.list_tag_operations(50, Some("user")).unwrap();
+        assert_eq!(scoped.len(), 1);
+    }
+
+    #[test]
+    fn tag_merge_normalizes_sources_and_rejects_stale_preview_or_undo_conflict() {
+        let storage = create_test_storage();
+        let node = ingest_tagged_in_scope(
+            &storage,
+            "user",
+            "multi source tag merge",
+            &["keep", "beta", "alpha", "target", "target", "tail"],
+        );
+        // Duplicate sources dedupe; matching is byte-exact (padded variants
+        // are separate, reachable keys — see the padded-source test).
+        let sources = vec!["beta".to_string(), "alpha".to_string(), "alpha".to_string()];
+        let preview = storage
+            .preview_tag_mutation(&sources, "target", Some("user"))
+            .unwrap();
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET tags = ?1 WHERE id = ?2",
+                    params![
+                        serde_json::json!(["keep", "beta", "alpha", "drift"]).to_string(),
+                        &node.id
+                    ],
+                )
+                .unwrap();
+        }
+        let stale_error = storage
+            .apply_tag_mutation(
+                &sources,
+                "target",
+                Some("user"),
+                preview_token(&preview),
+                "tag_merge",
+                "merge aliases",
+            )
+            .unwrap_err();
+        assert!(stale_error.to_string().contains("stale"));
+        assert!(storage.list_merge_operations(20).unwrap().is_empty());
+
+        let fresh = storage
+            .preview_tag_mutation(&sources, "target", Some("user"))
+            .unwrap();
+        let operation = storage
+            .apply_tag_mutation(
+                &sources,
+                "target",
+                Some("user"),
+                preview_token(&fresh),
+                "tag_merge",
+                "merge aliases",
+            )
+            .unwrap();
+        assert_eq!(
+            storage.get_node(&node.id).unwrap().unwrap().tags,
+            vec!["keep", "target", "drift"]
+        );
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET tags = ?1 WHERE id = ?2",
+                    params![
+                        serde_json::json!(["keep", "target", "later-edit"]).to_string(),
+                        &node.id
+                    ],
+                )
+                .unwrap();
+        }
+        let conflict = storage.undo_tag_mutation(&operation.id).unwrap_err();
+        assert!(conflict.to_string().contains("conflict"));
+        assert_eq!(
+            storage
+                .get_merge_operation(&operation.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "applied",
+            "failed undo must not mark the original operation reverted"
+        );
+    }
+
+    #[test]
+    fn tag_mutation_validation_and_malformed_json_fail_without_partial_writes() {
+        let storage = create_test_storage();
+        let first = ingest_tagged_in_scope(&storage, "user", "first atomic row", &["old"]);
+        let second = ingest_tagged_in_scope(&storage, "user", "second atomic row", &["old"]);
+        assert!(
+            storage
+                .preview_tag_mutation(&["same".into()], "same", Some("user"))
+                .is_err()
+        );
+        assert!(
+            storage
+                .preview_tag_mutation(&["bad\ncontrol".into()], "new", Some("user"))
+                .is_err()
+        );
+
+        let sources = vec!["old".to_string()];
+        let preview = storage
+            .preview_tag_mutation(&sources, "new", Some("user"))
+            .unwrap();
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET tags = 'not-json' WHERE id = ?1",
+                    params![&second.id],
+                )
+                .unwrap();
+        }
+        let error = storage
+            .apply_tag_mutation(
+                &sources,
+                "new",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "atomic malformed-json test",
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("invalid tags JSON"));
+        assert_eq!(
+            storage.get_node(&first.id).unwrap().unwrap().tags,
+            vec!["old"]
+        );
+        assert!(storage.list_merge_operations(20).unwrap().is_empty());
+
+        let valid_storage = create_test_storage();
+        ingest_tagged_in_scope(&valid_storage, "user", "no match", &["other"]);
+        let empty = valid_storage
+            .preview_tag_mutation(&sources, "new", Some("user"))
+            .unwrap();
+        assert_eq!(empty["affectedMemoryCount"], 0);
+        assert!(
+            valid_storage
+                .apply_tag_mutation(
+                    &sources,
+                    "new",
+                    Some("user"),
+                    preview_token(&empty),
+                    "tag_rename",
+                    "must reject no-op",
+                )
+                .is_err()
+        );
+        assert!(
+            valid_storage
+                .apply_tag_mutation(
+                    &["other".into()],
+                    "new",
+                    Some("user"),
+                    "tag-plan-v1:wrong",
+                    "tag_rename",
+                    "",
+                )
+                .is_err(),
+            "a nonempty audit reason is mandatory"
+        );
+    }
+
+    #[test]
+    fn tag_mutation_rejects_secret_shaped_persistent_fields_without_side_effects() {
+        let storage = create_test_storage();
+        let node = ingest_tagged_in_scope(&storage, "user", "secret policy fixture", &["old"]);
+        let source = vec!["old".to_string()];
+        let credential = format!("ghp_{}", "a".repeat(36));
+
+        let target_error = storage
+            .preview_tag_mutation(&source, &credential, Some("user"))
+            .unwrap_err()
+            .to_string();
+        assert!(target_error.contains("probable credential"));
+        assert!(!target_error.contains(&credential));
+
+        // SOURCE tags are exact-match lookup keys for values that already
+        // exist in the store, so a secret-shaped source is accepted (it must
+        // stay renameable AWAY); only newly persisted fields are rejected.
+        let source_preview = storage
+            .preview_tag_mutation(std::slice::from_ref(&credential), "new", Some("user"))
+            .unwrap();
+        assert_eq!(source_preview["affectedMemoryCount"], 0);
+
+        let safe_preview = storage
+            .preview_tag_mutation(&source, "new", Some("user"))
+            .unwrap();
+        let reason_error = storage
+            .apply_tag_mutation(
+                &source,
+                "new",
+                Some("user"),
+                preview_token(&safe_preview),
+                "tag_rename",
+                &credential,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(reason_error.contains("probable credential"));
+        assert!(!reason_error.contains(&credential));
+        assert_eq!(
+            storage.get_node(&node.id).unwrap().unwrap().tags,
+            vec!["old"]
+        );
+        assert!(storage.list_merge_operations(20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn tag_mutation_row_and_audit_limits_fail_before_writes() {
+        let storage = create_test_storage();
+        let nodes: Vec<_> = (0..3)
+            .map(|index| {
+                ingest_tagged_in_scope(
+                    &storage,
+                    "user",
+                    &format!("row limit fixture {index}"),
+                    &["old"],
+                )
+            })
+            .collect();
+        let source = vec!["old".to_string()];
+        let preview = storage
+            .preview_tag_mutation(&source, "new", Some("user"))
+            .unwrap();
+
+        let row_limit_error = storage
+            .apply_tag_mutation_with_limits(
+                &source,
+                "new",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "row limit fixture",
+                2,
+                MAX_TAG_MUTATION_AUDIT_BYTES,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(row_limit_error.contains("more than 2 memories"));
+        assert!(storage.list_merge_operations(20).unwrap().is_empty());
+        for node in &nodes {
+            assert_eq!(
+                storage.get_node(&node.id).unwrap().unwrap().tags,
+                vec!["old"]
+            );
+        }
+
+        let applied = storage
+            .apply_tag_mutation_with_limits(
+                &source,
+                "new",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "exact row limit fixture",
+                3,
+                MAX_TAG_MUTATION_AUDIT_BYTES,
+            )
+            .unwrap();
+        assert_eq!(applied.affected_ids.len(), 3);
+
+        let audit_storage = create_test_storage();
+        let audit_node = ingest_tagged_in_scope(
+            &audit_storage,
+            "user",
+            "audit payload limit fixture",
+            &["old"],
+        );
+        let audit_preview = audit_storage
+            .preview_tag_mutation(&source, "new", Some("user"))
+            .unwrap();
+        let audit_limit_error = audit_storage
+            .apply_tag_mutation_with_limits(
+                &source,
+                "new",
+                Some("user"),
+                preview_token(&audit_preview),
+                "tag_rename",
+                "audit payload limit fixture",
+                MAX_TAG_MUTATION_MEMORIES,
+                1,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(audit_limit_error.contains("1-byte limit"));
+        assert_eq!(
+            audit_storage
+                .get_node(&audit_node.id)
+                .unwrap()
+                .unwrap()
+                .tags,
+            vec!["old"]
+        );
+        assert!(audit_storage.list_merge_operations(20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn hygiene_snapshot_covers_more_than_five_hundred_without_full_content() {
+        let storage = create_test_storage();
+        let now = Utc::now().to_rfc3339();
+        {
+            let mut writer = storage.writer.lock().unwrap();
+            let tx = writer.transaction().unwrap();
+            for index in 0..501 {
+                tx.execute(
+                    "INSERT INTO knowledge_nodes
+                        (id, content, node_type, created_at, updated_at, last_accessed, tags, scope)
+                     VALUES (?1, ?2, 'fact', ?3, ?3, ?3, ?4, 'user')",
+                    params![
+                        format!("hygiene-{index:04}"),
+                        format!("bounded content {index}"),
+                        &now,
+                        serde_json::json!(["bulk"]).to_string(),
+                    ],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        let snapshot = storage.hygiene_snapshot(Some("user")).unwrap();
+        assert_eq!(snapshot.nodes.len(), 501);
+        assert!(
+            snapshot
+                .nodes
+                .iter()
+                .all(|row| row.content_preview.len() <= 240)
+        );
+        assert!(snapshot.nodes.iter().all(|row| row.never_accessed));
+        assert!(snapshot.nodes.iter().all(|row| !row.access_unknown));
+        assert_eq!(snapshot.malformed_tag_rows, 0);
+        assert_eq!(snapshot.defaulted_retention_rows, 0);
+    }
+
+    #[test]
+    fn hygiene_snapshot_distinguishes_unknown_pruned_access_from_never_accessed() {
+        let storage = create_test_storage();
+        let now = Utc::now();
+        let fresh = now.to_rfc3339();
+        let before_log_window =
+            (now - Duration::days(ACCESS_LOG_RETENTION_DAYS + 110)).to_rfc3339();
+        {
+            let writer = storage.writer.lock().unwrap();
+            // Heavily used old memory: its log rows were pruned, but the
+            // durable retrieval counter survives on the node row.
+            writer
+                .execute(
+                    "INSERT INTO knowledge_nodes
+                        (id, content, node_type, created_at, updated_at, last_accessed,
+                         tags, scope, times_retrieved)
+                     VALUES ('old-used', 'used before the log window', 'fact',
+                             ?1, ?1, ?1, '[]', 'user', 5)",
+                    params![&before_log_window],
+                )
+                .unwrap();
+            // Old memory with no evidence either way: pruning makes its
+            // history unknowable, so it must not be claimed never-accessed.
+            writer
+                .execute(
+                    "INSERT INTO knowledge_nodes
+                        (id, content, node_type, created_at, updated_at, last_accessed,
+                         tags, scope)
+                     VALUES ('old-unknown', 'predates the log window', 'fact',
+                             ?1, ?1, ?1, '[]', 'user')",
+                    params![&before_log_window],
+                )
+                .unwrap();
+            // Fresh memory with no accesses: the retained log is complete
+            // evidence for its whole lifetime, so never-accessed is provable.
+            writer
+                .execute(
+                    "INSERT INTO knowledge_nodes
+                        (id, content, node_type, created_at, updated_at, last_accessed,
+                         tags, scope)
+                     VALUES ('fresh-never', 'created inside the log window', 'fact',
+                             ?1, ?1, ?1, '[]', 'user')",
+                    params![&fresh],
+                )
+                .unwrap();
+        }
+        let shown = ingest_tagged_in_scope(&storage, "user", "fresh shown row", &[]);
+        storage.record_batch_retrieval(&[&shown.id]).unwrap();
+
+        let snapshot = storage.hygiene_snapshot(Some("user")).unwrap();
+        let by_id = |id: &str| {
+            snapshot
+                .nodes
+                .iter()
+                .find(|node| node.id == id)
+                .unwrap_or_else(|| panic!("snapshot row {id}"))
+        };
+        let old_used = by_id("old-used");
+        assert!(
+            !old_used.never_accessed && !old_used.access_unknown,
+            "a durable retrieval counter proves past access even after log pruning"
+        );
+        let old_unknown = by_id("old-unknown");
+        assert!(
+            !old_unknown.never_accessed,
+            "a pre-window row without counters must never be claimed never-accessed"
+        );
+        assert!(old_unknown.access_unknown);
+        let fresh_never = by_id("fresh-never");
+        assert!(fresh_never.never_accessed && !fresh_never.access_unknown);
+        let shown_row = by_id(&shown.id);
+        assert!(!shown_row.never_accessed && !shown_row.access_unknown);
+    }
+
+    #[test]
+    fn hygiene_snapshot_tolerates_malformed_and_null_legacy_rows() {
+        let storage = create_test_storage();
+        for index in 0..3 {
+            ingest_tagged_in_scope(&storage, "user", &format!("clean row {index}"), &["clean"]);
+        }
+        let now = Utc::now().to_rfc3339();
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "INSERT INTO knowledge_nodes
+                        (id, content, node_type, created_at, updated_at, last_accessed,
+                         tags, scope)
+                     VALUES ('bad-json', 'hand-edited tags', 'fact', ?1, ?1, ?1,
+                             'not-json', 'user')",
+                    params![&now],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO knowledge_nodes
+                        (id, content, node_type, created_at, updated_at, last_accessed,
+                         tags, scope, retention_strength)
+                     VALUES ('null-tags', 'hand-edited null row', 'fact', ?1, ?1, ?1,
+                             NULL, 'user', NULL)",
+                    params![&now],
+                )
+                .unwrap();
+        }
+
+        let snapshot = storage.hygiene_snapshot(Some("user")).unwrap();
+        assert_eq!(
+            snapshot.nodes.len(),
+            5,
+            "aggregates must cover every row, corrupted ones included"
+        );
+        assert_eq!(snapshot.malformed_tag_rows, 2);
+        assert_eq!(
+            snapshot.malformed_tag_row_ids,
+            vec!["bad-json".to_string(), "null-tags".to_string()]
+        );
+        assert!(!snapshot.malformed_tag_row_ids_truncated);
+        assert_eq!(snapshot.defaulted_retention_rows, 1);
+        let null_row = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.id == "null-tags")
+            .unwrap();
+        assert!(null_row.tags.is_empty());
+        assert_eq!(null_row.retention_strength, 1.0);
+    }
+
+    #[test]
+    fn tag_apply_and_audit_roll_back_together_on_injected_failure() {
+        let storage = create_test_storage();
+        let first = ingest_tagged_in_scope(&storage, "user", "atomic pair first", &["old"]);
+        let second = ingest_tagged_in_scope(&storage, "user", "atomic pair second", &["old"]);
+        let sources = vec!["old".to_string()];
+        let preview = storage
+            .preview_tag_mutation(&sources, "new", Some("user"))
+            .unwrap();
+
+        FAIL_TAG_MUTATION_BEFORE_AUDIT.with(|flag| flag.set(true));
+        let error = storage
+            .apply_tag_mutation(
+                &sources,
+                "new",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "single transaction fail point",
+            )
+            .unwrap_err();
+        FAIL_TAG_MUTATION_BEFORE_AUDIT.with(|flag| flag.set(false));
+        assert!(error.to_string().contains("fail point"));
+        // The failure fired AFTER every row UPDATE: rollback must restore all
+        // tag arrays AND leave no audit row, proving one shared transaction.
+        assert_eq!(
+            storage.get_node(&first.id).unwrap().unwrap().tags,
+            vec!["old"]
+        );
+        assert_eq!(
+            storage.get_node(&second.id).unwrap().unwrap().tags,
+            vec!["old"]
+        );
+        assert!(storage.list_merge_operations(20).unwrap().is_empty());
+        assert!(storage.list_tag_operations(20, None).unwrap().is_empty());
+
+        // Disarmed, the same untouched preview applies normally.
+        let applied = storage
+            .apply_tag_mutation(
+                &sources,
+                "new",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "single transaction fail point disarmed",
+            )
+            .unwrap();
+        assert_eq!(applied.affected_ids.len(), 2);
+        assert_eq!(
+            storage.get_node(&first.id).unwrap().unwrap().tags,
+            vec!["new"]
+        );
+    }
+
+    #[test]
+    fn tag_vocabulary_skips_and_counts_overlong_stored_tags() {
+        let storage = create_test_storage();
+        ingest_tagged_in_scope(&storage, "user", "normal tag row", &["normal"]);
+        let overlong = "x".repeat(201);
+        ingest_tagged_in_scope(&storage, "user", "overlong tag row", &[&overlong]);
+
+        let vocabulary = storage.tag_vocabulary(Some("user")).unwrap();
+        assert_eq!(vocabulary.tags, vec!["normal".to_string()]);
+        assert_eq!(vocabulary.skipped_overlong, 1);
+    }
+
+    #[test]
+    fn overlong_source_tags_can_be_renamed_away_end_to_end() {
+        let storage = create_test_storage();
+        let overlong = "y".repeat(250);
+        let node =
+            ingest_tagged_in_scope(&storage, "user", "overlong rename fixture", &[&overlong]);
+
+        let sources = vec![overlong.clone()];
+        let preview = storage
+            .preview_tag_mutation(&sources, "short-tag", Some("user"))
+            .unwrap();
+        assert_eq!(preview["affectedMemoryCount"], 1);
+        storage
+            .apply_tag_mutation(
+                &sources,
+                "short-tag",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "repair an overlong stored tag",
+            )
+            .unwrap();
+        assert_eq!(
+            storage.get_node(&node.id).unwrap().unwrap().tags,
+            vec!["short-tag"]
+        );
+        let vocabulary = storage.tag_vocabulary(Some("user")).unwrap();
+        assert_eq!(vocabulary.skipped_overlong, 0, "the overlong tag is gone");
+    }
+
+    #[test]
+    fn tag_vocabulary_rejects_more_than_ten_thousand_tags() {
+        let storage = create_test_storage();
+        let tags: Vec<String> = (0..10_001)
+            .map(|index| format!("bulk-{index:05}"))
+            .collect();
+        let now = Utc::now().to_rfc3339();
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "INSERT INTO knowledge_nodes
+                        (id, content, node_type, created_at, updated_at, last_accessed,
+                         tags, scope)
+                     VALUES ('vocab-bound', 'vocabulary bound fixture', 'fact', ?1, ?1, ?1,
+                             ?2, 'user')",
+                    params![&now, serde_json::to_string(&tags).unwrap()],
+                )
+                .unwrap();
+        }
+        let error = storage
+            .tag_vocabulary(Some("user"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exceeds the 10000-tag"));
+    }
+
+    #[test]
+    fn padded_source_tags_are_reachable_byte_exact() {
+        let storage = create_test_storage();
+        let padded = ingest_tagged_in_scope(&storage, "user", "padded tag fixture", &[" prix-six"]);
+        let unpadded = ingest_tagged_in_scope(&storage, "user", "unpadded fixture", &["prix-six"]);
+
+        // The padded stored variant is addressable exactly as stored; the
+        // trimmed TARGET merges it into the canonical spelling.
+        let sources = vec![" prix-six".to_string()];
+        let preview = storage
+            .preview_tag_mutation(&sources, "prix-six", Some("user"))
+            .unwrap();
+        assert_eq!(preview["affectedMemoryCount"], 1);
+        storage
+            .apply_tag_mutation(
+                &sources,
+                "prix-six",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "collapse a whitespace-padded tag variant",
+            )
+            .unwrap();
+        assert_eq!(
+            storage.get_node(&padded.id).unwrap().unwrap().tags,
+            vec!["prix-six"]
+        );
+
+        // A trimmed source still matches unpadded stored tags as before.
+        let trimmed_sources = vec!["prix-six".to_string()];
+        let trimmed_preview = storage
+            .preview_tag_mutation(&trimmed_sources, "grand-prix", Some("user"))
+            .unwrap();
+        assert_eq!(trimmed_preview["affectedMemoryCount"], 2);
+        storage
+            .apply_tag_mutation(
+                &trimmed_sources,
+                "grand-prix",
+                Some("user"),
+                preview_token(&trimmed_preview),
+                "tag_rename",
+                "rename the canonical spelling",
+            )
+            .unwrap();
+        assert_eq!(
+            storage.get_node(&unpadded.id).unwrap().unwrap().tags,
+            vec!["grand-prix"]
+        );
+    }
+
+    #[test]
+    fn secret_shaped_stored_tags_can_be_renamed_away() {
+        let storage = create_test_storage();
+        let credential = format!("ghp_{}", "b".repeat(36));
+        let node = storage
+            .ingest_with_secret_policy(
+                IngestInput {
+                    content: "explicit-allow credential tag fixture".to_string(),
+                    tags: vec![credential.clone(), "keep".to_string()],
+                    ..Default::default()
+                },
+                SecretPolicy::AllowExplicitly,
+            )
+            .unwrap();
+
+        let sources = vec![credential.clone()];
+        let preview = storage
+            .preview_tag_mutation(&sources, "rotated-token-reference", Some("user"))
+            .unwrap();
+        assert_eq!(preview["affectedMemoryCount"], 1);
+        storage
+            .apply_tag_mutation(
+                &sources,
+                "rotated-token-reference",
+                Some("user"),
+                preview_token(&preview),
+                "tag_rename",
+                "replace a credential-shaped tag with a safe reference",
+            )
+            .unwrap();
+        assert_eq!(
+            storage.get_node(&node.id).unwrap().unwrap().tags,
+            vec!["rotated-token-reference", "keep"]
+        );
+    }
+
+    #[test]
+    fn scoped_tag_operation_listing_includes_all_scopes_operations() {
+        let storage = create_test_storage();
+        ingest_tagged_in_scope(&storage, "user", "scoped audit row", &["scoped-old"]);
+        ingest_tagged_in_scope(&storage, "user", "shared audit row", &["shared-old"]);
+        ingest_tagged_in_scope(&storage, "project-b", "other scope row", &["shared-old"]);
+
+        let scoped_sources = vec!["scoped-old".to_string()];
+        let scoped_preview = storage
+            .preview_tag_mutation(&scoped_sources, "scoped-new", Some("user"))
+            .unwrap();
+        let scoped_op = storage
+            .apply_tag_mutation(
+                &scoped_sources,
+                "scoped-new",
+                Some("user"),
+                preview_token(&scoped_preview),
+                "tag_rename",
+                "scoped audit fixture",
+            )
+            .unwrap();
+
+        let shared_sources = vec!["shared-old".to_string()];
+        let shared_preview = storage
+            .preview_tag_mutation(&shared_sources, "shared-new", None)
+            .unwrap();
+        let shared_op = storage
+            .apply_tag_mutation(
+                &shared_sources,
+                "shared-new",
+                None,
+                preview_token(&shared_preview),
+                "tag_rename",
+                "all-scopes audit fixture",
+            )
+            .unwrap();
+
+        let user_view = storage.list_tag_operations(50, Some("user")).unwrap();
+        let user_ids: Vec<&str> = user_view.iter().map(|op| op.id.as_str()).collect();
+        assert!(
+            user_ids.contains(&scoped_op.id.as_str()) && user_ids.contains(&shared_op.id.as_str()),
+            "a scope's audit must show all-scopes operations that rewrote it"
+        );
+
+        let other_view = storage.list_tag_operations(50, Some("project-b")).unwrap();
+        assert_eq!(other_view.len(), 1);
+        assert_eq!(other_view[0].id, shared_op.id);
+
+        let all_view = storage.list_tag_operations(50, None).unwrap();
+        assert_eq!(all_view.len(), 2);
+    }
+
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn non_256_active_profile_builds_matching_dimension_index_without_truncation() {
@@ -12344,6 +17177,237 @@ mod tests {
     }
 
     #[test]
+    fn passive_recall_records_telemetry_without_reinforcing() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "current version is 2.0.12 as of 2026-03-04".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let before = storage.get_node(&node.id).unwrap().unwrap();
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET activation = 0.73 WHERE id = ?1",
+                    params![&node.id],
+                )
+                .unwrap();
+        }
+
+        for _ in 0..3 {
+            let recalled = storage
+                .recall(RecallInput {
+                    query: "current version".to_string(),
+                    limit: 10,
+                    min_retention: 0.0,
+                    search_mode: SearchMode::Keyword,
+                    valid_at: None,
+                })
+                .unwrap();
+            assert_eq!(recalled.len(), 1);
+        }
+
+        let after = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(after.retrieval_strength, before.retrieval_strength);
+        assert_eq!(after.retention_strength, before.retention_strength);
+        assert_eq!(after.stability, before.stability);
+        assert_eq!(after.last_accessed, before.last_accessed);
+        assert_eq!(after.reps, before.reps);
+        assert_eq!(after.next_review, before.next_review);
+        assert_eq!(after.times_retrieved, before.times_retrieved);
+        assert_eq!(after.times_useful, before.times_useful);
+        assert_eq!(after.utility_score, before.utility_score);
+        assert_eq!(storage.auto_promote_frequent_access().unwrap(), 0);
+        storage.compute_act_r_activations().unwrap();
+
+        let reader = storage.reader.lock().unwrap();
+        let retrievals_shown: i64 = reader
+            .query_row(
+                "SELECT COUNT(*) FROM memory_access_log WHERE node_id = ?1 AND access_type = 'retrieval_shown'",
+                params![&node.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retrievals_shown, 3);
+        let activation: f64 = reader
+            .query_row(
+                "SELECT activation FROM knowledge_nodes WHERE id = ?1",
+                params![&node.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(activation, 0.0);
+    }
+
+    #[test]
+    fn explicit_promotion_marks_a_retrieved_memory_useful() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "A memory that needs explicit positive feedback".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        storage.demote_memory(&node.id).unwrap();
+        let before = storage.get_node(&node.id).unwrap().unwrap();
+
+        storage.record_batch_retrieval(&[&node.id]).unwrap();
+        let promoted = storage.promote_memory(&node.id).unwrap();
+
+        assert!(promoted.retrieval_strength > before.retrieval_strength);
+        assert!(promoted.retention_strength > before.retention_strength);
+        assert_eq!(promoted.times_retrieved.unwrap_or_default(), 0);
+        assert_eq!(promoted.times_useful.unwrap_or_default(), 1);
+        assert_eq!(promoted.utility_score.unwrap_or_default(), 1.0);
+    }
+
+    #[test]
+    fn legacy_search_hits_cannot_reinforce_or_reactivate_a_memory() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "legacy dated current version claim".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes
+                     SET retrieval_strength = 0.50, retention_strength = 0.40, activation = 0.73
+                     WHERE id = ?1",
+                    params![&node.id],
+                )
+                .unwrap();
+            for _ in 0..3 {
+                writer
+                    .execute(
+                        "INSERT INTO memory_access_log (node_id, access_type, accessed_at)
+                         VALUES (?1, 'search_hit', ?2)",
+                        params![&node.id, Utc::now().to_rfc3339()],
+                    )
+                    .unwrap();
+            }
+        }
+        let before = storage.get_node(&node.id).unwrap().unwrap();
+
+        assert_eq!(storage.auto_promote_frequent_access().unwrap(), 0);
+        storage.compute_act_r_activations().unwrap();
+
+        let after = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(after.retrieval_strength, before.retrieval_strength);
+        assert_eq!(after.retention_strength, before.retention_strength);
+        assert_eq!(after.last_accessed, before.last_accessed);
+
+        let reader = storage.reader.lock().unwrap();
+        let activation: f64 = reader
+            .query_row(
+                "SELECT activation FROM knowledge_nodes WHERE id = ?1",
+                params![&node.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(activation, 0.0);
+    }
+
+    #[test]
+    fn legacy_search_hits_cannot_preserve_recency_or_delay_decay() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "a legacy passive search must not preserve freshness".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let created_at = Utc::now() - Duration::days(30);
+        let passive_at = Utc::now();
+
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET
+                        created_at = ?1,
+                        updated_at = ?1,
+                        last_accessed = ?2,
+                        retrieval_strength = 1.0,
+                        retention_strength = 1.0
+                     WHERE id = ?3",
+                    params![created_at.to_rfc3339(), passive_at.to_rfc3339(), &node.id],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_access_log (node_id, access_type, accessed_at)
+                     VALUES (?1, 'search_hit', ?2)",
+                    params![&node.id, passive_at.to_rfc3339()],
+                )
+                .unwrap();
+        }
+
+        storage.compute_act_r_activations().unwrap();
+        let repaired = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(repaired.last_accessed, created_at);
+
+        storage.apply_decay().unwrap();
+        let decayed = storage.get_node(&node.id).unwrap().unwrap();
+        assert!(decayed.retrieval_strength < 1.0);
+        assert!(decayed.retention_strength < 1.0);
+    }
+
+    #[test]
+    fn legacy_recency_repair_preserves_reviewed_memories() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "a reviewed memory must not be reset by passive logs".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        storage.promote_memory(&node.id).unwrap();
+        let reviewed = storage.mark_reviewed(&node.id, Rating::Good).unwrap();
+
+        // New telemetry never changed state, so it must never trigger a
+        // legacy-state repair.
+        storage.record_batch_retrieval(&[&node.id]).unwrap();
+        storage.compute_act_r_activations().unwrap();
+        let after_new_telemetry = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(after_new_telemetry.last_accessed, reviewed.last_accessed);
+
+        // If an old search-hit row was recorded after a review, restore the
+        // review timestamp from updated_at rather than falling back to create.
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET last_accessed = ?1 WHERE id = ?2",
+                    params![Utc::now().to_rfc3339(), &node.id],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_access_log (node_id, access_type, accessed_at)
+                     VALUES (?1, 'search_hit', ?2)",
+                    params![&node.id, Utc::now().to_rfc3339()],
+                )
+                .unwrap();
+        }
+        storage.compute_act_r_activations().unwrap();
+        let restored = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(restored.last_accessed, reviewed.last_accessed);
+    }
+
+    #[test]
     fn test_review() {
         let storage = create_test_storage();
 
@@ -12367,6 +17431,7 @@ mod tests {
         let input = IngestInput {
             content: "To be deleted".to_string(),
             node_type: "fact".to_string(),
+            tags: vec!["sensitive-delete-tag".to_string()],
             ..Default::default()
         };
 
@@ -12376,6 +17441,174 @@ mod tests {
         let deleted = storage.delete_node(&node.id).unwrap();
         assert!(deleted);
         assert!(storage.get_node(&node.id).unwrap().is_none());
+        let archive = serde_json::to_string(&storage.export_portable_archive().unwrap()).unwrap();
+        assert!(!archive.contains(&node.id));
+        assert!(!archive.contains("sensitive-delete-tag"));
+    }
+
+    /// REGRESSION (v2.6.0 data-safety): consolidation must never delete a
+    /// memory. Until this release, an autonomic "retention target" GC inside
+    /// run_consolidation hard-deleted everything below 0.3 retention older
+    /// than 30 days — dormant only while decay was broken, and it destroyed
+    /// 23 real memories from a live store the day decay was fixed. This test
+    /// constructs exactly that scenario and asserts nothing dies.
+    #[test]
+    fn consolidation_never_deletes_low_retention_memories() {
+        let storage = create_test_storage();
+        let mut ids = Vec::new();
+        for i in 0..4 {
+            let node = storage
+                .ingest(IngestInput {
+                    content: format!("Old low-retention memory number {i} that must survive"),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                })
+                .unwrap();
+            ids.push(node.id);
+        }
+        // Force the doomed profile the old reaper keyed on: retention far
+        // below 0.3 and created_at far older than 30 days.
+        {
+            let writer = storage.writer.lock().unwrap();
+            let old = (Utc::now() - Duration::days(120)).to_rfc3339();
+            for id in &ids {
+                writer
+                    .execute(
+                        "UPDATE knowledge_nodes
+                         SET retention_strength = 0.05, created_at = ?1, last_accessed = ?1
+                         WHERE id = ?2",
+                        params![old, id],
+                    )
+                    .unwrap();
+            }
+        }
+        let before: i64 = {
+            let reader = storage.reader.lock().unwrap();
+            reader
+                .query_row("SELECT COUNT(*) FROM knowledge_nodes", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        storage.run_consolidation().unwrap();
+
+        let after: i64 = {
+            let reader = storage.reader.lock().unwrap();
+            reader
+                .query_row("SELECT COUNT(*) FROM knowledge_nodes", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(before, after, "consolidation deleted memories");
+        for id in &ids {
+            assert!(
+                storage.get_node(id).unwrap().is_some(),
+                "low-retention memory {id} was reaped by consolidation"
+            );
+        }
+    }
+
+    /// The explicit GC path must never collect a protected (pinned) memory,
+    /// no matter how decayed it is. A pin says "keep this"; low retention
+    /// only says "rarely retrieved".
+    #[test]
+    fn gc_spares_protected_memories() {
+        let storage = create_test_storage();
+        let pinned = storage
+            .ingest(IngestInput {
+                content: "Pinned but heavily decayed memory".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let doomed = storage
+            .ingest(IngestInput {
+                content: "Unpinned decayed memory".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        {
+            let writer = storage.writer.lock().unwrap();
+            let old = (Utc::now() - Duration::days(120)).to_rfc3339();
+            for id in [&pinned.id, &doomed.id] {
+                writer
+                    .execute(
+                        "UPDATE knowledge_nodes
+                         SET retention_strength = 0.05, created_at = ?1 WHERE id = ?2",
+                        params![old, id],
+                    )
+                    .unwrap();
+            }
+        }
+        storage.set_protected(&pinned.id, true).unwrap();
+
+        let deleted = storage.gc_below_retention(0.3, 30).unwrap();
+        assert_eq!(deleted, 1, "only the unpinned memory is collected");
+        assert!(storage.get_node(&pinned.id).unwrap().is_some(), "pin survives GC");
+        assert!(storage.get_node(&doomed.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn gc_uses_the_privacy_cleanup_deletion_path() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "GC deletion privacy target".to_string(),
+                node_type: "fact".to_string(),
+                tags: vec!["gc-sensitive-tag".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes
+                     SET retention_strength = 0.0, created_at = '2000-01-01T00:00:00Z'
+                     WHERE id = ?1",
+                    params![&node.id],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(storage.gc_below_retention(0.1, 1).unwrap(), 1);
+        let archive = serde_json::to_string(&storage.export_portable_archive().unwrap()).unwrap();
+        assert!(!archive.contains(&node.id));
+        assert!(!archive.contains("gc-sensitive-tag"));
+    }
+
+    #[test]
+    fn purging_empty_content_does_not_scrub_unrelated_evidence() {
+        let storage = create_test_storage();
+        let empty = storage
+            .ingest(IngestInput {
+                content: String::new(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_prs (
+                        id, kind, status, title, diff, signals, created_at
+                     ) VALUES ('unrelated-review', 'new_fact', 'pending',
+                               'keep this review', '{}', '[]', ?1)",
+                    params![Utc::now().to_rfc3339()],
+                )
+                .unwrap();
+        }
+
+        assert!(storage.purge_node(&empty.id, None).unwrap().deleted);
+        let writer = storage.writer.lock().unwrap();
+        let remaining_reviews: i64 = writer
+            .query_row(
+                "SELECT COUNT(*) FROM memory_prs WHERE id = 'unrelated-review'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining_reviews, 1);
     }
 
     #[test]
@@ -13664,6 +18897,22 @@ mod tests {
                 .as_deref(),
             Some("Portable purge composition preview leak")
         );
+        {
+            let writer = target.writer.lock().unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_prs (
+                        id, kind, status, title, subject_id, diff, signals, created_at
+                     ) VALUES (?1, 'new_fact', 'pending', ?2, ?3, '{}', '[]', ?4)",
+                    params![
+                        "portable-purge-review",
+                        "remote cleanup review",
+                        &node.id,
+                        Utc::now().to_rfc3339(),
+                    ],
+                )
+                .unwrap();
+        }
 
         source
             .purge_node(&node.id, Some("sync purge test"))
@@ -13684,21 +18933,76 @@ mod tests {
         assert!(
             target
                 .get_composition_members("portable-purge-composition")
-                .unwrap()[0]
-                .preview
-                .is_none(),
-            "portable purge merge should scrub target composition previews"
+                .unwrap()
+                .is_empty(),
+            "portable purge merge should delete composition evidence that references the target"
         );
 
         let writer = target.writer.lock().unwrap();
+        let review_count: i64 = writer
+            .query_row(
+                "SELECT COUNT(*) FROM memory_prs WHERE id = 'portable-purge-review'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            review_count, 0,
+            "portable purge merge must run the full non-FK evidence cleanup"
+        );
         let tombstone_count: i64 = writer
             .query_row(
-                "SELECT COUNT(*) FROM deletion_tombstones WHERE memory_id = ?1 AND reason = ?2",
-                params![node.id, "sync purge test"],
+                "SELECT COUNT(*) FROM deletion_tombstones
+                 WHERE memory_id = ?1 AND reason IS NULL AND tags = '[]'",
+                params![SqliteMemoryStore::opaque_tombstone_marker(&node.id)],
                 |row| row.get(0),
             )
             .unwrap();
         assert_eq!(tombstone_count, 1);
+    }
+
+    #[test]
+    fn opaque_tombstone_rejects_a_later_node_archive_even_with_newer_timestamp() {
+        let source_dir = tempdir().unwrap();
+        let target_dir = tempdir().unwrap();
+        let source = create_test_storage_at(&source_dir, "source.db");
+        let target = create_test_storage_at(&target_dir, "target.db");
+
+        let node = source
+            .ingest(IngestInput {
+                content: "must not resurrect after opaque tombstone".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut later_node_archive = source.export_portable_archive().unwrap();
+        let node_table = later_node_archive
+            .tables
+            .iter_mut()
+            .find(|table| table.name == "knowledge_nodes")
+            .unwrap();
+        let updated_at_index = node_table
+            .columns
+            .iter()
+            .position(|column| column == "updated_at")
+            .unwrap();
+        match &mut node_table.rows[0][updated_at_index] {
+            PortableValue::Text(value) => *value = (Utc::now() + Duration::hours(24)).to_rfc3339(),
+            value => panic!("knowledge_nodes.updated_at must be text, got {value:?}"),
+        }
+
+        source.purge_node(&node.id, None).unwrap();
+        let tombstone_archive = source.export_portable_archive().unwrap();
+        target
+            .import_portable_archive(&tombstone_archive, PortableImportMode::Merge)
+            .unwrap();
+        assert!(target.get_node(&node.id).unwrap().is_none());
+
+        let report = target
+            .import_portable_archive(&later_node_archive, PortableImportMode::Merge)
+            .unwrap();
+        assert!(target.get_node(&node.id).unwrap().is_none());
+        assert!(report.rows_skipped >= 1);
     }
 
     #[test]
@@ -13977,6 +19281,111 @@ mod tests {
         assert!(results[0].semantic_score.is_none());
     }
 
+    /// A memory that merely CITES an identifier must not outrank the memory that
+    /// IS it. Raw BM25 magnitude is unbounded while literal_match_score is capped
+    /// at 3.0, and both fed the same combined_score: measured on a 202-document
+    /// corpus, a note citing a UUID three times scored 27.5 against the exact
+    /// match's 3.0. That inverted the documented exact-lookup guarantee.
+    /// A corrupt FTS index must NOT strand the user's memories. `knowledge_fts`
+    /// is declared `content='knowledge_nodes'`, so it is derived state and is
+    /// always reconstructible. This reproduces the field failure: a store with
+    /// intact memories became unopenable because one fts5 blob was damaged.
+    #[test]
+    fn corrupt_fts_index_is_rebuilt_instead_of_bricking_the_store() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("vestige.db");
+
+        // Seed a store and close it cleanly.
+        {
+            let storage = Storage::new(Some(path.clone())).expect("open");
+            for i in 0..5 {
+                storage
+                    .ingest(IngestInput {
+                        content: format!("memory number {i} about deployment"),
+                        node_type: "fact".to_string(),
+                        ..Default::default()
+                    })
+                    .expect("ingest");
+            }
+        }
+
+        // Corrupt the FTS index the way an interrupted rebuild does.
+        {
+            let conn = Connection::open(&path).expect("raw open");
+            conn.execute_batch(
+                "UPDATE knowledge_fts_data SET block = randomblob(200) \
+                 WHERE id = (SELECT id FROM knowledge_fts_data WHERE id > 1 LIMIT 1);",
+            )
+            .expect("corrupt");
+            let corrupt = conn
+                .execute_batch(
+                    "INSERT INTO knowledge_fts(knowledge_fts) VALUES('integrity-check');",
+                )
+                .is_err();
+            assert!(corrupt, "the fixture must actually corrupt the index");
+        }
+
+        // Reopening must succeed by rebuilding, not fail.
+        let storage = Storage::new(Some(path.clone()))
+            .expect("a corrupt DERIVED index must not prevent opening the store");
+        let all = storage.get_all_nodes(100, 0).expect("list nodes");
+        assert_eq!(all.len(), 5, "every memory must survive the rebuild");
+
+        // And the rebuilt index must actually be usable again.
+        let hits = storage
+            .concrete_search_filtered("deployment", 10, None, None)
+            .expect("keyword search after rebuild");
+        assert!(
+            !hits.is_empty(),
+            "the rebuilt index must find the seeded memories"
+        );
+    }
+
+    #[test]
+    fn test_concrete_search_exact_match_beats_a_doc_that_only_cites_it() {
+        let storage = create_test_storage();
+
+        // Filler so BM25's IDF term is meaningful rather than degenerate.
+        for i in 0..40 {
+            storage
+                .ingest(IngestInput {
+                    content: format!("Routine note {i} about deployment pipelines and review"),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+
+        let needle = "PAYMENTS_REDIS_URL";
+        let target = storage
+            .ingest(IngestInput {
+                content: needle.to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        // Cites the identifier repeatedly -> large BM25 magnitude.
+        storage
+            .ingest(IngestInput {
+                content: format!(
+                    "See {needle} for the rollout; {needle} was rotated in review, and \
+                     {needle} supersedes the older connection note entirely"
+                ),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let results = storage
+            .concrete_search_filtered(needle, 10, None, None)
+            .unwrap();
+        assert!(!results.is_empty(), "exact lookup must return something");
+        assert_eq!(
+            results[0].node.id, target.id,
+            "the memory that IS the identifier must rank first, not the one citing it"
+        );
+    }
+
     #[test]
     fn test_purge_scrubs_insight_json_orphans_children_and_writes_tombstone() {
         let storage = create_test_storage();
@@ -14055,6 +19464,23 @@ mod tests {
                     params![doomed.id, child.id],
                 )
                 .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO memory_prs (
+                        id, kind, status, title, subject_id, diff, signals, created_at
+                     ) VALUES (?1, 'new_fact', 'pending', ?2, ?3, ?4, '[]', ?5)",
+                    params![
+                        "purge-review-leak",
+                        "Sensitive purge target memory review preview",
+                        doomed.id,
+                        serde_json::json!({
+                            "contentPreview": "Sensitive purge target memory"
+                        })
+                        .to_string(),
+                        Utc::now().to_rfc3339(),
+                    ],
+                )
+                .unwrap();
         }
 
         storage
@@ -14117,26 +19543,54 @@ mod tests {
 
         let tombstone_count: i64 = writer
             .query_row(
-                "SELECT COUNT(*) FROM deletion_tombstones WHERE memory_id = ?1 AND reason = ?2",
-                params![doomed.id, "user requested hard purge"],
+                "SELECT COUNT(*) FROM deletion_tombstones
+                 WHERE memory_id = ?1 AND reason IS NULL AND tags = '[]'",
+                params![SqliteMemoryStore::opaque_tombstone_marker(&doomed.id)],
                 |row| row.get(0),
             )
             .unwrap();
         assert_eq!(tombstone_count, 1);
+        let sync_tombstone_count: i64 = writer
+            .query_row(
+                "SELECT COUNT(*) FROM sync_tombstones
+                 WHERE table_name = 'knowledge_nodes' AND row_id = ?1 AND reason IS NULL",
+                params![SqliteMemoryStore::opaque_tombstone_marker(&doomed.id)],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(sync_tombstone_count, 1);
 
         let members = storage
             .get_composition_members("purge-composition-preview-test")
             .unwrap();
-        assert_eq!(members.len(), 1);
         assert!(
-            members[0].preview.is_none(),
-            "purge should scrub composition member previews for the purged memory"
+            members.is_empty(),
+            "purge should remove composition evidence that references the target"
+        );
+        let review_count: i64 = writer
+            .query_row(
+                "SELECT COUNT(*) FROM memory_prs WHERE id = 'purge-review-leak'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            review_count, 0,
+            "purge should remove linked review evidence"
         );
         let archive_json =
             serde_json::to_string(&storage.export_portable_archive().unwrap()).unwrap();
         assert!(
             !archive_json.contains("Sensitive purge target memory preview leak"),
             "portable archive should not retain purged memory content through composition previews"
+        );
+        assert!(
+            !archive_json.contains(&doomed.id),
+            "portable archive should not retain the purged memory's raw identifier"
+        );
+        assert!(
+            !archive_json.contains("user requested hard purge"),
+            "portable archive should not retain caller-controlled purge rationale"
         );
 
         let has_content_column: i64 = writer
@@ -14669,10 +20123,12 @@ mod tests {
         }
     }
 
-    // --- A. Default (flag unset): near-duplicates still merge (regression) ---
+    // --- A. Default (flag unset): NOTHING merges, nothing is deleted ---------
+    // v2.6.0 flipped the #142 opt-out into an opt-in: unattended destruction
+    // of user memories must be asked for, never inherited.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
-    fn test_auto_dedup_default_on_merges_near_duplicates() {
+    fn test_auto_dedup_default_off_preserves_near_duplicates() {
         with_auto_merge_env(None, || {
             let storage = create_test_storage();
             let keeper = seed_node(
@@ -14687,22 +20143,58 @@ mod tests {
                 &["api"],
                 axis_vector(21, 0.01),
             );
-            // Make `keeper` win the retention tiebreak deterministically.
             set_retention(&storage, &keeper, 0.9);
             set_retention(&storage, &dup, 0.3);
 
             let merged = storage.auto_dedup_consolidation().unwrap();
-            assert_eq!(merged, 1, "one weak node folded into the keeper");
+            assert_eq!(merged, 0, "flag unset: the destructive pass must not run");
             assert!(
-                storage.get_node(&dup).unwrap().is_none(),
-                "weak duplicate is hard-deleted"
+                storage.get_node(&dup).unwrap().is_some(),
+                "near-duplicate survives by default"
             );
-            let survivor = storage.get_node(&keeper).unwrap().unwrap();
             assert!(
-                survivor.content.contains("[MERGED]"),
-                "keeper carries the folded-in [MERGED] block"
+                !storage
+                    .get_node(&keeper)
+                    .unwrap()
+                    .unwrap()
+                    .content
+                    .contains("[MERGED]"),
+                "keeper content untouched by default"
             );
         });
+        // Explicit opt-in (trimmed, case-insensitive 1/true/on/yes) enables it.
+        for value in ["1", "true", "ON", "  Yes  "] {
+            with_auto_merge_env(Some(value), || {
+                let storage = create_test_storage();
+                let keeper = seed_node(
+                    &storage,
+                    "Rate limiting uses a token bucket per client API key",
+                    &["api"],
+                    axis_vector(21, 0.02),
+                );
+                let dup = seed_node(
+                    &storage,
+                    "Rate limiting uses a token-bucket algorithm per client API key, refilled steadily",
+                    &["api"],
+                    axis_vector(21, 0.01),
+                );
+                set_retention(&storage, &keeper, 0.9);
+                set_retention(&storage, &dup, 0.3);
+
+                let merged = storage.auto_dedup_consolidation().unwrap();
+                assert_eq!(merged, 1, "opted in ({value:?}): weak node folds into keeper");
+                assert!(storage.get_node(&dup).unwrap().is_none());
+                assert!(
+                    storage
+                        .get_node(&keeper)
+                        .unwrap()
+                        .unwrap()
+                        .content
+                        .contains("[MERGED]"),
+                    "keeper carries the folded-in [MERGED] block"
+                );
+            });
+        }
     }
 
     // --- B. Flag off suppresses the merge (parametrized) ---------------------
@@ -14741,10 +20233,10 @@ mod tests {
         }
     }
 
-    // --- B (cont). A malformed value fails OPEN to the ON default ------------
+    // --- B (cont). A malformed value fails CLOSED: no destruction on a typo --
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
-    fn test_auto_dedup_env_garbage_fails_open_and_merges() {
+    fn test_auto_dedup_env_garbage_fails_closed_and_preserves() {
         with_auto_merge_env(Some("banana"), || {
             let storage = create_test_storage();
             let keeper = seed_node(
@@ -14763,8 +20255,8 @@ mod tests {
             set_retention(&storage, &dup, 0.3);
 
             let merged = storage.auto_dedup_consolidation().unwrap();
-            assert_eq!(merged, 1, "malformed value fails open to the ON default");
-            assert!(storage.get_node(&dup).unwrap().is_none());
+            assert_eq!(merged, 0, "malformed value fails closed for a destructive gate");
+            assert!(storage.get_node(&dup).unwrap().is_some(), "nothing deleted on a typo");
         });
     }
 
@@ -14772,7 +20264,7 @@ mod tests {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn test_auto_dedup_protected_would_be_keeper_untouched_others_merge() {
-        with_auto_merge_env(None, || {
+        with_auto_merge_env(Some("1"), || {
             let storage = create_test_storage();
             // P has the highest retention, so absent protection it would be the
             // keeper. Protected → skipped entirely; the two unprotected merge alone.
@@ -14822,7 +20314,7 @@ mod tests {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn auto_dedup_regression_142_protected_weak_member_not_absorbed() {
-        with_auto_merge_env(None, || {
+        with_auto_merge_env(Some("1"), || {
             let storage = create_test_storage();
             // Regression (#142): before the fix this pinned node — the weaker
             // member of the cluster — was silently absorbed into the stronger
@@ -14883,7 +20375,7 @@ mod tests {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn test_auto_dedup_two_protected_near_dups_neither_merges() {
-        with_auto_merge_env(None, || {
+        with_auto_merge_env(Some("1"), || {
             let storage = create_test_storage();
             let a = seed_node(
                 &storage,
@@ -14915,7 +20407,7 @@ mod tests {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn test_auto_dedup_protected_plus_single_unprotected_no_merge() {
-        with_auto_merge_env(None, || {
+        with_auto_merge_env(Some("1"), || {
             let storage = create_test_storage();
             let pinned = seed_node(
                 &storage,
@@ -14946,7 +20438,7 @@ mod tests {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     #[test]
     fn test_auto_dedup_protected_plus_two_unprotected_liveness() {
-        with_auto_merge_env(None, || {
+        with_auto_merge_env(Some("1"), || {
             let storage = create_test_storage();
             // The pin exclusion must not block a legitimate merge of the others.
             let pinned = seed_node(
@@ -15303,6 +20795,27 @@ mod tests {
     }
 
     #[test]
+    fn trait_insert_rejects_secret_shaped_tags_and_source_without_a_row() {
+        let s = create_test_storage();
+        let credential = format!("ghp_{}", "A".repeat(36));
+        let rt = rt();
+        rt.block_on(async {
+            let mut tagged = make_record("safe direct trait insert");
+            tagged.tags = vec![credential.clone()];
+            let err = s.insert(&tagged).await.unwrap_err();
+            assert!(matches!(err, MemoryStoreError::SecretDetected(_)));
+            assert!(!err.to_string().contains(&credential));
+            assert_eq!(s.count().await.unwrap(), 0);
+
+            let mut sourced = make_record("another safe direct trait insert");
+            sourced.metadata = serde_json::json!({ "source": credential });
+            let err = s.insert(&sourced).await.unwrap_err();
+            assert!(matches!(err, MemoryStoreError::SecretDetected(_)));
+            assert_eq!(s.count().await.unwrap(), 0);
+        });
+    }
+
+    #[test]
     fn trait_get_stats_reports_registered_model() {
         let s = create_test_storage();
         let sig = ModelSignature {
@@ -15494,5 +21007,450 @@ mod tests {
         assert!(!parse(Some("false")), "false is OFF");
         assert!(!parse(Some("OFF")), "OFF (case-insensitive) is OFF");
         assert!(!parse(Some(" no ")), "whitespace-padded no is OFF (trim)");
+    }
+
+    // =====================================================================
+    // Smart-ingest bitemporal validity gates (issue #156)
+    // =====================================================================
+
+    /// Marker-keyed test embedder: contents sharing the "alpha" marker embed
+    /// to the same axis (cosine similarity 1.0) and everything else lands on
+    /// the orthogonal axis, so gate decisions are fully controlled by content.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    struct MarkerEmbedder;
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    impl crate::embedder::EmbedderSend for MarkerEmbedder {
+        async fn embed(&self, text: &str) -> crate::embedder::EmbedderResult<Vec<f32>> {
+            Ok(if text.contains("alpha") {
+                vec![1.0, 0.0]
+            } else {
+                vec![0.0, 1.0]
+            })
+        }
+        fn model_name(&self) -> &str {
+            "marker-gate-test-runner"
+        }
+        fn dimension(&self) -> usize {
+            2
+        }
+        fn model_hash(&self) -> String {
+            "0".repeat(64)
+        }
+        async fn embed_batch(
+            &self,
+            texts: &[&str],
+        ) -> crate::embedder::EmbedderResult<Vec<Vec<f32>>> {
+            let mut result = Vec::with_capacity(texts.len());
+            for text in texts {
+                result.push(if text.contains("alpha") {
+                    vec![1.0, 0.0]
+                } else {
+                    vec![0.0, 1.0]
+                });
+            }
+            Ok(result)
+        }
+    }
+
+    /// Install, promote, activate, and attach a verified 2-dimensional marker
+    /// profile so smart-ingest gate decisions run end to end without a model
+    /// download. Mirrors the lifecycle install/evaluate/migrate/activate flow;
+    /// the Ready promotion is applied directly to the persisted manifest since
+    /// the process-local registry is private to the lifecycle module.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn storage_with_marker_gate_runtime(dir: &tempfile::TempDir) -> Storage {
+        use crate::embedding::{
+            ChunkingStrategy, EmbeddingDevice, EmbeddingEvaluationSummary, EmbeddingNormalization,
+            EmbeddingProfile, EmbeddingProfileLifecycle, EmbeddingRuntimeMetadata,
+            EncodingTemplate, ModelArtifactHash, VerifiedLocalArtifact,
+        };
+        use sha2::{Digest, Sha256};
+
+        let storage = create_test_storage_at(dir, "marker-gate.db");
+        let artifact_bytes: &[u8] = b"marker gate test artifact";
+        std::fs::write(dir.path().join("runner.bin"), artifact_bytes).unwrap();
+        let artifact = ModelArtifactHash::sha256(
+            "runner.bin",
+            format!("{:x}", Sha256::digest(artifact_bytes)),
+        );
+        let profile = EmbeddingProfile {
+            profile_id: EmbeddingProfileId::new("marker-gate-test-2d").unwrap(),
+            display_name: "Marker Gate Test Profile".to_string(),
+            model_id: "test/marker-gate".to_string(),
+            immutable_model_revision: "immutable-test-revision".to_string(),
+            verified_model_artifact_hashes: vec![artifact.clone()],
+            runtime_backend: EmbeddingRuntimeBackend::FastembedCandle,
+            embedding_dimension: 2,
+            normalization_method: EmbeddingNormalization::L2,
+            document_encoding_template: EncodingTemplate::Raw,
+            query_encoding_template: EncodingTemplate::Raw,
+            maximum_token_limit: 64,
+            chunking_strategy: ChunkingStrategy::WholeDocument,
+            created_at: Utc::now(),
+        };
+        let artifacts = vec![VerifiedLocalArtifact::from_root(artifact, dir.path()).unwrap()];
+        let source = EmbeddingProfileId::new("nomic-v1.5-legacy-raw-256").unwrap();
+        let lifecycle = EmbeddingProfileLifecycle::new(&storage);
+        let mut manifest = lifecycle
+            .install_verified(
+                profile.clone(),
+                &artifacts,
+                EmbeddingRuntimeMetadata {
+                    backend: EmbeddingRuntimeBackend::FastembedCandle,
+                    device: EmbeddingDevice::Cpu,
+                    runtime_version: "test".to_string(),
+                    initialized_at: Utc::now(),
+                    local_only: true,
+                },
+                Arc::new(MarkerEmbedder),
+            )
+            .unwrap();
+        manifest.state = EmbeddingProfileState::Ready;
+        manifest.evaluation = Some(EmbeddingEvaluationSummary {
+            evaluation_id: Uuid::new_v4(),
+            compared_against: source.clone(),
+            completed_at: Utc::now(),
+            corpus_size: 0,
+            recall_at_5: None,
+            recall_at_10: None,
+            ndcg_at_10: None,
+            exact_match_preservation: None,
+            false_positive_rate: None,
+            p50_query_latency_ms: None,
+            p95_query_latency_ms: None,
+            ingestion_throughput_per_second: None,
+            report_hash: "1".repeat(64),
+        });
+        storage.save_embedding_profile_manifest(&manifest).unwrap();
+        lifecycle
+            .migrate_registered(&profile.profile_id, &source, None, None)
+            .unwrap();
+        storage
+            .activate_embedding_profile(&profile.profile_id)
+            .unwrap();
+        lifecycle
+            .attach_registered_active_profile(&profile.profile_id)
+            .unwrap();
+        storage
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn inferred_as_of_validity_never_mutates_an_existing_nodes_window() {
+        let dir = tempdir().unwrap();
+        let storage = storage_with_marker_gate_runtime(&dir);
+        let explicit_from = Utc::now() - Duration::days(60);
+        let explicit_until = Utc::now() + Duration::days(300);
+        let target = storage
+            .ingest(IngestInput {
+                content: "alpha deployment policy is retries with backoff".to_string(),
+                valid_from: Some(explicit_from),
+                valid_until: Some(explicit_until),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // Near-identical content whose only validity is a prose-inferred
+        // "as of" date must reinforce WITHOUT touching the target's window.
+        let result = storage
+            .smart_ingest(IngestInput {
+                content: "alpha deployment policy is retries with backoff, as of last review"
+                    .to_string(),
+                valid_from: Some(Utc::now() - Duration::days(10)),
+                validity_inferred: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(result.decision, "reinforce");
+        assert_eq!(result.node.id, target.id);
+
+        let node = storage.get_node(&target.id).unwrap().unwrap();
+        assert_eq!(
+            node.valid_from.map(|value| value.to_rfc3339()),
+            Some(explicit_from.to_rfc3339()),
+            "an inferred date must not move valid_from"
+        );
+        assert_eq!(
+            node.valid_until.map(|value| value.to_rfc3339()),
+            Some(explicit_until.to_rfc3339()),
+            "an inferred date must not clear or move valid_until"
+        );
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn inferred_as_of_must_not_resurrect_an_expired_similar_node() {
+        let dir = tempdir().unwrap();
+        let storage = storage_with_marker_gate_runtime(&dir);
+        let expired_from = Utc::now() - Duration::days(90);
+        let expired_until = Utc::now() - Duration::days(7);
+        let target = storage
+            .ingest(IngestInput {
+                content: "alpha deployment policy is retries with backoff".to_string(),
+                valid_from: Some(expired_from),
+                valid_until: Some(expired_until),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            !storage
+                .get_node(&target.id)
+                .unwrap()
+                .unwrap()
+                .is_currently_valid(),
+            "fixture must start expired"
+        );
+
+        // Live #170 failure: inferred validFrom + PEG update used to
+        // REPLACE valid_until with NULL and un-expire the similar row.
+        let result = storage
+            .smart_ingest(IngestInput {
+                content: "alpha deployment policy is retries with backoff as of 2026-03-04"
+                    .to_string(),
+                valid_from: Some(Utc::now() - Duration::days(10)),
+                validity_inferred: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(result.decision, "reinforce");
+        assert_eq!(result.node.id, target.id);
+
+        let node = storage.get_node(&target.id).unwrap().unwrap();
+        assert_eq!(
+            node.valid_from.map(|value| value.to_rfc3339()),
+            Some(expired_from.to_rfc3339()),
+            "inferred as-of must not move the expired node's valid_from"
+        );
+        assert_eq!(
+            node.valid_until.map(|value| value.to_rfc3339()),
+            Some(expired_until.to_rfc3339()),
+            "inferred as-of must not un-expire the similar node"
+        );
+        assert!(!node.is_currently_valid());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn explicit_valid_from_on_reinforce_updates_without_clearing_valid_until() {
+        let dir = tempdir().unwrap();
+        let storage = storage_with_marker_gate_runtime(&dir);
+        let explicit_from = Utc::now() - Duration::days(60);
+        let explicit_until = Utc::now() + Duration::days(300);
+        let target = storage
+            .ingest(IngestInput {
+                content: "alpha deployment policy is retries with backoff".to_string(),
+                valid_from: Some(explicit_from),
+                valid_until: Some(explicit_until),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // An explicit caller-supplied valid_from still updates the window, and
+        // omitting valid_until must preserve the stored bound (merge, not
+        // replace).
+        let new_from = Utc::now() - Duration::days(10);
+        let result = storage
+            .smart_ingest(IngestInput {
+                content: "alpha deployment policy is retries with backoff".to_string(),
+                valid_from: Some(new_from),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(result.decision, "reinforce");
+
+        let node = storage.get_node(&target.id).unwrap().unwrap();
+        assert_eq!(
+            node.valid_from.map(|value| value.to_rfc3339()),
+            Some(new_from.to_rfc3339()),
+            "explicit valid_from must update the window"
+        );
+        assert_eq!(
+            node.valid_until.map(|value| value.to_rfc3339()),
+            Some(explicit_until.to_rfc3339()),
+            "an explicit valid_from-only update must not NULL valid_until"
+        );
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn create_path_still_stamps_inferred_validity_on_the_new_node() {
+        let dir = tempdir().unwrap();
+        let storage = storage_with_marker_gate_runtime(&dir);
+        let inferred_from = Utc::now() - Duration::days(10);
+        let result = storage
+            .smart_ingest(IngestInput {
+                content: "beta service quota was raised".to_string(),
+                valid_from: Some(inferred_from),
+                validity_inferred: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(result.decision, "create");
+        assert!(result.auto_closed_until.is_none());
+        let node = storage.get_node(&result.node.id).unwrap().unwrap();
+        assert_eq!(
+            node.valid_from.map(|value| value.to_rfc3339()),
+            Some(inferred_from.to_rfc3339()),
+            "the issue-156 feature: inferred validity stamps the NEW node"
+        );
+        assert!(node.valid_until.is_none());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn older_dated_claim_after_newer_fact_is_created_with_a_closed_window() {
+        let dir = tempdir().unwrap();
+        let storage = storage_with_marker_gate_runtime(&dir);
+        let newer_from = Utc::now() - Duration::days(30);
+        storage
+            .ingest(IngestInput {
+                content: "alpha runtime version is 5.0".to_string(),
+                valid_from: Some(newer_from),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // The stale snapshot loses every candidate to the newer current fact,
+        // so it is created as a CLOSED historical claim, never an open one.
+        let result = storage
+            .smart_ingest(IngestInput {
+                content: "alpha runtime version is 4.2".to_string(),
+                valid_from: Some(Utc::now() - Duration::days(180)),
+                validity_inferred: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(result.decision, "create");
+        assert_eq!(
+            result.auto_closed_until.map(|value| value.to_rfc3339()),
+            Some(newer_from.to_rfc3339()),
+            "the new node closes exactly where the newer fact begins"
+        );
+        assert!(result.reason.contains("Closed validity at"));
+        let node = storage.get_node(&result.node.id).unwrap().unwrap();
+        assert_eq!(
+            node.valid_until.map(|value| value.to_rfc3339()),
+            Some(newer_from.to_rfc3339())
+        );
+        assert!(!node.is_currently_valid());
+
+        // Reverse order on a fresh store: the newer dated claim arriving
+        // second must NOT auto-close anything. That is this half's subject.
+        //
+        // It previously also asserted `reinforce`, which encoded a defect. The
+        // pair here ("version is 4.2" against "version is 5.0") is a mutually
+        // exclusive VALUE conflict, the same shape as PostgreSQL 14 -> 16, and
+        // the write-path detector could not see it: short numeric tokens were
+        // dropped by the substantive-word length filter, so the two texts
+        // looked identical and the gate reinforced on similarity alone. The
+        // effect was that telling Vestige "the version is now 5.0" discarded
+        // that update and made it believe 4.2 MORE strongly. The gate now
+        // keeps both claims. See advanced::contradiction.
+        let dir = tempdir().unwrap();
+        let storage = storage_with_marker_gate_runtime(&dir);
+        let target = storage
+            .ingest(IngestInput {
+                content: "alpha runtime version is 4.2".to_string(),
+                valid_from: Some(Utc::now() - Duration::days(180)),
+                ..Default::default()
+            })
+            .unwrap();
+        let result = storage
+            .smart_ingest(IngestInput {
+                content: "alpha runtime version is 5.0".to_string(),
+                valid_from: Some(newer_from),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            result.decision, "create",
+            "a version change is a value conflict, not a reinforcement"
+        );
+        assert_ne!(
+            result.node.id, target.id,
+            "the superseded 4.2 claim must not be overwritten in place"
+        );
+        assert!(
+            result.auto_closed_until.is_none(),
+            "a newer dated claim arriving second closes nothing"
+        );
+        assert_eq!(
+            result.node.valid_from.map(|value| value.to_rfc3339()),
+            Some(newer_from.to_rfc3339()),
+            "the new node carries its own validity"
+        );
+        // The older claim survives intact, still open, still retrievable.
+        let previous = storage.get_node(&target.id).unwrap().unwrap();
+        assert!(previous.valid_until.is_none());
+        assert!(previous.content.contains("4.2"));
+    }
+
+    #[test]
+    fn update_node_validity_merges_bounds_and_validates_the_effective_window() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "validity merge fixture".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let from = Utc::now() - Duration::days(10);
+        let until = Utc::now() + Duration::days(10);
+        storage
+            .update_node_validity(&node.id, Some(from), Some(until))
+            .unwrap();
+
+        // Updating only valid_from must not clear the stored valid_until.
+        let new_from = Utc::now() - Duration::days(5);
+        storage
+            .update_node_validity(&node.id, Some(new_from), None)
+            .unwrap();
+        let stored = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(
+            stored.valid_from.map(|value| value.to_rfc3339()),
+            Some(new_from.to_rfc3339())
+        );
+        assert_eq!(
+            stored.valid_until.map(|value| value.to_rfc3339()),
+            Some(until.to_rfc3339())
+        );
+
+        // Updating only valid_until must not clear the stored valid_from.
+        let new_until = Utc::now() + Duration::days(20);
+        storage
+            .update_node_validity(&node.id, None, Some(new_until))
+            .unwrap();
+        let stored = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(
+            stored.valid_from.map(|value| value.to_rfc3339()),
+            Some(new_from.to_rfc3339())
+        );
+        assert_eq!(
+            stored.valid_until.map(|value| value.to_rfc3339()),
+            Some(new_until.to_rfc3339())
+        );
+
+        // The EFFECTIVE post-merge window is validated: a valid_from at or
+        // beyond the stored valid_until is rejected and nothing changes.
+        let error = storage
+            .update_node_validity(&node.id, Some(Utc::now() + Duration::days(30)), None)
+            .unwrap_err();
+        assert!(matches!(error, StorageError::InvalidTimestamp(_)));
+        let stored = storage.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(
+            stored.valid_from.map(|value| value.to_rfc3339()),
+            Some(new_from.to_rfc3339())
+        );
+        assert_eq!(
+            stored.valid_until.map(|value| value.to_rfc3339()),
+            Some(new_until.to_rfc3339())
+        );
+
+        // Both bounds supplied together are still validated up front.
+        let error = storage
+            .update_node_validity(&node.id, Some(until), Some(from))
+            .unwrap_err();
+        assert!(matches!(error, StorageError::InvalidTimestamp(_)));
     }
 }

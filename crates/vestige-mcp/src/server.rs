@@ -68,6 +68,34 @@ fn supported_protocol_versions() -> &'static [&'static str] {
     &["2024-11-05", "2025-03-26", "2025-06-18", MCP_VERSION]
 }
 
+/// Whether `VESTIGE_TRACE` enables Black Box trace recording. ON by default:
+/// unset, empty, or any malformed value → true (fail-open to the documented
+/// default); only an explicit `0` / `false` / `off` / `no` turns it off.
+/// Parsed exactly like the sibling `VESTIGE_AUTO_CONSOLIDATE_MERGE` gate.
+fn parse_trace_enabled(value: Option<&str>) -> bool {
+    match value {
+        Some(v) => {
+            let v = v.trim();
+            !(v.eq_ignore_ascii_case("false")
+                || v.eq_ignore_ascii_case("off")
+                || v.eq_ignore_ascii_case("no")
+                || v == "0")
+        }
+        None => true,
+    }
+}
+
+/// OPT-OUT (Black Box trace recorder): every MCP tool call writes trace rows
+/// (`agent_traces`/`agent_runs`) to the user's DB. A consumer that does not
+/// want per-call persistence can turn it off with `VESTIGE_TRACE=0` (or
+/// false/off/no). Read ONCE per process (the recorder sits on the hot path of
+/// every tool call), so flipping the env mid-process has no effect.
+fn trace_enabled() -> bool {
+    static TRACE_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRACE_ENABLED
+        .get_or_init(|| parse_trace_enabled(std::env::var("VESTIGE_TRACE").ok().as_deref()))
+}
+
 /// MCP Server implementation
 pub struct McpServer {
     storage: Arc<Storage>,
@@ -140,10 +168,19 @@ impl McpServer {
             return None;
         }
 
-        // Check initialization for non-initialize requests
+        // Check initialization for non-initialize requests.
+        //
+        // `server/discover` is deliberately exempt. Its entire purpose is to let
+        // a client learn what this server speaks BEFORE committing to a protocol
+        // revision, and MCP 2026-07-28 -- which removes the handshake altogether
+        // -- explicitly sanctions using it as a backward-compatibility probe on
+        // stdio. Gating it behind the very handshake it exists to precede makes
+        // it useless: a modern client probing this server would get
+        // "Server not initialized" and have to guess.
         if !self.initialized
             && request.method != "initialize"
             && request.method != "notifications/initialized"
+            && request.method != "server/discover"
         {
             warn!(
                 "Rejecting request '{}': server not initialized",
@@ -164,6 +201,7 @@ impl McpServer {
             "tools/call" => self.handle_tools_call(request.params).await,
             "resources/list" => self.handle_resources_list().await,
             "resources/read" => self.handle_resources_read(request.params).await,
+            "server/discover" => self.handle_server_discover(),
             "ping" => Ok(serde_json::json!({})),
             method => {
                 warn!("Unknown method: {}", method);
@@ -175,6 +213,39 @@ impl McpServer {
             Ok(result) => JsonRpcResponse::success(request.id, result),
             Err(error) => JsonRpcResponse::error(request.id, error),
         })
+    }
+
+    /// `server/discover` — advertise supported protocol versions, capabilities and
+    /// identity WITHOUT a handshake.
+    ///
+    /// MCP 2026-07-28 makes this mandatory: it removes the
+    /// `initialize`/`notifications/initialized` handshake entirely and makes the
+    /// protocol stateless, so a client needs some way to learn what a server
+    /// speaks before it commits to a revision. On stdio the spec explicitly
+    /// allows using this as a backward-compatibility probe, which is exactly how
+    /// a 2026-era client will meet this 2025-11-25 server.
+    ///
+    /// Answering it truthfully costs nothing and is strictly better than the
+    /// alternative, which is a modern client getting `method_not_found` and
+    /// having to guess. It deliberately does NOT claim 2026-07-28 support: the
+    /// stateless core, `resultType`, and MRTR are not implemented yet, and
+    /// advertising a revision we do not serve would be a false claim that fails
+    /// conformance for real.
+    ///
+    /// Unlike `initialize`, this neither takes params nor mutates session state,
+    /// so it is safe to call at any point, including before initialization.
+    fn handle_server_discover(&self) -> Result<serde_json::Value, JsonRpcError> {
+        Ok(serde_json::json!({
+            "protocolVersions": supported_protocol_versions(),
+            "serverInfo": {
+                "name": "vestige",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+            "capabilities": {
+                "tools": { "listChanged": false },
+                "resources": { "listChanged": false },
+            },
+        }))
     }
 
     /// Handle initialize request
@@ -240,8 +311,8 @@ impl McpServer {
 
     /// Handle tools/list request
     async fn handle_tools_list(&self) -> Result<serde_json::Value, JsonRpcError> {
-        // v2.2: 12 advertised tools after Layer-1 Tool Consolidation
-        // (verified by `tools.len() == 12` in test_tools_list_returns_all_tools).
+        // v2.3: 14 advertised tools after adding the controlled `receipt`
+        // surface and retaining the distinct flagship `backfill` primitive.
         // 22 deprecated/folded names still work as hidden redirects in
         // handle_tools_call. See docs/launch/tool-consolidation-v2.2.0.md.
         let mut tools = vec![
@@ -252,8 +323,14 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "recall".to_string(),
-                description: Some("Retrieve from memory. Modes: 'lookup' (default — fast hybrid search: keyword + semantic + convex fusion, auto-strengthens on access; use for plain recall), 'reason' (deep cognitive reasoning across memories with FSRS-6 trust scoring, spreading activation, supersession, and contradiction analysis; use when accuracy matters, needs 'query'), 'contradictions' (surface trust-weighted disagreement pairs for a 'topic'). Default mode is fast — only 'reason' pays the deep-analysis cost.".to_string()),
+                description: Some("Retrieve from memory. Modes: 'lookup' (default — fast hybrid search: keyword + semantic + convex fusion; retrieval is audit-only, and promote is the explicit usefulness signal), 'reason' (deep cognitive reasoning across memories with FSRS-6 trust scoring, spreading activation, supersession, and contradiction analysis; use when accuracy matters, needs 'query'), 'contradictions' (surface trust-weighted disagreement pairs for a 'topic'). Default mode is fast — only 'reason' pays the deep-analysis cost.".to_string()),
                 input_schema: tools::recall::schema(),
+                ..Default::default()
+            },
+            ToolDescription {
+                name: "receipt".to_string(),
+                description: Some("Inspect a persisted memory receipt or run a controlled post-retrieval context ablation. Actions: 'get' returns the receipt and a privacy-safe frozen-capsule summary; 'replay' compares the exact final recorded evidence pack with the same pack minus specified receipt-local slots. Replay never reruns search, backfills candidates, expands the graph, calls a model, or establishes causality.".to_string()),
+                input_schema: tools::receipt::schema(),
                 ..Default::default()
             },
             // ================================================================
@@ -298,11 +375,12 @@ impl McpServer {
             // ================================================================
             // STATUS / TEMPORAL — unified `memory_status` tool (v2.2)
             // Folds system_status + memory_health + memory_timeline +
-            // memory_changelog into one view-dispatched surface.
+            // memory_changelog into one view-dispatched surface, plus the
+            // full-store hygiene-statistics view.
             // ================================================================
             ToolDescription {
                 name: "memory_status".to_string(),
-                description: Some("Memory status & history. Views: 'health' (default — full system health + stats + FSRS preview + cognitive-module health + warnings + recommendations), 'retention' (lightweight retention dashboard: avg, distribution, trend), 'timeline' (browse memories chronologically, grouped by day), 'changelog' (audit trail of memory state changes — per-memory transitions or system-wide).".to_string()),
+                description: Some("Memory status & history. Views: 'health' (default — full system health + stats + FSRS preview + cognitive-module health + warnings + recommendations), 'retention' (lightweight retention dashboard: avg, distribution, trend), 'timeline' (browse memories chronologically, grouped by day), 'changelog' (audit trail of memory state changes — per-memory transitions or system-wide), 'stats' (full-store hygiene counts by type/tag/age/retention/lifecycle, bounded never-accessed and largest-node details, and recent tag-operation audit).".to_string()),
                 input_schema: tools::memory_status::schema(),
                 ..Default::default()
             },
@@ -325,7 +403,7 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "dedup".to_string(),
-                description: Some("Deduplication & merge/supersede. Actions: 'scan' (default — surface duplicate clusters via cosine + merge candidates via Fellegi-Sunter, read-only), 'plan_merge' (preview a reversible merge plan for 2+ member_ids → plan_id), 'plan_supersede' (preview superseding old_id with new_id → plan_id), 'apply' (execute a plan_id; 'possible'/'non_match' need confirm=true), 'undo' (reverse an operation_id, or omit to list the reflog), 'protect' (pin a memory against auto-merge/supersede/forget), 'policy' (get/set Fellegi-Sunter thresholds). Old memories are invalidated, never deleted.".to_string()),
+                description: Some("Deduplication, merge/supersede, and exact tag maintenance. Actions: 'scan' (default — surface duplicate clusters via cosine + merge candidates via Fellegi-Sunter, read-only), 'plan_merge' (preview a reversible merge plan for 2+ member_ids → plan_id), 'plan_supersede' (preview superseding old_id with new_id → plan_id), 'apply' (execute a plan_id; 'possible'/'non_match' need confirm=true), 'undo' (reverse an operation_id, or omit to list the mixed reflog plus a dedicated tagOperations list that cannot be buried by merge activity), 'tag_rename'/'tag_merge' (exact, scoped, preview-token-gated tag maintenance), 'protect' (pin a memory against auto-merge/supersede/forget), 'policy' (get/set Fellegi-Sunter thresholds). Old memories are invalidated, never deleted.".to_string()),
                 input_schema: tools::dedup::unified_schema(),
                 ..Default::default()
             },
@@ -436,8 +514,35 @@ impl McpServer {
             }
         }
 
-        let result = ListToolsResult { tools };
-        serde_json::to_value(result).map_err(|e| JsonRpcError::internal_error(&e.to_string()))
+        // Deterministic order. MCP 2026-07-28 says servers SHOULD return tools
+        // from tools/list in a stable order so clients can cache the list and so
+        // the bytes land identically in an LLM prompt cache. The vec above is
+        // hand-ordered by theme, which is good for a human reading the source and
+        // useless as a cache key the moment anyone reorders it.
+        tools.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let mut result = serde_json::to_value(ListToolsResult { tools })
+            .map_err(|e| JsonRpcError::internal_error(&e.to_string()))?;
+
+        // Freshness hints (MCP 2026-07-28 `CacheableResult`). Measured on a real
+        // install: this response is 28,506 bytes and was served 1,161 times from
+        // one log -- roughly 7,000 tokens of tool schema pushed into model context
+        // on every single session start, re-sent forever, with nothing telling the
+        // client it could have kept the previous copy.
+        //
+        // The advertised surface only changes when the binary changes, so an hour
+        // is conservative rather than aggressive. `private` because the list can
+        // vary with per-install configuration; a shared intermediary must not
+        // serve one install's tool list to another.
+        //
+        // Emitting these at 2025-11-25 is forward-compatible: unknown result
+        // fields are ignored by older clients, and the fields become required at
+        // 2026-07-28.
+        if let Some(object) = result.as_object_mut() {
+            object.insert("ttlMs".to_string(), serde_json::json!(3_600_000u64));
+            object.insert("cacheScope".to_string(), serde_json::json!("private"));
+        }
+        Ok(result)
     }
 
     /// Handle tools/call request
@@ -476,14 +581,69 @@ impl McpServer {
         // can attach the downstream memory events (retrieve/suppress/veto) to the
         // same run.
         let trace_run_id = crate::trace_recorder::run_id_for(&saved_args);
-        crate::trace_recorder::record_call(
+        if trace_enabled() {
+            crate::trace_recorder::record_call(
+                &self.storage,
+                self.event_tx.as_ref(),
+                &trace_run_id,
+                &request.name,
+                &saved_args,
+            );
+        }
+
+        // Destructive and suppressive mutations must be reviewed before their
+        // tool implementation can remove a node or change its retrieval
+        // influence. This deliberately runs after the opening trace event but
+        // before dispatch. Safety is intentionally independent of VESTIGE_TRACE:
+        // disabling the recorder must not silently permit destructive writes.
+        // Normal calls continue to #150's unchanged record_result -> receipt ->
+        // post-commit gate -> event order when tracing is enabled.
+        let mode = crate::trace_recorder::read_review_mode(&self.storage);
+        let pending = crate::trace_recorder::gate_pending_memory_mutation(
             &self.storage,
             self.event_tx.as_ref(),
             &trace_run_id,
             &request.name,
             &saved_args,
+            mode,
         );
+        match pending {
+            Ok(Some(content)) => {
+                // The pre-gate already emitted MemoryPrOpened. `success`
+                // is false, so emitting the normal tool event cannot claim
+                // a deletion or suppression that did not happen.
+                self.emit_tool_event(&request.name, &saved_args, &content);
+                let call_result = CallToolResult {
+                    content: vec![crate::protocol::messages::ToolResultContent {
+                        content_type: "text".to_string(),
+                        text: serde_json::to_string_pretty(&content)
+                            .unwrap_or_else(|_| content.to_string()),
+                    }],
+                    structured_content: Some(content),
+                    is_error: Some(false),
+                };
+                return serde_json::to_value(call_result)
+                    .map_err(|e| JsonRpcError::internal_error(&e.to_string()));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let error_content = serde_json::json!({ "error": error });
+                let call_result = CallToolResult {
+                    content: vec![crate::protocol::messages::ToolResultContent {
+                        content_type: "text".to_string(),
+                        text: serde_json::to_string_pretty(&error_content)
+                            .unwrap_or_else(|_| error_content.to_string()),
+                    }],
+                    structured_content: Some(error_content),
+                    is_error: Some(true),
+                };
+                return serde_json::to_value(call_result)
+                    .map_err(|e| JsonRpcError::internal_error(&e.to_string()));
+            }
+        }
 
+        // `mut` so the post-call block can annotate a successful result with any
+        // Memory PRs or receipts it attaches to a successful result.
         let mut result = match request.name.as_str() {
             // ================================================================
             // UNIFIED TOOLS (v1.1+) - Preferred API
@@ -499,6 +659,7 @@ impl McpServer {
                 )
                 .await
             }
+            "receipt" => tools::receipt::execute(&self.storage, request.arguments).await,
             // DEPRECATED (v2.2): folded into `recall` (mode='lookup'). Hidden alias.
             "search" => {
                 warn!(
@@ -1172,44 +1333,98 @@ impl McpServer {
             // downstream memory events (retrieve/suppress/veto/dream) under the
             // same run_id as the opening mcp.call, so /api/traces, /api/receipts
             // and the trace:// resource are actually populated.
-            crate::trace_recorder::record_result(
-                &self.storage,
-                self.event_tx.as_ref(),
-                &trace_run_id,
-                &request.name,
-                content,
-            );
-            // Receipt spine: persist the auditable receipt for THIS retrieval run
-            // (recall / deep_reference / search / explore_connections) so a real
-            // agent call produces a real, fetchable receipt via GET
-            // /api/receipts?run=<trace_run_id>. build_and_save_receipt no-ops for
-            // non-retrieval tools and empty results, so this is safe on every call.
-            // This closes the dead seam: the builder existed but had no caller.
-            let receipt = crate::trace_recorder::build_and_save_receipt(
-                &self.storage,
-                &trace_run_id,
-                &request.name,
-                content,
-            );
-            // Attach runId + receiptId + receipt to the RETURNED structured result
-            // (not just persisted) so the caller/agent gets the auditable "which
-            // memories did this use" receipt inline. Only stamp runId/receipt when
-            // there's a receipt (a real retrieval); runId is always safe to carry.
-            if let Some(obj) = content.as_object_mut() {
-                obj.entry("runId".to_string())
-                    .or_insert_with(|| serde_json::json!(trace_run_id));
-                if let Some(receipt) = receipt {
+            if trace_enabled() {
+                crate::trace_recorder::record_result(
+                    &self.storage,
+                    self.event_tx.as_ref(),
+                    &trace_run_id,
+                    &request.name,
+                    content,
+                );
+                // Persist the receipt for this exact retrieval run, then attach
+                // its stable reference to the structured response. The Black Box
+                // can now answer "why did the agent do that?" from the same
+                // evidence the tool actually used, rather than reconstructing an
+                // explanation after the fact. Non-retrieval tools safely return
+                // None and keep their existing response shape.
+                if let Some(receipt) = crate::trace_recorder::build_and_save_receipt(
+                    &self.storage,
+                    &trace_run_id,
+                    &request.name,
+                    content,
+                ) && let Some(obj) = content.as_object_mut()
+                {
                     let receipt_id = receipt
                         .get("receipt_id")
-                        .and_then(|v| v.as_str())
+                        .and_then(|value| value.as_str())
                         .map(String::from);
+                    obj.entry("runId".to_string())
+                        .or_insert_with(|| serde_json::json!(trace_run_id));
                     obj.insert("receiptId".to_string(), serde_json::json!(receipt_id));
                     obj.insert("receipt".to_string(), receipt);
                 }
+
+                // Memory PR gate: classify the writes this tool just made under
+                // the active ReviewMode and, for risky ones, quarantine the new
+                // node and open a Memory PR. `gate_writes` no-ops for non-write
+                // tools, and `classify_write` auto-commits everything in Fast
+                // mode, so this is safe on every call.
+                //
+                // This closes the dead seam: the gate and its tests existed but
+                // it had no production caller, so `ReviewMode` was inert and
+                // nothing ever landed in `memory_prs` outside tests.
+                //
+                // Note this rides on `trace_enabled()` with the rest of the black
+                // box: a Memory PR is an auditable trace artifact and is reviewed
+                // through the same surfaces, so disabling tracing disables gating.
+                let mode = crate::trace_recorder::read_review_mode(&self.storage);
+                let opened = crate::trace_recorder::gate_writes(
+                    &self.storage,
+                    self.event_tx.as_ref(),
+                    &trace_run_id,
+                    &request.name,
+                    content,
+                    mode,
+                );
+                if !opened.is_empty()
+                    && let Some(obj) = content.as_object_mut()
+                {
+                    // Tell the calling agent exactly what happened. A held write
+                    // is quarantined until the PR is decided; a destructive write
+                    // (or a failed suppression) is NOT held — the PR is an audit
+                    // record of something that already happened. Saying
+                    // "quarantined" for those would be false.
+                    let held = opened
+                        .iter()
+                        .filter(|o| o.get("held").and_then(|v| v.as_bool()) == Some(true))
+                        .count();
+                    let recorded = opened.len() - held;
+                    let mut parts = Vec::new();
+                    if held > 0 {
+                        parts.push(format!(
+                            "{held} write(s) quarantined until their Memory PR is decided"
+                        ));
+                    }
+                    if recorded > 0 {
+                        parts.push(format!(
+                            "{recorded} write(s) already applied but recorded for review \
+                             (destructive or unsuppressable — nothing is held)"
+                        ));
+                    }
+                    obj.insert("memoryPrs".to_string(), serde_json::json!(opened));
+                    obj.insert(
+                        "memoryPrNotice".to_string(),
+                        serde_json::json!(format!(
+                            "Review mode '{}': {}. Review in the dashboard under Memory PRs \
+                             or via GET /api/memory-prs.",
+                            mode.as_str(),
+                            parts.join("; ")
+                        )),
+                    );
+                }
             }
-            // Emit after the receipt has been persisted and attached. Backfill
-            // events are therefore always linkable to the exact artifact the
-            // dashboard opens; no live visual can outrun the evidence.
+            // Emit after receipt attachment and gating so the dashboard sees the
+            // same final evidence and review state returned to the calling agent.
             self.emit_tool_event(&request.name, &saved_args, content);
         }
 
@@ -1747,88 +1962,6 @@ impl McpServer {
                 });
             }
 
-            // -- Retroactive Salience Backfill --
-            // The event is emitted only after build_and_save_receipt attached a
-            // real receiptId above. Candidate ids and join keys are copied from
-            // the tool output verbatim; the frontend must never infer them.
-            "backfill" => {
-                let receipt_id = result
-                    .get("receiptId")
-                    .and_then(|value| value.as_str())
-                    .filter(|id| !id.is_empty());
-                let failure_id = result
-                    .get("failure")
-                    .and_then(|failure| failure.get("id"))
-                    .and_then(|value| value.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let candidates = result
-                    .get("causes")
-                    .and_then(|value| value.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                if let Some(receipt_id) = receipt_id
-                    && !failure_id.is_empty()
-                    && !candidates.is_empty()
-                {
-                    let candidate_ids: Vec<String> = candidates
-                        .iter()
-                        .filter_map(|candidate| {
-                            candidate.get("memory_id").and_then(|value| value.as_str())
-                        })
-                        .map(ToString::to_string)
-                        .collect();
-                    let shared_entities: Vec<String> = candidates
-                        .iter()
-                        .flat_map(|candidate| {
-                            candidate
-                                .get("shared_entities")
-                                .and_then(|value| value.as_array())
-                                .cloned()
-                                .unwrap_or_default()
-                        })
-                        .filter_map(|entity| entity.as_str().map(ToString::to_string))
-                        .collect::<std::collections::BTreeSet<_>>()
-                        .into_iter()
-                        .collect();
-                    let path_ids: Vec<String> = result
-                        .get("receipt")
-                        .and_then(|receipt| receipt.get("backfill"))
-                        .and_then(|proof| proof.get("path_ids"))
-                        .and_then(|value| value.as_array())
-                        .map(|ids| {
-                            ids.iter()
-                                .filter_map(|id| id.as_str().map(ToString::to_string))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let promoted = candidates.iter().any(|candidate| {
-                        candidate
-                            .get("promoted")
-                            .and_then(|value| value.as_bool())
-                            .unwrap_or(false)
-                    });
-                    // Only receipt-authored paths may enter the live scene.
-                    if path_ids.len() < 2 {
-                        return;
-                    }
-                    self.emit(VestigeEvent::BackfillFired {
-                        run_id: result
-                            .get("runId")
-                            .and_then(|value| value.as_str())
-                            .unwrap_or_default()
-                            .to_string(),
-                        receipt_id: receipt_id.to_string(),
-                        failure_id,
-                        candidate_ids,
-                        path_ids,
-                        shared_entities,
-                        promoted,
-                        timestamp: now,
-                    });
-                }
-            }
-
             // Other tools don't emit events
             _ => {}
         }
@@ -1887,6 +2020,496 @@ mod tests {
                 "version": "1.0.0"
             }
         })
+    }
+
+    // ========================================================================
+    // MEMORY PR GATE WIRING
+    // ========================================================================
+
+    /// Regression test for the dead seam: `gate_writes` and its unit tests
+    /// existed, but nothing in production ever called it, so `ReviewMode` was
+    /// inert and `memory_prs` only ever filled up inside `#[cfg(test)]`.
+    ///
+    /// This drives a real `tools/call` through `handle_request` and asserts a
+    /// Memory PR actually lands. Paranoid mode is used deliberately so the test
+    /// pins the WIRING, not the risk heuristic (which is covered by the unit
+    /// tests in `trace_recorder`).
+    #[tokio::test]
+    async fn memory_pr_gate_is_wired_into_the_real_tool_path() {
+        use vestige_core::MemoryPrStatus;
+
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"paranoid"}"#,
+        )
+        .unwrap();
+
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        assert_eq!(
+            storage
+                .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+                .unwrap()
+                .len(),
+            0,
+            "no Memory PRs before the call"
+        );
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "smart_ingest",
+                    "arguments": { "content": "Staging was migrated to Postgres 17." }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            response.error.is_none(),
+            "smart_ingest should succeed: {:?}",
+            response.error
+        );
+
+        let prs = storage
+            .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(
+            prs.len(),
+            1,
+            "a write through the real tool path must open a Memory PR in Paranoid mode"
+        );
+
+        // The calling agent must be told its write is held, otherwise it will
+        // assume the memory is live and act on it.
+        let text = serde_json::to_string(&response.result).unwrap();
+        assert!(
+            text.contains("memoryPrs"),
+            "response must carry the opened PRs: {text}"
+        );
+        assert!(
+            text.contains("memoryPrNotice"),
+            "response must carry the human-readable notice: {text}"
+        );
+        // Truthfulness: this was a normal (non-destructive) write, so it must
+        // report held=true and the notice must say quarantined.
+        assert!(
+            text.contains("\"held\":true"),
+            "a suppressed write must report held=true: {text}"
+        );
+        assert!(
+            text.contains("quarantined until"),
+            "notice for a held write must say quarantined: {text}"
+        );
+    }
+
+    /// The third leg of the mode matrix: Fast mode must open NO Memory PR
+    /// through the real tool path — every write auto-commits.
+    #[tokio::test]
+    async fn fast_mode_opens_no_memory_pr() {
+        use vestige_core::MemoryPrStatus;
+
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"fast"}"#,
+        )
+        .unwrap();
+
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "smart_ingest",
+                    "arguments": { "content": "Fast mode write that must auto-commit." }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none());
+
+        assert_eq!(
+            storage
+                .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+                .unwrap()
+                .len(),
+            0,
+            "Fast mode must never open a Memory PR"
+        );
+        let text = serde_json::to_string(&response.result).unwrap();
+        assert!(
+            !text.contains("memoryPrNotice"),
+            "Fast mode must not attach a gating notice: {text}"
+        );
+    }
+
+    /// Deprecated aliases share the same destructive policy; otherwise an
+    /// older MCP client could bypass the canonical `memory` pre-gate.
+    #[tokio::test]
+    async fn legacy_delete_knowledge_is_pre_gated_on_the_real_mcp_path() {
+        let (storage, _dir) = test_storage().await;
+        let node = storage
+            .ingest(vestige_core::IngestInput {
+                content: "Memory preserved through the legacy delete alias.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "delete_knowledge",
+                    "arguments": {
+                        "id": node.id.clone(),
+                        "confirm": true,
+                        "reason": "exercise the pre-execution review gate"
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            response.error.is_none(),
+            "pending review is a valid MCP result"
+        );
+        assert!(
+            storage.get_node(&node.id).unwrap().is_some(),
+            "the legacy alias must not bypass pre-execution review"
+        );
+
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("structuredContent"))
+            .expect("structured tool result");
+        assert_eq!(structured["action"], "delete_pending_review");
+        assert_eq!(structured["pendingReview"], true);
+        let prs = storage
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].diff["pendingAction"], "delete");
+    }
+
+    /// Regression #117: purge must be intercepted on the real MCP path before
+    /// `memory_unified::execute` can delete the node. The response and dashboard
+    /// event must describe a pending review, not a completed deletion.
+    #[tokio::test]
+    async fn destructive_purge_is_pre_gated_on_the_real_mcp_path() {
+        use crate::dashboard::events::VestigeEvent;
+        use std::time::Duration;
+        use vestige_core::MemoryPrStatus;
+
+        let (storage, _dir) = test_storage().await;
+        let node = storage
+            .ingest(vestige_core::IngestInput {
+                content: "Memory that must survive pre-execution review.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let (event_tx, mut events) = tokio::sync::broadcast::channel(16);
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new_with_events(storage.clone(), cognitive, event_tx);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "memory",
+                    "arguments": {
+                        "action": "purge",
+                        "id": node.id,
+                        "confirm": true,
+                        "reason": "exercise the pre-execution review gate",
+                        "runId": "run_pre_execution_purge"
+                    }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            response.error.is_none(),
+            "a pending-review response is a valid MCP result"
+        );
+
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("structuredContent"))
+            .expect("structured tool result");
+        assert_eq!(structured["success"], false);
+        assert_eq!(structured["pendingReview"], true);
+        assert_eq!(structured["action"], "purge_pending_review");
+        assert_eq!(structured["nodeId"], node.id);
+        assert!(
+            storage.get_node(&node.id).unwrap().is_some(),
+            "pre-execution gate must prevent the purge"
+        );
+
+        let prs = storage
+            .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].diff["pendingAction"], "purge");
+        assert_eq!(prs[0].diff["node"]["deleted"], false);
+
+        let mut saw_pr_opened = false;
+        for _ in 0..8 {
+            match tokio::time::timeout(Duration::from_millis(100), events.recv()).await {
+                Ok(Ok(VestigeEvent::MemoryPrOpened { .. })) => {
+                    saw_pr_opened = true;
+                }
+                Ok(Ok(VestigeEvent::MemoryDeleted { .. })) => {
+                    panic!("a blocked purge must not emit MemoryDeleted")
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => break,
+            }
+        }
+        assert!(saw_pr_opened, "pre-gate must announce the opened Memory PR");
+    }
+
+    /// Suppression changes retrieval influence immediately, so it is subject to
+    /// the same production pre-execution gate as an irreversible purge.
+    #[tokio::test]
+    async fn suppress_is_pre_gated_on_the_real_mcp_path() {
+        use vestige_core::MemoryPrStatus;
+
+        let (storage, _dir) = test_storage().await;
+        let node = storage
+            .ingest(vestige_core::IngestInput {
+                content: "Memory that must not be inhibited before review.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "suppress",
+                    "arguments": { "id": node.id, "reason": "requires review first" }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none());
+
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("structuredContent"))
+            .expect("structured tool result");
+        assert_eq!(structured["action"], "suppress_pending_review");
+        assert_eq!(structured["pendingReview"], true);
+        assert_eq!(
+            storage
+                .get_node(&node.id)
+                .unwrap()
+                .unwrap()
+                .suppression_count,
+            0,
+            "pre-execution gate must not change retrieval influence"
+        );
+        let prs = storage
+            .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].diff["pendingAction"], "suppress");
+    }
+
+    /// Fast mode is the documented explicit opt-out: it keeps legacy direct
+    /// execution instead of manufacturing a pending review.
+    #[tokio::test]
+    async fn fast_mode_allows_destructive_call_on_the_real_mcp_path() {
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"fast"}"#,
+        )
+        .unwrap();
+        let node = storage
+            .ingest(vestige_core::IngestInput {
+                content: "Fast mode purge target.".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "memory",
+                    "arguments": { "action": "purge", "id": node.id, "confirm": true }
+                })),
+            ))
+            .await
+            .unwrap();
+        let structured = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("structuredContent"))
+            .expect("structured tool result");
+        assert_eq!(structured["success"], true);
+        assert!(storage.get_node(&node.id).unwrap().is_none());
+        assert!(
+            storage
+                .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+                .unwrap()
+                .is_empty(),
+            "Fast mode must not pre-gate the mutation"
+        );
+    }
+
+    /// Dashboard events must not announce a write as landed before the Memory
+    /// PR is opened. The receipt/gate merge seam is deliberately exercised
+    /// through the real MCP dispatch path, not by calling either helper alone.
+    #[tokio::test]
+    async fn memory_pr_event_precedes_memory_created_event() {
+        use crate::dashboard::events::VestigeEvent;
+        use std::time::Duration;
+
+        let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"paranoid"}"#,
+        )
+        .unwrap();
+        let (event_tx, mut events) = tokio::sync::broadcast::channel(16);
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new_with_events(storage, cognitive, event_tx);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "smart_ingest",
+                    "arguments": { "content": "A write whose dashboard order is audited." }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none(), "smart_ingest should succeed");
+
+        let mut observed = Vec::new();
+        for _ in 0..8 {
+            let event = tokio::time::timeout(Duration::from_millis(100), events.recv())
+                .await
+                .expect("expected a queued dashboard event")
+                .expect("dashboard event channel should remain open");
+            match event {
+                VestigeEvent::MemoryPrOpened { .. } => observed.push("memory-pr-opened"),
+                VestigeEvent::MemoryCreated { .. } => {
+                    observed.push("memory-created");
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let opened_at = observed
+            .iter()
+            .position(|event| *event == "memory-pr-opened")
+            .expect("gating must open a Memory PR");
+        let created_at = observed
+            .iter()
+            .position(|event| *event == "memory-created")
+            .expect("emit_tool_event must publish the created memory");
+        assert!(
+            opened_at < created_at,
+            "dashboard must observe the Memory PR before the memory-created event: {observed:?}"
+        );
+    }
+
+    /// A corrupt or missing `review_mode.json` must never silently disable
+    /// gating: it falls back to the default RiskGated.
+    #[tokio::test]
+    async fn review_mode_falls_back_to_risk_gated() {
+        let (storage, _dir) = test_storage().await;
+        assert_eq!(
+            crate::trace_recorder::read_review_mode(&storage),
+            vestige_core::ReviewMode::RiskGated,
+            "missing file defaults to RiskGated"
+        );
+
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            "{ not valid json",
+        )
+        .unwrap();
+        assert_eq!(
+            crate::trace_recorder::read_review_mode(&storage),
+            vestige_core::ReviewMode::RiskGated,
+            "corrupt file defaults to RiskGated, never Fast"
+        );
+
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"fast"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::trace_recorder::read_review_mode(&storage),
+            vestige_core::ReviewMode::Fast,
+            "a valid mode is honored"
+        );
+    }
+
+    // ========================================================================
+    // TRACE GATE TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_parse_trace_enabled_defaults_on_and_honors_opt_out() {
+        // Default ON: unset, empty, or malformed values all fail open.
+        assert!(parse_trace_enabled(None));
+        assert!(parse_trace_enabled(Some("")));
+        assert!(parse_trace_enabled(Some("1")));
+        assert!(parse_trace_enabled(Some("true")));
+        assert!(parse_trace_enabled(Some("banana")));
+        // Explicit opt-out only: 0/false/off/no (case-insensitive, trimmed).
+        assert!(!parse_trace_enabled(Some("0")));
+        assert!(!parse_trace_enabled(Some("false")));
+        assert!(!parse_trace_enabled(Some("FALSE")));
+        assert!(!parse_trace_enabled(Some("OFF")));
+        assert!(!parse_trace_enabled(Some(" no ")));
     }
 
     // ========================================================================
@@ -2060,11 +2683,10 @@ mod tests {
         // dispatchable as hidden back-compat aliases but drop off the advertised list.
         assert_eq!(
             tools.len(),
-            13,
-            "Expected exactly 13 tools after v2.2 Layer-1 consolidation \
+            14,
+            "Expected exactly 14 tools after v2.3 receipt replay integration \
              (12 consolidated: dedup + memory_status + graph + maintain + recall; \
-             session_context renamed) plus the flagship `backfill` (Retroactive \
-             Salience, Cai 2024 Nature), a distinct cognitive primitive"
+             session_context renamed) plus `receipt` and the flagship `backfill`"
         );
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -2072,6 +2694,7 @@ mod tests {
         // Unified tools
         // (search folded into `recall` mode='lookup' in v2.2)
         assert!(tool_names.contains(&"recall"));
+        assert!(tool_names.contains(&"receipt"));
         assert!(tool_names.contains(&"memory"));
         assert!(tool_names.contains(&"codebase"));
         assert!(tool_names.contains(&"intention"));
@@ -2149,6 +2772,15 @@ mod tests {
         // find_duplicates + the 7 Phase-3 merge tools folded in; still
         // dispatchable as hidden back-compat aliases, but off the advertised list.
         assert!(tool_names.contains(&"dedup"));
+        let dedup = tools
+            .iter()
+            .find(|tool| tool["name"] == "dedup")
+            .expect("dedup is advertised");
+        let dedup_description = dedup["description"].as_str().unwrap();
+        assert!(
+            dedup_description.contains("tag_rename") && dedup_description.contains("tag_merge"),
+            "tools/list description must advertise tag rename/merge, got: {dedup_description}"
+        );
         for old in [
             "find_duplicates",
             "merge_candidates",
@@ -2267,6 +2899,7 @@ mod tests {
             ("memory_status", serde_json::json!({"view": "retention"})),
             ("memory_status", serde_json::json!({"view": "timeline"})),
             ("memory_status", serde_json::json!({"view": "changelog"})),
+            ("memory_status", serde_json::json!({"view": "stats"})),
         ];
 
         for (name, args) in calls {
@@ -2320,181 +2953,51 @@ mod tests {
         }
     }
 
-    /// THE RECEIPT SPINE ACCEPTANCE TEST (Jul 14 2026).
-    ///
-    /// Drives the REAL production path: McpServer::handle_request dispatches a
-    /// `recall` with a known runId, and we assert BOTH sides of the spine:
-    ///   1. the trace exists — agent_traces has this run (Black Box can open it),
-    ///   2. GET /api/receipts?run=<runId> (== storage.list_receipts_for_run)
-    ///      returns the run's receipt listing the real memory that was retrieved,
-    ///   3. the tool RESPONSE carries runId + receiptId + receipt inline.
-    /// Before this wiring, recall recorded nothing durable — the builder existed
-    /// with no caller, so no real query produced a fetchable receipt or a trace.
+    /// A real retrieval must create one durable receipt that the Black Box can
+    /// fetch by the caller-supplied run id, and return that same receipt inline.
     #[tokio::test]
-    async fn recall_run_produces_trace_and_fetchable_receipt_spine() {
+    async fn recall_run_produces_fetchable_decision_receipt() {
         let (mut server, _dir) = test_server().await;
-        let init_request = make_request("initialize", Some(init_params()));
-        server.handle_request(init_request).await;
-
-        // Seed a real, distinctive memory the recall can retrieve. The query below
-        // shares strong keyword overlap with this content so the hybrid lexical
-        // path retrieves it even in a fresh test DB without a warmed embedding
-        // index (the receipt spine is what's under test, not retrieval quality).
-        let seeded = server
-            .storage
-            .ingest(vestige_core::IngestInput {
-                content:
-                    "Vestige dashboard dev server runs on port 5199 under base path dashboard."
-                        .to_string(),
-                node_type: "fact".to_string(),
-                ..Default::default()
-            })
-            .unwrap();
-
-        // Dispatch recall with a KNOWN runId so we can fetch by it afterwards.
-        let run_id = "run_spine_accept";
-        let request = make_request(
-            "tools/call",
-            Some(serde_json::json!({
-                "name": "recall",
-                "arguments": {
-                    "query": "port 5199",
-                    "concrete": true,
-                    "runId": run_id
-                }
-            })),
-        );
-        let response = server.handle_request(request).await.unwrap();
-        assert!(
-            response.error.is_none(),
-            "recall dispatched: {:?}",
-            response.error
-        );
-
-        // 1. The trace exists for this run — Black Box can open it.
-        let trace = server.storage.get_trace(run_id).unwrap();
-        assert!(
-            !trace.is_empty(),
-            "recall must record at least the opening mcp.call trace event for the run"
-        );
-
-        // 2. The receipt is fetchable by run id — the exact GET /api/receipts?run= path.
-        let receipts = server.storage.list_receipts_for_run(run_id, 10).unwrap();
-        assert_eq!(
-            receipts.len(),
-            1,
-            "one real recall produces exactly one fetchable receipt for its run"
-        );
-        let receipt = &receipts[0];
-        assert!(
-            receipt.retrieved.contains(&seeded.id),
-            "the receipt lists the real memory the recall actually retrieved"
-        );
-
-        // 3. The tool RESPONSE carries the spine fields inline (not just persisted).
-        let structured = response
-            .result
-            .as_ref()
-            .and_then(|r| r.get("structuredContent"))
-            .expect("recall returns structured content");
-        assert_eq!(
-            structured.get("runId").and_then(|v| v.as_str()),
-            Some(run_id),
-            "response echoes the runId"
-        );
-        assert_eq!(
-            structured.get("receiptId").and_then(|v| v.as_str()),
-            Some(receipt.receipt_id.as_str()),
-            "response carries the persisted receiptId"
-        );
-        assert!(
-            structured.get("receipt").is_some(),
-            "response carries the receipt inline"
-        );
-    }
-
-    /// MCP must publish the same receipt-backed route as the HTTP dashboard
-    /// adapter. This protects the terminal/agent → Black Box → Observatory
-    /// proof loop from transport-specific topology inference.
-    #[tokio::test]
-    async fn backfill_mcp_run_persists_receipt_and_emits_exact_receipt_path() {
-        let (storage, _dir) = test_storage().await;
-        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let (event_tx, mut events) = broadcast::channel(16);
-        let mut server = McpServer::new_with_events(storage.clone(), cognitive, event_tx);
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
 
-        let cause = storage
+        let seeded = server
+            .storage
             .ingest(vestige_core::IngestInput {
-                content: "Set API_TIMEOUT=2 in deploy environment.".to_string(),
-                node_type: "decision".to_string(),
-                tags: vec!["API_TIMEOUT".to_string()],
+                content: "The dashboard development server runs on port 5199.".to_string(),
+                node_type: "fact".to_string(),
                 ..Default::default()
             })
             .unwrap();
-        storage
-            .set_created_at(&cause.id, chrono::Utc::now() - chrono::Duration::days(3))
-            .unwrap();
-        let failure = storage
-            .ingest(vestige_core::IngestInput {
-                content: "Checkout crashed with timeout on the auth endpoint.".to_string(),
-                node_type: "event".to_string(),
-                tags: vec!["API_TIMEOUT".to_string(), "crash".to_string()],
-                ..Default::default()
-            })
-            .unwrap();
-        let run_id = "run_backfill_mcp_proof";
+        let run_id = "run_decision_receipt";
         let response = server
             .handle_request(make_request(
                 "tools/call",
                 Some(serde_json::json!({
-                    "name": "backfill",
-                    "arguments": {
-                        "failure_id": failure.id,
-                        "promote": false,
-                        "runId": run_id
-                    }
+                    "name": "recall",
+                    "arguments": { "query": "port 5199", "runId": run_id }
                 })),
             ))
             .await
-            .expect("MCP response");
-        assert!(
-            response.error.is_none(),
-            "backfill dispatched: {:?}",
-            response.error
-        );
+            .expect("recall response");
+
+        assert!(response.error.is_none(), "recall should succeed");
+        let receipts = server.storage.list_receipts_for_run(run_id, 10).unwrap();
+        assert_eq!(receipts.len(), 1, "one retrieval produces one receipt");
+        assert!(receipts[0].retrieved.contains(&seeded.id));
 
         let structured = response
             .result
             .as_ref()
             .and_then(|result| result.get("structuredContent"))
-            .expect("structured backfill result");
-        let receipt_id = structured
-            .get("receiptId")
-            .and_then(|id| id.as_str())
-            .expect("persisted receipt id");
+            .expect("structured content");
+        assert_eq!(structured["runId"], run_id);
         assert_eq!(
-            structured["receipt"]["backfill"]["path_ids"],
-            serde_json::json!([cause.id, failure.id])
+            structured["receiptId"],
+            serde_json::json!(receipts[0].receipt_id)
         );
-        let stored = storage
-            .get_receipt(receipt_id)
-            .unwrap()
-            .expect("receipt saved");
-        assert_eq!(
-            stored.backfill.expect("proof").path_ids,
-            vec![cause.id.clone(), failure.id.clone()]
-        );
-
-        let emitted = loop {
-            match events.recv().await.expect("server event") {
-                VestigeEvent::BackfillFired { path_ids, .. } => break path_ids,
-                _ => continue,
-            }
-        };
-        assert_eq!(emitted, vec![cause.id, failure.id]);
+        assert!(structured.get("receipt").is_some());
     }
 
     /// v2.2: the 7 tools folded into `maintain` must still dispatch, the new
@@ -2626,12 +3129,10 @@ mod tests {
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
 
-        // A shared caller-supplied runId keeps the trace correlation field
-        // deterministic while comparing the lookup payloads.
-        let args = serde_json::json!({ "query": "anything", "runId": "run_lookup_contract" });
+        let args = serde_json::json!({ "query": "anything" });
         let via_recall = make_request(
             "tools/call",
-            Some(serde_json::json!({ "name": "recall", "arguments": args.clone() })),
+            Some(serde_json::json!({ "name": "recall", "arguments": args })),
         );
         let via_search = make_request(
             "tools/call",

@@ -271,7 +271,11 @@ pub struct PredictionErrorConfig {
     pub correction_threshold: f32,
     /// Maximum candidates to consider
     pub max_candidates: usize,
-    /// Whether to auto-supersede demoted memories
+    /// Whether to allow automatic supersession of an already-demoted memory.
+    ///
+    /// This is an explicit opt-in for callers that own a narrow, reviewed
+    /// workflow. The default preserves both memories: semantic similarity is
+    /// not enough to demote an existing record.
     pub auto_supersede_demoted: bool,
     /// Whether to prefer updates over creates
     pub prefer_updates: bool,
@@ -284,7 +288,7 @@ impl Default for PredictionErrorConfig {
             near_identical_threshold: NEAR_IDENTICAL_THRESHOLD,
             correction_threshold: CORRECTION_THRESHOLD,
             max_candidates: MAX_UPDATE_CANDIDATES,
-            auto_supersede_demoted: true,
+            auto_supersede_demoted: false,
             prefer_updates: true,
         }
     }
@@ -388,7 +392,17 @@ impl PredictionErrorGate {
 
         // Check for near-identical match
         if let Some(best) = top_candidates.first() {
-            if best.similarity >= self.config.near_identical_threshold {
+            // A CORRECTION is lexically near-identical to what it corrects:
+            // "Never use fp16lib on Windows" vs "Always use fp16lib on Windows"
+            // measures 0.928 cosine, just over the 0.92 near_identical_threshold.
+            // Reinforcing on similarity alone therefore discards the correction
+            // AND strengthens the very memory the user just said is wrong --
+            // the single worst outcome this gate can produce. `appears_contradictory`
+            // is already computed for this candidate above, so honour it here and
+            // let the contradiction branch below decide.
+            if best.similarity >= self.config.near_identical_threshold
+                && !best.appears_contradictory
+            {
                 // Nearly identical - reinforce existing
                 self.stats.updates += 1;
                 return GateDecision::Update {
@@ -402,7 +416,11 @@ impl PredictionErrorGate {
             // Check for potential supersede
             let candidate = candidates.iter().find(|c| c.id == best.memory_id);
             if let Some(c) = candidate {
-                // If similar and the existing memory was demoted, supersede it
+                // If similar and the existing memory was demoted, only
+                // supersede it when the caller explicitly opted into this
+                // destructive heuristic. A demoted memory is precisely the
+                // kind of record where a false match must not make a second,
+                // irreversible-looking decision on the user's behalf.
                 if best.similarity >= self.config.similarity_threshold
                     && c.was_demoted
                     && self.config.auto_supersede_demoted
@@ -416,15 +434,31 @@ impl PredictionErrorGate {
                     };
                 }
 
-                // Check for correction (similar but contradictory)
+                // A loose text contradiction (for example, a dated session
+                // summary that merely says "update") is not proof that the
+                // existing memory is wrong. Default to a separate claim and
+                // leave both memories intact; the caller can use the explicit
+                // supersede/review path after inspecting them.
                 if best.similarity >= self.config.correction_threshold && best.appears_contradictory
                 {
-                    self.stats.supersedes += 1;
-                    return GateDecision::Supersede {
-                        old_memory_id: c.id.clone(),
-                        similarity: best.similarity,
-                        supersede_reason: SupersedeReason::Correction,
+                    self.stats.creates += 1;
+                    return GateDecision::Create {
+                        reason: CreateReason::DifferentDomain,
                         prediction_error: best.prediction_error,
+                        related_memory_ids: vec![best.memory_id.clone()],
+                    };
+                }
+
+                // Do not merge new content into a previously demoted memory
+                // either. It may be related, but only an explicit review
+                // should revive or overwrite a record that was intentionally
+                // down-ranked.
+                if best.similarity >= self.config.similarity_threshold && c.was_demoted {
+                    self.stats.creates += 1;
+                    return GateDecision::Create {
+                        reason: CreateReason::DifferentDomain,
+                        prediction_error: best.prediction_error,
+                        related_memory_ids: vec![best.memory_id.clone()],
                     };
                 }
 
@@ -543,59 +577,24 @@ impl PredictionErrorGate {
         }
     }
 
-    /// Detect if two pieces of content appear contradictory
+    /// Detect if two pieces of content appear contradictory.
     ///
-    /// Uses simple heuristics; could be enhanced with NLI model
+    /// Delegates to the shared detector in [`crate::advanced::contradiction`],
+    /// which the retrieval path uses as well. This function previously carried
+    /// its own, narrower copy: it fired only when the NEW content held the
+    /// negative term, had no antonym branch and no mutually-exclusive-value
+    /// branch. Ingesting "Always use X" over a stored "Never use X" therefore
+    /// read as agreement and *reinforced the claim being corrected* — measured
+    /// at 0.965 similarity against a 0.92 near-identical threshold, with the
+    /// same pair in the reverse order correctly kept. Subject identity is
+    /// already established here by the caller's embedding-similarity gate, so
+    /// no lexical-overlap floor is applied on top of it.
     fn detect_contradiction(&self, new_content: &str, old_content: &str) -> bool {
-        let new_lower = new_content.to_lowercase();
-        let old_lower = old_content.to_lowercase();
-
-        // Check for explicit negation patterns — a real polarity FLIP, not the
-        // mere presence of a negation word. We require the negation term in the
-        // new content AND its paired positive term in the old content (old: "use
-        // X"; new: "avoid X"). The previous logic fired whenever the new content
-        // merely contained a negation word the old one lacked, so ordinary
-        // additive notes ("Do not forget to configure X" — contains "not ") were
-        // misread as corrections and demoted a correct memory. Bare triggers with
-        // no paired positive term ("not ", "instead of", "rather than") are
-        // dropped for the same reason: they match complementary phrasing.
-        let negation_pairs = [
-            ("don't use", "use"),
-            ("don't", "do"),
-            ("never", "always"),
-            ("avoid", "use"),
-            ("wrong", "right"),
-            ("incorrect", "correct"),
-            ("deprecated", "recommended"),
-            ("outdated", "current"),
-        ];
-
-        for (neg, pos) in negation_pairs.iter() {
-            if new_lower.contains(neg) && old_lower.contains(pos) && !old_lower.contains(neg) {
-                return true;
-            }
-        }
-
-        // Check for correction phrases
-        let correction_phrases = [
-            "actually",
-            "correction",
-            "update:",
-            "fixed",
-            "was wrong",
-            "should be",
-            "better approach",
-            "improved",
-            "the right way",
-        ];
-
-        for phrase in correction_phrases.iter() {
-            if new_lower.contains(phrase) {
-                return true;
-            }
-        }
-
-        false
+        crate::advanced::contradiction::appears_contradictory(
+            new_content,
+            old_content,
+            crate::advanced::contradiction::SubjectIdentity::AlreadyEstablished,
+        )
     }
 
     /// Get statistics
@@ -789,22 +788,79 @@ mod tests {
     }
 
     #[test]
-    fn test_demoted_memory_supersede() {
+    fn test_demoted_memory_creates_by_default() {
         let mut gate = PredictionErrorGate::new();
-        let embedding = make_embedding(1.0);
+        let embedding = vec![1.0, 0.0];
 
-        // Use similar embedding (seed 1.05) - close enough to be above similarity threshold
+        // Similar enough to be a candidate, but not an exact duplicate.
         let mut candidate = make_candidate("mem-1", 1.0);
-        candidate.embedding = make_embedding(1.05);
+        candidate.embedding = vec![0.82, (1.0_f32 - 0.82_f32.powi(2)).sqrt()];
         candidate.was_demoted = true;
 
         let decision = gate.evaluate("Better solution", &embedding, &[candidate]);
 
-        // Should supersede the demoted memory if similarity is above threshold
-        // If not superseding, it should at least update
         assert!(matches!(
             decision,
-            GateDecision::Supersede { .. } | GateDecision::Update { .. }
+            GateDecision::Create {
+                reason: CreateReason::DifferentDomain,
+                related_memory_ids,
+                ..
+            } if related_memory_ids == vec!["mem-1".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_contradiction_creates_by_default() {
+        let mut gate = PredictionErrorGate::new();
+        let new_embedding = vec![1.0, 0.0];
+        let mut candidate = make_candidate("policy-node", 1.0);
+        candidate.embedding = vec![0.82, (1.0_f32 - 0.82_f32.powi(2)).sqrt()];
+        candidate.content = "The approach is to retain the storage policy node.".to_string();
+
+        // A same-subject revision: enough token overlap for the correction
+        // marker to count, and a marker on exactly one side. (A marker with no
+        // shared subject no longer fires — that shape was measured to be a
+        // false positive on real content.)
+        let decision = gate.evaluate(
+            "Actually, the correct approach is to retire the storage policy node.",
+            &new_embedding,
+            &[candidate],
+        );
+
+        assert!(matches!(
+            decision,
+            GateDecision::Create {
+                reason: CreateReason::DifferentDomain,
+                related_memory_ids,
+                ..
+            } if related_memory_ids == vec!["policy-node".to_string()]
+        ));
+        assert_eq!(gate.stats().supersedes, 0);
+    }
+
+    #[test]
+    fn test_explicit_supersede_intent_is_preserved() {
+        let mut gate = PredictionErrorGate::new();
+        let embedding = make_embedding(1.0);
+        let candidate = make_candidate("mem-1", 1.05);
+
+        let decision = gate.evaluate_with_intent(
+            "Reviewed correction",
+            &embedding,
+            &[candidate],
+            EvaluationIntent::Supersede {
+                old_memory_id: "mem-1".to_string(),
+                reason: SupersedeReason::UserIndicated,
+            },
+        );
+
+        assert!(matches!(
+            decision,
+            GateDecision::Supersede {
+                old_memory_id,
+                supersede_reason: SupersedeReason::UserIndicated,
+                ..
+            } if old_memory_id == "mem-1"
         ));
     }
 
@@ -832,8 +888,8 @@ mod tests {
         ));
 
         assert!(gate.detect_contradiction(
-            "Actually, the correct approach is...",
-            "The approach is to..."
+            "Actually, the correct approach is Redis",
+            "The approach is Redis"
         ));
 
         assert!(!gate.detect_contradiction(

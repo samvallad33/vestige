@@ -101,8 +101,63 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 20,
-        description: "Embedding Profiles: isolated vector rows, integrity manifests, active pointer, and resumable migration checkpoints",
+        description: "Finish the V19 repair: clear connector sync cursors so the next source_sync re-scans from scratch and re-keys every clobbered record",
         up: MIGRATION_V20_UP,
+    },
+    Migration {
+        version: 21,
+        description: "Durable synaptic capture: restart-safe tags, idempotent events, atomic capture items, and typed receipt evidence",
+        up: MIGRATION_V21_UP,
+    },
+    Migration {
+        version: 22,
+        description: "Competitive capture epochs: forward reconciliation, contextual gating, and immutable pair receipts",
+        up: MIGRATION_V22_UP,
+    },
+    Migration {
+        version: 23,
+        description: "Controlled replay influence: frozen post-retrieval evidence capsules and idempotent context ablation",
+        up: MIGRATION_V23_UP,
+    },
+    Migration {
+        version: 24,
+        description: "Privacy-safe DSSE receipt attestations: signing-key registry, immutable envelopes, chain heads, and deletable disclosures",
+        up: MIGRATION_V24_UP,
+    },
+    Migration {
+        version: 25,
+        description: "Verified Local Unlearning: fenced lineage closure, content-free erasure ledger, and anti-resurrection tombstones",
+        up: super::unlearning_store::V25_UNLEARNING_STORAGE_SCHEMA_EXPECTATION,
+    },
+    Migration {
+        version: 26,
+        description: "DSSE receipt binding: persist the signed redaction-safe decision projection alongside immutable envelopes",
+        up: MIGRATION_V26_UP,
+    },
+    Migration {
+        version: 27,
+        description: "Project scopes: normalize legacy scope values to the safe user namespace",
+        up: MIGRATION_V27_UP,
+    },
+    Migration {
+        version: 28,
+        description: "Embedding Profiles: isolated vector rows, integrity manifests, active pointer, and resumable migration checkpoints",
+        up: MIGRATION_V28_UP,
+    },
+    Migration {
+        version: 29,
+        description: "Memory hygiene: index the legacy-compatible normalized project scope",
+        up: MIGRATION_V29_UP,
+    },
+    Migration {
+        version: 30,
+        description: "FTS5: replace the ascii tokenizer with unicode61 so typographic punctuation and accents stop swallowing adjacent words",
+        up: MIGRATION_V30_UP,
+    },
+    Migration {
+        version: 31,
+        description: "Self-verifying code memory: content-hashed source anchors so a code memory can be checked against the code it describes instead of being served with false confidence",
+        up: MIGRATION_V31_UP,
     },
 ];
 
@@ -208,14 +263,20 @@ INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (1, datetime('
 
 /// V2: Add temporal columns
 const MIGRATION_V2_UP: &str = r#"
-ALTER TABLE knowledge_nodes ADD COLUMN valid_from TEXT;
-ALTER TABLE knowledge_nodes ADD COLUMN valid_until TEXT;
-
 CREATE INDEX IF NOT EXISTS idx_nodes_valid_from ON knowledge_nodes(valid_from);
 CREATE INDEX IF NOT EXISTS idx_nodes_valid_until ON knowledge_nodes(valid_until);
 
 UPDATE schema_version SET version = 2, applied_at = datetime('now');
 "#;
+
+/// V2 columns are split from the batch because an old pre-transaction runner
+/// could have committed an `ADD COLUMN` before recording the schema version.
+/// The current runner makes that impossible going forward, but accepting the
+/// old half-applied shape lets an affected local database recover in place.
+const MIGRATION_V2_ALTER_COLUMNS: &[&str] = &[
+    "ALTER TABLE knowledge_nodes ADD COLUMN valid_from TEXT",
+    "ALTER TABLE knowledge_nodes ADD COLUMN valid_until TEXT",
+];
 
 /// V3: Add persistence tables for neuroscience features
 /// Fixes critical gap: intentions, insights, and activation network were IN-MEMORY ONLY
@@ -479,7 +540,7 @@ const MIGRATION_V5_UP: &str = r#"
 -- ACCESS HISTORY (For ACT-R Activation + Parameter Training)
 -- ============================================================================
 
--- Logs every search hit, promote, demote for ACT-R activation computation
+-- Logs retrieval telemetry plus explicit feedback for audit and learning.
 CREATE TABLE IF NOT EXISTS memory_access_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     node_id TEXT NOT NULL,
@@ -906,12 +967,27 @@ UPDATE schema_version SET version = 15, applied_at = datetime('now');
 
 /// Get current schema version from database
 pub fn get_current_version(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
+    // A missing version table is normal only for a genuinely empty database.
+    // Never convert arbitrary read errors or a damaged non-empty database into
+    // version zero: doing so can replay early ALTER migrations over live schema.
+    let has_user_tables: i64 = conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM sqlite_master
+              WHERE type IN ('table', 'view')
+                AND name NOT LIKE 'sqlite_%'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_user_tables == 0 {
+        return Ok(0);
+    }
+
     conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_version",
         [],
         |row| row.get(0),
     )
-    .or(Ok(0))
 }
 
 /// Run an `ALTER TABLE ... ADD COLUMN` statement, treating a "duplicate column
@@ -1160,7 +1236,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_source_key
 UPDATE schema_version SET version = 19, applied_at = datetime('now');
 "#;
 
-/// V20: Embedding Profiles.
+/// V20: make the V19 repair actually happen instead of asking the user to do it.
+///
+/// V19 fixed the idempotency *key* going forward, but every record that had
+/// already been clobbered under the old `(source_system, source_id)` key stays
+/// clobbered until the connector re-fetches it. Re-running `source_sync` does
+/// NOT re-fetch it: `run_sync` resumes from the saved per-(system, scope)
+/// cursor minus only `CURSOR_OVERLAP_SECS` (see
+/// [`crate::connectors::run_sync`]), so any record not touched upstream since
+/// the last pre-upgrade sync falls outside the `since` window forever — while
+/// the `SyncReport` still looks clean.
+///
+/// Clearing the checkpoints makes the next sync start from `since = None`, i.e.
+/// a full re-scan that re-upserts every record under the corrected key.
+/// `upsert_by_source` is idempotent (Created / Updated / Unchanged, keyed by
+/// `content_hash`), so the re-scan costs bandwidth and nothing else: untouched
+/// records come back `Unchanged`.
+///
+/// This is a NEW migration rather than an edit to V19 on purpose — a database
+/// that already has V19 applied would never re-run it.
+const MIGRATION_V20_UP: &str = r#"
+-- Drop every incremental-sync checkpoint. `get_connector_cursor` returns a
+-- zeroed cursor when no row exists, so the next run starts from the beginning
+-- and re-keys the rows V19 could only protect going forward. Only sync
+-- bookkeeping lives here (cursor / last-synced / reconcile / counters), so no
+-- memory content is touched.
+DELETE FROM connector_cursors;
+
+UPDATE schema_version SET version = 20, applied_at = datetime('now');
+"#;
+/// V28: Embedding Profiles.
 ///
 /// The legacy `node_embeddings` table remains intact as a compatibility mirror
 /// for existing installations and portable archives. New profile-aware code
@@ -1168,7 +1273,7 @@ UPDATE schema_version SET version = 19, applied_at = datetime('now');
 /// makes vectors from two encoding contracts physically distinct. This is the
 /// critical isolation boundary: semantic scores can only be produced from one
 /// profile at a time.
-const MIGRATION_V20_UP: &str = r#"
+const MIGRATION_V28_UP: &str = r#"
 CREATE TABLE IF NOT EXISTS embedding_profiles (
     profile_id TEXT PRIMARY KEY,
     model_id TEXT NOT NULL,
@@ -1282,9 +1387,396 @@ INSERT OR IGNORE INTO embedding_profile_manifests (
     (SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = 'nomic-v1.5-legacy-raw-256'),
     0, NULL, datetime('now')
 );
-
-UPDATE schema_version SET version = 20, applied_at = datetime('now');
+UPDATE schema_version SET version = 28, applied_at = datetime('now');
 "#;
+
+/// V29: index the exact normalized scope expression used by the hygiene/tag
+/// maintenance full-scope scans (`hygiene_snapshot`, `tag_vocabulary`, and
+/// `tag_mutation_state`). Scoped recall does NOT use this index — its scope
+/// filter is a per-id primary-key probe (`node_is_in_scope`). The V27 data
+/// repair handles current databases; the expression preserves safe behavior
+/// for later direct/legacy blank rows.
+const MIGRATION_V29_UP: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_nodes_normalized_scope
+    ON knowledge_nodes(COALESCE(NULLIF(trim(scope), ''), 'user'));
+
+UPDATE schema_version SET version = 29, applied_at = datetime('now');
+"#;
+/// V21: durable source of truth for synaptic tag-and-capture.
+///
+/// `synaptic_tags` survives process restarts. `synaptic_events` gives an
+/// importance event a stable idempotency key and frozen window. Each evaluated
+/// pair is recorded in `synaptic_capture_items`, including rejected/withheld
+/// candidates, so the receipt is a decision predicate rather than a positives-
+/// only story. Promotion, item rows, tag state, and the generic receipt payload
+/// are committed by one writer transaction in `synaptic_store`.
+const MIGRATION_V21_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS synaptic_tags (
+    tag_id              TEXT PRIMARY KEY,
+    memory_id           TEXT NOT NULL,
+    created_at_ms       INTEGER NOT NULL,
+    initial_strength    REAL NOT NULL,
+    encoding_context    TEXT,
+    algorithm_version   TEXT NOT NULL,
+    state               TEXT NOT NULL CHECK (state IN ('active', 'captured', 'expired')),
+    capture_event_id    TEXT,
+    captured_at_ms      INTEGER,
+    recorded_at         TEXT NOT NULL,
+    UNIQUE(memory_id, created_at_ms),
+    FOREIGN KEY (memory_id) REFERENCES knowledge_nodes(id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_synaptic_tags_active_time
+    ON synaptic_tags(state, created_at_ms, tag_id);
+CREATE INDEX IF NOT EXISTS idx_synaptic_tags_memory
+    ON synaptic_tags(memory_id, created_at_ms DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_synaptic_tags_one_active_per_memory
+    ON synaptic_tags(memory_id) WHERE state = 'active';
+
+CREATE TABLE IF NOT EXISTS synaptic_events (
+    event_id            TEXT PRIMARY KEY,
+    trigger_memory_id   TEXT NOT NULL,
+    event_type          TEXT NOT NULL,
+    occurred_at_ms      INTEGER NOT NULL,
+    window_from_ms      INTEGER NOT NULL,
+    window_to_ms        INTEGER NOT NULL,
+    strength            REAL NOT NULL,
+    algorithm_version   TEXT NOT NULL,
+    receipt_id          TEXT UNIQUE,
+    recorded_at         TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_synaptic_events_open_window
+    ON synaptic_events(window_from_ms, window_to_ms, occurred_at_ms, event_id);
+CREATE INDEX IF NOT EXISTS idx_synaptic_events_trigger
+    ON synaptic_events(trigger_memory_id, occurred_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS synaptic_capture_items (
+    event_id                    TEXT NOT NULL,
+    tag_id                      TEXT NOT NULL,
+    memory_id                   TEXT NOT NULL,
+    evidence_slot               TEXT NOT NULL,
+    receipt_id                  TEXT NOT NULL,
+    encoded_at_ms               INTEGER NOT NULL,
+    temporal_distance_hours     REAL NOT NULL,
+    capture_probability         REAL NOT NULL,
+    tag_strength_at_evaluation  REAL NOT NULL,
+    capture_score               REAL NOT NULL,
+    disposition                 TEXT NOT NULL,
+    reason                      TEXT,
+    retrieval_before            REAL,
+    retrieval_after             REAL,
+    retention_before            REAL,
+    retention_after             REAL,
+    stability_before            REAL,
+    stability_after             REAL,
+    recorded_at                 TEXT NOT NULL,
+    PRIMARY KEY(event_id, tag_id),
+    FOREIGN KEY (event_id) REFERENCES synaptic_events(event_id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES synaptic_tags(tag_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_synaptic_capture_items_receipt
+    ON synaptic_capture_items(receipt_id);
+
+UPDATE schema_version SET version = 21, applied_at = datetime('now');
+"#;
+
+/// V22: production forward capture over durable competitive epochs.
+///
+/// V21 events intentionally evaluated no forward window, so they are migrated
+/// as closed and are never retroactively reopened. New V2 events persist the
+/// complete frozen policy and a random public id separately from the private
+/// deterministic event fingerprint. Pair rows remain uniquely keyed by
+/// `(event_id, tag_id)` and now carry the scalar contextual/competition
+/// evidence used by immutable child receipts.
+const MIGRATION_V22_UP: &str = r#"
+-- Recover the already-public id from the immutable V1 receipt where possible.
+-- The random fallback is deliberately unrelated to the private event
+-- fingerprint, which must never become a correlatable public identifier.
+UPDATE synaptic_events
+SET public_event_id = COALESCE(
+    (SELECT json_extract(r.payload, '$.evidence.predicate.trigger.eventId')
+       FROM memory_receipts r
+      WHERE r.receipt_id = synaptic_events.receipt_id),
+    'sevt_' || lower(hex(randomblob(16)))
+)
+WHERE public_event_id IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_synaptic_events_public_event_id
+    ON synaptic_events(public_event_id);
+CREATE INDEX IF NOT EXISTS idx_synaptic_events_forward_open
+    ON synaptic_events(event_state, window_to_ms, occurred_at_ms, event_id);
+
+UPDATE synaptic_capture_items
+SET evaluation_direction = COALESCE(evaluation_direction, 'backward'),
+    temporal_score = COALESCE(temporal_score, capture_probability),
+    context_score = COALESCE(context_score, 1.0),
+    context_method = COALESCE(context_method, 'v1_ungated'),
+    association_score = COALESCE(association_score, capture_score),
+    algorithm_version = COALESCE(algorithm_version, 'vestige.synaptic_capture.v1'),
+    reason_code = COALESCE(reason_code, disposition);
+
+UPDATE schema_version SET version = 22, applied_at = datetime('now');
+"#;
+
+/// V22 columns are added individually so a schema-version rewind used by
+/// replay/repair tooling cannot fail on duplicate column names.
+pub const MIGRATION_V22_ALTER_COLUMNS: &[&str] = &[
+    "ALTER TABLE synaptic_events ADD COLUMN public_event_id TEXT",
+    "ALTER TABLE synaptic_events ADD COLUMN event_state TEXT NOT NULL DEFAULT 'closed' CHECK (event_state IN ('open', 'closed'))",
+    "ALTER TABLE synaptic_events ADD COLUMN tag_lifetime_hours REAL",
+    "ALTER TABLE synaptic_events ADD COLUMN minimum_tag_strength REAL",
+    "ALTER TABLE synaptic_events ADD COLUMN minimum_association_score REAL",
+    "ALTER TABLE synaptic_events ADD COLUMN maximum_captures INTEGER",
+    "ALTER TABLE synaptic_events ADD COLUMN decay_function TEXT",
+    "ALTER TABLE synaptic_events ADD COLUMN context_threshold REAL",
+    "ALTER TABLE synaptic_events ADD COLUMN context_algorithm_version TEXT",
+    "ALTER TABLE synaptic_events ADD COLUMN signal_snapshot_json TEXT",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN evaluation_direction TEXT",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN temporal_score REAL",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN context_score REAL",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN context_method TEXT",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN association_score REAL",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN competition_rank INTEGER",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN algorithm_version TEXT",
+    "ALTER TABLE synaptic_capture_items ADD COLUMN reason_code TEXT",
+];
+
+/// V23: frozen post-retrieval evidence packs and pure context ablation.
+///
+/// Capsules contain no raw query, prompt, memory text, or model output. Private
+/// memory locators and keyed item digests exist only so current-state and purge
+/// checks can invalidate the historical projection. Public replay results use
+/// receipt-local slots. Suppression/purge nulls result and aggregate
+/// fingerprints rather than preserving perfect historical fidelity.
+const MIGRATION_V23_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS retrieval_replay_capsules (
+    capsule_id                 TEXT PRIMARY KEY,
+    source_receipt_id          TEXT NOT NULL UNIQUE,
+    schema_version             INTEGER NOT NULL,
+    algorithm_version          TEXT NOT NULL,
+    selection_boundary         TEXT NOT NULL,
+    redaction_generation       INTEGER NOT NULL DEFAULT 0 CHECK (redaction_generation >= 0),
+    privacy_state              TEXT NOT NULL CHECK (privacy_state IN ('active', 'redacted', 'purged')),
+    replayable                 INTEGER NOT NULL CHECK (replayable IN (0, 1)),
+    policy_digest              TEXT NOT NULL,
+    baseline_evidence_digest   TEXT,
+    baseline_merkle_root       TEXT,
+    item_count                 INTEGER,
+    total_token_estimate       INTEGER,
+    trust_floor                REAL,
+    decay_risk                 TEXT CHECK (decay_risk IS NULL OR decay_risk IN ('low', 'medium', 'high')),
+    created_at                 TEXT NOT NULL,
+    FOREIGN KEY (source_receipt_id) REFERENCES memory_receipts(receipt_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_replay_capsules_privacy
+    ON retrieval_replay_capsules(privacy_state, replayable, created_at);
+
+CREATE TABLE IF NOT EXISTS retrieval_replay_items (
+    capsule_id       TEXT NOT NULL,
+    ordinal          INTEGER NOT NULL CHECK (ordinal >= 0),
+    evidence_slot    TEXT NOT NULL,
+    memory_id        TEXT,
+    private_digest   TEXT,
+    token_estimate   INTEGER,
+    trust_score      REAL,
+    decay_risk       TEXT CHECK (decay_risk IS NULL OR decay_risk IN ('low', 'medium', 'high')),
+    PRIMARY KEY (capsule_id, ordinal),
+    UNIQUE (capsule_id, evidence_slot),
+    FOREIGN KEY (capsule_id) REFERENCES retrieval_replay_capsules(capsule_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_replay_items_memory
+    ON retrieval_replay_items(memory_id) WHERE memory_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS counterfactual_replays (
+    replay_id              TEXT PRIMARY KEY,
+    idempotency_key        TEXT NOT NULL UNIQUE,
+    capsule_id             TEXT NOT NULL,
+    source_receipt_id      TEXT NOT NULL,
+    receipt_id             TEXT UNIQUE,
+    algorithm_version      TEXT NOT NULL,
+    redaction_generation   INTEGER NOT NULL CHECK (redaction_generation >= 0),
+    withheld_slots_json    TEXT NOT NULL,
+    result_json            TEXT,
+    privacy_state          TEXT NOT NULL CHECK (privacy_state IN ('active', 'redacted', 'purged')),
+    created_at             TEXT NOT NULL,
+    FOREIGN KEY (capsule_id) REFERENCES retrieval_replay_capsules(capsule_id) ON DELETE CASCADE,
+    FOREIGN KEY (source_receipt_id) REFERENCES memory_receipts(receipt_id) ON DELETE CASCADE,
+    FOREIGN KEY (receipt_id) REFERENCES memory_receipts(receipt_id) ON DELETE SET NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_counterfactual_replays_source
+    ON counterfactual_replays(source_receipt_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_counterfactual_replays_privacy
+    ON counterfactual_replays(privacy_state, created_at DESC);
+
+UPDATE schema_version SET version = 23, applied_at = datetime('now');
+"#;
+
+/// V24: privacy-safe, append-only receipt attestations.
+///
+/// Absence from `receipt_envelopes` is the explicit legacy-unsigned state.
+/// Existing V18-V23 receipts are never retro-signed. New signed receipts,
+/// their exact DSSE envelope, disclosure mappings, and chain-head advance are
+/// committed by one V24 storage transaction.
+const MIGRATION_V24_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS receipt_signing_keys (
+    key_id                   TEXT PRIMARY KEY,
+    algorithm                TEXT NOT NULL CHECK (algorithm = 'ed25519'),
+    public_key               BLOB NOT NULL CHECK (length(public_key) = 32),
+    public_key_fingerprint   TEXT NOT NULL UNIQUE
+        CHECK (length(public_key_fingerprint) = 64
+               AND public_key_fingerprint NOT GLOB '*[^0-9a-f]*'),
+    status                   TEXT NOT NULL
+        CHECK (status IN ('active', 'retired', 'revoked', 'disabled')),
+    valid_from               TEXT NOT NULL,
+    valid_until              TEXT,
+    revoked_at               TEXT,
+    created_at               TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_receipt_signing_keys_status
+    ON receipt_signing_keys(status, valid_from);
+
+CREATE TABLE IF NOT EXISTS receipt_envelopes (
+    receipt_id               TEXT PRIMARY KEY,
+    chain_id                 TEXT NOT NULL,
+    sequence                 INTEGER NOT NULL
+        CHECK (sequence >= 0 AND sequence <= 9007199254740991),
+    previous_entry_digest    TEXT,
+    payload_type             TEXT NOT NULL,
+    envelope_json            TEXT NOT NULL CHECK (json_valid(envelope_json)),
+    payload_digest           TEXT NOT NULL
+        CHECK (length(payload_digest) = 64
+               AND payload_digest NOT GLOB '*[^0-9a-f]*'),
+    entry_digest             TEXT NOT NULL UNIQUE
+        CHECK (length(entry_digest) = 64
+               AND entry_digest NOT GLOB '*[^0-9a-f]*'),
+    signing_key_id           TEXT NOT NULL,
+    signer_key_fingerprint   TEXT NOT NULL
+        CHECK (length(signer_key_fingerprint) = 64
+               AND signer_key_fingerprint NOT GLOB '*[^0-9a-f]*'),
+    issued_at                TEXT NOT NULL,
+    stored_at                TEXT NOT NULL,
+    CHECK ((sequence = 0 AND previous_entry_digest IS NULL)
+           OR (sequence > 0
+               AND length(previous_entry_digest) = 64
+               AND previous_entry_digest NOT GLOB '*[^0-9a-f]*')),
+    UNIQUE (chain_id, sequence),
+    FOREIGN KEY (receipt_id) REFERENCES memory_receipts(receipt_id) ON DELETE RESTRICT,
+    FOREIGN KEY (signing_key_id) REFERENCES receipt_signing_keys(key_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_receipt_envelopes_chain
+    ON receipt_envelopes(chain_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_receipt_envelopes_key
+    ON receipt_envelopes(signing_key_id, issued_at);
+
+CREATE TRIGGER IF NOT EXISTS receipt_envelopes_reject_update
+BEFORE UPDATE ON receipt_envelopes
+BEGIN
+    SELECT RAISE(ABORT, 'receipt envelopes are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS receipt_envelopes_reject_delete
+BEFORE DELETE ON receipt_envelopes
+BEGIN
+    SELECT RAISE(ABORT, 'receipt envelopes are immutable');
+END;
+
+CREATE TABLE IF NOT EXISTS receipt_chain_state (
+    chain_id                 TEXT PRIMARY KEY,
+    last_sequence            INTEGER NOT NULL
+        CHECK (last_sequence >= 0 AND last_sequence <= 9007199254740991),
+    last_entry_digest        TEXT NOT NULL
+        CHECK (length(last_entry_digest) = 64
+               AND last_entry_digest NOT GLOB '*[^0-9a-f]*'),
+    updated_at               TEXT NOT NULL
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS receipt_chain_state_validate_insert
+BEFORE INSERT ON receipt_chain_state
+WHEN NOT EXISTS (
+    SELECT 1 FROM receipt_envelopes e
+     WHERE e.chain_id = NEW.chain_id
+       AND e.sequence = NEW.last_sequence
+       AND e.entry_digest = NEW.last_entry_digest
+)
+BEGIN
+    SELECT RAISE(ABORT, 'receipt chain head must reference an immutable envelope');
+END;
+
+CREATE TRIGGER IF NOT EXISTS receipt_chain_state_validate_update
+BEFORE UPDATE ON receipt_chain_state
+WHEN NEW.chain_id <> OLD.chain_id
+  OR NEW.last_sequence <> OLD.last_sequence + 1
+  OR NOT EXISTS (
+      SELECT 1 FROM receipt_envelopes e
+       WHERE e.chain_id = NEW.chain_id
+         AND e.sequence = NEW.last_sequence
+         AND e.previous_entry_digest = OLD.last_entry_digest
+         AND e.entry_digest = NEW.last_entry_digest
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'receipt chain head advance is not contiguous');
+END;
+
+CREATE TABLE IF NOT EXISTS receipt_disclosures (
+    receipt_id       TEXT NOT NULL,
+    evidence_slot    TEXT NOT NULL,
+    memory_id        TEXT NOT NULL,
+    nonce            BLOB NOT NULL CHECK (length(nonce) = 32),
+    commitment       TEXT NOT NULL
+        CHECK (length(commitment) = 64
+               AND commitment NOT GLOB '*[^0-9a-f]*'),
+    created_at       TEXT NOT NULL,
+    PRIMARY KEY (receipt_id, evidence_slot),
+    FOREIGN KEY (receipt_id) REFERENCES receipt_envelopes(receipt_id) ON DELETE CASCADE,
+    FOREIGN KEY (memory_id) REFERENCES knowledge_nodes(id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_receipt_disclosures_memory
+    ON receipt_disclosures(memory_id, receipt_id);
+
+CREATE TRIGGER IF NOT EXISTS receipt_disclosures_reject_update
+BEFORE UPDATE ON receipt_disclosures
+BEGIN
+    SELECT RAISE(ABORT, 'receipt disclosures are immutable; delete on erasure');
+END;
+
+UPDATE schema_version SET version = 24, applied_at = datetime('now');
+"#;
+
+/// V26: persist the inspectable identity-free projection that is already part
+/// of every newly signed DSSE payload. Existing V24 rows deliberately remain
+/// readable but have no backfilled projection: retroactively inventing one
+/// would defeat the no-retro-signing boundary.
+const MIGRATION_V26_UP: &str = r#"
+UPDATE schema_version SET version = 26, applied_at = datetime('now');
+"#;
+
+/// V27: `scope` was introduced as dormant schema in V4.  Existing rows should
+/// remain visible through the legacy `user` namespace once retrieval starts
+/// enforcing that column.  Treat missing or blank values as that namespace
+/// rather than making old memories disappear or fall into every project.
+const MIGRATION_V27_UP: &str = r#"
+UPDATE knowledge_nodes
+SET scope = 'user'
+WHERE scope IS NULL OR trim(scope) = '';
+
+CREATE INDEX IF NOT EXISTS idx_nodes_scope ON knowledge_nodes(scope);
+
+UPDATE schema_version SET version = 27, applied_at = datetime('now');
+"#;
+
+const MIGRATION_V26_ALTER_COLUMNS: &[&str] = &[r#"
+ALTER TABLE receipt_envelopes ADD COLUMN projection_json TEXT CHECK (
+    projection_json IS NULL OR json_valid(projection_json)
+)
+"#];
 
 /// Apply pending migrations
 ///
@@ -1297,11 +1789,39 @@ UPDATE schema_version SET version = 20, applied_at = datetime('now');
 /// bricked the DB permanently). VACUUM (V7) cannot run inside a transaction,
 /// so it runs after the transaction commits.
 pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
-    let current_version = get_current_version(conn)?;
+    // A fresh local database can be opened simultaneously by two processes at
+    // startup. Individual migration transactions already take the writer lock
+    // and re-check the version, but SQLite can still return BUSY while a peer
+    // is switching journal modes for the V7 page-size migration. Retrying the
+    // complete, idempotent runner makes that startup race converge instead of
+    // surfacing a transient lock to one of the openers.
+    const MAX_BUSY_RETRIES: u8 = 40;
+    let mut attempts = 0_u8;
+
+    loop {
+        match apply_migrations_once(conn) {
+            Ok(applied) => return Ok(applied),
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if matches!(
+                    error.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) && attempts < MAX_BUSY_RETRIES =>
+            {
+                attempts += 1;
+                let delay_ms = 25_u64.saturating_mul(1_u64 << attempts.min(4));
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn apply_migrations_once(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
+    let initial_version = get_current_version(conn)?;
     let mut applied = 0;
 
     for migration in MIGRATIONS {
-        if migration.version > current_version {
+        if migration.version > initial_version {
             tracing::info!(
                 "Applying migration v{}: {}",
                 migration.version,
@@ -1312,7 +1832,39 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
             // or roll back together. On rollback, schema_version is unchanged so
             // the migration cleanly re-applies next run.
             {
-                let tx = conn.unchecked_transaction()?;
+                // Acquire the writer lock before re-reading the version. A
+                // second process that lost a startup race then observes the
+                // first process's committed schema instead of replaying stale
+                // migrations over it.
+                let mut attempts = 0_u8;
+                let tx = loop {
+                    match rusqlite::Transaction::new_unchecked(
+                        conn,
+                        rusqlite::TransactionBehavior::Immediate,
+                    ) {
+                        Ok(tx) => break tx,
+                        Err(rusqlite::Error::SqliteFailure(error, _))
+                            if error.code == rusqlite::ErrorCode::DatabaseBusy && attempts < 20 =>
+                        {
+                            attempts += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(25));
+                        }
+                        Err(error) => return Err(error),
+                    }
+                };
+                if migration.version <= get_current_version(&tx)? {
+                    tx.commit()?;
+                    continue;
+                }
+
+                // V2 predates transactional migrations. Accept its historic
+                // half-applied shape by adding each column idempotently before
+                // creating indexes and advancing the version.
+                if migration.version == 2 {
+                    for stmt in MIGRATION_V2_ALTER_COLUMNS {
+                        add_column_if_missing(&tx, stmt)?;
+                    }
+                }
 
                 // V14: add the two bitemporal/protect columns BEFORE the batch (the
                 // batch's indexes reference them). SQLite lacks
@@ -1347,8 +1899,29 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
                     }
                 }
 
+                if migration.version == 22 {
+                    for stmt in MIGRATION_V22_ALTER_COLUMNS {
+                        add_column_if_missing(&tx, stmt)?;
+                    }
+                }
+                if migration.version == 26 {
+                    for stmt in MIGRATION_V26_ALTER_COLUMNS {
+                        add_column_if_missing(&tx, stmt)?;
+                    }
+                }
+
                 // Use execute_batch to handle multi-statement SQL including triggers
                 tx.execute_batch(migration.up)?;
+
+                // V25 keeps the reusable schema contract free of the repository's
+                // schema-version bookkeeping so isolated storage tests can apply it
+                // without first bootstrapping `schema_version`.
+                if migration.version == 25 {
+                    tx.execute(
+                        "UPDATE schema_version SET version = 25, applied_at = datetime('now')",
+                        [],
+                    )?;
+                }
 
                 tx.commit()?;
             }
@@ -1374,56 +1947,203 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
     Ok(applied)
 }
 
+
+/// V30: FTS5 tokenizer fix.
+///
+/// V7 built `knowledge_fts` with `tokenize='porter ascii'`. The `ascii`
+/// tokenizer only treats ASCII alphanumerics as token characters, and it does
+/// NOT treat multi-byte characters as separators -- it folds them into the
+/// adjacent token. So an em dash, a curly apostrophe, an ellipsis, a
+/// non-breaking space, a leading emoji or an accented letter glues itself onto
+/// the neighbouring word, and that word becomes permanently unfindable by
+/// keyword search. LLM-authored memory text is saturated with exactly those
+/// characters, so in practice a large fraction of stored content is invisible
+/// to the BM25 leg of hybrid search.
+///
+/// `unicode61` treats every non-alphanumeric codepoint as a separator and
+/// `remove_diacritics 2` folds accents, so "parser-which we fixed" tokenizes as
+/// parser/which/we/fixed and "cafe" matches "cafe". `porter` stemming is kept.
+///
+/// The query sanitizers in `crate::fts` are updated in the same change to split
+/// on Unicode alphanumerics rather than ASCII, because they deliberately mirror
+/// this tokenizer -- changing either one alone breaks matching.
+const MIGRATION_V30_UP: &str = r#"
+DROP TRIGGER IF EXISTS knowledge_ai;
+DROP TRIGGER IF EXISTS knowledge_ad;
+DROP TRIGGER IF EXISTS knowledge_au;
+DROP TABLE IF EXISTS knowledge_fts;
+
+CREATE VIRTUAL TABLE knowledge_fts USING fts5(
+    id, content, tags,
+    content='knowledge_nodes',
+    content_rowid='rowid',
+    tokenize='porter unicode61 remove_diacritics 2'
+);
+
+INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild');
+
+CREATE TRIGGER knowledge_ai AFTER INSERT ON knowledge_nodes BEGIN
+    INSERT INTO knowledge_fts(rowid, id, content, tags)
+    VALUES (NEW.rowid, NEW.id, NEW.content, NEW.tags);
+END;
+
+CREATE TRIGGER knowledge_ad AFTER DELETE ON knowledge_nodes BEGIN
+    INSERT INTO knowledge_fts(knowledge_fts, rowid, id, content, tags)
+    VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.tags);
+END;
+
+CREATE TRIGGER knowledge_au AFTER UPDATE ON knowledge_nodes BEGIN
+    INSERT INTO knowledge_fts(knowledge_fts, rowid, id, content, tags)
+    VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.tags);
+    INSERT INTO knowledge_fts(rowid, id, content, tags)
+    VALUES (NEW.rowid, NEW.id, NEW.content, NEW.tags);
+END;
+
+UPDATE schema_version SET version = 30, applied_at = datetime('now');
+"#;
+
+/// V31: Self-verifying code memory anchors.
+///
+/// A code memory used to anchor to source with nothing but a file path printed
+/// into its markdown body. Nothing could tell whether the code it describes
+/// still existed, so a rotted memory was retrieved with exactly the same
+/// confidence as a correct one.
+///
+/// This table stores, per memory, the information needed to *re-check* the
+/// claim later: the path, the optional symbol name, the capture-time line span
+/// (a hint for reporting only, never the identity), and a content hash of the
+/// normalized anchored span. Verification re-hashes the file today and compares.
+///
+/// Migration safety is the whole point of the nullable columns:
+///
+/// * Every existing code memory simply has **no row here**. Absence means
+///   "unverifiable", never "stale" - an old, correct memory must not be
+///   accused of being wrong.
+/// * `content_hash`, `span_lines`, `symbol`, `start_line` and `end_line` are
+///   all nullable. A path-only anchor (no readable span at capture time) is
+///   still recorded, and still degrades to "unverifiable" rather than "stale".
+/// * `node_id` cascades on delete so `purge_node`'s
+///   `DELETE FROM knowledge_nodes` (sqlite.rs) removes the anchored path and
+///   hash with the memory. `PRAGMA foreign_keys = ON` is asserted on both
+///   connections at open time, so the cascade is enforced, not decorative.
+const MIGRATION_V31_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS code_memory_anchors (
+    id                TEXT PRIMARY KEY,
+    node_id           TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+    -- Repository-relative path as recorded by the caller.
+    file_path         TEXT NOT NULL,
+    -- Symbol the memory is about. NULL for a path-only anchor.
+    symbol            TEXT,
+    symbol_kind       TEXT,
+    -- Capture-time position. Advisory only: relocation is decided by content
+    -- hash, so a shifted line number never by itself marks a memory stale.
+    start_line        INTEGER,
+    end_line          INTEGER,
+    -- Number of normalized (blank-stripped, trimmed) lines the hash covers.
+    span_lines        INTEGER,
+    -- blake3 of the normalized anchored span. NULL => unverifiable, not stale.
+    content_hash      TEXT,
+    captured_at       TEXT NOT NULL,
+    last_verified_at  TEXT,
+    last_status       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_code_anchors_node ON code_memory_anchors(node_id);
+CREATE INDEX IF NOT EXISTS idx_code_anchors_path ON code_memory_anchors(file_path);
+
+UPDATE schema_version SET version = 31, applied_at = datetime('now');
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+    use std::time::Duration;
+    use tempfile::tempdir;
 
-    /// Regression: a migration that is interrupted after its `ADD COLUMN`
-    /// commits but before `schema_version` advances must NOT permanently brick
-    /// the DB on replay with `duplicate column name`. Because each migration now
-    /// runs in a transaction, an interrupted migration rolls back atomically and
-    /// replays cleanly.
-    ///
-    /// We simulate the pre-fix corrupt state directly: run all migrations, then
-    /// hand-apply one of V2's `ADD COLUMN`s again on a DB whose version we roll
-    /// back, and confirm `apply_migrations` still succeeds (the transaction
-    /// makes the whole migration atomic, so a real interruption can never leave
-    /// the half-applied state the old code could).
+    /// Regression for the historical pre-transaction failure mode: V2 could
+    /// add one temporal column and crash before advancing `schema_version`.
+    /// The new runner must finish that exact shape instead of failing on a
+    /// duplicate column.
     #[test]
-    fn test_interrupted_migration_replays_without_duplicate_column_brick() {
-        // A fresh DB migrates cleanly and reaches the latest version.
+    fn v2_historical_partial_migration_recovers_without_duplicate_column_brick() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("initial migrations succeed");
-        let latest = MIGRATIONS.last().unwrap().version;
-        assert_eq!(get_current_version(&conn).expect("version"), latest);
+        apply_migrations_through(&conn, 1);
+        conn.execute_batch("ALTER TABLE knowledge_nodes ADD COLUMN valid_from TEXT;")
+            .expect("seed the historical V2 partial state");
 
-        // Running apply_migrations again on an already-migrated DB is a no-op and
-        // must never error (idempotent) — the previous brick surfaced here.
-        let applied = apply_migrations(&conn).expect("replay must not brick");
-        assert_eq!(applied, 0, "no migrations should re-apply on a current DB");
-
-        // Directly prove atomicity: an ADD COLUMN inside a rolled-back
-        // transaction leaves no trace, so a retried migration sees a clean slate.
-        let conn2 = rusqlite::Connection::open_in_memory().expect("open in-memory 2");
-        conn2
-            .execute_batch(
-                "CREATE TABLE t (id INTEGER);
-                 CREATE TABLE schema_version (version INTEGER, applied_at TEXT);
-                 INSERT INTO schema_version (version, applied_at) VALUES (0, datetime('now'));",
+        apply_migrations(&conn).expect("V2 partial state must recover");
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            MIGRATIONS.last().unwrap().version
+        );
+        let temporal_columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('knowledge_nodes')
+                 WHERE name IN ('valid_from', 'valid_until')",
+                [],
+                |row| row.get(0),
             )
-            .expect("seed");
-        {
-            let tx = conn2.unchecked_transaction().expect("tx");
-            tx.execute_batch("ALTER TABLE t ADD COLUMN c INTEGER;")
-                .expect("add column in tx");
-            // Simulate mid-migration failure: drop the tx without committing.
-            drop(tx);
+            .expect("read temporal columns");
+        assert_eq!(temporal_columns, 2);
+    }
+
+    #[test]
+    fn missing_schema_version_on_a_nonempty_database_fails_without_replaying_v1() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 2);
+        conn.execute_batch("DROP TABLE schema_version;")
+            .expect("remove version table");
+
+        let error = apply_migrations(&conn).expect_err("damaged DB must fail closed");
+        assert!(
+            error.to_string().contains("schema_version"),
+            "unexpected error: {error}"
+        );
+        let recreated: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query schema version table");
+        assert_eq!(recreated, 0, "failed startup must not mutate the database");
+    }
+
+    #[test]
+    fn concurrent_first_openers_serialize_migration_and_both_succeed() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("concurrent-migrations.db");
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+
+        for _ in 0..2 {
+            let path = path.clone();
+            let barrier = Arc::clone(&barrier);
+            workers.push(thread::spawn(move || {
+                let conn = rusqlite::Connection::open(path).expect("open shared DB");
+                conn.busy_timeout(Duration::from_secs(5))
+                    .expect("set busy timeout");
+                barrier.wait();
+                apply_migrations(&conn)
+            }));
         }
-        // The column must be gone (rolled back), so re-adding it succeeds — the
-        // exact operation that previously failed with "duplicate column name".
-        conn2
-            .execute_batch("ALTER TABLE t ADD COLUMN c INTEGER;")
-            .expect("column must not survive a rolled-back transaction");
+
+        barrier.wait();
+        for worker in workers {
+            worker
+                .join()
+                .expect("migration worker panicked")
+                .expect("concurrent opener must not fail");
+        }
+
+        let conn = rusqlite::Connection::open(&path).expect("reopen shared DB");
+        assert_eq!(
+            get_current_version(&conn).expect("read version"),
+            MIGRATIONS.last().unwrap().version
+        );
     }
 
     /// A fresh in-memory DB must end up at schema_version = highest migration
@@ -1745,6 +2465,470 @@ mod tests {
         );
     }
 
+    /// Apply every migration up to and including `through`, mirroring the
+    /// per-version ALTER TABLE handling `apply_migrations` does for V14/V16/V17.
+    /// Lets a test build a database that is genuinely *at* an older schema
+    /// version rather than rewinding `schema_version` on a current one.
+    fn apply_migrations_through(conn: &rusqlite::Connection, through: u32) {
+        for migration in MIGRATIONS {
+            if migration.version > through {
+                break;
+            }
+            if migration.version == 14 {
+                add_column_if_missing(
+                    conn,
+                    "ALTER TABLE knowledge_nodes ADD COLUMN protected INTEGER NOT NULL DEFAULT 0",
+                )
+                .expect("V14 protected column");
+                add_column_if_missing(
+                    conn,
+                    "ALTER TABLE knowledge_nodes ADD COLUMN superseded_by TEXT",
+                )
+                .expect("V14 superseded_by column");
+            }
+            if migration.version == 2 {
+                for stmt in MIGRATION_V2_ALTER_COLUMNS {
+                    add_column_if_missing(conn, stmt).expect("V2 alter column");
+                }
+            }
+            if migration.version == 16 {
+                for stmt in MIGRATION_V16_ALTER_COLUMNS {
+                    add_column_if_missing(conn, stmt).expect("V16 alter column");
+                }
+            }
+            if migration.version == 17 {
+                for stmt in MIGRATION_V17_ALTER_COLUMNS {
+                    add_column_if_missing(conn, stmt).expect("V17 alter column");
+                }
+            }
+            if migration.version == 22 {
+                for stmt in MIGRATION_V22_ALTER_COLUMNS {
+                    add_column_if_missing(conn, stmt).expect("V22 alter column");
+                }
+            }
+            if migration.version == 26 {
+                for stmt in MIGRATION_V26_ALTER_COLUMNS {
+                    add_column_if_missing(conn, stmt).expect("V26 alter column");
+                }
+            }
+            conn.execute_batch(migration.up).expect("apply migration");
+        }
+    }
+
+    fn cursor_row_count(conn: &rusqlite::Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM connector_cursors", [], |row| {
+            row.get(0)
+        })
+        .expect("count connector_cursors")
+    }
+
+    fn seed_connector_cursor(conn: &rusqlite::Connection, system: &str, scope: &str) {
+        conn.execute(
+            "INSERT INTO connector_cursors \
+                (source_system, scope, cursor_updated_at, last_synced_at, records_seen) \
+             VALUES (?1, ?2, '2026-07-01T00:00:00+00:00', '2026-07-01T00:00:00+00:00', 42)",
+            [system, scope],
+        )
+        .expect("seed connector cursor");
+    }
+
+    /// V20 must empty `connector_cursors` on a database that is already at V19,
+    /// so the next `source_sync` starts from `since = None` and re-upserts every
+    /// record under the project-scoped key. Without this, records not touched
+    /// upstream since the last pre-upgrade sync stay clobbered forever — the
+    /// changelog's "just re-run source_sync" advice cannot work on its own,
+    /// because `run_sync` resumes from the saved cursor.
+    #[test]
+    fn v20_clears_connector_cursors_on_a_v19_database() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 19);
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            19,
+            "test fixture must be a genuine V19 database"
+        );
+
+        // Pre-upgrade sync state: checkpoints that would otherwise pin the next
+        // run's `since` window past the clobbered records.
+        seed_connector_cursor(&conn, "github", "octocat/repoA");
+        seed_connector_cursor(&conn, "github", "octocat/repoB");
+        assert_eq!(cursor_row_count(&conn), 2);
+
+        let applied = apply_migrations(&conn).expect("V20+ apply on a V19 database");
+        assert_eq!(
+            applied, 12,
+            "V20 through V31 should apply on a V19 database"
+        );
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            MIGRATIONS.last().unwrap().version
+        );
+        assert_eq!(
+            cursor_row_count(&conn),
+            0,
+            "V20 must clear every connector cursor so the next sync full re-scans"
+        );
+    }
+
+    /// Fresh database: all migrations apply cleanly through V31 and the cursor
+    /// table exists and is empty (nothing to clear, no error).
+    #[test]
+    fn v20_applies_cleanly_on_a_fresh_database() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("fresh migrations succeed through V31");
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            31,
+            "latest migration must be V31"
+        );
+        assert_eq!(cursor_row_count(&conn), 0);
+    }
+
+    /// V20 is replayable: re-running it after new cursors were saved simply
+    /// clears them again, and a no-op `apply_migrations` on a current DB leaves
+    /// live cursors alone.
+    #[test]
+    fn v20_is_replayable_and_does_not_touch_cursors_when_already_applied() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("first apply");
+
+        // A post-upgrade sync saves a fresh checkpoint.
+        seed_connector_cursor(&conn, "github", "octocat/repoA");
+
+        // Already-current DB: no migration runs, so the live cursor survives.
+        assert_eq!(apply_migrations(&conn).expect("no-op replay"), 0);
+        assert_eq!(cursor_row_count(&conn), 1);
+
+        // Forced replay from V19 clears it again without erroring.
+        conn.execute("UPDATE schema_version SET version = 19", [])
+            .expect("rewind to 19");
+        apply_migrations(&conn).expect("V20+ replay must be idempotent");
+        assert_eq!(cursor_row_count(&conn), 0);
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            MIGRATIONS.last().unwrap().version
+        );
+    }
+
+    #[test]
+    fn v28_isolates_legacy_vectors_and_seeds_only_the_legacy_pointer() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 27);
+        conn.execute(
+            "INSERT INTO knowledge_nodes (id, content, node_type, created_at, updated_at, last_accessed, \
+             stability, difficulty, reps, lapses, learning_state, storage_strength, retrieval_strength, \
+             retention_strength, next_review, scheduled_days, has_embedding) \
+             VALUES ('legacy-vector-node', 'legacy vector source', 'fact', datetime('now'), datetime('now'), datetime('now'), \
+             1.0, 0.3, 0, 0, 'new', 1.0, 1.0, 1.0, datetime('now'), 1, 1)",
+            [],
+        )
+        .expect("seed V27 node");
+        conn.execute(
+            "INSERT INTO node_embeddings (node_id, embedding, dimensions, model, created_at) \
+             VALUES ('legacy-vector-node', ?1, 256, 'nomic-ai/nomic-embed-text-v1.5', datetime('now'))",
+            [vec![7_u8; 1024]],
+        )
+        .expect("seed legacy vector");
+
+        apply_migrations(&conn).expect("apply V28 through V31");
+        assert_eq!(
+            get_current_version(&conn).expect("version"),
+            31,
+            "V28 profile migration is followed by the V29 scope index, the V30 FTS rebuild, and the V31 code anchors"
+        );
+        let copied: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_profile_vectors \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256' AND node_id = 'legacy-vector-node'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query copied vector");
+        assert_eq!(
+            copied, 1,
+            "V28 must retain a legacy vector in its isolated profile"
+        );
+        let active: String = conn
+            .query_row(
+                "SELECT active_profile_id FROM embedding_profile_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("active profile");
+        assert_eq!(active, "nomic-v1.5-legacy-raw-256");
+        let qwen_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_profiles WHERE profile_id LIKE 'qwen3-%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query Qwen profiles");
+        assert_eq!(qwen_rows, 0, "migration must not install or activate Qwen");
+
+        assert_eq!(
+            apply_migrations(&conn).expect("current schema is a no-op"),
+            0
+        );
+        let copied_after_reopen: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_profile_vectors \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256' AND node_id = 'legacy-vector-node'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query retained vector");
+        assert_eq!(copied_after_reopen, 1, "V28 copy is idempotent");
+    }
+
+    #[test]
+    fn v21_creates_durable_synaptic_capture_tables() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("apply migrations through V21");
+
+        for table in ["synaptic_tags", "synaptic_events", "synaptic_capture_items"] {
+            let rows: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("query sqlite_master");
+            assert_eq!(rows, 1, "V21 must create {table}");
+        }
+    }
+
+    #[test]
+    fn v22_closes_v1_events_and_adds_forward_evidence_columns() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 21);
+        conn.execute(
+            "INSERT INTO synaptic_events
+                 (event_id, trigger_memory_id, event_type, occurred_at_ms,
+                  window_from_ms, window_to_ms, strength, algorithm_version,
+                  receipt_id, recorded_at)
+             VALUES ('private-v1', 'missing-is-ok', 'novelty_spike', 1000,
+                     0, 1000, 0.9, 'vestige.synaptic_capture.v1', NULL,
+                     '1970-01-01T00:00:01Z')",
+            [],
+        )
+        .expect("seed V21 event");
+
+        apply_migrations(&conn).expect("apply V22");
+        let (state, public_id): (String, String) = conn
+            .query_row(
+                "SELECT event_state, public_event_id FROM synaptic_events
+                 WHERE event_id = 'private-v1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read migrated event");
+        assert_eq!(state, "closed");
+        assert!(public_id.starts_with("sevt_"));
+
+        let new_columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('synaptic_capture_items')
+                 WHERE name IN ('evaluation_direction', 'context_score',
+                                'association_score', 'reason_code')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query V22 item columns");
+        assert_eq!(new_columns, 4);
+    }
+
+    #[test]
+    fn v23_creates_private_replay_capsules_and_idempotent_branches() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("apply through V23");
+        for table in [
+            "retrieval_replay_capsules",
+            "retrieval_replay_items",
+            "counterfactual_replays",
+        ] {
+            let rows: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("query replay table");
+            assert_eq!(rows, 1, "V23 must create {table}");
+        }
+        let nullable_private_fields: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('retrieval_replay_capsules')
+                 WHERE name IN (
+                    'baseline_evidence_digest', 'baseline_merkle_root', 'item_count',
+                    'total_token_estimate', 'trust_floor', 'decay_risk'
+                 ) AND \"notnull\" = 0",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query privacy-nullable replay fields");
+        assert_eq!(nullable_private_fields, 6);
+    }
+
+    #[test]
+    fn v24_creates_attestation_registry_chain_envelopes_and_disclosures() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("enable foreign keys");
+        apply_migrations(&conn).expect("apply through V24");
+        for table in [
+            "receipt_signing_keys",
+            "receipt_chain_state",
+            "receipt_envelopes",
+            "receipt_disclosures",
+        ] {
+            let rows: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("query V24 table");
+            assert_eq!(rows, 1, "V24 must create {table}");
+        }
+        let immutable_triggers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'trigger' AND name IN (
+                    'receipt_envelopes_reject_update',
+                    'receipt_envelopes_reject_delete',
+                    'receipt_disclosures_reject_update',
+                    'receipt_chain_state_validate_insert',
+                    'receipt_chain_state_validate_update'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query V24 triggers");
+        assert_eq!(immutable_triggers, 5);
+
+        conn.execute(
+            "INSERT INTO memory_receipts(receipt_id, payload, created_at)
+             VALUES ('legacy-receipt', '{}', '2026-08-10T00:00:00Z')",
+            [],
+        )
+        .expect("seed legacy receipt");
+        let signed_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM receipt_envelopes WHERE receipt_id = 'legacy-receipt'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query legacy attestation state");
+        assert_eq!(signed_rows, 0, "legacy receipts must remain unsigned");
+    }
+
+    #[test]
+    fn v26_adds_replayable_signed_projection_column() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 25);
+        conn.execute(
+            "UPDATE schema_version SET version = 25, applied_at = datetime('now')",
+            [],
+        )
+        .expect("mark V25 fixture current");
+
+        assert_eq!(apply_migrations(&conn).expect("apply V26 through V31"), 6);
+        let columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('receipt_envelopes')
+                 WHERE name = 'projection_json'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("inspect V26 column");
+        assert_eq!(columns, 1);
+        assert_eq!(apply_migrations(&conn).expect("V29 replay is a no-op"), 0);
+    }
+
+    #[test]
+    fn v27_preserves_legacy_rows_in_the_user_scope() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 26);
+        conn.execute(
+            "INSERT INTO knowledge_nodes (id, content, node_type, created_at, updated_at, last_accessed, scope)
+             VALUES ('null-scope', 'legacy', 'fact', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL),
+                    ('blank-scope', 'legacy', 'fact', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '   ') ",
+            [],
+        )
+        .expect("seed legacy scopes");
+
+        apply_migrations(&conn).expect("apply V27");
+        let scopes: Vec<String> = conn
+            .prepare("SELECT scope FROM knowledge_nodes ORDER BY id")
+            .expect("prepare scope query")
+            .query_map([], |row| row.get(0))
+            .expect("read scopes")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect scopes");
+        assert_eq!(scopes, vec!["user", "user"]);
+    }
+
+    #[test]
+    fn v29_creates_the_normalized_scope_expression_index() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("apply_migrations");
+
+        let index_sql: Vec<String> = conn
+            .prepare(
+                "SELECT sql FROM sqlite_master
+                 WHERE type='index' AND name='idx_nodes_normalized_scope'",
+            )
+            .expect("prepare index lookup")
+            .query_map([], |row| row.get(0))
+            .expect("read index sql")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect index sql");
+        assert_eq!(
+            index_sql.len(),
+            1,
+            "V29 must create exactly one idx_nodes_normalized_scope"
+        );
+        assert!(
+            index_sql[0].contains("COALESCE(NULLIF(trim(scope), ''), 'user')"),
+            "the index expression must match the hygiene/tag scan predicate byte-for-byte, got: {}",
+            index_sql[0]
+        );
+    }
+
+    #[test]
+    fn v29_index_serves_the_scoped_hygiene_scan_query_plan() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations(&conn).expect("apply_migrations");
+        conn.execute(
+            "INSERT INTO knowledge_nodes (id, content, node_type, created_at, updated_at, last_accessed, scope)
+             VALUES ('plan-a', 'row', 'fact', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'user'),
+                    ('plan-b', 'row', 'fact', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'project-a'),
+                    ('plan-c', 'row', 'fact', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL)",
+            [],
+        )
+        .expect("seed scoped rows");
+
+        // The scoped hygiene/tag scans all filter on this exact expression.
+        let plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM knowledge_nodes
+                 WHERE COALESCE(NULLIF(trim(scope), ''), 'user') = ?1",
+            )
+            .expect("prepare query plan")
+            .query_map(["user"], |row| row.get::<_, String>(3))
+            .expect("read query plan")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect query plan");
+        assert!(
+            plan.iter()
+                .any(|step| step.contains("idx_nodes_normalized_scope")),
+            "the scoped hygiene scan must use the V29 expression index, got plan: {plan:?}"
+        );
+    }
+
     #[test]
     fn v16_preserves_existing_rows_from_v15() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
@@ -1752,6 +2936,11 @@ mod tests {
         // `apply_migrations` normally runs before the V14 SQL batch.
         for migration in MIGRATIONS {
             if migration.version <= 15 {
+                if migration.version == 2 {
+                    for stmt in MIGRATION_V2_ALTER_COLUMNS {
+                        add_column_if_missing(&conn, stmt).expect("apply V2 temporal column");
+                    }
+                }
                 if migration.version == 14 {
                     add_column_if_missing(
                         &conn,

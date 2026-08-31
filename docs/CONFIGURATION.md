@@ -4,19 +4,15 @@
 
 ---
 
-## Embedding Profiles
+## First-Run Network Requirement
 
-Vestige never downloads or switches an embedding model in the background. Nomic Compact is the local baseline; optional Qwen profiles must be explicitly installed from verified artifacts, evaluated, migrated into an isolated vector space, and activated by the user.
+Vestige downloads the **Nomic Embed Text v1.5** model (~130MB) from Hugging Face on first use. Qwen3 embeddings are opt-in and download their own Hugging Face model when selected.
 
-`VESTIGE_EMBEDDING_MODEL` is not supported. Environment variables, hardware
-detection, upgrades, and ordinary startup cannot select, download, or activate
-an embedding profile. Use `vestige embeddings list` to inspect the local
-profile catalog and the explicit lifecycle commands to change it.
+**All subsequent runs are fully offline.**
 
 ### Model Cache Location
 
-The legacy Nomic runtime uses platform-specific cache directories when it has
-already been provisioned locally:
+The embedding model is cached in platform-specific directories:
 
 | Platform | Cache Location |
 |----------|----------------|
@@ -29,9 +25,7 @@ Override with environment variable:
 export FASTEMBED_CACHE_PATH="/custom/path"
 ```
 
-Qwen profiles do not use a Hugging Face runtime downloader. Their artifacts
-must be supplied locally, hash-verified, and paired with a compatible packaged
-runner before an explicit profile install can succeed.
+Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the standard Hugging Face cache environment such as `HF_HOME` if you need to relocate that larger model cache.
 
 ---
 
@@ -51,9 +45,64 @@ runner before an explicit profile install can succeed.
 | `VESTIGE_DASHBOARD_ENABLED` | `false` | Set `true` or `1` to enable the web dashboard |
 | `VESTIGE_CONSOLIDATION_INTERVAL_HOURS` | `6` | FSRS-6 decay cycle cadence |
 | `VESTIGE_BACKFILL_AUTOFIRE` | `on` | Retroactive Salience Backfill auto-fire during consolidation. On by default; set `0`/`false`/`off`/`no` to disable. The manual `backfill` tool + CLI stay available either way. When on, promotion is bounded (`stability = MIN(stability * 1.5, stability + 365)`) |
-| `VESTIGE_AUTO_CONSOLIDATE_MERGE` | `on` | Auto concat-merge of near-duplicate memories during consolidation (keeps the strongest, folds the rest in as `[MERGED]` blocks, deletes the originals). On by default; set `0`/`false`/`off`/`no` to disable. Protected (`dedup protect`) memories are never absorbed or deleted by this pass, on or off. |
+| `VESTIGE_AUTO_CONSOLIDATE_MERGE` | `off` | Auto concat-merge of near-duplicate memories during consolidation (keeps the strongest, folds the rest in as `[MERGED]` blocks, deletes the originals). **Off by default since v2.6.0** — unattended destruction is opt-in: set `1`/`true`/`on`/`yes` to enable; anything else (including typos) stays off. Protected (`dedup protect`) memories are never absorbed or deleted by this pass. The `dedup` tool remains the previewable, reversible path. |
+| `VESTIGE_TRACE` | `on` | Agent Black Box trace recording. **On by default**: every MCP tool call writes rows to `agent_traces`/`agent_runs` in your local database. Set `0`/`false`/`off`/`no` to turn the recorder off. Read once per process, so changing it mid-process has no effect |
+| `VESTIGE_TRACE_RETENTION_DAYS` | `30` | How long Black Box traces are kept. The consolidation cycle deletes trace events older than this and drops any `agent_runs` roll-up left with no events. `0` keeps traces forever (sweep disabled); unset, empty, negative, or malformed values fall back to `30` |
+| `VESTIGE_DISABLE_VECTOR_SEARCH` | unset (vector search on) | Kill switch for the HNSW vector index. Set to `1`/`true`/`yes`/`on`/`enable`/`enabled` to force semantic/vector search off and fall back to keyword search. Useful on older x86 CPUs — the index also disables itself automatically when AVX2+FMA are missing |
+| `ORT_DYLIB_PATH` | unset | Intel Mac (`x86_64-apple-darwin`) only: absolute path to Homebrew `libonnxruntime.dylib`. Resolve with `brew --prefix onnxruntime` (do not hardcode `/opt/homebrew` vs `/usr/local`). GUI clients (Cursor, Claude Desktop) do not inherit `.zshrc` — set this in the MCP JSON `env` block. See [Intel Mac install](INSTALL-INTEL-MAC.md) |
 
 > **Storage location precedence:** `--data-dir <path>` wins over `VESTIGE_DATA_DIR`; if neither is set, Vestige uses your OS's per-user data directory: `~/Library/Application Support/com.vestige.core/` on macOS, `~/.local/share/vestige/core/` on Linux, `%APPDATA%\vestige\core\` on Windows. Custom paths are directories, are created if missing, expand a leading `~`, and store the database at `<dir>/vestige.db`.
+
+### Vestige Pro (hosted cloud sync)
+
+These are read only by `vestige sync --cloud`. Leave them unset and Vestige stays fully local — nothing is uploaded and no network call is made.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VESTIGE_CLOUD_ENDPOINT` | unset | Hosted managed-sync endpoint, issued when you subscribe. `--endpoint` on `vestige sync --cloud` takes precedence |
+| `VESTIGE_CLOUD_SYNC_KEY` | unset | Per-user bearer key for the hosted service, issued when you subscribe. Authenticates the transport only — it is **not** the encryption passphrase |
+| `VESTIGE_CLOUD_ENCRYPTION_KEY` | unset (**required** for cloud sync) | Passphrase for client-side zero-knowledge encryption (Argon2id KDF → XChaCha20-Poly1305, `VSTGENC1` envelope). Use the same passphrase on every device |
+
+> **The passphrase never leaves your machine.** The archive is encrypted on-device
+> before upload and decrypted after download, so the hosted service only ever
+> stores ciphertext. Vestige has no copy of `VESTIGE_CLOUD_ENCRYPTION_KEY` and
+> **cannot reset or recover it** — if you lose it, the synced blob is
+> unrecoverable by design. Encryption is mandatory: the client refuses to upload
+> an unencrypted archive and rejects a plaintext archive on download.
+
+---
+
+## Review Modes (Memory PR write gating)
+
+Vestige can hold risky memory writes for review instead of letting them land
+silently. Each held write is suppressed (excluded from normal retrieval) and
+opens a **Memory PR** you decide in the dashboard (Memory PRs tab) or via
+`GET /api/memory-prs`.
+
+| Mode | Behavior |
+|------|----------|
+| `fast` | Never gate. Every write auto-commits. |
+| `risk_gated` | **Default.** Ordinary writes auto-commit; risky ones (contradicting high-trust memories, destructive ops, sensitive topics) open a Memory PR. |
+| `paranoid` | Gate every write. Nothing enters the brain without approval. |
+
+The mode is stored in `<data_dir>/review_mode.json` and set from the dashboard
+(`POST /api/memory-prs/mode`). A missing or corrupt file falls back to
+`risk_gated` — a bad file can never silently disable gating.
+
+When a normal risky write is gated, the tool response carries `memoryPrs` and a
+`memoryPrNotice` describing the quarantine. Confirmed purge/delete calls and
+direct suppression are different: in `risk_gated` and `paranoid` modes Vestige
+durably opens a pending Memory PR **before** the mutation and returns without
+changing the memory. If the PR cannot be saved, the call fails closed.
+
+For a pending destructive PR, `forget` approves and executes the requested
+purge or suppression, `promote` keeps the memory unchanged, and `quarantine`
+keeps the row but suppresses it. `fast` remains the explicit direct-execution
+opt-out.
+
+> **Note:** `VESTIGE_TRACE=0` disables Black Box trace/receipt recording, but it
+> does not disable this pre-execution safety gate. Review mode, not tracing,
+> controls destructive mutation policy.
 
 ---
 
@@ -148,7 +197,7 @@ limit = 50
 
 ```bash
 vestige-mcp --data-dir /custom/path   # Custom storage location
-VESTIGE_DATA_DIR=~/.vestige vestige-mcp # Env fallback storage location
+VESTIGE_DATA_DIR="$HOME/.vestige" vestige-mcp # Env fallback (shell); GUI JSON does not expand ~
 VESTIGE_DATA_DIR=./.vestige vestige stats # Point the CLI at the same custom DB
 vestige-mcp --help                     # Show all options
 ```
@@ -170,6 +219,7 @@ vestige portable-export <file>         # Exact Vestige-to-Vestige archive
 vestige portable-import <file>         # Import exact archive into an empty database
 vestige portable-import <file> --merge # Merge exact archive into this database
 vestige sync <file>                    # Pull/merge/push through a file backend
+vestige sync --cloud                   # Pull/merge/push through Vestige Pro (see cloud env vars)
 ```
 
 ---
@@ -211,25 +261,60 @@ Add to `~/.claude/settings.json`:
 
 ### Claude Desktop (macOS)
 
+Claude Desktop is a GUI app: it does not inherit your shell PATH and does not expand `~` in JSON. After `npm install -g vestige-mcp-server@latest`, paste the absolute path from `which vestige-mcp`. nvm/fnm/Homebrew npm will not be `/usr/local/bin`.
+
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "vestige": {
-      "command": "vestige-mcp"
+      "command": "<absolute path from which vestige-mcp>"
     }
   }
 }
 ```
 
+Per-project memory — live storage flag is `--data-dir`, and the directory must be absolute:
+
+```json
+{
+  "mcpServers": {
+    "vestige": {
+      "command": "<absolute path from which vestige-mcp>",
+      "args": ["--data-dir", "/Users/you/projects/my-app/.vestige"]
+    }
+  }
+}
+```
+
+**Intel Mac:** Claude Desktop does not inherit `.zshrc`. Put `ORT_DYLIB_PATH` in the MCP `env` block. Run `brew --prefix onnxruntime` and paste the result — do not hardcode `/opt/homebrew` vs `/usr/local`. See [Intel Mac install](INSTALL-INTEL-MAC.md).
+
+```json
+{
+  "mcpServers": {
+    "vestige": {
+      "command": "<absolute path from which vestige-mcp>",
+      "args": [],
+      "env": {
+        "ORT_DYLIB_PATH": "<brew --prefix onnxruntime>/lib/libonnxruntime.dylib"
+      }
+    }
+  }
+}
+```
+
+Drop-in skeleton: [`claude-desktop-config.json`](claude-desktop-config.json).
+
 ### Claude Desktop (Windows)
+
+Same GUI PATH rule: paste the absolute path from `where vestige-mcp`. Official install is npm, not cargo.
 
 Add to `%APPDATA%\Claude\claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "vestige": {
-      "command": "vestige-mcp"
+      "command": "<absolute path from where vestige-mcp>"
     }
   }
 }

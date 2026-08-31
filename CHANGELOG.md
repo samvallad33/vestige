@@ -5,9 +5,585 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-08-30 — "Nothing deletes your memories except you"
+
 ## [Unreleased]
 
-### Fixed — Auto-consolidation merge: opt-out lever + protected pins honored (#142)
+### Fixed — Consolidation can no longer delete your memories
+
+The background consolidation cycle contained two paths that could destroy
+memories unattended. Both are gone or opt-in now, because forgetting in
+Vestige means down-ranking, and destruction is reserved for explicit,
+previewable commands.
+
+The serious one was a "retention target" garbage collector: whenever average
+retention slipped below a target, it hard-deleted every memory below 0.3
+retention older than 30 days. It looked harmless for months only because
+decay was broken (see below) so nothing ever sank that low. The day decay
+came back to life, it silently destroyed 23 real memories from a live
+2,929-memory store in one cycle — no line in the output, no reason in the
+tombstone, and no exemption for pinned memories. Consolidation now reports
+how many low-retention memories exist and deletes nothing; the explicit
+`maintain {action:"gc"}` command (dry-run by default) is the only collector,
+and it now refuses to touch protected memories no matter how decayed.
+
+The second was the near-duplicate auto-merge from #142: it folds weaker
+copies into a keeper and hard-deletes them, and it was on by default with a
+fail-open gate (a typo in the env var still destroyed data). It is opt-in
+now (`VESTIGE_AUTO_CONSOLIDATE_MERGE=1`), the gate fails closed, and when
+enabled it only deletes a weak node after the keeper verifiably absorbed its
+content — the previous code discarded that failure and deleted anyway. The
+`dedup` tool remains the previewable, reversible path.
+
+If you run a store that predates this release: memories already collected by
+the old GC are recorded as content-free tombstones and cannot be recovered
+from the store itself. Check your backups directory; the daily backup from
+before your first post-decay-fix consolidation contains them.
+
+### Fixed — Forgetting works again (the two dead accessibility states)
+
+The four-state accessibility model (Active, Dormant, Silent, Unavailable) was
+measured running as a two-state one: across a real 2,929-memory store,
+retention never fell below 0.61, so Silent and Unavailable could not fire and
+memories sat 217 days untouched without decaying into them.
+
+The root cause was not the forgetting curve. The decay exponent is
+personalized by an optimizer trained on the access log, and an agent memory
+store's access log is success-dominated by construction: almost every event
+says "remembered", almost none say "forgot". Given that data, the best fit is
+"nothing is ever forgotten", and the fit collapsed into the optimizer's 0.01
+lower bound and stayed there for a month. Decay ran on schedule, on every
+node, and wrote values indistinguishable from no decay. Under the same
+formula with the default exponent, 244 of the 404 oldest untouched memories
+should have been Silent on the day this was measured.
+
+Three repairs, each with a regression test:
+
+- The optimizer refuses to fit without real forgetting evidence (at least 5
+  failed-recall events). Success-only history is insufficient evidence, not
+  proof of immortal memory.
+- The fit is floored at 0.08, roughly half the FSRS-6 default. The old 0.01
+  bound was a numeric convenience, not a forgetting curve any human has.
+- Suppression now counts as the forgetting signal it is. It was being fed to
+  the optimizer as a successful recall. Training also uses the most recent
+  1,000 events instead of the oldest (the old window slid under the 90-day
+  log pruning, which is why the fit swung between 0.0104 and 0.137 with no
+  behavior change).
+
+Also repaired: five memories had escaped the stability ceiling entirely (one
+at 1.4e24 days) because the per-review sentiment boost compounded unclamped.
+The boost is clamped now, and consolidation clamps existing outliers back.
+
+### Added — Granite embedding profile (32k context, multilingual)
+
+New built-in profile `granite-311m-multilingual-r2-256`:
+ibm-granite/granite-embedding-311m-multilingual-r2 (Apache-2.0), ModernBERT,
+32,768-token context — four times the Nomic profiles — with the official
+Matryoshka truncation to the existing 256d storage, so switching profiles
+reuses the vector store as-is via the reversible migration machinery. No
+query or document prefixes; CLS pooling, verified from the pinned revision's
+own pooling config.
+
+The model is not in fastembed's catalogue, so it runs through the
+user-defined ONNX path from an explicitly installed artifact directory,
+hash-verified file by file against digests pinned in the profile (the same
+no-network-at-attach contract as the Qwen profiles). Install, attach, and
+migrate all flow through the existing `vestige embeddings` commands.
+
+Honest claim boundary, recorded here on purpose: Granite beats
+EmbeddingGemma-300m 65.2 vs 62.5 on MMTEB Multilingual Retrieval in its
+paper, plus the context advantage. There is no same-source benchmark against
+Nomic, so no number versus Nomic is claimed.
+
+### Added — Rank-native fusion, opt-in
+
+The retrieval pipeline's post-stages (temporal, accessibility, context,
+utility) have folded into the score as stacked multipliers. With
+`rank_native_fusion: true` (or `VESTIGE_RANK_NATIVE_FUSION=1`) they now join
+as ranked lists via weighted reciprocal-rank fusion instead — the same
+mechanism, and the same k=60, as the core keyword/semantic fusion. Signals
+advise (a single signal cannot overturn adjacent base relevance) and
+accumulate (agreeing signals can genuinely reorder). Suppression and
+retrieval-competition penalties stay penalties in both modes.
+
+Off by default until it beats the multiplicative path on the MemConflict
+harness. The response reports `fusionMode` when it is active.
+
+### Added — Staleness prediction for code memories
+
+`codebase verify` now learns from its own sweeps. Every anchored verdict is
+one observation about how long code memories survive before drifting (stale
+= event, fresh = right-censored), and a Kaplan-Meier estimator over those
+observations attaches a `predictedStaleProbability` to the memories
+verification cannot reach. Backcalculation in the Brookmeyer & Gail sense:
+rot is only ever observed at verification time, and the onset distribution
+is inferred from the lags.
+
+It refuses to predict without evidence — at least 12 anchored verdicts
+including 4 observed drift events, and a fresh-only history fits nothing
+(the mirror of the optimizer lesson above). A prediction is a probability
+shown next to the memory, never an action taken on it.
+
+## [2.5.0] - 2026-08-30 — "Corrections stick"
+
+Telling Vestige it was wrong now works.
+
+Until this release, saving a correction could do the opposite of what you
+asked. A correction is worded almost identically to the thing it corrects, so
+the write path read it as a repeat, threw it away, and made the wrong memory
+stronger. This release fixes that, adds a benchmark so retrieval claims are
+measured instead of argued, and picks up a SQLite security fix.
+
+### Fixed — A correction no longer strengthens the claim it corrects
+
+Contradiction detection existed twice in the codebase, and the two copies had
+drifted apart.
+
+The retrieval side could spot a conflict properly. The write side could not.
+It only noticed a conflict when the incoming memory carried the negative word,
+and it had no idea what to do with opposites or with two different values for
+the same fact.
+
+The write side is the one that decides whether your memory gets stored at all,
+so the weaker copy was the one guarding the door. Protecting a memory during
+search does not help if it was already discarded on the way in.
+
+Measured against the real binary, every one of these was read as agreement,
+and each one reinforced the claim it contradicted:
+
+| You saved | Over the stored | Similarity |
+|---|---|---|
+| "Always use prompt diversity" | "Never use prompt diversity" | 0.965 |
+| "prompt diversity improves accuracy" | "prompt diversity hurts accuracy" | 0.962 |
+| "runs PostgreSQL 16" | "runs PostgreSQL 14" | 0.940 |
+| "holds a Master degree" | "holds a Bachelor degree" | 0.976 |
+
+All four sit above the 0.92 near-identical threshold, which is why they
+short-circuited. Saving the same two in the opposite order worked fine, so
+this was about which one arrived second, not about the threshold being wrong.
+
+There is one detector now. Both paths use it, so they cannot drift again.
+
+The shared detector itself then failed its pre-release audit and was tightened
+before tagging. Measured against a real 2,929-memory store, its negation scan
+fired on the mere presence of a word like "never" or "removed" in one of two
+long notes — flagging 83% of same-subject pairs as contradictions and turning
+84% of near-identical re-saves into duplicates instead of reinforcements. A
+negation word now only counts when the OTHER text carries its paired positive
+term ("never" against "always"), matched as whole words, and a correction
+marker ("fixed", "actually") only counts when token overlap shows the two
+texts genuinely share a subject. On the same store that brings the flag rate
+from 83% to 13%, while every correction shape in the table above is still
+detected in both orders.
+
+Version numbers needed a further fix. Words of three characters or fewer were
+being dropped before comparison, so "version is 4.2" and "version is 5.0"
+looked like identical text with the only meaningful difference thrown away.
+
+### Fixed — A corrupt search index no longer strands your memories
+
+Startup treated a damaged full-text index as fatal and refused to open the
+database. That index is derived data. It can be rebuilt from the memories
+themselves, and it now is. Real corruption elsewhere still fails loudly.
+
+### Fixed — Vestige sees writes from your other apps (#181)
+
+If you run Claude Desktop and the CLI against the same store, one process
+could not find memories the other had just written until you restarted it.
+The in-memory vector index is now refreshed when a peer process writes.
+
+### Fixed — A capital letter no longer blanks a tag search
+
+`tag_prefix` compared case-sensitively while everything around it did not, so
+searching `Reflection` missed a memory tagged `reflection`.
+
+### Fixed — Memories that disagree are no longer suppressed for disagreeing
+
+Search applies a penalty to results that compete with each other. A memory
+contradicting another counted as competition, so the dissenting view got
+pushed down exactly when you most needed to see it. Contradiction pairs are
+now exempt, and the response says when this happened.
+
+### Added — Code memories know when the code moved (schema V31)
+
+A memory about a function can now tell you whether that function still looks
+the way it did when you saved it. Three layers are checked in order: the file
+path, the symbol, then a hash of the code itself.
+
+### Added — `server/discover`, for MCP revision 2026-07-28
+
+The current MCP revision requires it. `tools/list` is now sorted and
+cacheable, so clients stop refetching it.
+
+### Added — MemConflict benchmark harness
+
+Retrieval changes can now be measured on a public benchmark instead of
+argued about. Runs four arms, including a no-memory control and a BM25
+control, because a memory system that cannot beat plain keyword search is
+not earning its complexity.
+
+Read the per-bucket sample size before quoting a number from it. One of its
+three categories has three questions in it, and the harness warns you.
+
+### Changed — Balanced search considers more candidates
+
+The reranker's own configuration asks for 50 candidates and was being handed
+30. It now gets 50. Measured on MemConflict this improved every category with
+a real sample size, and costs about 38% more time on a 2,900-memory store.
+For the record: the three-question category went down (1.0 to 0.667, one
+question), and at 98 questions total the improvement is directionally
+consistent rather than statistically settled — the depth-vs-recall curve from
+T2-RAGBench is what carries the direction.
+
+`precise` mode is unchanged. The same change cost it 103% and speed is that
+mode's whole purpose.
+
+### Security
+
+SQLite 3.51.1 to 3.53.2, covering CVE-2026-11822, a memory corruption bug in
+FTS5.
+
+### Testing
+
+A new end-to-end suite spawns the real binary and talks to it over stdio the
+way a client does, covering protocol framing, migrations under a second live
+process, and the embedding runtime. It is what caught the correction bug
+above.
+
+## [2.4.1] - 2026-08-30 — "Linux starts"
+
+A packaging fix. v2.4.0 and every release before it shipped a Linux binary
+that could not start on common distributions, so none of its correctness work
+reached those users at all.
+
+### Fixed — Linux binaries start on Ubuntu 22.04 and Debian 12 (#174, #175)
+
+The published `x86_64-unknown-linux-gnu` asset was built on `ubuntu-latest`
+(glibc 2.39). `npm install -g vestige-mcp-server` then `vestige-mcp` died
+before any MCP handshake with `GLIBC_2.38 not found`. The MCP spec-test
+failures were that crash, not protocol.
+
+Linux-gnu is now produced in an `ubuntu:22.04` container (glibc 2.35, the
+22.04 floor). The pyke ONNX Runtime archive still references C23
+`__isoc23_strto*` symbols; a small shim forwards them to classic `strto*`
+so embeddings keep working. musl was evaluated and rejected: ONNX Runtime
+ships no musl prebuilts.
+
+CI execs the binary on Ubuntu 22.04 and Debian 12 bookworm (`initialize`
+over stdio, not just `--version`). npm 2.3.0 stays broken until the next
+tagged release; this branch does not tag or publish.
+
+## [2.4.0] - 2026-08-30 — "Memory that keeps its word"
+
+A correctness release. Fourteen defects are fixed across the write path, keyword
+search, the causal-reach engine and the storage layer. Twelve of them were live
+in the shipped v2.3.0 binary; the remaining two existed only in unreleased code,
+including one that would have made this release refuse to start for existing
+users.
+
+### Fixed — Upgrade no longer bricks an existing database (release blocker)
+
+`run_integrity_checks` treated any `PRAGMA foreign_key_check` violation as
+fatal at startup, with no environment override, no warning-only mode and no
+repair path. Deletion residue from older builds is common — a real 2,868-memory
+store carried 84 violations across 83 rows — so this release would have refused
+to open for every affected user, recoverable only by manual SQLite surgery.
+v2.3.0 opens that same store; the unreleased code did not.
+
+Orphaned child rows are now repaired before migrations, and **only** where that
+row's own foreign key is declared `ON DELETE CASCADE` — the schema already
+states such a row should have gone with its parent, so it is unreachable
+residue. Violations that are not cascade-declared still fail loudly. The
+post-migration and runtime checks are unchanged and remain strict. Verified
+end to end: the store that aborted now opens, `repaired=83 remaining=0`, all
+2,868 memories preserved.
+
+### Fixed — Corrections are no longer swallowed as reinforcements
+
+`PredictionErrorGate::evaluate` returned `Update{Reinforce}` on similarity
+alone, short-circuiting before anything consulted `appears_contradictory` —
+which is already computed for that candidate. A correction is *lexically*
+near-identical to what it corrects: "Never use the fp16lib feature for usearch on
+Windows" against a stored "Always use the fp16lib feature for usearch on Windows"
+measures 0.928 cosine, over the 0.92 near-identical threshold. So the gate read
+corrections as agreement, discarded them, and
+strengthened the very memory the user had just said was wrong. Contradictory
+input now falls through to the contradiction branch, which keeps both.
+
+### Fixed — Supersession no longer inverts which memory is authoritative
+
+`assess_relation` gated supersession on "is B more trusted?" but chose the
+newer/older labels independently, by date. When the newer memory was the *less*
+trusted one, it reported the less-trusted memory as superseding the more-trusted
+one and printed the older memory's own trust advantage as if it belonged to the
+newer claim — exactly backwards for the case this guard exists to catch.
+Supersession now requires the newer memory to also be the more trusted one; a
+newer, weakly-supported claim yields no supersession and both are kept.
+
+### Fixed — Suppression and demotion survive consolidation
+
+`suppress_memory` and `demote_memory` stamped `last_accessed = now`.
+`apply_decay` does not decay the stored value — it recomputes
+`retrieval_strength` and `retention_strength` from `days_since(last_accessed)`.
+Stamping "now" made an inhibited memory look freshly recalled, so the next
+consolidation pass overwrote the whole penalty and silently un-suppressed it
+within hours. An inhibition is not a recall.
+
+### Fixed — Nightly consolidation no longer merges or deletes across projects
+
+`auto_dedup_consolidation` clustered every embedding at cosine ≥ 0.85 with no
+scope predicate and then hard-deleted the losers — unattended, with no audit
+row. Two projects' near-identical notes naming different credentials would be
+fused and one destroyed. Clustering is now scope-bounded.
+
+### Fixed — Keyword search is unicode-aware (schema V30)
+
+Three coupled defects, fixed together because the query sanitizers deliberately
+mirror the index tokenizer:
+
+- The FTS index used `porter ascii`, which folds multi-byte characters into the
+  adjacent token instead of separating on them. An em dash, curly apostrophe,
+  ellipsis, non-breaking space, leading emoji or accented letter therefore glued
+  itself to the neighbouring word and made that word permanently unfindable.
+  Note that a character with spaces around it is harmless, since the tokenizer
+  separates on the space regardless; only a character glued directly between
+  letters hides anything. Measured on a real 2,868-memory store, 201 memories
+  (7%) contain words hidden this way, 161 of them through accented or Cyrillic
+  text, which the ascii tokenizer cannot index at all.
+  Rebuilt as `porter unicode61 remove_diacritics 2`.
+- `sanitize_fts5_terms` used a deny list that left 16 ASCII punctuation
+  characters unblanked. The demonstrated failure is the apostrophe, which opens a
+  string literal in FTS5: `recall("cargo can't find crate")` returned zero
+  keyword hits while the same query without it matched. Replaced with a
+  conservative allow list, which does not depend on enumerating the grammar
+  correctly.
+- `sanitize_fts5_or_query` truncated non-ASCII tokens to their ASCII prefix to
+  match the old index; those are real tokens under `unicode61`.
+
+### Fixed — Exact lookup is no longer outranked by memories that merely cite it
+
+`concrete_search_filtered` is the documented exact-lookup path: a UUID, env var,
+path or quoted phrase routes here. It fed two incompatible scales into one
+`combined_score`. The FTS leg used raw BM25 magnitude, which is unbounded, while
+`literal_match_score` returns fixed constants (id-exact 3.0, content-exact 2.5,
+prefix 2.0, contains 1.6, source 1.4, tag 1.2), and the merge takes the maximum.
+
+Measured with SQLite FTS5 on a 202-document corpus, a note citing a UUID three
+times scores a BM25 magnitude of 27.475. The memory whose id *is* that UUID
+scores exactly 3.0 and never appears in the FTS leg at all, because the
+identifier is its id rather than its text. The FTS leg is now normalized into
+0.0..=1.0, strictly below the 1.2 literal floor, so relative BM25 order is kept
+among pure keyword hits while any literal match outranks any non-literal one.
+
+### Fixed — The claim-vs-memory conflict check can actually fire
+
+`recall(mode="reason")` tests the caller's query against each analyzed memory so
+that a claim contradicting a high-trust memory surfaces instead of passing in
+silence. Its gate used a symmetric Jaccard that divides by the union, so the
+score is bounded by (query length / memory length). A claim restating a real
+26-substantive-word memory's own position in 8 words scores 0.214 against a gate
+of 0.4. The stage never fired for any realistic memory. It now gates on query
+coverage instead, which scores that same claim at 0.75.
+
+The pre-existing test covered only the negative case, an agreeing claim not being
+flagged, which passes trivially when the gate never fires at all.
+
+### Fixed — A new memory is no longer stamped as already expired
+
+smart_ingest auto-closes a dated claim's validity when a currently-valid newer
+fact starts later. The comment stated the precondition — a claim that lost every
+candidate — but the filter never checked it, and the trigger is recorded while
+skipping *ineligible* candidates. So an unrelated newer fact elsewhere in the
+store could close a brand-new memory at creation, leaving it invisible to
+ordinary recall. This existed only in unreleased code.
+
+### Fixed — Causal backfill joins on identifiers, not vocabulary
+
+The backward reach links a failure to its cause through *shared entities*, but
+the extractor was harvesting ordinary English: `is_env` accepted any all-caps
+run of three or more characters (so `VERIFIED`, `BUG`, `CRITICAL` registered as
+environment variables), tags were inserted unfiltered (so any shared topical tag
+counted), and `is_path` accepted prose abbreviations like `e.g.`. Because the
+causal score is a raw count of shared entities, junk matches outranked genuine
+rare identifiers — the join preferred vocabulary over causality, the exact
+failure backfill exists to avoid. Entities must now be identifier-shaped, and
+the same test is applied to tags. Adds the first test exercising extraction on
+realistic prose.
+
+### Added — Official MCP Registry publish from GitHub Releases
+
+Creating a GitHub Release now publishes repo-root `server.json` to
+https://registry.modelcontextprotocol.io via GitHub OIDC
+(`mcp-publisher login github-oidc`). No stored PAT. npm
+`vestige-mcp-server@<version>` must already exist; the job fails rather
+than racing the registry's npm `mcpName` check. Already-listed versions
+(including 2.3.0) are not republished.
+
+### Fixed — Memory PR write gate wired into the real tool path (#117)
+
+`gate_writes` — the risk gate that quarantines risky memory writes and opens
+Memory PRs for review — existed and was tested but had **no production
+caller**, so `ReviewMode` was inert and `memory_prs` never populated outside
+tests. It now runs on every traced tool call:
+
+- New shared reader for `<data_dir>/review_mode.json` (default `risk_gated`;
+  missing/corrupt files can never silently disable gating). The dashboard and
+  the write path read the mode through one implementation.
+- Risky writes are suppressed until their Memory PR is decided, and the tool
+  response now carries `memoryPrs` + `memoryPrNotice` so the calling agent
+  knows. The notice is truthful per-write: quarantined writes are reported as
+  held; destructive writes (already applied) are reported as recorded for
+  review, never as "quarantined".
+- Confirmed purge/delete and direct suppression now open a durable Memory PR
+  before execution in risk-gated/paranoid mode. Failed PR persistence blocks
+  the mutation; review decisions then atomically purge, keep, or quarantine.
+- `VESTIGE_TRACE=0` disables Black Box recording without disabling the
+  pre-execution destructive safety gate.
+
+## [2.3.0] - 2026-07-26 — "Cognitive Observatory + Zero-Knowledge Sync"
+
+Two audits (39 verified fixes), three dormant features brought to life, a
+raw-WebGPU dashboard, and the first Vestige Pro surface — a cloud-sync client
+that refuses to sync anything it hasn't encrypted first.
+
+### Added — Cognitive Observatory: a raw-WebGPU living memory field
+
+The dashboard gains a full-bleed, zero-library WebGPU surface that renders the
+memory graph as a living cognitive field: GPU force simulation, HDR bloom, and
+a recall wavefront sweeping the **real** memory graph. Five deterministic demo
+moments are driven by a URL contract (`?demo=<name>&seed=...&frame=N`):
+recall-path, engram-birth, salience-rescue, forgetting-horizon, firewall —
+capture mode (`?frame=N`) freezes the sim so the same URL produces identical
+pixels. No Three.js, no chart library: bare-metal WebGPU engine, WGSL shaders,
+DOM as instrument overlays only. The Observatory is also embedded in the main
+graph page (an Observatory button beside Dream and Memory Cinema takes over
+full-bleed; Esc exits), and the field is clickable — GPU picking opens the
+same Memory Detail inspector Classic's picking drove.
+
+### Added — Vestige Pro: zero-knowledge cloud-sync client + CLI/npm upgrade surfaces
+
+The public client for the hosted Vestige Cloud managed-sync service lands
+behind the optional `cloud-sync` cargo feature, and encryption is mandatory:
+**the client refuses plaintext sync**. The portable archive is encrypted
+on-device before upload (Argon2id KDF → XChaCha20-Poly1305 AEAD, a
+self-describing `VSTGENC1` envelope) under a passphrase
+(`VESTIGE_CLOUD_ENCRYPTION_KEY`) that is **never sent to the server** and is
+independent of the bearer sync key — the hosted service only ever stores
+ciphertext, so "we hold no keys" is literally true, and a lost passphrase means
+the synced blob is unrecoverable by design (we cannot reset what we never
+have). The refusal cuts both ways: the client will not upload an unencrypted
+archive, and it rejects a plaintext blob on download instead of quietly
+accepting it. The transport is the existing pull-merge-push portable-sync
+engine over HTTP with ETag/`If-Match` optimistic concurrency, so two devices
+converge without lost updates. The Pro upgrade surfaces that ship with it are
+**CLI and npm only** — the `vestige sync --cloud` subscribe wall, the `--help`
+and `vestige health` footers, the npm README, and the postinstall banner. The
+dashboard gains no Pro surface in this release. **The hosted service is optional
+and paid; local-first stays free** — the default `vestige-core` library build
+links no HTTP client at all, and in the shipped server binary (whose default
+features do include `connectors` and `cloud-sync`, so it links `reqwest`) the
+cloud client is inert unless you set `VESTIGE_CLOUD_ENDPOINT`,
+`VESTIGE_CLOUD_SYNC_KEY`, and `VESTIGE_CLOUD_ENCRYPTION_KEY` and explicitly run
+`vestige sync --cloud`.
+
+### Changed — The living field is now the main graph renderer
+
+The main graph page defaults to the Observatory engine wherever WebGPU exists.
+A new **Field | Classic** toggle in the control bar keeps the Three.js view one
+click away and untouched (picking, colour modes, temporal scrubbing and legends
+remain Classic features); a missing or non-functional WebGPU stack forces
+Classic automatically — including the case where `'gpu' in navigator` is true
+but `requestAdapter()` returns null, `requestDevice()` throws, or the device is
+lost mid-session — and the choice persists in `localStorage` (the automatic
+fallback deliberately does not persist, so a machine whose GPU recovers gets
+the field back next session). Dream, Observatory takeover, Memory Cinema,
+and Reload work in both modes.
+
+### Changed — `smart_ingest` batch mode honors an explicit `forceCreate: false`
+
+**Write-semantics change for existing clients.** Batch mode has defaulted to
+`batchMergePolicy: "force_create"` since v2.1.23 — but under that default, an
+explicit per-call `forceCreate: false` was silently inverted into a
+force-create. An explicit `forceCreate` is now authoritative in both policies:
+pass `forceCreate: false` and batch items go through Prediction Error Gating
+(merge/update/create against existing memories) even under the default policy.
+Callers that were sending `forceCreate: false` while relying on the old
+always-create behavior will now see merges and updates instead of new nodes —
+drop the parameter (or send `true`) to keep the old behavior.
+
+### Fixed — 29 bugs from the full-backend adversarial audit (#139)
+
+A backend-wide audit (18 feature areas, each finding adversarially re-verified)
+surfaced 31 real bugs; this release fixes 29. Highlights: **migrations now run
+in a transaction** (a mid-migration failure no longer bricks the DB),
+`decide_memory_pr` rejects re-deciding a finalized PR, `suppress` reverse is a
+true inverse (was leaving stability permanently halved), `update_node_content`
+regenerates a stale embedding when the embedder wasn't ready, `plan_merge`
+validates `survivor_id` (was an unchecked-unwrap panic), the contradiction
+heuristic requires a real polarity flip (was demoting correct memories on
+benign "do not" notes), and hybrid-search relevance is the min-max-normalized
+RRF fused score. Full workspace stayed green (1556 tests, clippy `-D warnings`
+clean).
+
+### Fixed — Three dormant features wired live (#117, #124, #137 via #140)
+
+Honesty first: each of these is now genuinely producing data, and none of the
+three is 100% finished. The remaining edges are stated per item.
+
+- **Agent Black Box records traces for real (#117)**: the trace recorder had
+  zero production callers, so `agent_traces` never populated.
+  `handle_tools_call` now records the opening `mcp.call` event before dispatch
+  and the memory events after, under a shared `run_id` — including in pure
+  stdio mode (was gated on a dashboard socket). **Tracing is on by default**
+  and writes rows to your local database on every MCP tool call; set
+  `VESTIGE_TRACE=0` (or `false`/`off`/`no`) to turn the recorder off. **Traces
+  are pruned after 30 days by default** — the consolidation cycle sweeps
+  `agent_traces` older than the retention window and drops any `agent_runs`
+  roll-up left with no events. Override with `VESTIGE_TRACE_RETENTION_DAYS`;
+  `0` keeps traces forever (sweep disabled). **Not yet wired**: the receipts
+  and memory-PR producers — those Black Box surfaces still have no production
+  writer and stay empty for now.
+- **Recurring intentions re-arm (#124)**: `mark_triggered` advances a
+  recurring trigger's `next_occurrence` and returns it to Active (was firing
+  once and staying Triggered forever). **Not yet done**: the re-arm logic is
+  fixed, but recurring intentions are not yet hydrated into the live engine,
+  so a re-armed intention is not automatically picked up by the running
+  trigger loop.
+- **Co-access prediction is live (#137)**: `search_unified` feeds retrieved
+  sets to the speculative retriever, so co-access patterns populate (were
+  permanently empty). **Partially wired**: #137's remaining speculative
+  channels are still only partially connected to production callers.
+
+### Fixed — 10 more bugs from the second full-codebase audit (#141)
+
+A second adversarial pass over areas the first under-covered. Majors: the FTS5
+sanitizer leaked bare operators on doubled input ("foo AND AND AND"), aborting
+MATCH or silently flipping AND→OR; unbounded MCP `hours_back`/`hours_forward`
+and an unclamped `limit` could panic the server (DoS); and the connector
+idempotency key omitted `source_project`, so two repos with overlapping issue
+ids clobbered each other's memories — **migration V19** adds the project to the
+key and unique index. Minors: `list_memories` honors `node_type`/`tag` on the
+search path, HTTP Accept handles `*/*` wildcards, Bearer matches
+case-insensitively (RFC 7235), dream insights no longer fabricate a
+TemporalTrend from sentinel dates, the dashboard WebSocket can't resurrect
+itself after `disconnect()`, and Redmine thread truncation keeps the newest
+journals. 1559 tests + clippy clean; dashboard check green.
+
+### Fixed — Dashboard mock data replaced with real APIs
+
+The `/duplicates`, `/contradictions`, and `/patterns` routes shipped hardcoded
+mock data — and `/duplicates` rendered a "Live" badge over it. The three mocks
+are replaced (`898bd33`) with real dashboard HTTP endpoints backed by existing
+core capabilities: `GET /api/duplicates` (dedup cluster detection),
+`GET /api/contradictions` (trust-weighted contradiction analysis), and
+`GET /api/patterns/cross-project` (cross-project pattern transfer). The "Live"
+badge is now truthful. Two more honesty fixes on the same routes: `/duplicates`
+loses its no-op "Merge all" button (the copy now points at the `dedup` MCP
+tool, which actually performs previewable, reversible merges), and the
+`/contradictions` stat card reports the number of memories actually analyzed
+instead of an inflated total.
+
+### Fixed — Auto-consolidation merge: opt-out lever + protected pins honored (#142, via #143)
 
 The background consolidation cycle's auto-dedup pass silently concat-merges
 near-duplicate memories (cosine ≥ 0.85): it keeps the strongest node, folds the
@@ -21,7 +597,68 @@ available for on-demand, previewable, reversible merges regardless. Second,
 unattended, contradicting the interactive contract that a protected node may only
 survive a merge, never be absorbed. A protected node is now never an anchor, never
 a cluster member, and thus never merged into or deleted, whether the lever is on
-or off.
+or off. To be plain about what did **not** change: when the pass is enabled,
+its merges are still hard-deletes with no reversible trail — the lever and the
+pin exclusion narrow the blast radius, they do not add a reflog. Thanks
+@Vrakoss for the report and the fix.
+
+### Docs — README rewrite; CauseBench replaced by Silent Rotation
+
+The README is rewritten for clarity, with stale facts and a dead link fixed.
+The advertised CauseBench benchmark is withdrawn: `benchmarks/causebench/` no
+longer exists, so its link and repro command 404'd, and its published numbers
+are retracted. It is replaced by **Silent Rotation**, which is real and
+auditable — three coding agents, one failing end-to-end test, a signing key
+that exists only in the memory layer, and 246 raw agent transcripts published
+instead of a summary table. The headline metric is the converged-wrong column:
+a no-memory fleet agrees on a planted decoy 21 times in 25; dense cosine 12 in
+23. The repro is three verbatim commands verified from a fresh clone. The
+ComposeBench roadmap note now points at the silent-rotation harness.
+
+### Upgrade notes
+
+- **BREAKING for 2.2.x cloud-sync users: encryption is no longer optional.**
+  In 2.2.x, `VESTIGE_CLOUD_ENCRYPTION_KEY` was optional and `vestige sync
+  --cloud` would upload a plaintext archive when it was unset. 2.3.0 makes
+  zero-knowledge encryption mandatory in **both** directions: it refuses to
+  start a cloud sync without a passphrase, and on download it **hard-rejects a
+  plaintext remote archive** ("refusing plaintext cloud archive") rather than
+  quietly accepting it. So if you synced plaintext under 2.2.x, 2.3.0 will not
+  read that blob. Recovery: on the machine that **still holds the local data**,
+  set `VESTIGE_CLOUD_ENCRYPTION_KEY` to a strong passphrase and re-run `vestige
+  sync --cloud` to re-upload an encrypted archive, then set that same
+  passphrase on every other device. Vestige never receives the passphrase and
+  cannot reset it for you.
+
+- **Black Box tracing is on by default and writes to your database.** Every MCP
+  tool call now records trace rows (`agent_traces` / `agent_runs`). Set
+  `VESTIGE_TRACE=0` (or `false`/`off`/`no`) to opt out. **Retention changed
+  too**: traces older than **30 days** are pruned during the consolidation
+  cycle; tune with `VESTIGE_TRACE_RETENTION_DAYS`, where `0` keeps them
+  forever.
+
+- **Migrations V19 and V20 run automatically.** V19 adds `source_project` to
+  the connector idempotency key and unique index. If you synced **two or more
+  projects of the same source system** (e.g. two GitHub repos) under 2.2.x,
+  their overlapping issue ids clobbered each other's memories. V20 then clears
+  the connector sync cursors, so the next `source_sync` for each project does a
+  full re-scan and repairs the clobbered rows **automatically** — there is no
+  manual step beyond running your normal sync. One caveat for large projects: a
+  single `source_sync` run is bounded by `max_pages`, which defaults to `10`, so
+  a big backlog may take more than one call (or one call with a higher
+  `max_pages`) before the re-scan is complete.
+
+### Credits
+
+This release was again driven in part by the community:
+
+- **@Vrakoss** reported the silent auto-consolidation merge behavior (#142)
+  with a precise write-up of the missing opt-out and the ignored `dedup
+  protect` pins, and contributed the basis of the fix itself — the
+  `VESTIGE_AUTO_CONSOLIDATE_MERGE` lever and the protected-pin exclusion
+  shipped as they built them (PR #143, co-authored in `f7a782d`).
+
+Thank you.
 
 ## [2.2.1] - 2026-07-02 — "Windows embeddings + backfill safety"
 

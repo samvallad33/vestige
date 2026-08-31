@@ -208,7 +208,7 @@ Fix the MCP connection first, then the model will download automatically.
 | Platform | Architecture |
 |----------|--------------|
 | macOS | ARM64 (Apple Silicon), x86_64 (Intel) |
-| Linux | x86_64 |
+| Linux | x86_64 (Ubuntu 22.04, Debian 12, and newer) |
 | Windows | x86_64 |
 
 ## License

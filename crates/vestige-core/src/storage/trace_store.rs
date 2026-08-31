@@ -18,6 +18,62 @@ use super::sqlite::SqliteMemoryStore;
 use super::{Result, StorageError};
 use crate::trace::{MemoryPr, MemoryPrAction, MemoryPrStatus, MemoryTraceEvent, Receipt};
 
+/// Side effect applied while atomically deciding a pre-execution mutation PR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingMemoryMutationEffect {
+    /// The reviewer kept the memory unchanged.
+    Kept,
+    /// The reviewer approved the pending purge/delete.
+    Purged,
+    /// The reviewer held the memory under active suppression.
+    Suppressed,
+}
+
+/// Result of deciding a PR created before a destructive mutation.
+#[derive(Debug, Clone)]
+pub struct PendingMemoryMutationDecision {
+    /// Final PR state returned even when an approved purge removed its row.
+    pub pr: MemoryPr,
+    /// Mutation side effect committed with the decision.
+    pub effect: PendingMemoryMutationEffect,
+}
+
+/// Trace retention window used when `VESTIGE_TRACE_RETENTION_DAYS` is unset or
+/// unusable.
+const DEFAULT_TRACE_RETENTION_DAYS: i64 = 30;
+
+/// Upper bound on the configurable trace retention window (100 years). Beyond
+/// this the window is meaningless — `0` is the documented "keep forever" — and
+/// unbounded values overflow the `chrono::Duration` the sweep builds from them,
+/// which panics (and the release profile aborts on panic).
+const MAX_TRACE_RETENTION_DAYS: i64 = 36_500;
+
+fn is_receipt_local_slot(id: &str) -> bool {
+    [
+        "candidate_",
+        "pair_",
+        "evidence_",
+        "trigger_",
+        "redacted_",
+        "purged_",
+    ]
+    .iter()
+    .any(|prefix| id.starts_with(prefix))
+}
+
+/// Parse the `VESTIGE_TRACE_RETENTION_DAYS` value into a usable retention
+/// window. Unset, empty, negative, and malformed values fall back to
+/// [`DEFAULT_TRACE_RETENTION_DAYS`]; values above
+/// [`MAX_TRACE_RETENTION_DAYS`] are clamped. Split out from
+/// [`SqliteMemoryStore::prune_agent_traces`] so the parsing rules are testable
+/// without touching process-global environment state.
+fn resolve_trace_retention_days(raw: Option<&str>) -> i64 {
+    raw.and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|d| *d >= 0)
+        .map(|d| d.min(MAX_TRACE_RETENTION_DAYS))
+        .unwrap_or(DEFAULT_TRACE_RETENTION_DAYS)
+}
+
 /// A roll-up summary of one agent run, for the Black Box run list.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct AgentRunSummary {
@@ -151,7 +207,49 @@ impl SqliteMemoryStore {
                 out.push(ev);
             }
         }
+        drop(stmt);
+        Self::redact_trace_for_current_state(&reader, &mut out)?;
         Ok(out)
+    }
+
+    /// Resolve every trace-carried memory id against current public validity.
+    /// This makes suppression immediately effective even for an older run.
+    fn redact_trace_for_current_state(
+        conn: &rusqlite::Connection,
+        events: &mut [MemoryTraceEvent],
+    ) -> Result<()> {
+        let mut ids = Vec::<String>::new();
+        for event in events.iter() {
+            for id in event.referenced_memory_ids() {
+                if !is_receipt_local_slot(id) && !ids.iter().any(|existing| existing == id) {
+                    ids.push(id.to_string());
+                }
+            }
+        }
+
+        let now_ms = Utc::now().timestamp_millis();
+        for (index, id) in ids.into_iter().enumerate() {
+            let publicly_eligible: Option<i64> = conn
+                .query_row(
+                    "SELECT CASE
+                        WHEN suppression_count = 0
+                         AND superseded_by IS NULL
+                         AND (valid_from IS NULL OR unixepoch(valid_from) * 1000 <= ?2)
+                         AND (valid_until IS NULL OR unixepoch(valid_until) * 1000 > ?2)
+                        THEN 1 ELSE 0 END
+                     FROM knowledge_nodes WHERE id = ?1",
+                    params![id, now_ms],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if publicly_eligible != Some(1) {
+                let replacement = format!("redacted_{}", index + 1);
+                for event in events.iter_mut() {
+                    event.redact_memory_id(&id, &replacement);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// List recent runs, newest activity first.
@@ -205,6 +303,64 @@ impl SqliteMemoryStore {
         })
     }
 
+    /// Prune old Black Box trace events (bounded retention).
+    ///
+    /// The trace recorder appends rows on every MCP tool call, so without a
+    /// sweep `agent_traces` grows without bound. Called from the periodic
+    /// consolidation cycle (mirroring `prune_access_log`): deletes trace
+    /// events older than the retention window, then drops any `agent_runs`
+    /// roll-up left with no events (orphaned).
+    ///
+    /// Retention defaults to 30 days. `VESTIGE_TRACE_RETENTION_DAYS` overrides
+    /// it; `0` keeps traces forever (sweep disabled); unset, empty, negative,
+    /// or malformed values fall back to the default, and absurdly large values
+    /// are clamped to [`MAX_TRACE_RETENTION_DAYS`]. Returns the number of trace
+    /// events deleted.
+    pub fn prune_agent_traces(&self) -> Result<i64> {
+        let days = resolve_trace_retention_days(
+            std::env::var("VESTIGE_TRACE_RETENTION_DAYS")
+                .ok()
+                .as_deref(),
+        );
+        self.prune_agent_traces_older_than_days(days)
+    }
+
+    /// Env-independent core of [`Self::prune_agent_traces`], so tests can
+    /// exercise retention deterministically. `days == 0` means keep forever.
+    pub(crate) fn prune_agent_traces_older_than_days(&self, days: i64) -> Result<i64> {
+        if days == 0 {
+            return Ok(0);
+        }
+        // Belt and braces against an out-of-range window: `Duration::days`
+        // panics on overflow and the release profile is panic = "abort", so an
+        // unclamped value would hard-kill the process from inside the periodic
+        // consolidation sweep. Skip the sweep instead — a cutoff that far back
+        // could not have deleted anything anyway.
+        let Some(cutoff) = chrono::Duration::try_days(days)
+            .and_then(|window| Utc::now().checked_sub_signed(window))
+        else {
+            tracing::warn!("Trace retention of {days} days is out of range; skipping trace sweep");
+            return Ok(0);
+        };
+        let cutoff_ms = cutoff.timestamp_millis();
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let deleted =
+            writer.execute("DELETE FROM agent_traces WHERE at < ?1", params![cutoff_ms])? as i64;
+        if deleted > 0 {
+            // Drop run roll-ups whose every event was just swept, so the Black
+            // Box run list never shows runs that can no longer be replayed.
+            writer.execute(
+                "DELETE FROM agent_runs
+                 WHERE run_id NOT IN (SELECT DISTINCT run_id FROM agent_traces)",
+                [],
+            )?;
+        }
+        Ok(deleted)
+    }
+
     // ========================================================================
     // MEMORY RECEIPTS
     // ========================================================================
@@ -245,6 +401,22 @@ impl SqliteMemoryStore {
         Ok(())
     }
 
+    /// Associate a receipt committed inside a tool transaction with the Black
+    /// Box run that invoked that tool. The receipt payload stays immutable; the
+    /// denormalized run column is filled once after dispatch returns.
+    pub fn link_receipt_to_run(&self, receipt_id: &str, run_id: &str) -> Result<bool> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let changed = writer.execute(
+            "UPDATE memory_receipts SET run_id = ?1
+             WHERE receipt_id = ?2 AND run_id IS NULL",
+            params![run_id, receipt_id],
+        )?;
+        Ok(changed == 1)
+    }
+
     /// Fetch one receipt by id.
     pub fn get_receipt(&self, receipt_id: &str) -> Result<Option<Receipt>> {
         let reader = self
@@ -258,7 +430,13 @@ impl SqliteMemoryStore {
                 |row| row.get(0),
             )
             .optional()?;
-        Ok(payload.and_then(|p| serde_json::from_str(&p).ok()))
+        let Some(payload) = payload else {
+            return Ok(None);
+        };
+        let mut receipt: Receipt = serde_json::from_str(&payload)
+            .map_err(|e| StorageError::Init(format!("receipt deserialize: {e}")))?;
+        Self::redact_receipt_for_current_state(&reader, &mut receipt)?;
+        Ok(Some(receipt))
     }
 
     /// List recent receipts, newest first.
@@ -273,11 +451,17 @@ impl SqliteMemoryStore {
             let p: String = row.get(0)?;
             Ok(p)
         })?;
-        let mut out = Vec::new();
+        let mut payloads = Vec::new();
         for r in rows {
-            if let Ok(rc) = serde_json::from_str::<Receipt>(&r?) {
-                out.push(rc);
-            }
+            payloads.push(r?);
+        }
+        drop(stmt);
+        let mut out = Vec::new();
+        for payload in payloads {
+            let mut receipt: Receipt = serde_json::from_str(&payload)
+                .map_err(|e| StorageError::Init(format!("receipt deserialize: {e}")))?;
+            Self::redact_receipt_for_current_state(&reader, &mut receipt)?;
+            out.push(receipt);
         }
         Ok(out)
     }
@@ -298,13 +482,72 @@ impl SqliteMemoryStore {
             let p: String = row.get(0)?;
             Ok(p)
         })?;
-        let mut out = Vec::new();
+        let mut payloads = Vec::new();
         for r in rows {
-            if let Ok(rc) = serde_json::from_str::<Receipt>(&r?) {
-                out.push(rc);
-            }
+            payloads.push(r?);
+        }
+        drop(stmt);
+        let mut out = Vec::new();
+        for payload in payloads {
+            let mut receipt: Receipt = serde_json::from_str(&payload)
+                .map_err(|e| StorageError::Init(format!("receipt deserialize: {e}")))?;
+            Self::redact_receipt_for_current_state(&reader, &mut receipt)?;
+            out.push(receipt);
         }
         Ok(out)
+    }
+
+    /// Resolve stable evidence ids against current suppression/validity state
+    /// before a receipt crosses a public API boundary. Stored history remains
+    /// auditable, but a later suppress/purge cannot resurrect a correlatable id.
+    fn redact_receipt_for_current_state(
+        conn: &rusqlite::Connection,
+        receipt: &mut Receipt,
+    ) -> Result<()> {
+        let mut ids = Vec::<String>::new();
+        let mut push_id = |id: &str| {
+            if !is_receipt_local_slot(id) && !ids.iter().any(|existing| existing == id) {
+                ids.push(id.to_string());
+            }
+        };
+        for id in &receipt.retrieved {
+            push_id(id);
+        }
+        for entry in &receipt.suppressed {
+            push_id(&entry.id);
+        }
+        for mutation in &receipt.mutations {
+            push_id(&mutation.id);
+        }
+        if let Some(crate::trace::ReceiptEvidence::SynapticCapture(evidence)) = &receipt.evidence {
+            push_id(&evidence.trigger.memory_id);
+            for candidate in &evidence.candidates {
+                if let Some(id) = &candidate.memory_id {
+                    push_id(id);
+                }
+            }
+        }
+
+        let now_ms = Utc::now().timestamp_millis();
+        for (index, id) in ids.into_iter().enumerate() {
+            let publicly_eligible: Option<i64> = conn
+                .query_row(
+                    "SELECT CASE
+                        WHEN suppression_count = 0
+                         AND superseded_by IS NULL
+                         AND (valid_from IS NULL OR unixepoch(valid_from) * 1000 <= ?2)
+                         AND (valid_until IS NULL OR unixepoch(valid_until) * 1000 > ?2)
+                        THEN 1 ELSE 0 END
+                     FROM knowledge_nodes WHERE id = ?1",
+                    params![id, now_ms],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if publicly_eligible != Some(1) {
+                receipt.redact_memory_id(&id, &format!("redacted_{}", index + 1));
+            }
+        }
+        Ok(())
     }
 
     // ========================================================================
@@ -460,6 +703,108 @@ impl SqliteMemoryStore {
             .ok_or_else(|| StorageError::NotFound(id.to_string()))
     }
 
+    /// Atomically decide and, when approved, apply a mutation that was held
+    /// before execution. Returns `None` for ordinary post-commit Memory PRs.
+    ///
+    /// `Forget` approves the requested purge/suppression, `Promote` (and the
+    /// other accept actions) keeps the current memory unchanged, and
+    /// `Quarantine` keeps the row but applies suppression. The PR transition
+    /// and mutation share one SQLite transaction, so neither can commit alone.
+    pub fn decide_pending_memory_mutation(
+        &self,
+        id: &str,
+        action: MemoryPrAction,
+    ) -> Result<Option<PendingMemoryMutationDecision>> {
+        let pr = self
+            .get_memory_pr(id)?
+            .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+        let Some(pending_action) = pr
+            .diff
+            .get("pendingAction")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Ok(None);
+        };
+        let subject_id = pr.subject_id.clone().ok_or_else(|| {
+            StorageError::Init(format!("pending mutation PR {id} has no subject"))
+        })?;
+        let new_status = action.resulting_status().ok_or_else(|| {
+            StorageError::Init("ask_agent_why is read-only and decides nothing".into())
+        })?;
+        let decision = serde_json::to_value(action)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let now = Utc::now();
+
+        let effect = {
+            let mut writer = self
+                .writer
+                .lock()
+                .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            let tx = writer.transaction()?;
+
+            let changed = tx.execute(
+                "UPDATE memory_prs SET status = ?1, decision = ?2, decided_at = ?3
+                 WHERE id = ?4 AND status = 'pending'",
+                params![new_status.as_str(), decision, now.to_rfc3339(), id],
+            )?;
+            if changed == 0 {
+                return Err(StorageError::Init(format!(
+                    "memory PR {id} is already decided and cannot be re-decided"
+                )));
+            }
+
+            let effect = match action {
+                MemoryPrAction::Forget if matches!(pending_action, "purge" | "delete") => {
+                    let deleted =
+                        Self::purge_node_in_transaction(&tx, &subject_id, now, true)?.is_some();
+                    if !deleted {
+                        return Err(StorageError::NotFound(subject_id.to_string()));
+                    }
+                    PendingMemoryMutationEffect::Purged
+                }
+                MemoryPrAction::Forget | MemoryPrAction::Quarantine => {
+                    let changed = tx.execute(
+                        "UPDATE knowledge_nodes SET
+                            last_accessed = ?1,
+                            suppression_count = COALESCE(suppression_count, 0) + 1,
+                            suppressed_at = ?1,
+                            retrieval_strength = MAX(0.05, retrieval_strength - 0.35),
+                            retention_strength = MAX(0.05, retention_strength - 0.20),
+                            stability = stability * 0.4
+                         WHERE id = ?2",
+                        params![now.to_rfc3339(), &subject_id],
+                    )?;
+                    if changed == 0 {
+                        return Err(StorageError::NotFound(subject_id.to_string()));
+                    }
+                    Self::invalidate_replay_evidence_for_memory_in_transaction(
+                        &tx,
+                        &subject_id,
+                        crate::storage::ReplayInvalidationReason::Suppressed,
+                    )?;
+                    PendingMemoryMutationEffect::Suppressed
+                }
+                _ => PendingMemoryMutationEffect::Kept,
+            };
+
+            tx.commit()?;
+            effect
+        };
+
+        let mut pr = pr;
+        pr.status = new_status;
+        pr.decision = Some(action);
+        pr.decided_at = Some(now.to_rfc3339());
+        if effect == PendingMemoryMutationEffect::Purged {
+            self.remove_purged_node_from_vector_index(&subject_id);
+        } else if effect == PendingMemoryMutationEffect::Suppressed {
+            let _ = self.log_access(&subject_id, "suppress");
+        }
+        Ok(Some(PendingMemoryMutationDecision { pr, effect }))
+    }
+
     fn row_to_memory_pr(row: &rusqlite::Row) -> rusqlite::Result<MemoryPr> {
         let kind_s: String = row.get("kind")?;
         let status_s: String = row.get("status")?;
@@ -496,6 +841,7 @@ impl SqliteMemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IngestInput;
     use crate::trace::{
         DecayRisk, MemoryPrKind, MemoryTraceEvent, Receipt, RiskSignal, SuppressReason,
         SuppressedReceiptEntry,
@@ -506,6 +852,23 @@ mod tests {
         // sqlite.rs test helpers; there is no in-memory constructor).
         let dir = tempfile::tempdir().unwrap();
         SqliteMemoryStore::new(Some(dir.path().join("trace_test.db"))).expect("test store")
+    }
+
+    #[test]
+    fn receipt_local_slots_are_never_resolved_as_memory_ids() {
+        for slot in [
+            "candidate_1",
+            "pair_fedcba98",
+            "evidence_2",
+            "trigger_1",
+            "redacted_3",
+            "purged_1",
+        ] {
+            assert!(is_receipt_local_slot(slot), "{slot} must stay opaque");
+        }
+        assert!(!is_receipt_local_slot(
+            "550e8400-e29b-41d4-a716-446655440000"
+        ));
     }
 
     #[test]
@@ -555,17 +918,214 @@ mod tests {
     }
 
     #[test]
+    fn trace_reads_redact_suppressed_ids_and_purge_scrubs_raw_payloads() {
+        let s = store();
+        let node = s
+            .ingest(IngestInput {
+                content: "trace identity must follow current privacy state".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut activation = std::collections::BTreeMap::new();
+        activation.insert(node.id.clone(), 0.9);
+        s.append_trace_event(&MemoryTraceEvent::MemoryRetrieve {
+            run_id: "run_privacy".into(),
+            ids: vec![node.id.clone()],
+            activation,
+            at: 100,
+        })
+        .unwrap();
+        s.append_trace_event(&MemoryTraceEvent::MemoryWrite {
+            run_id: "run_privacy".into(),
+            id: node.id.clone(),
+            diff: serde_json::json!({ "memoryId": node.id }),
+            source: crate::trace::WriteSource::Agent,
+            at: 110,
+        })
+        .unwrap();
+
+        let visible = serde_json::to_string(&s.get_trace("run_privacy").unwrap()).unwrap();
+        assert!(visible.contains(&node.id));
+
+        s.suppress_memory(&node.id).unwrap();
+        let suppressed = serde_json::to_string(&s.get_trace("run_privacy").unwrap()).unwrap();
+        assert!(!suppressed.contains(&node.id));
+        assert!(suppressed.contains("redacted_1"));
+
+        s.purge_node(&node.id, Some("trace privacy test")).unwrap();
+        let raw_payloads: Vec<String> = {
+            let reader = s.reader.lock().unwrap();
+            let mut stmt = reader
+                .prepare("SELECT payload FROM agent_traces WHERE run_id = 'run_privacy'")
+                .unwrap();
+            stmt.query_map([], |row| row.get(0))
+                .unwrap()
+                .map(|row| row.unwrap())
+                .collect()
+        };
+        assert!(
+            raw_payloads
+                .iter()
+                .all(|payload| !payload.contains(&node.id))
+        );
+        assert!(
+            raw_payloads
+                .iter()
+                .all(|payload| payload.contains("purged_1"))
+        );
+    }
+
+    #[test]
+    fn prune_agent_traces_sweeps_old_events_and_orphaned_runs() {
+        let s = store();
+        let now_ms = Utc::now().timestamp_millis();
+        let old_ms = now_ms - 40 * 24 * 60 * 60 * 1000; // 40 days ago
+
+        s.append_trace_event(&MemoryTraceEvent::McpCall {
+            run_id: "run_old".into(),
+            tool: "search".into(),
+            args_hash: "h".into(),
+            at: old_ms,
+        })
+        .unwrap();
+        s.append_trace_event(&MemoryTraceEvent::McpCall {
+            run_id: "run_new".into(),
+            tool: "search".into(),
+            args_hash: "h".into(),
+            at: now_ms,
+        })
+        .unwrap();
+
+        // 0 = keep forever: the sweep is disabled entirely.
+        assert_eq!(s.prune_agent_traces_older_than_days(0).unwrap(), 0);
+        assert_eq!(s.list_agent_runs(10).unwrap().len(), 2);
+
+        // 30-day sweep: the old event goes, and its now-orphaned run roll-up
+        // goes with it; the fresh run is untouched.
+        let deleted = s.prune_agent_traces_older_than_days(30).unwrap();
+        assert_eq!(deleted, 1, "exactly the 40-day-old event is deleted");
+        assert!(s.get_trace("run_old").unwrap().is_empty());
+        assert!(
+            s.get_agent_run("run_old").unwrap().is_none(),
+            "orphaned run roll-up must be swept with its events"
+        );
+        assert_eq!(s.get_trace("run_new").unwrap().len(), 1);
+        assert!(s.get_agent_run("run_new").unwrap().is_some());
+    }
+
+    /// Retention parsing must survive hostile / fat-fingered env values. The
+    /// upper bound is the load-bearing one: an unclamped huge value overflows
+    /// the `chrono::Duration` the sweep builds, and `panic = "abort"` in the
+    /// release profile turns that into a hard process kill.
+    #[test]
+    fn trace_retention_env_value_is_clamped_and_never_overflows() {
+        // Sane values pass through untouched.
+        assert_eq!(resolve_trace_retention_days(Some("7")), 7);
+        assert_eq!(resolve_trace_retention_days(Some(" 90 ")), 90);
+        // 0 stays 0: the documented "keep forever" switch.
+        assert_eq!(resolve_trace_retention_days(Some("0")), 0);
+        // Unset / empty / malformed / negative fall back to the default.
+        for raw in [None, Some(""), Some("   "), Some("forever"), Some("-5")] {
+            assert_eq!(
+                resolve_trace_retention_days(raw),
+                DEFAULT_TRACE_RETENTION_DAYS,
+                "unusable value {raw:?} must fall back to the default"
+            );
+        }
+        // Absurdly large values are clamped instead of overflowing.
+        for raw in ["999999999999", "9223372036854775807"] {
+            assert_eq!(
+                resolve_trace_retention_days(Some(raw)),
+                MAX_TRACE_RETENTION_DAYS,
+                "{raw} must be clamped, not passed through"
+            );
+        }
+    }
+
+    /// End-to-end: a hostile `VESTIGE_TRACE_RETENTION_DAYS` must not panic the
+    /// process, and must not sweep anything (the clamped window is 100 years,
+    /// far older than any trace). Also exercises the raw sweep at `i64::MAX` to
+    /// prove the second line of defence inside
+    /// `prune_agent_traces_older_than_days` holds even if a caller bypasses the
+    /// env clamp.
+    #[test]
+    fn prune_agent_traces_survives_hostile_retention_value() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        const KEY: &str = "VESTIGE_TRACE_RETENTION_DAYS";
+
+        let s = store();
+        s.append_trace_event(&MemoryTraceEvent::McpCall {
+            run_id: "run_hostile".into(),
+            tool: "search".into(),
+            args_hash: "h".into(),
+            at: Utc::now().timestamp_millis(),
+        })
+        .unwrap();
+
+        // Direct call: no clamp in play, so this is the overflow path itself.
+        assert_eq!(
+            s.prune_agent_traces_older_than_days(i64::MAX).unwrap(),
+            0,
+            "an out-of-range window must skip the sweep, not panic"
+        );
+
+        // Env path: process env is global and unsafe to mutate under Rust 2024,
+        // so serialize on a local lock and restore the previous value.
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::env::var_os(KEY);
+        unsafe { std::env::set_var(KEY, "999999999999") };
+        let deleted = s.prune_agent_traces();
+        unsafe {
+            match previous {
+                Some(prev) => std::env::set_var(KEY, prev),
+                None => std::env::remove_var(KEY),
+            }
+        }
+
+        assert_eq!(
+            deleted.unwrap(),
+            0,
+            "a 100-year clamped window sweeps nothing"
+        );
+        assert_eq!(
+            s.get_trace("run_hostile").unwrap().len(),
+            1,
+            "the fresh trace must survive"
+        );
+    }
+
+    #[test]
     fn receipt_roundtrips() {
         let s = store();
+        let m1 = s
+            .ingest(IngestInput {
+                content: "receipt evidence one".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let m2 = s
+            .ingest(IngestInput {
+                content: "receipt evidence two".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let m3 = s
+            .ingest(IngestInput {
+                content: "receipt evidence three".into(),
+                ..Default::default()
+            })
+            .unwrap();
         let receipt = Receipt {
             receipt_id: "r_2026_06_22_abc".into(),
-            retrieved: vec!["m1".into(), "m2".into()],
-            suppressed: vec![SuppressedReceiptEntry::new("m3", SuppressReason::LowTrust)],
+            retrieved: vec![m1.id, m2.id],
+            suppressed: vec![SuppressedReceiptEntry::new(m3.id, SuppressReason::LowTrust)],
             activation_path: vec!["a -> b".into()],
             trust_floor: 0.62,
             decay_risk: DecayRisk::Medium,
             mutations: vec![],
-            backfill: None,
+            evidence: None,
         };
         s.save_receipt(&receipt, Some("run_abc"), Some("search"), Some("q"))
             .unwrap();
@@ -585,7 +1145,7 @@ mod tests {
             trust_floor: 0.9,
             decay_risk: DecayRisk::Low,
             mutations: vec![],
-            backfill: None,
+            evidence: None,
         };
         s.save_receipt(&mk("r_a1"), Some("run_a"), Some("search"), None)
             .unwrap();

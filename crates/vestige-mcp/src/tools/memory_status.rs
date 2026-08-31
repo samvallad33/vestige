@@ -3,7 +3,7 @@
 //! Folds four read-only status/health/temporal tools into one
 //! view-dispatched surface:
 //!
-//!   view = health (default) | retention | timeline | changelog
+//!   view = health (default) | retention | timeline | changelog | stats
 //!
 //! - `health` → full system health + statistics (the former `system_status`).
 //!   Returns the byte-for-byte `system_status` shape (audit scripts parse it),
@@ -11,6 +11,7 @@
 //! - `retention` → the lightweight retention dashboard (former `memory_health`).
 //! - `timeline` → chronological browse (former `memory_timeline`).
 //! - `changelog` → audit trail of memory changes (former `memory_changelog`).
+//! - `stats` → full-store hygiene aggregates plus bounded diagnostic lists.
 //!
 //! This is a thin facade: each view forwards the *same* args envelope to the
 //! existing handler. None of the underlying arg structs use
@@ -33,9 +34,9 @@ pub fn schema() -> Value {
         "properties": {
             "view": {
                 "type": "string",
-                "enum": ["health", "retention", "timeline", "changelog"],
+                "enum": ["health", "retention", "timeline", "changelog", "stats"],
                 "default": "health",
-                "description": "Which status view. 'health' (default): full system health + stats + FSRS preview + warnings + recommendations. 'retention': lightweight retention dashboard (avg/distribution/trend). 'timeline': browse memories chronologically. 'changelog': audit trail of memory state changes."
+                "description": "Which status view. 'health' (default): full system health + stats + FSRS preview + warnings + recommendations. 'retention': lightweight retention dashboard (avg/distribution/trend). 'timeline': browse memories chronologically. 'changelog': audit trail of memory state changes. 'stats': complete hygiene counts by type/tag/age/retention/lifecycle plus bounded never-accessed and largest-node lists and recent tag-operation audit."
             },
             // --- [health view] ---
             "schema_introspection": {
@@ -53,10 +54,21 @@ pub fn schema() -> Value {
             },
             // --- [changelog view] ---
             "memory_id": { "type": "string", "description": "[changelog view] Per-memory mode: state transitions for this memory id." },
+            // --- [stats view] ---
+            "scope": {
+                "type": "string",
+                "default": "user",
+                "description": "[stats view] Exact normalized memory scope to aggregate (default 'user'). Ignored when all_scopes=true."
+            },
+            "all_scopes": {
+                "type": "boolean",
+                "default": false,
+                "description": "[stats view] Explicitly aggregate every stored scope. Default false preserves project isolation."
+            },
             // --- shared: limit (per-view ranges differ; clamped internally) ---
             "limit": {
                 "type": "integer",
-                "description": "Max results. [timeline] default 50, max 200. [changelog] default 20, clamped to 100. Ignored by health/retention.",
+                "description": "Max results. [timeline] default 50, max 200. [changelog] default 20, clamped to 100. [stats] detail lists default 50, clamped to 200; aggregate counts always cover the full selected store. Ignored by health/retention.",
                 "minimum": 1, "maximum": 200
             }
         }
@@ -83,8 +95,9 @@ pub async fn execute(
         "retention" => super::health::execute(storage, args).await,
         "timeline" => super::timeline::execute(storage, output_config, args).await,
         "changelog" => super::changelog::execute(storage, args).await,
+        "stats" => super::hygiene_stats::execute(storage, args).await,
         other => Err(format!(
-            "Unknown memory_status view '{other}'. Use health|retention|timeline|changelog."
+            "Unknown memory_status view '{other}'. Use health|retention|timeline|changelog|stats."
         )),
     }
 }
@@ -107,8 +120,10 @@ mod tests {
     fn test_schema_views() {
         let s = schema();
         let views = s["properties"]["view"]["enum"].as_array().unwrap();
-        assert_eq!(views.len(), 4);
+        assert_eq!(views.len(), 5);
         assert_eq!(s["properties"]["view"]["default"], "health");
+        assert_eq!(s["properties"]["scope"]["default"], "user");
+        assert_eq!(s["properties"]["all_scopes"]["default"], false);
     }
 
     #[tokio::test]
@@ -132,7 +147,7 @@ mod tests {
         let storage = test_storage();
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
         let oc = OutputConfig::default();
-        for view in ["health", "retention", "timeline", "changelog"] {
+        for view in ["health", "retention", "timeline", "changelog", "stats"] {
             let args = Some(serde_json::json!({ "view": view }));
             let r = execute(&storage, &cognitive, &oc, args).await;
             assert!(r.is_ok(), "view={view} should resolve, got {r:?}");

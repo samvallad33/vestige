@@ -167,6 +167,82 @@ impl<'a> EmbeddingProfileLifecycle<'a> {
         Err(EmbeddingLifecycleError::RunnerUnavailable)
     }
 
+    /// Explicit Granite install from a verified local artifact directory.
+    /// Same contract as the Qwen path: artifacts are hash-verified against
+    /// the profile, and no Hub or network client is ever invoked.
+    #[cfg(feature = "embeddings")]
+    pub fn install_granite_onnx(
+        &self,
+        profile: EmbeddingProfile,
+        artifact_root: &Path,
+    ) -> Result<EmbeddingProfileManifest, EmbeddingLifecycleError> {
+        let manifest = self.register_granite_onnx_verified(profile, artifact_root)?;
+        self.storage.save_embedding_profile_manifest(&manifest)?;
+        Ok(manifest)
+    }
+
+    #[cfg(not(feature = "embeddings"))]
+    pub fn install_granite_onnx(
+        &self,
+        _profile: EmbeddingProfile,
+        _artifact_root: &Path,
+    ) -> Result<EmbeddingProfileManifest, EmbeddingLifecycleError> {
+        Err(EmbeddingLifecycleError::RunnerUnavailable)
+    }
+
+    /// Recreate the Granite runner from the caller-supplied local artifact
+    /// directory and attach it to the currently active matching profile.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn attach_active_granite_onnx(
+        &self,
+        artifact_root: &Path,
+    ) -> Result<EmbeddingProfileId, EmbeddingLifecycleError> {
+        let active = self.storage.active_embedding_profile()?.ok_or_else(|| {
+            EmbeddingLifecycleError::InvalidFixture(
+                "no active embedding profile is configured".to_string(),
+            )
+        })?;
+        let profile = self.installed_profile(&active.profile_id)?;
+        self.register_granite_onnx_verified(profile, artifact_root)?;
+        self.attach_registered_active_profile(&active.profile_id)?;
+        Ok(active.profile_id)
+    }
+
+    #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
+    pub fn attach_active_granite_onnx(
+        &self,
+        _artifact_root: &Path,
+    ) -> Result<EmbeddingProfileId, EmbeddingLifecycleError> {
+        Err(EmbeddingLifecycleError::RunnerUnavailable)
+    }
+
+    /// Migrate to a Granite profile using a process-local verified runner.
+    #[cfg(feature = "embeddings")]
+    pub fn migrate_granite_onnx(
+        &self,
+        destination: &EmbeddingProfileId,
+        source: &EmbeddingProfileId,
+        artifact_root: &Path,
+        migration_id: Option<Uuid>,
+        interrupt_after: Option<u64>,
+    ) -> Result<EmbeddingLifecycleMigrationReceipt, EmbeddingLifecycleError> {
+        let profile = self.installed_profile(destination)?;
+        self.register_granite_onnx_verified(profile, artifact_root)?;
+        self.migrate_registered(destination, source, migration_id, interrupt_after)
+    }
+
+    #[cfg(not(feature = "embeddings"))]
+    pub fn migrate_granite_onnx(
+        &self,
+        _destination: &EmbeddingProfileId,
+        _source: &EmbeddingProfileId,
+        _artifact_root: &Path,
+        _migration_id: Option<Uuid>,
+        _interrupt_after: Option<u64>,
+    ) -> Result<EmbeddingLifecycleMigrationReceipt, EmbeddingLifecycleError> {
+        Err(EmbeddingLifecycleError::RunnerUnavailable)
+    }
+
     /// Evaluate a currently registered profile against the committed Agent
     /// Memory Eval fixture. It records the candidate's raw rankings and never
     /// invents a baseline score when no baseline runtime was supplied.
@@ -576,7 +652,7 @@ impl<'a> EmbeddingProfileLifecycle<'a> {
         Err(EmbeddingLifecycleError::RunnerUnavailable)
     }
 
-    #[cfg(feature = "qwen3-embeddings")]
+    #[cfg(feature = "embeddings")]
     fn installed_profile(
         &self,
         profile_id: &EmbeddingProfileId,
@@ -587,6 +663,24 @@ impl<'a> EmbeddingProfileLifecycle<'a> {
             .ok_or_else(|| EmbeddingLifecycleError::NotInstalled(profile_id.clone()))?;
         ensure_locally_verified(&manifest)?;
         Ok(manifest.profile)
+    }
+
+    #[cfg(feature = "embeddings")]
+    fn register_granite_onnx_verified(
+        &self,
+        profile: EmbeddingProfile,
+        artifact_root: &Path,
+    ) -> Result<EmbeddingProfileManifest, EmbeddingLifecycleError> {
+        let artifacts = Self::verified_artifacts(&profile, artifact_root)?;
+        let runner = Arc::new(
+            crate::embedder::GraniteOnnxEmbedder::from_verified_local_artifacts(
+                profile.clone(),
+                &artifacts,
+            )?,
+        );
+        self.registry
+            .install_verified(profile.clone(), &artifacts, granite_runtime(&profile), runner)
+            .map_err(Into::into)
     }
 
     #[cfg(feature = "qwen3-embeddings")]
@@ -632,6 +726,18 @@ impl<'a> EmbeddingProfileLifecycle<'a> {
             fs::set_permissions(&report_path, fs::Permissions::from_mode(0o600))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(feature = "embeddings")]
+fn granite_runtime(profile: &EmbeddingProfile) -> EmbeddingRuntimeMetadata {
+    use super::EmbeddingDevice;
+    EmbeddingRuntimeMetadata {
+        backend: profile.runtime_backend,
+        device: EmbeddingDevice::Cpu,
+        runtime_version: "fastembed=5.13.2;user-defined-onnx".to_string(),
+        initialized_at: Utc::now(),
+        local_only: true,
     }
 }
 
@@ -1272,6 +1378,22 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
+        let source = EmbeddingProfileId::new("nomic-v1.5-legacy-raw-256").unwrap();
+        // Seed the source profile explicitly: a migration must never delete
+        // an existing rollback vector, but it also must not invent one for a
+        // node whose historic Nomic embedding was never generated.
+        for node in storage.get_all_nodes(10, 0).unwrap() {
+            storage
+                .put_embedding_profile_vector(&EmbeddingProfileVector {
+                    profile_id: source.to_string(),
+                    node_id: node.id,
+                    embedding: f32_bytes(&vec![0.25; 256]),
+                    dimensions: 256,
+                    model: "nomic-ai/nomic-embed-text-v1.5".to_string(),
+                    created_at: Utc::now(),
+                })
+                .unwrap();
+        }
         let artifact_path = temp.path().join("runner.bin");
         fs::write(&artifact_path, b"local test artifact").unwrap();
         let artifact = ModelArtifactHash::sha256("runner.bin", sha256_hex(b"local test artifact"));
@@ -1312,7 +1434,6 @@ mod tests {
             .record_evaluation(&profile.profile_id, evaluation)
             .unwrap();
         storage.save_embedding_profile_manifest(&ready).unwrap();
-        let source = EmbeddingProfileId::new("nomic-v1.5-legacy-raw-256").unwrap();
         let migration_id = Uuid::new_v4();
         let interrupted = lifecycle
             .migrate_registered(&profile.profile_id, &source, Some(migration_id), Some(1))
@@ -1345,7 +1466,8 @@ mod tests {
             storage
                 .embedding_profile_vector(&source, &storage.get_all_nodes(1, 0).unwrap()[0].id)
                 .unwrap()
-                .is_none()
+                .is_some(),
+            "migration must retain the source profile vector so rollback can switch pointers without re-embedding"
         );
         assert!(
             storage

@@ -28,6 +28,7 @@
 		| 'duplicates'
 		| 'contradictions'
 		| 'patterns'
+		| 'embeddings'
 		| 'intentions'
 		| 'stats'
 		| 'embeddings'
@@ -74,6 +75,8 @@
 		contradictions: `<path d="M3 9h8l-2.5-2.5M3 9l2.5 2.5M21 15h-8l2.5 2.5M21 15l-2.5-2.5"/><path d="M12 4v16" opacity=".35" stroke-dasharray="2 2.5"/>`,
 		// Tessellated grid — recurring patterns.
 		patterns: `<path d="M4 8.5 8.5 4 13 8.5 8.5 13zM13 8.5 17.5 4 22 8.5 17.5 13zM8.5 17 13 12.5 17.5 17 13 21.5z" opacity=".9"/>`,
+		// Layered vector space — profile-scoped embeddings.
+		embeddings: `<ellipse cx="12" cy="6.5" rx="7.5" ry="3"/><path d="M4.5 6.5v5.5c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6.5M4.5 12v5.5c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V12"/><circle cx="12" cy="6.5" r=".9" fill="currentColor" stroke="none"/>`,
 		// Crosshair / target — intentions / aim.
 		intentions: `<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.4"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/>`,
 		// Bar chart — stats.

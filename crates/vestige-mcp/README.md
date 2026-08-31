@@ -58,6 +58,7 @@ The server exposes the current unified MCP tools from
 [`src/server.rs`](src/server.rs), including:
 
 - `session_context`
+- `receipt` (inspect persisted retrieval receipts and run controlled evidence replay)
 - `search`, `smart_ingest`, `memory`, `codebase`, `intention`
 - `deep_reference`, `cross_reference`, `contradictions`
 - `dream`, `explore_connections`, `predict`
@@ -66,6 +67,8 @@ The server exposes the current unified MCP tools from
 - `consolidate`, `memory_timeline`, `memory_changelog`
 - `backup`, `export`, `restore`, `gc`, `suppress`
 
+For the receipt workflow, replay claim boundary, signature status, durability,
+and privacy limits, see [`docs/DECISION_RECEIPTS.md`](../../docs/DECISION_RECEIPTS.md).
 See the root [`README.md`](../../README.md) and
 [`docs/AGENT-MEMORY-PROTOCOL.md`](../../docs/AGENT-MEMORY-PROTOCOL.md) for
 agent instructions.

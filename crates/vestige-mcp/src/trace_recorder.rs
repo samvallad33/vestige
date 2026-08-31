@@ -16,18 +16,36 @@
 //!
 //! The recorder is best-effort: a persistence error never fails the tool call.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
+use std::env;
+use std::sync::{Arc, OnceLock};
 
 use chrono::Utc;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
 use crate::dashboard::events::VestigeEvent;
-use vestige_core::{
-    BackfillCandidateEvidence, BackfillReceiptEvidence, MemoryTraceEvent, Receipt, Storage,
-    SuppressReason, SuppressedReceiptEntry, WriteSource,
+use vestige_core::storage::{
+    SignedReceiptWrite, load_receipt_signing_seed,
+    receipt_attestation::{
+        AttestationChainPosition, DisclosureMapping, ProducerIdentity, ReceiptAttestationV1,
+        RedactionSafeDecisionProjectionV1, SignedReceiptAttestation, SigningKeyStatus,
+        sign_attestation,
+    },
 };
+use vestige_core::{
+    MemoryTraceEvent, REPLAY_SELECTION_BOUNDARY, Receipt, ReplayDecayRisk,
+    RetrievalReplayCapsuleDraft, RetrievalReplayItemDraft, Storage, SuppressReason,
+    SuppressedReceiptEntry, WriteSource, private_evidence_digest, replay_evidence_slot,
+    replay_policy_digest,
+};
+
+/// Opt-in environment configuration for the live receipt signer. The process
+/// never provisions a seed or registers a public key: operators must do those
+/// actions first, then explicitly configure both values below.
+const RECEIPT_SIGNING_KEY_ID_ENV: &str = "VESTIGE_RECEIPT_SIGNING_KEY_ID";
+const RECEIPT_SIGNING_SEED_PATH_ENV: &str = "VESTIGE_RECEIPT_SIGNING_SEED_PATH";
+const RECEIPT_ATTESTATION_ALGORITHM_V1: &str = "mcp-retrieval-receipt-v1";
 
 /// Tools that write to memory and are therefore subject to risk-gated review.
 ///
@@ -78,6 +96,27 @@ fn is_write_decision(label: &str) -> bool {
             | "forget"
             | "forgotten"
     )
+}
+
+/// Read the persisted [`vestige_core::ReviewMode`] for this brain.
+///
+/// The mode lives in `<data_dir>/review_mode.json` and is written by the
+/// dashboard (`POST /api/memory-prs/mode`). Anything missing, unreadable, or
+/// unrecognised falls back to the default [`vestige_core::ReviewMode::RiskGated`],
+/// so a corrupt file can never silently disable gating.
+///
+/// This is the single source of truth: the dashboard handler delegates here so
+/// the MCP write path and the dashboard can never disagree about the mode.
+pub fn read_review_mode(storage: &Storage) -> vestige_core::ReviewMode {
+    std::fs::read_to_string(storage.data_dir().join("review_mode.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| {
+            v.get("mode")
+                .and_then(|m| m.as_str())
+                .map(vestige_core::ReviewMode::from_label)
+        })
+        .unwrap_or_default()
 }
 
 /// Risk-gate the writes in a tool result. For each write the tool just made,
@@ -164,9 +203,20 @@ pub fn gate_writes(
         // Quarantine the just-written node so it's held out of retrieval until
         // the PR is decided. For a destructive write there's no live node to
         // suppress — the PR records the action for review/audit instead.
-        if node.is_some() {
-            let _ = storage.suppress_memory(&id);
-        }
+        // `held` is reported truthfully to the caller: a destructive write is
+        // NOT held (it already happened), and a failed suppression must not be
+        // announced as a quarantine.
+        let held = if node.is_some() {
+            match storage.suppress_memory(&id) {
+                Ok(_) => true,
+                Err(e) => {
+                    tracing::warn!("memory PR gate: quarantine of {id} failed: {e}");
+                    false
+                }
+            }
+        } else {
+            false
+        };
 
         let kind = match decision.as_str() {
             "supersede" | "replace" | "superseded" => MemoryPrKind::MemorySuperseded,
@@ -180,10 +230,8 @@ pub fn gate_writes(
         // secret, and the PR row is read by the dashboard and may be exported).
         // Store a short, redacted preview + a content hash instead. The preview
         // is dropped entirely when the write was gated for a sensitive topic.
-        let sensitive = signals
-            .iter()
-            .any(|s| s.code == "sensitive_topic" || s.code == "sensitive_node_type");
         let raw_content = node.as_ref().map(|n| n.content.as_str()).unwrap_or("");
+        let sensitive = is_sensitive_pr_content(raw_content, &signals);
         let preview = content_preview(raw_content, sensitive);
         let content_hash = hash_content(raw_content);
 
@@ -236,6 +284,10 @@ pub fn gate_writes(
             "title": pr.title,
             "signals": signals,
             "subjectId": id,
+            // true: node suppressed until the PR is decided. false: nothing is
+            // held — either the write was destructive (already applied, PR is
+            // an audit record) or suppression failed.
+            "held": held,
         }));
     }
 
@@ -295,9 +347,7 @@ pub fn gate_pending_memory_mutation(
         return Ok(None);
     }
 
-    let sensitive = signals
-        .iter()
-        .any(|s| s.code == "sensitive_topic" || s.code == "sensitive_node_type");
+    let sensitive = is_sensitive_pr_content(&node.content, &signals);
     let preview = content_preview(&node.content, sensitive);
     let content_hash = hash_content(&node.content);
     let kind = MemoryPrKind::NodeDecayed;
@@ -441,6 +491,29 @@ fn is_destructive_decision(label: &str) -> bool {
     )
 }
 
+/// Whether content must be fully redacted from a Memory PR.
+///
+/// Risk signals cover the broad policy categories (auth, money, identity,
+/// etc.), but credential detection is intentionally stricter: a legacy or
+/// explicitly allowed node can still hold a provider-shaped secret even when
+/// its surrounding prose did not trigger a sensitive-topic signal.  Both PR
+/// creation paths use this helper so neither can turn that secret into a
+/// title, preview, or diff field.
+fn is_sensitive_pr_content(content: &str, signals: &[vestige_core::RiskSignal]) -> bool {
+    signals
+        .iter()
+        .any(|s| s.code == "sensitive_topic" || s.code == "sensitive_node_type")
+        || has_blocking_secret(content)
+}
+
+/// Match the storage boundary's blocking credential policy without retaining
+/// the detector output or the matched value.
+fn has_blocking_secret(content: &str) -> bool {
+    vestige_core::scan_secrets(content)
+        .iter()
+        .any(vestige_core::SecretFinding::blocks_ingestion)
+}
+
 /// A short, privacy-preserving preview of memory content for a Memory PR.
 /// When the write was flagged for a sensitive topic, the content is redacted
 /// entirely — the reviewer sees the risk signals + hash, never the secret.
@@ -493,8 +566,379 @@ fn is_retrieval_tool(tool: &str) -> bool {
     )
 }
 
-fn is_receiptable_tool(tool: &str) -> bool {
-    is_retrieval_tool(tool) || tool == "backfill"
+/// Process-private key used to prevent replay item digests from becoming a
+/// public content-equality oracle. Operators that need to verify current
+/// materializations after a restart can provide a stable 32-byte key as
+/// exactly 64 hexadecimal characters in `VESTIGE_REPLAY_DIGEST_KEY`.
+///
+/// Without that explicit key, Vestige deliberately chooses a fresh random key
+/// for each process. Persisted structural replay remains deterministic and
+/// restart-safe; content materialization verification fails closed after a
+/// restart until a durable local keystore is available.
+static REPLAY_DIGEST_KEY: OnceLock<[u8; 32]> = OnceLock::new();
+
+fn replay_digest_key() -> &'static [u8; 32] {
+    REPLAY_DIGEST_KEY.get_or_init(|| {
+        if let Ok(encoded) = std::env::var("VESTIGE_REPLAY_DIGEST_KEY") {
+            if let Some(key) = parse_replay_digest_key(&encoded) {
+                return key;
+            }
+            tracing::warn!(
+                "VESTIGE_REPLAY_DIGEST_KEY must be exactly 64 hexadecimal characters; using a process-private replay digest key"
+            );
+        }
+
+        let mut key = [0_u8; 32];
+        key[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        key[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        key
+    })
+}
+
+fn parse_replay_digest_key(encoded: &str) -> Option<[u8; 32]> {
+    if encoded.len() != 64 || !encoded.is_ascii() {
+        return None;
+    }
+    let mut key = [0_u8; 32];
+    for (index, byte) in key.iter_mut().enumerate() {
+        let offset = index * 2;
+        let high = decode_hex_nibble(encoded.as_bytes()[offset])?;
+        let low = decode_hex_nibble(encoded.as_bytes()[offset + 1])?;
+        *byte = (high << 4) | low;
+    }
+    Some(key)
+}
+
+fn decode_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+struct ReturnedReplayEvidence<'a> {
+    memory_id: &'a str,
+    value: &'a Value,
+    trust_score: f64,
+}
+
+/// Select only the evidence collection that crossed the MCP boundary after
+/// all ranking, masking, limiting, and token-budget enforcement completed.
+/// Candidate-only fields such as `expandable` are never considered.
+fn final_returned_replay_evidence<'a>(
+    tool: &str,
+    result: &'a Value,
+) -> Vec<ReturnedReplayEvidence<'a>> {
+    let collection = match tool {
+        "recall" => result
+            .get("results")
+            .and_then(Value::as_array)
+            .filter(|items| !items.is_empty())
+            .map(|items| ("results", items))
+            .or_else(|| {
+                result
+                    .get("evidence")
+                    .and_then(Value::as_array)
+                    .filter(|items| !items.is_empty())
+                    .map(|items| ("evidence", items))
+            }),
+        "search" => result
+            .get("results")
+            .and_then(Value::as_array)
+            .map(|items| ("results", items)),
+        "deep_reference" | "cross_reference" => result
+            .get("evidence")
+            .and_then(Value::as_array)
+            .map(|items| ("evidence", items)),
+        "explore_connections" => match result.get("action").and_then(Value::as_str) {
+            Some("chain") => result
+                .get("steps")
+                .and_then(Value::as_array)
+                .map(|items| ("steps", items)),
+            Some("associations") => result
+                .get("associations")
+                .and_then(Value::as_array)
+                .map(|items| ("associations", items)),
+            Some("bridges") => result
+                .get("bridges")
+                .and_then(Value::as_array)
+                .map(|items| ("bridges", items)),
+            _ => None,
+        },
+        _ => None,
+    };
+
+    collection
+        .into_iter()
+        .flat_map(|(_, items)| items)
+        .filter_map(|value| {
+            let memory_id = replay_memory_id(value)?;
+            Some(ReturnedReplayEvidence {
+                memory_id,
+                value,
+                trust_score: replay_trust_score(value),
+            })
+        })
+        .collect()
+}
+
+fn replay_memory_id(value: &Value) -> Option<&str> {
+    value
+        .get("id")
+        .or_else(|| value.get("memory_id"))
+        .or_else(|| value.get("memoryId"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+}
+
+fn replay_trust_score(value: &Value) -> f64 {
+    [
+        "trust",
+        "trustScore",
+        "trust_score",
+        "retentionStrength",
+        "retention_strength",
+        "activation",
+        "score",
+        "strength",
+        "connectionStrength",
+        "connection_strength",
+        "combinedScore",
+        "combined_score",
+    ]
+    .into_iter()
+    .find_map(|field| value.get(field).and_then(Value::as_f64))
+    .filter(|score| score.is_finite())
+    .unwrap_or(0.0)
+    .clamp(0.0, 1.0)
+}
+
+fn replay_decay_risk(trust_score: f64) -> ReplayDecayRisk {
+    if trust_score >= 0.7 {
+        ReplayDecayRisk::Low
+    } else if trust_score >= 0.4 {
+        ReplayDecayRisk::Medium
+    } else {
+        ReplayDecayRisk::High
+    }
+}
+
+fn replay_policy_bytes(tool: &str, result: &Value, collection: &str) -> Vec<u8> {
+    let mut policy = BTreeMap::new();
+    policy.insert(
+        "selectionBoundary".to_string(),
+        Value::String(REPLAY_SELECTION_BOUNDARY.to_string()),
+    );
+    policy.insert("tool".to_string(), Value::String(tool.to_string()));
+    policy.insert(
+        "evidenceCollection".to_string(),
+        Value::String(collection.to_string()),
+    );
+    for field in [
+        "action",
+        "method",
+        "retrievalMode",
+        "concrete",
+        "detailLevel",
+        "profile",
+        "tokenBudgetLimit",
+    ] {
+        if let Some(value) = result.get(field)
+            && (value.is_string() || value.is_boolean() || value.is_number())
+        {
+            policy.insert(field.to_string(), value.clone());
+        }
+    }
+    serde_json::to_vec(&policy).unwrap_or_default()
+}
+
+fn replay_evidence_collection(tool: &str, result: &Value) -> Option<&'static str> {
+    match tool {
+        "recall"
+            if result
+                .get("results")
+                .and_then(Value::as_array)
+                .is_some_and(|v| !v.is_empty()) =>
+        {
+            Some("results")
+        }
+        "recall"
+            if result
+                .get("evidence")
+                .and_then(Value::as_array)
+                .is_some_and(|v| !v.is_empty()) =>
+        {
+            Some("evidence")
+        }
+        "search" => Some("results"),
+        "deep_reference" | "cross_reference" => Some("evidence"),
+        "explore_connections" => match result.get("action").and_then(Value::as_str) {
+            Some("chain") => Some("steps"),
+            Some("associations") => Some("associations"),
+            Some("bridges") => Some("bridges"),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn build_replay_capsule_draft(
+    receipt_id: &str,
+    tool: &str,
+    result: &Value,
+) -> Option<RetrievalReplayCapsuleDraft> {
+    let evidence = final_returned_replay_evidence(tool, result);
+    if evidence.is_empty() {
+        return None;
+    }
+    let collection = replay_evidence_collection(tool, result)?;
+    let items = evidence
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, evidence)| {
+            let evidence_slot = replay_evidence_slot(index + 1);
+            let evidence_bytes = serde_json::to_vec(evidence.value).ok()?;
+            let token_estimate = u64::try_from(evidence_bytes.len()).ok()?.div_ceil(4);
+            Some(RetrievalReplayItemDraft {
+                evidence_slot: evidence_slot.clone(),
+                memory_id: evidence.memory_id.to_string(),
+                private_digest: private_evidence_digest(
+                    replay_digest_key(),
+                    &evidence_slot,
+                    &evidence_bytes,
+                ),
+                token_estimate,
+                trust_score: evidence.trust_score,
+                decay_risk: replay_decay_risk(evidence.trust_score),
+            })
+        })
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        return None;
+    }
+
+    Some(RetrievalReplayCapsuleDraft::new(
+        receipt_id,
+        replay_policy_digest(&replay_policy_bytes(tool, result, collection)),
+        items,
+    ))
+}
+
+#[derive(Debug)]
+struct ReceiptSigner {
+    key_id: String,
+    seed: [u8; 32],
+}
+
+/// Load the live signer only when an operator supplied a complete explicit
+/// configuration. A partial configuration, unreadable sidecar, unregistered
+/// key, seed/public-key mismatch, or non-active key is an error: retrieval
+/// receipt persistence then fails closed instead of quietly emitting unsigned
+/// evidence under a signing-enabled deployment.
+fn configured_receipt_signer(storage: &Storage) -> Result<Option<ReceiptSigner>, String> {
+    let key_id = env::var(RECEIPT_SIGNING_KEY_ID_ENV).ok();
+    let seed_path = env::var_os(RECEIPT_SIGNING_SEED_PATH_ENV);
+    match (key_id, seed_path) {
+        (None, None) => Ok(None),
+        (Some(key_id), Some(seed_path)) if !key_id.trim().is_empty() => {
+            let seed = load_receipt_signing_seed(std::path::Path::new(&seed_path))
+                .map_err(|error| format!("receipt signing seed is unavailable: {error}"))?;
+            let registered = storage
+                .registered_receipt_signing_key(&key_id)
+                .map_err(|error| format!("receipt signing key lookup failed: {error}"))?
+                .ok_or_else(|| {
+                    format!(
+                        "receipt signing key '{key_id}' is not registered; register its public key before enabling signing"
+                    )
+                })?;
+            if registered.status != SigningKeyStatus::Active {
+                return Err(format!(
+                    "receipt signing key '{key_id}' is not active for new receipts"
+                ));
+            }
+            let public_key = ed25519_dalek::SigningKey::from_bytes(&seed)
+                .verifying_key()
+                .to_bytes();
+            if public_key != registered.public_key {
+                return Err(format!(
+                    "receipt signing seed does not match registered public key '{key_id}'"
+                ));
+            }
+            Ok(Some(ReceiptSigner { key_id, seed }))
+        }
+        _ => Err(format!(
+            "receipt signing requires both {RECEIPT_SIGNING_KEY_ID_ENV} and {RECEIPT_SIGNING_SEED_PATH_ENV}, or neither"
+        )),
+    }
+}
+
+fn retrieval_projection(receipt: &Receipt) -> Result<RedactionSafeDecisionProjectionV1, String> {
+    let count = |name: &str, value: usize| {
+        u32::try_from(value).map_err(|_| format!("receipt {name} exceeds the attestation bound"))
+    };
+    let trust_floor_basis_points = if receipt.trust_floor.is_finite() {
+        (receipt.trust_floor.clamp(0.0, 1.0) * 10_000.0).round() as u16
+    } else {
+        return Err("receipt trust floor is not finite".into());
+    };
+    Ok(RedactionSafeDecisionProjectionV1::RetrievalSelection {
+        returned_count: count("retrieved count", receipt.retrieved.len())?,
+        suppressed_count: count("suppressed count", receipt.suppressed.len())?,
+        mutation_count: count("mutation count", receipt.mutations.len())?,
+        trust_floor_basis_points,
+    })
+}
+
+fn receipt_memory_ids(receipt: &Receipt) -> Vec<String> {
+    let mut ids = BTreeSet::new();
+    ids.extend(receipt.retrieved.iter().cloned());
+    ids.extend(receipt.suppressed.iter().map(|entry| entry.id.clone()));
+    ids.extend(receipt.mutations.iter().map(|mutation| mutation.id.clone()));
+    ids.into_iter().collect()
+}
+
+fn sign_retrieval_receipt(
+    storage: &Storage,
+    signer: &ReceiptSigner,
+    receipt: &mut Receipt,
+) -> Result<
+    (
+        ReceiptAttestationV1,
+        Vec<DisclosureMapping>,
+        SignedReceiptAttestation,
+    ),
+    String,
+> {
+    let predecessor = storage
+        .latest_receipt_chain_entry()
+        .map_err(|error| format!("receipt chain lookup failed: {error}"))?;
+    let chain_position = predecessor
+        .as_ref()
+        .map(AttestationChainPosition::Successor)
+        .unwrap_or(AttestationChainPosition::Genesis);
+    let prepared = ReceiptAttestationV1::build(
+        Utc::now(),
+        ProducerIdentity::new(
+            "vestige-mcp",
+            env!("CARGO_PKG_VERSION"),
+            "receipt-runtime-v1",
+        )
+        .map_err(|error| format!("receipt producer identity is invalid: {error}"))?,
+        chain_position,
+        RECEIPT_ATTESTATION_ALGORITHM_V1,
+        retrieval_projection(receipt)?,
+        receipt_memory_ids(receipt),
+    )
+    .map_err(|error| format!("receipt attestation build failed: {error}"))?;
+    let (attestation, disclosures) = prepared
+        .bind_receipt(receipt)
+        .map_err(|error| format!("receipt attestation binding failed: {error}"))?
+        .into_parts();
+    let signed = sign_attestation(&attestation, &signer.key_id, &signer.seed)
+        .map_err(|error| format!("receipt attestation signing failed: {error}"))?;
+    Ok((attestation, disclosures, signed))
 }
 
 /// Build a [`Receipt`] from a retrieval tool's response JSON, persist it, and
@@ -503,29 +947,30 @@ fn is_receiptable_tool(tool: &str) -> bool {
 /// the activation path) — so the receipt is the auditable "nutrition label" for
 /// the answer and costs nothing extra to produce.
 ///
-/// Returns `None` for non-retrieval tools or empty results. Best-effort
-/// persistence: a storage error is logged, the receipt is still returned.
+/// Returns `None` for non-retrieval tools or empty results. When persistence
+/// fails, returns an explicit status object with no receipt id or payload, so a
+/// successful retrieval never implies it has durable receipt evidence.
 pub fn build_and_save_receipt(
     storage: &Arc<Storage>,
     run_id: &str,
     tool: &str,
     result: &serde_json::Value,
 ) -> Option<serde_json::Value> {
-    if !is_receiptable_tool(tool) {
+    if !is_retrieval_tool(tool) {
         return None;
     }
 
-    if tool == "backfill" {
-        return build_and_save_backfill_receipt(storage, run_id, result);
-    }
-
-    let (retrieved, activation) = extract_retrieved(result);
-    if retrieved.is_empty() {
+    let returned_evidence = final_returned_replay_evidence(tool, result);
+    if returned_evidence.is_empty() {
         return None;
     }
-    let trust_scores: Vec<f64> = retrieved
+    let retrieved: Vec<String> = returned_evidence
         .iter()
-        .map(|id| activation.get(id).copied().unwrap_or(0.0))
+        .map(|evidence| evidence.memory_id.to_string())
+        .collect();
+    let trust_scores: Vec<f64> = returned_evidence
+        .iter()
+        .map(|evidence| evidence.trust_score)
         .collect();
 
     let suppressed: Vec<SuppressedReceiptEntry> = extract_suppressed(result)
@@ -547,9 +992,7 @@ pub fn build_and_save_receipt(
             }
         });
 
-    let query = result.get("query").and_then(|v| v.as_str());
-
-    let receipt = Receipt::build(
+    let mut receipt = Receipt::build(
         Utc::now(),
         run_id,
         retrieved,
@@ -558,128 +1001,65 @@ pub fn build_and_save_receipt(
         &trust_scores,
         Vec::new(),
     );
-    if let Err(e) = storage.save_receipt(&receipt, Some(run_id), Some(tool), query) {
-        tracing::warn!("receipt save failed: {e}");
+    let signing_result = configured_receipt_signer(storage).and_then(|signer| {
+        let capsule_and_save = |receipt: &Receipt,
+                                signed: Option<(
+            &ReceiptAttestationV1,
+            &[DisclosureMapping],
+            &SignedReceiptAttestation,
+        )>|
+         -> Result<(), String> {
+            let capsule = build_replay_capsule_draft(&receipt.receipt_id, tool, result)
+                .ok_or_else(|| "retrieval receipt has no replayable final evidence".to_string())?;
+            match signed {
+                Some((attestation, disclosures, signed)) => storage
+                    .save_signed_retrieval_receipt_with_replay_capsule_atomic(
+                        SignedReceiptWrite {
+                            receipt,
+                            attestation,
+                            signed,
+                            disclosures,
+                            run_id: Some(run_id),
+                            tool: Some(tool),
+                            query: None,
+                        },
+                        &capsule,
+                    )
+                    .map(|_| ())
+                    .map_err(|error| format!("atomic signed receipt save failed: {error}")),
+                None => storage
+                    .save_retrieval_receipt_with_replay_capsule(
+                        receipt,
+                        Some(run_id),
+                        Some(tool),
+                        &capsule,
+                    )
+                    .map(|_| ())
+                    .map_err(|error| format!("atomic receipt save failed: {error}")),
+            }
+        };
+        match signer {
+            Some(signer) => {
+                let (attestation, disclosures, signed) =
+                    sign_retrieval_receipt(storage, &signer, &mut receipt)?;
+                capsule_and_save(&receipt, Some((&attestation, &disclosures, &signed)))
+            }
+            None => capsule_and_save(&receipt, None),
+        }
+    });
+    if let Err(error) = signing_result {
+        tracing::warn!("atomic receipt persistence failed: {error}");
+        return Some(receipt_persistence_unavailable());
     }
     Some(serde_json::to_value(&receipt).unwrap_or(serde_json::Value::Null))
 }
 
-/// Persist the exact output of a Backfill run as the same receipt primitive
-/// used by retrieval. The proof records candidates, not an asserted root cause:
-/// the UI must preserve that epistemic boundary.
-fn build_and_save_backfill_receipt(
-    storage: &Arc<Storage>,
-    run_id: &str,
-    result: &Value,
-) -> Option<Value> {
-    if !result.get("triggered")?.as_bool()? {
-        return None;
-    }
-    let failure = result.get("failure")?;
-    let failure_id = failure.get("id")?.as_str()?.to_string();
-    let failure_preview = failure
-        .get("content_preview")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let candidates: Vec<BackfillCandidateEvidence> = result
-        .get("causes")
-        .and_then(|v| v.as_array())?
-        .iter()
-        .filter_map(|cause| {
-            Some(BackfillCandidateEvidence {
-                memory_id: cause.get("memory_id")?.as_str()?.to_string(),
-                content_preview: cause
-                    .get("content_preview")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                shared_entities: cause
-                    .get("shared_entities")
-                    .and_then(|v| v.as_array())
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|item| item.as_str().map(ToString::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                age_days_before_failure: cause
-                    .get("age_days_before_failure")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0),
-                similarity_rank: cause
-                    .get("similarity_rank")
-                    .and_then(|v| v.as_u64())
-                    .map(|rank| rank as usize),
-                backfill_score: cause
-                    .get("backfill_score")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0),
-                promoted: cause
-                    .get("promoted")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
-                candidate_edge_persisted: cause
-                    .get("candidate_edge_persisted")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
-            })
-        })
-        .collect();
-    if candidates.is_empty() {
-        return None;
-    }
-    let retrieved = candidates
-        .iter()
-        .map(|candidate| candidate.memory_id.clone())
-        .collect();
-    let activation_path = candidates
-        .iter()
-        .map(|candidate| format!("{} -> {}", candidate.memory_id, failure_id))
-        .collect();
-    let mutations = candidates
-        .iter()
-        .filter(|candidate| candidate.promoted)
-        .map(|candidate| vestige_core::ReceiptMutation {
-            id: candidate.memory_id.clone(),
-            kind: "backfill_candidate_promoted".to_string(),
-            note: Some("Promoted after an explicit-entity backward candidate match".to_string()),
-        })
-        .collect();
-    let mut receipt = Receipt::build(
-        Utc::now(),
-        run_id,
-        retrieved,
-        Vec::new(),
-        activation_path,
-        &[],
-        mutations,
-    );
-    receipt.backfill = Some(BackfillReceiptEvidence {
-        failure_id,
-        failure_preview,
-        scanned: result.get("scanned").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-        lookback_days: result
-            .get("lookback_days")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(30),
-        baseline: "embedding cosine rank within the scanned candidate set".to_string(),
-        path_ids: result
-            .get("path_ids")
-            .and_then(|value| value.as_array())
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| id.as_str().map(ToString::to_string))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        candidates,
-    });
-    if let Err(error) = storage.save_receipt(&receipt, Some(run_id), Some("backfill"), None) {
-        tracing::warn!(%error, "backfill receipt save failed");
-    }
-    Some(serde_json::to_value(receipt).unwrap_or(Value::Null))
+fn receipt_persistence_unavailable() -> serde_json::Value {
+    serde_json::json!({
+        "persistence": "unavailable",
+        "claimBoundary": "Receipt evidence was not persisted; no durable receipt is claimed.",
+        "message": "Receipt persistence is temporarily unavailable. Retry the retrieval to obtain durable evidence."
+    })
 }
 
 /// Derive the run id for a tool call. Honours a client-supplied `runId` /
@@ -716,6 +1096,51 @@ pub fn hash_args(args: &Option<Value>) -> String {
         hash = hash.wrapping_mul(FNV_PRIME);
     }
     format!("{:016x}", hash)
+}
+
+/// Fixed trace marker used when `smart_ingest` rejects credential-shaped
+/// content.  Hashing those arguments, even without storing the raw JSON,
+/// leaves a stable value derived from a rejected secret that can be brute
+/// forced for low-entropy values.  The marker records only that redaction
+/// happened; it is intentionally independent of every argument byte.
+const REDACTED_SMART_INGEST_SECRET_ARGS_HASH: &str = "redacted_secret_input";
+
+fn trace_args_hash(tool: &str, args: &Option<Value>) -> String {
+    if tool == "smart_ingest" && smart_ingest_has_blocking_secret(args) {
+        return REDACTED_SMART_INGEST_SECRET_ARGS_HASH.to_string();
+    }
+    hash_args(args)
+}
+
+/// Detect the fields `smart_ingest` passes to the credential-aware storage
+/// boundary. This mirrors its single and batch request shapes, so a rejected
+/// item cannot leave a raw-derived fingerprint behind in the opening trace.
+fn smart_ingest_has_blocking_secret(args: &Option<Value>) -> bool {
+    let Some(args) = args.as_ref() else {
+        return false;
+    };
+
+    smart_ingest_input_has_blocking_secret(args)
+        || args
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flat_map(|items| items.iter())
+            .any(smart_ingest_input_has_blocking_secret)
+}
+
+fn smart_ingest_input_has_blocking_secret(input: &Value) -> bool {
+    let scalar_fields = ["content", "source"]
+        .into_iter()
+        .filter_map(|field| input.get(field).and_then(Value::as_str));
+    let tags = input
+        .get("tags")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flat_map(|tags| tags.iter())
+        .filter_map(Value::as_str);
+
+    scalar_fields.chain(tags).any(has_blocking_secret)
 }
 
 /// Persist one trace event and broadcast it to the dashboard. Best-effort:
@@ -757,7 +1182,7 @@ pub fn record_call(
         MemoryTraceEvent::McpCall {
             run_id: run_id.to_string(),
             tool: tool.to_string(),
-            args_hash: hash_args(args),
+            args_hash: trace_args_hash(tool, args),
             at: 0,
         },
     );
@@ -773,6 +1198,13 @@ pub fn record_result(
     tool: &str,
     result: &Value,
 ) {
+    // Receipts committed atomically inside write tools do not yet know the
+    // enclosing MCP run id. Link their denormalized Black Box column once the
+    // tool returns, without rewriting the signed/typed payload surface.
+    for receipt_id in extract_embedded_receipt_ids(result) {
+        let _ = storage.link_receipt_to_run(&receipt_id, run_id);
+    }
+
     // --- memory.retrieve: ids + per-id activation ---
     let (ids, activation) = extract_retrieved(result);
     if !ids.is_empty() {
@@ -862,6 +1294,36 @@ pub fn record_result(
     }
 }
 
+fn extract_embedded_receipt_ids(result: &Value) -> Vec<String> {
+    fn push_from_item(item: &Value, out: &mut Vec<String>) {
+        if let Some(capture) = item.get("synapticCapture") {
+            if let Some(id) = capture.get("receiptId").and_then(Value::as_str)
+                && !out.iter().any(|existing| existing == id)
+            {
+                out.push(id.to_string());
+            }
+            if let Some(forward) = capture.get("forwardReceipts").and_then(Value::as_array) {
+                for pair in forward {
+                    if let Some(id) = pair.get("receiptId").and_then(Value::as_str)
+                        && !out.iter().any(|existing| existing == id)
+                    {
+                        out.push(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    push_from_item(result, &mut out);
+    if let Some(items) = result.get("results").and_then(Value::as_array) {
+        for item in items {
+            push_from_item(item, &mut out);
+        }
+    }
+    out
+}
+
 /// Pull retrieved memory ids + their activation/score from a search-like or
 /// deep_reference-like result.
 fn extract_retrieved(result: &Value) -> (Vec<String>, BTreeMap<String, f64>) {
@@ -893,22 +1355,6 @@ fn extract_retrieved(result: &Value) -> (Vec<String>, BTreeMap<String, f64>) {
                 ids.push(id.to_string());
                 if let Some(t) = item.get("trust").and_then(|v| v.as_f64()) {
                     activation.insert(id.to_string(), t);
-                }
-            }
-        }
-    }
-
-    // Retroactive Salience Backfill: these are not ordinary retrieval hits,
-    // but they are the exact earlier candidates an agent must inspect. Record
-    // them in the same run so Black Box and its receipt list agree.
-    if ids.is_empty()
-        && let Some(arr) = result.get("causes").and_then(|r| r.as_array())
-    {
-        for item in arr {
-            if let Some(id) = item.get("memory_id").and_then(|v| v.as_str()) {
-                ids.push(id.to_string());
-                if let Some(score) = item.get("backfill_score").and_then(|v| v.as_f64()) {
-                    activation.insert(id.to_string(), score);
                 }
             }
         }
@@ -1129,6 +1575,39 @@ fn extract_dream_proposals(result: &Value, tool: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn receipt_signing_env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    struct ReceiptSigningEnvReset {
+        key_id: Option<std::ffi::OsString>,
+        seed_path: Option<std::ffi::OsString>,
+    }
+
+    impl ReceiptSigningEnvReset {
+        fn capture() -> Self {
+            Self {
+                key_id: env::var_os(RECEIPT_SIGNING_KEY_ID_ENV),
+                seed_path: env::var_os(RECEIPT_SIGNING_SEED_PATH_ENV),
+            }
+        }
+    }
+
+    impl Drop for ReceiptSigningEnvReset {
+        fn drop(&mut self) {
+            for (name, previous) in [
+                (RECEIPT_SIGNING_KEY_ID_ENV, self.key_id.take()),
+                (RECEIPT_SIGNING_SEED_PATH_ENV, self.seed_path.take()),
+            ] {
+                match previous {
+                    Some(value) => unsafe { env::set_var(name, value) },
+                    None => unsafe { env::remove_var(name) },
+                }
+            }
+        }
+    }
+
     #[test]
     fn run_id_honours_client_supplied() {
         let args = Some(serde_json::json!({ "runId": "run_session_7" }));
@@ -1153,6 +1632,51 @@ mod tests {
     }
 
     #[test]
+    fn rejected_smart_ingest_secret_uses_fixed_non_derived_trace_marker() {
+        let s = store();
+        let secret = format!("ghp_{}", "A".repeat(36));
+        let args = Some(serde_json::json!({
+            "content": format!("{secret}"),
+            "runId": "run_secret_rejection"
+        }));
+
+        // `record_call` runs before smart_ingest dispatches and rejects the
+        // credential, so this is the persistence boundary that must redact.
+        record_call(&s, None, "run_secret_rejection", "smart_ingest", &args);
+
+        let trace = s.get_trace("run_secret_rejection").unwrap();
+        assert_eq!(trace.len(), 1);
+        let MemoryTraceEvent::McpCall { args_hash, .. } = &trace[0] else {
+            panic!("opening trace event must be mcp.call");
+        };
+        assert_eq!(args_hash, REDACTED_SMART_INGEST_SECRET_ARGS_HASH);
+        assert_ne!(args_hash, &hash_args(&args));
+
+        let persisted = serde_json::to_string(&trace).unwrap();
+        assert!(
+            !persisted.contains(&secret),
+            "rejected credential must not be persisted in the trace"
+        );
+    }
+
+    #[test]
+    fn rejected_smart_ingest_batch_secret_uses_fixed_trace_marker() {
+        let secret = format!("ghp_{}", "B".repeat(36));
+        let args = Some(serde_json::json!({
+            "items": [
+                { "content": "safe item" },
+                { "content": format!("{secret}") }
+            ]
+        }));
+
+        assert_eq!(
+            trace_args_hash("smart_ingest", &args),
+            REDACTED_SMART_INGEST_SECRET_ARGS_HASH,
+            "one rejected batch item must redact the whole call fingerprint"
+        );
+    }
+
+    #[test]
     fn extract_retrieved_from_search_shape() {
         let r = serde_json::json!({
             "results": [
@@ -1174,6 +1698,243 @@ mod tests {
         let (ids, act) = extract_retrieved(&r);
         assert_eq!(ids, vec!["e1"]);
         assert_eq!(act["e1"], 0.7);
+    }
+
+    #[test]
+    fn replay_digest_key_parser_requires_exact_32_byte_hex() {
+        let lower = "00ff".repeat(16);
+        let upper = "A1".repeat(32);
+        assert_eq!(
+            parse_replay_digest_key(&lower).unwrap()[..4],
+            [0, 255, 0, 255]
+        );
+        assert_eq!(parse_replay_digest_key(&upper).unwrap(), [0xA1; 32]);
+        assert!(parse_replay_digest_key(&"0".repeat(63)).is_none());
+        assert!(parse_replay_digest_key(&"z0".repeat(32)).is_none());
+    }
+
+    #[test]
+    fn replay_capsule_draft_freezes_only_final_returned_evidence() {
+        let result = serde_json::json!({
+            "query": "raw query must not enter replay policy",
+            "method": "hybrid+cognitive",
+            "retrievalMode": "balanced",
+            "detailLevel": "summary",
+            "profile": "standard",
+            "tokenBudgetLimit": 200,
+            "tokenBudgetUsed": 87,
+            "results": [
+                {
+                    "id": "memory_selected_1",
+                    "content": "first private memory fragment",
+                    "retentionStrength": 0.82,
+                    "combinedScore": 0.91
+                },
+                {
+                    "id": "memory_selected_2",
+                    "content": "second private memory fragment",
+                    "retentionStrength": 0.51,
+                    "combinedScore": 0.74
+                }
+            ],
+            "expandable": ["memory_candidate_not_returned"]
+        });
+
+        let draft = build_replay_capsule_draft("r_2026_08_10_run_abcdef", "recall", &result)
+            .expect("final selected evidence should create a capsule draft");
+        assert_eq!(draft.items.len(), 2);
+        assert_eq!(draft.items[0].evidence_slot, "evidence_1");
+        assert_eq!(draft.items[1].evidence_slot, "evidence_2");
+        assert_eq!(draft.items[0].memory_id, "memory_selected_1");
+        assert_eq!(draft.items[1].memory_id, "memory_selected_2");
+        assert_eq!(draft.items[0].trust_score, 0.82);
+        assert_eq!(draft.items[1].trust_score, 0.51);
+        assert_eq!(draft.items[0].decay_risk, ReplayDecayRisk::Low);
+        assert_eq!(draft.items[1].decay_risk, ReplayDecayRisk::Medium);
+
+        let first_bytes = serde_json::to_vec(&result["results"][0]).unwrap();
+        assert_eq!(
+            draft.items[0].private_digest,
+            private_evidence_digest(replay_digest_key(), "evidence_1", &first_bytes)
+        );
+        assert_eq!(
+            draft.items[0].token_estimate,
+            u64::try_from(first_bytes.len()).unwrap().div_ceil(4)
+        );
+        assert!(
+            draft
+                .items
+                .iter()
+                .all(|item| item.memory_id != "memory_candidate_not_returned")
+        );
+
+        let mut changed_query_and_candidates = result.clone();
+        changed_query_and_candidates["query"] = serde_json::json!("different secret query");
+        changed_query_and_candidates["expandable"] =
+            serde_json::json!(["different_unreturned_candidate"]);
+        let retry = build_replay_capsule_draft(
+            "r_2026_08_10_run_abcdef",
+            "recall",
+            &changed_query_and_candidates,
+        )
+        .unwrap();
+        assert_eq!(draft.policy_digest, retry.policy_digest);
+        assert_eq!(draft.items, retry.items);
+    }
+
+    #[test]
+    fn replay_capsule_uses_reason_evidence_not_recommended_duplicate() {
+        let result = serde_json::json!({
+            "query": "private reasoning query",
+            "recommended": {
+                "memory_id": "memory_primary",
+                "answer_preview": "duplicate answer material",
+                "trust_score": 0.9
+            },
+            "evidence": [
+                { "id": "memory_primary", "preview": "primary", "trust": 0.9 },
+                { "id": "memory_support", "preview": "support", "trust": 0.6 }
+            ],
+            "reasoning": "raw synthesized output"
+        });
+
+        let draft = build_replay_capsule_draft("r_reason", "recall", &result).unwrap();
+        assert_eq!(draft.items.len(), 2);
+        assert_eq!(draft.items[0].memory_id, "memory_primary");
+        assert_eq!(draft.items[1].memory_id, "memory_support");
+    }
+
+    #[test]
+    fn receipt_and_final_capsule_persist_atomically_without_raw_replay_material() {
+        // configured_receipt_signer reads process env. Serialize with the
+        // signing-env tests so a parallel missing-key fixture cannot turn this
+        // unsigned persist into "temporarily unavailable".
+        let _lock = receipt_signing_env_lock().lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("retrieval-capsule.db");
+        let storage = Arc::new(vestige_core::Storage::new(Some(db_path.clone())).unwrap());
+        // Replay-item rows deliberately carry an FK to the canonical memory so
+        // this regression exercises the same path as a live retrieval rather
+        // than relying on impossible fixture identifiers.
+        let first = storage
+            .ingest(vestige_core::IngestInput {
+                content: "raw memory sentinel alpha".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let second = storage
+            .ingest(vestige_core::IngestInput {
+                content: "raw memory sentinel beta".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let result = serde_json::json!({
+            "query": "private query sentinel",
+            "method": "concrete",
+            "retrievalMode": "precise",
+            "detailLevel": "summary",
+            "profile": "standard",
+            "tokenBudgetLimit": 120,
+            "results": [
+                {
+                    "id": first.id,
+                    "content": "raw memory sentinel alpha",
+                    "retentionStrength": 0.75
+                },
+                {
+                    "id": second.id,
+                    "content": "raw memory sentinel beta",
+                    "retentionStrength": 0.35
+                }
+            ],
+            "expandable": ["memory_expandable_sentinel"]
+        });
+
+        let receipt_json =
+            build_and_save_receipt(&storage, "run_product_replay", "recall", &result)
+                .expect("retrieval should return its receipt");
+        let receipt_id = receipt_json["receipt_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("expected signed receipt, got {receipt_json}"));
+        let persisted_receipt = storage.get_receipt(receipt_id).unwrap().unwrap();
+        assert_eq!(
+            persisted_receipt.retrieved,
+            vec![first.id.clone(), second.id.clone()],
+            "live retrieval evidence must retain its canonical active ids"
+        );
+        assert_eq!(persisted_receipt.trust_floor, 0.35);
+
+        let capsule = storage
+            .get_retrieval_replay_capsule(receipt_id)
+            .unwrap()
+            .expect("receipt and capsule must commit together");
+        assert_eq!(capsule.item_count, Some(2));
+        assert_eq!(
+            capsule
+                .items
+                .iter()
+                .map(|item| item.evidence_slot.as_str())
+                .collect::<Vec<_>>(),
+            vec!["evidence_1", "evidence_2"]
+        );
+        let public_capsule_json = serde_json::to_string(&capsule).unwrap();
+        for forbidden in [
+            "private query sentinel",
+            "raw memory sentinel alpha",
+            "raw memory sentinel beta",
+            "memory_expandable_sentinel",
+            "b3k:",
+        ] {
+            assert!(
+                !public_capsule_json.contains(forbidden),
+                "public capsule leaked {forbidden}"
+            );
+        }
+
+        let reader = rusqlite::Connection::open(db_path).unwrap();
+        let (query, payload): (Option<String>, String) = reader
+            .query_row(
+                "SELECT query, payload FROM memory_receipts WHERE receipt_id = ?1",
+                [receipt_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(
+            query.is_none(),
+            "atomic replay receipts must not duplicate queries"
+        );
+        for forbidden in [
+            "private query sentinel",
+            "raw memory sentinel alpha",
+            "raw memory sentinel beta",
+            "memory_expandable_sentinel",
+        ] {
+            assert!(
+                !payload.contains(forbidden),
+                "receipt payload leaked {forbidden}"
+            );
+        }
+        let expandable_rows: i64 = reader
+            .query_row(
+                "SELECT COUNT(*) FROM retrieval_replay_items WHERE memory_id = ?1",
+                ["memory_expandable_sentinel"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(expandable_rows, 0);
+    }
+
+    #[test]
+    fn receipt_persistence_failure_is_explicit_and_never_claims_a_receipt() {
+        let status = receipt_persistence_unavailable();
+        assert_eq!(status["persistence"], "unavailable");
+        assert!(status.get("receipt_id").is_none());
+        assert!(
+            status["claimBoundary"]
+                .as_str()
+                .unwrap()
+                .contains("not persisted")
+        );
     }
 
     #[test]
@@ -1298,6 +2059,35 @@ mod tests {
     }
 
     #[test]
+    fn embedded_synaptic_receipts_are_extracted_for_run_linkage() {
+        let result = serde_json::json!({
+            "synapticCapture": {
+                "receiptId": "r_one",
+                "forwardReceipts": [
+                    { "receiptId": "r_pair_one" },
+                    { "receiptId": "r_one" }
+                ]
+            },
+            "results": [
+                { "synapticCapture": {
+                    "receiptId": "r_two",
+                    "forwardReceipts": [{ "receiptId": "r_pair_two" }]
+                } },
+                { "synapticCapture": { "receiptId": "r_one" } }
+            ]
+        });
+        assert_eq!(
+            extract_embedded_receipt_ids(&result),
+            vec![
+                "r_one".to_string(),
+                "r_pair_one".to_string(),
+                "r_two".to_string(),
+                "r_pair_two".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn extract_writes_recognizes_destructive_actions_c2() {
         // C2: purge/delete are brain mutations and must trace + be gateable.
         for act in ["purge", "delete"] {
@@ -1315,6 +2105,107 @@ mod tests {
         std::sync::Arc::new(
             vestige_core::Storage::new(Some(dir.path().join("gate_test.db"))).unwrap(),
         )
+    }
+
+    #[test]
+    fn configured_signing_commits_receipt_envelope_and_replay_capsule_together() {
+        let _lock = receipt_signing_env_lock().lock().unwrap();
+        let _reset = ReceiptSigningEnvReset::capture();
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(Storage::new(Some(dir.path().join("signed-receipt.db"))).unwrap());
+        let provisioned = vestige_core::storage::provision_receipt_signing_key_sidecar(
+            &dir.path().join("receipt-keys"),
+            "test-receipt-key",
+            chrono::DateTime::<Utc>::UNIX_EPOCH,
+        )
+        .unwrap();
+        storage
+            .register_receipt_signing_key(&provisioned.trusted_key)
+            .unwrap();
+        unsafe {
+            env::set_var(RECEIPT_SIGNING_KEY_ID_ENV, "test-receipt-key");
+            env::set_var(RECEIPT_SIGNING_SEED_PATH_ENV, &provisioned.seed_path);
+        }
+        let memory = storage
+            .ingest(vestige_core::IngestInput {
+                content: "private retrieval content".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let result = serde_json::json!({
+            "results": [{
+                "id": memory.id,
+                "content": "private retrieval content",
+                "retentionStrength": 0.91
+            }]
+        });
+        let mut receipt = Receipt::build(
+            Utc::now(),
+            "run_signed",
+            vec![memory.id],
+            Vec::new(),
+            Vec::new(),
+            &[0.91],
+            Vec::new(),
+        );
+        let signer = configured_receipt_signer(&storage).unwrap().unwrap();
+        let (attestation, disclosures, signed) =
+            sign_retrieval_receipt(&storage, &signer, &mut receipt).unwrap();
+        let capsule = build_replay_capsule_draft(&receipt.receipt_id, "recall", &result).unwrap();
+        storage
+            .save_signed_retrieval_receipt_with_replay_capsule_atomic(
+                SignedReceiptWrite {
+                    receipt: &receipt,
+                    attestation: &attestation,
+                    signed: &signed,
+                    disclosures: &disclosures,
+                    run_id: Some("run_signed"),
+                    tool: Some("recall"),
+                    query: None,
+                },
+                &capsule,
+            )
+            .unwrap();
+        let receipt_id = receipt.receipt_id.as_str();
+        assert!(receipt_id.starts_with("ratt_"));
+        assert_eq!(
+            storage.receipt_attestation_status(receipt_id).unwrap(),
+            Some(vestige_core::storage::ReceiptAttestationStatus::SignedV1)
+        );
+        assert!(
+            storage
+                .get_retrieval_replay_capsule(receipt_id)
+                .unwrap()
+                .is_some()
+        );
+        let verification = storage
+            .verify_stored_receipt_attestation(receipt_id)
+            .unwrap()
+            .expect("stored verification");
+        assert!(
+            verification.is_valid(),
+            "{:?}",
+            verification.report.failures
+        );
+        assert!(
+            storage
+                .get_receipt_attestation_envelope(receipt_id)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn partial_signing_configuration_fails_closed() {
+        let _lock = receipt_signing_env_lock().lock().unwrap();
+        let _reset = ReceiptSigningEnvReset::capture();
+        unsafe {
+            env::set_var(RECEIPT_SIGNING_KEY_ID_ENV, "missing-key");
+            env::remove_var(RECEIPT_SIGNING_SEED_PATH_ENV);
+        }
+        let storage = store();
+        assert!(configured_receipt_signer(&storage).is_err());
     }
 
     #[test]
@@ -1396,6 +2287,81 @@ mod tests {
         );
         // A content hash is present so reviewers can still correlate.
         assert!(pr.diff["node"]["contentHash"].as_str().is_some());
+    }
+
+    #[test]
+    fn gate_redacts_detected_secret_without_sensitive_topic_signal() {
+        let s = store();
+        let secret = format!("ghp_{}", "C".repeat(36));
+        let node = s
+            .ingest_with_secret_policy(
+                vestige_core::IngestInput {
+                    content: secret.clone(),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                },
+                vestige_core::SecretPolicy::AllowExplicitly,
+            )
+            .unwrap();
+        let result = serde_json::json!({ "decision": "create", "nodeId": node.id });
+
+        // Paranoid mode opens a PR even though a bare token has no topic signal;
+        // credential detection itself must still force full redaction.
+        let opened = gate_writes(
+            &s,
+            None,
+            "run_detected_secret",
+            "smart_ingest",
+            &result,
+            vestige_core::ReviewMode::Paranoid,
+        );
+        assert_eq!(opened.len(), 1);
+
+        let pr = &s
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap()[0];
+        let serialized = serde_json::to_string(pr).unwrap();
+        assert!(!serialized.contains(&secret));
+        assert!(serialized.contains("redacted"));
+    }
+
+    #[test]
+    fn pre_gate_redacts_detected_secret_without_sensitive_topic_signal() {
+        let s = store();
+        let secret = format!("ghp_{}", "D".repeat(36));
+        let node = s
+            .ingest_with_secret_policy(
+                vestige_core::IngestInput {
+                    content: secret.clone(),
+                    node_type: "fact".to_string(),
+                    ..Default::default()
+                },
+                vestige_core::SecretPolicy::AllowExplicitly,
+            )
+            .unwrap();
+        let args = Some(serde_json::json!({
+            "action": "purge",
+            "id": node.id,
+            "confirm": true
+        }));
+
+        let response = gate_pending_memory_mutation(
+            &s,
+            None,
+            "run_pending_detected_secret",
+            "memory",
+            &args,
+            vestige_core::ReviewMode::RiskGated,
+        )
+        .unwrap();
+        assert!(response.is_some());
+
+        let pr = &s
+            .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+            .unwrap()[0];
+        let serialized = serde_json::to_string(pr).unwrap();
+        assert!(!serialized.contains(&secret));
+        assert!(serialized.contains("redacted"));
     }
 
     #[test]
@@ -1509,9 +2475,4 @@ mod tests {
         assert!(!is_write_tool("search"));
         assert!(!is_write_tool("deep_reference"));
     }
-
-    // The receipt-spine acceptance test lives in server.rs as a real
-    // McpServer::handle_request recall test (seed → dispatch recall with a known
-    // runId → assert the trace AND list_receipts_for_run), which exercises the
-    // whole production path rather than this helper in isolation.
 }

@@ -386,6 +386,13 @@ pub struct IngestInput {
     /// When this knowledge stops being valid
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_until: Option<DateTime<Utc>>,
+    /// True when `valid_from` was inferred from prose (an "as of YYYY-MM-DD"
+    /// phrase) rather than supplied explicitly by the caller. Inferred
+    /// validity may stamp a newly created node but must never rewrite an
+    /// existing node's window. Internal flag set by smart ingest; never part
+    /// of the wire format.
+    #[serde(skip)]
+    pub validity_inferred: bool,
     /// Structured provenance for connector-ingested records (#57). When set
     /// with a `(source_system, source_id)` key, callers should route through
     /// `upsert_by_source` for idempotent sync rather than plain `ingest`.
@@ -404,6 +411,7 @@ impl Default for IngestInput {
             tags: vec![],
             valid_from: None,
             valid_until: None,
+            validity_inferred: false,
             source_envelope: None,
         }
     }

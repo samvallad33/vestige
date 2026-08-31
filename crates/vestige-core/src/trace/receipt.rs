@@ -55,47 +55,11 @@ pub struct Receipt {
     /// strengthening, reconsolidation, supersession). Empty for a pure read.
     pub mutations: Vec<ReceiptMutation>,
 
-    /// Optional proof payload for Retroactive Salience Backfill. Keeping this
-    /// inside the canonical receipt means the exact candidate evidence shown to
-    /// an engineer is the same durable artifact Black Box and Observatory open.
+    /// Optional schema-versioned evidence for non-retrieval receipts. This is
+    /// kept inside the persisted receipt payload so fetching a receipt after a
+    /// restart returns the same predicate that justified the mutation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backfill: Option<BackfillReceiptEvidence>,
-}
-
-/// One earlier memory surfaced by a Backfill run. This deliberately records
-/// *candidate* evidence rather than asserting an unverified root cause.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct BackfillCandidateEvidence {
-    pub memory_id: String,
-    pub content_preview: String,
-    pub shared_entities: Vec<String>,
-    pub age_days_before_failure: f64,
-    pub similarity_rank: Option<usize>,
-    pub backfill_score: f64,
-    pub promoted: bool,
-    /// Whether the explicit candidate-to-failure evidence edge was durably
-    /// written before this receipt was saved. This is deliberately separate
-    /// from promotion: a preview can record evidence without strengthening a
-    /// memory.
-    pub candidate_edge_persisted: bool,
-}
-
-/// Auditable, receipt-scoped output of a Retroactive Salience Backfill run.
-/// `similarity_rank` is explicitly the engine's embedding rank within its
-/// scanned candidate set; it is not represented as a benchmark or a universal
-/// statement about vector search.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct BackfillReceiptEvidence {
-    pub failure_id: String,
-    pub failure_preview: String,
-    pub scanned: usize,
-    pub lookback_days: i64,
-    pub baseline: String,
-    /// Ordered, receipt-authoritative causal route for the primary candidate:
-    /// `candidate_id -> failure_id`. Consumers must render this exact path and
-    /// must not substitute a graph/layout-derived route.
-    pub path_ids: Vec<String>,
-    pub candidates: Vec<BackfillCandidateEvidence>,
+    pub evidence: Option<ReceiptEvidence>,
 }
 
 impl Receipt {
@@ -171,9 +135,193 @@ impl Receipt {
             trust_floor,
             decay_risk,
             mutations,
-            backfill: None,
+            evidence: None,
         }
     }
+
+    /// Attach a typed evidence predicate to this receipt.
+    pub fn with_evidence(mut self, evidence: ReceiptEvidence) -> Self {
+        self.evidence = Some(evidence);
+        self
+    }
+
+    /// Replace one memory id everywhere it can appear in a public receipt.
+    /// Purge and state-aware read paths use this to preserve the audit shape
+    /// without keeping a correlatable stable identifier.
+    pub fn redact_memory_id(&mut self, memory_id: &str, replacement: &str) {
+        for id in &mut self.retrieved {
+            if id == memory_id {
+                *id = replacement.to_string();
+            }
+        }
+        for entry in &mut self.suppressed {
+            if entry.id == memory_id {
+                entry.id = replacement.to_string();
+            }
+        }
+        for path in &mut self.activation_path {
+            if path.contains(memory_id) {
+                *path = path.replace(memory_id, replacement);
+            }
+        }
+        for mutation in &mut self.mutations {
+            if mutation.id == memory_id {
+                mutation.id = replacement.to_string();
+            }
+        }
+        if let Some(ReceiptEvidence::SynapticCapture(evidence)) = &mut self.evidence {
+            if evidence.trigger.memory_id == memory_id {
+                evidence.trigger.memory_id = replacement.to_string();
+            }
+            for candidate in &mut evidence.candidates {
+                if candidate.memory_id.as_deref() == Some(memory_id) {
+                    candidate.memory_id = None;
+                }
+            }
+        }
+    }
+}
+
+/// Typed predicate carried by a persisted receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", content = "predicate", rename_all = "snake_case")]
+pub enum ReceiptEvidence {
+    /// A synaptic-tag capture decision and its measured state transition.
+    SynapticCapture(SynapticCaptureEvidence),
+    /// One controlled post-retrieval context-ablation replay. The nested
+    /// result is identity-free and carries the exact non-causal claim boundary.
+    CounterfactualReplay {
+        schema: String,
+        schema_version: u32,
+        replay_id: String,
+        capsule_id: String,
+        result: crate::storage::CounterfactualReplayResult,
+    },
+}
+
+/// Versioned evidence for one durable synaptic-capture evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SynapticCaptureEvidence {
+    /// Stable schema URI for downstream validators.
+    pub schema: String,
+    /// Predicate schema version.
+    pub schema_version: u32,
+    /// Version of the scoring/mutation policy used for this decision.
+    pub algorithm_version: String,
+    /// V2 receipt role: `root` for the event's initial backward decision or
+    /// `pair` for an immutable forward event/tag evaluation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_role: Option<String>,
+    /// Root event receipt referenced by a V2 pair receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_receipt_id: Option<String>,
+    /// Explicit direction copied to the top level for receipt validators.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_direction: Option<String>,
+    /// The importance event that opened the capture window.
+    pub trigger: SynapticCaptureTrigger,
+    /// Frozen policy snapshot used for eligibility and scoring.
+    pub capture_window: SynapticCaptureWindow,
+    /// Every candidate evaluated, including rejected and withheld candidates.
+    pub candidates: Vec<SynapticCaptureCandidate>,
+    /// Explicit epistemic boundary for product and audit surfaces.
+    pub claim_boundary: String,
+}
+
+/// Trigger evidence for a synaptic-capture receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SynapticCaptureTrigger {
+    pub event_id: String,
+    pub memory_id: String,
+    pub event_type: String,
+    pub occurred_at: chrono::DateTime<chrono::Utc>,
+    pub importance_score: f64,
+}
+
+/// Frozen temporal/scoring policy used by a capture decision.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SynapticCaptureWindow {
+    pub evaluation_direction: String,
+    pub backward_hours: f64,
+    pub forward_hours: f64,
+    pub tag_lifetime_hours: f64,
+    pub minimum_tag_strength: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_association_score: Option<f64>,
+    pub maximum_captures: usize,
+    pub decay_function: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_threshold: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_algorithm_version: Option<String>,
+}
+
+/// One evaluated capture candidate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SynapticCaptureCandidate {
+    /// Stable id only for evidence that was actually allowed to participate.
+    /// Withheld candidates use a receipt-local opaque `evidence_slot` instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_id: Option<String>,
+    pub evidence_slot: String,
+    pub encoded_at: chrono::DateTime<chrono::Utc>,
+    pub temporal_distance_hours: f64,
+    pub capture_probability: f64,
+    pub tag_strength_at_evaluation: f64,
+    pub capture_score: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_direction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub association_score: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub competition_rank: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    pub disposition: SynapticCaptureDisposition,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strength_change: Option<SynapticStrengthChange>,
+}
+
+/// Auditable outcome for a candidate in a capture window.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SynapticCaptureDisposition {
+    Captured,
+    BelowThreshold,
+    ContextMismatch,
+    WithheldSuppressed,
+    WithheldInvalid,
+    LostCompetition,
+}
+
+/// Before/after strengths measured in the same transaction as the receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SynapticStrengthChange {
+    pub retrieval_strength: StrengthDelta,
+    pub retention_strength: StrengthDelta,
+    pub stability: StrengthDelta,
+}
+
+/// One scalar before/after mutation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StrengthDelta {
+    pub before: f64,
+    pub after: f64,
 }
 
 /// One suppressed-memory entry in a [`Receipt`].
@@ -326,7 +474,7 @@ mod tests {
             trust_floor: 0.62,
             decay_risk: DecayRisk::Medium,
             mutations: vec![],
-            backfill: None,
+            evidence: None,
         };
         let json = serde_json::to_value(&r).unwrap();
         assert_eq!(json["receipt_id"], "r_2026_06_22_abc");
@@ -334,5 +482,52 @@ mod tests {
         assert_eq!(json["decay_risk"], "medium");
         assert_eq!(json["trust_floor"], 0.62);
         assert!(json["mutations"].as_array().unwrap().is_empty());
+        assert!(json.get("evidence").is_none());
+    }
+
+    #[test]
+    fn v1_synaptic_receipt_deserializes_without_v2_optional_fields() {
+        let json = serde_json::json!({
+            "receipt_id": "r_syn_v1",
+            "retrieved": [],
+            "suppressed": [],
+            "activation_path": [],
+            "trust_floor": 0.0,
+            "decay_risk": "high",
+            "mutations": [],
+            "evidence": {
+                "kind": "synaptic_capture",
+                "predicate": {
+                    "schema": "https://vestige.dev/schemas/receipt/synaptic-capture/v1",
+                    "schemaVersion": 1,
+                    "algorithmVersion": "vestige.synaptic_capture.v1",
+                    "trigger": {
+                        "eventId": "sevt_public",
+                        "memoryId": "memory_trigger",
+                        "eventType": "novelty_spike",
+                        "occurredAt": "2026-06-22T15:00:00Z",
+                        "importanceScore": 0.9
+                    },
+                    "captureWindow": {
+                        "evaluationDirection": "backward_only",
+                        "backwardHours": 9.0,
+                        "forwardHours": 0.0,
+                        "tagLifetimeHours": 12.0,
+                        "minimumTagStrength": 0.3,
+                        "maximumCaptures": 50,
+                        "decayFunction": "exponential"
+                    },
+                    "candidates": [],
+                    "claimBoundary": "temporal association only"
+                }
+            }
+        });
+        let receipt: Receipt = serde_json::from_value(json).expect("V1 receipt remains readable");
+        let Some(ReceiptEvidence::SynapticCapture(evidence)) = receipt.evidence else {
+            panic!("typed synaptic evidence");
+        };
+        assert_eq!(evidence.schema_version, 1);
+        assert!(evidence.receipt_role.is_none());
+        assert!(evidence.capture_window.context_threshold.is_none());
     }
 }

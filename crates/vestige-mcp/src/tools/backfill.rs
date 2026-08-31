@@ -16,12 +16,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use chrono::Utc;
 use vestige_core::advanced::prediction_error::cosine_similarity;
 use vestige_core::advanced::retroactive_backfill::{
     self, BackfillCandidate, FailureEvent, RetroactiveBackfill,
 };
-use vestige_core::{ConnectionRecord, KnowledgeNode, Storage};
+use vestige_core::{KnowledgeNode, Storage};
 
 pub fn schema() -> Value {
     json!({
@@ -195,42 +194,13 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             .find(|c| c.id == cause.memory_id)
             .map(|c| c.content.chars().take(140).collect::<String>())
             .unwrap_or_default();
-        // A Backfill result is explicit-entity evidence, not an omniscient
-        // causal oracle. Always persist that evidence edge before saving the
-        // receipt — including dry-run previews. `promote=false` means no FSRS
-        // mutation, not "hide the evidence from the graph". The distinct link
-        // type prevents any consumer from presenting this as a proven causal
-        // relationship.
-        let link_type = "backfill_candidate".to_string();
-        let already_linked = storage
-            .get_connections_for_memory(&cause.memory_id)
-            .map(|connections| {
-                connections.iter().any(|connection| {
-                    connection.source_id == cause.memory_id
-                        && connection.target_id == failure_node.id
-                        && connection.link_type == link_type
-                })
-            })
-            .unwrap_or(false);
-        let candidate_edge_persisted = already_linked
-            || storage
-                .save_connection(&ConnectionRecord {
-                    source_id: cause.memory_id.clone(),
-                    target_id: failure_node.id.clone(),
-                    strength: cause.score.clamp(0.0, 1.0),
-                    link_type,
-                    created_at: Utc::now(),
-                    last_activated: Utc::now(),
-                    activation_count: 0,
-                })
-                .is_ok();
-        let did_promote = if promote && candidate_edge_persisted {
-            // promote_memory_backfill boosts retrieval strength + reps (the
-            // FSRS knob) with a bounded stability multiply.
-            storage.promote_memory_backfill(&cause.memory_id).is_ok()
-        } else {
-            false
-        };
+        let mut did_promote = false;
+        if promote {
+            // promote_memory_backfill boosts retrieval strength + reps (the FSRS
+            // promote knob) with a bounded stability multiply — shared with the
+            // step-8.5 auto-fire path (omega-backfill-safety patch, pending upstream).
+            did_promote = storage.promote_memory_backfill(&cause.memory_id).is_ok();
+        }
         promoted.push(json!({
             "memory_id": cause.memory_id,
             "content_preview": content_preview,
@@ -239,7 +209,6 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             "similarity_rank": cause.similarity_rank,
             "backfill_score": (cause.score * 100.0).round() / 100.0,
             "promoted": did_promote,
-            "candidate_edge_persisted": candidate_edge_persisted,
             "reason": cause.reason,
         }));
     }
@@ -247,7 +216,6 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     Ok(json!({
         "tool": "backfill",
         "triggered": true,
-        "lookback_days": lookback,
         "headline": format!(
             "Reached back across history from the failure and surfaced {} causal memor{} that semantic search would have missed.",
             result.causes.len(),
@@ -259,14 +227,6 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             "entities": failure_entities,
         },
         "scanned": result.scanned,
-        // This is an explicit direct evidence edge from the highest-ranked
-        // candidate to the failure, not a topology inferred by the renderer.
-        // The complete candidate set remains below for alternate branches.
-        "path_ids": promoted.first()
-            .and_then(|cause| cause.get("memory_id"))
-            .and_then(|id| id.as_str())
-            .map(|id| vec![id.to_string(), failure.id.clone()])
-            .unwrap_or_default(),
         "causes": promoted,
         "note": "Causes are ranked by causal join (shared entities, backward in time), NOT semantic similarity. A high similarity_rank means a vector search would NOT have surfaced this — that is the point.",
     }))
@@ -364,25 +324,6 @@ mod tests {
         assert!(
             shared.iter().any(|e| e.as_str() == Some("api_timeout")),
             "must link via the shared API_TIMEOUT entity, got: {shared:?}"
-        );
-        assert_eq!(
-            top["candidate_edge_persisted"],
-            json!(true),
-            "the candidate evidence edge must exist before a receipt can claim it"
-        );
-        assert_eq!(
-            out["path_ids"],
-            json!([cause.id, failure.id]),
-            "the tool must publish the exact backend-authored candidate-to-failure path"
-        );
-        let edges = storage.get_connections_for_memory(&cause.id).unwrap();
-        assert!(
-            edges.iter().any(|edge| {
-                edge.source_id == cause.id
-                    && edge.target_id == failure.id
-                    && edge.link_type == "backfill_candidate"
-            }),
-            "candidate evidence edge must be persisted"
         );
         // It was actually promoted in the real store.
         assert_eq!(

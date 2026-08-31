@@ -38,12 +38,40 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// derives the namespace from the key), so the client uses a fixed path.
 const BLOB_PATH: &str = "/v1/blob";
 
+/// Minimum zero-knowledge passphrase length. The server stores ciphertext it can
+/// never decrypt, so the only attack left is offline brute force by whoever holds
+/// that ciphertext. Argon2id slows each guess down; it cannot rescue a passphrase
+/// with a handful of characters of entropy.
+const MIN_ENCRYPTION_KEY_LEN: usize = 12;
+
+/// Hosts allowed to be reached over plaintext `http://`: loopback only, for local
+/// development and the test mock. Everything else must be `https://`.
+const LOOPBACK_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "[::1]"];
+
+/// Whether it is safe to present the bearer sync key to `endpoint`.
+///
+/// `https://` anywhere is fine. Plain `http://` is accepted only for a loopback
+/// host, and only when the host ends there (so `http://127.0.0.1.evil.test` is
+/// still rejected).
+fn is_transport_secure(endpoint: &str) -> bool {
+    let lower = endpoint.to_ascii_lowercase();
+    if lower.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = lower.strip_prefix("http://") else {
+        return false;
+    };
+    LOOPBACK_HOSTS.iter().any(|host| {
+        rest.strip_prefix(host)
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with(':') || tail.starts_with('/'))
+    })
+}
+
 /// HTTP-backed portable sync backend for Vestige Cloud.
 ///
 /// Mirrors the shape of
 /// [`FilePortableSyncBackend`](super::sqlite::FilePortableSyncBackend) but reads
 /// and writes the archive over HTTPS with a per-user bearer key.
-#[derive(Debug)]
 pub struct HttpPortableSyncBackend {
     /// Base endpoint, e.g. `https://sync.vestige.dev`. No trailing slash.
     endpoint: String,
@@ -61,6 +89,20 @@ pub struct HttpPortableSyncBackend {
     last_etag: RefCell<Option<String>>,
 }
 
+/// Hand-written so neither secret can be leaked by a `{:?}` in a log line, an
+/// error chain, or a panic message. The bearer key and the zero-knowledge
+/// passphrase are the two values that must never be printed.
+impl std::fmt::Debug for HttpPortableSyncBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpPortableSyncBackend")
+            .field("endpoint", &self.endpoint)
+            .field("sync_key", &"<redacted>")
+            .field("encryption_key", &"<redacted>")
+            .field("last_etag", &self.last_etag)
+            .finish_non_exhaustive()
+    }
+}
+
 impl HttpPortableSyncBackend {
     /// Plaintext cloud sync is deliberately disabled.
     ///
@@ -73,8 +115,11 @@ impl HttpPortableSyncBackend {
     ///
     /// The portable archive is encrypted with XChaCha20-Poly1305
     /// (Argon2id-derived key) before upload and decrypted on download. The
-    /// passphrase never leaves this process. Missing or blank passphrases are
-    /// rejected rather than silently uploading plaintext.
+    /// passphrase never leaves this process. Missing, blank, or short
+    /// passphrases are rejected rather than silently uploading weakly protected
+    /// ciphertext, and a non-`https://` endpoint is rejected rather than
+    /// silently putting the bearer sync key on the wire in cleartext (plain
+    /// `http://` loopback is allowed for local development).
     pub fn new_with_encryption(
         endpoint: impl Into<String>,
         sync_key: impl Into<String>,
@@ -86,6 +131,13 @@ impl HttpPortableSyncBackend {
             return Err(StorageError::Init(
                 "cloud sync endpoint is empty (set VESTIGE_CLOUD_ENDPOINT)".to_string(),
             ));
+        }
+        if !is_transport_secure(&endpoint) {
+            return Err(StorageError::Init(format!(
+                "cloud sync endpoint must use https:// (got `{endpoint}`). Plain http:// would \
+                 put your sync key on the wire in cleartext; only http://127.0.0.1 and \
+                 http://localhost are allowed, for local development."
+            )));
         }
         if sync_key.is_empty() {
             return Err(StorageError::Init(
@@ -101,6 +153,15 @@ impl HttpPortableSyncBackend {
                         .to_string(),
                 )
             })?;
+        if encryption_key.trim().chars().count() < MIN_ENCRYPTION_KEY_LEN {
+            return Err(StorageError::Init(format!(
+                "cloud sync encryption key must be at least {MIN_ENCRYPTION_KEY_LEN} characters. \
+                 The server only ever holds ciphertext, so anyone who obtains it can guess your \
+                 passphrase offline as fast as their hardware allows — Argon2id slows that down, \
+                 it does not make a short passphrase safe. Set VESTIGE_CLOUD_ENCRYPTION_KEY to a \
+                 long passphrase you can remember."
+            )));
+        }
         let client = Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .user_agent(concat!("vestige-cloud-sync/", env!("CARGO_PKG_VERSION")))
@@ -345,6 +406,83 @@ mod tests {
             .is_err()
         );
         assert!(encrypted_backend("https://x", "key").is_encrypted());
+    }
+
+    #[test]
+    fn debug_redacts_sync_key_and_passphrase() {
+        let be = encrypted_backend("https://sync.example", "super-secret-sync-key");
+        let rendered = format!("{be:?}");
+        assert!(!rendered.contains("super-secret-sync-key"), "{rendered}");
+        assert!(!rendered.contains(TEST_PASSPHRASE), "{rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
+        // Non-secret fields stay visible for debugging.
+        assert!(rendered.contains("https://sync.example"), "{rendered}");
+    }
+
+    #[test]
+    fn new_rejects_plaintext_http_endpoint() {
+        // Remote plaintext would leak the bearer key on the wire.
+        let err = HttpPortableSyncBackend::new_with_encryption(
+            "http://sync.example",
+            "key",
+            Some(TEST_PASSPHRASE.to_string()),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("must use https://"), "{err}");
+
+        // A loopback-lookalike host is not loopback.
+        assert!(
+            HttpPortableSyncBackend::new_with_encryption(
+                "http://127.0.0.1.evil.test",
+                "key",
+                Some(TEST_PASSPHRASE.to_string()),
+            )
+            .is_err()
+        );
+        // Schemeless / other schemes are rejected too.
+        assert!(
+            HttpPortableSyncBackend::new_with_encryption(
+                "sync.example",
+                "key",
+                Some(TEST_PASSPHRASE.to_string()),
+            )
+            .is_err()
+        );
+
+        // Loopback carve-out for local development and the test mock.
+        assert!(encrypted_backend("http://127.0.0.1:8080", "key").is_encrypted());
+        assert!(encrypted_backend("http://localhost:8080", "key").is_encrypted());
+        assert!(encrypted_backend("https://sync.example", "key").is_encrypted());
+    }
+
+    #[test]
+    fn new_rejects_short_encryption_key() {
+        let err = HttpPortableSyncBackend::new_with_encryption(
+            "https://sync.example",
+            "key",
+            Some("a".to_string()),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("at least 12 characters"), "{err}");
+
+        // Padding with whitespace does not buy entropy.
+        assert!(
+            HttpPortableSyncBackend::new_with_encryption(
+                "https://sync.example",
+                "key",
+                Some("   short   ".to_string()),
+            )
+            .is_err()
+        );
+        // Exactly at the floor is accepted.
+        assert!(
+            HttpPortableSyncBackend::new_with_encryption(
+                "https://sync.example",
+                "key",
+                Some("abcdefghijkl".to_string()),
+            )
+            .is_ok()
+        );
     }
 
     #[test]

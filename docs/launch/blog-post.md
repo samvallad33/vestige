@@ -31,9 +31,9 @@ We wanted something different. We wanted memory that behaves like a brain -- whe
 
 Vestige implements a cognitive architecture with three core principles:
 
-1. **Memories have a lifecycle.** They are born, they strengthen through retrieval, they decay over time, they can be revived, and they eventually fade below the retrieval threshold. This is FSRS-6.
+1. **Memories have a lifecycle.** They are born, strengthen after explicit positive feedback, decay over time, can be revived, and eventually fade below the retrieval threshold. This is FSRS-6.
 2. **Storage is gated by novelty.** Not everything deserves to be remembered. Prediction Error Gating compares new information against existing memories and decides whether to create, update, merge, or supersede. This is the hippocampal bouncer.
-3. **Retrieval changes memory.** Every search strengthens the memories it finds (the Testing Effect) and weakens competitors (retrieval-induced forgetting). Memory is not a read-only operation.
+3. **Feedback changes memory.** Search is audit-only; explicit positive feedback applies the Testing Effect only to memories that proved useful.
 
 ### Architecture Overview
 
@@ -109,7 +109,7 @@ Each memory exists in one of four states based on its accessibility score:
 | **Silent** | 10-40% | Rarely surfaces, needs direct access to revive |
 | **Unavailable** | < 10% | Below retrieval threshold, candidate for GC |
 
-Memories are never hard-deleted. They fade. And any access -- even a search that returns them as a secondary result -- strengthens them back toward Active.
+Memories are never hard-deleted. They fade. An explicit positive feedback signal can strengthen a memory back toward Active after it proves useful; merely showing it in search cannot.
 
 ---
 
@@ -182,7 +182,7 @@ The search pipeline then runs seven stages:
 6. **Competition** -- Anderson's retrieval-induced forgetting (1994): winners strengthen, competitors weaken
 7. **Spreading activation** -- Collins & Loftus (1975): activate related memories as a side effect
 
-That last stage is the critical differentiator. Every search does not just return results -- it reshapes the memory landscape.
+The pipeline is the critical differentiator, but retrieval itself remains audit-only. Only explicit positive feedback reshapes a memory's retention state.
 
 ---
 
@@ -347,7 +347,7 @@ Vestige has 734 tests across the workspace (313 in vestige-core, 338 in vestige-
 | Forgetting curve | No | No | FSRS-6 (21-param power law) |
 | Duplicate detection | Manual | Basic | Prediction Error Gating |
 | Retroactive importance | No | No | Synaptic Tagging & Capture |
-| Retrieval strengthening | No | No | Testing Effect + spreading activation |
+| Retrieval strengthening | No | No | Explicit Testing Effect feedback |
 | Dream consolidation | No | No | 5-stage sleep model |
 | Query expansion | No | No | HyDE (template-based) |
 | 3D visualization | No | No | Three.js + WebSocket |
@@ -361,7 +361,7 @@ Vestige has 734 tests across the workspace (313 in vestige-core, 338 in vestige-
 
 **Neuroscience is an engineering goldmine.** The literature on human memory is vast, detailed, and largely untapped by the AI systems community. Papers from the 1970s through 2000s describe algorithms that directly translate into code -- Collins & Loftus's spreading activation is literally a BFS with weighted edges and decay. FSRS-6 is a parameterized forgetting curve. STC is a temporal window query with capture probability.
 
-**The Testing Effect changes everything.** Making search a write operation (not just read) transforms the memory dynamics. Frequently accessed memories get stronger. Competitors get weaker. The system self-organizes toward surfacing what matters most.
+**The Testing Effect needs evidence.** Vestige records retrieval without treating it as correctness. When an agent explicitly promotes a memory that proved useful, that feedback strengthens the right record without allowing stale-but-relevant results to self-reinforce.
 
 **Prediction Error Gating eliminates the "save or not" problem.** The single hardest UX question in AI memory is: what should be saved? The answer from neuroscience is: whatever is surprising. PE Gating compares against existing knowledge and only stores what is genuinely novel. This eliminates both the "save everything" bloat and the "save nothing" amnesia.
 

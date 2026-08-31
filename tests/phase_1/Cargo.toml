@@ -11,7 +11,7 @@ tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 serde_json = "1"
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [[test]]
 name = "trait_round_trip"

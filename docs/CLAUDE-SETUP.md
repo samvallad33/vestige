@@ -112,7 +112,7 @@ DON'T ask permission to:
 
 ## 7. MEMORY IS RETRIEVAL
 
-Every search strengthens memory (Testing Effect). Search liberally.
+Search is audit-only; promote a recalled memory only after it proves useful.
 When in doubt, search Vestige first. If nothing found, solve the problem, then save the solution.
 
 **Your memory fades like a human's. Use it or lose it.**

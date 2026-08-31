@@ -258,7 +258,7 @@ pub async fn execute_system_status(
 
     // === Cognitive health ===
     let cognitive_health = if let Ok(cog) = cognitive.try_lock() {
-        let activation_count = cog.activation_network.get_associations("_probe_").len();
+        let activation_count = cog.activation_network.edge_count();
         let prediction_accuracy = cog.predictive_memory.prediction_accuracy().unwrap_or(0.0);
         let scheduler_stats = cog.consolidation_scheduler.get_activity_stats();
         Some(serde_json::json!({
@@ -778,6 +778,7 @@ mod tests {
                     tags: vec![],
                     valid_from: None,
                     valid_until: None,
+                    validity_inferred: false,
                     source_envelope: None,
                 })
                 .unwrap();
@@ -833,6 +834,7 @@ mod tests {
                         tags: vec![],
                         valid_from: None,
                         valid_until: None,
+                        validity_inferred: false,
                         source_envelope: None,
                     })
                     .unwrap();
@@ -906,6 +908,7 @@ mod tests {
                 tags: vec!["schema-test".to_string()],
                 valid_from: None,
                 valid_until: None,
+                validity_inferred: false,
                 source_envelope: None,
             })
             .unwrap();
@@ -1018,6 +1021,7 @@ mod tests {
                 tags: vec!["portable".to_string()],
                 valid_from: None,
                 valid_until: None,
+                validity_inferred: false,
                 source_envelope: None,
             })
             .unwrap();

@@ -957,6 +957,34 @@ impl SynapticTaggingSystem {
         tag
     }
 
+    /// Restore a persisted tag without changing its timestamps or strengths.
+    ///
+    /// Persistence remains authoritative; this method only rebuilds the fast
+    /// in-process projection used by status and consolidation paths.
+    pub fn restore_tag(&mut self, tag: SynapticTag) {
+        if let Ok(mut tags) = self.tags.write() {
+            tags.insert(tag.memory_id.clone(), tag);
+        }
+
+        if let Ok(mut stats) = self.stats.write() {
+            stats.active_tags = self.tags.read().map(|tags| tags.len()).unwrap_or(0);
+        }
+    }
+
+    /// Remove one tag from the in-process projection after durable storage has
+    /// captured, expired, suppressed, or purged it.
+    pub fn remove_tag(&mut self, memory_id: &str) -> Option<SynapticTag> {
+        let removed = self
+            .tags
+            .write()
+            .ok()
+            .and_then(|mut tags| tags.remove(memory_id));
+        if let Ok(mut stats) = self.stats.write() {
+            stats.active_tags = self.tags.read().map(|tags| tags.len()).unwrap_or(0);
+        }
+        removed
+    }
+
     /// Trigger PRP production from an importance event
     ///
     /// This is the core STC mechanism. When an importance event occurs:

@@ -19,6 +19,7 @@
 pub mod adaptive_embedding;
 pub mod chains;
 pub mod compression;
+pub mod contradiction;
 pub mod cross_project;
 pub mod dreams;
 pub mod importance;
@@ -36,6 +37,7 @@ pub use chains::{
     ReasoningChain,
 };
 pub use compression::{CompressedMemory, CompressionConfig, CompressionStats, MemoryCompressor};
+pub use contradiction::{SubjectIdentity, appears_contradictory};
 pub use cross_project::{
     ApplicableKnowledge, CrossProjectLearner, ProjectContext, UniversalPattern,
 };

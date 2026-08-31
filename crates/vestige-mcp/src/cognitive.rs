@@ -93,11 +93,11 @@ impl Default for CognitiveEngine {
 }
 
 impl CognitiveEngine {
-    /// Load persisted connections from storage into in-memory cognitive modules.
+    /// Load persisted source-of-truth state into in-memory cognitive modules.
     ///
-    /// Currently hydrates `ActivationNetwork` which serves `explore_connections`
-    /// "associations" queries. Other modules (MemoryChainBuilder, HippocampalIndex)
-    /// require full MemoryNode content and are deferred to a follow-up.
+    /// Hydrates `ActivationNetwork` plus the active synaptic-tag projection.
+    /// Other modules (MemoryChainBuilder, HippocampalIndex) require full
+    /// MemoryNode content and are deferred to a follow-up.
     pub fn hydrate(&mut self, storage: &Storage) {
         match storage.get_all_connections() {
             Ok(connections) => {
@@ -124,6 +124,19 @@ impl CognitiveEngine {
             }
             Err(e) => {
                 tracing::warn!("Failed to hydrate cognitive modules: {}", e);
+            }
+        }
+
+        match storage.load_active_synaptic_tags() {
+            Ok(tags) => {
+                let count = tags.len();
+                for tag in tags {
+                    self.synaptic_tagging.restore_tag(tag);
+                }
+                tracing::info!(count, "Hydrated active synaptic tags from durable storage");
+            }
+            Err(e) => {
+                tracing::warn!("Failed to hydrate synaptic tags: {}", e);
             }
         }
     }
@@ -195,6 +208,7 @@ mod tests {
                 tags: vec!["test".to_string()],
                 valid_from: None,
                 valid_until: None,
+                validity_inferred: false,
                 source_envelope: None,
             })
             .unwrap();
@@ -292,5 +306,19 @@ mod tests {
             "Should have at least 2 associations, got {}",
             assocs.len()
         );
+    }
+
+    #[test]
+    fn test_hydrate_restores_active_synaptic_tags() {
+        let (storage, _dir) = create_test_storage();
+        let id = ingest_memory(&storage, "Decision waiting for a later outcome");
+        storage
+            .save_synaptic_tag(&vestige_core::SynapticTag::new(&id))
+            .unwrap();
+
+        let mut engine = CognitiveEngine::new();
+        engine.hydrate(&storage);
+
+        assert!(engine.synaptic_tagging.has_active_tag(&id));
     }
 }

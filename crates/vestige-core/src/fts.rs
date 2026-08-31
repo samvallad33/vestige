@@ -19,13 +19,19 @@ pub fn sanitize_fts5_terms(query: &str) -> Option<String> {
     let limited: String = query.chars().take(1000).collect();
     let mut sanitized = limited;
 
+    // Blank EVERY non-alphanumeric character rather than a hand-picked deny list.
+    // The old list missed 14 characters still meaningful to the FTS5 query
+    // grammar -- most damagingly the apostrophe, which opens a string literal:
+    // recall("cargo can't find crate") returned zero keyword hits while the same
+    // query without the apostrophe matched. A deny list has to be exhaustively
+    // right; an allow list only has to be conservative.
+    //
+    // Unicode-aware (`is_alphanumeric`, not `is_ascii_alphanumeric`) to mirror
+    // the index's `unicode61` tokenizer as of migration V30 -- accented and
+    // non-Latin words are real tokens and must survive sanitization.
     sanitized = sanitized
         .chars()
-        .map(|c| match c {
-            '*' | ':' | '^' | '-' | '"' | '(' | ')' | '{' | '}' | '[' | ']' | '.' | '/' | '\\'
-            | '=' | '@' => ' ',
-            _ => c,
-        })
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
         .collect();
 
     // Drop any token that IS a bare FTS5 boolean operator (AND/OR/NOT/NEAR),
@@ -71,12 +77,12 @@ pub fn sanitize_fts5_terms(query: &str) -> Option<String> {
 pub fn sanitize_fts5_or_query(query: &str) -> Option<String> {
     let limited: String = query.chars().take(1000).collect();
     let q: String = limited
-        .split(|c: char| !c.is_ascii_alphanumeric())
+        .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
         .take(64) // bound the OR-chain length (DoS hardening)
         .map(|t| {
-            // mirror the ascii tokenizer: lowercase, cap at its max token length
-            let tok: String = t.chars().take(64).collect::<String>().to_ascii_lowercase();
+            // mirror the unicode61 tokenizer (migration V30): lowercase, cap length
+            let tok: String = t.chars().take(64).collect::<String>().to_lowercase();
             format!("\"{}\"", tok.replace('"', "\"\""))
         })
         .collect::<Vec<_>>()
@@ -193,10 +199,15 @@ mod tests {
     }
 
     #[test]
-    fn or_query_non_ascii_is_separated() {
-        // café -> the ascii tokenizer indexes "caf"; our query must not emit "café".
+    fn or_query_preserves_non_ascii_tokens() {
+        // As of migration V30 the index uses `unicode61 remove_diacritics 2`, so
+        // an accented word is a REAL token, not a truncated ASCII prefix. The old
+        // `ascii` tokenizer indexed "café" as "caf", and this test asserted that
+        // lossy behavior; preserving the token is now the correct expectation
+        // (FTS5 applies the same tokenizer to query terms, so diacritic folding
+        // happens on both sides and still matches).
         let q = sanitize_fts5_or_query("café").unwrap();
-        assert_eq!(q, "\"caf\"");
+        assert_eq!(q, "\"café\"");
     }
 
     #[test]
@@ -235,6 +246,28 @@ mod tests {
             "single token capped at 64 + quotes, got {}",
             q2.len()
         );
+    }
+
+    #[test]
+    fn terms_strips_all_bare_operators_even_when_doubled() {
+        // Regression: doubled/chained operators must never leak a bare operator
+        // into the raw MATCH (which aborts with a syntax error or silently flips
+        // implicit-AND to boolean-OR).
+        for op in FTS5_OPERATORS {
+            let doubled = format!("foo {op} {op} {op} bar");
+            let out = sanitize_fts5_terms(&doubled).unwrap();
+            for tok in out.split_whitespace() {
+                assert!(
+                    !FTS5_OPERATORS.iter().any(|o| tok.eq_ignore_ascii_case(o)),
+                    "operator {op} leaked into output {out:?}"
+                );
+            }
+            assert_eq!(out, "foo bar", "only real terms should survive: {out:?}");
+        }
+        // Lowercase + leading/trailing operators are stripped too.
+        assert_eq!(sanitize_fts5_terms("or foo and bar or").unwrap(), "foo bar");
+        // Operator-only input yields nothing.
+        assert_eq!(sanitize_fts5_terms("AND OR NOT").map(|_| ()), None);
     }
 
     #[test]

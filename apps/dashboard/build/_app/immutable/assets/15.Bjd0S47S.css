@@ -1,0 +1,1 @@
+.audit-trail.svelte-kf1sc6 ol>li{animation:svelte-kf1sc6-event-rise .4s cubic-bezier(.22,.8,.3,1) backwards}@keyframes svelte-kf1sc6-event-rise{0%{opacity:0;transform:translate(6px)}to{opacity:1;transform:translate(0)}}.audit-trail .marker{transition:transform .2s ease}.audit-trail li:hover .marker{transform:scale(1.15)}

@@ -183,12 +183,7 @@ The FSRS decay doesn't delete—it just deprioritizes. Your "have cake and eat i
 
 The **Testing Effect** (Roediger & Karpicke, 2006) is the finding that retrieving information strengthens memory more than re-studying it.
 
-In Vestige: **Every search automatically strengthens matching memories.** When Claude recalls something:
-- Storage strength increases slightly
-- Retrieval strength increases
-- The memory becomes easier to find next time
-
-This is why the unified `search` tool is so powerful—using memories makes them stronger.
+In Vestige, retrieval is audit-only: a matching result is not automatically treated as correct. Promote a memory after it proves useful; that explicit feedback strengthens it and records the positive outcome.
 </details>
 
 <details>
@@ -230,9 +225,9 @@ Based on **Bjork & Bjork's New Theory of Disuse (1992)**, every memory has two s
 | Strength | What It Means | How It Changes |
 |----------|---------------|----------------|
 | **Storage Strength** | How well-encoded the memory is | Only increases, never decreases |
-| **Retrieval Strength** | How accessible the memory is now | Decays over time, restored by access |
+| **Retrieval Strength** | How accessible the memory is now | Decays over time, restored by explicit positive feedback |
 
-**Why it matters**: A memory can be well-stored but hard to retrieve (like a name on the tip of your tongue). The Testing Effect works because retrieval practice increases *both* strengths.
+**Why it matters**: A memory can be well-stored but hard to retrieve (like a name on the tip of your tongue). Vestige applies the Testing Effect only after explicit positive feedback, so relevance alone cannot keep a stale memory strong.
 
 In Vestige: Both strengths are tracked separately and factor into search ranking.
 </details>
@@ -329,7 +324,7 @@ The unified `search` always uses hybrid, which gives you the best of both worlds
 Three approaches:
 
 1. **Mark as important**: `importance_score(content="...", event_type="user_flag")`
-2. **Access regularly**: The Testing Effect strengthens memories each time you retrieve them
+2. **Review when needed**: Retrieval is audit-only, so it never pins stale memories
 3. **Promote explicitly**: `memory(action="promote", id="xxx")` after it proves valuable
 
 For truly critical information, consider also:
@@ -473,7 +468,7 @@ Most of these are hardcoded but based on cognitive science research. Future vers
 
 Common issues:
 - Missing embedding (run consolidation)
-- Very low retention (access it to strengthen)
+- Very low retention (verify it, then explicitly promote it if it remains useful)
 - Tags/content mismatch (check exact content)
 </details>
 
@@ -551,7 +546,7 @@ Common issues:
 | Decay | Everything stays forever | Unused knowledge fades naturally |
 | Duplicates | You manage manually | Prediction Error Gating auto-merges |
 | Context | Static text | Active part of AI reasoning |
-| Strengthening | Manual review | Automatic via Testing Effect |
+| Strengthening | Manual review | Explicit positive feedback |
 
 The key difference: **Vestige is part of the agent's cognitive loop.** Notes are external reference; Vestige is active working memory.
 </details>
@@ -726,7 +721,7 @@ Vector databases (Pinecone, Weaviate, etc.) are great for RAG, but lack:
 1. **Forgetting**: Everything has equal weight forever
 2. **Dual-strength**: No storage vs retrieval distinction
 3. **Context matching**: No temporal/topical context weighting
-4. **Testing Effect**: Access doesn't strengthen
+4. **Testing Effect**: Explicit usefulness feedback strengthens proven memories
 5. **Prediction Error**: No intelligent CREATE/UPDATE/MERGE
 
 Vestige uses SQLite + HNSW (via fastembed) for vectors, but wraps them in cognitive science.

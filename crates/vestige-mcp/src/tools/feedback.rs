@@ -313,6 +313,7 @@ mod tests {
                 tags: vec![],
                 valid_from: None,
                 valid_until: None,
+                validity_inferred: false,
                 source_envelope: None,
             })
             .unwrap();
@@ -557,6 +558,7 @@ mod tests {
                 tags: vec![],
                 valid_from: None,
                 valid_until: None,
+                validity_inferred: false,
                 source_envelope: None,
             })
             .unwrap();
