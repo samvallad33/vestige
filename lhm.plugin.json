@@ -1,13 +1,13 @@
 {
   "identifier": "samvallad33-vestige",
   "name": "Vestige",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "author": "samvallad33",
   "authorUrl": "https://github.com/samvallad33",
   "category": "developer",
   "homepage": "https://github.com/samvallad33/vestige",
-  "icon": "🧠",
-  "description": "Local-first Rust MCP memory for AI agents. Stdio only — not a hosted service and not production. Causal Backfill reaches backward to the quiet change that caused today's failure. Tools: recall, smart_ingest, backfill. Launch with vestige-mcp or npx -y vestige-mcp-server. GUI clients should use the absolute path from `which vestige-mcp`. Linux on Ubuntu 22.04 / Debian 12: wait for v2.4.0 (glibc). Your data stays on disk.",
+  "icon": "\ud83e\udde0",
+  "description": "Local-first Rust MCP memory for AI agents. Stdio only \u2014 not a hosted service and not production. Causal Backfill reaches backward to the quiet change that caused today's failure. Tools: recall, smart_ingest, backfill. Launch with vestige-mcp or npx -y vestige-mcp-server. GUI clients should use the absolute path from `which vestige-mcp`. Linux on Ubuntu 22.04 / Debian 12: wait for v2.4.0 (glibc). Your data stays on disk.",
   "tags": [
     "memory",
     "local-first",
@@ -32,7 +32,11 @@
           },
           "mode": {
             "type": "string",
-            "enum": ["lookup", "reason", "contradictions"],
+            "enum": [
+              "lookup",
+              "reason",
+              "contradictions"
+            ],
             "default": "lookup",
             "description": "lookup (default): hybrid search. reason: deeper causal reasoning. contradictions: disagreement pairs for a topic."
           },
@@ -64,7 +68,9 @@
           },
           "tags": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Tags for categorization."
           },
           "scope": {
@@ -77,9 +83,13 @@
             "items": {
               "type": "object",
               "properties": {
-                "content": { "type": "string" }
+                "content": {
+                  "type": "string"
+                }
               },
-              "required": ["content"]
+              "required": [
+                "content"
+              ]
             }
           }
         }
@@ -87,7 +97,7 @@
     },
     {
       "name": "backfill",
-      "description": "Causal Backfill: reach backward from a failure to the earlier memory that most plausibly caused it — even when the cause shares no vocabulary with the symptom. Local stdio; not a production hosted service.",
+      "description": "Causal Backfill: reach backward from a failure to the earlier memory that most plausibly caused it \u2014 even when the cause shares no vocabulary with the symptom. Local stdio; not a production hosted service.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -73,6 +73,7 @@ pub mod context;
 pub mod git;
 pub mod patterns;
 pub mod relationships;
+pub mod staleness;
 pub mod types;
 pub mod watcher;
 

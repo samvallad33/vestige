@@ -94,6 +94,11 @@ pub fn schema() -> Value {
                 "description": "Force literal/concrete search. Skips semantic expansion, FSRS reweighting, spreading activation, and cognitive side effects. Auto-enabled for quoted strings, env vars, UUIDs, paths, and code identifiers.",
                 "default": false
             },
+            "rank_native_fusion": {
+                "type": "boolean",
+                "description": "Join the post-retrieval stages (temporal, accessibility, context, utility) as ranked lists via weighted RRF instead of score multipliers. Experimental; default off pending benchmark validation.",
+                "default": false
+            },
             "tag_prefix": {
                 "type": "string",
                 "description": "Optional tag-prefix filter. When set, only results carrying at least one tag whose value starts with this prefix are returned (case-insensitive). Example: tag_prefix=\"meeting:\" matches memories tagged 'meeting:standup', 'meeting:1-on-1', etc. Applied as a post-filter; combine with a larger 'limit' if you expect heavy thinning."
@@ -171,6 +176,12 @@ struct SearchArgs {
     token_budget: Option<i32>,
     #[serde(alias = "retrieval_mode")]
     retrieval_mode: Option<String>,
+    /// Join the post-retrieval stages (temporal, accessibility, context,
+    /// utility) as ranked lists via weighted RRF instead of score
+    /// multipliers. Default off pending MemConflict validation; also
+    /// enabled store-wide by VESTIGE_RANK_NATIVE_FUSION=1.
+    #[serde(alias = "rank_native_fusion")]
+    rank_native_fusion: Option<bool>,
     concrete: Option<bool>,
     #[serde(alias = "tag_prefix")]
     tag_prefix: Option<String>,
@@ -668,22 +679,43 @@ pub async fn execute(
         filtered_results.truncate(limit_usize);
     }
 
+    // Rank-native fusion (opt-in): the stages below normally fold their
+    // signal into `combined_score` as a multiplier. When enabled, each stage
+    // records its raw signal instead, and one weighted-RRF pass at the end
+    // joins base relevance and the recorded signals as ranked lists — the
+    // core hybrid fusion is already RRF, and rank joining is scale-free
+    // where multiplier stacking is not. Penalties (suppression, retrieval
+    // competition) are safety semantics, not ranked signals, and apply
+    // identically in both modes.
+    let rank_native = args.rank_native_fusion.unwrap_or(false)
+        || std::env::var("VESTIGE_RANK_NATIVE_FUSION")
+            .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    let mut fusion_signals: Vec<FusionSignals> = if rank_native {
+        vec![FusionSignals::default(); filtered_results.len()]
+    } else {
+        Vec::new()
+    };
+
     // ====================================================================
     // STAGE 3: Temporal boosting (recency + validity windows)
     // ====================================================================
     #[cfg(feature = "vector-search")]
     if let Ok(cog) = cognitive.try_lock() {
-        for result in &mut filtered_results {
+        for (index, result) in filtered_results.iter_mut().enumerate() {
             let recency = cog.temporal_searcher.recency_boost(result.node.created_at);
             let validity = cog.temporal_searcher.validity_boost(
                 result.node.valid_from,
                 result.node.valid_until,
                 valid_at,
             );
-            // Blend: 85% relevance + 15% temporal signal
             let temporal_factor = recency * validity;
-            result.combined_score = result.combined_score * 0.85
-                + (result.combined_score * temporal_factor as f32) * 0.15;
+            if rank_native {
+                fusion_signals[index].temporal = temporal_factor;
+            } else {
+                // Blend: 85% relevance + 15% temporal signal
+                result.combined_score = result.combined_score * 0.85
+                    + (result.combined_score * temporal_factor as f32) * 0.15;
+            }
         }
     }
 
@@ -691,7 +723,7 @@ pub async fn execute(
     // STAGE 4: Memory state accessibility filtering
     // ====================================================================
     if let Ok(cog) = cognitive.try_lock() {
-        for result in &mut filtered_results {
+        for (index, result) in filtered_results.iter_mut().enumerate() {
             // Build a MemoryLifecycle from node data for the calculator
             let mut lifecycle = MemoryLifecycle::new();
             lifecycle.last_access = result.node.last_accessed;
@@ -707,14 +739,22 @@ pub async fn execute(
                 MemoryState::Unavailable
             };
 
-            let mut adjusted = cog
-                .accessibility_calc
-                .calculate(&lifecycle, result.combined_score as f64);
+            let mut adjusted = if rank_native {
+                // Record the state's multiplier as a signal; base relevance
+                // stays untouched for the rank join.
+                fusion_signals[index].accessibility =
+                    cog.accessibility_calc.calculate(&lifecycle, 1.0);
+                result.combined_score as f64
+            } else {
+                cog.accessibility_calc
+                    .calculate(&lifecycle, result.combined_score as f64)
+            };
 
             // v2.0.5: Active forgetting penalty (Anderson 2025 SIF).
             // Each prior suppress call compounds a retrieval-score penalty,
             // saturating at 80%. Applied AFTER accessibility so the penalty
-            // stacks on top of any passive FSRS decay.
+            // stacks on top of any passive FSRS decay. A penalty, not a
+            // signal: it applies in both fusion modes.
             if result.node.suppression_count > 0 {
                 let sys =
                     vestige_core::neuroscience::active_forgetting::ActiveForgettingSystem::new();
@@ -735,15 +775,19 @@ pub async fn execute(
         let retrieval_ctx =
             EncodingContext::new().with_topical(TopicalContext::with_topics(topics.clone()));
         if let Ok(cog) = cognitive.try_lock() {
-            for result in &mut filtered_results {
+            for (index, result) in filtered_results.iter_mut().enumerate() {
                 // Build encoding context from memory's tags
                 let encoding_ctx = EncodingContext::new()
                     .with_topical(TopicalContext::with_topics(result.node.tags.clone()));
                 let context_score = cog
                     .context_matcher
                     .match_contexts(&encoding_ctx, &retrieval_ctx);
-                // Blend: context match boosts relevance up to +30%
-                result.combined_score *= 1.0 + (context_score as f32 * 0.3);
+                if rank_native {
+                    fusion_signals[index].context = context_score;
+                } else {
+                    // Blend: context match boosts relevance up to +30%
+                    result.combined_score *= 1.0 + (context_score as f32 * 0.3);
+                }
             }
         }
     }
@@ -877,11 +921,43 @@ pub async fn execute(
     // Memories that proved useful in past sessions get a retrieval boost.
     // utility_score = times_useful / times_retrieved (0.0 to 1.0)
     // ====================================================================
-    for result in &mut filtered_results {
+    for (index, result) in filtered_results.iter_mut().enumerate() {
         let utility = result.node.utility_score.unwrap_or(0.0) as f32;
-        if utility > 0.0 {
+        if rank_native {
+            fusion_signals[index].utility = utility as f64;
+        } else if utility > 0.0 {
             // Utility boost: up to +15% for memories with utility_score = 1.0
             result.combined_score *= 1.0 + (utility * 0.15);
+        }
+    }
+
+    // Rank-native join: base relevance and the recorded stage signals fuse
+    // as ranked lists. Weights mirror each stage's multiplicative influence
+    // (temporal 15%, context 30%, utility 15%, accessibility carries the
+    // forgetting semantics at 30%); the base list dominates at 1.0. Initial
+    // values, gated on the MemConflict harness like every ranking change.
+    if rank_native && filtered_results.len() > 1 {
+        let base: Vec<f64> = filtered_results
+            .iter()
+            .map(|result| result.combined_score as f64)
+            .collect();
+        let fused = fuse_rank_native(
+            &base,
+            &[
+                (
+                    fusion_signals.iter().map(|s| s.temporal).collect(),
+                    0.15,
+                ),
+                (
+                    fusion_signals.iter().map(|s| s.accessibility).collect(),
+                    0.30,
+                ),
+                (fusion_signals.iter().map(|s| s.context).collect(), 0.30),
+                (fusion_signals.iter().map(|s| s.utility).collect(), 0.15),
+            ],
+        );
+        for (result, score) in filtered_results.iter_mut().zip(fused) {
+            result.combined_score = score as f32;
         }
     }
 
@@ -1069,6 +1145,9 @@ pub async fn execute(
                        sides before acting; do not treat the top result as settled.",
         });
     }
+    if rank_native {
+        response["fusionMode"] = serde_json::json!("rank_native");
+    }
     if suppressed_count > 0 {
         response["competitionSuppressed"] = serde_json::json!(suppressed_count);
     }
@@ -1150,6 +1229,46 @@ fn tags_match_prefix(tags: &[String], prefix: &str) -> bool {
     let needle = prefix.to_ascii_lowercase();
     tags.iter()
         .any(|t| t.to_ascii_lowercase().starts_with(&needle))
+}
+
+/// Per-result stage signals recorded when rank-native fusion is enabled,
+/// instead of being folded into `combined_score` as multipliers.
+#[derive(Debug, Clone, Copy, Default)]
+struct FusionSignals {
+    temporal: f64,
+    accessibility: f64,
+    context: f64,
+    utility: f64,
+}
+
+/// Weighted reciprocal-rank fusion of the base relevance list with any number
+/// of (signal values, weight) lists. Returns one fused score per result.
+///
+/// Each list contributes `weight / (k + rank)` with k = 60, the same constant
+/// the core hybrid fusion uses. A signal that is uniform across results (for
+/// example context when no topics were supplied) produces all-tied ranks and
+/// contributes the same constant to every result, so it cannot reorder
+/// anything — no special-casing needed.
+fn fuse_rank_native(base: &[f64], signals: &[(Vec<f64>, f64)]) -> Vec<f64> {
+    const RRF_K: f64 = 60.0;
+    // rank[i] = number of items strictly greater than item i (dense ranking,
+    // ties share a rank), so equal values contribute equally.
+    fn ranks(values: &[f64]) -> Vec<usize> {
+        values
+            .iter()
+            .map(|value| values.iter().filter(|other| **other > *value).count())
+            .collect()
+    }
+    let mut fused = vec![0.0; base.len()];
+    for (index, rank) in ranks(base).into_iter().enumerate() {
+        fused[index] += 1.0 / (RRF_K + rank as f64 + 1.0);
+    }
+    for (values, weight) in signals {
+        for (index, rank) in ranks(values).into_iter().enumerate() {
+            fused[index] += weight / (RRF_K + rank as f64 + 1.0);
+        }
+    }
+    fused
 }
 
 /// Retrieval namespace policy. Every ordinary query is scoped, including a
@@ -2528,6 +2647,45 @@ mod tests {
     // ========================================================================
     // TAG_PREFIX TESTS (PR1)
     // ========================================================================
+
+    #[test]
+    fn rank_native_fusion_joins_ranked_lists_not_multipliers() {
+        // Property 1: a single sub-1.0-weight signal can NEVER overturn an
+        // adjacent base step — that is the advisory contract, and exactly
+        // what multiplier stacking violated (one large multiplier could
+        // swamp base relevance entirely).
+        let base = vec![0.9, 0.5, 0.4];
+        let access = vec![0.05, 0.05, 1.0];
+        let fused = fuse_rank_native(&base, &[(access, 0.30)]);
+        assert!(fused[0] > fused[1] && fused[1] > fused[2]);
+
+        // Property 2: signals ACCUMULATE. When every stage agrees across a
+        // wide rank gap, the tail item genuinely overtakes: six results,
+        // last-by-relevance but first on all four signals beats the
+        // second-by-relevance that every signal ranks last.
+        let base = vec![0.9, 0.8, 0.7, 0.6, 0.5, 0.4];
+        let favoring_last = vec![0.1, 0.0, 0.2, 0.3, 0.4, 1.0];
+        let signals: Vec<(Vec<f64>, f64)> = vec![
+            (favoring_last.clone(), 0.15),
+            (favoring_last.clone(), 0.30),
+            (favoring_last.clone(), 0.30),
+            (favoring_last, 0.15),
+        ];
+        let fused = fuse_rank_native(&base, &signals);
+        assert!(
+            fused[5] > fused[1],
+            "agreeing signals across a wide gap must be able to reorder"
+        );
+        assert!(fused[0] > fused[5] || fused[0] > fused[1], "base still anchors the head");
+    }
+
+    #[test]
+    fn uniform_signals_cannot_reorder_anything() {
+        let base = vec![0.9, 0.5, 0.4];
+        let uniform = vec![0.0, 0.0, 0.0];
+        let fused = fuse_rank_native(&base, &[(uniform.clone(), 0.30), (uniform, 0.15)]);
+        assert!(fused[0] > fused[1] && fused[1] > fused[2]);
+    }
 
     #[test]
     fn test_tags_match_prefix_unit() {

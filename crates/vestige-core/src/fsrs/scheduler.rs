@@ -239,13 +239,17 @@ impl FSRSScheduler {
             (self.handle_recall(state, grade, r), false)
         };
 
-        // Apply sentiment boost
+        // Apply sentiment boost. Clamped: the boost multiplies the PERSISTED
+        // stability on every review, and unclamped compounding was measured
+        // driving real memories to stability 1.4e24 days (issue #121) —
+        // beyond any horizon the forgetting curve can express.
         if self.enable_sentiment_boost
             && let Some(sentiment) = sentiment_boost
             && sentiment > 0.0
         {
             new_state.stability =
-                apply_sentiment_boost(new_state.stability, sentiment, self.max_sentiment_boost);
+                apply_sentiment_boost(new_state.stability, sentiment, self.max_sentiment_boost)
+                    .min(MAX_STABILITY);
         }
 
         let mut interval =

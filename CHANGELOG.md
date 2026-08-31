@@ -5,7 +5,124 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-08-30 — "Nothing deletes your memories except you"
+
 ## [Unreleased]
+
+### Fixed — Consolidation can no longer delete your memories
+
+The background consolidation cycle contained two paths that could destroy
+memories unattended. Both are gone or opt-in now, because forgetting in
+Vestige means down-ranking, and destruction is reserved for explicit,
+previewable commands.
+
+The serious one was a "retention target" garbage collector: whenever average
+retention slipped below a target, it hard-deleted every memory below 0.3
+retention older than 30 days. It looked harmless for months only because
+decay was broken (see below) so nothing ever sank that low. The day decay
+came back to life, it silently destroyed 23 real memories from a live
+2,929-memory store in one cycle — no line in the output, no reason in the
+tombstone, and no exemption for pinned memories. Consolidation now reports
+how many low-retention memories exist and deletes nothing; the explicit
+`maintain {action:"gc"}` command (dry-run by default) is the only collector,
+and it now refuses to touch protected memories no matter how decayed.
+
+The second was the near-duplicate auto-merge from #142: it folds weaker
+copies into a keeper and hard-deletes them, and it was on by default with a
+fail-open gate (a typo in the env var still destroyed data). It is opt-in
+now (`VESTIGE_AUTO_CONSOLIDATE_MERGE=1`), the gate fails closed, and when
+enabled it only deletes a weak node after the keeper verifiably absorbed its
+content — the previous code discarded that failure and deleted anyway. The
+`dedup` tool remains the previewable, reversible path.
+
+If you run a store that predates this release: memories already collected by
+the old GC are recorded as content-free tombstones and cannot be recovered
+from the store itself. Check your backups directory; the daily backup from
+before your first post-decay-fix consolidation contains them.
+
+### Fixed — Forgetting works again (the two dead accessibility states)
+
+The four-state accessibility model (Active, Dormant, Silent, Unavailable) was
+measured running as a two-state one: across a real 2,929-memory store,
+retention never fell below 0.61, so Silent and Unavailable could not fire and
+memories sat 217 days untouched without decaying into them.
+
+The root cause was not the forgetting curve. The decay exponent is
+personalized by an optimizer trained on the access log, and an agent memory
+store's access log is success-dominated by construction: almost every event
+says "remembered", almost none say "forgot". Given that data, the best fit is
+"nothing is ever forgotten", and the fit collapsed into the optimizer's 0.01
+lower bound and stayed there for a month. Decay ran on schedule, on every
+node, and wrote values indistinguishable from no decay. Under the same
+formula with the default exponent, 244 of the 404 oldest untouched memories
+should have been Silent on the day this was measured.
+
+Three repairs, each with a regression test:
+
+- The optimizer refuses to fit without real forgetting evidence (at least 5
+  failed-recall events). Success-only history is insufficient evidence, not
+  proof of immortal memory.
+- The fit is floored at 0.08, roughly half the FSRS-6 default. The old 0.01
+  bound was a numeric convenience, not a forgetting curve any human has.
+- Suppression now counts as the forgetting signal it is. It was being fed to
+  the optimizer as a successful recall. Training also uses the most recent
+  1,000 events instead of the oldest (the old window slid under the 90-day
+  log pruning, which is why the fit swung between 0.0104 and 0.137 with no
+  behavior change).
+
+Also repaired: five memories had escaped the stability ceiling entirely (one
+at 1.4e24 days) because the per-review sentiment boost compounded unclamped.
+The boost is clamped now, and consolidation clamps existing outliers back.
+
+### Added — Granite embedding profile (32k context, multilingual)
+
+New built-in profile `granite-311m-multilingual-r2-256`:
+ibm-granite/granite-embedding-311m-multilingual-r2 (Apache-2.0), ModernBERT,
+32,768-token context — four times the Nomic profiles — with the official
+Matryoshka truncation to the existing 256d storage, so switching profiles
+reuses the vector store as-is via the reversible migration machinery. No
+query or document prefixes; CLS pooling, verified from the pinned revision's
+own pooling config.
+
+The model is not in fastembed's catalogue, so it runs through the
+user-defined ONNX path from an explicitly installed artifact directory,
+hash-verified file by file against digests pinned in the profile (the same
+no-network-at-attach contract as the Qwen profiles). Install, attach, and
+migrate all flow through the existing `vestige embeddings` commands.
+
+Honest claim boundary, recorded here on purpose: Granite beats
+EmbeddingGemma-300m 65.2 vs 62.5 on MMTEB Multilingual Retrieval in its
+paper, plus the context advantage. There is no same-source benchmark against
+Nomic, so no number versus Nomic is claimed.
+
+### Added — Rank-native fusion, opt-in
+
+The retrieval pipeline's post-stages (temporal, accessibility, context,
+utility) have folded into the score as stacked multipliers. With
+`rank_native_fusion: true` (or `VESTIGE_RANK_NATIVE_FUSION=1`) they now join
+as ranked lists via weighted reciprocal-rank fusion instead — the same
+mechanism, and the same k=60, as the core keyword/semantic fusion. Signals
+advise (a single signal cannot overturn adjacent base relevance) and
+accumulate (agreeing signals can genuinely reorder). Suppression and
+retrieval-competition penalties stay penalties in both modes.
+
+Off by default until it beats the multiplicative path on the MemConflict
+harness. The response reports `fusionMode` when it is active.
+
+### Added — Staleness prediction for code memories
+
+`codebase verify` now learns from its own sweeps. Every anchored verdict is
+one observation about how long code memories survive before drifting (stale
+= event, fresh = right-censored), and a Kaplan-Meier estimator over those
+observations attaches a `predictedStaleProbability` to the memories
+verification cannot reach. Backcalculation in the Brookmeyer & Gail sense:
+rot is only ever observed at verification time, and the onset distribution
+is inferred from the lags.
+
+It refuses to predict without evidence — at least 12 anchored verdicts
+including 4 observed drift events, and a fresh-only history fits nothing
+(the mirror of the optimizer lesson above). A prediction is a probability
+shown next to the memory, never an action taken on it.
 
 ## [2.5.0] - 2026-08-30 — "Corrections stick"
 
