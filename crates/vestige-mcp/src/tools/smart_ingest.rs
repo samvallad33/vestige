@@ -363,7 +363,11 @@ fn state_ttl_days() -> i64 {
 /// being true in the store long after they stopped being true in the world.
 /// A `state` node therefore expires by default instead of by discipline.
 /// An explicit `validUntil` always wins; other node types are untouched.
-fn apply_state_ttl(resolution: &mut ValidityResolution, node_type: Option<&str>, now: DateTime<Utc>) {
+fn apply_state_ttl(
+    resolution: &mut ValidityResolution,
+    node_type: Option<&str>,
+    now: DateTime<Utc>,
+) {
     if !node_type.is_some_and(|kind| kind.eq_ignore_ascii_case("state")) {
         return;
     }
@@ -2055,7 +2059,10 @@ mod tests {
         let now = Utc::now();
         let mut state = resolve_validity_range("version is 2.6.0", None, None).unwrap();
         apply_state_ttl(&mut state, Some("state"), now);
-        let until = state.range.until.expect("state node gets a default validUntil");
+        let until = state
+            .range
+            .until
+            .expect("state node gets a default validUntil");
         assert_eq!(until, now + chrono::Duration::days(DEFAULT_STATE_TTL_DAYS));
         assert_eq!(state.source, "state_default_ttl");
 
@@ -2073,7 +2080,10 @@ mod tests {
         for kind in [Some("fact"), Some("decision"), None] {
             let mut other = resolve_validity_range("durable lesson", None, None).unwrap();
             apply_state_ttl(&mut other, kind, now);
-            assert!(other.range.until.is_none(), "{kind:?} must not expire by default");
+            assert!(
+                other.range.until.is_none(),
+                "{kind:?} must not expire by default"
+            );
             assert_eq!(other.source, "none");
         }
     }

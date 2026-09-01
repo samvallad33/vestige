@@ -2283,7 +2283,10 @@ fn run_upgrade(dry_run: bool) -> anyhow::Result<()> {
     for suffix in ["-wal", "-shm"] {
         let sidecar = PathBuf::from(format!("{}{suffix}", source.display()));
         if sidecar.exists() {
-            std::fs::copy(&sidecar, PathBuf::from(format!("{}{suffix}", copy.display())))?;
+            std::fs::copy(
+                &sidecar,
+                PathBuf::from(format!("{}{suffix}", copy.display())),
+            )?;
         }
     }
     println!("Source: {}", source.display());

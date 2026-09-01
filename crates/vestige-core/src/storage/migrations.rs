@@ -1856,13 +1856,22 @@ pub(crate) fn repair_legacy_raw_profile_vectors(
     // The `dimensions` column is untrusted here; the blob length is ground
     // truth (4 bytes per f32). Fetch anything whose recorded OR actual width
     // disagrees with the profile.
-    let mismatched: Vec<(String, Vec<u8>)> = {
+    // The embedding column is untrusted too: a legacy row whose value is not
+    // a BLOB (TEXT/NULL from an old tool or a hand-edit) must be dropped for
+    // the backfill, not allowed to abort startup with a type error. That abort
+    // is the exact symptom this repair exists to remove.
+    let mismatched: Vec<(String, Option<Vec<u8>>)> = {
         let mut stmt = conn.prepare(
             "SELECT node_id, embedding FROM embedding_profile_vectors \
-             WHERE profile_id = ?1 AND (dimensions <> ?2 OR length(embedding) <> ?2 * 4)",
+             WHERE profile_id = ?1 AND (dimensions <> ?2 OR length(embedding) <> ?2 * 4 \
+                OR typeof(embedding) <> 'blob')",
         )?;
         let rows = stmt.query_map(rusqlite::params![legacy_profile_id, declared], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            let blob = match row.get::<_, rusqlite::types::Value>(1)? {
+                rusqlite::types::Value::Blob(bytes) => Some(bytes),
+                _ => None,
+            };
+            Ok((row.get::<_, String>(0)?, blob))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
@@ -1870,13 +1879,14 @@ pub(crate) fn repair_legacy_raw_profile_vectors(
         return Ok((0, 0));
     }
 
-    let tx =
-        rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
     let mut truncated: u64 = 0;
     let mut dropped: u64 = 0;
     for (node_id, blob) in mismatched {
-        let widened_enough = blob.len().is_multiple_of(4) && blob.len() / 4 >= declared_len;
-        if widened_enough {
+        let widened_enough = blob
+            .as_ref()
+            .is_some_and(|blob| blob.len().is_multiple_of(4) && blob.len() / 4 >= declared_len);
+        if let (true, Some(blob)) = (widened_enough, blob) {
             // Matryoshka truncation: keep the leading `declared_len` floats,
             // then L2-renormalize (mirrors embeddings::matryoshka_truncate).
             let mut vector: Vec<f32> = blob
@@ -2947,6 +2957,54 @@ mod tests {
             )
             .expect("manifest row");
         assert_eq!(manifest_count, 0, "manifest reflects the dropped row");
+    }
+
+    /// A legacy row whose embedding is not a BLOB at all (TEXT from an old
+    /// tool or a hand-edit) must be dropped for backfill, never allowed to
+    /// abort startup with a column-type error — that abort is the exact
+    /// symptom issue #191 reported.
+    #[test]
+    fn repair_drops_non_blob_legacy_vectors_instead_of_aborting() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 27);
+        conn.execute(
+            "INSERT INTO knowledge_nodes (id, content, node_type, created_at, updated_at, last_accessed, \
+             stability, difficulty, reps, lapses, learning_state, storage_strength, retrieval_strength, \
+             retention_strength, next_review, scheduled_days, has_embedding) \
+             VALUES ('text-node', 'legacy vector source', 'fact', datetime('now'), datetime('now'), datetime('now'), \
+             1.0, 0.3, 0, 0, 'new', 1.0, 1.0, 1.0, datetime('now'), 1, 1)",
+            [],
+        )
+        .expect("seed V27 node");
+        conn.execute(
+            "INSERT INTO node_embeddings (node_id, embedding, dimensions, model, created_at) \
+             VALUES ('text-node', ?1, 768, 'nomic-ai/nomic-embed-text-v1.5', datetime('now'))",
+            ["not a blob at all".repeat(200)],
+        )
+        .expect("seed text-typed vector");
+
+        apply_migrations(&conn).expect("apply through current version");
+        let (truncated, dropped) =
+            repair_legacy_raw_profile_vectors(&conn, "nomic-v1.5-legacy-raw-256")
+                .expect("repair must not abort on a non-blob row");
+        assert_eq!((truncated, dropped), (0, 1));
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_profile_vectors \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(remaining, 0, "the non-blob row is dropped for backfill");
+        let node_intact: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_nodes WHERE id = 'text-node'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("node count");
+        assert_eq!(node_intact, 1, "memory content is never touched");
     }
 
     #[test]
