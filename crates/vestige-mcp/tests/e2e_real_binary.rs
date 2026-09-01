@@ -851,8 +851,14 @@ fn corrupt_fts_index_does_not_brick_the_store() {
     {
         let conn = open_db(dir.path());
         conn.execute_batch(
-            "UPDATE knowledge_fts_data SET block = randomblob(200) \
-             WHERE id = (SELECT id FROM knowledge_fts_data WHERE id > 1 LIMIT 1);",
+            // Fixed byte pattern, not randomblob(): an unseeded random block
+            // sometimes damages the segment so badly that quick_check itself
+            // fails with SQLITE_NOMEM, and the test flakes (Aug 30, Sep 1).
+            &format!(
+                "UPDATE knowledge_fts_data SET block = x'{}' \
+                 WHERE id = (SELECT id FROM knowledge_fts_data WHERE id > 1 LIMIT 1);",
+                "A5".repeat(200)
+            ),
         )
         .expect("corrupt the fts index");
         assert!(
@@ -2100,8 +2106,14 @@ fn corrupt_fts_rebuild_preserves_embeddings() {
     {
         let conn = open_db(dir.path());
         conn.execute_batch(
-            "UPDATE knowledge_fts_data SET block = randomblob(200) \
-             WHERE id = (SELECT id FROM knowledge_fts_data WHERE id > 1 LIMIT 1);",
+            // Fixed byte pattern, not randomblob(): an unseeded random block
+            // sometimes damages the segment so badly that quick_check itself
+            // fails with SQLITE_NOMEM, and the test flakes (Aug 30, Sep 1).
+            &format!(
+                "UPDATE knowledge_fts_data SET block = x'{}' \
+                 WHERE id = (SELECT id FROM knowledge_fts_data WHERE id > 1 LIMIT 1);",
+                "A5".repeat(200)
+            ),
         )
         .expect("corrupt the fts index");
         assert!(

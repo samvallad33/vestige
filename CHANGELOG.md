@@ -5,6 +5,83 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] - 2026-09-01 — "Share your brain, not your memories"
+
+The dashboard becomes VestigeOS: a living WebGPU observatory of your memory,
+a share loop that lets you show the world the shape of your store without
+exposing a single memory, and the first native HTTP and receipt surface for
+Retroactive Salience Backfill. 501 files, five transformation phases, every
+one of them gated.
+
+### Added — The share loop (zero memory text, by construction)
+
+- **Deterministic loop export.** One tap renders the Observatory's full
+  720-frame, 12-second loop offline, frame by frame, straight into a
+  hardware-encoded mp4 (Mediabunny over WebCodecs). It is not a screen
+  recording: the loop clock is a pure function of the frame index, so every
+  machine exports the byte-identical clip of the same loop. A slow laptop
+  takes longer; it never drops a frame.
+- **Brain print.** A `vb1-…` signature hashed (FNV-1a) from your store's
+  shape only: counts, type mix, retention buckets, edge density. Same store,
+  same print, every time; two stores never collide. It seeds the Observatory,
+  names your exported clips, and gives you a permalink that carries structure
+  and nothing else.
+- **Wrapped card and `?brain=` permalinks.** A shareable card drawn from the
+  shape vector and trait chips, and a permalink that reconstructs the same
+  field on someone else's machine with no backend and no memory content.
+- **Receipts replay clip preset.** A loop-export preset focused on the
+  recall-path demo with receipt ids: watch your agent's memory decide.
+
+### Added — Native Backfill receipts and the HTTP surface
+
+- `ReceiptEvidence::Backfill` joins the unified evidence stream with a
+  stable schema URI, `schema_version`, and an explicit candidate-only claim
+  boundary. Fail-closed: a backfill renders only when the receipt carries a
+  complete, ordered `path_ids`; nothing is inferred by the renderer.
+- `POST /api/backfill` runs the full trace pipeline (record call, execute,
+  record result, save receipt), clamps inputs, and the Black Box salience
+  rescue is wired to it live. The `backfill_candidate` evidence edge is now
+  always persisted, idempotently, even in dry-run previews; promotion is
+  gated on the edge existing, so a receipt can never claim an edge the graph
+  does not hold.
+- Receipt attestation covers the new evidence kind: the redaction-safe
+  binding gains a `Backfill` variant and the attested memory set includes
+  the failure id, path ids, and candidate ids.
+
+### Changed — VestigeOS: one registry, breathing everywhere
+
+- `os-routes.ts` is the single route registry; dock, rail, palette, and
+  mobile navigation all derive from it. Explore absorbed Activation as a
+  Walk/Spread physics toggle (Spread runs a real edge-weighted BFS over the
+  graph); Stats absorbed the dream ritual; patterns, importance, schedule,
+  activation, and settings are hidden from navigation.
+- Ambient time is monotonic live and wrapped only in capture and export, so
+  the 12-second loop no longer snaps at the seam. AmbientField living base
+  coats sit under the DOM organs, fed by real vitals.
+- A camera rig, hover states, pick receipts, and wired pickers: clicking a
+  memory in the Observatory field lands on that memory in `/memories` via a
+  real `?memory=` deep link.
+- Route event pulses, feed jumps, timeline audit, memory state chips and
+  legend, an error page, and the de-violet: the legacy silent `#8b5cf6` is
+  gone, replaced by fossil cyan, per the palette doctrine.
+
+### Fixed — Truth
+
+- The websocket store no longer reports zeros while disconnected, and no
+  longer hardcodes a dev port (a 5173-only branch had silently killed the
+  live layer on every other port).
+- Memory PR diffs render before/after instead of asking you to approve blind.
+- Roughly 17,400 lines of dead dashboard code removed (the old Graph3D stack,
+  orphaned components, a dead reasoning GPU pipeline).
+
+### Verification
+
+- `cargo test --workspace`: 1,961 passed, 0 failed; `clippy -D warnings`
+  clean; svelte-check 0 errors across 1,001 files; vitest 826/826; production
+  build clean; live-verified against a seeded demo store: `/api/backfill`
+  returns real receipts with `path_ids`, the brain print is deterministic,
+  the export produces a playable mp4.
+
 ## [2.6.1] - 2026-09-01 — "1.x stores open again"
 
 ### Fixed — 1.x stores open again after upgrading (#191)
