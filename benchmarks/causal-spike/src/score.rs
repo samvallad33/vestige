@@ -70,8 +70,10 @@ pub fn score(runs_dir: &Path, manifest_path: &Path) -> Result<PathBuf> {
 
     let mut metrics = Vec::new();
     let mut scored_arms = vec![Arm::Lexical, Arm::Backfill, Arm::CausalGraph];
-    if by_arm.contains_key(Arm::LexicalOr.as_str()) {
-        scored_arms.push(Arm::LexicalOr);
+    for extra in [Arm::LexicalAnd, Arm::LexicalOr, Arm::LexicalEmbed] {
+        if by_arm.contains_key(extra.as_str()) {
+            scored_arms.push(extra);
+        }
     }
     for arm in scored_arms {
         let arm_runs = by_arm.get(arm.as_str()).expect("checked");
@@ -109,6 +111,8 @@ pub fn score(runs_dir: &Path, manifest_path: &Path) -> Result<PathBuf> {
         .cloned()
         .expect("causal-graph required");
     let lexical_or = metrics.iter().find(|m| m.arm == Arm::LexicalOr).cloned();
+    let lexical_and = metrics.iter().find(|m| m.arm == Arm::LexicalAnd).cloned();
+    let lexical_embed = metrics.iter().find(|m| m.arm == Arm::LexicalEmbed).cloned();
 
     let sep = causal_graph.separation_rate_vs_lexical.unwrap_or(0.0);
     let mh = causal_graph.multihop_recall_at_3.unwrap_or(0.0);
@@ -132,6 +136,8 @@ pub fn score(runs_dir: &Path, manifest_path: &Path) -> Result<PathBuf> {
         backfill,
         causal_graph,
         lexical_or,
+        lexical_and,
+        lexical_embed,
         gate,
         outcome,
         claim_licensed_if_pass: manifest.claim_boundary.clone(),
@@ -338,6 +344,7 @@ mod tests {
             bridge_entity: None,
             cause_lag_days: 10,
             multihop,
+            identifier_in_failure_content: false,
         }
     }
 
@@ -383,6 +390,7 @@ mod tests {
             t0: Utc::now(),
             claim_boundary: "".into(),
             dataset_id: "".into(),
+            generation: "v2".into(),
             stores: vec![],
         };
         let m = score_arm(&manifest, &refs, &c_ref, &by).unwrap();

@@ -15,7 +15,9 @@ pub struct ArmRun {
 pub fn run_arm(arm: Arm, storage: &Storage, failure_ids: &[String]) -> Result<ArmRun> {
     match arm {
         Arm::Lexical => lexical::run(storage, failure_ids),
+        Arm::LexicalAnd => lexical::run_and(storage, failure_ids),
         Arm::LexicalOr => lexical::run_or(storage, failure_ids),
+        Arm::LexicalEmbed => lexical::run_embed(storage, failure_ids),
         Arm::Backfill => backfill::run(storage, failure_ids),
         Arm::CausalGraph => causal_graph::run(storage, failure_ids),
     }

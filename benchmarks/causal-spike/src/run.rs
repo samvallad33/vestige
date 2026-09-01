@@ -22,12 +22,14 @@ pub fn run(store: &Path, failures: &Path, arm: Arm, out: Option<&Path>) -> Resul
     let scratch = scratch_copy(store, arm)?;
     let storage =
         Storage::new(Some(scratch.clone())).with_context(|| format!("open scratch {scratch:?}"))?;
+    let embedding_ready = try_init_embeddings(&storage, arm);
     let started_at = Utc::now();
     let executed = arms::run_arm(arm, &storage, &failures_doc.failure_ids)?;
     let finished_at = Utc::now();
-    let lookback = match arm {
-        Arm::Lexical | Arm::LexicalOr => None,
-        Arm::Backfill | Arm::CausalGraph => Some(LOOKBACK_DAYS),
+    let lookback = if arm.is_lexical() {
+        None
+    } else {
+        Some(LOOKBACK_DAYS)
     };
     let output = RunOutput {
         arm,
@@ -43,7 +45,7 @@ pub fn run(store: &Path, failures: &Path, arm: Arm, out: Option<&Path>) -> Resul
         accumulation_ms: executed.accumulation_ms,
         dataset_id,
         scratch_store: Some(scratch.display().to_string()),
-        embedding_ready: storage.is_embedding_ready(),
+        embedding_ready,
     };
     let encoded = serde_json::to_vec_pretty(&output)?;
     if let Some(path) = out {
@@ -73,4 +75,23 @@ fn scratch_copy(store: &Path, arm: Arm) -> Result<PathBuf> {
         }
     }
     Ok(dest)
+}
+
+fn try_init_embeddings(storage: &Storage, arm: Arm) -> bool {
+    if arm != Arm::LexicalEmbed {
+        return storage.is_embedding_ready();
+    }
+    match storage.init_embeddings() {
+        Ok(()) => {
+            let ready = storage.is_embedding_ready();
+            if !ready {
+                eprintln!("init_embeddings returned ok but embedding_ready=false");
+            }
+            ready
+        }
+        Err(err) => {
+            eprintln!("embeddings not live ({arm}): {err}");
+            false
+        }
+    }
 }

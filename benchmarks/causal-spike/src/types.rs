@@ -4,8 +4,15 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_PATH: &str = "docs/v3/CAUSAL-SPIKE-PROTOCOL.md";
-pub const PREREGISTERED: &str = "2026-08-31";
-pub const DEFAULT_SEED: u64 = 20260831;
+pub const PREREGISTERED_V1: &str = "2026-08-31";
+pub const PREREGISTERED_V2: &str = "2026-09-01";
+pub const V1_SEED: u64 = 20260831;
+pub const V2_SEED: u64 = 20260901;
+pub const DEFAULT_SEED: u64 = V2_SEED;
+pub const A_FAIR_MOD: usize = 10;
+pub const A_FAIR_LT: usize = 3;
+pub const CHATTER_BEFORE: usize = 3;
+pub const CHATTER_AFTER: usize = 2;
 pub const N_STORES: usize = 3;
 pub const PAIRS_PER_STORE: usize = 30;
 pub const DISTRACTORS_PER_KIND: usize = 5;
@@ -20,11 +27,17 @@ pub const MULTIHOP_STRIDE: usize = 9;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum Arm {
-    /// Protocol Arm A: `hybrid_search` (keyword AND, plus embeddings when live).
+    /// v2 operative Arm A: `Storage::search` (FTS OR+BM25).
     Lexical,
-    /// Extra disclosure arm, not in the locked gate: `Storage::search` (FTS OR+BM25).
+    /// Disclosure: `hybrid_search` FTS implicit-AND (v1 Arm A).
+    #[value(name = "lexical-and")]
+    LexicalAnd,
+    /// v1 erratum alias of OR+BM25. Not required in the v2 gate.
     #[value(name = "lexical-or")]
     LexicalOr,
+    /// Disclosure: `hybrid_search` after `init_embeddings`.
+    #[value(name = "lexical-embed")]
+    LexicalEmbed,
     Backfill,
     #[value(name = "causal-graph")]
     CausalGraph,
@@ -34,10 +47,19 @@ impl Arm {
     pub fn as_str(self) -> &'static str {
         match self {
             Arm::Lexical => "lexical",
+            Arm::LexicalAnd => "lexical-and",
             Arm::LexicalOr => "lexical-or",
+            Arm::LexicalEmbed => "lexical-embed",
             Arm::Backfill => "backfill",
             Arm::CausalGraph => "causal-graph",
         }
+    }
+
+    pub fn is_lexical(self) -> bool {
+        matches!(
+            self,
+            Arm::Lexical | Arm::LexicalAnd | Arm::LexicalOr | Arm::LexicalEmbed
+        )
     }
 }
 
@@ -56,6 +78,8 @@ pub struct Manifest {
     pub claim_boundary: String,
     #[serde(default)]
     pub dataset_id: String,
+    #[serde(default)]
+    pub generation: String,
     pub stores: Vec<StoreManifest>,
 }
 
@@ -77,6 +101,8 @@ pub struct PairManifest {
     pub bridge_entity: Option<String>,
     pub cause_lag_days: i64,
     pub multihop: bool,
+    #[serde(default)]
+    pub identifier_in_failure_content: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -155,6 +181,10 @@ pub struct GateVerdict {
     pub causal_graph: ArmMetrics,
     #[serde(default)]
     pub lexical_or: Option<ArmMetrics>,
+    #[serde(default)]
+    pub lexical_and: Option<ArmMetrics>,
+    #[serde(default)]
+    pub lexical_embed: Option<ArmMetrics>,
     pub gate: GateChecks,
     pub outcome: String,
     pub claim_licensed_if_pass: String,
@@ -184,6 +214,12 @@ pub fn t0() -> DateTime<Utc> {
 
 pub fn is_multihop_pair(store_idx: usize, pair_idx: usize) -> bool {
     (store_idx * PAIRS_PER_STORE + pair_idx).is_multiple_of(MULTIHOP_STRIDE)
+}
+
+/// A-fairness: identifier also appears in failure content. Locked formula:
+/// `global_idx % 10 < 3` → 27/90 = 30%.
+pub fn is_a_fair_pair(store_idx: usize, pair_idx: usize) -> bool {
+    (store_idx * PAIRS_PER_STORE + pair_idx) % A_FAIR_MOD < A_FAIR_LT
 }
 
 pub fn entity_name(store_idx: usize, pair_idx: usize) -> String {
@@ -238,5 +274,15 @@ mod tests {
         let b = dataset_id_for(&["a".into(), "b".into()]);
         assert_eq!(a, b);
         assert_ne!(a, dataset_id_for(&["a".into()]));
+    }
+
+    #[test]
+    fn a_fairness_is_exactly_thirty_percent() {
+        let n = (0..N_STORES)
+            .flat_map(|s| (0..PAIRS_PER_STORE).map(move |p| (s, p)))
+            .filter(|(s, p)| is_a_fair_pair(*s, *p))
+            .count();
+        assert_eq!(n, 27);
+        assert_eq!(CHATTER_BEFORE + CHATTER_AFTER, DISTRACTORS_PER_KIND);
     }
 }

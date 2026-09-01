@@ -5,9 +5,10 @@
 
 use crate::rng::SplitMix64;
 use crate::types::{
-    CAUSE_LAG_MAX_DAYS, CAUSE_LAG_MIN_DAYS, DISTRACTORS_PER_KIND, FailuresFile, Manifest, N_STORES,
-    PAIRS_PER_STORE, PREREGISTERED, PROTOCOL_PATH, PairManifest, StoreManifest, bridge_name,
-    dataset_id_for, entity_name, is_multihop_pair, t0,
+    CAUSE_LAG_MAX_DAYS, CAUSE_LAG_MIN_DAYS, CHATTER_AFTER, CHATTER_BEFORE, DISTRACTORS_PER_KIND,
+    FailuresFile, Manifest, N_STORES, PAIRS_PER_STORE, PREREGISTERED_V1, PREREGISTERED_V2,
+    PROTOCOL_PATH, PairManifest, StoreManifest, V1_SEED, V2_SEED, bridge_name, dataset_id_for,
+    entity_name, is_a_fair_pair, is_multihop_pair, t0,
 };
 use anyhow::{Context, Result, bail};
 use chrono::{Duration, Utc};
@@ -44,6 +45,13 @@ struct Pending {
 }
 
 pub fn seed(out: &Path, seed: u64) -> Result<PathBuf> {
+    if seed == V1_SEED {
+        bail!(
+            "seed {V1_SEED} (preregistered {PREREGISTERED_V1}) is frozen at \
+             benchmarks/causal-spike/data/; v2 is --seed {V2_SEED} --out \
+             benchmarks/causal-spike/data/v2"
+        );
+    }
     if out.exists() && contains_store(out) {
         bail!(
             "refusing to write into {out:?}: path already contains a store \
@@ -66,6 +74,9 @@ pub fn seed(out: &Path, seed: u64) -> Result<PathBuf> {
 
         let storage = Storage::new(Some(db_path.clone()))
             .with_context(|| format!("open fresh store {db_path:?}"))?;
+        if let Err(err) = storage.init_embeddings() {
+            eprintln!("seed embeddings not live (store-{store_idx}): {err}");
+        }
         let mut rng = SplitMix64::mix_with(seed, store_idx as u64 + 1);
         let mut pairs = Vec::with_capacity(PAIRS_PER_STORE);
 
@@ -96,6 +107,7 @@ pub fn seed(out: &Path, seed: u64) -> Result<PathBuf> {
                 bridge_entity: planted.bridge,
                 cause_lag_days: planted.cause_lag_days,
                 multihop: planted.multihop,
+                identifier_in_failure_content: planted.identifier_in_failure_content,
             });
         }
 
@@ -127,11 +139,20 @@ pub fn seed(out: &Path, seed: u64) -> Result<PathBuf> {
 
     let manifest = Manifest {
         protocol: PROTOCOL_PATH.into(),
-        preregistered: PREREGISTERED.into(),
+        preregistered: if seed == V2_SEED {
+            PREREGISTERED_V2.into()
+        } else {
+            "smoke".into()
+        },
         seed,
         t0: epoch,
         claim_boundary: CLAIM_BOUNDARY.into(),
         dataset_id,
+        generation: if seed == V2_SEED {
+            "v2".into()
+        } else {
+            "smoke".into()
+        },
         stores,
     };
     let manifest_path = out.join("manifest.json");
@@ -148,6 +169,7 @@ struct PlantedPair {
     bridge: Option<String>,
     cause_lag_days: i64,
     multihop: bool,
+    identifier_in_failure_content: bool,
 }
 
 fn plant_pair(
@@ -158,19 +180,24 @@ fn plant_pair(
 ) -> Result<PlantedPair> {
     let entity = entity_name(store_idx, pair_idx);
     let multihop = is_multihop_pair(store_idx, pair_idx);
+    let a_fair = is_a_fair_pair(store_idx, pair_idx);
     let cause_lag_days = rng.gen_range(CAUSE_LAG_MIN_DAYS, CAUSE_LAG_MAX_DAYS) as i64;
     let value = rng.gen_range(2, 20);
 
-    let (cause_content, failure_content, bridge, root_content) = if multihop {
+    let (cause_content, bridge, root_content) = if multihop {
         let bridge = bridge_name(store_idx, pair_idx);
         let root = format!("Recorded {entity} in the toolchain file during the weekly pass");
-        let cause = format!("Copied {entity} into {bridge} for the deploy env");
-        let failure = failure_text(pair_idx);
-        (cause, failure, Some(bridge), Some(root))
+        let cause = format!("Copied {entity} into {bridge} during the weekly configuration pass");
+        (cause, Some(bridge), Some(root))
     } else {
-        let cause = format!("Set {entity}={value} in the deploy env for faster cold starts");
-        let failure = failure_text(pair_idx);
-        (cause, failure, None, None)
+        let cause = format!("Set {entity}={value} during the weekly configuration pass");
+        (cause, None, None)
+    };
+    let fail_entity = bridge.as_ref().unwrap_or(&entity).clone();
+    let failure_content = if a_fair {
+        failure_text_a_fair(pair_idx, &fail_entity)
+    } else {
+        failure_text(pair_idx)
     };
 
     let cause_when = epoch - Duration::days(cause_lag_days);
@@ -198,24 +225,29 @@ fn plant_pair(
     assert_has_entity("cause", &cause_content, &cause_tags, &entity)?;
     let cause_slot = items.len();
     items.push(Pending {
-        content: cause_content,
+        content: cause_content.clone(),
         node_type: "decision",
         tags: cause_tags,
         when: cause_when,
     });
 
-    let fail_entity = bridge.as_ref().unwrap_or(&entity).clone();
     let fail_tags = vec![fail_entity.clone(), "crash".into()];
     assert_failure("failure", &failure_content, &fail_tags)?;
     assert_has_entity("failure", &failure_content, &fail_tags, &fail_entity)?;
-    if failure_content.contains(&entity)
+    if a_fair {
+        if !failure_content.contains(&fail_entity) {
+            bail!("A-fair failure must name {fail_entity} in content");
+        }
+    } else if failure_content.contains(&entity)
         || bridge.as_ref().is_some_and(|b| failure_content.contains(b))
     {
-        bail!("failure content must not mention the identifier (Arm A would cheat via FTS)");
+        bail!("blind failure content must not mention the identifier");
     }
-    // Official 20260831 templates still share stopwords (`the`/`deploy`/`env`
-    // on cause vs crash vocabulary on failure). Do not rewrite planted text
-    // after seeing scores; future generations must assert this for real.
+    let mut keys = vec![entity.clone()];
+    if let Some(b) = &bridge {
+        keys.push(b.clone());
+    }
+    assert_no_shared_content_words(&cause_content, &failure_content, &keys)?;
 
     for (i, text) in SEMANTIC_DECOYS.iter().enumerate() {
         assert_failure("decoy", text, &[])?;
@@ -227,22 +259,61 @@ fn plant_pair(
             tags: vec![],
             when: epoch - Duration::days(lag),
         });
-        // Re-check after suffix: suffix must not introduce identifiers or strip failure.
         let last = items.last().unwrap();
         assert_failure("decoy+suffix", &last.content, &last.tags)?;
         assert_no_entities("decoy+suffix", &last.content, &last.tags)?;
     }
 
-    for i in 0..DISTRACTORS_PER_KIND {
-        let chatter =
-            format!("Noted {entity} still listed in the env catalog after the deploy window ({i})");
-        assert_quiet("chatter", &chatter, std::slice::from_ref(&entity))?;
-        assert_has_entity("chatter", &chatter, std::slice::from_ref(&entity), &entity)?;
+    let chatter_before = [
+        format!("Audited {fail_entity} during the quarterly catalog review"),
+        format!("Rotated the comment on {fail_entity} during the quarterly catalog review"),
+        format!(
+            "Listed {fail_entity} in the inventory worksheet during the quarterly catalog review"
+        ),
+    ];
+    let chatter_after = [
+        format!("Noted {fail_entity} still listed in the catalog after the window closed"),
+        format!("Confirmed {fail_entity} remained in the catalog after the window closed"),
+    ];
+    debug_assert_eq!(chatter_before.len(), CHATTER_BEFORE);
+    debug_assert_eq!(chatter_after.len(), CHATTER_AFTER);
+
+    for (i, chatter) in chatter_before.iter().enumerate() {
+        assert_quiet(
+            "chatter-before",
+            chatter,
+            std::slice::from_ref(&fail_entity),
+        )?;
+        assert_has_entity(
+            "chatter-before",
+            chatter,
+            std::slice::from_ref(&fail_entity),
+            &fail_entity,
+        )?;
+        let mut lag = rng.gen_range(2, 40) as i64;
+        if lag == cause_lag_days {
+            lag = if lag > 2 { lag - 1 } else { lag + 1 };
+        }
+        items.push(Pending {
+            content: format!("{chatter} ({i})"),
+            node_type: "note",
+            tags: vec![fail_entity.clone()],
+            when: epoch - Duration::days(lag),
+        });
+    }
+    for (i, chatter) in chatter_after.iter().enumerate() {
+        assert_quiet("chatter-after", chatter, std::slice::from_ref(&fail_entity))?;
+        assert_has_entity(
+            "chatter-after",
+            chatter,
+            std::slice::from_ref(&fail_entity),
+            &fail_entity,
+        )?;
         let ahead = rng.gen_range(1, 5) as i64;
         items.push(Pending {
-            content: chatter,
+            content: format!("{chatter} ({i})"),
             node_type: "note",
-            tags: vec![entity.clone()],
+            tags: vec![fail_entity.clone()],
             when: epoch + Duration::days(ahead),
         });
     }
@@ -279,14 +350,45 @@ fn plant_pair(
         bridge,
         cause_lag_days,
         multihop,
+        identifier_in_failure_content: a_fair,
     })
 }
 
 pub(crate) fn failure_text(pair_idx: usize) -> String {
-    // Identifier lives in tags only. Putting SPIKE*_CFG_* in the body lets
-    // hybrid_search / FTS recover the cause by token overlap — the thing Arm A
-    // is supposed to miss.
     format!("Process crashed with Internal Server Error on the auth endpoint ({pair_idx})")
+}
+
+pub(crate) fn failure_text_a_fair(pair_idx: usize, fail_entity: &str) -> String {
+    format!("Process crashed with Internal Server Error after reading {fail_entity} ({pair_idx})")
+}
+
+const CONTENT_STOPWORDS: &[&str] = &[
+    "a", "an", "the", "in", "on", "of", "for", "to", "and", "or", "with", "from", "after",
+    "during", "into", "by", "at", "as", "is", "was", "be", "this", "that", "its", "it", "still",
+    "than", "then", "but", "not", "no", "nor", "so", "if", "we", "our", "your", "their", "over",
+    "under", "until", "while", "once", "about", "out", "off", "up", "down", "just", "only", "same",
+    "too", "very", "can", "will", "should", "now", "pair",
+];
+
+fn content_tokens(s: &str) -> std::collections::HashSet<String> {
+    s.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.len() > 2)
+        .filter(|w| !CONTENT_STOPWORDS.contains(&w.as_str()))
+        .collect()
+}
+
+fn assert_no_shared_content_words(cause: &str, failure: &str, keys: &[String]) -> Result<()> {
+    let keys: std::collections::HashSet<String> = keys.iter().map(|k| k.to_lowercase()).collect();
+    let shared: Vec<String> = content_tokens(cause)
+        .intersection(&content_tokens(failure))
+        .filter(|w| !keys.contains(*w))
+        .cloned()
+        .collect();
+    if !shared.is_empty() {
+        bail!("cause/failure share non-identifier content words {shared:?}");
+    }
+    Ok(())
 }
 
 fn assert_quiet(role: &str, content: &str, tags: &[String]) -> Result<()> {
@@ -364,15 +466,17 @@ mod tests {
 
     #[test]
     fn official_templates_obey_entity_and_failure_invariants() {
-        let entity = entity_name(0, 0);
+        let entity = entity_name(0, 1);
         let bridge = bridge_name(0, 0);
-        let cause = format!("Set {entity}=7 in the deploy env for faster cold starts");
+        let cause = format!("Set {entity}=7 during the weekly configuration pass");
         let root = format!("Recorded {entity} in the toolchain file during the weekly pass");
-        let mid = format!("Copied {entity} into {bridge} for the deploy env");
-        let failure = failure_text(0);
-        let hop_fail = failure_text(1);
+        let mid = format!("Copied {entity} into {bridge} during the weekly configuration pass");
+        let failure = failure_text(1);
+        let hop_fail = failure_text(0);
+        let fair = failure_text_a_fair(1, &entity);
         assert!(!failure.contains(&entity));
         assert!(!hop_fail.contains(&bridge));
+        assert!(fair.contains(&entity));
 
         assert!(!looks_like_failure(&cause, std::slice::from_ref(&entity)));
         assert!(!looks_like_failure(&root, std::slice::from_ref(&entity)));
@@ -385,6 +489,23 @@ mod tests {
             &hop_fail,
             &[bridge.clone(), "crash".into()]
         ));
+        assert_no_shared_content_words(&cause, &failure, std::slice::from_ref(&entity)).unwrap();
+        assert_no_shared_content_words(&cause, &fair, std::slice::from_ref(&entity)).unwrap();
+        assert_no_shared_content_words(&mid, &hop_fail, &[entity.clone(), bridge.clone()]).unwrap();
+        assert_no_shared_content_words(
+            &mid,
+            &failure_text_a_fair(0, &bridge),
+            &[entity.clone(), bridge.clone()],
+        )
+        .unwrap();
+        assert!(
+            assert_no_shared_content_words(
+                "Set foo=1 in the deploy env",
+                "Process crashed from the deploy env",
+                &["foo".into()]
+            )
+            .is_err()
+        );
 
         let cause_ents = extract_entities(&cause, std::slice::from_ref(&entity));
         assert!(cause_ents.contains(&entity.to_lowercase()));
@@ -398,6 +519,51 @@ mod tests {
             assert!(looks_like_failure(d, &[]), "{d}");
             assert!(extract_entities(d, &[]).is_empty(), "{d}");
         }
+    }
+
+    #[test]
+    fn v1_seed_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = seed(dir.path(), V1_SEED).unwrap_err();
+        assert!(err.to_string().contains("frozen"), "{err}");
+    }
+
+    #[test]
+    fn v2_plant_has_backward_chatter_and_s1() {
+        let mut rng = SplitMix64::mix_with(V2_SEED, 1);
+        let epoch = t0();
+        let planted = plant_pair(0, 3, epoch, &mut rng).unwrap();
+        assert!(!planted.identifier_in_failure_content);
+        let fail_when = planted.items[planted.failure_slot].when;
+        let fail_entity = entity_name(0, 3);
+        let before = planted
+            .items
+            .iter()
+            .filter(|p| {
+                p.when < fail_when && p.tags.contains(&fail_entity) && p.node_type == "note"
+            })
+            .count();
+        let after = planted
+            .items
+            .iter()
+            .filter(|p| {
+                p.when > fail_when && p.tags.contains(&fail_entity) && p.node_type == "note"
+            })
+            .count();
+        assert_eq!(before, CHATTER_BEFORE);
+        assert_eq!(after, CHATTER_AFTER);
+        let cause = &planted.items[planted.cause_slot].content;
+        let failure = &planted.items[planted.failure_slot].content;
+        assert_no_shared_content_words(cause, failure, std::slice::from_ref(&fail_entity)).unwrap();
+
+        let fair = plant_pair(0, 0, epoch, &mut rng).unwrap();
+        assert!(fair.multihop);
+        assert!(fair.identifier_in_failure_content);
+        assert!(
+            fair.items[fair.failure_slot]
+                .content
+                .contains(&bridge_name(0, 0))
+        );
     }
 
     #[test]
@@ -429,7 +595,7 @@ mod tests {
 
         let cause = storage
             .ingest(IngestInput {
-                content: format!("Set {entity}=7 in the deploy env for faster cold starts"),
+                content: format!("Set {entity}=7 during the weekly configuration pass"),
                 node_type: "decision".into(),
                 tags: vec![entity.clone()],
                 ..Default::default()

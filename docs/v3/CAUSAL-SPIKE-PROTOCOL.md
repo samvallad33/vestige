@@ -162,3 +162,67 @@ Locked gate arithmetic (unchanged thresholds): C r@1 ≥ 0.60 ✓, C r@3 ≥ 0.8
 - Verdict artifacts carry `claim_boundary` verbatim plus `claim_never_licensed: "automatic root cause"`.
 - A store holds 510 pair-memories plus 3–4 roots (513 or 514), 1540 across the three stores — not ~480.
 - **Not changed (needs a new preregistered generation, Sam's call):** entity chatter is still all *after* the failure, so B/C have no backward competitor sharing the entity. Cause/failure templates still share stopwords; failure bodies keep the identifier in tags only. Do not rewrite planted text on the frozen 20260831 stores.
+
+## v2 amendment (PREREGISTERED 2026-09-01, before seed 20260901)
+
+Append-only. v1 text above is frozen, including the INVALID-BASELINE erratum run
+and the v1 errata. This section is the generation that can lock v3.0 scope.
+Locked before any `seed --seed 20260901` byte was written.
+
+Claim boundary unchanged: receipt-backed upstream candidates that similarity
+search misses — NEVER automatic root cause.
+
+Thresholds unchanged (never move):
+
+1. Arm C recall@1 ≥ 0.60 AND recall@3 ≥ 0.80
+2. Arm C separation rate vs operative Arm A ≥ 0.40
+3. Arm C ≥ Arm B on recall@3
+4. Multi-hop recall@3 ≥ 0.50 on the 10-root subset
+
+`score` still emits `INVALID-BASELINE` (not PASS) if operative Arm A's
+`empty_list_rate == 1.0`.
+
+### Dataset (seed=20260901)
+
+- New stores under `benchmarks/causal-spike/data/v2/`. v1 `data/store-*/` is
+  untouched. New `dataset_id` from the sorted v2 failure-id list.
+- Same N: 3 stores × 30 pairs = 90, 10 multi-hop at `global_idx % 9 == 0`.
+- T0 remains 2026-08-31T00:00:00Z. Cause lag still uniform 7–45 days.
+- **B2:** per pair, 5 entity-chatter memories sharing the failure's join
+  identifier (`fail_entity` = bridge on multi-hop pairs, else the cause
+  identifier). **3 ingested BEFORE the failure** (2–40 days, not the cause's
+  timestamp), non-causal (routine catalog/audit mentions or an unrelated
+  comment rotation on the same identifier). **2 ingested AFTER** (temporal
+  precedence). B and C must rank the true cause among backward-eligible
+  same-entity candidates.
+- **S1:** seeder asserts stopword-filtered token intersection of each cause
+  and its failure is identifiers only, and `bail!`s otherwise. Stopwords are
+  closed-class function words (the, a, in, during, after, into, …). Content
+  words such as deploy, env, process, crashed, configuration are not
+  stopwords.
+- **A-fairness subset:** `global_idx % 10 < 3` (27/90 = 30%). Those failures
+  put the join identifier in **content** as well as tags
+  (`… after reading {fail_entity} …`). Other failures keep the identifier in
+  tags only. Manifest field `identifier_in_failure_content` records which.
+- Cause templates (v2 only; v1 text is not rewritten):
+  - direct: `Set {entity}={value} during the weekly configuration pass`
+  - multi-hop intermediate: `Copied {entity} into {bridge} during the weekly configuration pass`
+  - failure (blind): `Process crashed with Internal Server Error on the auth endpoint ({pair_idx})`
+  - failure (A-fair): `Process crashed with Internal Server Error after reading {fail_entity} ({pair_idx})`
+- `causal-spike seed --seed 20260831` is refused. That generation is frozen.
+
+### Systems under test (v2)
+
+| Arm | CLI | Gate? | Description |
+|-----|-----|-------|-------------|
+| A (operative) | `lexical` | yes | `Storage::search` (FTS OR+BM25), the live lexical path that returns lists |
+| A-and | `lexical-and` | no | `hybrid_search` FTS implicit-AND (v1 Arm A). Reported alongside. |
+| A-embed | `lexical-embed` | no | `hybrid_search` after `init_embeddings()`. Run if the model can be made live; disclose `embedding_ready` either way. |
+| B | `backfill` | yes | per-query Retroactive Salience Backfill |
+| C | `causal-graph` | yes | accumulated `backfill_candidate` graph, two-pass, depth-2 traversal |
+
+v1 JSON `arm: "lexical"` meant hybrid AND. v2 JSON `arm: "lexical"` means
+OR+BM25. Do not mix v1 and v2 run directories. `lexical-or` remains
+deserializable as an alias of OR+BM25 for v1 erratum files.
+
+The v2 numbers are the only ones that can lock v3.0 scope.

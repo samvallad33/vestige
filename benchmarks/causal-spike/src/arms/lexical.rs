@@ -4,12 +4,21 @@ use anyhow::Result;
 use std::time::Instant;
 use vestige_core::{MatchType, Storage};
 
+/// v2 operative Arm A: OR+BM25.
 pub fn run(storage: &Storage, failure_ids: &[String]) -> Result<ArmRun> {
-    run_inner(storage, failure_ids, SearchKind::Hybrid)
+    run_inner(storage, failure_ids, SearchKind::OrBm25)
 }
 
 pub fn run_or(storage: &Storage, failure_ids: &[String]) -> Result<ArmRun> {
     run_inner(storage, failure_ids, SearchKind::OrBm25)
+}
+
+pub fn run_and(storage: &Storage, failure_ids: &[String]) -> Result<ArmRun> {
+    run_inner(storage, failure_ids, SearchKind::Hybrid)
+}
+
+pub fn run_embed(storage: &Storage, failure_ids: &[String]) -> Result<ArmRun> {
+    run_inner(storage, failure_ids, SearchKind::Hybrid)
 }
 
 enum SearchKind {
