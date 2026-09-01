@@ -70,7 +70,7 @@ pub fn score(runs_dir: &Path, manifest_path: &Path) -> Result<PathBuf> {
 
     let mut metrics = Vec::new();
     let mut scored_arms = vec![Arm::Lexical, Arm::Backfill, Arm::CausalGraph];
-    for extra in [Arm::LexicalAnd, Arm::LexicalOr, Arm::LexicalEmbed] {
+    for extra in [Arm::LexicalAnd, Arm::LexicalOr, Arm::LexicalEmbed, Arm::CausalGraphV2] {
         if by_arm.contains_key(extra.as_str()) {
             scored_arms.push(extra);
         }
@@ -145,9 +145,48 @@ pub fn score(runs_dir: &Path, manifest_path: &Path) -> Result<PathBuf> {
         protocol: manifest.protocol.clone(),
         dataset_id: expected_dataset,
     };
+    let c2_verdict = metrics
+        .iter()
+        .find(|m| m.arm == Arm::CausalGraphV2)
+        .cloned()
+        .map(|c2| {
+            let sep2 = c2.separation_rate_vs_lexical.unwrap_or(0.0);
+            let mh2 = c2.multihop_recall_at_3.unwrap_or(0.0);
+            let gate2 = GateChecks {
+                c_recall_at_1_ge_0_60: c2.recall_at_1 >= 0.60,
+                c_recall_at_3_ge_0_80: c2.recall_at_3 >= 0.80,
+                c_separation_vs_a_ge_0_40: sep2 >= 0.40,
+                c_recall_at_3_ge_b: c2.recall_at_3 >= verdict.backfill.recall_at_3,
+                c_multihop_recall_at_3_ge_0_50: mh2 >= 0.50,
+            };
+            let pass2 = gate2.c_recall_at_1_ge_0_60
+                && gate2.c_recall_at_3_ge_0_80
+                && gate2.c_separation_vs_a_ge_0_40
+                && gate2.c_recall_at_3_ge_b
+                && gate2.c_multihop_recall_at_3_ge_0_50;
+            let outcome2 = verdict_outcome(pass2, &verdict.lexical).to_string();
+            crate::types::GateVerdictC2 {
+                causal_graph_v2: c2,
+                gate: gate2,
+                outcome: outcome2,
+            }
+        });
+    let verdict = crate::types::GateVerdictFile {
+        base: verdict,
+        c2: c2_verdict,
+    };
     let path = results_dir.join(format!("verdict-{:.7}-{stamp}.json", commit));
     write_json(&path, &verdict)?;
-    eprintln!("verdict {} → {}", verdict.outcome, path.display());
+    eprintln!(
+        "verdict C1={}{} → {}",
+        verdict.base.outcome,
+        verdict
+            .c2
+            .as_ref()
+            .map(|c| format!(" C2={}", c.outcome))
+            .unwrap_or_default(),
+        path.display()
+    );
     Ok(path)
 }
 

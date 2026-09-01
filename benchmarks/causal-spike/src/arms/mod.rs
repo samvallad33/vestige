@@ -1,5 +1,6 @@
 pub mod backfill;
 pub mod causal_graph;
+pub mod causal_graph_v2;
 pub mod lexical;
 
 use crate::types::{Arm, QueryResult, TOP_K};
@@ -20,6 +21,7 @@ pub fn run_arm(arm: Arm, storage: &Storage, failure_ids: &[String]) -> Result<Ar
         Arm::LexicalEmbed => lexical::run_embed(storage, failure_ids),
         Arm::Backfill => backfill::run(storage, failure_ids),
         Arm::CausalGraph => causal_graph::run(storage, failure_ids),
+        Arm::CausalGraphV2 => causal_graph_v2::run(storage, failure_ids),
     }
 }
 

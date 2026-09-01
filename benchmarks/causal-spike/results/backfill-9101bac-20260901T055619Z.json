@@ -1,0 +1,20 @@
+{
+  "arm": "backfill",
+  "commit": "9101bac9e8331a4a60b250deb06389331cd2e791",
+  "seed": 31337,
+  "n_pairs": 90,
+  "recall_at_1": 0.13333333333333333,
+  "recall_at_3": 0.5,
+  "mrr": 0.4083333333333333,
+  "mean_wall_clock_ms": 3.638082422222223,
+  "search_mode": "retroactive_backfill",
+  "n_multihop": 10,
+  "multihop_recall_at_3": 0.0,
+  "separation_rate_vs_lexical": 0.5,
+  "separation_rate_vs_lexical_or": null,
+  "accumulation_ms": null,
+  "amortized_ms_per_query": null,
+  "mean_list_len": 4.0,
+  "empty_list_rate": 0.0,
+  "n_answered_pairs": 90
+}

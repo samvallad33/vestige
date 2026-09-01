@@ -256,3 +256,65 @@ Copied the platform default Vestige `vestige.db` (165,076,992 bytes, 2,806 nodes
 - plain-cp→exit-137: `exit-137` is not an incident node. The Jul 8 macOS `plain cp` codesign break exists as **one combined memory** (`6b566dce-6713-49a5-9690-c45ea5d2bf1d`), not a two-node pair.
 
 Per-query backfill on that combined memory (copy only): `looks_like_failure=true`, 10 backward candidates. Top ranks are other Vestige ship/audit notes, not a distinct upstream cause node — expected, because the cause text lives in the same row as the failure. Artifacts: `results/s3-live-copy-probe-a0ea030.json`, `results/s3-plain-cp-probe-a0ea030.json`. S3 does not license live-corpus causal recovery.
+
+## v3 amendment — evidence-typed recovery layer (C2), preregistered before its test run
+
+Appended 2026-09-01 (PT evening 2026-08-31), after the v2 FAIL and before any
+run of the new arm against the frozen 20260901 test set.
+
+### The v2 FAIL's diagnosis
+
+The true cause is admitted but out-ranked: every backward same-entity
+candidate carries a near-identical edge strength (entity term dominates), so
+recency decides, and three chatter draws beat one cause. Depth-2 paths
+compound two lag decays, sinking roots below depth-1 chatter (multi-hop
+1/10).
+
+### Arm C2 `causal-graph-v2` (design frozen at this commit)
+
+Ranks backward same-entity candidates by **evidence class**, derived from
+content and corpus structure only — `node_type` and all node metadata are
+deliberately unread (a dataset whose causes carry a distinctive type must not
+be won by reading the label):
+
+- **Mutation** (+2.0): the shared entity occurs in content immediately
+  followed by an assignment/version operator (`=`, `:`, `@`), case-folded
+  because stored entities are lowercased; OR the memory couples ≥2 distinct
+  identifier entities.
+- **Origin** (+1.0): the earliest memory in the store carrying the shared
+  entity.
+- **Mention** (+0): everything else. Mentions never serve as multi-hop
+  intermediates and receive no depth-2 credit.
+
+Score = class bonus + (squashed base × lag decay); bonuses dominate, base
+breaks ties within a class. Depth-2 only through Mutation nodes; roots credit
+only as Mutation/Origin. Constants: MUTATION_BONUS 2.0, ORIGIN_BONUS 1.0,
+HOP_CREDIT 0.5; floor and lookback unchanged.
+
+### Dev methodology (no test-set contact)
+
+- Dev set: fresh generation with the v2 seeder at seed **31337** (disjoint
+  from the frozen 20260901 test set, same construction). The burned 20260831
+  stores were also run for continuity.
+- One erratum-class fix during dev: the adjacency scan initially compared
+  stored (lowercased) entities against raw content and classified every
+  UPPER_SNAKE cause as Mention (dev r@1 0.522). Case-folding the scan is an
+  implementation fix of the frozen design, not a design change.
+- Dev results (seed 31337): A 0.00/0.00, B 0.133/0.500 (multi-hop 0.0),
+  C1 FAIL, **C2 1.00/1.00, separation 1.00, multi-hop 1.00**. Dev artifacts:
+  `results/*-20260901T0552-0556*.json` (labeled dev by this note).
+- Component ablation matrix (typing-only vs +origin vs +typed-traversal) was
+  NOT run; attribution is qualitative from the miss autopsy (class bonuses
+  decide depth-1; typed traversal decides multi-hop).
+
+### Test declaration
+
+ONE run of all arms (A, A-and, A-embed where live, B, C1, C2) on the frozen
+seed-20260901 stores (`dataset_id=d9be9f1265ccd9e2`). The locked gate
+thresholds are evaluated twice and reported side by side: the original C1 row,
+and `c2` with C := causal-graph-v2 — the v3 verdict reads the `c2` row. No
+second attempt: if C2 fails on the test set, that FAIL publishes and the
+recovery layer goes back to redesign.
+
+The claim boundary is unchanged and applies to C2 verbatim: receipt-backed
+upstream candidates, never automatic root cause.

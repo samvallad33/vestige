@@ -41,6 +41,9 @@ pub enum Arm {
     Backfill,
     #[value(name = "causal-graph")]
     CausalGraph,
+    /// C2: evidence-typed causal ranking (mutation/origin/mention).
+    #[value(name = "causal-graph-v2")]
+    CausalGraphV2,
 }
 
 impl Arm {
@@ -52,6 +55,7 @@ impl Arm {
             Arm::LexicalEmbed => "lexical-embed",
             Arm::Backfill => "backfill",
             Arm::CausalGraph => "causal-graph",
+            Arm::CausalGraphV2 => "causal-graph-v2",
         }
     }
 
@@ -197,6 +201,24 @@ pub struct GateVerdict {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GateVerdictFile {
+    #[serde(flatten)]
+    pub base: GateVerdict,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c2: Option<GateVerdictC2>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GateVerdictC2 {
+    /// Same locked thresholds, evaluated with C := causal-graph-v2 (the v3
+    /// amendment's operative arm). Reported alongside, never replacing, the
+    /// original C1 gate row.
+    pub causal_graph_v2: ArmMetrics,
+    pub gate: GateChecks,
+    pub outcome: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateChecks {
     pub c_recall_at_1_ge_0_60: bool,
     pub c_recall_at_3_ge_0_80: bool,
