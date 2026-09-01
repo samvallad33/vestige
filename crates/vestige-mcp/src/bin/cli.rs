@@ -175,6 +175,15 @@ enum Commands {
     /// Run memory consolidation cycle
     Consolidate,
 
+    /// Apply pending storage migrations, or rehearse them on a copy first
+    Upgrade {
+        /// Copy the store to a temp directory, run every migration and strict
+        /// check against the copy, report what would happen, and leave the
+        /// original untouched.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Update Vestige binaries from the latest GitHub release
     Update {
         /// Install a specific release tag instead of latest (example: v2.1.27)
@@ -418,6 +427,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Stats { tagging, states } => run_stats(tagging, states),
         Commands::Health => run_health(),
         Commands::Consolidate => run_consolidate(),
+        Commands::Upgrade { dry_run } => run_upgrade(dry_run),
         Commands::Update {
             version,
             install_dir,
@@ -657,7 +667,13 @@ fn run_embeddings_install(
     let uses_local_artifacts = !profile.verified_model_artifact_hashes.is_empty();
     if !uses_local_artifacts {
         anyhow::bail!(
-            "'{}' is the released legacy Nomic profile and is not installable through the local-artifact workflow",
+            "'{}' is the released legacy Nomic profile and is not installable through the local-artifact workflow.\n\
+             Nomic is the built-in runtime, so it needs no install: a store on the legacy profile is repaired \
+             automatically when the MCP server starts (v1.x raw-768 vectors are Matryoshka-truncated to 256, \
+             issue #191) and any missing vectors are filled by the server's background backfill.\n\
+             `embeddings migrate --to <profile>` only accepts installed local-artifact profiles; \
+             run `vestige-cli embeddings list` to see legal targets, and `vestige-cli upgrade --dry-run` \
+             to rehearse an upgrade on a copy first.",
             profile_id
         );
     }
@@ -2116,13 +2132,17 @@ fn run_health() -> anyhow::Result<()> {
         "Active Embedding Coverage".white(),
         embedding_coverage
     );
+    // The CLI never starts an embedding runtime; the MCP server owns it. Saying
+    // "Not Ready" here read as a store-health verdict (issue #191) when it was
+    // only a statement about this process.
     println!(
         "{}: {}",
         "Embedding Service".white(),
         if storage.is_embedding_ready() {
             "Ready".green()
         } else {
-            "Not Ready".red()
+            "not started by the CLI (the MCP server runs the embedder; not a store-health verdict)"
+                .yellow()
         }
     );
 
@@ -2212,6 +2232,140 @@ fn run_health() -> anyhow::Result<()> {
 }
 
 /// Run consolidation cycle
+/// Mirrors `vestige_core::storage::sqlite::LEGACY_EMBEDDING_PROFILE_ID`; the
+/// id is frozen by definition (it names a released, immutable profile).
+const LEGACY_NOMIC_PROFILE_ID: &str = "nomic-v1.5-legacy-raw-256";
+
+/// The database this CLI invocation targets (`--data-dir` wins, then the
+/// platform default).
+fn cli_db_path() -> anyhow::Result<PathBuf> {
+    if let Some(path) = CLI_DB_PATH.get() {
+        return Ok(path.clone());
+    }
+    Ok(Storage::default_db_path()?)
+}
+
+/// Apply pending migrations, or rehearse them on a throwaway copy of the store.
+///
+/// A v1.x to v2.6.0 jump (issue #191) aborted at startup on a strict check
+/// that only fired once the real store was open; the only way to know in
+/// advance was to hand-copy the database and open the copy. `--dry-run` is
+/// that rehearsal as a command: copy the store and its WAL/SHM sidecars into
+/// a temp directory, report what the strict checks see on disk today, open the
+/// copy so every migration actually runs, and never touch the original.
+fn run_upgrade(dry_run: bool) -> anyhow::Result<()> {
+    let source = cli_db_path()?;
+    if !source.exists() {
+        anyhow::bail!("no store at {} (nothing to upgrade)", source.display());
+    }
+
+    if !dry_run {
+        println!("{}", "=== Vestige Upgrade ===".cyan().bold());
+        let storage = Storage::new(Some(source.clone()))?;
+        let stats = storage.get_stats()?;
+        println!("{} {}", "Migrated:".green().bold(), source.display());
+        println!("Total memories: {}", stats.total_nodes);
+        return Ok(());
+    }
+
+    println!(
+        "{}",
+        "=== Vestige Upgrade (dry run on a copy) ===".cyan().bold()
+    );
+    let scratch = std::env::temp_dir().join(format!(
+        "vestige-upgrade-dry-run-{}-{}",
+        chrono::Utc::now().format("%Y%m%dT%H%M%S"),
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scratch)?;
+    let copy = scratch.join("vestige.db");
+    std::fs::copy(&source, &copy)?;
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = PathBuf::from(format!("{}{suffix}", source.display()));
+        if sidecar.exists() {
+            std::fs::copy(&sidecar, PathBuf::from(format!("{}{suffix}", copy.display())))?;
+        }
+    }
+    println!("Source: {}", source.display());
+    println!("Copy:   {}", copy.display());
+    println!();
+
+    // Preflight reads the copy raw, before any migration runs, so the report
+    // describes the store exactly as it sits on disk today.
+    {
+        let preflight = rusqlite::Connection::open(&copy)?;
+        let schema_version: Option<i64> = preflight
+            .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .ok();
+        println!(
+            "Schema version on disk: {}",
+            schema_version
+                .map(|version| version.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        );
+        let mismatched: Vec<(String, i64, i64)> = preflight
+            .prepare(
+                "SELECT p.profile_id, p.embedding_dimension, COUNT(v.node_id) \
+                 FROM embedding_profiles p \
+                 JOIN embedding_profile_vectors v ON v.profile_id = p.profile_id \
+                 WHERE v.dimensions <> p.embedding_dimension \
+                    OR length(v.embedding) <> p.embedding_dimension * 4 \
+                 GROUP BY p.profile_id",
+            )
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap_or_default();
+        if mismatched.is_empty() {
+            println!("Embedding profiles: no vector/dimension mismatches on disk");
+        } else {
+            for (profile, declared, count) in &mismatched {
+                let verdict = if profile == LEGACY_NOMIC_PROFILE_ID {
+                    "repaired automatically on open (Matryoshka-truncated, issue #191)".green()
+                } else {
+                    "hard error on open (pinned profile; re-embed before upgrading)".red()
+                };
+                println!(
+                    "Embedding profile '{}': {} vectors disagree with the declared {} dims -> {}",
+                    profile, count, declared, verdict
+                );
+            }
+        }
+    }
+    println!();
+
+    match Storage::new(Some(copy.clone())) {
+        Ok(storage) => {
+            let stats = storage.get_stats()?;
+            println!("{}", "Migration on the copy: OK".green().bold());
+            println!("Memories after migration: {}", stats.total_nodes);
+            println!(
+                "Active embedding coverage: {}/{}",
+                stats.nodes_with_active_embeddings, stats.total_nodes
+            );
+        }
+        Err(error) => {
+            println!(
+                "{} {}",
+                "Migration on the copy: WOULD FAIL".red().bold(),
+                error
+            );
+            println!(
+                "Your original store was not modified. Please report this output at \
+                 https://github.com/samvallad33/vestige/issues"
+            );
+        }
+    }
+    println!();
+    println!("Original store untouched: {}", source.display());
+    let _ = std::fs::remove_dir_all(&scratch);
+    Ok(())
+}
+
 fn run_consolidate() -> anyhow::Result<()> {
     println!("{}", "=== Vestige Consolidation ===".cyan().bold());
     println!();
@@ -2248,6 +2402,13 @@ fn run_consolidate() -> anyhow::Result<()> {
         result.embeddings_generated
     );
     println!("{}: {}ms", "Duration".white().bold(), result.duration_ms);
+    if result.embeddings_generated == 0 && !storage.is_embedding_ready() {
+        println!(
+            "  {}",
+            "(the CLI runs without an embedding runtime; missing vectors are generated by the MCP server's background backfill on its next start)"
+                .yellow()
+        );
+    }
 
     println!();
     println!(
