@@ -19316,13 +19316,20 @@ mod tests {
             }
         }
 
-        // Corrupt the FTS index the way an interrupted rebuild does.
+        // Corrupt the FTS index the way an interrupted rebuild does. The
+        // damage is a FIXED byte pattern, not randomblob(): an unseeded random
+        // block sometimes wrecks the segment so badly that quick_check itself
+        // fails with SQLITE_NOMEM before the heal gate can classify the rows,
+        // and the store (correctly) refuses loudly. That path is documented
+        // shipped behavior, but it made this test flake in CI; a deterministic
+        // pattern exercises the rebuild path every run.
         {
             let conn = Connection::open(&path).expect("raw open");
-            conn.execute_batch(
-                "UPDATE knowledge_fts_data SET block = randomblob(200) \
-                 WHERE id = (SELECT id FROM knowledge_fts_data WHERE id > 1 LIMIT 1);",
-            )
+            let pattern = "A5".repeat(200);
+            conn.execute_batch(&format!(
+                "UPDATE knowledge_fts_data SET block = x'{pattern}' \
+                 WHERE id = (SELECT id FROM knowledge_fts_data WHERE id > 1 LIMIT 1);"
+            ))
             .expect("corrupt");
             let corrupt = conn
                 .execute_batch(
