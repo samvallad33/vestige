@@ -1439,6 +1439,13 @@ impl SqliteMemoryStore {
 
         // Apply migrations on writer only
         super::migrations::apply_migrations(&writer_conn)?;
+        // Issue #191: heal v1.x raw-768 vectors copied verbatim under the
+        // 256-dim legacy profile before any strict dimension check can abort
+        // startup. No-op on clean stores.
+        super::migrations::repair_legacy_raw_profile_vectors(
+            &writer_conn,
+            LEGACY_EMBEDDING_PROFILE_ID,
+        )?;
         writer_conn.execute_batch("PRAGMA optimize = 0x10002;")?;
         let after_migrations = Self::run_integrity_checks(&writer_conn, "post-migration")?;
         let startup_checkpoint =
