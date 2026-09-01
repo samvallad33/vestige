@@ -1,0 +1,183 @@
+{
+  "mode": "rag-bus",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "/Users/entity002/vestige-launch-private/flagship-demo/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 104615,
+    "output": 3665,
+    "total": 108280
+  },
+  "fleet_cost_usd": 0.08815,
+  "cost_rate": {
+    "input_per_mtok": 0.72,
+    "output_per_mtok": 3.5
+  },
+  "fleet_wall_clock_seconds": 34.16,
+  "fleet_iterations_total": 19,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 3,
+  "memory_tool": "rag_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.7
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 3,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-rag-bus-a0.json",
+    "transcript-rag-bus-a1.json",
+    "transcript-rag-bus-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_wren",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_vela",
+    "a1": "kid:k_vela",
+    "a2": "kid:k_vela"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "rag-bus",
+      "tokens": {
+        "input": 31386,
+        "output": 1097,
+        "total": 32483
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 26.14,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": true,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\" because the \"externalize secrets\" refactor left both the identity-service `activeKid` and ledger-service `trustedKid` config fields blank. The signer (identity-service) couldn't mint tokens and the verifier (ledger-service) couldn't verify them. Per team memory (OPS-522), the platform's active signing key is `k_vela`. I set `activeKid = \"k_vela\"` in identity-service/src/config.ts and `trustedKid = \"k_vela\"` in ledger-service/src/config.ts so both services select the same material from the shared keyring. The test now passes (exit code 0).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "rag-bus",
+      "tokens": {
+        "input": 40235,
+        "output": 1354,
+        "total": 41589
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 33.29,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": true,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\". Root cause: the \"externalize secrets\" refactor left both identity-service/src/config.ts (activeKid) and ledger-service/src/config.ts (trustedKid) blank. signSession threw before minting because activeKid was empty; even if minting worked, verifyToken would have failed for the same reason on the ledger side.\n\nFix: set both config fields to \"k_vela\" \u2014 the platform's shipped key id, confirmed by team memory note OPS-522 (staging box recovered after resetting key id to k_vela). Both must match so the HMAC the issuer signs with equals the one the ledger verifies against. I kept env overrides (MERIDIAN_IDENTITY_KID / MERIDIAN_LEDGER_KID) for production. The canonical claim strings on both services already agreed, so no other changes were needed. run_tests now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "rag-bus",
+      "tokens": {
+        "input": 32994,
+        "output": 1214,
+        "total": 34208
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 28.11,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": true,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\". Root cause: the \"externalize secrets\" refactor left both identity-service/src/config.ts (activeKid) and ledger-service/src/config.ts (trustedKid) blank, so signSession threw before minting a token. Fix: set both defaults to \"k_vela\" \u2014 the platform key the ledger trusts (confirmed by memory OPS-522). Both must be the same kid since the identity issuer signs with one and the ledger verifies with the other. Verified with run_tests: the charge test now exits 0.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-26T05:20:54Z"
+}

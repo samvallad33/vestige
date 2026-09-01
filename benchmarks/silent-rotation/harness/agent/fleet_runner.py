@@ -1164,8 +1164,9 @@ def _integrate(
     shutil.copytree(
         pristine_snapshot, integration_repo, symlinks=True,
         ignore=shutil.ignore_patterns(
-            ".vestige-seed.sh", ".vestige-demo-db", ".vestige-demo-data",
-            ".repo-snapshot", ".fixtures", "prod-corpus", "*.db",
+            ".vestige-seed.sh", ".vestige-seed-noedge.sh", ".vestige-demo-db",
+            ".vestige-demo-data", ".repo-snapshot", ".fixtures", "prod-corpus",
+            "*.db",
         ),
     )
 

@@ -1,0 +1,193 @@
+{
+  "mode": "sync-noedge",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "/Users/entity002/vestige-launch-private/flagship-demo/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 136517,
+    "output": 4523,
+    "total": 141040
+  },
+  "fleet_cost_usd": 0.114123,
+  "cost_rate": {
+    "input_per_mtok": 0.72,
+    "output_per_mtok": 3.5
+  },
+  "fleet_wall_clock_seconds": 38.58,
+  "fleet_iterations_total": 22,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "memory_tool": "vestige_backfill",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.5
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 3,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-sync-noedge-a0.json",
+    "transcript-sync-noedge-a1.json",
+    "transcript-sync-noedge-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "failed_merge_conflict",
+  "integrated_tests_pass": false,
+  "prod_replay_pass": null,
+  "production_replay": {
+    "ran": false,
+    "reason": "integrated tree is red"
+  },
+  "merge_conflict_count": 2,
+  "merge_conflicts": [
+    {
+      "file": "identity-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0",
+          "a1"
+        ],
+        "1": [
+          "a2"
+        ]
+      }
+    },
+    {
+      "file": "ledger-service/src/config.ts",
+      "kind": "same_file_divergent_edits",
+      "distinct_orders": [
+        "unparseable",
+        "unparseable"
+      ],
+      "agents": {
+        "0": [
+          "a0",
+          "a1"
+        ],
+        "1": [
+          "a2"
+        ]
+      }
+    }
+  ],
+  "cross_file_divergence": true,
+  "fix_directions": {
+    "a0": "kid:k_pavo",
+    "a1": "kid:k_pavo",
+    "a2": "kid:k_sirius"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync-noedge",
+      "tokens": {
+        "input": 43014,
+        "output": 1524,
+        "total": 44538
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 37.22,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The failing e2e charge test was caused by the \"externalize-secrets refactor\" blanking both identity-service `config.activeKid` and ledger-service `ledgerConfig.trustedKid` to \"\". `signSession` threw \"no active signing key selected\" before any token was minted. Fix: set BOTH configs to the same keyring kid (\"k_pavo\", the first provisioned key in @meridian/shared KEYRING). Both must agree because the token header carries no kid and the verifier resolves its key purely from its own trustedKid config. No changes to the canonical claim recipe or token layout were needed \u2014 both services already produced identical canonical strings. Test now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync-noedge",
+      "tokens": {
+        "input": 52483,
+        "output": 1583,
+        "total": 54066
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 37.7,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync-noedge",
+      "tokens": {
+        "input": 41020,
+        "output": 1416,
+        "total": 42436
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 35.3,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "Root cause: the \"externalize-secrets\" refactor blanked both `identity-service/src/config.ts` `activeKid` and `ledger-service/src/config.ts` `trustedKid`, causing signSession to throw \"no active signing key selected\". Fix: set both to the same keyring kid `k_sirius` (a valid key in @meridian/shared KEYRING) so the signer and verifier use the same HMAC key. Verified with run_tests (exit 0).",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-26T05:16:48Z"
+}

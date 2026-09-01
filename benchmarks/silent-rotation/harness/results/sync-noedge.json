@@ -1,0 +1,183 @@
+{
+  "mode": "sync-noedge",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "/Users/entity002/vestige-launch-private/flagship-demo/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 167764,
+    "output": 5274,
+    "total": 173038
+  },
+  "fleet_cost_usd": 0.139249,
+  "cost_rate": {
+    "input_per_mtok": 0.72,
+    "output_per_mtok": 3.5
+  },
+  "fleet_wall_clock_seconds": 47.67,
+  "fleet_iterations_total": 24,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 3,
+  "agents_used_vestige_log": 3,
+  "memory_tool": "vestige_backfill",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.4
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 3,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-sync-noedge-a0.json",
+    "transcript-sync-noedge-a1.json",
+    "transcript-sync-noedge-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_dorado",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_polaris",
+    "a1": "kid:k_polaris",
+    "a2": "kid:k_polaris"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "sync-noedge",
+      "tokens": {
+        "input": 57071,
+        "output": 1681,
+        "total": 58752
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 40.32,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "sync-noedge",
+      "tokens": {
+        "input": 60977,
+        "output": 2069,
+        "total": 63046
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 46.79,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "sync-noedge",
+      "tokens": {
+        "input": 49716,
+        "output": 1524,
+        "total": 51240
+      },
+      "iterations": 8,
+      "wall_clock_seconds": 37.92,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": true,
+      "used_vestige_log": true,
+      "used_rag_search": false,
+      "memory_tool_used": "vestige_backfill",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-26T05:28:17Z"
+}

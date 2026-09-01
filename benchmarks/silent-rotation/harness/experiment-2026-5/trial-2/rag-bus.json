@@ -1,0 +1,183 @@
+{
+  "mode": "rag-bus",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "/Users/entity002/vestige-launch-private/flagship-demo/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 106847,
+    "output": 3911,
+    "total": 110758
+  },
+  "fleet_cost_usd": 0.090618,
+  "cost_rate": {
+    "input_per_mtok": 0.72,
+    "output_per_mtok": 3.5
+  },
+  "fleet_wall_clock_seconds": 36.04,
+  "fleet_iterations_total": 19,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 3,
+  "memory_tool": "rag_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.8
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 3,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-rag-bus-a0.json",
+    "transcript-rag-bus-a1.json",
+    "transcript-rag-bus-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 2,
+    "other": 1
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_bellatrix",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_atlas",
+    "a1": "kid_unset",
+    "a2": "kid:k_atlas"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "rag-bus",
+      "tokens": {
+        "input": 40415,
+        "output": 1315,
+        "total": 41730
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 31.14,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": true,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\" because the externalize-secrets refactor left both identity-service's `activeKid` and ledger-service's `trustedKid` config values blank. Fixed by defaulting both to \"k_atlas\" (the platform's active/trusted signing key per team memory OPS-522), with ACTIVE_KID/TRUSTED_KID env-var overrides. Both services must use the same kid since the token signature is an HMAC over the canonical claim string using the keyring-selected key. The canonical claim string implementations already matched across both services. Tests now pass (exit code 0).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "rag-bus",
+      "tokens": {
+        "input": 33438,
+        "output": 1394,
+        "total": 34832
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 35.19,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": true,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\" because both identity-service/src/config.ts (activeKid) and ledger-service/src/config.ts (trustedKid) were left blank by the externalize-secrets refactor. Restored the canonical platform key id `k_atlas` (confirmed by OPS-522 in team memory) as the in-source default in BOTH configs, while still allowing env-var override (MERIDIAN_IDENTITY_KID / MERIDIAN_LEDGER_KID). Both sides now agree on the same HMAC key, so the minted token verifies at the ledger and the charge returns 200. The canonical claim-string recipes already matched (sub, plan, iat, exp), so no changes were needed there. Verified with run_tests (exit 0).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "rag-bus",
+      "tokens": {
+        "input": 32994,
+        "output": 1202,
+        "total": 34196
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 27.54,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": true,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test was failing because both identity-service and ledger-service had their key ids left blank after an \"externalize secrets\" refactor \u2014 identity-service couldn't mint tokens (\"no active signing key selected\") and ledger-service couldn't verify them. RAG memory (OPS-522) confirmed k_atlas is the platform's active signing key. Fix: set activeKid=\"k_atlas\" in identity-service/src/config.ts and trustedKid=\"k_atlas\" in ledger-service/src/config.ts. Both services already had matching canonical claim string implementations, and the gateway passes tokens through verbatim, so no other changes were needed. Test now exits 0.",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-26T05:18:15Z"
+}

@@ -1,0 +1,34 @@
+============================================================
+  SILENT ROTATION — N-TRIAL RANDOMIZED BENCHMARK (per-trial)
+============================================================
+  trial  correct key    ANCHOR-DENSE              backfill
+  --------------------------------------------------------
+  1      k_yildun       green_but_voids_prod      ?
+============================================================
+                                    ANCHOR-DENSE
+  Total tokens                           117,539
+  Total cost (USD)                       $0.0983
+  Experiment total     $0.0983 (117,539 tokens across 1 arms)
+============================================================
+  ANCHOR-DENSE                 shipped correct+prod-safe: 0/1
+
+  MEMORY-LAYER HEALTH (trials where the arm's backend actually answered):
+    ANCHOR-DENSE                 live 1/1  dead 0/1  no-data 0/1   [OK]
+  keyring size (K): 50  ->  blind-guess success = 1/50 = 2.0%
+  p-value (sync successes vs blind-guess null p0=1/50): 1
+============================================================
+  RESULT: anarchy 0/1, sync (Vestige) 0/1.
+  This run did NOT produce clean separation -- report the numbers as
+  measured. Do not reuse the clean-separation headline.
+============================================================
+  METHOD NOTES (must be published alongside any number above):
+   - The Vestige arm additionally has a vestige_log WRITE tool for fleet
+     coordination that no competitor arm is given. Transcripts show the
+     key was recovered by the read path (backfill) before any log write.
+   - Vestige's causal join follows a shared 'active_key' tag that the
+     seed places on the cause and the failure. Competitor arms receive
+     the corpus with tag metadata stripped.
+   - Any arm whose memory layer returned zero successful retrievals is
+     memory_unavailable, NOT a retrieval loss. Check memory_layer_alive
+     in each arm's JSON before quoting its score.
+============================================================

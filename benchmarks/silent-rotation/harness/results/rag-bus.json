@@ -1,0 +1,183 @@
+{
+  "mode": "rag-bus",
+  "fleet_size": 3,
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.2",
+  "task": "make the failing end-to-end charge test pass",
+  "repo": "/Users/entity002/vestige-launch-private/flagship-demo/torture-v3.5",
+  "measured": true,
+  "fleet_tokens": {
+    "input": 107505,
+    "output": 3733,
+    "total": 111238
+  },
+  "fleet_cost_usd": 0.090469,
+  "cost_rate": {
+    "input_per_mtok": 0.72,
+    "output_per_mtok": 3.5
+  },
+  "fleet_wall_clock_seconds": 37.12,
+  "fleet_iterations_total": 19,
+  "agents_local_pass": 3,
+  "agents_errored": 0,
+  "tokens_uncounted": false,
+  "agents_used_vestige_backfill": 0,
+  "agents_used_vestige_log": 3,
+  "memory_tool": "rag_search",
+  "memory_prewarm": {
+    "attempted": true,
+    "ok": true,
+    "error": "",
+    "seconds": 0.8
+  },
+  "agents_memory_alive": 3,
+  "retrieval_ok_total": 3,
+  "retrieval_err_total": 0,
+  "retrieval_empty_total": 0,
+  "retrieval_error_samples": [],
+  "memory_layer_alive": true,
+  "memory_unavailable": false,
+  "transcripts": [
+    "transcript-rag-bus-a0.json",
+    "transcript-rag-bus-a1.json",
+    "transcript-rag-bus-a2.json"
+  ],
+  "demo_profile": "keyring",
+  "fix_direction_counts": {
+    "correct": 0,
+    "wrong": 3,
+    "other": 0
+  },
+  "fleet_verdict": "green_but_voids_prod",
+  "integrated_tests_pass": true,
+  "prod_replay_pass": false,
+  "production_replay": {
+    "ok": false,
+    "verified": 0,
+    "total": 5,
+    "failures": [
+      {
+        "sub": "user_1001",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1002",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1003",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1004",
+        "error": "signature mismatch"
+      },
+      {
+        "sub": "user_1005",
+        "error": "signature mismatch"
+      }
+    ],
+    "signed_under": "k_dorado",
+    "ran": true
+  },
+  "merge_conflict_count": 0,
+  "merge_conflicts": [],
+  "cross_file_divergence": false,
+  "fix_directions": {
+    "a0": "kid:k_quartz",
+    "a1": "kid:k_quartz",
+    "a2": "kid:k_quartz"
+  },
+  "reasoning_effort": null,
+  "truncated": false,
+  "agents": [
+    {
+      "agent_id": "a0",
+      "mode": "rag-bus",
+      "tokens": {
+        "input": 34869,
+        "output": 1474,
+        "total": 36343
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 36.25,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": true,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\" because the \"externalize secrets\" refactor left both identity-service (activeKid) and ledger-service (trustedKid) configs blank. Fix: set both to default to \"k_quartz\" \u2014 the platform-default key from the shared keyring (corroborated by team memory, ticket OPS-522 which reset staging to k_quartz) \u2014 with env overrides MERIDIAN_ACTIVE_KID / MERIDIAN_TRUSTED_KID for KMS injection in production. The sign and verify sides must use the same kid; canonical claim strings, HS256 alg, and verbatim gateway forwarding were already correct, so key selection was the sole break. Test now passes (exit 0).",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a1",
+      "mode": "rag-bus",
+      "tokens": {
+        "input": 33004,
+        "output": 1028,
+        "total": 34032
+      },
+      "iterations": 6,
+      "wall_clock_seconds": 24.94,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": true,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed with \"no active signing key selected\" because both identity-service (activeKid) and ledger-service (trustedKid) had blank key ids after the \"externalize-secrets\" refactor. Fix: set both to \"k_quartz\" (the key id referenced in OPS-522 team memory) in identity-service/src/config.ts and ledger-service/src/config.ts. The canonical claim strings already matched between services, so only the key id selection needed fixing. Test now exits 0.",
+      "turn_error": ""
+    },
+    {
+      "agent_id": "a2",
+      "mode": "rag-bus",
+      "tokens": {
+        "input": 39632,
+        "output": 1231,
+        "total": 40863
+      },
+      "iterations": 7,
+      "wall_clock_seconds": 30.97,
+      "status": "fixed",
+      "local_tests_pass": true,
+      "files_written": [
+        "identity-service/src/config.ts",
+        "ledger-service/src/config.ts"
+      ],
+      "out_of_bounds_writes": [],
+      "used_vestige_backfill": false,
+      "used_vestige_log": true,
+      "used_rag_search": true,
+      "memory_tool_used": "rag_search",
+      "retrieval_ok_count": 1,
+      "retrieval_err_count": 0,
+      "retrieval_empty_count": 0,
+      "retrieval_errors": [],
+      "memory_layer_alive": true,
+      "finish_summary": "The end-to-end charge test failed because the \"externalize-secrets\" refactor left both key selectors blank: identity-service config.activeKid and ledger-service config.trustedKid were both empty strings. This caused signSession() to throw \"no active signing key selected\" before a token could even be minted.\n\nFix: Set both activeKid (identity-service/src/config.ts) and trustedKid (ledger-service/src/config.ts) to \"k_quartz\" \u2014 the key the platform originally shipped with (confirmed by team memory OPS-522). Both now default to k_quartz with env-variable overrides (IDENTITY_ACTIVE_KID / LEDGER_TRUSTED_KID) for production. This ensures the issuer signs with the same key the verifier trusts. No other changes were needed: the canonical claim strings already match between services, and the gateway passes the token verbatim.\n\nVerified: run_tests exits 0, the charge test passes (200, ok=true, chargedTo=user_42, amountCents=1999).",
+      "turn_error": ""
+    }
+  ],
+  "timestamp": "2026-07-26T05:27:21Z"
+}

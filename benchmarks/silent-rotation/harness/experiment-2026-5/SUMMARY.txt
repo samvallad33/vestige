@@ -1,0 +1,42 @@
+================================================================================================================
+  SILENT ROTATION — N-TRIAL RANDOMIZED BENCHMARK (per-trial)
+================================================================================================================
+  trial  correct key    RAG-BUS                   SYNC-NOEDGE               ANCHOR-DENSE              backfill
+  ------------------------------------------------------------------------------------------------------------
+  1      k_yildun       green_but_voids_prod      failed_merge_conflict     green_but_voids_prod      ?
+  2      k_bellatrix    green_but_voids_prod      green_but_voids_prod      failed_still_red          ?
+  3      k_wren         green_but_voids_prod      failed_merge_conflict     green_but_voids_prod      ?
+  4      k_indus        green_but_voids_prod      green_but_voids_prod      failed_merge_conflict     ?
+  5      k_dorado       green_but_voids_prod      green_but_voids_prod      failed_still_red          ?
+================================================================================================================
+                                         RAG-BUS               SYNC-NOEDGE              ANCHOR-DENSE
+  Total tokens                           572,667                   753,361                   598,012
+  Total cost (USD)                       $0.4655                   $0.6125                   $0.5058
+  Experiment total     $1.5837 (1,924,040 tokens across 3 arms)
+================================================================================================================
+  RAG-BUS                      shipped correct+prod-safe: 0/5
+  SYNC-NOEDGE                  shipped correct+prod-safe: 0/5
+  ANCHOR-DENSE                 shipped correct+prod-safe: 0/5
+
+  MEMORY-LAYER HEALTH (trials where the arm's backend actually answered):
+    RAG-BUS                      live 5/5  dead 0/5  no-data 0/5   [OK]
+    SYNC-NOEDGE                  live 5/5  dead 0/5  no-data 0/5   [OK]
+    ANCHOR-DENSE                 live 5/5  dead 0/5  no-data 0/5   [OK]
+  keyring size (K): 50  ->  blind-guess success = 1/50 = 2.0%
+  p-value (sync successes vs blind-guess null p0=1/50): 1
+================================================================================================================
+  RESULT: anarchy 0/5, sync (Vestige) 0/5.
+  This run did NOT produce clean separation -- report the numbers as
+  measured. Do not reuse the clean-separation headline.
+================================================================================================================
+  METHOD NOTES (must be published alongside any number above):
+   - The Vestige arm additionally has a vestige_log WRITE tool for fleet
+     coordination that no competitor arm is given. Transcripts show the
+     key was recovered by the read path (backfill) before any log write.
+   - Vestige's causal join follows a shared 'active_key' tag that the
+     seed places on the cause and the failure. Competitor arms receive
+     the corpus with tag metadata stripped.
+   - Any arm whose memory layer returned zero successful retrievals is
+     memory_unavailable, NOT a retrieval loss. Check memory_layer_alive
+     in each arm's JSON before quoting its score.
+================================================================================================================

@@ -130,7 +130,12 @@ _SKIP_DIRS = {
 # script contains the SEEDED MEMORY (i.e. the answer) and must never be readable
 # from the checkout -- the answer is only supposed to reach the agent through the
 # Vestige backfill tool, not by cat-ing a file.
-_SKIP_FILES = {".vestige-seed.sh"}
+# Both seed variants are stripped from every agent checkout (_CHECKOUT_IGNORE
+# in fleet_runner.py), so neither is agent-readable and the leak audit excludes
+# them on the same rationale. The noedge twin was added for the pre-registered
+# sync-noedge ablation and tripped the audit until listed here -- the audit
+# catching a brand-new answer-bearing file was correct behavior.
+_SKIP_FILES = {".vestige-seed.sh", ".vestige-seed-noedge.sh"}
 
 
 def _is_skipped(rel: Path) -> bool:
