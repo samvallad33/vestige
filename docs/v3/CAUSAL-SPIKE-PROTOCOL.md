@@ -106,4 +106,59 @@ numbers get published to this document unedited.
 
 ## Results
 
-*(append-only; empty at preregistration)*
+### Run 2026-09-01T04:51:09Z — seed=20260831 (official)
+
+- HEAD at measurement: `7a2dc8da1308e6bc6e08a01447cb2a0d8c183a60` (protocol + crate scaffold). Harness sources used for this run were uncommitted on `spike/causal-graph` at measurement time.
+- Stores: 3 × 30 planted pairs (90), 10 multi-hop. Dataset written under `benchmarks/causal-spike/data/` (gitignored).
+- Arm A search_mode: `fts_keyword` (embedding hybrid compiled in vestige-core; this run's `SearchResult`s had no semantic scores).
+- Metrics JSON: `benchmarks/causal-spike/results/*-7a2dc8d-20260901T045109Z.json`
+
+| Arm | recall@1 | recall@3 | MRR | sep vs A | multi-hop r@3 | mean ms/query |
+|-----|----------|----------|-----|----------|---------------|---------------|
+| A lexical | 0.00 | 0.00 | 0.00 | — | — | 1.94 |
+| B backfill | 1.00 | 1.00 | 1.00 | 1.00 | — | 3.75 |
+| C causal-graph | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 (10/10) | 0.005 |
+
+Pass gate (locked): C r@1 ≥ 0.60 ✓, C r@3 ≥ 0.80 ✓, C sep vs A ≥ 0.40 ✓, C r@3 ≥ B r@3 ✓, C multi-hop r@3 ≥ 0.50 ✓.
+
+**Outcome: PASS.** Licenses: receipt-backed upstream candidates that similarity search misses. Does not license automatic root cause.
+
+Post-hoc (see erratum run 2026-09-01T05:21:40Z): Arm A candidate lists were empty for all 90 queries. The printed PASS is arithmetically true against a null baseline and does not lock v3.0 scope.
+
+A prior smoke with seed=1 (not the preregistered dataset) is in `results/*-20260901T045017Z.json` and is not this gate.
+
+### Run 2026-09-01T05:21:40Z — same frozen stores, harness errata (not a new seed)
+
+- Same seed=20260831 stores. `dataset_id=8e199470e4807ecd`. No regeneration.
+- HEAD stamp still `7a2dc8d` (harness still uncommitted). `embedding_ready=false` on every store (`node_embeddings=0`).
+- Arm A kept as protocol `hybrid_search` (now labeled `fts_keyword_and`). Extra disclosure arm `lexical-or` = `Storage::search` (FTS OR+BM25); not in the locked gate.
+- Metrics JSON: `benchmarks/causal-spike/results/*-7a2dc8d-20260901T052140Z.json`
+- Runs: `benchmarks/causal-spike/data/runs-erratum-harness/` (gitignored)
+
+| Arm | recall@1 | recall@3 | MRR | sep vs A | sep vs OR | multi-hop r@3 | mean list len | empty-list rate | mean ms/query | amortized ms/query |
+|-----|----------|----------|-----|----------|-----------|---------------|---------------|-----------------|---------------|--------------------|
+| A lexical (`fts_keyword_and`) | 0.00 | 0.00 | 0.00 | — | — | 0.00 | 0.00 | 1.00 | 2.03 | — |
+| A′ lexical-or (`fts_or_bm25`) | 0.00 | 0.00 | 0.00 | 0.00 | — | 0.00 | 10.00 | 0.00 | 2.08 | — |
+| B backfill | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 0.00 (0/10) | 1.00 | 0.00 | 3.96 | — |
+| C causal-graph | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 (10/10) | 1.11 | 0.00 | 0.006 | 21.70 (incl. 1953 ms accumulation) |
+
+Locked gate arithmetic (unchanged thresholds): C r@1 ≥ 0.60 ✓, C r@3 ≥ 0.80 ✓, C sep vs A ≥ 0.40 ✓, C r@3 ≥ B r@3 ✓, C multi-hop r@3 ≥ 0.50 ✓.
+
+**Outcome: INVALID-BASELINE.** Arm A is still a null function (empty lists). The OR+BM25 disclosure arm returns 10 candidates per query and still recovers 0/90 planted causes, so the *ranking* moat vs a live lexical path is real — but the locked gate compares against Arm A, and a PASS against empty lists is refused. B's list length is exactly 1.00 (only the planted cause is backward-and-entity-eligible). C's 1.11 is that cause plus the root on the 10 multi-hop pairs. Claim licensed if this were a pass: receipt-backed upstream candidates that similarity search misses — NEVER automatic root cause.
+
+### Errata
+
+- SQLite row IDs are UUID v4 from `Storage::ingest`; identical *content* across reseeds, not identical DB bytes.
+- Arm C accumulation is two passes (pre-run disclosure). Pass 1 persists `backfill_candidate` edges from every `looks_like_failure` memory. Pass 2 re-runs backfill with `manual=true` from every quiet memory promoted in pass 1, so `root → intermediate` edges exist for intermediates that carry no failure vocabulary. Pass 2 uses no ground truth: its source set is derived solely from pass-1 output. Without pass 2, multi-hop recovery is unreachable by construction and gate check 4 is undefined. This is not PCMCI / transfer entropy.
+- Protocol Arm A is `hybrid_search`. Its keyword leg is FTS5 **implicit AND**. On this dataset that returns zero candidates after self-filtering. `Storage::search` (OR+BM25) is reported as extra arm `lexical-or` and is not substituted into the locked gate.
+- If Arm A `empty_list_rate == 1.0`, `score` emits `INVALID-BASELINE` rather than PASS, even when the five locked checks are arithmetically true.
+- Persisted edge strength is `score / (1 + score)` so `EVIDENCE_FLOOR=0.2` is on a (0,1) scale. Typical backfill scores are ≥ 1.0, so squashed strength is ≥ 0.5; the floor still does not reject those edges.
+- Arm C query timer excludes the accumulation pass. Publish both `mean_wall_clock_ms` and `amortized_ms_per_query`.
+- Each arm runs against a per-arm scratch copy of the store (`{stem}.{arm}.scratch.db`) so Arm C cannot mutate the seeded artifact.
+- Multi-hop recall@3 is reported for every arm when the 10-root subset is present. The locked gate still reads C's number. Measured: B = 0/10, C = 10/10.
+- `score` hard-errors on unparseable run JSON, missing protocol arms, duplicate `(arm, failure_id)`, extra/missing failure ids, and `dataset_id` mismatch. Silent skips are a p-hacking vector and are not allowed.
+- `.gitignore` ignores `*.db` / wal / shm / `data/runs/` / `data/runs-*/` only. `manifest.json` and `store-*/failures.json` are committable.
+- Official dataset fingerprint `dataset_id=8e199470e4807ecd` (FNV-1a of the sorted 90 failure ids) is recorded on the manifest, each `failures.json`, and every run. Metadata only — stores were not regenerated.
+- Verdict artifacts carry `claim_boundary` verbatim plus `claim_never_licensed: "automatic root cause"`.
+- A store holds 510 pair-memories plus 3–4 roots (513 or 514), 1540 across the three stores — not ~480.
+- **Not changed (needs a new preregistered generation, Sam's call):** entity chatter is still all *after* the failure, so B/C have no backward competitor sharing the entity. Cause/failure templates still share stopwords; failure bodies keep the identifier in tags only. Do not rewrite planted text on the frozen 20260831 stores.

@@ -6,6 +6,7 @@ members = [
     "crates/vestige-mcp",
     "tests/e2e",
     "tests/phase_1",
+    "benchmarks/causal-spike",
 ]
 exclude = [
     "fastembed-rs",

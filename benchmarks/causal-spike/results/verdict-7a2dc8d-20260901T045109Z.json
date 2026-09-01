@@ -1,0 +1,55 @@
+{
+  "commit": "7a2dc8da1308e6bc6e08a01447cb2a0d8c183a60",
+  "seed": 20260831,
+  "lexical": {
+    "arm": "lexical",
+    "commit": "7a2dc8da1308e6bc6e08a01447cb2a0d8c183a60",
+    "seed": 20260831,
+    "n_pairs": 90,
+    "recall_at_1": 0.0,
+    "recall_at_3": 0.0,
+    "mrr": 0.0,
+    "mean_wall_clock_ms": 1.9369703666666664,
+    "search_mode": "fts_keyword",
+    "n_multihop": 10,
+    "multihop_recall_at_3": null,
+    "separation_rate_vs_lexical": null
+  },
+  "backfill": {
+    "arm": "backfill",
+    "commit": "7a2dc8da1308e6bc6e08a01447cb2a0d8c183a60",
+    "seed": 20260831,
+    "n_pairs": 90,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "mrr": 1.0,
+    "mean_wall_clock_ms": 3.754264399999999,
+    "search_mode": "retroactive_backfill",
+    "n_multihop": 10,
+    "multihop_recall_at_3": null,
+    "separation_rate_vs_lexical": 1.0
+  },
+  "causal_graph": {
+    "arm": "causal-graph",
+    "commit": "7a2dc8da1308e6bc6e08a01447cb2a0d8c183a60",
+    "seed": 20260831,
+    "n_pairs": 90,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "mrr": 1.0,
+    "mean_wall_clock_ms": 0.005497177777777775,
+    "search_mode": "causal_graph_v1",
+    "n_multihop": 10,
+    "multihop_recall_at_3": 1.0,
+    "separation_rate_vs_lexical": 1.0
+  },
+  "gate": {
+    "c_recall_at_1_ge_0_60": true,
+    "c_recall_at_3_ge_0_80": true,
+    "c_separation_vs_a_ge_0_40": true,
+    "c_recall_at_3_ge_b": true,
+    "c_multihop_recall_at_3_ge_0_50": true
+  },
+  "outcome": "PASS",
+  "claim_licensed_if_pass": "receipt-backed upstream candidates that similarity search misses"
+}

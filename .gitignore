@@ -160,3 +160,10 @@ blackbox-proof-*/*.jsonl
 # Local agent tooling — never commit
 /.codex/
 /.agents/
+
+# Causal-spike SQLite stores + scratch. Manifest, failures.json, and results/ are committed.
+benchmarks/causal-spike/data/**/*.db
+benchmarks/causal-spike/data/**/*.db-wal
+benchmarks/causal-spike/data/**/*.db-shm
+benchmarks/causal-spike/data/runs/
+benchmarks/causal-spike/data/runs-*/

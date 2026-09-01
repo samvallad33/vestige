@@ -1,0 +1,931 @@
+{
+  "protocol": "docs/v3/CAUSAL-SPIKE-PROTOCOL.md",
+  "preregistered": "2026-08-31",
+  "seed": 20260831,
+  "t0": "2026-08-31T00:00:00Z",
+  "claim_boundary": "receipt-backed upstream candidates that similarity search misses \u2014 NEVER automatic root cause",
+  "stores": [
+    {
+      "id": "store-0",
+      "db": "store-0/vestige.db",
+      "failures_file": "store-0/failures.json",
+      "pairs": [
+        {
+          "pair_id": "s0-p00",
+          "cause_id": "d9b354e4-eda7-46c3-99a4-4da3eb98b4d2",
+          "failure_id": "be1c619c-29cb-468a-a54e-f2a2082a35bc",
+          "root_id": "84b1eaee-16eb-42cf-a876-d5332e91885f",
+          "entity": "SPIKE0_CFG_00",
+          "bridge_entity": "SPIKE0_BRG_00",
+          "cause_lag_days": 11,
+          "multihop": true
+        },
+        {
+          "pair_id": "s0-p01",
+          "cause_id": "54059541-d8ad-46ed-94a8-1ade6b6dd74f",
+          "failure_id": "6a867e49-a513-4c1e-a3e3-cac374a7f4a9",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_01",
+          "bridge_entity": null,
+          "cause_lag_days": 9,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p02",
+          "cause_id": "52cb89d3-0b16-411b-9959-f7091079da9e",
+          "failure_id": "37c92948-b614-40d1-8f4f-e90cc956cbfd",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_02",
+          "bridge_entity": null,
+          "cause_lag_days": 40,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p03",
+          "cause_id": "a8c1e648-a494-425b-97d8-288f53c3bec3",
+          "failure_id": "e990dcd4-4f91-4ed6-b6a7-ac6a502c4a86",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_03",
+          "bridge_entity": null,
+          "cause_lag_days": 34,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p04",
+          "cause_id": "5b075a58-3ebd-4149-80cd-e88d77b4d58e",
+          "failure_id": "6c516445-4804-402d-94c8-6cf42ad259c8",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_04",
+          "bridge_entity": null,
+          "cause_lag_days": 10,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p05",
+          "cause_id": "1fe022ce-2ff0-42e9-b699-a68363829380",
+          "failure_id": "74f4b691-66fc-4e36-9073-6094f01ce5d9",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_05",
+          "bridge_entity": null,
+          "cause_lag_days": 27,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p06",
+          "cause_id": "c746927b-1859-46ef-b701-165b5cae9b51",
+          "failure_id": "7fca7b24-6cba-4503-8bcb-8429120c5991",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_06",
+          "bridge_entity": null,
+          "cause_lag_days": 40,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p07",
+          "cause_id": "073cbd35-7455-4fd9-9cb5-f70ffff905d3",
+          "failure_id": "45c7cf2c-9118-4559-afc1-0ab3b2273f68",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_07",
+          "bridge_entity": null,
+          "cause_lag_days": 21,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p08",
+          "cause_id": "c9d45878-2175-4d3b-be0c-9dd92ed82e79",
+          "failure_id": "59d5a72b-d62e-41ba-ada6-a01a5b8ff5f0",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_08",
+          "bridge_entity": null,
+          "cause_lag_days": 33,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p09",
+          "cause_id": "c98e0109-fba9-4025-a736-655aa9fe7171",
+          "failure_id": "895f23f1-bd02-4a95-87b8-b4820ed0b5c8",
+          "root_id": "df2a59f2-8ad6-450c-b28b-62534c81cbce",
+          "entity": "SPIKE0_CFG_09",
+          "bridge_entity": "SPIKE0_BRG_09",
+          "cause_lag_days": 28,
+          "multihop": true
+        },
+        {
+          "pair_id": "s0-p10",
+          "cause_id": "a20da083-faf7-4736-b08a-1efc88c36fe1",
+          "failure_id": "e5473e5f-6b35-4740-bb25-f21e95462ff2",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_10",
+          "bridge_entity": null,
+          "cause_lag_days": 33,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p11",
+          "cause_id": "cbeaf51f-8cad-4042-aa0f-2622a6b90157",
+          "failure_id": "ba841c77-1d59-40d6-8c00-5546476f74da",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_11",
+          "bridge_entity": null,
+          "cause_lag_days": 31,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p12",
+          "cause_id": "572c62f9-5f7b-42cd-94de-26bfb6b29ac2",
+          "failure_id": "d9ed0e4b-6fec-40df-8436-a52143713a17",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_12",
+          "bridge_entity": null,
+          "cause_lag_days": 16,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p13",
+          "cause_id": "3ef3eacc-93a5-4c21-b061-ef5b441f4272",
+          "failure_id": "37c3cf11-6104-456b-9d7e-8882fa311089",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_13",
+          "bridge_entity": null,
+          "cause_lag_days": 19,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p14",
+          "cause_id": "8d7dabd4-291a-4d83-b9c5-39148fe4fc76",
+          "failure_id": "61354e9a-48d5-4584-b042-b0ae6c1daaad",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_14",
+          "bridge_entity": null,
+          "cause_lag_days": 17,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p15",
+          "cause_id": "683770bf-0a65-4665-8b19-75fd58feac71",
+          "failure_id": "ddf7d0bf-bd54-4d22-85d3-e3dd128648b7",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_15",
+          "bridge_entity": null,
+          "cause_lag_days": 13,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p16",
+          "cause_id": "a2c16c77-2f95-4f6b-93f2-55e1f91ae3aa",
+          "failure_id": "8e03727b-1b1d-40ac-ae43-5660e48a58bb",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_16",
+          "bridge_entity": null,
+          "cause_lag_days": 32,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p17",
+          "cause_id": "4d2c9beb-15df-4bec-90a6-fa3d60799752",
+          "failure_id": "83414694-ee7a-465c-878a-4fa52dedb7e3",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_17",
+          "bridge_entity": null,
+          "cause_lag_days": 20,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p18",
+          "cause_id": "4560304e-af17-4912-8efe-693a10d03fda",
+          "failure_id": "95fb7240-d250-453a-abdb-2069fc9e6d96",
+          "root_id": "13e823f1-b5a9-4b7e-aa02-bcd42ecc1491",
+          "entity": "SPIKE0_CFG_18",
+          "bridge_entity": "SPIKE0_BRG_18",
+          "cause_lag_days": 8,
+          "multihop": true
+        },
+        {
+          "pair_id": "s0-p19",
+          "cause_id": "d526c624-c8f4-4040-a709-ce0a1f3a5f82",
+          "failure_id": "0083d7e3-4513-4ebf-8ffb-b36e794a40c4",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_19",
+          "bridge_entity": null,
+          "cause_lag_days": 28,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p20",
+          "cause_id": "7db46718-a89a-4255-ae8b-0821c33abfd2",
+          "failure_id": "30c70306-395d-4968-8888-d6ed75f7d1ca",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_20",
+          "bridge_entity": null,
+          "cause_lag_days": 37,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p21",
+          "cause_id": "189b3d6e-2711-49e2-8f29-cf79d652ef54",
+          "failure_id": "d1273e14-ee95-4821-a847-6f8f75e5028b",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_21",
+          "bridge_entity": null,
+          "cause_lag_days": 34,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p22",
+          "cause_id": "be81f62d-31cb-4c84-ae43-3cda603de342",
+          "failure_id": "7a0b18d3-e192-40e3-ac3a-ecdd0b7f9afd",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_22",
+          "bridge_entity": null,
+          "cause_lag_days": 25,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p23",
+          "cause_id": "91aa04a8-036f-4cce-a78c-247b14bb7f5a",
+          "failure_id": "4e847952-ebd4-453d-9228-e99f8f2d721f",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_23",
+          "bridge_entity": null,
+          "cause_lag_days": 39,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p24",
+          "cause_id": "d9b9387f-f536-4959-a71d-9b3249f68e53",
+          "failure_id": "508c346d-a031-4074-93c1-3cc7afebc60a",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_24",
+          "bridge_entity": null,
+          "cause_lag_days": 21,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p25",
+          "cause_id": "11137396-21af-4a8d-8fa4-b6b8cfcf6773",
+          "failure_id": "f5380d42-dba6-4da4-b263-5f5b996737e1",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_25",
+          "bridge_entity": null,
+          "cause_lag_days": 17,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p26",
+          "cause_id": "97590480-034c-47d2-b323-a8f376749346",
+          "failure_id": "2a51c6f1-effd-46eb-98c4-5b046ac8d28f",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_26",
+          "bridge_entity": null,
+          "cause_lag_days": 13,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p27",
+          "cause_id": "abb02827-67ff-41fd-8bec-9c066c47bc83",
+          "failure_id": "66519903-447e-4109-a439-9ee01f426546",
+          "root_id": "29ddfeb9-c6c1-4d17-8cc0-43efedff4bab",
+          "entity": "SPIKE0_CFG_27",
+          "bridge_entity": "SPIKE0_BRG_27",
+          "cause_lag_days": 7,
+          "multihop": true
+        },
+        {
+          "pair_id": "s0-p28",
+          "cause_id": "21b8c81c-79c7-4a0b-9800-1844f51a3c90",
+          "failure_id": "becb60cc-b773-48a7-994c-6d382c07de68",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_28",
+          "bridge_entity": null,
+          "cause_lag_days": 44,
+          "multihop": false
+        },
+        {
+          "pair_id": "s0-p29",
+          "cause_id": "4f8e6f23-5f5b-48f1-9648-6913871c2814",
+          "failure_id": "78867c27-c819-41f6-ac5a-67234f2bb755",
+          "root_id": null,
+          "entity": "SPIKE0_CFG_29",
+          "bridge_entity": null,
+          "cause_lag_days": 23,
+          "multihop": false
+        }
+      ]
+    },
+    {
+      "id": "store-1",
+      "db": "store-1/vestige.db",
+      "failures_file": "store-1/failures.json",
+      "pairs": [
+        {
+          "pair_id": "s1-p00",
+          "cause_id": "e0978a4f-e3f1-4122-8e7b-88f7b43dd7a4",
+          "failure_id": "0fcfb7dc-f308-4798-8954-08f4bb6d8129",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_00",
+          "bridge_entity": null,
+          "cause_lag_days": 28,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p01",
+          "cause_id": "3e3c9daa-63ae-402e-88e5-0074b568c921",
+          "failure_id": "6be22e5a-461b-4421-b6ef-c992f746eb74",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_01",
+          "bridge_entity": null,
+          "cause_lag_days": 10,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p02",
+          "cause_id": "e6157e85-f388-4210-bdc8-e3daa75e343b",
+          "failure_id": "d71f4e3e-c89e-4684-b074-1debad528a2e",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_02",
+          "bridge_entity": null,
+          "cause_lag_days": 41,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p03",
+          "cause_id": "46d928e2-cf58-4f1e-a29d-00c399ae2f31",
+          "failure_id": "7197dc45-0f7a-483f-914d-95eb00c4f12f",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_03",
+          "bridge_entity": null,
+          "cause_lag_days": 12,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p04",
+          "cause_id": "b35ed961-154c-4da5-b625-2a7b666863a3",
+          "failure_id": "396dc89a-7eb1-472c-99b9-322dd913d5ba",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_04",
+          "bridge_entity": null,
+          "cause_lag_days": 37,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p05",
+          "cause_id": "8eb88ee6-4e76-42ff-af62-145e9e8e0484",
+          "failure_id": "22e7f7c5-9d6f-4301-92aa-48be36a57140",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_05",
+          "bridge_entity": null,
+          "cause_lag_days": 31,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p06",
+          "cause_id": "09f69dd6-c065-406e-8a5b-43189ed8c337",
+          "failure_id": "58240245-daf9-4e7f-b7a0-d599a95318f3",
+          "root_id": "6156d547-dd40-4883-a461-0bef93aac47a",
+          "entity": "SPIKE1_CFG_06",
+          "bridge_entity": "SPIKE1_BRG_06",
+          "cause_lag_days": 9,
+          "multihop": true
+        },
+        {
+          "pair_id": "s1-p07",
+          "cause_id": "9094448f-a9fa-40a4-bb85-131c1711111c",
+          "failure_id": "5aeb840d-b0d2-4c0b-b606-8ac12d53e09a",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_07",
+          "bridge_entity": null,
+          "cause_lag_days": 26,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p08",
+          "cause_id": "a6145cb6-46ed-4031-9c3c-1da1900b893b",
+          "failure_id": "d9354bcc-7664-40a6-9563-bc37a83f37a7",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_08",
+          "bridge_entity": null,
+          "cause_lag_days": 13,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p09",
+          "cause_id": "fbabdcdc-7804-474c-94b2-08b1a5e64e7a",
+          "failure_id": "c5581da8-3b76-49f4-9184-4692a71126e9",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_09",
+          "bridge_entity": null,
+          "cause_lag_days": 37,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p10",
+          "cause_id": "368e26c2-b513-4ac9-96ce-1e28ceffd1a9",
+          "failure_id": "f168ed8f-0052-4223-aefd-64cd70814dd3",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_10",
+          "bridge_entity": null,
+          "cause_lag_days": 15,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p11",
+          "cause_id": "e8450ace-a49a-45da-bdba-a5017a72cbf5",
+          "failure_id": "0e2ce3cb-1247-4e07-b9dd-506b362970c6",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_11",
+          "bridge_entity": null,
+          "cause_lag_days": 8,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p12",
+          "cause_id": "a8813e72-40d2-4ed2-bbe5-b739bc04129e",
+          "failure_id": "ec86a1c9-1a3d-4c27-8e8e-e2c28b32a1cf",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_12",
+          "bridge_entity": null,
+          "cause_lag_days": 27,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p13",
+          "cause_id": "953a4476-c9c2-44f0-bb09-f59404b79aaa",
+          "failure_id": "e54cfdb8-38a4-41c5-b1f0-a222f7ef7e8e",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_13",
+          "bridge_entity": null,
+          "cause_lag_days": 44,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p14",
+          "cause_id": "1453ebd5-eba6-42c5-8a15-2d61f703db15",
+          "failure_id": "824f13ab-cc49-49f6-bf1a-c762408c26a7",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_14",
+          "bridge_entity": null,
+          "cause_lag_days": 22,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p15",
+          "cause_id": "7fdcd1d7-7e3a-492f-9bc0-73db99f8b68f",
+          "failure_id": "8ca8ecbf-3df8-497c-8b06-473e0982a8ee",
+          "root_id": "8b3c637a-13a1-4913-8559-20467fc74de9",
+          "entity": "SPIKE1_CFG_15",
+          "bridge_entity": "SPIKE1_BRG_15",
+          "cause_lag_days": 36,
+          "multihop": true
+        },
+        {
+          "pair_id": "s1-p16",
+          "cause_id": "5b513647-ca1e-471b-8430-c97dc0cca834",
+          "failure_id": "20a75501-3221-4095-b9d5-cd2295ff8621",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_16",
+          "bridge_entity": null,
+          "cause_lag_days": 33,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p17",
+          "cause_id": "06bdf235-ffb8-44aa-ab75-d4120184fa45",
+          "failure_id": "707461e5-c6bd-442d-bda8-0bbca4e56c88",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_17",
+          "bridge_entity": null,
+          "cause_lag_days": 16,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p18",
+          "cause_id": "99c7336f-5749-4c1d-a073-08a2699016f1",
+          "failure_id": "3a57505c-d5a0-4a21-916a-0152a0d8f687",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_18",
+          "bridge_entity": null,
+          "cause_lag_days": 20,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p19",
+          "cause_id": "9eec2e2b-bf10-410f-b8b0-239683977fad",
+          "failure_id": "5967e376-02c3-497a-a794-9afa031874f5",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_19",
+          "bridge_entity": null,
+          "cause_lag_days": 17,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p20",
+          "cause_id": "c78a06e7-6518-4c96-ab04-c87fc936c736",
+          "failure_id": "9bab1ca2-1fa2-45d9-9bfc-70f9d1f6fb0a",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_20",
+          "bridge_entity": null,
+          "cause_lag_days": 40,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p21",
+          "cause_id": "4e4cbfab-7882-4a31-8467-5139ec162baa",
+          "failure_id": "75bad827-9115-4f28-80c4-d4949926aedc",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_21",
+          "bridge_entity": null,
+          "cause_lag_days": 29,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p22",
+          "cause_id": "988cadd4-b318-4e2e-aacc-992fee53eef2",
+          "failure_id": "48bb51a4-7f88-49ad-a565-12a21be41521",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_22",
+          "bridge_entity": null,
+          "cause_lag_days": 21,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p23",
+          "cause_id": "be7fcc88-0816-4aa9-9682-2be69a77e8f8",
+          "failure_id": "f86089f4-07a2-475a-ac79-1a9af0799c01",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_23",
+          "bridge_entity": null,
+          "cause_lag_days": 41,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p24",
+          "cause_id": "1152a49c-0c31-4606-879b-900ddfea0ad1",
+          "failure_id": "a4df3176-9b91-48a0-b128-d928ee9d85ab",
+          "root_id": "0d0ea6fe-68c6-4916-86c0-e9a9d28f67ba",
+          "entity": "SPIKE1_CFG_24",
+          "bridge_entity": "SPIKE1_BRG_24",
+          "cause_lag_days": 23,
+          "multihop": true
+        },
+        {
+          "pair_id": "s1-p25",
+          "cause_id": "ebb962ac-a391-46c7-afff-00bb0630fc31",
+          "failure_id": "38225954-e943-4bd3-be9a-44d73cdb94b2",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_25",
+          "bridge_entity": null,
+          "cause_lag_days": 25,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p26",
+          "cause_id": "2110bbca-aa87-4e17-80e4-946db25df949",
+          "failure_id": "4322cade-afa1-4a8d-b0d7-a81ab75d5dbb",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_26",
+          "bridge_entity": null,
+          "cause_lag_days": 7,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p27",
+          "cause_id": "ca6c3bbe-9650-467b-a592-d96ec6572ef2",
+          "failure_id": "a05eaf91-9bb3-40f7-a33a-c11be175acba",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_27",
+          "bridge_entity": null,
+          "cause_lag_days": 7,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p28",
+          "cause_id": "f4cf40a5-1f1a-4834-82fb-90b932b8cedf",
+          "failure_id": "1deec3b4-3f3d-488e-928e-5ac82384ec6c",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_28",
+          "bridge_entity": null,
+          "cause_lag_days": 43,
+          "multihop": false
+        },
+        {
+          "pair_id": "s1-p29",
+          "cause_id": "0b5179d4-01e8-47f9-9eb7-b5bcb9df9ae4",
+          "failure_id": "e3d1e871-82d8-4a85-a466-b63ecf6c5cdf",
+          "root_id": null,
+          "entity": "SPIKE1_CFG_29",
+          "bridge_entity": null,
+          "cause_lag_days": 42,
+          "multihop": false
+        }
+      ]
+    },
+    {
+      "id": "store-2",
+      "db": "store-2/vestige.db",
+      "failures_file": "store-2/failures.json",
+      "pairs": [
+        {
+          "pair_id": "s2-p00",
+          "cause_id": "6549d20a-d776-4e90-bbf0-64f267281d31",
+          "failure_id": "07dfabdd-79ad-4435-92b5-d07f36a196ff",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_00",
+          "bridge_entity": null,
+          "cause_lag_days": 20,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p01",
+          "cause_id": "d07978a3-f4e8-4158-b12b-f04f7d26a38a",
+          "failure_id": "4c5e3acf-d035-4a0f-9a6a-cfb822a45113",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_01",
+          "bridge_entity": null,
+          "cause_lag_days": 23,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p02",
+          "cause_id": "75f742ed-b7f2-432a-acde-f0481e85508e",
+          "failure_id": "c1eea5f9-0f0a-4d25-a019-92fe98f80388",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_02",
+          "bridge_entity": null,
+          "cause_lag_days": 14,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p03",
+          "cause_id": "460112f2-f27d-4c5e-8b4a-4e36c1eb841c",
+          "failure_id": "cb3d984d-23cc-4638-aa96-16f904132fef",
+          "root_id": "cc38f2dd-ebff-48b2-990e-dfc530431ed6",
+          "entity": "SPIKE2_CFG_03",
+          "bridge_entity": "SPIKE2_BRG_03",
+          "cause_lag_days": 28,
+          "multihop": true
+        },
+        {
+          "pair_id": "s2-p04",
+          "cause_id": "efbe7733-4cf1-49d2-8ff8-d6f3e408dd32",
+          "failure_id": "ac21d314-9392-44d5-9385-7f1210bff28a",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_04",
+          "bridge_entity": null,
+          "cause_lag_days": 30,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p05",
+          "cause_id": "f7e1be59-85a5-45be-9511-60b32b299c93",
+          "failure_id": "2487cbe1-f0be-4569-b416-b44fd9c9e30a",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_05",
+          "bridge_entity": null,
+          "cause_lag_days": 7,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p06",
+          "cause_id": "0eba69d4-f151-49f1-9ef8-73835349ee7c",
+          "failure_id": "0c7400e1-f3b9-4fe7-8e91-ec516d31cf18",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_06",
+          "bridge_entity": null,
+          "cause_lag_days": 43,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p07",
+          "cause_id": "2b16b344-2f40-4e7b-b625-1b20d1d1aa06",
+          "failure_id": "2e032733-4160-4052-9869-42422ca0f620",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_07",
+          "bridge_entity": null,
+          "cause_lag_days": 33,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p08",
+          "cause_id": "02a39fc6-1166-4298-a795-6573fbd5974b",
+          "failure_id": "fc1eddc5-ce06-4cf0-9a86-a0a8bb7afcd7",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_08",
+          "bridge_entity": null,
+          "cause_lag_days": 23,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p09",
+          "cause_id": "73f79def-b277-48b9-a3d2-febe19cb2644",
+          "failure_id": "3b464771-909d-4997-a574-ca6c60092d7f",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_09",
+          "bridge_entity": null,
+          "cause_lag_days": 44,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p10",
+          "cause_id": "35b28cc5-f6d6-46e5-b6a5-08f14a0d3a15",
+          "failure_id": "9161d096-6657-4021-8e6f-0c39ab85aea6",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_10",
+          "bridge_entity": null,
+          "cause_lag_days": 17,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p11",
+          "cause_id": "e61f2d63-8797-4cab-92cf-e2ebb264d196",
+          "failure_id": "7394f092-a0cd-4cc6-80ba-0cc4cedb8127",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_11",
+          "bridge_entity": null,
+          "cause_lag_days": 16,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p12",
+          "cause_id": "a6a9529a-e077-420d-a4c1-0bd8d653399a",
+          "failure_id": "54ee8b4e-ecf2-45a2-9ee7-0ae12f81ad48",
+          "root_id": "4cce5844-1768-410e-bea9-8dc63f5c9260",
+          "entity": "SPIKE2_CFG_12",
+          "bridge_entity": "SPIKE2_BRG_12",
+          "cause_lag_days": 17,
+          "multihop": true
+        },
+        {
+          "pair_id": "s2-p13",
+          "cause_id": "09a6efec-a696-496a-bccd-e339c550ee6a",
+          "failure_id": "91426588-ce72-403b-b2be-8606945bd4f8",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_13",
+          "bridge_entity": null,
+          "cause_lag_days": 41,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p14",
+          "cause_id": "c8283b39-2fdc-4e92-8e35-1ecc498a6435",
+          "failure_id": "5d0e8991-99bb-488b-b7ed-3dea3a9e5b0d",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_14",
+          "bridge_entity": null,
+          "cause_lag_days": 15,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p15",
+          "cause_id": "6661d7bf-4c54-4dd2-82df-da4e4b98b369",
+          "failure_id": "0cfeb84e-d2aa-4551-ad65-5c40a72df4bd",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_15",
+          "bridge_entity": null,
+          "cause_lag_days": 43,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p16",
+          "cause_id": "15f6ba82-0e68-4b7f-9572-416abb85817e",
+          "failure_id": "5b11abf8-65a3-4823-b1cf-7076e254970f",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_16",
+          "bridge_entity": null,
+          "cause_lag_days": 15,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p17",
+          "cause_id": "c897fe3c-62a3-4297-8ded-0accf039c3be",
+          "failure_id": "35213bae-56b2-4eac-9e4d-c386010e002b",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_17",
+          "bridge_entity": null,
+          "cause_lag_days": 25,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p18",
+          "cause_id": "129fa572-9ece-4bef-bd95-7b55e69d1bce",
+          "failure_id": "7757d867-80f1-451b-b155-262cc82cda2f",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_18",
+          "bridge_entity": null,
+          "cause_lag_days": 21,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p19",
+          "cause_id": "ff01e657-fead-4856-b136-ea5a2276912f",
+          "failure_id": "59bcfe73-c8c9-4b36-b3b5-5d27226774ba",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_19",
+          "bridge_entity": null,
+          "cause_lag_days": 39,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p20",
+          "cause_id": "c5375c03-2804-4739-9e50-c9ffd1372843",
+          "failure_id": "ae7ec966-d5af-4936-9710-c89cb713c1ef",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_20",
+          "bridge_entity": null,
+          "cause_lag_days": 34,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p21",
+          "cause_id": "6436dbdd-f6d3-4278-bfe4-cedd28d03850",
+          "failure_id": "a1b6289a-aad7-4815-8256-516ff2868120",
+          "root_id": "36219bba-b16d-4951-9fec-8c149fc4b579",
+          "entity": "SPIKE2_CFG_21",
+          "bridge_entity": "SPIKE2_BRG_21",
+          "cause_lag_days": 8,
+          "multihop": true
+        },
+        {
+          "pair_id": "s2-p22",
+          "cause_id": "505bd263-eba9-43d4-a9de-65ba622c7943",
+          "failure_id": "a35afcf9-2ad4-4702-baaf-947bfd00429f",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_22",
+          "bridge_entity": null,
+          "cause_lag_days": 7,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p23",
+          "cause_id": "7cc220b1-a357-464c-9b02-49e847c9d0b4",
+          "failure_id": "1fcfc941-a073-4b8d-b7ae-75ab0a46845f",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_23",
+          "bridge_entity": null,
+          "cause_lag_days": 20,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p24",
+          "cause_id": "9f90a107-03b0-4393-ad70-12f2ae58f726",
+          "failure_id": "9441b725-6324-496c-8a9c-a2d22c1f8435",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_24",
+          "bridge_entity": null,
+          "cause_lag_days": 12,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p25",
+          "cause_id": "e213e25b-83e8-4ddc-9098-eb7f3bf2df19",
+          "failure_id": "9ee9af9c-9826-4282-a65f-1257601d0f3b",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_25",
+          "bridge_entity": null,
+          "cause_lag_days": 29,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p26",
+          "cause_id": "7478395a-382a-4261-836c-fdd96d4aebdc",
+          "failure_id": "c4d30f9e-7825-42d1-95f7-4fb07af8e2f7",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_26",
+          "bridge_entity": null,
+          "cause_lag_days": 11,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p27",
+          "cause_id": "953cc728-0ade-4a45-bbf2-33812404bad8",
+          "failure_id": "8e6ff4e4-e1d0-4714-b37b-29273b9371d9",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_27",
+          "bridge_entity": null,
+          "cause_lag_days": 22,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p28",
+          "cause_id": "60cb39cd-d86e-4ac8-a60a-5bfa032c9441",
+          "failure_id": "f85b9b04-1ca7-408a-ab5c-a8121f027c89",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_28",
+          "bridge_entity": null,
+          "cause_lag_days": 22,
+          "multihop": false
+        },
+        {
+          "pair_id": "s2-p29",
+          "cause_id": "5e539045-dbdf-4d46-be15-f79420710e1b",
+          "failure_id": "f2e9bfc7-f56f-4bce-8391-36d5ef657d33",
+          "root_id": null,
+          "entity": "SPIKE2_CFG_29",
+          "bridge_entity": null,
+          "cause_lag_days": 12,
+          "multihop": false
+        }
+      ]
+    }
+  ],
+  "dataset_id": "8e199470e4807ecd"
+}
