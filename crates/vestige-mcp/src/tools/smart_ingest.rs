@@ -43,7 +43,7 @@ pub fn schema() -> Value {
             },
             "node_type": {
                 "type": "string",
-                "description": "Type of knowledge: fact, concept, event, person, place, note, pattern, decision, state. 'state' is for current-state snapshots (version numbers, progress, inventories) that rot: unless validUntil is given, it expires VESTIGE_STATE_TTL_DAYS (default 30) after ingest and stops surfacing in recall.",
+                "description": "Type of knowledge: fact, concept, event, person, place, note, pattern, decision, state. 'state' is for current-state snapshots (version numbers, progress, inventories) that rot: unless validUntil is given, it expires VESTIGE_STATE_TTL_DAYS (default 30) after ingest; expired memories are down-ranked to the bottom of recall and marked currentlyValid=false (still retrievable for audit via validAt).",
                 "default": "fact"
             },
             "tags": {

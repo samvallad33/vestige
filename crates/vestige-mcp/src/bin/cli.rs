@@ -2279,18 +2279,24 @@ fn run_upgrade(dry_run: bool) -> anyhow::Result<()> {
     ));
     std::fs::create_dir_all(&scratch)?;
     let copy = scratch.join("vestige.db");
-    std::fs::copy(&source, &copy)?;
-    for suffix in ["-wal", "-shm"] {
-        let sidecar = PathBuf::from(format!("{}{suffix}", source.display()));
-        if sidecar.exists() {
-            std::fs::copy(
-                &sidecar,
-                PathBuf::from(format!("{}{suffix}", copy.display())),
-            )?;
-        }
+    // A raw file copy of a live WAL-mode database can be torn (committed
+    // frames still sit in the WAL). `VACUUM INTO` through a read-only
+    // connection yields a transactionally consistent snapshot and cannot
+    // modify the source; it is the same mechanism `vestige-cli backup` uses,
+    // minus opening the source through Storage (which would run the very
+    // migrations we are rehearsing).
+    {
+        let snapshot = rusqlite::Connection::open_with_flags(
+            &source,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        snapshot.execute_batch(&format!(
+            "VACUUM INTO '{}'",
+            copy.display().to_string().replace('\'', "''")
+        ))?;
     }
-    println!("Source: {}", source.display());
-    println!("Copy:   {}", copy.display());
+    println!("Source:   {}", source.display());
+    println!("Snapshot: {}", copy.display());
     println!();
 
     // Preflight reads the copy raw, before any migration runs, so the report

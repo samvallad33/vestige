@@ -39,9 +39,12 @@ fix directions by @aaronukgarcia in #191 and the field report in #190.
 inventories) are the rot class that pollutes recall worst: they stay true in
 the store long after they stopped being true in the world. `smart_ingest`
 now accepts `node_type: "state"`, which sets `validUntil` to
-`VESTIGE_STATE_TTL_DAYS` (default 30) after ingest unless the caller gives
-one, so the memory stops surfacing on its own. Requested by @aaronukgarcia
-after seven months of enforcing the same rule by hand (#182, #190).
+`VESTIGE_STATE_TTL_DAYS` (default 30, `0` disables) after ingest unless the
+caller gives one. Once expired, recall down-ranks the memory to the bottom
+of results and marks it `currentlyValid: false` (it stays retrievable for
+audit through `validAt`), so stale state stops polluting the top of recall
+on its own instead of by discipline. Requested by @aaronukgarcia after seven
+months of enforcing the same rule by hand (#182, #190).
 
 ### Fixed — Consolidation can no longer delete your memories
 
