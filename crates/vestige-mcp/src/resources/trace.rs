@@ -53,8 +53,7 @@ async fn read_runs(storage: &Arc<Storage>) -> Result<String, String> {
             })
         })
         .collect();
-    serde_json::to_string_pretty(&serde_json::json!({ "runs": json }))
-        .map_err(|e| e.to_string())
+    serde_json::to_string_pretty(&serde_json::json!({ "runs": json })).map_err(|e| e.to_string())
 }
 
 async fn read_latest(storage: &Arc<Storage>) -> Result<String, String> {

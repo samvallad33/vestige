@@ -12,8 +12,8 @@
  *   0.7 therefore fall into the LOWER band on purpose (so a similarity of
  *   exactly 0.7 is 'moderate', not 'strong').
  * - Node type palette has 8 known types; anything else — including
- *   `undefined`, `null`, empty string, or a typo — falls back to violet
- *   (#8b5cf6), matching the `concept` fallback tone used elsewhere.
+ *   `undefined`, `null`, empty string, or a typo — falls back to fossil teal
+ *   (#1A8FA8), matching the `concept` tone used elsewhere.
  * - Pair opacity is a trinary rule: no focus → 1, focused match → 1,
  *   focused non-match → 0.12. `null` and `undefined` both mean "no focus".
  * - Trust is defined on [0,1]; `nodeRadius` clamps out-of-range values so
@@ -70,17 +70,17 @@ export function severityLabel(sim: number): SeverityLabel {
 // ---------------------------------------------------------------------------
 
 /** Fallback colour used when a memory's node_type is missing or unknown. */
-export const NODE_COLOR_FALLBACK = '#8b5cf6';
+export const NODE_COLOR_FALLBACK = '#1A8FA8';
 
 /** Canonical palette for the 8 known node types. */
 export const NODE_COLORS: Record<string, string> = {
 	fact: '#3b82f6',
-	concept: '#8b5cf6',
+	concept: '#1A8FA8',
 	event: '#f59e0b',
 	person: '#10b981',
 	place: '#06b6d4',
 	note: '#6b7280',
-	pattern: '#ec4899',
+	pattern: '#E07A3D',
 	decision: '#ef4444',
 };
 
@@ -98,7 +98,7 @@ export const KNOWN_NODE_TYPES = Object.freeze([
 
 /**
  * Map a (possibly undefined) node_type to a colour. Unknown / missing /
- * empty / null strings fall back to violet (#8b5cf6).
+ * empty / null strings fall back to fossil teal (#1A8FA8).
  */
 export function nodeColor(t?: string | null): string {
 	if (!t) return NODE_COLOR_FALLBACK;

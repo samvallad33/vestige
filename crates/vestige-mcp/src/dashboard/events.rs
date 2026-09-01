@@ -85,6 +85,21 @@ pub enum VestigeEvent {
         timestamp: DateTime<Utc>,
     },
 
+    // -- Retroactive Salience Backfill --
+    // The exact proof artifact emitted only after the Backfill result has been
+    // persisted as a receipt. `path_ids` is deliberately explicit so a visual
+    // never replaces the returned candidate route with a prettier graph guess.
+    BackfillFired {
+        run_id: String,
+        receipt_id: String,
+        failure_id: String,
+        candidate_ids: Vec<String>,
+        path_ids: Vec<String>,
+        shared_entities: Vec<String>,
+        promoted: bool,
+        timestamp: DateTime<Utc>,
+    },
+
     // -- Hook verdicts --
     HookVerdictRecorded {
         hook: String,

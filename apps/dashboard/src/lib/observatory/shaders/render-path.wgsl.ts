@@ -22,7 +22,11 @@ struct Params {
 	brightness: f32,
 	demo_id: f32,
 	time: f32,
-	_pad: f32,
+	capture_mode: f32,
+	live_kind: f32,
+	live_frame: f32,
+	live_energy: f32,
+	projection_days: f32,
 };
 
 struct Camera {

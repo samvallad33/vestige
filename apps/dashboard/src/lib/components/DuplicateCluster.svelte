@@ -2,9 +2,7 @@
   DuplicateCluster — renders a single cosine-similarity cluster from the
   `find_duplicates` MCP tool. Shows similarity bar (color-coded by severity),
   stacked memory cards with type/retention/tags/date, and action controls
-  (Review → expand, Dismiss → hide). The "Merge all → winner" button renders
-  ONLY when the host wires `onMerge` to a real merge action — today the merge
-  itself lives in the MCP `dedup` tool, so the dashboard page omits it.
+  (Merge all → highest-retention winner, Review → expand, Dismiss → hide).
 
   Pure helpers live in `./duplicates-helpers.ts` and are unit-tested there.
   Keep this file focused on rendering + glue.
@@ -34,24 +32,34 @@
 		similarity: number;
 		memories: ClusterMemory[];
 		suggestedAction: 'merge' | 'review';
+		/**
+		 * Oversized similarity component (similarity-chained, e.g. A~B~C~D where A is
+		 * NOT similar to D). Quarantined: capped display, merge explicitly unsafe.
+		 */
+		oversized?: boolean;
 		onDismiss?: () => void;
-		onMerge?: (winnerId: string, loserIds: string[]) => void;
 	}
 
-	let { similarity, memories, suggestedAction, onDismiss, onMerge }: Props = $props();
+	let { similarity, memories, suggestedAction, oversized = false, onDismiss }: Props = $props();
 
 	let expanded = $state(false);
 
-	// Winner = highest retention; others get merged into it. Stable tie-break
-	// (first-wins). pickWinner returns null for empty input — render-guarded below.
-	const winner = $derived(pickWinner(memories));
-	const losers = $derived(
-		winner ? memories.filter((m) => m.id !== winner.id).map((m) => m.id) : []
-	);
+	// Cap the rendered member cards so an oversized component (428 members on the
+	// real brain) can't produce a 44,000px card that strands everything below it.
+	// Winner + metadata are ALWAYS computed from the FULL member array — display is
+	// capped, cluster semantics are not.
+	const DISPLAY_CAP = 12;
 
-	function handleMerge() {
-		if (onMerge && winner) onMerge(winner.id, losers);
-	}
+	// Winner = highest retention. pickWinner runs on the FULL array (never the
+	// display subset) so capping cannot redefine who the winner is.
+	const winner = $derived(pickWinner(memories));
+	const displayMemories = $derived.by(() => {
+		if (memories.length <= DISPLAY_CAP) return memories;
+		// Winner-first so the capped view always shows the anchor of the cluster.
+		const rest = memories.filter((m) => m.id !== winner?.id);
+		return winner ? [winner, ...rest.slice(0, DISPLAY_CAP - 1)] : rest.slice(0, DISPLAY_CAP);
+	});
+	const hiddenCount = $derived(memories.length - displayMemories.length);
 </script>
 
 {#if memories.length > 0 && winner}
@@ -88,20 +96,32 @@
 				</div>
 			</div>
 
-			<!-- Suggested action badge — dream (review) or recall (merge) -->
-			<span
-				class="flex-shrink-0 rounded-full border px-3 py-1 text-xs font-medium {suggestedAction ===
-				'merge'
-					? 'border-recall/40 bg-recall/10 text-recall'
-					: 'border-dream-glow/40 bg-dream/10 text-dream-glow'}"
-			>
-				Suggested: {suggestedAction === 'merge' ? 'Merge' : 'Review'}
-			</span>
+			<!-- Suggested action badge. Oversized components are quarantined: they are
+			     similarity CHAINS (A~B~C~D), not mutually-similar sets — never mergeable. -->
+			{#if oversized}
+				<span
+					class="flex-shrink-0 rounded-full border border-warning/50 bg-warning/10 px-3 py-1 text-xs font-medium text-warning"
+				>
+					REVIEW REQUIRED · NOT SAFE TO MERGE
+				</span>
+			{:else}
+				<!-- Analysis classification, NOT an actionable suggestion — merge is
+				     globally unavailable until the backend ships, so "Suggested: Merge"
+				     beside a disabled merge button would contradict itself. -->
+				<span
+					class="flex-shrink-0 rounded-full border px-3 py-1 text-xs font-medium {suggestedAction ===
+					'merge'
+						? 'border-recall/40 bg-recall/10 text-recall'
+						: 'border-dream-glow/40 bg-dream/10 text-dream-glow'}"
+				>
+					Classification: {suggestedAction === 'merge' ? 'merge candidate' : 'review'}
+				</span>
+			{/if}
 		</div>
 
-		<!-- Stacked memory cards -->
+		<!-- Stacked memory cards (display-capped; winner always shown) -->
 		<div class="space-y-2">
-			{#each memories as memory (memory.id)}
+			{#each displayMemories as memory (memory.id)}
 				<div
 					class="group flex items-start gap-3 rounded-xl border border-synapse/5 bg-white/[0.02] p-3 transition-all duration-200 hover:border-synapse/20 hover:bg-white/[0.04] {memory.id ===
 					winner.id
@@ -160,22 +180,34 @@
 					</div>
 				</div>
 			{/each}
+			{#if hiddenCount > 0}
+				<div
+					class="rounded-xl border border-warning/20 bg-warning/5 p-3 text-xs text-dim"
+				>
+					+{hiddenCount} linked candidates — oversized similarity component. Members
+					chain through pairwise similarity; distant members may be unrelated. Raise
+					the threshold to split it.
+				</div>
+			{/if}
 		</div>
 
 		<!-- Actions — native <button> elements, fully keyboard-accessible.
-		     Merge renders only when the host actually performs a merge. -->
+		     Merge is NOT wired to a backend yet; the old button console.logged and
+		     optimistically dismissed the cluster — a fake success. Until the merge
+		     endpoint ships, the control is visibly disabled (never lies). -->
 		<div class="flex flex-wrap items-center gap-2 pt-1">
-			{#if onMerge}
-				<button
-					type="button"
-					onclick={handleMerge}
-					aria-label="Merge all memories into the highest-retention winner"
-					class="rounded-lg bg-recall/20 px-3 py-1.5 text-xs font-medium text-recall transition hover:bg-recall/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-recall/60"
-					title="Merge all into highest-retention memory ({(winner.retention * 100).toFixed(0)}%)"
-				>
-					Merge all → winner
-				</button>
-			{/if}
+			<button
+				type="button"
+				disabled
+				aria-disabled="true"
+				aria-label="Merge is not available yet"
+				class="cursor-not-allowed rounded-lg bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-muted/60"
+				title={oversized
+					? 'Oversized similarity component — not safe to merge'
+					: 'Merge backend not shipped yet — no destructive action is taken from this screen'}
+			>
+				Merge unavailable
+			</button>
 			<button
 				type="button"
 				onclick={() => (expanded = !expanded)}

@@ -116,7 +116,7 @@ describe('nodeColor', () => {
 		expect(nodeColor('decision')).toBe(NODE_COLORS.decision);
 	});
 
-	it('falls back to violet for unknown / missing types', () => {
+	it('falls back to fossil teal for unknown / missing types', () => {
 		expect(nodeColor(undefined)).toBe(NODE_COLOR_FALLBACK);
 		expect(nodeColor(null)).toBe(NODE_COLOR_FALLBACK);
 		expect(nodeColor('')).toBe(NODE_COLOR_FALLBACK);
@@ -124,8 +124,8 @@ describe('nodeColor', () => {
 		expect(nodeColor('FACT')).toBe(NODE_COLOR_FALLBACK); // case-sensitive
 	});
 
-	it('violet fallback equals 0x8b5cf6', () => {
-		expect(NODE_COLOR_FALLBACK).toBe('#8b5cf6');
+	it('fossil teal fallback equals #1A8FA8', () => {
+		expect(NODE_COLOR_FALLBACK).toBe('#1A8FA8');
 	});
 });
 

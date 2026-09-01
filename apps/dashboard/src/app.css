@@ -2,30 +2,30 @@
 
 @theme {
 	/* Vestige cosmic dark palette */
-	--color-void: #050510;
-	--color-abyss: #0a0a1a;
-	--color-deep: #10102a;
-	--color-surface: #161638;
-	--color-elevated: #1e1e4a;
-	--color-subtle: #2a2a5e;
-	--color-muted: #4a4a7a;
-	--color-dim: #7a7aaa;
-	--color-text: #e0e0ff;
+	--color-void: #020307;
+	--color-abyss: #07100D;
+	--color-deep: #0B171B;
+	--color-surface: #11140A;
+	--color-elevated: #162422;
+	--color-subtle: #243836;
+	--color-muted: #6a8a86;
+	--color-dim: #8aa9a5;
+	--color-text: #eafffb;
 	--color-bright: #ffffff;
 
-	/* Accent colors */
-	--color-synapse: #6366f1;
-	--color-synapse-glow: #818cf8;
-	--color-dream: #a855f7;
-	--color-dream-glow: #c084fc;
-	--color-memory: #3b82f6;
+	/* Accent colors — doctrine: cyan/jade, never purple chrome */
+	--color-synapse: #22C7DE;
+	--color-synapse-glow: #7ff3e6;
+	--color-dream: #29F2A9;
+	--color-dream-glow: #A8FF5E;
+	--color-memory: #1BD6FF;
 	--color-recall: #10b981;
 	--color-decay: #ef4444;
 	--color-warning: #f59e0b;
 
 	/* Node type colors */
 	--color-node-fact: #3b82f6;
-	--color-node-concept: #8b5cf6;
+	--color-node-concept: #4A7D8C;
 	--color-node-event: #f59e0b;
 	--color-node-person: #10b981;
 	--color-node-place: #06b6d4;
@@ -59,18 +59,18 @@ html {
 @supports (color: oklch(0 0 0)) {
 	:root {
 		/* Accent colors */
-		--color-synapse: oklch(0.585 0.222 277);
-		--color-synapse-glow: oklch(0.685 0.169 277);
-		--color-dream: oklch(0.627 0.265 304);
-		--color-dream-glow: oklch(0.714 0.203 305);
-		--color-memory: oklch(0.623 0.214 259);
+		--color-synapse: oklch(0.76 0.12 205);
+		--color-synapse-glow: oklch(0.88 0.1 185);
+		--color-dream: oklch(0.86 0.18 162);
+		--color-dream-glow: oklch(0.92 0.2 125);
+		--color-memory: oklch(0.8 0.14 215);
 		--color-recall: oklch(0.696 0.17 162);
 		--color-decay: oklch(0.637 0.237 25);
 		--color-warning: oklch(0.769 0.188 70);
 
 		/* Node type colors */
 		--color-node-fact: oklch(0.623 0.214 259);
-		--color-node-concept: oklch(0.606 0.25 292);
+		--color-node-concept: oklch(0.55 0.06 220);
 		--color-node-event: oklch(0.769 0.188 70);
 		--color-node-person: oklch(0.696 0.17 162);
 		--color-node-place: oklch(0.715 0.143 215);

@@ -152,15 +152,35 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
         )
         // Search
         .route("/api/search", get(handlers::search_memories))
-        .route("/api/embeddings/profiles", get(handlers::list_embedding_profiles))
-        .route("/api/embeddings/install", post(handlers::install_embedding_profile))
-        .route("/api/embeddings/evaluate", post(handlers::evaluate_embedding_profile))
-        .route("/api/embeddings/migrate", post(handlers::migrate_embedding_profile))
-        .route("/api/embeddings/activate", post(handlers::activate_embedding_profile))
-        .route("/api/embeddings/rollback", post(handlers::rollback_embedding_profile))
         // Stats & health
         .route("/api/stats", get(handlers::get_stats))
         .route("/api/health", get(handlers::health_check))
+        // Embedding Profiles — catalog visibility is safe; each lifecycle
+        // stage remains separately confirmed and local-only.
+        .route(
+            "/api/embeddings/profiles",
+            get(handlers::list_embedding_profiles),
+        )
+        .route(
+            "/api/embeddings/install",
+            post(handlers::install_embedding_profile),
+        )
+        .route(
+            "/api/embeddings/evaluate",
+            post(handlers::evaluate_embedding_profile),
+        )
+        .route(
+            "/api/embeddings/migrate",
+            post(handlers::migrate_embedding_profile),
+        )
+        .route(
+            "/api/embeddings/activate",
+            post(handlers::activate_embedding_profile),
+        )
+        .route(
+            "/api/embeddings/rollback",
+            post(handlers::rollback_embedding_profile),
+        )
         // Timeline
         .route("/api/timeline", get(handlers::get_timeline))
         .route("/api/changelog", get(handlers::get_changelog))
@@ -182,6 +202,9 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
         // Wraps crate::tools::cross_reference::execute. Emits
         // DeepReferenceCompleted so Graph3D can glide, pulse, and arc.
         .route("/api/deep_reference", post(handlers::deep_reference_query))
+        // Retroactive Salience Backfill — an explicit preview/promote surface
+        // whose output is always persisted as a receipt before it reaches 3D.
+        .route("/api/backfill", post(handlers::backfill_query))
         // Sanhedrin receipts: latest local hook verdict + appeal training.
         .route("/api/sanhedrin/latest", get(handlers::get_sanhedrin_latest))
         .route(

@@ -162,10 +162,10 @@ export function buildBirthPlan(
     // w: base size
     particles[base + 7] = 1.0 + rng() * 1.8;
 
-    // Color: violet dust base (0.55, 0.32, 1.00)
-    particles[base + 8] = 0.55;
-    particles[base + 9] = 0.32;
-    particles[base + 10] = 1.00;
+    // Color: luciferin dust base
+    particles[base + 8] = 0.91;
+    particles[base + 9] = 1.00;
+    particles[base + 10] = 0.72;
     // w: phase offset for spectral rim
     particles[base + 11] = rng();
 
@@ -222,9 +222,9 @@ export function buildBirthPlan(
     particles[base + 6] = targetPos[2];
     particles[base + 7] = 1.0 + rng() * 1.8;
 
-    particles[base + 8] = 0.55;
-    particles[base + 9] = 0.32;
-    particles[base + 10] = 1.00;
+    particles[base + 8] = 0.91;
+    particles[base + 9] = 1.00;
+    particles[base + 10] = 0.72;
     particles[base + 11] = rng();
 
     particles[base + 12] = 0;
@@ -255,9 +255,9 @@ export function buildBirthPlan(
     particles[base + 6] = targetPos[2];
     particles[base + 7] = 1.0 + rng() * 1.8;
 
-    particles[base + 8] = 0.55;
-    particles[base + 9] = 0.32;
-    particles[base + 10] = 1.00;
+    particles[base + 8] = 0.91;
+    particles[base + 9] = 1.00;
+    particles[base + 10] = 0.72;
     particles[base + 11] = rng();
 
     particles[base + 12] = 0;

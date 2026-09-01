@@ -1,673 +1,281 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$stores/api';
-	import ReasoningChain from '$components/ReasoningChain.svelte';
-	import EvidenceCard from '$components/EvidenceCard.svelte';
-	import PageHeader from '$lib/components/PageHeader.svelte';
-	import Icon from '$lib/components/Icon.svelte';
-	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
-	import { reveal } from '$lib/actions/reveal';
-	import { spotlight, magnetic } from '$lib/actions/interactions';
+	import { api, type Receipt } from '$stores/api';
+	import { base } from '$app/paths';
+	import PageHeader from '$components/PageHeader.svelte';
+	import Icon from '$components/Icon.svelte';
+	import AmbientField from '$components/AmbientField.svelte';
 	import {
-		confidenceColor,
-		confidenceLabel,
-	} from '$components/reasoning-helpers';
+		normalizeDeepReferenceResponse,
+		type ReasoningScene,
+		type NormalizedEvidence
+	} from '$lib/observatory/reasoning/reasoning-scene';
 
-	// ────────────────────────────────────────────────────────────────
-	// Local type — mirrors the shape deep_reference will return once
-	// /api/deep-reference lands. See backend MCP tool `deep_reference`.
-	// ────────────────────────────────────────────────────────────────
-	type Role = 'primary' | 'supporting' | 'contradicting' | 'superseded';
-
-	interface EvidenceEntry {
-		id: string;
-		trust: number; // 0-1
-		date: string; // ISO
-		role: Role;
-		preview: string;
-		nodeType?: string;
-	}
-
-	interface RecommendedAnswer {
-		answer_preview: string;
-		memory_id: string;
-		trust_score: number;
-		date: string;
-	}
-
-	interface ContradictionPair {
-		a_id: string;
-		b_id: string;
-		summary: string;
-	}
-
-	interface SupersessionEntry {
-		old_id: string;
-		new_id: string;
-		reason: string;
-	}
-
-	interface EvolutionPoint {
-		date: string;
-		summary: string;
-		trust: number;
-	}
-
-	interface DeepReferenceResponse {
-		intent: string;
-		reasoning: string;
-		recommended: RecommendedAnswer;
-		evidence: EvidenceEntry[];
-		contradictions: ContradictionPair[];
-		superseded: SupersessionEntry[];
-		evolution: EvolutionPoint[];
-		related_insights: string[];
-		confidence: number; // 0-100
-		memoriesAnalyzed: number;
-	}
-
-	// Real backend call — wraps the 8-stage deep_reference cognitive pipeline
-	// via /api/deep_reference. The handler emits DeepReferenceCompleted on
-	// the WebSocket so Graph3D can glide + pulse + arc in the 3D scene.
-	async function deepReferenceFetch(query: string): Promise<DeepReferenceResponse> {
-		const raw = (await api.deepReference(query, 20)) as Record<string, unknown>;
-
-		const evidenceRaw = Array.isArray(raw.evidence) ? (raw.evidence as Record<string, unknown>[]) : [];
-		const evidence: EvidenceEntry[] = evidenceRaw.map((e) => {
-			const trustNum = typeof e.trust === 'number' ? (e.trust as number) : 0;
-			// Backend trust is 0-1; if it came back > 1 treat as already-scaled percent.
-			const trust = trustNum > 1 ? trustNum / 100 : trustNum;
-			const role = (e.role as Role) || 'supporting';
-			return {
-				id: String(e.id ?? ''),
-				trust: Math.max(0, Math.min(1, trust)),
-				date: String(e.date ?? ''),
-				role,
-				preview: String(e.preview ?? ''),
-				nodeType: e.node_type ? String(e.node_type) : (e.nodeType ? String(e.nodeType) : undefined)
-			};
-		});
-
-		const rec = raw.recommended as Record<string, unknown> | undefined;
-		const recommended: RecommendedAnswer = {
-			answer_preview: String(rec?.answer_preview ?? evidence[0]?.preview ?? ''),
-			memory_id: String(rec?.memory_id ?? evidence[0]?.id ?? ''),
-			trust_score: (() => {
-				const t = rec?.trust_score;
-				if (typeof t === 'number') return t > 1 ? t / 100 : t;
-				return evidence[0]?.trust ?? 0;
-			})(),
-			date: String(rec?.date ?? evidence[0]?.date ?? '')
-		};
-
-		const contradictionsRaw = Array.isArray(raw.contradictions)
-			? (raw.contradictions as Record<string, unknown>[])
-			: [];
-		const contradictions: ContradictionPair[] = contradictionsRaw.map((c) => ({
-			a_id: String(c.a_id ?? ''),
-			b_id: String(c.b_id ?? ''),
-			summary: String(c.summary ?? c.reason ?? 'Trust-weighted conflict between high-FSRS memories.')
-		}));
-
-		const supersededRaw = Array.isArray(raw.superseded)
-			? (raw.superseded as Record<string, unknown>[])
-			: [];
-		const superseded: SupersessionEntry[] = supersededRaw.map((s) => ({
-			old_id: String(s.old_id ?? ''),
-			new_id: String(s.new_id ?? recommended.memory_id ?? ''),
-			reason: String(s.reason ?? 'Superseded by newer memory with higher FSRS trust.')
-		}));
-
-		// Backend emits evolution with `preview`; UI type wants `summary`.
-		// Normalise so the component can stay agnostic.
-		const evolutionRaw = Array.isArray(raw.evolution)
-			? (raw.evolution as Record<string, unknown>[])
-			: [];
-		const evolution: EvolutionPoint[] = evolutionRaw.map((p) => ({
-			date: String(p.date ?? ''),
-			summary: String(p.summary ?? p.preview ?? ''),
-			trust: (() => {
-				const t = p.trust;
-				if (typeof t === 'number') return t > 1 ? t / 100 : t;
-				return 0;
-			})()
-		}));
-
-		const related_insights = Array.isArray(raw.related_insights)
-			? (raw.related_insights as string[])
-			: [];
-
-		const confidenceRaw = typeof raw.confidence === 'number' ? (raw.confidence as number) : 0;
-		// Backend already scales to 0-100 for dashboard consumers, but defend
-		// against a change: treat 0-1 values as fractions.
-		const confidence =
-			confidenceRaw > 1 ? Math.round(confidenceRaw) : Math.round(confidenceRaw * 100);
-
-		const intent = String(raw.intent ?? 'Synthesis');
-		const reasoning = String(raw.reasoning ?? raw.guidance ?? '');
-		const memoriesAnalyzed =
-			typeof raw.memoriesAnalyzed === 'number'
-				? (raw.memoriesAnalyzed as number)
-				: evidence.length;
-
-		return {
-			intent,
-			reasoning,
-			recommended,
-			evidence,
-			contradictions,
-			superseded,
-			evolution,
-			related_insights,
-			confidence,
-			memoriesAnalyzed
-		};
-	}
-
-	// ────────────────────────────────────────────────────────────────
-	// State
-	// ────────────────────────────────────────────────────────────────
+	// Memory Replay is deliberately DOM-first: the value is the proof a person can read,
+	// not a decorative simulation of thought.
 	let query = $state('');
 	let loading = $state(false);
-	let response: DeepReferenceResponse | null = $state(null);
-	let error: string | null = $state(null);
-	let askInputEl: HTMLInputElement | null = $state(null);
+	let error = $state<string | null>(null);
+	let scene = $state<ReasoningScene | null>(null);
+	let runId = $state<string | null>(null);
+	let receiptId = $state<string | null>(null);
+	let input: HTMLInputElement | null = $state(null);
 
-	// Evidence DOM refs for SVG arc drawing between contradicting pairs
-	let evidenceGridEl: HTMLDivElement | null = $state(null);
-	let arcs: { x1: number; y1: number; x2: number; y2: number }[] = $state([]);
+	let receiptSeal = $state<Receipt | null>(null);
+	const EXAMPLES = ['refund compliance exception', 'What port does the dev server use?', 'How does FSRS-6 trust scoring work?'];
+	const confidence = $derived(Math.round((scene?.recommended?.trust_score ?? 0) * 100));
+	const receiptUrl = $derived(receiptId ? `${base}/observatory?receipt=${encodeURIComponent(receiptId)}` : null);
+	const blackBoxUrl = $derived(runId ? `${base}/blackbox?run=${encodeURIComponent(runId)}` : `${base}/blackbox`);
 
-	async function ask() {
-		const q = query.trim();
-		if (!q || loading) return;
+	function freshRunId() {
+		return `run_replay_${Date.now().toString(36)}`;
+	}
+
+	function stringAt(raw: Record<string, unknown>, ...keys: string[]) {
+		for (const key of keys) {
+			const value = raw[key];
+			if (typeof value === 'string' && value) return value;
+		}
+		return null;
+	}
+
+	async function runReplay() {
+		const question = query.trim();
+		if (!question || loading) return;
 		loading = true;
 		error = null;
-		response = null;
-		arcs = [];
+		scene = null;
+		receiptId = null;
+		const nextRunId = freshRunId();
+		runId = nextRunId;
 		try {
-			response = await deepReferenceFetch(q);
-			// After DOM paints the evidence cards, measure & draw arcs
-			requestAnimationFrame(() => requestAnimationFrame(measureArcs));
-		} catch (e) {
-			error = e instanceof Error ? e.message : 'Unknown error';
+			const raw = (await api.deepReference(question, 20, nextRunId)) as Record<string, unknown>;
+			scene = normalizeDeepReferenceResponse(raw);
+			runId = stringAt(raw, 'runId', 'run_id') ?? nextRunId;
+			receiptId = stringAt(raw, 'receiptId', 'receipt_id');
+			receiptSeal = null;
+			if (receiptId) {
+				try {
+					receiptSeal = await api.receipts.get(receiptId);
+				} catch {
+					receiptSeal = null;
+				}
+			}
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : 'Unable to retrieve the supporting memory.';
 		} finally {
 			loading = false;
 		}
 	}
 
-	function measureArcs() {
-		if (!response || !evidenceGridEl || response.contradictions.length === 0) {
-			arcs = [];
-			return;
-		}
-		const gridRect = evidenceGridEl.getBoundingClientRect();
-		const next: typeof arcs = [];
-		for (const c of response.contradictions) {
-			const a = evidenceGridEl.querySelector<HTMLElement>(`[data-evidence-id="${c.a_id}"]`);
-			const b = evidenceGridEl.querySelector<HTMLElement>(`[data-evidence-id="${c.b_id}"]`);
-			if (!a || !b) continue;
-			const ar = a.getBoundingClientRect();
-			const br = b.getBoundingClientRect();
-			next.push({
-				x1: ar.left - gridRect.left + ar.width / 2,
-				y1: ar.top - gridRect.top + ar.height / 2,
-				x2: br.left - gridRect.left + br.width / 2,
-				y2: br.top - gridRect.top + br.height / 2
-			});
-		}
-		arcs = next;
+	function useExample(example: string) {
+		query = example;
+		void runReplay();
 	}
 
-	function handleGlobalKey(e: KeyboardEvent) {
-		// Cmd/Ctrl + K focuses the ask box
-		if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-			e.preventDefault();
-			askInputEl?.focus();
-			askInputEl?.select();
-		}
+	function reset() {
+		query = '';
+		scene = null;
+		error = null;
+		runId = null;
+		receiptId = null;
+		receiptSeal = null;
+		input?.focus();
 	}
 
-	onMount(() => {
-		askInputEl?.focus();
-		window.addEventListener('keydown', handleGlobalKey);
-		window.addEventListener('resize', measureArcs);
-		return () => {
-			window.removeEventListener('keydown', handleGlobalKey);
-			window.removeEventListener('resize', measureArcs);
-		};
+	function labelFor(evidence: NormalizedEvidence) {
+		if (evidence.role === 'primary') return 'Primary evidence';
+		if (evidence.role === 'contradicting') return 'Conflicting evidence';
+		if (evidence.role === 'superseded') return 'Older, superseded evidence';
+		return 'Supporting evidence';
+	}
+
+	onMount(() => input?.focus());
+
+	// Living base coat — real store vitals drive the ambient field (never
+	// decorative randomness). One cheap fetch; zeros render a calm field.
+	let ambient = $state({ endangered: 0, fracture: 0, due: 0, count: 0 });
+	onMount(async () => {
+		try {
+			const [s, rd] = await Promise.all([api.stats(), api.retentionDistribution()]);
+			const total = Math.max(1, s.totalMemories);
+			ambient = {
+				endangered: Math.min(1, (rd.endangered?.length ?? 0) / total),
+				fracture: 0,
+				due: Math.min(1, (s.dueForReview ?? 0) / total),
+				count: s.totalMemories
+			};
+		} catch {
+			/* field stays calm — never invents vitals */
+		}
 	});
-
-	const exampleQueries = [
-		'What port does the dev server use?',
-		'Should I enable prefix caching with vLLM?',
-		'Why did the benchmark score drop after the parser change?',
-		'How does FSRS-6 trust scoring work?'
-	];
 </script>
 
 <svelte:head>
-	<title>Reasoning Theater · Vestige</title>
+	<title>Memory Replay · Vestige</title>
 </svelte:head>
 
-<div class="p-6 max-w-6xl mx-auto space-y-8 enter">
-	<!-- Header -->
+<main class="replay-shell" style="position: relative">
+	<AmbientField {...ambient} accent={[0.36, 0.94, 0.65]} opacity={0.5} />
 	<PageHeader
 		icon="reasoning"
-		title="Reasoning Theater"
-		subtitle="Watch Vestige reason — the 8-stage cognitive pipeline runs locally and returns a pre-built answer with trust-scored evidence."
-		accent="dream"
+		title="Memory Replay"
+		subtitle="See the exact memories Vestige retrieved before it makes a recommendation."
+		accent="recall"
 	>
-		<span
-			class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-dream/15 border border-dream/30 text-[10px] text-dream-glow uppercase tracking-wider font-mono"
-		>
-			<span class="ping-host w-1.5 h-1.5 rounded-full" style="color: var(--color-dream); background: var(--color-dream)"></span>
-			deep_reference
-		</span>
+		<span class="live-pill"><span></span> Live retrieval proof</span>
 	</PageHeader>
 
-	<!-- Cmd+K Ask Palette -->
-	<div class="glass-panel rounded-2xl p-5 space-y-4">
-		<div class="flex items-center gap-3">
-			<span class="text-synapse-glow {loading ? 'breathe' : ''}"><Icon name="reasoning" size={20} /></span>
-			<input
-				bind:this={askInputEl}
-				type="text"
-				bind:value={query}
-				onkeydown={(e) => e.key === 'Enter' && ask()}
-				placeholder="Ask your memory anything…"
-				class="flex-1 bg-transparent text-bright text-lg placeholder:text-muted focus:outline-none font-mono"
-			/>
-			<kbd class="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded bg-white/[0.04] border border-synapse/15 text-[10px] text-dim font-mono">
-				<span>⌘</span>K
-			</kbd>
-			<button
-				use:magnetic
-				onclick={ask}
-				disabled={!query.trim() || loading}
-				class="px-4 py-2 rounded-xl bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm hover:bg-synapse/30 transition disabled:opacity-40 disabled:cursor-not-allowed"
-			>
-				{loading ? 'Reasoning…' : 'Reason'}
-			</button>
+	<section class="hero-card">
+		<div class="hero-copy">
+			<p class="eyebrow">MAKE AI DECISIONS AUDITABLE</p>
+			<h1>Ask a question. See the memory behind the answer.</h1>
+			<p>Vestige retrieves real, local memory, evaluates conflicts, and gives you a receipt for the run.</p>
 		</div>
-
-		{#if !response && !loading}
-			<div class="flex flex-wrap gap-2 pt-1">
-				<span class="text-[10px] uppercase tracking-wider text-muted mr-1 self-center">Try</span>
-				{#each exampleQueries as ex}
-					<button
-						onclick={() => {
-							query = ex;
-							ask();
-						}}
-						class="px-2.5 py-1 rounded-full glass-subtle text-[11px] text-dim hover:text-synapse-glow hover:!border-synapse/30 transition"
-					>
-						{ex}
-					</button>
-				{/each}
-			</div>
-		{/if}
-	</div>
-
-	<!-- Error -->
-	{#if error}
-		<div class="glass rounded-xl p-4 !border-decay/40 text-decay text-sm">
-			<span class="font-medium">Error:</span>
-			{error}
-		</div>
-	{/if}
-
-	<!-- Loading state — chain runs alone -->
-	{#if loading}
-		<div class="glass-panel rounded-2xl p-6 space-y-4">
-			<div class="flex items-center gap-2 text-xs text-dream-glow uppercase tracking-wider">
-				<span class="animate-pulse-glow">●</span>
-				<span>Running cognitive pipeline</span>
-			</div>
-			<ReasoningChain running />
-		</div>
-	{/if}
-
-	<!-- Response -->
-	{#if response && !loading}
-		{@const conf = response.confidence}
-		{@const confColor = confidenceColor(conf)}
-
-		<!-- REASONING CHAIN (hero — this IS the answer) -->
-		{#if response.reasoning}
-			<div class="space-y-3" use:reveal>
-				<div class="flex items-center justify-between">
-					<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-						<span class="text-dream-glow"><Icon name="reasoning" size={16} /></span>
-						Reasoning
-					</h2>
-					<div class="flex items-center gap-3 text-[10px] text-muted font-mono">
-						<span>intent: <span class="text-dim">{response.intent}</span></span>
-						<span>·</span>
-						<span><AnimatedNumber value={response.memoriesAnalyzed} /> analyzed</span>
-						<span>·</span>
-						<span style="color: {confColor}">{conf}% {confidenceLabel(conf)}</span>
-					</div>
-				</div>
-				<div
-					use:spotlight
-					class="spotlight-surface glass-panel rounded-2xl p-6 font-mono text-sm text-bright whitespace-pre-wrap leading-relaxed"
-					style="box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.03), 0 0 32px {confColor}20, 0 8px 32px rgba(0,0,0,0.4); border-color: {confColor}35;"
-				><span class="relative z-[1]">{response.reasoning}</span></div>
-			</div>
-		{/if}
-
-		<!-- Confidence meter + recommended answer (citation footer below the chain) -->
-		<div class="grid md:grid-cols-[280px_1fr] gap-4">
-			<!-- Confidence meter -->
-			<div
-				class="glass-panel rounded-2xl p-5 flex flex-col items-center justify-center text-center space-y-2"
-				style="box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.03), 0 0 32px {confColor}30, 0 8px 32px rgba(0,0,0,0.4); border-color: {confColor}40;"
-			>
-				<span class="text-[10px] uppercase tracking-wider text-dim">Confidence</span>
-				<div class="relative">
-					<span
-						class="block text-6xl font-bold font-mono conf-number"
-						style="color: {confColor}; text-shadow: 0 0 24px {confColor}80;"
-					>
-						<AnimatedNumber value={conf} /><span class="text-2xl align-top opacity-60">%</span>
-					</span>
-				</div>
-				<span
-					class="text-[10px] font-mono tracking-wider"
-					style="color: {confColor}"
-				>
-					{confidenceLabel(conf)}
-				</span>
-				<!-- Confidence ring -->
-				<svg width="220" height="14" viewBox="0 0 220 14" class="mt-1">
-					<rect x="0" y="5" width="220" height="4" rx="2" fill="rgba(255,255,255,0.05)" />
-					<rect
-						x="0"
-						y="5"
-						width={(conf / 100) * 220}
-						height="4"
-						rx="2"
-						fill={confColor}
-						style="filter: drop-shadow(0 0 6px {confColor});"
-					>
-						<animate attributeName="width" from="0" to={(conf / 100) * 220} dur="0.9s" fill="freeze" />
-					</rect>
-				</svg>
-				<div class="flex gap-3 pt-2 text-[10px] text-muted font-mono">
-					<span>intent: <span class="text-dim">{response.intent}</span></span>
-					<span>·</span>
-					<span>{response.memoriesAnalyzed} analyzed</span>
-				</div>
-			</div>
-
-			<!-- Recommended answer (primary source citation) -->
-			<div class="glass-panel rounded-2xl p-5 space-y-3 !border-synapse/25">
-				<div class="flex items-center justify-between">
-					<span class="text-[10px] uppercase tracking-wider text-synapse-glow">Primary Source</span>
-					<span class="text-[10px] font-mono text-muted" title={response.recommended.memory_id}>
-						#{response.recommended.memory_id.slice(0, 8)}
-					</span>
-				</div>
-				<p class="text-base text-bright leading-relaxed">{response.recommended.answer_preview}</p>
-				<div class="flex items-center gap-4 text-[11px] text-muted pt-1 border-t border-synapse/10">
-					<span class="flex items-center gap-1.5">
-						<span class="w-2 h-2 rounded-full" style="background: {confidenceColor(response.recommended.trust_score * 100)}"></span>
-						Trust {(response.recommended.trust_score * 100).toFixed(0)}%
-					</span>
-					<span>·</span>
-					<span>{new Date(response.recommended.date).toLocaleDateString()}</span>
-				</div>
-			</div>
-		</div>
-
-		<!-- Cognitive Pipeline visualization (how the engine got there) -->
-		<div class="space-y-3">
-			<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-				<span class="text-dream-glow"><Icon name="activation" size={15} /></span>
-				Cognitive Pipeline
-			</h2>
-			<div class="glass-panel rounded-2xl p-5">
-				<ReasoningChain
-					intent={response.intent}
-					memoriesAnalyzed={response.memoriesAnalyzed}
-					evidenceCount={response.evidence.length}
-					contradictionCount={response.contradictions.length}
-					supersededCount={response.superseded.length}
+		<form
+			class="ask-form"
+			onsubmit={(event) => {
+				event.preventDefault();
+				void runReplay();
+			}}
+		>
+			<label for="memory-question">Your question</label>
+			<div class="ask-row">
+				<input
+					bind:this={input}
+					bind:value={query}
+					id="memory-question"
+					type="search"
+					placeholder="Ask Vestige something it should remember…"
+					autocomplete="off"
 				/>
+				<button type="submit" disabled={!query.trim() || loading}>
+					<Icon name="reasoning" size={16} /> {loading ? 'Retrieving…' : 'Run replay'}
+				</button>
 			</div>
-		</div>
-
-		<!-- Evidence grid -->
-		<div class="space-y-3">
-			<div class="flex items-center justify-between">
-				<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-					<span class="text-synapse-glow"><Icon name="memories" size={15} /></span>
-					Evidence
-					<span class="text-muted font-normal">({response.evidence.length})</span>
-				</h2>
-				<div class="flex items-center gap-3 text-[10px] text-muted">
-					<span class="flex items-center gap-1">
-						<span class="w-2 h-2 rounded-full bg-synapse-glow"></span>primary
-					</span>
-					<span class="flex items-center gap-1">
-						<span class="w-2 h-2 rounded-full bg-recall"></span>supporting
-					</span>
-					<span class="flex items-center gap-1">
-						<span class="w-2 h-2 rounded-full bg-decay"></span>contradicting
-					</span>
-					<span class="flex items-center gap-1">
-						<span class="w-2 h-2 rounded-full bg-muted"></span>superseded
-					</span>
-				</div>
-			</div>
-
-			<div bind:this={evidenceGridEl} class="evidence-grid relative grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-				{#each response.evidence as ev, i (ev.id)}
-					<EvidenceCard
-						id={ev.id}
-						trust={ev.trust}
-						date={ev.date}
-						role={ev.role}
-						preview={ev.preview}
-						nodeType={ev.nodeType}
-						index={i}
-					/>
+			<div class="examples" aria-label="Example questions">
+				<span>Try:</span>
+				{#each EXAMPLES as example}
+					<button type="button" onclick={() => useExample(example)}>{example}</button>
 				{/each}
+			</div>
+		</form>
+	</section>
 
-				<!-- SVG overlay for contradiction arcs -->
-				{#if arcs.length > 0}
-					<svg class="contradiction-arcs pointer-events-none absolute inset-0 w-full h-full" aria-hidden="true">
-						<defs>
-							<linearGradient id="arcGrad" x1="0" y1="0" x2="1" y2="0">
-								<stop offset="0%" stop-color="#ef4444" stop-opacity="0.9" />
-								<stop offset="50%" stop-color="#ef4444" stop-opacity="0.4" />
-								<stop offset="100%" stop-color="#ef4444" stop-opacity="0.9" />
-							</linearGradient>
-						</defs>
-						{#each arcs as arc, i}
-							{@const mx = (arc.x1 + arc.x2) / 2}
-							{@const my = Math.min(arc.y1, arc.y2) - 28}
-							<path
-								d="M {arc.x1} {arc.y1} Q {mx} {my} {arc.x2} {arc.y2}"
-								fill="none"
-								stroke="url(#arcGrad)"
-								stroke-width="1.5"
-								stroke-dasharray="4 4"
-								class="arc-path"
-								style="animation-delay: {i * 120 + 600}ms;"
-							/>
-							<circle cx={arc.x1} cy={arc.y1} r="4" fill="#ef4444" opacity="0.8" class="arc-dot" style="animation-delay: {i * 120 + 600}ms;" />
-							<circle cx={arc.x2} cy={arc.y2} r="4" fill="#ef4444" opacity="0.8" class="arc-dot" style="animation-delay: {i * 120 + 700}ms;" />
-						{/each}
-					</svg>
+	{#if error}
+		<section class="notice error">
+			<Icon name="close" size={18} />
+			<div><strong>Replay could not complete.</strong><br />{error}</div>
+			<button type="button" onclick={() => void runReplay()}>Try again</button>
+		</section>
+	{:else if loading}
+		<section class="loading-card" aria-live="polite">
+			<div class="pulse"></div><div><strong>Retrieving from your memory</strong><p>Creating a trace and receipt for this run…</p></div>
+		</section>
+	{:else if scene}
+		<section class="proof-strip" aria-label="Retrieval proof summary">
+			<div><strong>{scene.evidence.length}</strong><span>memories retrieved</span></div>
+			<div><strong>{scene.contradictions.length}</strong><span>conflicts flagged</span></div>
+			<div><strong>{confidence}%</strong><span>confidence</span></div>
+			<div class:ready={Boolean(receiptId)}><strong>{receiptId ? 'Receipt ready' : 'Trace recorded'}</strong><span>{receiptId ? 'proof is linked to this run' : 'receipt availability pending'}</span></div>
+		</section>
+
+		<div class="results-grid">
+			<section class="decision-card">
+				<div class="section-kicker"><span class="dot"></span> Recommendation</div>
+				{#if scene.recommended?.answer_preview}
+					<h2>{scene.recommended.answer_preview}</h2>
+				{:else}
+					<h2>No reliable recommendation was produced.</h2>
 				{/if}
-			</div>
+				<p class="honesty"><strong>What this proves:</strong> the memory IDs below were retrieved in this run. It does not claim an answer changed.</p>
+				<div class="action-row">
+					<a href={blackBoxUrl}>Open this run in Black Box <span>→</span></a>
+					{#if receiptUrl}<a class="secondary" href={receiptUrl}>Open exact receipt <span>→</span></a>{/if}
+					<button class="quiet" type="button" onclick={reset}>New question</button>
+				</div>
+				{#if receiptSeal}
+					<div class="receipt-seal">
+						<strong>Receipt seal</strong>
+						<span>{receiptSeal.retrieved.length} retrieved · {receiptSeal.suppressed.length} suppressed · trust floor {receiptSeal.trust_floor}</span>
+					</div>
+				{/if}
+				{#if runId}<code class="run-id">RUN {runId}</code>{/if}
+			</section>
+
+			<aside class="method-card">
+				<p class="section-kicker">Why this is different</p>
+				<ol>
+					<li><span>1</span><div><strong>Retrieve</strong><small>Find the real memories relevant to your question.</small></div></li>
+					<li><span>2</span><div><strong>Evaluate</strong><small>Expose conflicts and older superseded context.</small></div></li>
+					<li><span>3</span><div><strong>Prove</strong><small>Keep a run receipt anyone can inspect.</small></div></li>
+				</ol>
+			</aside>
 		</div>
 
-		<!-- Contradictions section -->
-		{#if response.contradictions.length > 0}
-			<div class="space-y-3">
-				<h2 class="text-sm font-semibold flex items-center gap-2" style="color: #fca5a5;">
-					<span><Icon name="contradictions" size={15} /></span>
-					Contradictions Detected
-					<span class="font-normal text-muted">(<AnimatedNumber value={response.contradictions.length} />)</span>
-				</h2>
-				<div class="glass rounded-2xl p-4 space-y-3 !border-decay/30">
-					{#each response.contradictions as c, i}
-						<div class="flex items-start gap-3 p-3 rounded-xl bg-decay/[0.05] border border-decay/20">
-							<span class="text-decay text-lg">⚠</span>
-							<div class="flex-1 space-y-1">
-								<div class="flex items-center gap-2 text-[10px] font-mono text-muted">
-									<span>#{c.a_id.slice(0, 8)}</span>
-									<span class="text-decay">↔</span>
-									<span>#{c.b_id.slice(0, 8)}</span>
-								</div>
-								<p class="text-sm text-text">{c.summary}</p>
-							</div>
-							<span class="text-[10px] font-mono text-muted">pair {i + 1}</span>
-						</div>
+		<section class="evidence-panel">
+			<header>
+				<div><p class="section-kicker">Proven: retrieved in this run</p><h2>The evidence Vestige actually used</h2></div>
+				<span>{scene.evidence.length} memory{scene.evidence.length === 1 ? '' : 'ies'}</span>
+			</header>
+			{#if scene.evidence.length}
+				<div class="evidence-list">
+					{#each scene.evidence as evidence (evidence.id)}
+						<article class:primary={evidence.role === 'primary'} class:conflict={evidence.role === 'contradicting'}>
+							<div class="evidence-top"><span>{labelFor(evidence)}</span><b>{Math.round(evidence.trust * 100)}% trust</b></div>
+							<p>{evidence.preview || 'Memory content is unavailable in this response.'}</p>
+							<a href={`${base}/memories?memory=${encodeURIComponent(evidence.id)}`}><code>{evidence.id}</code></a>
+						</article>
 					{/each}
 				</div>
-			</div>
-		{/if}
-
-		<!-- Superseded -->
-		{#if response.superseded.length > 0}
-			<div class="space-y-3">
-				<h2 class="text-sm text-dim font-semibold flex items-center gap-2">
-					<span>⊘</span>
-					Superseded
-					<span class="font-normal text-muted">({response.superseded.length})</span>
-				</h2>
-				<div class="glass-subtle rounded-2xl p-4 space-y-2">
-					{#each response.superseded as s}
-						<div class="flex items-center gap-3 text-xs text-dim">
-							<span class="font-mono text-muted">#{s.old_id.slice(0, 8)}</span>
-							<span class="text-dream-glow">⟶</span>
-							<span class="font-mono text-synapse-glow">#{s.new_id.slice(0, 8)}</span>
-							<span class="text-muted">{s.reason}</span>
-						</div>
-					{/each}
-				</div>
-			</div>
-		{/if}
-
-		<!-- Evolution + insights side-by-side -->
-		<div class="grid md:grid-cols-2 gap-4">
-			{#if response.evolution.length > 0}
-				<div class="space-y-3">
-					<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-						<span class="text-dream-glow">↗</span>
-						Evolution
-					</h2>
-					<div class="glass rounded-2xl p-4 space-y-2">
-						{#each response.evolution as ev}
-							<div class="flex items-start gap-3 text-xs">
-								<span class="text-muted font-mono whitespace-nowrap">
-									{new Date(ev.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-								</span>
-								<span
-									class="mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0"
-									style="background: {confidenceColor(ev.trust * 100)}"
-								></span>
-								<span class="text-dim flex-1">{ev.summary}</span>
-							</div>
-						{/each}
-					</div>
-				</div>
+			{:else}
+				<div class="empty-evidence">No memory was retrieved for this question. That result is visible rather than hidden.</div>
 			{/if}
+		</section>
 
-			{#if response.related_insights.length > 0}
-				<div class="space-y-3">
-					<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-						<span class="text-dream-glow"><Icon name="sparkle" size={15} /></span>
-						Related Insights
-					</h2>
-					<div class="glass rounded-2xl p-4 space-y-2">
-						{#each response.related_insights as ins}
-							<p class="text-xs text-dim leading-relaxed">
-								<span class="text-synapse-glow mr-2">›</span>{ins}
-							</p>
-						{/each}
-					</div>
-				</div>
-			{/if}
-		</div>
+		{#if scene.contradictions.length || scene.superseded.length}
+			<section class="attribution-panel">
+				<p class="section-kicker">Attributed: likely influence</p>
+				<h2>Context Vestige weighed, but did not treat as decisive</h2>
+				{#each scene.contradictions as conflict}
+					<p><strong>Conflict flagged:</strong> {conflict.summary}</p>
+				{/each}
+				{#each scene.superseded as older}
+					<p><strong>Superseded:</strong> {older.preview || older.id} <code>{older.id}</code></p>
+				{/each}
+			</section>
+		{/if}
+	{:else}
+		<section class="empty-state">
+			<div class="empty-icon"><Icon name="memories" size={28} /></div>
+			<div><h2>Turn an AI answer into evidence you can inspect.</h2><p>Run a replay to reveal retrieved memory, confidence, conflicts, and the exact run receipt.</p></div>
+		</section>
 	{/if}
-
-	<!-- Empty state -->
-	{#if !response && !loading && !error}
-		<div class="glass-subtle rounded-2xl p-12 text-center space-y-3 enter">
-			<div class="mx-auto w-fit text-dream-glow opacity-40 breathe"><Icon name="reasoning" size={44} strokeWidth={1.2} /></div>
-			<p class="text-sm text-dim">
-				Ask anything. Vestige will run the full reasoning pipeline and show you its work.
-			</p>
-			<p class="text-[10px] text-muted font-mono">
-				8-stage pipeline: retrieval → rerank → activation → trust-score → supersession →
-				contradiction → relations → chain. Zero LLM calls, 100% local.
-			</p>
-		</div>
-	{/if}
-</div>
+</main>
 
 <style>
-	.conf-number {
-		animation: conf-pop 900ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
-	}
-
-	@keyframes conf-pop {
-		0% {
-			opacity: 0;
-			transform: scale(0.5);
-		}
-		60% {
-			opacity: 1;
-			transform: scale(1.1);
-		}
-		100% {
-			opacity: 1;
-			transform: scale(1);
-		}
-	}
-
-	.arc-path {
-		animation: arc-draw 900ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
-		stroke-dashoffset: 0;
-	}
-
-	@keyframes arc-draw {
-		0% {
-			opacity: 0;
-			stroke-dasharray: 0 400;
-		}
-		100% {
-			opacity: 1;
-			stroke-dasharray: 4 4;
-		}
-	}
-
-	.arc-dot {
-		animation: arc-dot-pulse 1400ms ease-in-out infinite;
-	}
-
-	@keyframes arc-dot-pulse {
-		0%,
-		100% {
-			opacity: 0.8;
-			r: 4;
-		}
-		50% {
-			opacity: 1;
-			r: 5;
-		}
-	}
-
-	.evidence-grid {
-		/* give arc overlay room without affecting layout */
-		isolation: isolate;
-	}
-
-	.contradiction-arcs {
-		z-index: 5;
-	}
+	:global(body) { background: #071012; }
+	.replay-shell { min-height: 100%; max-width: 1180px; margin: 0 auto; padding: 2rem clamp(1rem, 3vw, 2.5rem) 4rem; color: #e8f5f4; }
+	.live-pill { display: inline-flex; align-items: center; gap: .5rem; color: #91bab6; font: 600 .72rem/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
+	.live-pill span, .dot { width: .5rem; height: .5rem; border-radius: 999px; background: #00e7c8; box-shadow: 0 0 12px #00e7c8; }
+	.hero-card, .decision-card, .method-card, .evidence-panel, .attribution-panel, .empty-state, .loading-card, .notice { border: 1px solid rgba(139, 192, 184, .17); background: linear-gradient(135deg, rgba(14, 33, 35, .96), rgba(7, 18, 21, .94)); box-shadow: 0 18px 50px rgba(0,0,0,.2); border-radius: 1.15rem; }
+	.hero-card { margin-top: 1.5rem; padding: clamp(1.3rem, 3vw, 2.6rem); display: grid; gap: 2rem; grid-template-columns: minmax(0, .85fr) minmax(380px, 1.15fr); background: radial-gradient(circle at 100% 0%, rgba(0, 231, 200, .12), transparent 42%), linear-gradient(135deg, #10282a, #071315); }
+	.eyebrow, .section-kicker { margin: 0; color: #55dbc8; font: 700 .68rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; text-transform: uppercase; }
+	.hero-copy h1 { max-width: 16ch; margin: .7rem 0 .8rem; font-size: clamp(1.7rem, 3.2vw, 2.65rem); line-height: 1.05; letter-spacing: -.045em; color: #f2fffd; }
+	.hero-copy > p:last-child { max-width: 48ch; margin: 0; color: #a9c4c1; line-height: 1.55; }
+	.ask-form { align-self: end; } .ask-form label { display: block; margin-bottom: .6rem; color: #b8d1cf; font-size: .78rem; font-weight: 700; }
+	.ask-row { display: flex; gap: .65rem; } .ask-row input { min-width: 0; flex: 1; border: 1px solid rgba(120, 178, 170, .3); border-radius: .75rem; background: rgba(0,0,0,.24); padding: .9rem 1rem; color: #f4fffd; outline: none; font-size: .92rem; } .ask-row input:focus { border-color: #4ce3cb; box-shadow: 0 0 0 3px rgba(0,231,200,.13); }
+	button, .action-row a { cursor: pointer; } .ask-row button { border: 0; border-radius: .75rem; padding: .9rem 1.05rem; display: inline-flex; align-items: center; gap: .45rem; background: #00cbb0; color: #03201d; font-weight: 800; white-space: nowrap; } .ask-row button:disabled { opacity: .45; cursor: not-allowed; }
+	.examples { display: flex; flex-wrap: wrap; gap: .45rem; align-items: center; margin-top: .8rem; color: #7d9c99; font-size: .72rem; } .examples button { border: 1px solid rgba(134, 184, 177, .22); border-radius: 99px; background: transparent; padding: .35rem .6rem; color: #b9d5d1; font-size: .72rem; } .examples button:hover { border-color: #54ddc9; color: #effffd; }
+	.proof-strip { display: grid; grid-template-columns: repeat(4, 1fr); margin: 1rem 0; overflow: hidden; border: 1px solid rgba(139, 192, 184, .16); border-radius: .9rem; background: rgba(9, 24, 26, .8); } .proof-strip > div { padding: 1rem 1.15rem; border-right: 1px solid rgba(139, 192, 184, .15); } .proof-strip > div:last-child { border: 0; } .proof-strip strong { display: block; color: #eafffb; font-size: 1.1rem; } .proof-strip span { display: block; margin-top: .2rem; color: #82a39f; font-size: .7rem; } .proof-strip .ready strong { color: #5be6cf; }
+	.results-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(250px, .65fr); gap: 1rem; } .decision-card, .method-card, .evidence-panel, .attribution-panel { padding: clamp(1.15rem, 2vw, 1.6rem); } .section-kicker { display: flex; align-items: center; gap: .5rem; } .decision-card h2 { max-width: 30ch; margin: 1rem 0; color: #f4fffd; font-size: clamp(1.3rem, 2.4vw, 1.85rem); line-height: 1.25; letter-spacing: -.025em; } .honesty { margin: 0; border-left: 2px solid #5ce3d0; padding-left: .85rem; color: #a8c6c1; font-size: .83rem; line-height: 1.5; }
+	.action-row { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1.3rem; } .action-row a, .quiet { border: 1px solid rgba(102, 226, 205, .38); border-radius: .6rem; background: rgba(0, 225, 195, .11); padding: .6rem .75rem; color: #75f0dc; font-size: .78rem; font-weight: 700; text-decoration: none; } .action-row .secondary, .quiet { border-color: rgba(158, 190, 186, .25); background: transparent; color: #aec9c5; } .receipt-seal { margin-top: 1rem; display: grid; gap: .2rem; padding: .7rem .8rem; border: 1px solid rgba(34, 199, 222, .28); border-radius: .6rem; background: rgba(2, 12, 16, .7); color: #9fd9d0; font-size: .74rem; } .receipt-seal strong { color: #7ff3e6; font-size: .62rem; letter-spacing: .12em; text-transform: uppercase; } .run-id { display: block; margin-top: 1rem; color: #60817c; font-size: .66rem; overflow-wrap: anywhere; }
+	.method-card { background: linear-gradient(180deg, rgba(10, 29, 31, .96), rgba(7, 17, 19, .96)); } .method-card ol { margin: 1.2rem 0 0; padding: 0; list-style: none; } .method-card li { display: flex; gap: .7rem; margin: 1rem 0; } .method-card li > span { display: grid; place-items: center; flex: 0 0 1.55rem; height: 1.55rem; border-radius: 50%; background: rgba(0,226,196,.12); color: #60e6d2; font-size: .72rem; font-weight: 800; } .method-card strong { display: block; font-size: .85rem; } .method-card small { display: block; margin-top: .18rem; color: #87a6a2; line-height: 1.35; }
+	.evidence-panel, .attribution-panel { margin-top: 1rem; } .evidence-panel header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; } .evidence-panel h2, .attribution-panel h2 { margin: .45rem 0 0; color: #effdfa; font-size: 1.13rem; } .evidence-panel header > span { border-radius: 99px; background: rgba(103, 157, 150, .12); padding: .35rem .55rem; color: #94b9b4; font-size: .7rem; white-space: nowrap; }
+	.evidence-list { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 285px), 1fr)); } .evidence-list article { min-width: 0; border: 1px solid rgba(144, 191, 184, .17); border-radius: .75rem; background: rgba(1, 12, 13, .34); padding: 1rem; } .evidence-list article.primary { border-color: rgba(60, 225, 198, .46); box-shadow: inset 3px 0 #2ce0c4; } .evidence-list article.conflict { border-color: rgba(255, 115, 104, .42); } .evidence-top { display: flex; justify-content: space-between; gap: .5rem; color: #5ce2cf; font-size: .68rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; } .evidence-list article.conflict .evidence-top { color: #ff9c91; } .evidence-top b { color: #a3c3bf; font-weight: 600; } .evidence-list p { min-height: 3.2em; margin: .75rem 0; color: #d6e8e5; font-size: .86rem; line-height: 1.5; } .evidence-list code, .attribution-panel code { color: #6e9690; font-size: .65rem; overflow-wrap: anywhere; }
+	.attribution-panel { border-color: rgba(234, 174, 80, .27); background: linear-gradient(135deg, rgba(49, 35, 14, .44), rgba(16, 23, 21, .94)); } .attribution-panel .section-kicker { color: #e9bc6e; } .attribution-panel p:not(.section-kicker) { margin: .8rem 0 0; color: #c4c8b5; font-size: .85rem; line-height: 1.5; }
+	.empty-state, .loading-card, .notice { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; padding: 1.35rem; } .empty-icon, .pulse { display: grid; place-items: center; flex: 0 0 3.2rem; height: 3.2rem; border-radius: .8rem; background: rgba(0,226,196,.1); color: #63e6d2; } .empty-state h2, .loading-card strong { margin: 0; color: #effdfa; font-size: 1rem; } .empty-state p, .loading-card p { margin: .35rem 0 0; color: #91b0ac; font-size: .83rem; line-height: 1.45; } .pulse { position: relative; } .pulse::after { content: ''; width: .72rem; height: .72rem; border-radius: 50%; background: #58e8d2; animation: pulse 1s infinite alternate; } .notice.error { border-color: rgba(255, 111, 100, .4); color: #f6b0a9; } .notice button { margin-left: auto; border: 1px solid currentColor; border-radius: .5rem; background: transparent; padding: .45rem .65rem; color: inherit; }
+	@keyframes pulse { to { opacity: .35; transform: scale(.55); } }
+	@media (max-width: 800px) { .hero-card, .results-grid { grid-template-columns: 1fr; } .proof-strip { grid-template-columns: 1fr 1fr; } .proof-strip > div:nth-child(2) { border-right: 0; } .proof-strip > div:nth-child(-n+2) { border-bottom: 1px solid rgba(139, 192, 184, .15); } }
+	@media (max-width: 520px) { .replay-shell { padding-top: 1rem; } .ask-row { flex-direction: column; } .ask-row button { justify-content: center; } .proof-strip { grid-template-columns: 1fr; } .proof-strip > div { border-right: 0; border-bottom: 1px solid rgba(139, 192, 184, .15); } .proof-strip > div:last-child { border-bottom: 0; } }
 </style>

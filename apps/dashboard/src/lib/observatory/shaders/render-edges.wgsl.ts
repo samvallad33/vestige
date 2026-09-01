@@ -23,7 +23,11 @@ struct Params {
 	brightness: f32,
 	demo_id: f32,
 	time: f32,
-	_pad: f32,
+	capture_mode: f32,
+	live_kind: f32,
+	live_frame: f32,
+	live_energy: f32,
+	projection_days: f32,
 };
 
 struct Camera {
@@ -53,11 +57,13 @@ struct Node {
 // spectral(w) (visual DNA §7.1): indigo → cyan-teal → mint → magenta rim.
 fn spectral(w_in: f32) -> vec3<f32> {
 	let w = fract(w_in);
+	// Fossil band (doctrine): sediment → amber → jade → chalk. Magenta is
+	// reserved for backward-causal kind=1 wavefronts only (RSB).
 	let stops = array<vec3<f32>, 4>(
-		vec3<f32>(0.20, 0.28, 0.95), // indigo
-		vec3<f32>(0.20, 0.85, 0.90), // cyan-teal
-		vec3<f32>(0.45, 1.00, 0.72), // mint
-		vec3<f32>(0.85, 0.45, 1.00)  // magenta rim
+		vec3<f32>(0.18, 0.16, 0.08), // sediment
+		vec3<f32>(0.96, 0.62, 0.16), // amber debt
+		vec3<f32>(0.16, 0.95, 0.66), // jade recall
+		vec3<f32>(0.91, 1.00, 0.72)  // luciferin chalk
 	);
 	let f = w * 4.0;
 	let i = u32(floor(f)) % 4u;
@@ -148,7 +154,12 @@ fn vs_main(
 	let waveAlpha = waveIntensity * 0.9 * params.brightness; // bright pulse
 
 	// Spectral hue rides the wavefront.
-	out.color = baseColor * edgeAlpha + waveColor * waveAlpha;
+	// FOSSIL LIGHT existence mask — an edge only exists while BOTH endpoints
+	// do. Live retention of exactly 0 is the "not yet born at the scrubbed
+	// instant" sentinel (fsrs.ts floors living memories at 0.001), so edges
+	// vanish with their memories when the chrono rewinds across a birthday.
+	let exists = step(0.0005, src.vel_retention.w) * step(0.0005, tgt.vel_retention.w);
+	out.color = (baseColor * edgeAlpha + waveColor * waveAlpha) * exists;
 
 	// Line width: thicker at the wavefront for visibility.
 	out.width = 1.0 + waveIntensity * 3.0;

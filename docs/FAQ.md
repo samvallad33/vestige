@@ -600,11 +600,10 @@ This matches empirical data better than the exponential model most apps use.
 <details>
 <summary><b>"What embedding model does Vestige use?"</b></summary>
 
-**Nomic Embed Text v1.5** (via fastembed):
-- 768-dimensional vectors
-- ~130MB model size
-- Runs 100% local (after first download)
-- Good balance of quality vs speed
+**Nomic Compact** uses Nomic Embed Text v1.5 locally via fastembed, with a
+preserved 256-dimensional legacy profile. It is the default baseline; the
+separate Nomic retrieval profile and Qwen profiles are explicit migration
+choices, never a runtime selector.
 
 Why Nomic:
 - Open source (Apache 2.0)
@@ -612,7 +611,10 @@ Why Nomic:
 - No API costs or rate limits
 - Fast enough for real-time search
 
-The model is cached in the platform user cache directory first, with `./.fastembed_cache` as a fallback. Set `FASTEMBED_CACHE_PATH` to choose a specific cache path.
+Vestige never downloads or switches an embedding profile at startup or on first
+use. Optional artifacts must be supplied locally, hash-verified, evaluated,
+migrated, and explicitly activated. Set `FASTEMBED_CACHE_PATH` only to locate
+an already-provisioned legacy Nomic cache.
 </details>
 
 <details>
@@ -838,12 +840,11 @@ This folder is created by the fastembed library on first run, in whatever direct
 2. **Set cache path**: `export FASTEMBED_CACHE_PATH="$HOME/.fastembed_cache"`
 3. **Add to `.gitignore`**
 
-### Model download fails
+### Embedding profile install cannot proceed
 
-First run requires internet to download the embedding model (~130MB). If behind a proxy:
-```bash
-export HTTPS_PROXY=your-proxy:port
-```
+Vestige does not download a model in the background. Inspect the profile state
+with `vestige embeddings status`; an optional profile can proceed only after
+its local artifacts and compatible runner have been verified.
 
 ### "Tools not showing" in Claude
 

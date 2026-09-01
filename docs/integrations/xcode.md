@@ -162,13 +162,17 @@ See [CLAUDE.md templates](../CLAUDE-SETUP.md) for a full setup.
 
 ### Embedding model cache
 
-The first time Vestige runs, it downloads the embedding model (~130MB). In Xcode's sandboxed environment, the cache location is:
+Vestige does not download or switch embedding models when it starts. If a
+legacy Nomic cache has already been provisioned locally, its Xcode sandbox
+location is:
 
 ```
 ~/Library/Caches/vestige/fastembed
 ```
 
-If the download fails behind a corporate proxy, pre-download by running `vestige-mcp` once from your terminal.
+Optional Qwen profiles require explicit local-artifact verification, evaluation,
+migration, and activation; they never use the Xcode session to download a
+model.
 
 ---
 

@@ -31,6 +31,7 @@
 		| 'embeddings'
 		| 'intentions'
 		| 'stats'
+		| 'embeddings'
 		| 'settings'
 		| 'command'
 		| 'search'
@@ -74,12 +75,12 @@
 		contradictions: `<path d="M3 9h8l-2.5-2.5M3 9l2.5 2.5M21 15h-8l2.5 2.5M21 15l-2.5-2.5"/><path d="M12 4v16" opacity=".35" stroke-dasharray="2 2.5"/>`,
 		// Tessellated grid — recurring patterns.
 		patterns: `<path d="M4 8.5 8.5 4 13 8.5 8.5 13zM13 8.5 17.5 4 22 8.5 17.5 13zM8.5 17 13 12.5 17.5 17 13 21.5z" opacity=".9"/>`,
-		// Layered vector space — profile-scoped embeddings.
-		embeddings: `<ellipse cx="12" cy="6.5" rx="7.5" ry="3"/><path d="M4.5 6.5v5.5c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6.5M4.5 12v5.5c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V12"/><circle cx="12" cy="6.5" r=".9" fill="currentColor" stroke="none"/>`,
 		// Crosshair / target — intentions / aim.
 		intentions: `<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.4"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/>`,
 		// Bar chart — stats.
 		stats: `<path d="M4 20h16"/><rect x="5.5" y="11" width="3.2" height="6.5" rx="1" fill="currentColor" stroke="none"/><rect x="10.4" y="7" width="3.2" height="10.5" rx="1" fill="currentColor" stroke="none" opacity=".85"/><rect x="15.3" y="13.5" width="3.2" height="4" rx="1" fill="currentColor" stroke="none" opacity=".7"/>`,
+		// Stacked vector planes — independent, non-comparable embedding spaces.
+		embeddings: `<path d="m5 7 7-3.5L19 7l-7 3.5z"/><path d="m5 12 7 3.5 7-3.5M5 17l7 3.5 7-3.5"/><path d="M5 7v10M19 7v10" opacity=".55"/><circle cx="12" cy="10.5" r="1" fill="currentColor" stroke="none"/>`,
 		// Gear — settings.
 		settings: `<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.6M12 18.9v2.6M21.5 12h-2.6M5.1 12H2.5M18.7 5.3l-1.9 1.9M7.2 16.8l-1.9 1.9M18.7 18.7l-1.9-1.9M7.2 7.2 5.3 5.3"/>`,
 

@@ -67,7 +67,7 @@ export interface RescueShaderConsts {
 }
 
 export interface RescueVerdictCopy {
-	headline: 'root cause found';
+	headline: 'root cause found' | 'candidate cause found';
 	causeLabel: string;
 	failureLabel: string;
 	causeDate: string;
@@ -75,6 +75,24 @@ export interface RescueVerdictCopy {
 	k: number;
 	/** `${hops} hops back · ${causeDate} · vector search: 0 for ${k}` */
 	receipt: string;
+}
+
+/** Exact evidence returned by the Backfill receipt. The scene must not infer
+ * substitutes for any of these ids. Baseline probes are intentionally absent
+ * until the backend supplies actual baseline candidates. */
+export interface ReceiptBackfillEvidence {
+	failureId: string;
+	/** Ordered, backend-recorded candidate → failure route. This is required
+	 * for a proof replay: any missing/in-field mismatch makes the plan
+	 * non-viable instead of allowing topology inference. */
+	pathIds?: string[];
+	candidates: Array<{
+		memoryId: string;
+		sharedEntities: string[];
+		ageDays: number;
+		similarityRank: number | null;
+		promoted: boolean;
+	}>;
 }
 
 export interface RescuePlan {
@@ -459,8 +477,10 @@ function emptyPlan(nodeCount: number): RescuePlan {
 export function buildRescuePlan(
 	response: GraphResponse,
 	graph: ObservatoryGraph,
-	seed: string
+	seed: string,
+	evidence?: ReceiptBackfillEvidence
 ): RescuePlan {
+	if (evidence) return buildReceiptRescuePlan(response, graph, evidence);
 	const n = graph.nodes.length;
 	if (n === 0) return emptyPlan(0);
 
@@ -629,6 +649,107 @@ export function buildRescuePlan(
 		pathMetas,
 		spineBeats,
 		verdict,
+		consts: { hopSlot, causeDepth }
+	};
+}
+
+/**
+ * Receipt-first Backfill replay. Unlike the cinematic fallback above this
+ * accepts no layout/age-selected stand-ins: if the exact failure or candidate
+ * is absent from the field it returns non-viable and the host shows the receipt
+ * rather than inventing a magenta route.
+ */
+export function buildReceiptRescuePlan(
+	response: GraphResponse,
+	graph: ObservatoryGraph,
+	evidence: ReceiptBackfillEvidence
+): RescuePlan {
+	const n = graph.nodes.length;
+	const failureIndex = graph.indexById.get(evidence.failureId) ?? -1;
+	const pathIds = evidence.pathIds ?? [];
+	// Receipt proof has a deliberately hard contract. A route is a recorded
+	// fact, not an invitation to run a graph search. Require it to be ordered,
+	// complete, and to land on the receipt's failure.
+	if (
+		failureIndex < 0 ||
+		pathIds.length < 2 ||
+		pathIds[pathIds.length - 1] !== evidence.failureId ||
+		new Set(pathIds).size !== pathIds.length
+	) return emptyPlan(n);
+	const pathIndices = pathIds.map((id) => graph.indexById.get(id));
+	if (pathIndices.some((index) => index === undefined)) return emptyPlan(n);
+	const indexedPath = pathIndices as number[];
+	const causeIndex = indexedPath[0];
+	if (causeIndex === failureIndex) return emptyPlan(n);
+	const cause = evidence.candidates.find((candidate) => candidate.memoryId === pathIds[0]);
+	// If the route's origin isn't one of the receipt candidates, the receipt is
+	// internally inconsistent. Keep the field honest and show the raw receipt.
+	if (!cause) return emptyPlan(n);
+
+	const hopDepths = new Uint16Array(n);
+	hopDepths.fill(UNREACHED);
+	hopDepths[failureIndex] = 0;
+	indexedPath.forEach((index, i) => {
+		hopDepths[index] = indexedPath.length - 1 - i;
+	});
+	const waveData = new Uint32Array(n);
+	waveData[failureIndex] = 1 << 16;
+	indexedPath.slice(0, -1).forEach((index) => {
+		waveData[index] = hopDepths[index];
+	});
+	waveData[causeIndex] |= 1 << 17;
+	const causeDepth = indexedPath.length - 1;
+	const hopSlot = hopSlotFor(causeDepth);
+	const causeLabel = truncateLabel(graph.nodes[causeIndex].label);
+	const failureLabel = truncateLabel(graph.nodes[failureIndex].label);
+	const causeDate = response.nodes.find((node) => node.id === cause.memoryId)?.createdAt?.slice(0, 10) ?? '';
+	const pathData = new Uint32Array((indexedPath.length - 1) * UINTS_PER_STEP);
+	const pathMetas: PathStepMeta[] = indexedPath.slice(0, -1).map((sourceIndex, i) => {
+		const targetIndex = indexedPath[i + 1];
+		const beatFrame = WAVE_START + i * hopSlot;
+		pathData[i * UINTS_PER_STEP] = sourceIndex;
+		pathData[i * UINTS_PER_STEP + 1] = targetIndex;
+		pathData[i * UINTS_PER_STEP + 2] = beatFrame;
+		pathData[i * UINTS_PER_STEP + 3] = PATH_KIND.backwardCause;
+		return {
+			sourceIndex,
+			targetIndex,
+			beatFrame,
+			kind: PATH_KIND.backwardCause,
+			beatKind: 'receipt-path',
+			nodeId: pathIds[i + 1],
+			label: `recorded path · ${truncateLabel(graph.nodes[targetIndex].label)}`
+		};
+	});
+	const join = cause.sharedEntities.length ? cause.sharedEntities.join(', ') : 'recorded entity';
+	const rank = cause.similarityRank === null ? 'rank unavailable' : `embedding rank #${cause.similarityRank}`;
+	const spineBeats: PathStepMeta[] = [
+		{ sourceIndex: failureIndex, targetIndex: failureIndex, beatFrame: DETONATE_FRAME, kind: 1, beatKind: 'receipt-failure', nodeId: evidence.failureId, label: `recorded failure · ${failureLabel}` },
+		{ sourceIndex: failureIndex, targetIndex: failureIndex, beatFrame: WAVE_START, kind: 1, beatKind: 'receipt-join', nodeId: 'receipt-join', label: `shared entity · ${join}` },
+		{ sourceIndex: causeIndex, targetIndex: failureIndex, beatFrame: WAVE_START + (causeDepth - 1) * hopSlot, kind: PATH_KIND.backwardCause, beatKind: 'receipt-candidate', nodeId: cause.memoryId, label: `candidate · ${causeLabel}` },
+		{ sourceIndex: causeIndex, targetIndex: causeIndex, beatFrame: VERDICT_START, kind: 1, beatKind: 'receipt-verdict', nodeId: 'receipt-verdict', label: 'candidate cause found' }
+	];
+	return {
+		viable: true,
+		failureIndex,
+		causeIndex,
+		lookalikeIndices: [],
+		hopDepths,
+		causeDepth,
+		hopSlot,
+		waveData,
+		pathData,
+		pathMetas,
+		spineBeats,
+		verdict: {
+			headline: 'candidate cause found',
+			causeLabel,
+			failureLabel,
+			causeDate,
+			hops: causeDepth,
+			k: 0,
+			receipt: `${cause.ageDays.toFixed(1)}d back · ${join} · ${rank}`
+		},
 		consts: { hopSlot, causeDepth }
 	};
 }

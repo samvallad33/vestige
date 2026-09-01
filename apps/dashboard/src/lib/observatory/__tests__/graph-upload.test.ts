@@ -116,7 +116,7 @@ describe('meaning-layer palette (visual DNA §7.1)', () => {
 		const gone = toObservatoryNode(node({ id: 'u', retention: 0.01 }), 3);
 		expect(nodeBaseColor(active)).toEqual(hexToRgb01('#10b981')); // emerald
 		expect(nodeBaseColor(dormant)).toEqual(hexToRgb01('#f59e0b')); // amber
-		expect(nodeBaseColor(silent)).toEqual(hexToRgb01('#8b5cf6')); // violet
+		expect(nodeBaseColor(silent)).toEqual(hexToRgb01('#4A7D8C')); // fossil cyan — never purple
 		expect(nodeBaseColor(gone)).toEqual(hexToRgb01('#6b7280')); // slate
 	});
 

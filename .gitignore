@@ -156,3 +156,7 @@ blackbox-proof-*/*.jsonl
 
 # Hermes agent-runtime conversation dumps (dated hex, tens of MB, embed system prompts)
 [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+
+# Local agent tooling — never commit
+/.codex/
+/.agents/

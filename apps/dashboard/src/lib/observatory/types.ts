@@ -104,9 +104,66 @@ export const PATH_KIND = {
 //   [8]  brightness       (from graphState)
 //   [9]  demoId           (DemoMode index)
 //   [10] time             (fixed sim seconds = frame / fps; NOT wall clock)
-//   [11] _pad
-export const PARAMS_FLOATS = 12;
-export const PARAMS_BYTES = PARAMS_FLOATS * 4; // 48 (multiple of 16)
+//   [11] captureMode      (1.0 = ?frame=N freeze — simulate.wgsl skips physics)
+//
+// --- LIVE lanes (v2.3: the field driven by the real backend event stream) ---
+// These carry the state of the ONE active live cognitive event so every
+// shader can react to real backend data instead of the deterministic
+// DemoClock. All are 0.0 at rest (a calm field), so a build with no live
+// bridge is pixel-identical to before.
+//   [12] liveKind         (LiveKind index — 0 none, see LIVE_KIND below)
+//   [13] liveFrame        (frames SINCE the active live event fired — the
+//                          event-relative animation frame the live shader
+//                          branches read, so the choreography plays once from
+//                          the event instead of riding the wrapped loop clock)
+//   [14] liveEnergy       (0..1+ global agitation — dream storm loosens the
+//                          sim, firewall shock rings the field, etc.)
+//   [15] projectionDays   (Phase 1 forward-scrub: added to every node's real
+//                          FSRS elapsed so decay is legible in one session)
+//   [16] cursorX          (cursor in pre-aspect-divide NDC; far offscreen at rest)
+//   [17] cursorY
+//   [18] cursorVx         (smoothed pre-divide cursor velocity, per pointer sample)
+//   [19] cursorVy
+export const PARAMS_FLOATS = 20;
+export const PARAMS_BYTES = PARAMS_FLOATS * 4; // 80 (multiple of 16)
+
+/**
+ * Live-event kinds written into params[12] (liveKind). The field's shaders
+ * branch on this the same way they branch on demo_id, but it is driven by the
+ * real WebSocket stream, not the DemoClock. 0 = nothing live (calm field).
+ */
+export const LIVE_KIND = {
+	none: 0,
+	firewall: 1, // MemorySuppressed / contradiction quarantine on camera
+	dreamStorm: 2, // DreamStarted..DreamCompleted consolidation storm
+	causalRecall: 3, // BackfillFired / DeepReferenceCompleted backward path
+	birth: 4 // MemoryCreated (deferred hero — reserved)
+} as const;
+export type LiveKind = (typeof LIVE_KIND)[keyof typeof LIVE_KIND];
+
+/** Param array indices for the live lanes (mirror the WGSL Params order). */
+export const PARAM_IDX = {
+	frame: 0,
+	loopPhase: 1,
+	nodeCount: 2,
+	edgeCount: 3,
+	pathCount: 4,
+	pulse: 5,
+	viewportW: 6,
+	viewportH: 7,
+	brightness: 8,
+	demoId: 9,
+	time: 10,
+	captureMode: 11,
+	liveKind: 12,
+	liveFrame: 13,
+	liveEnergy: 14,
+	projectionDays: 15,
+	cursorX: 16,
+	cursorY: 17,
+	cursorVx: 18,
+	cursorVy: 19
+} as const;
 
 export function demoModeId(mode: DemoMode): number {
 	const i = DEMO_MODES.indexOf(mode);
@@ -125,6 +182,23 @@ export interface ObservatoryNode {
 	tags: string[];
 	isCenter: boolean;
 	suppressed: boolean;
+	/**
+	 * v2.3 living field — real FSRS state. `stability` (days) + `lastAccessed`
+	 * (ISO) let the live decay pass recompute retrievability every frame on the
+	 * true forgetting curve (fsrs.ts). Undefined when the backend serializer
+	 * predates the get_graph stability/lastAccessed add — the field then holds
+	 * the static `retention` snapshot instead (graceful, still honest).
+	 */
+	stability?: number;
+	lastAccessed?: string;
+	/**
+	 * FOSSIL LIGHT — real creation instant (ISO). The chrono scrub's existence
+	 * mask: retention evaluates to exactly 0 before this, so rewinding across a
+	 * memory's birthday pops it out of the field. Served by get_graph
+	 * (handlers.rs `"createdAt"`); undefined on older serializers (node then
+	 * simply never unbirths — graceful).
+	 */
+	createdAt?: string;
 }
 
 export interface ObservatoryEdge {
@@ -152,7 +226,13 @@ export function toObservatoryNode(n: GraphNode, index: number): ObservatoryNode 
 		retention: typeof n.retention === 'number' ? n.retention : 0,
 		tags: Array.isArray(n.tags) ? n.tags : [],
 		isCenter: !!n.isCenter,
-		suppressed: (n.suppression_count ?? 0) > 0
+		suppressed: (n.suppression_count ?? 0) > 0,
+		stability: typeof n.stability === 'number' ? n.stability : undefined,
+		lastAccessed: typeof n.lastAccessed === 'string' ? n.lastAccessed : undefined,
+		createdAt:
+			typeof (n as { createdAt?: unknown }).createdAt === 'string'
+				? (n as { createdAt: string }).createdAt
+				: undefined
 	};
 }
 

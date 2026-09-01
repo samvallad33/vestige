@@ -1,1 +1,0 @@
-import{A as S,S as T,R as h,T as k,U as A}from"./COHU1F_1.js";function t(r,i){return r===i||(r==null?void 0:r[A])===i}function x(r={},i,a,c){return S(()=>{var f,s;return T(()=>{f=s,s=[],h(()=>{r!==a(...s)&&(i(r,...s),f&&t(a(...f),r)&&i(null,...f))})}),()=>{k(()=>{s&&t(a(...s),r)&&i(null,...s)})}}),r}export{x as b};

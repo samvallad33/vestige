@@ -1,677 +1,389 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
-	import Graph3D from '$components/Graph3D.svelte';
-	import RetentionCurve from '$components/RetentionCurve.svelte';
-	import TimeSlider from '$components/TimeSlider.svelte';
-	import MemoryStateLegend from '$components/MemoryStateLegend.svelte';
-	// ⚠ MEMORY CINEMA — DO NOT MODIFY. This is the flawless, protected
-	//   AI-narrated flythrough experience. The graph-control overhaul below
-	//   (icons, dropdown, alive empty states) is a SEPARATE concern and must
-	//   never touch the Cinema import, element, or its props.
-	import MemoryCinema from '$components/MemoryCinema.svelte';
-	// Graph-control overhaul (2026 alive UI): unique icons + dropdown.
+	import { osGoto } from '$lib/os-nav';
+	import { page } from '$app/stores';
 	import Icon from '$components/Icon.svelte';
-	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
-	import { api } from '$stores/api';
-	import { eventFeed } from '$stores/websocket';
-	import { graphState } from '$stores/graph-state.svelte';
-	import type { GraphResponse, GraphNode, GraphEdge, Memory } from '$types';
-	import type { GraphMutation } from '$lib/graph/events';
-	import { AHAGRAPH_COLORS, AHAGRAPH_DESCRIPTIONS, type ColorMode } from '$lib/graph/nodes';
-	import { filterByDate } from '$lib/graph/temporal';
-	// Cognitive Observatory — the WebGPU cinematic moments, launched from THIS
-	// page (its primary home) as a full-bleed takeover, like Memory Cinema.
-	import ObservatoryStage from '$lib/observatory/ObservatoryStage.svelte';
-	import type { DemoMode } from '$lib/observatory/types';
+	// MEMORY CINEMA IS PROTECTED. The Witness route keeps its finished
+	// flythrough intact as a separate, opt-in emotional surface.
+	import MemoryCinema from '$components/MemoryCinema.svelte';
+	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import { WitnessVolumePass } from '$lib/observatory/witness/witness-volume-pass';
+	import { buildWitnessScene, type WitnessShard } from '$lib/observatory/witness/witness-scene';
+	import type { RouteSceneModel } from '$lib/observatory/route-scene';
+	import { api, type Receipt, type TraceDetail, type TraceRunSummary } from '$lib/stores/api';
+	import type { GraphResponse, Memory } from '$types';
 
-	let graphData: GraphResponse | null = $state(null);
-	let selectedMemory: Memory | null = $state(null);
+	let runs = $state<TraceRunSummary[]>([]);
+	let selectedRunId = $state<string | null>(null);
+	let detail = $state<TraceDetail | null>(null);
+	let receipts = $state<Receipt[]>([]);
+	let selectedReceiptId = $state<string | null>(null);
+	let memoryById = $state<Map<string, Memory>>(new Map());
+	let selectedShardId = $state<string | null>(null);
+	let cinemaGraph = $state<GraphResponse | null>(null);
 	let loading = $state(true);
-	let error = $state('');
-	let isDreaming = $state(false);
-	let searchQuery = $state('');
-	let maxNodes = $state(150);
-	// Node-count choices for the clear Dropdown control (replaces a native
-	// <select>). Bound as a string; coerced back to a number on change.
-	const nodeCountOptions: DropdownOption[] = [
-		{ value: '50', label: '50 nodes' },
-		{ value: '100', label: '100 nodes' },
-		{ value: '150', label: '150 nodes' },
-		{ value: '200', label: '200 nodes' },
-	];
-	let maxNodesChoice = $state('150');
-	function onMaxNodesChange(v: string) {
-		maxNodes = parseInt(v, 10);
-		loadGraph();
-	}
-	let temporalEnabled = $state(false);
-	let temporalDate = $state(new Date());
-	// Colour spheres by node type, FSRS memory state, or AhaGraph learning tags.
-	let colorMode: ColorMode = $state('type');
-	const ahagraphLegendEntries = Object.entries(AHAGRAPH_COLORS) as Array<[
-		keyof typeof AHAGRAPH_COLORS,
-		string
-	]>;
+	let error = $state<string | null>(null);
+	let witnessVolume: WitnessVolumePass | null = null;
+	let playhead = $state(1);
 
-	// Live counts that update on mutations
-	let liveNodeCount = $state(0);
-	let liveEdgeCount = $state(0);
+	const selectedReceipt = $derived(
+		receipts.find((receipt) => receipt.receipt_id === selectedReceiptId) ?? receipts[0] ?? null
+	);
+	const isTraceEvidence = $derived(Boolean(selectedReceipt?.receipt_id.startsWith('trace:')));
+	const witnessScene = $derived(buildWitnessScene(detail, selectedReceipt, memoryById));
+	const selectedShard = $derived(
+		witnessScene.shards.find((shard) => shard.id === selectedShardId) ?? witnessScene.shards[0] ?? null
+	);
 
-	// Observatory takeover state — opens full-bleed over the graph; Esc or
-	// × EXIT returns here. {#key obsDemo} remounts the stage per moment so
-	// every demo starts deterministically from frame 0.
-	let showObservatory = $state(false);
-	let obsDemo = $state<DemoMode>('recall-path');
-
-	// Main-canvas renderer: 'field' = the raw-WebGPU living memory field (the
-	// Observatory engine — HDR bloom, GPU force sim, recall wavefront riding
-	// the REAL graph; visuals to the max, the default wherever WebGPU exists).
-	// 'classic' = the Three.js inspector (node picking, colour modes, temporal
-	// scrubbing) — kept one click away until GPU picking lands in the field.
-	const RENDERER_KEY = 'vestige-graph-renderer';
-	let renderMode = $state<'field' | 'classic'>('classic');
-	function setRenderMode(m: 'field' | 'classic') {
-		renderMode = m;
-		try {
-			localStorage.setItem(RENDERER_KEY, m);
-		} catch {
-			/* storage unavailable (private mode) — session-only choice */
-		}
+	function createWitnessPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		const volume = new WitnessVolumePass(engine, scene);
+		witnessVolume = volume;
+		return [volume];
 	}
 
-	// `'gpu' in navigator` only proves the API exists — requestAdapter() can
-	// still return null and requestDevice() can still throw (Linux/VM/
-	// blocklisted GPU). The engine reports that through onfallback: switch to
-	// the classic Three.js renderer automatically instead of stranding the
-	// user on a dead "MEMORY FIELD OFFLINE" panel. Deliberately NOT persisted
-	// to localStorage — a machine whose GPU works next session gets the field
-	// back by default.
-	function handleFieldFallback(reason: string) {
-		console.warn(`[graph] WebGPU field unavailable (${reason}) — using the classic renderer.`);
-		renderMode = 'classic';
+	function handleWitnessPick(pick: RoutePick) {
+		if (pick.kind !== 'witness-shard') return;
+		const shard = pick.payload as WitnessShard;
+		selectedShardId = shard.id;
+		witnessVolume?.setSelected(shard.id);
 	}
 
-	// Filtered graph data based on temporal mode
-	let displayNodes = $derived.by((): GraphNode[] => {
-		if (!graphData) return [];
-		if (!temporalEnabled) return graphData.nodes;
-		return filterByDate(graphData.nodes, graphData.edges, temporalDate).visibleNodes;
-	});
-
-	let displayEdges = $derived.by((): GraphEdge[] => {
-		if (!graphData) return [];
-		if (!temporalEnabled) return graphData.edges;
-		return filterByDate(graphData.nodes, graphData.edges, temporalDate).visibleEdges;
-	});
-
-	function handleGraphMutation(mutation: GraphMutation) {
-		if (!graphData) return;
-
-		switch (mutation.type) {
-			case 'nodeAdded':
-				graphData.nodes = [...graphData.nodes, mutation.node];
-				graphData.nodeCount = graphData.nodes.length;
-				liveNodeCount = graphData.nodeCount;
-				break;
-			case 'nodeRemoved':
-				graphData.nodes = graphData.nodes.filter((n) => n.id !== mutation.nodeId);
-				graphData.nodeCount = graphData.nodes.length;
-				liveNodeCount = graphData.nodeCount;
-				break;
-			case 'edgeAdded':
-				graphData.edges = [...graphData.edges, mutation.edge];
-				graphData.edgeCount = graphData.edges.length;
-				liveEdgeCount = graphData.edgeCount;
-				break;
-			case 'edgesRemoved':
-				graphData.edges = graphData.edges.filter(
-					(e) => e.source !== mutation.nodeId && e.target !== mutation.nodeId
-				);
-				graphData.edgeCount = graphData.edges.length;
-				liveEdgeCount = graphData.edgeCount;
-				break;
-			case 'nodeUpdated': {
-				const node = graphData.nodes.find((n) => n.id === mutation.nodeId);
-				if (node) node.retention = mutation.retention;
-				break;
-			}
-		}
+	function evidenceIds(receipt: Receipt | null): string[] {
+		if (!receipt) return [];
+		return [
+			...receipt.activation_path,
+			...receipt.retrieved,
+			...receipt.mutations.map((mutation) => mutation.id),
+			...receipt.suppressed.map((suppression) => suppression.id)
+		].filter((id, index, all) => Boolean(id) && all.indexOf(id) === index);
 	}
 
-	onMount(() => {
-		// Renderer choice: honor the saved preference, defaulting to the WebGPU
-		// field wherever the GPU exists. No WebGPU → classic, always.
-		const hasWebGpu = typeof navigator !== 'undefined' && 'gpu' in navigator;
-		let saved: string | null = null;
-		try {
-			saved = localStorage.getItem(RENDERER_KEY);
-		} catch {
-			/* storage unavailable */
-		}
-		renderMode = !hasWebGpu ? 'classic' : saved === 'classic' ? 'classic' : 'field';
-
-		const sp = new URLSearchParams(window.location.search);
-		const requestedMode = sp.get('colorMode');
-		if (isColorMode(requestedMode)) {
-			colorMode = requestedMode;
-		}
-		// "Open receipt in Cinema" deep-links here with ?center=<memoryId>, so
-		// the graph loads centered on the receipt's primary memory and the
-		// (protected) Cinema flythrough starts from that exact node. We do not
-		// touch MemoryCinema itself — only seed the graph it renders.
-		const center = sp.get('center');
-		void loadGraph(undefined, center || undefined);
-	});
-
-	function isColorMode(value: string | null): value is ColorMode {
-		return value === 'type' || value === 'state' || value === 'ahagraph';
+	/**
+	 * Some local tool runs have retrieval trace rows before a durable receipt is
+	 * written. Show that exact evidence, but visibly label it UNSEALED rather
+	 * than borrowing the authority of a receipt that does not exist.
+	 */
+	function traceEvidence(detail: TraceDetail): Receipt | null {
+		const retrieved = detail.events.flatMap((event) => event.type === 'memory.retrieve' ? event.ids : []);
+		const activationPath = detail.events.flatMap((event) => {
+			if (event.type !== 'memory.retrieve') return [];
+			return Object.entries(event.activation)
+				.sort(([, left], [, right]) => right - left)
+				.map(([id]) => id);
+		});
+		if (!retrieved.length && !activationPath.length) return null;
+		const suppressed = detail.events.flatMap((event) =>
+			event.type === 'memory.suppress' ? [{ id: event.id, reason: event.reason }] : []
+		);
+		const mutations = detail.events.flatMap((event) =>
+			event.type === 'memory.write' ? [{ id: event.id, kind: 'write' }] : []
+		);
+		return {
+			receipt_id: `trace:${detail.runId}`,
+			retrieved: retrieved.filter((id, index, all) => all.indexOf(id) === index),
+			suppressed,
+			activation_path: activationPath.filter((id, index, all) => all.indexOf(id) === index),
+			trust_floor: 0,
+			decay_risk: 'medium',
+			mutations
+		};
 	}
 
-	async function loadGraph(query?: string, centerId?: string) {
-		loading = true;
-		error = '';
-		try {
-			const isDefault = !query && !centerId;
-			graphData = await api.graph({
-				max_nodes: maxNodes,
-				depth: 3,
-				query: query || undefined,
-				center_id: centerId || undefined,
-				// Center on the newest memory by default. Prevents the old
-				// "most-connected" behaviour from clustering on historical
-				// hotspots and hiding today's memories behind the 150-node
-				// cap. Future UI toggle can flip this to 'connected'.
-				sort: isDefault ? 'recent' : undefined
-			});
-
-			// Fallback: if the newest memory is isolated (1 node, 0 edges),
-			// fall back to the connected hotspot so the user sees context
-			// instead of a lonely orb. Only applies to the default load —
-			// explicit queries/centerId honor the user's choice even if the
-			// subgraph is sparse.
-			if (
-				isDefault &&
-				graphData &&
-				graphData.nodeCount <= 1 &&
-				graphData.edgeCount === 0
-			) {
-				const connected = await api.graph({
-					max_nodes: maxNodes,
-					depth: 3,
-					sort: 'connected'
-				});
-				if (connected && connected.nodeCount > graphData.nodeCount) {
-					graphData = connected;
+	async function hydrateEvidence(receipt: Receipt | null) {
+		const missing = evidenceIds(receipt)
+			.slice(0, 64)
+			.filter((id) => !memoryById.has(id));
+		if (!missing.length) return;
+		const loaded = await Promise.all(
+			missing.map(async (id) => {
+				try {
+					return await api.memories.get(id);
+				} catch {
+					// Receipts can outlive a purged memory. The receipt still remains
+					// valid evidence, so show its ID rather than erase the shard.
+					return null;
 				}
-			}
+			})
+		);
+		const next = new Map(memoryById);
+		for (const memory of loaded) if (memory) next.set(memory.id, memory);
+		memoryById = next;
+	}
 
-			if (graphData) {
-				liveNodeCount = graphData.nodeCount;
-				liveEdgeCount = graphData.edgeCount;
-			}
-		} catch (e) {
-			// Distinguish three failure modes so the error message is actually
-			// helpful. Before: all failures (backend offline, empty DB, real
-			// 500) rendered identical cryptic text. That made the dashboard
-			// look broken on first-run or on backend-down, when the root
-			// cause is ALWAYS "the MCP server isn't running."
-			//   (1) Backend offline — vite dev proxy returns 500 with no body
-			//       (upstream EHOSTUNREACH / ECONNREFUSED). Surface clearly:
-			//       tell the user to start vestige-mcp.
-			//   (2) Empty database — fresh install, no memories yet. Happy
-			//       first-run state, not an error.
-			//   (3) Real backend error — a genuine 500 with a response body,
-			//       or a 4xx with content. Show the sanitized upstream msg.
-			const rawMsg = e instanceof Error ? e.message : String(e);
-			const safeMsg = rawMsg
-				.replace(/\/[\w./-]+\.(sqlite|rs|db|toml|lock)\b/g, '[path]')
-				.slice(0, 200);
-
-			// Network-level failure: fetch itself rejects (TypeError) OR vite
-			// proxy passes back a body-less 500 when upstream :3927 is
-			// unreachable. Both mean "backend offline."
-			const isBackendOffline =
-				e instanceof TypeError ||
-				/failed to fetch|NetworkError|load failed/i.test(rawMsg) ||
-				/^API 500:?\s*(Internal Server Error)?\s*$/i.test(rawMsg.trim());
-
-			const isEmpty =
-				(graphData?.nodeCount ?? 0) === 0 &&
-				/not found|404|empty|no memor/i.test(rawMsg);
-
-			if (isBackendOffline) {
-				error = 'OFFLINE';
-			} else if (isEmpty) {
-				error = 'EMPTY';
-			} else {
-				error = `Failed to load graph: ${safeMsg}`;
-			}
+	async function selectRun(runId: string) {
+		selectedRunId = runId;
+		loading = true;
+		error = null;
+		try {
+			const [nextDetail, receiptResult] = await Promise.all([
+				api.traces.get(runId),
+				api.receipts.listForRun(runId, 24)
+			]);
+			detail = nextDetail;
+			const fallback = traceEvidence(nextDetail);
+			receipts = receiptResult.receipts.length ? receiptResult.receipts : fallback ? [fallback] : [];
+			const requestedReceipt = $page.url.searchParams.get('receipt');
+			selectedReceiptId =
+				receipts.find((receipt) => receipt.receipt_id === requestedReceipt)?.receipt_id ??
+				receipts[0]?.receipt_id ??
+				null;
+			selectedShardId = null;
+			playhead = 1;
+			await hydrateEvidence(
+				receipts.find((receipt) => receipt.receipt_id === selectedReceiptId) ?? null
+			);
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
+			detail = null;
+			receipts = [];
 		} finally {
 			loading = false;
 		}
 	}
 
-	async function triggerDream() {
-		isDreaming = true;
-		try {
-			await api.dream();
-			await loadGraph();
-		} catch { /* dream failed */ }
-		finally { isDreaming = false; }
+	async function chooseReceipt(receipt: Receipt) {
+		selectedReceiptId = receipt.receipt_id;
+		selectedShardId = null;
+		playhead = 1;
+		await hydrateEvidence(receipt);
 	}
 
-	async function onNodeSelect(nodeId: string) {
+	async function loadWitness() {
+		loading = true;
 		try {
-			selectedMemory = await api.memories.get(nodeId);
-		} catch {
-			selectedMemory = null;
+			const response = await api.traces.list(48);
+			runs = response.runs;
+			const requestedRun = $page.url.searchParams.get('run');
+			const run = response.runs.find((candidate) => candidate.runId === requestedRun) ?? response.runs[0];
+			if (run) await selectRun(run.runId);
+			else loading = false;
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
+			loading = false;
 		}
 	}
 
-	function searchGraph() {
-		if (searchQuery.trim()) loadGraph(searchQuery);
+	async function loadCinema() {
+		try {
+			// This data is for the protected Cinema only. The Witness Loom never
+			// renders these corpus edges, so it cannot recreate the old hairball.
+			cinemaGraph = await api.graph({ max_nodes: 48, depth: 2, sort: 'connected' });
+		} catch {
+			cinemaGraph = null;
+		}
 	}
+
+	function openBlackBox() {
+		if (!selectedRunId) return;
+		void osGoto('/blackbox', { run: selectedRunId });
+	}
+
+	function openMemory(id: string) {
+		void osGoto('/memories', { memory: id });
+	}
+
+	$effect(() => {
+		void selectedShardId;
+		witnessVolume?.setSelected(selectedShardId);
+	});
+
+	onMount(() => {
+		void loadWitness();
+		void loadCinema();
+	});
 </script>
 
-<div class="h-full relative">
-	{#if loading}
-		<div class="h-full flex items-center justify-center">
-			<div class="text-center space-y-4">
-				<div class="w-16 h-16 mx-auto rounded-full border-2 border-synapse/30 border-t-synapse animate-spin"></div>
-				<p class="text-dim text-sm">Weaving your memory graph…</p>
-			</div>
+<RouteStage
+	organ="witness"
+	seed={`witness:${selectedRunId ?? 'armed'}:${selectedReceiptId ?? 'none'}`}
+	scene={witnessScene}
+	passes={createWitnessPasses}
+	maxDpr={1.25}
+	{loading}
+	{error}
+	emptyLabel="NO RECEIPT SELECTED - WITNESS CHAMBER ARMED"
+	onpick={handleWitnessPick}
+/>
+
+<main class="witness-shell relative z-10 mx-auto min-h-full max-w-[1520px] px-4 py-5 sm:px-7 sm:py-7">
+	<header class="witness-header">
+		<div>
+			<p class="eyebrow"><span></span> WITNESS / RECEIPT-BOUND MEMORY ACCOUNTABILITY</p>
+			<h1>What shaped the decision?</h1>
+			<p class="lede">A forensic loom of exactly what this agent run retrieved, changed, suppressed, and proved.</p>
 		</div>
-	{:else if error === 'OFFLINE'}
-		<div class="h-full flex items-center justify-center">
-			<div class="text-center space-y-5 max-w-lg px-8 enter">
-				<div class="mx-auto w-fit text-warning opacity-70 breathe"><Icon name="activation" size={52} strokeWidth={1.2} /></div>
-				<h2 class="text-xl text-bright text-aurora">MCP Backend Offline</h2>
-				<p class="text-dim text-sm leading-relaxed">
-					The Vestige MCP server isn't reachable on <code class="font-mono text-muted">:3927</code>.
-					The dashboard is running but has nothing to query.
-				</p>
-				<div class="glass-subtle rounded-xl p-4 text-left text-xs font-mono text-dim space-y-2">
-					<div class="text-muted text-[10px] uppercase tracking-wider">Start the backend:</div>
-					<code class="block whitespace-pre-wrap break-all text-text">nohup bash -c 'tail -f /dev/null | VESTIGE_DASHBOARD_ENABLED=true ~/.local/bin/vestige-mcp' &gt; /tmp/vestige.log 2&gt;&amp;1 &amp;
-disown</code>
-				</div>
-				<div class="flex gap-2 justify-center">
-					<button onclick={() => loadGraph()}
-						class="px-4 py-2 bg-synapse/20 border border-synapse/40 text-synapse-glow text-xs rounded-xl hover:bg-synapse/30 transition">
-						Retry
+		<div class="header-actions">
+			<button class="instrument-button" onclick={openBlackBox} disabled={!selectedRunId}>
+				<Icon name="blackbox" size={15} /> Open Black Box
+			</button>
+			<!-- MEMORY CINEMA — PROTECTED. Kept intact and fed a bounded graph only
+			     when a user deliberately launches the finished flythrough. -->
+			{#if cinemaGraph}
+				<MemoryCinema nodes={cinemaGraph.nodes} edges={cinemaGraph.edges} centerId={cinemaGraph.center_id} />
+			{/if}
+		</div>
+	</header>
+
+	<section class="run-strip" aria-label="Agent runs">
+		<div class="strip-label">AGENT RUNS <span>{runs.length}</span></div>
+		<div class="run-list">
+			{#each runs as run (run.runId)}
+				<button
+					class:active={run.runId === selectedRunId}
+					class="run-chip"
+					onclick={() => selectRun(run.runId)}
+					title={`Open run ${run.runId}`}
+				>
+					<span class="run-pulse"></span>
+					<span>{run.firstTool ?? 'agent run'}</span>
+					<small>{run.retrievedCount} recalled</small>
+				</button>
+			{/each}
+			{#if !loading && runs.length === 0}
+				<p class="empty-run">No Black Box run has been recorded locally yet.</p>
+			{/if}
+		</div>
+	</section>
+
+	{#if selectedReceipt}
+		<section class="receipt-rail" aria-label="Receipts for selected run">
+			<div class="strip-label">RECEIPTS <span>{receipts.length}</span></div>
+			<div class="receipt-list">
+				{#each receipts as receipt, index (receipt.receipt_id)}
+					<button
+						class:active={receipt.receipt_id === selectedReceiptId}
+						class="receipt-chip"
+						onclick={() => chooseReceipt(receipt)}
+					>
+						<span>#{String(index + 1).padStart(2, '0')}</span>
+						<small>{receipt.retrieved.length} evidence</small>
+						<i class:risk-high={receipt.decay_risk === 'high'} class:risk-medium={receipt.decay_risk === 'medium'}>{receipt.decay_risk}</i>
 					</button>
-					<a href="{base}/settings"
-						class="px-4 py-2 bg-dream/20 border border-dream/40 text-dream-glow text-xs rounded-xl hover:bg-dream/30 transition">
-						Try demos (no backend needed)
-					</a>
-				</div>
-			</div>
-		</div>
-	{:else if error === 'EMPTY'}
-		<div class="h-full flex items-center justify-center">
-			<div class="text-center space-y-4 max-w-md px-8 enter">
-				<div class="mx-auto w-fit text-synapse-glow opacity-50 breathe"><Icon name="graph" size={52} strokeWidth={1.2} /></div>
-				<h2 class="text-xl text-bright text-aurora">Your Mind Awaits</h2>
-				<p class="text-dim text-sm">No memories yet — the moment Vestige starts remembering, your constellation will bloom here.</p>
-			</div>
-		</div>
-	{:else if error}
-		<div class="h-full flex items-center justify-center">
-			<div class="text-center space-y-4 max-w-md px-8 enter">
-				<div class="mx-auto w-fit text-synapse-glow opacity-50 breathe"><Icon name="graph" size={52} strokeWidth={1.2} /></div>
-				<h2 class="text-xl text-bright text-aurora">Your Mind Awaits</h2>
-				<p class="text-dim text-sm">{error}</p>
-			</div>
-		</div>
-	{:else if graphData}
-		{#if renderMode === 'field'}
-			<!-- The raw-WebGPU living memory field — the Observatory engine as the
-			     MAIN renderer: GPU force sim, HDR bloom, the recall wavefront
-			     sweeping the real graph on a 12s loop. Page chrome stays DOM. -->
-			<div class="absolute inset-0">
-				<ObservatoryStage
-					embedded
-					chrome="none"
-					demo="recall-path"
-					showSwitcher={false}
-					onpick={onNodeSelect}
-					onfallback={handleFieldFallback}
-				/>
-			</div>
-		{:else}
-			<Graph3D
-				nodes={displayNodes}
-				edges={displayEdges}
-				centerId={graphData.center_id}
-				events={$eventFeed}
-				{isDreaming}
-				{colorMode}
-				onSelect={onNodeSelect}
-				onGraphMutation={handleGraphMutation}
-			/>
-		{/if}
-	{/if}
-
-	<!-- Top controls bar -->
-	<div
-		class="absolute top-0 left-0 right-0 z-10 flex flex-wrap items-center gap-2 px-3 pt-3 sm:top-4 sm:left-4 sm:right-4 sm:gap-3 sm:p-0
-			[padding-top:max(0.75rem,env(safe-area-inset-top))] [padding-left:max(0.75rem,env(safe-area-inset-left))] [padding-right:max(0.75rem,env(safe-area-inset-right))]
-			sm:[padding-top:0] sm:[padding-left:0] sm:[padding-right:0]"
-	>
-		<!-- Search — classic-renderer feature (centers + reloads the inspector) -->
-		{#if renderMode === 'classic'}
-		<div class="flex gap-2 w-full sm:flex-1 sm:w-auto sm:max-w-md">
-			<input
-				type="text"
-				placeholder="Center graph on..."
-				bind:value={searchQuery}
-				onkeydown={(e) => e.key === 'Enter' && searchGraph()}
-				class="flex-1 min-w-0 px-3 py-2 glass rounded-xl text-text text-sm
-					placeholder:text-muted focus:outline-none focus:!border-synapse/40 transition"
-			/>
-			<button onclick={searchGraph}
-				class="shrink-0 min-h-10 px-3 py-2 bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm rounded-xl hover:bg-synapse/30 transition backdrop-blur-sm">
-				Focus
-			</button>
-		</div>
-		{/if}
-
-		<div class="flex flex-wrap gap-2 w-full sm:w-auto sm:ml-auto">
-			<!-- Renderer toggle: the WebGPU living field (default) vs the classic
-				 Three.js inspector. The field is the banger; classic keeps node
-				 picking / colour modes / temporal until GPU picking lands. -->
-			<div class="flex shrink-0 glass rounded-xl p-0.5 text-xs" role="radiogroup" aria-label="Renderer">
-				<button
-					type="button"
-					role="radio"
-					aria-checked={renderMode === 'field'}
-					onclick={() => setRenderMode('field')}
-					class="min-h-9 px-3 py-1.5 rounded-lg transition {renderMode === 'field' ? 'bg-[#5dcaa5]/25 text-[#7fe6c0]' : 'text-dim hover:text-text'}"
-					title="Raw-WebGPU living memory field — visuals to the max"
-				>
-					✦ Field
-				</button>
-				<button
-					type="button"
-					role="radio"
-					aria-checked={renderMode === 'classic'}
-					onclick={() => setRenderMode('classic')}
-					class="min-h-9 px-3 py-1.5 rounded-lg transition {renderMode === 'classic' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
-					title="Classic 3D inspector — node picking, colour modes, temporal scrubbing"
-				>
-					Classic
-				</button>
-			</div>
-
-			{#if renderMode === 'classic'}
-			<!-- v2.0.8: colour mode toggle. Switches sphere tint between node type
-				 (fact / concept / event / …) and FSRS memory state (active / dormant /
-				 silent / unavailable). Legend auto-renders in state mode. -->
-			<div class="flex shrink min-w-0 glass rounded-xl p-0.5 text-xs" role="radiogroup" aria-label="Colour mode">
-				<button
-					type="button"
-					role="radio"
-					aria-checked={colorMode === 'type'}
-					onclick={() => (colorMode = 'type')}
-					class="min-h-9 px-3 py-1.5 rounded-lg transition {colorMode === 'type' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
-					title="Colour by node type (fact, concept, event, …)"
-				>
-					Type
-				</button>
-				<button
-					type="button"
-					role="radio"
-					aria-checked={colorMode === 'state'}
-					onclick={() => (colorMode = 'state')}
-					class="min-h-9 px-3 py-1.5 rounded-lg transition {colorMode === 'state' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
-					title="Colour by FSRS memory state (active / dormant / silent / unavailable)"
-				>
-					State
-				</button>
-				<button
-					type="button"
-					role="radio"
-					aria-checked={colorMode === 'ahagraph'}
-					onclick={() => (colorMode = 'ahagraph')}
-					class="min-h-9 px-3 py-1.5 rounded-lg transition {colorMode === 'ahagraph' ? 'bg-synapse/25 text-synapse-glow' : 'text-dim hover:text-text'}"
-					title="Colour by AhaGraph tags (aha / confusion / failure)"
-				>
-					AhaGraph
-				</button>
-			</div>
-
-			<!-- Node count — clear animated Dropdown (replaces native <select>) -->
-			<Dropdown
-				options={nodeCountOptions}
-				bind:value={maxNodesChoice}
-				icon="graph"
-				class="shrink-0"
-				onChange={onMaxNodesChange}
-			/>
-
-			<!-- Brightness slider (persists in localStorage). Scales node emissive,
-				 glow, and distance-compensated fog falloff. Default 1.0, range 0.5-2.5. -->
-			<label
-				class="flex shrink-0 items-center gap-2 min-h-10 px-3 py-2 glass rounded-xl text-dim text-xs select-none"
-				title="Adjust graph brightness ({graphState.brightness.toFixed(1)}x). Combines with auto distance compensation."
-			>
-				<span class="text-synapse-glow">☀</span>
-				<input
-					type="range"
-					min={graphState.brightnessMin}
-					max={graphState.brightnessMax}
-					step="0.1"
-					bind:value={graphState.brightness}
-					class="w-20 accent-synapse cursor-pointer"
-					aria-label="Graph brightness"
-				/>
-				<span class="font-mono text-[10px] text-muted w-8 text-right">
-					{graphState.brightness.toFixed(1)}x
-				</span>
-			</label>
-			{/if}
-
-			<!-- Dream button -->
-			<button
-				onclick={triggerDream}
-				disabled={isDreaming}
-				class="shrink-0 inline-flex items-center gap-2 min-h-10 px-4 py-2 rounded-xl bg-dream/20 border border-dream/40 text-dream-glow text-sm
-					hover:bg-dream/30 transition-all backdrop-blur-sm disabled:opacity-50
-					{isDreaming ? 'glow-dream animate-pulse-glow' : ''}"
-			>
-				<span class={isDreaming ? 'breathe' : ''}><Icon name="dreams" size={16} /></span>
-				{isDreaming ? 'Dreaming…' : 'Dream'}
-			</button>
-
-			<!-- Observatory — the WebGPU cognitive moments, full-bleed takeover.
-			     Lives HERE on the main graph, beside Dream and Memory Cinema. -->
-			<button
-				onclick={() => (showObservatory = true)}
-				class="shrink-0 inline-flex items-center gap-2 min-h-10 px-4 py-2 rounded-xl bg-[#5dcaa5]/15 border border-[#5dcaa5]/40 text-[#7fe6c0] text-sm
-					hover:bg-[#5dcaa5]/25 transition-all backdrop-blur-sm"
-				title="Open the Cognitive Observatory"
-			>
-				<Icon name="sparkle" size={16} />
-				Observatory
-			</button>
-
-			<!-- ═══════════════════════════════════════════════════════════
-			     MEMORY CINEMA — PROTECTED · DO NOT MODIFY
-			     The AI-narrated flythrough. Its trigger + props are flawless
-			     and intentionally untouched by the graph-control overhaul.
-			     ═══════════════════════════════════════════════════════════ -->
-			{#if displayNodes.length > 0}
-				<MemoryCinema
-					nodes={displayNodes}
-					edges={displayEdges}
-					centerId={graphData?.center_id ?? ''}
-				/>
-			{/if}
-			<!-- ═══════════ END PROTECTED MEMORY CINEMA ═══════════ -->
-
-			<!-- Reload -->
-			<button onclick={() => loadGraph()}
-				class="shrink-0 min-h-10 min-w-10 inline-flex items-center justify-center px-3 py-2 glass rounded-xl text-dim hover:text-text hover:rotate-180 transition-all duration-500"
-				title="Reload graph"
-				aria-label="Reload graph"
-			>
-				<Icon name="pulse" size={16} />
-			</button>
-		</div>
-	</div>
-
-	<!-- Bottom stats -->
-	<div class="graph-stats-pill absolute bottom-4 left-4 z-10 text-xs text-dim glass rounded-xl px-3 py-2">
-		{#if graphData}
-			<span>{liveNodeCount} nodes</span>
-			<span class="mx-2 text-subtle">·</span>
-			<span>{liveEdgeCount} edges</span>
-			<span class="mx-2 text-subtle">·</span>
-			<span>depth {graphData.depth}</span>
-		{/if}
-	</div>
-
-	<!-- v2.0.8: FSRS memory-state legend. Only rendered in state mode so the
-		 legend doesn't compete with the node-type palette in type mode. -->
-	{#if renderMode === 'classic' && colorMode === 'state'}
-		<div class="absolute bottom-4 right-4 z-10">
-			<MemoryStateLegend />
-		</div>
-	{/if}
-
-	{#if renderMode === 'classic' && colorMode === 'ahagraph'}
-		<div class="absolute bottom-4 right-4 z-10 glass rounded-xl px-4 py-3 text-xs">
-			<div class="text-bright font-semibold mb-2">AhaGraph</div>
-			<div class="space-y-1.5">
-				{#each ahagraphLegendEntries as [kind, color]}
-					<div class="flex items-center gap-2">
-						<span class="w-2.5 h-2.5 rounded-full" style="background: {color}"></span>
-						<span class="text-dim">{AHAGRAPH_DESCRIPTIONS[kind]}</span>
-					</div>
 				{/each}
 			</div>
-		</div>
+		</section>
 	{/if}
 
-	<!-- Temporal playback slider — scrubs the classic inspector only -->
-	{#if graphData && renderMode === 'classic'}
-		<TimeSlider
-			nodes={graphData.nodes}
-			onDateChange={(date) => { temporalDate = date; }}
-			onToggle={(enabled) => { temporalEnabled = enabled; }}
-		/>
-	{/if}
-
-	<!-- Selected memory panel -->
-	{#if selectedMemory}
-		<div class="absolute right-0 top-0 h-full w-96 glass-panel p-6 overflow-y-auto z-20
-			transition-transform duration-300">
-			<div class="flex justify-between items-start mb-4">
-				<h3 class="text-bright text-sm font-semibold">Memory Detail</h3>
-				<button onclick={() => selectedMemory = null} class="text-dim hover:text-text text-lg leading-none">×</button>
-			</div>
-
-			<div class="space-y-4">
-				<div class="flex gap-2 flex-wrap">
-					<span class="px-2 py-0.5 rounded-lg text-xs bg-synapse/20 text-synapse-glow">{selectedMemory.nodeType}</span>
-					{#each selectedMemory.tags as tag}
-						<span class="px-2 py-0.5 rounded-lg text-xs bg-white/[0.04] text-dim">{tag}</span>
-					{/each}
-				</div>
-
-				<div class="text-sm text-text leading-relaxed whitespace-pre-wrap max-h-64 overflow-y-auto">{selectedMemory.content}</div>
-
-				<!-- FSRS bars -->
-				<div class="space-y-2">
-					{#each [
-						{ label: 'Retention', value: selectedMemory.retentionStrength },
-						{ label: 'Storage', value: selectedMemory.storageStrength },
-						{ label: 'Retrieval', value: selectedMemory.retrievalStrength }
-					] as bar}
-						<div>
-							<div class="flex justify-between text-xs text-dim mb-0.5">
-								<span>{bar.label}</span>
-								<span>{(bar.value * 100).toFixed(1)}%</span>
-							</div>
-							<div class="h-1.5 bg-white/[0.04] rounded-full overflow-hidden">
-								<div
-									class="h-full rounded-full transition-all duration-500"
-									style="width: {bar.value * 100}%; background: {
-										bar.value > 0.7 ? '#10b981' :
-										bar.value > 0.4 ? '#f59e0b' : '#ef4444'
-									}"
-								></div>
-							</div>
-						</div>
-					{/each}
-				</div>
-
-				<!-- FSRS Decay Curve -->
-				<div>
-					<div class="text-xs text-dim mb-1 font-medium">Retention Forecast</div>
-					<RetentionCurve
-						retention={selectedMemory.retentionStrength}
-						stability={selectedMemory.storageStrength * 30}
-					/>
-				</div>
-
-				<div class="text-xs text-muted space-y-1">
-					<div>Created: {new Date(selectedMemory.createdAt).toLocaleString()}</div>
-					<div>Updated: {new Date(selectedMemory.updatedAt).toLocaleString()}</div>
-					{#if selectedMemory.lastAccessedAt}
-						<div>Accessed: {new Date(selectedMemory.lastAccessedAt).toLocaleString()}</div>
-					{/if}
-					<div>Reviews: {selectedMemory.reviewCount ?? 0}</div>
-				</div>
-
-				<div class="flex gap-2 pt-2">
-					<button
-						onclick={() => { if (selectedMemory) { api.memories.promote(selectedMemory.id); } }}
-						class="flex-1 px-3 py-2 rounded-xl bg-recall/20 text-recall text-xs hover:bg-recall/30 transition"
-					>
-						↑ Promote
-					</button>
-					<button
-						onclick={() => { if (selectedMemory) { api.memories.demote(selectedMemory.id); } }}
-						class="flex-1 px-3 py-2 rounded-xl bg-decay/20 text-decay text-xs hover:bg-decay/30 transition"
-					>
-						↓ Demote
-					</button>
-				</div>
-
-				<!-- Explore from this node -->
-				<a
-					href="{base}/explore"
-					class="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-dream/10 text-dream-glow text-xs hover:bg-dream/20 transition border border-dream/20"
-				>
-					<Icon name="explore" size={14} /> Explore Connections
-				</a>
+	<section class="volume-stage" aria-label="Three dimensional witness volume">
+		<div class="volume-caption">
+			<p class="eyebrow"><span></span> WITNESS STRATA / RECEIPT-SCOPED PROOF VOLUME</p>
+			<h2>One run. One proof boundary.</h2>
+			<p>Trace time becomes depth. Activation pins its stratum. Each smoked-glass specimen is an exact memory that crossed this run&rsquo;s evidence boundary.</p>
+			<div class="volume-key" aria-label="Witness volume legend">
+				<span><i class="path"></i> verified path</span>
+				<span><i class="retrieved"></i> retrieved</span>
+				<span><i class="mutation"></i> mutation</span>
+				<span><i class="suppressed"></i> suppressed</span>
 			</div>
 		</div>
-	{/if}
-</div>
 
-<!-- ═══════════════════════════════════════════════════════════════════════
-     COGNITIVE OBSERVATORY — full-bleed takeover, part of the MAIN graph.
-     z-50 lifts it above all app chrome; the {#key} remounts the stage per
-     moment so every demo runs deterministically from frame 0. × EXIT / Esc
-     returns to this graph exactly as it was.
-     ═══════════════════════════════════════════════════════════════════════ -->
-{#if showObservatory}
-	<div class="fixed inset-0 z-50">
-		{#key obsDemo}
-			<ObservatoryStage
-				demo={obsDemo}
-				ondemochange={(d) => (obsDemo = d)}
-				onexit={() => (showObservatory = false)}
-				onfallback={(reason) => {
-					// WebGPU boot failed inside the takeover: close it (its offline
-					// panel would link back to this very page) and drop to classic.
-					showObservatory = false;
-					handleFieldFallback(reason);
-				}}
+		<div class="volume-controls" aria-label="Witness playback controls">
+			<div class="control-label"><span>TRACE SLICER</span><b>{Math.round(playhead * Math.max(0, witnessScene.eventCount))} / {witnessScene.eventCount}</b></div>
+			<input
+				aria-label="Trace event position"
+				type="range"
+				min="0"
+				max="1"
+				step="0.01"
+				bind:value={playhead}
+				oninput={() => witnessVolume?.setPlayhead(playhead)}
 			/>
-		{/key}
-	</div>
-{/if}
+			<button class="replay-button" onclick={() => witnessVolume?.replay()} disabled={!witnessScene.shards.length}>
+				Replay evidence <span aria-hidden="true">↗</span>
+			</button>
+		</div>
+
+		<aside class="inspector" aria-live="polite">
+			<div class="panel-heading">
+				<div>
+					<p class="eyebrow"><span></span> SELECTED SPECIMEN</p>
+					<h2>{selectedShard ? selectedShard.role : 'Select a shard'}</h2>
+				</div>
+				{#if selectedReceipt}
+					<span class="trust">{Math.round(selectedReceipt.trust_floor * 100)}% trust</span>
+				{/if}
+			</div>
+
+			{#if selectedShard}
+				<div class="specimen" class:scarred={selectedShard.suppressed}>
+					<div class="specimen-cap">MEMORY / {selectedShard.id.slice(0, 12)}</div>
+					<p>{selectedShard.content || selectedShard.label}</p>
+				</div>
+				<dl class="readout">
+					<div><dt>Activation</dt><dd>{Math.round(selectedShard.activation * 100)}%</dd></div>
+					<div><dt>Retention</dt><dd>{Math.round(selectedShard.retention * 100)}%</dd></div>
+					<div><dt>State</dt><dd>{selectedShard.suppressed ? 'suppressed' : selectedShard.mutated ? 'mutated' : 'witnessed'}</dd></div>
+				</dl>
+				<button class="memory-button" onclick={() => openMemory(selectedShard.id)}>
+					Inspect memory <Icon name="chevron" size={14} />
+				</button>
+			{:else}
+				<p class="inspector-empty">Choose any visible evidence wafer. The chamber never substitutes an unrelated corpus edge for a proof path.</p>
+			{/if}
+
+			{#if selectedReceipt}
+				<div class="receipt-seal" class:unsealed={isTraceEvidence}>
+					<span>{isTraceEvidence ? 'UNSEALED TRACE EVIDENCE' : 'RECEIPT SEALED'}</span>
+					<code>{selectedReceipt.receipt_id}</code>
+					<div>
+						<b>{selectedReceipt.retrieved.length}</b> retrieved
+						<b>{selectedReceipt.suppressed.length}</b> suppressed
+						<b>{selectedReceipt.mutations.length}</b> mutations
+					</div>
+				</div>
+			{/if}
+		</aside>
+
+		{#if !loading && !witnessScene.shards.length}
+			<div class="volume-empty">
+				<Icon name="blackbox" size={26} />
+				<p>Choose a recorded run with retrieval evidence to unseal its 3D witness volume.</p>
+			</div>
+		{/if}
+	</section>
+</main>
+
+<style>
+	:global(body) { background: #070907; }
+	/* The WebGPU field is the primary surface. The DOM shell must not create an
+	   invisible full-page click shield over the evidence wafers; only its actual
+	   controls opt back into pointer input below. */
+	.witness-shell { color: #e5e2d8; pointer-events:none; }
+	.witness-header,.run-strip,.receipt-rail,.volume-controls,.inspector { pointer-events:auto; }
+	.witness-header { display:flex; align-items:flex-start; justify-content:space-between; gap:1.5rem; padding:1rem 0 1.35rem; border-bottom:1px solid rgba(95,175,138,.18); }
+	.eyebrow { display:flex; align-items:center; gap:.5rem; margin:0; color:#5faf8a; font:700 .65rem var(--font-mono,ui-monospace,monospace); letter-spacing:.15em; }
+	.eyebrow span { width:.42rem; height:.42rem; border-radius:50%; background:#5faf8a; }
+	h1,h2 { margin:.45rem 0 0; color:#e5e2d8; font-family:var(--font-display,ui-sans-serif,sans-serif); font-weight:520; letter-spacing:-.035em; }
+	h1 { font-size:clamp(2rem,4vw,3.45rem); } h2 { font-size:1.12rem; }
+	.lede { max-width:44rem; margin:.55rem 0 0; color:#8d9792; font-size:.94rem; }
+	.header-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:.55rem; }
+	.instrument-button,.memory-button { display:inline-flex; align-items:center; gap:.48rem; border:1px solid rgba(95,175,138,.46); border-radius:.38rem; padding:.66rem .78rem; background:rgba(11,15,13,.94); color:#c8d8cb; font:650 .72rem var(--font-mono,ui-monospace,monospace); letter-spacing:.04em; transition:border-color .16s,background .16s,transform .16s; }
+	.instrument-button:hover:not(:disabled),.memory-button:hover { border-color:#c58a4a; background:rgba(27,28,20,.98); transform:translateY(-1px); }
+	.instrument-button:disabled { cursor:not-allowed; opacity:.42; }
+	.run-strip,.receipt-rail { display:grid; grid-template-columns:8.5rem minmax(0,1fr); gap:1rem; padding:.82rem 0; border-bottom:1px solid rgba(95,175,138,.12); }
+	.strip-label { padding:.55rem 0; color:#6e7772; font:700 .61rem var(--font-mono,ui-monospace,monospace); letter-spacing:.14em; }.strip-label span { margin-left:.35rem; color:#e5e2d8; }
+	.run-list,.receipt-list { display:flex; gap:.42rem; overflow-x:auto; padding-bottom:.15rem; }
+	.run-chip,.receipt-chip { display:inline-flex; flex:0 0 auto; align-items:center; gap:.48rem; border:1px solid rgba(141,151,146,.24); border-radius:.3rem; padding:.48rem .6rem; background:rgba(10,13,12,.9); color:#aeb7b0; font:600 .67rem var(--font-mono,ui-monospace,monospace); transition:.16s; }
+	.run-chip:hover,.receipt-chip:hover,.run-chip.active,.receipt-chip.active { border-color:rgba(95,175,138,.75); background:rgba(16,27,21,.98); color:#f0eee5; }
+	.run-pulse { width:.36rem; height:.36rem; border-radius:50%; background:#5faf8a; }.run-chip small,.receipt-chip small { color:#6e7772; font-size:.58rem; }
+	.receipt-chip i { color:#c58a4a; font-size:.56rem; font-style:normal; text-transform:uppercase; }.receipt-chip i.risk-medium { color:#c58a4a; }.receipt-chip i.risk-high { color:#ab5a51; }.empty-run { margin:.5rem 0; color:#7d8781; font-size:.8rem; }
+	.volume-stage { position:relative; isolation:isolate; min-height:max(42rem,calc(100svh - 13.3rem)); padding:1.7rem 0 2.2rem; }
+	/* The chamber earns depth from the WebGPU specimens, not a page-sized fog. */
+	.volume-stage::before { position:absolute; z-index:-1; inset:-1rem -8vw 0; pointer-events:none; content:''; background:linear-gradient(90deg,rgba(7,9,7,.2),transparent 24%,transparent 76%,rgba(7,9,7,.24)); }
+	.volume-caption { width:min(25rem,39vw); margin-left:clamp(4.4rem,6vw,6.8rem); padding:.95rem 0; pointer-events:none; }.volume-caption h2 { font-size:clamp(1.35rem,2.2vw,2rem); letter-spacing:-.045em; }
+	.volume-caption > p:not(.eyebrow) { max-width:23rem; margin:.62rem 0 0; color:#8d9792; font-size:.8rem; line-height:1.58; }
+	.volume-key { display:flex; flex-wrap:wrap; gap:.52rem .85rem; margin-top:1rem; color:#7c8680; font:600 .54rem var(--font-mono,ui-monospace,monospace); letter-spacing:.09em; text-transform:uppercase; }.volume-key span { display:inline-flex; align-items:center; gap:.28rem; }.volume-key i { display:inline-block; width:.34rem; height:.34rem; background:#e5e2d8; }.volume-key i.path { background:#5faf8a; }.volume-key i.retrieved { background:#e5e2d8; }.volume-key i.mutation { background:#c58a4a; }.volume-key i.suppressed { background:#ab5a51; }
+	.volume-controls { position:absolute; z-index:2; bottom:2.4rem; left:clamp(4.4rem,6vw,6.8rem); width:min(28rem,46vw); padding:.76rem 0 .68rem; border-top:1px solid rgba(95,175,138,.24); border-bottom:1px solid rgba(95,175,138,.1); background:linear-gradient(90deg,rgba(9,12,10,.97),rgba(9,12,10,.58)); }
+	.control-label { display:flex; justify-content:space-between; margin-bottom:.48rem; color:#738078; font:700 .56rem var(--font-mono,ui-monospace,monospace); letter-spacing:.13em; }.control-label b { color:#e5e2d8; }
+	.volume-controls input { display:block; width:100%; height:3px; appearance:none; border-radius:999px; outline:none; background:linear-gradient(90deg,#5faf8a,rgba(197,138,74,.6),rgba(94,105,97,.42)); accent-color:#c58a4a; cursor:pointer; }.volume-controls input::-webkit-slider-thumb { width:12px; height:12px; appearance:none; border:1px solid #e5e2d8; border-radius:50%; background:#101411; }
+	.replay-button { display:inline-flex; align-items:center; gap:.42rem; margin-top:.72rem; border:1px solid rgba(95,175,138,.5); border-radius:.3rem; padding:.47rem .62rem; background:rgba(12,20,15,.94); color:#c8d8cb; font:700 .61rem var(--font-mono,ui-monospace,monospace); letter-spacing:.06em; text-transform:uppercase; transition:background .16s,border-color .16s,transform .16s; }.replay-button:hover:not(:disabled) { border-color:#c58a4a; background:rgba(32,29,19,.98); transform:translateY(-1px); }.replay-button:disabled { cursor:not-allowed; opacity:.35; }
+	.inspector { position:absolute; z-index:2; top:1.7rem; right:0; display:flex; flex-direction:column; width:min(19rem,28vw); min-height:0; padding:1rem; border:1px solid rgba(141,151,146,.28); background:linear-gradient(145deg,rgba(12,16,14,.98),rgba(7,9,8,.96)); }.inspector::before { position:absolute; top:.55rem; right:.7rem; content:'3D / RECEIPT BOUND'; color:rgba(95,175,138,.56); font:600 .47rem var(--font-mono,ui-monospace,monospace); letter-spacing:.13em; }
+	.panel-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; }.trust { border:1px solid rgba(197,138,74,.34); border-radius:999px; padding:.3rem .45rem; color:#c58a4a; font:700 .6rem var(--font-mono,ui-monospace,monospace); white-space:nowrap; }
+	.specimen { margin-top:1.05rem; padding:.8rem; border:1px solid rgba(95,175,138,.28); background:linear-gradient(145deg,rgba(18,26,21,.96),rgba(9,11,10,.98)); }.specimen.scarred { border-color:rgba(171,90,81,.7); }.specimen-cap { color:#5faf8a; font:.57rem var(--font-mono,ui-monospace,monospace); letter-spacing:.1em; }.specimen p { display:-webkit-box; overflow:hidden; margin:.55rem 0 0; color:#dedbd1; font-size:.78rem; line-height:1.52; line-clamp:8; -webkit-box-orient:vertical; -webkit-line-clamp:8; }
+	.readout { display:grid; grid-template-columns:repeat(3,1fr); gap:.45rem; margin:1rem 0; }.readout div { padding-top:.5rem; border-top:1px solid rgba(141,151,146,.18); }.readout dt { color:#6e7772; font:.55rem var(--font-mono,ui-monospace,monospace); text-transform:uppercase; }.readout dd { margin:.22rem 0 0; color:#c58a4a; font:700 .7rem var(--font-mono,ui-monospace,monospace); }.memory-button { width:100%; justify-content:center; }
+	.inspector-empty { margin:1.5rem 0; color:#818a84; font-size:.83rem; line-height:1.6; }.receipt-seal { margin-top:1.3rem; padding-top:1rem; border-top:1px solid rgba(141,151,146,.18); color:#7f8983; font:.58rem var(--font-mono,ui-monospace,monospace); letter-spacing:.08em; }.receipt-seal > span { color:#5faf8a; }.receipt-seal code { display:block; overflow:hidden; margin:.45rem 0; color:#c5cbc4; text-overflow:ellipsis; white-space:nowrap; }.receipt-seal div { display:flex; flex-wrap:wrap; gap:.7rem; letter-spacing:0; }.receipt-seal b { color:#c58a4a; }.receipt-seal.unsealed { border-color:rgba(197,138,74,.38); }.receipt-seal.unsealed > span { color:#c58a4a; }
+	.volume-empty { position:absolute; top:50%; left:50%; display:grid; width:min(20rem,80vw); place-items:center; gap:.8rem; transform:translate(-50%,-40%); color:#8d9792; text-align:center; font-size:.82rem; line-height:1.55; }.volume-empty p { margin:0; }
+	@media (max-width:900px) { .witness-header { flex-direction:column; }.header-actions { justify-content:flex-start; }.run-strip,.receipt-rail { grid-template-columns:1fr; gap:.1rem; }.strip-label { padding-bottom:.1rem; }.volume-stage { min-height:46rem; }.volume-caption { width:min(27rem,72vw); margin-left:0; }.inspector { top:auto; right:0; bottom:2rem; width:min(23rem,46vw); min-height:24rem; }.volume-controls { bottom:2rem; left:0; width:min(25rem,45vw); } }
+	@media (max-width:620px) { .witness-shell { padding:.75rem; }.witness-header { padding-top:.2rem; } h1 { font-size:2.15rem; }.volume-stage { min-height:49rem; padding-top:1rem; }.volume-caption { width:100%; }.inspector { right:0; bottom:1rem; width:100%; min-height:19.5rem; }.volume-controls { bottom:22rem; left:0; width:100%; }.volume-key { gap:.45rem .65rem; } }
+</style>

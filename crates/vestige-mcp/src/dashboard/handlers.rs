@@ -2434,6 +2434,151 @@ pub async fn deep_reference_query(
 }
 
 // ============================================================================
+// RETROACTIVE SALIENCE BACKFILL — receipt-first dashboard surface
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct BackfillBody {
+    pub failure_id: Option<String>,
+    #[serde(default)]
+    pub manual: bool,
+    pub lookback_days: Option<i64>,
+    /// Dashboard requests are previews by default. Promotion is an explicit
+    /// user action because a candidate match must never silently rewrite memory.
+    pub promote: Option<bool>,
+    #[serde(alias = "runId", default)]
+    pub run_id: Option<String>,
+}
+
+/// Run Backfill from the dashboard and return the immutable receipt that every
+/// downstream surface uses. Thin adapter over the MCP tool so terminal, agent,
+/// Black Box, and Observatory all see the same result.
+pub async fn backfill_query(
+    State(state): State<AppState>,
+    Json(body): Json<BackfillBody>,
+) -> Result<Json<Value>, StatusCode> {
+    let lookback_days = body.lookback_days.unwrap_or(30).clamp(1, 365);
+    let promote = body.promote.unwrap_or(false);
+    let call_args = serde_json::json!({
+        "failure_id": body.failure_id,
+        "manual": body.manual,
+        "lookback_days": lookback_days,
+        "promote": promote,
+        "run_id": body.run_id,
+    });
+    let run_id = crate::trace_recorder::run_id_for(&Some(call_args.clone()));
+    crate::trace_recorder::record_call(
+        &state.storage,
+        Some(&state.event_tx),
+        &run_id,
+        "backfill",
+        &Some(call_args.clone()),
+    );
+
+    let mut response = crate::tools::backfill::execute(&state.storage, Some(call_args))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    crate::trace_recorder::record_result(
+        &state.storage,
+        Some(&state.event_tx),
+        &run_id,
+        "backfill",
+        &response,
+    );
+    let receipt = crate::trace_recorder::build_and_save_receipt(
+        &state.storage,
+        &run_id,
+        "backfill",
+        &response,
+    );
+    let receipt_id = receipt
+        .as_ref()
+        .and_then(|value| value.get("receipt_id"))
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string);
+
+    if let Some(object) = response.as_object_mut() {
+        object.insert("runId".to_string(), serde_json::json!(run_id));
+        object.insert("receiptId".to_string(), serde_json::json!(receipt_id));
+        object.insert(
+            "receipt".to_string(),
+            receipt.clone().unwrap_or(Value::Null),
+        );
+    }
+
+    // Emit only an exact, persisted proof. A non-trigger/no-candidate result is
+    // still returned to the caller but never gets a fabricated victory event.
+    if let (Some(receipt_id), Some(proof)) = (
+        receipt_id.as_ref(),
+        receipt
+            .as_ref()
+            .and_then(|value| value.get("evidence"))
+            .filter(|evidence| evidence.get("kind").and_then(|k| k.as_str()) == Some("backfill"))
+            .and_then(|evidence| evidence.get("predicate")),
+    ) {
+        let failure_id = proof
+            .get("failure_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let candidates = proof
+            .get("candidates")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let candidate_ids: Vec<String> = candidates
+            .iter()
+            .filter_map(|candidate| candidate.get("memory_id").and_then(|value| value.as_str()))
+            .map(ToString::to_string)
+            .collect();
+        let shared_entities: Vec<String> = candidates
+            .iter()
+            .flat_map(|candidate| {
+                candidate
+                    .get("shared_entities")
+                    .and_then(|value| value.as_array())
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .filter_map(|entity| entity.as_str().map(ToString::to_string))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let promoted = candidates.iter().any(|candidate| {
+            candidate
+                .get("promoted")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        });
+        let path_ids: Vec<String> = proof
+            .get("path_ids")
+            .and_then(|value| value.as_array())
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| id.as_str().map(ToString::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // A live scene is only allowed to animate a receipt-authored route.
+        // Do not manufacture candidate -> failure topology in this adapter.
+        if path_ids.len() >= 2 {
+            state.emit(VestigeEvent::BackfillFired {
+                run_id,
+                receipt_id: receipt_id.clone(),
+                failure_id,
+                candidate_ids,
+                path_ids,
+                shared_entities,
+                promoted,
+                timestamp: Utc::now(),
+            });
+        }
+    }
+
+    Ok(Json(response))
+}
+
+// ============================================================================
 // AGENT BLACK BOX (v2.2) — replayable agent-run traces
 // ============================================================================
 
@@ -4035,6 +4180,98 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, StatusCode::NOT_FOUND);
+    }
+
+    /// Full proof-spine acceptance: a dashboard preview creates one durable
+    /// Backfill receipt (typed evidence), persists the candidate evidence edge,
+    /// and broadcasts only the route embedded in that receipt.
+    #[tokio::test]
+    async fn backfill_http_preview_persists_receipt_edge_and_exact_live_path() {
+        let (_dir, storage) = seed_storage();
+        let cause = storage
+            .ingest(IngestInput {
+                content: "Set API_TIMEOUT=2 in deploy environment.".to_string(),
+                node_type: "decision".to_string(),
+                tags: vec!["API_TIMEOUT".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        storage
+            .set_created_at(&cause.id, Utc::now() - Duration::days(3))
+            .unwrap();
+        let failure = storage
+            .ingest(IngestInput {
+                content: "Checkout crashed with timeout on the auth endpoint.".to_string(),
+                node_type: "event".to_string(),
+                tags: vec!["API_TIMEOUT".to_string(), "crash".to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        let state = AppState::new(storage.clone(), None);
+        let mut events = state.subscribe();
+        let run_id = "run_backfill_http_proof".to_string();
+
+        let Json(response) = backfill_query(
+            State(state.clone()),
+            Json(BackfillBody {
+                failure_id: Some(failure.id.clone()),
+                manual: false,
+                lookback_days: Some(30),
+                promote: None,
+                run_id: Some(run_id.clone()),
+            }),
+        )
+        .await
+        .expect("backfill preview succeeds");
+
+        assert_eq!(response["runId"], run_id);
+        assert_eq!(response["causes"][0]["promoted"], false);
+        assert_eq!(
+            response["receipt"]["evidence"]["kind"],
+            "backfill",
+            "proof must live in typed ReceiptEvidence::Backfill"
+        );
+        assert_eq!(
+            response["receipt"]["evidence"]["predicate"]["path_ids"],
+            serde_json::json!([cause.id, failure.id])
+        );
+        assert_eq!(
+            response["receipt"]["evidence"]["predicate"]["candidates"][0]["promoted"],
+            false
+        );
+        let receipt_id = response["receiptId"].as_str().expect("receipt id");
+        let persisted = storage
+            .get_receipt(receipt_id)
+            .unwrap()
+            .expect("receipt saved");
+        assert_eq!(
+            persisted.backfill_path_ids(),
+            Some([cause.id.clone(), failure.id.clone()].as_slice())
+        );
+        assert!(
+            storage
+                .get_connections_for_memory(&cause.id)
+                .unwrap()
+                .iter()
+                .any(|edge| {
+                    edge.source_id == cause.id
+                        && edge.target_id == failure.id
+                        && edge.link_type == "backfill_candidate"
+                }),
+            "preview still persists explicit evidence, without a promotion"
+        );
+        let emitted = loop {
+            match events.recv().await.expect("dashboard event") {
+                VestigeEvent::BackfillFired {
+                    receipt_id: emitted_receipt,
+                    path_ids,
+                    ..
+                } => break (emitted_receipt, path_ids),
+                _ => continue,
+            }
+        };
+        assert_eq!(emitted.0, receipt_id);
+        assert_eq!(emitted.1, vec![cause.id, failure.id]);
     }
 
     #[test]

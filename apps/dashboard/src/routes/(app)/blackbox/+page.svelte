@@ -14,6 +14,7 @@
 	//  rows. No fake demo events.
 	// ═══════════════════════════════════════════════════════════════════════
 	import { onMount } from 'svelte';
+	import { page } from '$app/stores';
 	import PageHeader from '$components/PageHeader.svelte';
 	import Icon from '$components/Icon.svelte';
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
@@ -24,9 +25,10 @@
 		type TraceRunSummary,
 		type TraceEvent,
 		type TraceDetail,
-		type Receipt
+		type Receipt,
+		type BackfillResponse
 	} from '$lib/stores/api';
-	import { isConnected, liveRunId, lastTraceEvent, traceEvents } from '$lib/stores/websocket';
+	import { isConnected, liveRunId, lastTraceEvent, traceEvents, eventFeed } from '$lib/stores/websocket';
 	import {
 		eventColor,
 		eventLabel,
@@ -36,6 +38,22 @@
 		formatAt,
 		relativeMs
 	} from '$components/blackbox-helpers';
+	import RouteStage, { type RoutePick, type RouteFramePass } from '$lib/observatory/RouteStage.svelte';
+	import { createBlackboxPasses } from '$lib/observatory/blackbox/blackbox-pass';
+	import {
+		normalizeBlackboxScene,
+		type BlackboxScene,
+		type BlackboxTraceImpulse
+	} from '$lib/observatory/blackbox/blackbox-scene';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import type { RouteSceneModel } from '$lib/observatory/route-scene';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
+	import { WitnessVolumePass } from '$lib/observatory/witness/witness-volume-pass';
+	import { buildWitnessScene } from '$lib/observatory/witness/witness-scene';
+	import { osGoto, osHref } from '$lib/os-nav';
+	import { isBackfillPulse } from '$lib/observatory/route-event-pulse';
+	import type { Memory } from '$types';
 
 	// ---- state ----------------------------------------------------------
 	let runs = $state<TraceRunSummary[]>([]);
@@ -46,6 +64,14 @@
 	let scrubIndex = $state(0); // index into detail.events
 	let proofMode = $state(false);
 	let receipts = $state<Receipt[]>([]);
+	let selectedImpulse = $state<BlackboxTraceImpulse | null>(null);
+	let viewMode = $state<'forensics' | 'volume'>('forensics');
+	let memoryById = $state<Map<string, Memory>>(new Map());
+	let witnessVolume: WitnessVolumePass | null = null;
+	let backfillBusy = $state(false);
+	let backfillError = $state<string | null>(null);
+	let backfillResult = $state<BackfillResponse | null>(null);
+	let rescueBanner = $state<string | null>(null);
 
 	// The events up to and including the scrubber position — what the agent had
 	// "experienced" at that moment in the run.
@@ -68,12 +94,34 @@
 	const hasContradiction = $derived(
 		detail?.events.some((e) => e.type === 'contradiction.detected') ?? false
 	);
+	const blackboxScene = $derived<BlackboxScene>(normalizeBlackboxScene(detail, receipts, scrubIndex));
+	const selectedReceipt = $derived(receipts[0] ?? null);
+	const witnessScene = $derived(buildWitnessScene(detail, selectedReceipt, memoryById));
+
+	function handleRoutePick(pick: RoutePick) {
+		if (pick.kind === 'witness-shard') {
+			witnessVolume?.setSelected(pick.id);
+			return;
+		}
+		if (pick.kind !== 'trace-event') return;
+		const impulse = pick.payload as BlackboxTraceImpulse;
+		selectedImpulse = impulse;
+		scrubIndex = Math.max(0, Math.min(detail?.events.length ? detail.events.length - 1 : 0, impulse.index));
+	}
 
 	async function loadRuns() {
 		try {
 			const res = await api.traces.list(100);
 			runs = res.runs;
-			if (!selectedRunId && runs.length) selectRun(runs[0].runId);
+			// A Replay handoff carries an exact run id. Honor it instead of relying on
+			// recency, so a live event cannot silently switch the proof being shown.
+			const requestedRunId = $page.url.searchParams.get('run');
+			if ($page.url.searchParams.get('view') === 'volume') viewMode = 'volume';
+			if (!selectedRunId && requestedRunId && runs.some((run) => run.runId === requestedRunId)) {
+				selectRun(requestedRunId);
+			} else if (!selectedRunId && runs.length) {
+				selectRun(runs[0].runId);
+			}
 		} catch (e) {
 			error = String(e);
 		}
@@ -86,9 +134,11 @@
 		try {
 			detail = await api.traces.get(runId);
 			scrubIndex = Math.max(0, (detail.events.length || 1) - 1);
+			selectedImpulse = null;
 			// Receipts are the proof behind THIS run's retrievals — scoped to
 			// the selected run (B5), not the global latest.
 			receipts = (await api.receipts.listForRun(runId, 8)).receipts;
+			await hydrateEvidence(receipts[0] ?? null);
 		} catch (e) {
 			error = String(e);
 			detail = null;
@@ -101,6 +151,74 @@
 		if (!selectedRunId) return;
 		// Direct browser download of the .vestige-trace.json artifact.
 		window.location.href = api.traces.exportUrl(selectedRunId);
+	}
+
+	function evidenceIds(receipt: Receipt | null): string[] {
+		if (!receipt) return [];
+		return [
+			...receipt.activation_path,
+			...receipt.retrieved,
+			...receipt.mutations.map((mutation) => mutation.id),
+			...receipt.suppressed.map((suppression) => suppression.id)
+		].filter((id, index, all) => Boolean(id) && all.indexOf(id) === index);
+	}
+
+	async function hydrateEvidence(receipt: Receipt | null) {
+		const missing = evidenceIds(receipt)
+			.slice(0, 64)
+			.filter((id) => !memoryById.has(id));
+		if (!missing.length) return;
+		const loaded = await Promise.all(
+			missing.map(async (id) => {
+				try {
+					return await api.memories.get(id);
+				} catch {
+					return null;
+				}
+			})
+		);
+		const next = new Map(memoryById);
+		for (const memory of loaded) if (memory) next.set(memory.id, memory);
+		memoryById = next;
+	}
+
+	function createVolumePasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		const volume = new WitnessVolumePass(engine, scene);
+		witnessVolume = volume;
+		return [volume];
+	}
+
+	async function runSalienceRescue() {
+		if (backfillBusy) return;
+		backfillBusy = true;
+		backfillError = null;
+		try {
+			const result = await api.backfill({
+				manual: true,
+				promote: false,
+				lookbackDays: 30,
+				runId: selectedRunId ?? undefined
+			});
+			backfillResult = result;
+			if (result.receiptId) {
+				rescueBanner = result.headline ?? 'Salience rescue receipt sealed';
+			}
+		} catch (cause) {
+			backfillError = cause instanceof Error ? cause.message : 'Backfill failed';
+		} finally {
+			backfillBusy = false;
+		}
+	}
+
+	function openRescueReplay() {
+		const receiptId = backfillResult?.receiptId ?? backfillResult?.receipt?.receipt_id;
+		if (!receiptId) return;
+		void osGoto('/observatory', { receipt: receiptId });
+	}
+
+	function setView(next: 'forensics' | 'volume') {
+		viewMode = next;
+		if (next === 'volume') void hydrateEvidence(selectedReceipt);
 	}
 
 	// Live: when a trace event for the *currently open* run arrives, refresh it
@@ -121,9 +239,88 @@
 	});
 
 	onMount(loadRuns);
+
+	$effect(() => {
+		const head = $eventFeed[0];
+		if (head && isBackfillPulse(head)) {
+			rescueBanner = 'Salience rescue fired';
+		}
+	});
+
+	// Every real agent run becomes a cell in the recorder's constellation behind
+	// the trace lanes: bigger = more events, scarlet = had a veto, amber = had a
+	// suppression, forward-cyan = clean. The field breathes even between runs.
+	let runsField: LivingFieldPass | null = null;
+	function buildRunCells() {
+		const maxEvents = Math.max(1, ...runs.map((r) => r.eventCount ?? 0));
+		const data: FieldDatum[] = runs.slice(0, 200).map((r) => {
+			const load = clampLocal((r.eventCount ?? 0) / maxEvents);
+			const hue =
+				(r.vetoCount ?? 0) > 0
+					? FIELD_HUE.scarlet
+					: (r.suppressedCount ?? 0) > 0
+						? FIELD_HUE.caution
+						: FIELD_HUE.forward;
+			return {
+				id: r.runId,
+				score: 0.35 + 0.65 * load,
+				hue,
+				energy: 0.4 + 0.6 * load,
+				selected: r.runId === selectedRunId,
+				scar: (r.vetoCount ?? 0) > 0,
+				metric2: clampLocal((r.retrievedCount ?? 0) / Math.max(1, r.eventCount ?? 1)),
+				kind: 'trace-run',
+				payload: r
+			} satisfies FieldDatum;
+		});
+		return layoutGalaxy(data, { maxRadius: 0.95, minCellR: 0.016, maxCellR: 0.06 });
+	}
+	function clampLocal(v: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
+	}
+	function createRecorderPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		const field = new LivingFieldPass(engine);
+		runsField = field;
+		// Text-heavy organ: the field is a DIM backdrop, and the centered content
+		// column (max-w-6xl) needs a wide reading well so labels/values stay legible.
+		field.setIntensity(0.24);
+		field.setReadingWell({ x: 0, y: 0, hw: 0.66, hh: 0.85, floor: 0.08, soft: 0.25 });
+		field.setCells(buildRunCells());
+		const fieldWrapper: RouteFramePass = {
+			compute: (encoder) => field.compute(encoder),
+			render: (pass) => field.render(pass),
+			pickAt: (x, y) => field.pickAt(x, y),
+			dispose: () => {
+				field.dispose();
+				if (runsField === field) runsField = null;
+			}
+		};
+		return [fieldWrapper, ...createBlackboxPasses(engine, scene)];
+	}
+	// Refresh the run constellation whenever the run list changes.
+	$effect(() => {
+		// Rebuild on run-list change AND on selection change (so the selected cell's
+		// bright highlight follows the picked run, not just new runs appearing).
+		void runs.length;
+		void selectedRunId;
+		runsField?.setCells(buildRunCells());
+	});
 </script>
 
-<div class="mx-auto max-w-6xl px-5 py-6">
+{#key viewMode}
+<RouteStage
+	organ={viewMode === 'volume' ? 'witness' : 'blackbox'}
+	seed={`agent-flight-recorder:${viewMode}:${selectedRunId ?? 'empty'}:${blackboxScene.visibleEventCount}`}
+	scene={viewMode === 'volume' ? witnessScene : blackboxScene}
+	passes={viewMode === 'volume' ? createVolumePasses : createRecorderPasses}
+	loading={loading}
+	error={error}
+	emptyLabel={viewMode === 'volume' ? 'NO RECEIPT SELECTED - WITNESS CHAMBER ARMED' : 'NO AGENT TRACE SELECTED - RECORDER ARMED'}
+	onpick={handleRoutePick}
+/>
+{/key}
+
+<div class="blackbox-shell relative z-10 mx-auto max-w-6xl px-5 py-6">
 	<PageHeader
 		icon="blackbox"
 		title="Agent Black Box"
@@ -132,12 +329,25 @@
 	>
 		<button
 			class="mode-toggle"
+			class:on={viewMode === 'volume'}
+			onclick={() => setView(viewMode === 'volume' ? 'forensics' : 'volume')}
+			title="Toggle 3D witness volume vs DOM forensics"
+		>
+			<Icon name="graph" size={14} />
+			{viewMode === 'volume' ? 'Forensics' : 'Witness volume'}
+		</button>
+		<button
+			class="mode-toggle"
 			class:on={proofMode}
 			onclick={() => (proofMode = !proofMode)}
 			title="Proof Mode: a clean launch-footage view"
 		>
 			<Icon name="sparkle" size={14} />
 			Proof Mode
+		</button>
+		<button class="export-btn" onclick={() => void runSalienceRescue()} disabled={backfillBusy}>
+			<Icon name="sparkle" size={14} />
+			{backfillBusy ? 'Rescuing…' : 'Run salience rescue (preview)'}
 		</button>
 		<button class="export-btn" onclick={exportTrace} disabled={!selectedRunId}>
 			<Icon name="feed" size={14} />
@@ -177,6 +387,52 @@
 			</span>
 		</div>
 	</div>
+
+	{#if rescueBanner || backfillResult || backfillError}
+		<div class="rescue-panel glass" use:reveal>
+			<div class="rescue-kicker">SALIENCE RESCUE · PREVIEW</div>
+			{#if rescueBanner}<p class="rescue-banner">{rescueBanner}</p>{/if}
+			{#if backfillError}<p class="rescue-error">{backfillError}</p>{/if}
+			{#if backfillResult}
+				<p>{backfillResult.headline ?? backfillResult.note ?? 'Preview complete. Nothing was promoted.'}</p>
+				{#if backfillResult.failure}
+					<div class="rescue-failure">
+						<span>Failure</span>
+						<a href={osHref('/memories', { memory: backfillResult.failure.id })}>{backfillResult.failure.id}</a>
+						<small>{backfillResult.failure.content_preview}</small>
+					</div>
+				{/if}
+				{#if backfillResult.causes?.length}
+					<ul class="rescue-causes">
+						{#each backfillResult.causes.slice(0, 8) as cause (cause.memory_id)}
+							<li>
+								<a href={osHref('/memories', { memory: cause.memory_id })}>{cause.memory_id.slice(0, 8)}</a>
+								<span>score {cause.backfill_score.toFixed(2)}</span>
+								<small>{cause.content_preview}</small>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				<div class="rescue-actions">
+					{#if backfillResult.receiptId || backfillResult.receipt}
+						<button type="button" onclick={openRescueReplay}>Replay in Observatory →</button>
+					{/if}
+					{#if backfillResult.runId}
+						<a href={osHref('/blackbox', { run: backfillResult.runId })}>Open rescue run</a>
+					{/if}
+				</div>
+			{/if}
+		</div>
+	{/if}
+
+	{#if selectedImpulse}
+		<div class="selected-impulse glass" use:reveal>
+			<span class="selected-kicker">GPU pick</span>
+			<strong>{selectedImpulse.label}</strong>
+			<span>{selectedImpulse.summary}</span>
+			<code>{selectedImpulse.provenance.id}</code>
+		</div>
+	{/if}
 
 	{#if !proofMode}
 		<div class="layout">
@@ -298,7 +554,7 @@
 					<!-- Pulse set: the memories touched so far -->
 					<div class="pulse glass" use:reveal>
 						<h3 class="panel-title">
-							Memory pulse <span class="text-dim">— touched this run</span>
+							Memory pulse <span class="text-dim">· touched this run</span>
 						</h3>
 						{#if pulsedIds.length === 0}
 							<p class="empty">No memories touched yet.</p>
@@ -313,7 +569,7 @@
 
 					<!-- Producer status — honest about what's live vs. off-by-default -->
 					<div class="producers glass" use:reveal>
-						<h3 class="panel-title">Event producers <span class="text-dim">— this run</span></h3>
+						<h3 class="panel-title">Event producers <span class="text-dim">· this run</span></h3>
 						<ul class="producer-list">
 							<li class="producer ok">
 								<span class="p-dot"></span> mcp.call · memory.write · memory.retrieve · memory.suppress
@@ -344,7 +600,7 @@
 					{#if receipts.length}
 						<div class="receipts-panel glass" use:reveal>
 							<h3 class="panel-title">
-								Receipts <span class="text-dim">— proof behind retrievals</span>
+								Receipts <span class="text-dim">· proof behind retrievals</span>
 							</h3>
 							<div class="receipts-grid">
 								{#each receipts.slice(0, 2) as r (r.receipt_id)}
@@ -371,6 +627,13 @@
 										<span class="log-summary">{eventSummary(ev)}</span>
 										<span class="log-t">+{relativeMs(ev.at, startAt)}ms</span>
 									</button>
+									{#if eventMemoryIds(ev).length}
+										<div class="log-jumps">
+											{#each eventMemoryIds(ev) as id (id)}
+												<a href={osHref('/memories', { memory: id })}>{id.slice(0, 8)}</a>
+											{/each}
+										</div>
+									{/if}
 								</li>
 							{/each}
 						</ol>
@@ -405,6 +668,63 @@
 </div>
 
 <style>
+	/* ░░ PORTRAIT / NARROW REFLOW ░░
+	   Gated on viewport aspect (not a hardcoded phone width) to mirror the
+	   engine's aspect<0.85 portrait branch, so the 1440px desktop render is
+	   byte-identical. On a phone the shared PageHeader lays the title block and
+	   the action pills on one non-wrapping row that is wider than the screen —
+	   the Export pill clips off the right edge and the subtitle gets crushed into
+	   a thin column beside the icon rail. Here we stack the header: full-width
+	   title/subtitle on top, the pills wrapping to their own left-aligned row
+	   below so every label is fully readable and reachable. */
+	@media (max-aspect-ratio: 85/100) {
+		.blackbox-shell :global(header) {
+			flex-direction: column;
+			align-items: stretch;
+			gap: 0.85rem;
+		}
+		/* Title block reclaims the full width so the subtitle reads as a sentence,
+		   not a 1-2-word vertical ribbon. */
+		.blackbox-shell :global(header > div:first-child) {
+			min-width: 0;
+		}
+		/* Action pills: their own row, left-aligned, allowed to wrap so the
+		   Export pill can never overflow the right screen edge. */
+		.blackbox-shell :global(header > div:last-child) {
+			flex: 0 0 auto;
+			flex-wrap: wrap;
+			justify-content: flex-start;
+		}
+		/* Let the wide Export pill shrink its own box and wrap its label instead
+		   of running off-screen. */
+		.export-btn {
+			max-width: 100%;
+			white-space: normal;
+			text-align: left;
+		}
+		/* The shared (app) shell is a fixed 100dvh overflow-hidden box (required so
+		   the zero-DOM WebGPU organs' absolute-inset canvases get a real height).
+		   That means this DOM content column cannot scroll with the page — so make
+		   the blackbox shell itself the scroll container on portrait, and pad its
+		   bottom so the lowest content clears the fixed MobileNav FAB. */
+		.blackbox-shell {
+			height: 100dvh;
+			overflow-y: auto;
+			overflow-x: hidden;
+			-webkit-overflow-scrolling: touch;
+			padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+		}
+		/* On portrait the two-column grid collapses to one column, so the Runs
+		   aside no longer needs its own sticky + max-height:100vh + internal scroll
+		   box (which parked its lowest rows behind the FAB). Let it flow inside the
+		   shell scroller instead. */
+		.blackbox-shell .runs {
+			position: static;
+			max-height: none;
+			overflow-y: visible;
+		}
+	}
+
 	.mode-toggle,
 	.export-btn {
 		display: inline-flex;
@@ -464,6 +784,36 @@
 		gap: 7px;
 	}
 	.spine-run {
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.8rem;
+	}
+	.rescue-panel {
+		margin-bottom: 18px;
+		padding: 16px 18px;
+		border-radius: 14px;
+		display: grid;
+		gap: 10px;
+	}
+	.rescue-kicker {
+		font-size: 0.66rem;
+		letter-spacing: 0.14em;
+		color: #7ff3e6;
+	}
+	.rescue-banner { margin: 0; color: #29f2a9; font-size: 0.85rem; }
+	.rescue-error { margin: 0; color: #ff9d93; font-size: 0.85rem; }
+	.rescue-failure, .rescue-causes li {
+		display: grid;
+		gap: 4px;
+		font-size: 0.78rem;
+	}
+	.rescue-causes { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+	.rescue-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+	.rescue-actions button, .rescue-actions a, .log-jumps a {
+		color: #22c7de;
+		font-size: 0.75rem;
+	}
+	.log-jumps { display: flex; gap: 8px; padding: 0 12px 8px; }
+	.spine-run {
 		font-size: 0.82rem;
 		color: var(--color-synapse-glow);
 		word-break: break-all;
@@ -516,9 +866,9 @@
 	}
 
 	.glass {
-		background: color-mix(in oklab, var(--color-void, #050510) 55%, transparent);
-		border: 1px solid color-mix(in oklab, white 8%, transparent);
-		backdrop-filter: blur(12px);
+		background: linear-gradient(180deg, rgba(2, 3, 7, 0.26), rgba(0, 5, 16, 0.16));
+		border: 1px solid color-mix(in oklab, var(--color-synapse) 16%, transparent);
+		backdrop-filter: blur(8px) saturate(122%);
 		border-radius: 14px;
 	}
 
@@ -596,7 +946,7 @@
 		color: var(--color-recall, #10b981);
 	}
 	.s-suppress {
-		color: #a78bfa;
+		color: #b90d2b;
 	}
 	.s-write {
 		color: #38bdf8;

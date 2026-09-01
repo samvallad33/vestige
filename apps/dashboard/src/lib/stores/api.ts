@@ -27,6 +27,18 @@ import type {
 
 const BASE = '/api';
 
+export interface MemoryPromotion {
+	id: string;
+	promoted: boolean;
+	retentionStrength: number;
+}
+
+export interface MemoryDemotion {
+	id: string;
+	demoted: boolean;
+	retentionStrength: number;
+}
+
 async function fetcher<T>(path: string, options?: RequestInit): Promise<T> {
 	const res = await fetch(`${BASE}${path}`, {
 		headers: { 'Content-Type': 'application/json' },
@@ -45,8 +57,8 @@ export const api = {
 		},
 		get: (id: string) => fetcher<Memory>(`/memories/${id}`),
 		delete: (id: string) => fetcher<{ deleted: boolean }>(`/memories/${id}`, { method: 'DELETE' }),
-		promote: (id: string) => fetcher<Memory>(`/memories/${id}/promote`, { method: 'POST' }),
-		demote: (id: string) => fetcher<Memory>(`/memories/${id}/demote`, { method: 'POST' }),
+		promote: (id: string) => fetcher<MemoryPromotion>(`/memories/${id}/promote`, { method: 'POST' }),
+		demote: (id: string) => fetcher<MemoryDemotion>(`/memories/${id}/demote`, { method: 'POST' }),
 		// v2.0.7: suppress + unsuppress. Anderson 2025 top-down inhibitory
 		// control. Each suppress call compounds; reversible within 24h. The
 		// backend emits MemorySuppressed / MemoryUnsuppressed so the 3D graph
@@ -117,6 +129,13 @@ export const api = {
 
 	retentionDistribution: () => fetcher<RetentionDistribution>('/retention-distribution'),
 
+	// Memory changelog (#changelog): the historical event stream (DreamCompleted,
+	// ConnectionDiscovered, MemorySuppressed, ...) — the recorded past of the live
+	// feed. Powers the Feed organ's real-data seed so it is alive before a live
+	// WebSocket event fires.
+	memoryChangelog: (limit = 100) =>
+		fetcher<ChangelogResponse>(`/changelog?limit=${limit}`),
+
 	// Memory hygiene & provenance: duplicate clusters, contradiction pairs,
 	// cross-project pattern transfer, per-memory audit trail.
 	duplicates: (threshold = 0.8, limit = 20) =>
@@ -147,10 +166,31 @@ export const api = {
 	// Returns a reasoning chain + evidence + contradictions + supersession +
 	// evolution + confidence. Emits DeepReferenceCompleted on the WebSocket so
 	// the 3D graph can camera-glide + pulse + arc.
-	deepReference: (query: string, depth = 20) =>
+	deepReference: (query: string, depth = 20, runId?: string) =>
 		fetcher<Record<string, unknown>>('/deep_reference', {
 			method: 'POST',
-			body: JSON.stringify({ query, depth })
+			body: JSON.stringify({ query, depth, ...(runId ? { runId } : {}) })
+		}),
+
+	// Retroactive Salience Backfill: preview by default; callers must explicitly
+	// opt into promotion. The returned receipt is the sole source for the
+	// Black Box and Observatory proof surfaces.
+	backfill: (params: {
+		failureId?: string;
+		manual?: boolean;
+		lookbackDays?: number;
+		promote?: boolean;
+		runId?: string;
+	}) =>
+		fetcher<BackfillResponse>('/backfill', {
+			method: 'POST',
+			body: JSON.stringify({
+				...(params.failureId ? { failure_id: params.failureId } : {}),
+				manual: params.manual ?? false,
+				lookback_days: params.lookbackDays ?? 30,
+				promote: params.promote ?? false,
+				...(params.runId ? { runId: params.runId } : {})
+			})
 		}),
 
 	sanhedrin: {
@@ -265,6 +305,20 @@ export type TraceDetail = {
 	events: TraceEvent[];
 };
 
+export type ReceiptEvidence =
+	| {
+			kind: 'synaptic_capture';
+			predicate: Record<string, unknown>;
+	  }
+	| {
+			kind: 'counterfactual_replay';
+			predicate: Record<string, unknown>;
+	  }
+	| {
+			kind: 'backfill';
+			predicate: BackfillEvidence;
+	  };
+
 export type Receipt = {
 	receipt_id: string;
 	retrieved: string[];
@@ -273,9 +327,70 @@ export type Receipt = {
 	trust_floor: number;
 	decay_risk: 'low' | 'medium' | 'high';
 	mutations: { id: string; kind: string; note?: string }[];
+	/** Typed proof payload. Backfill lives here as kind:'backfill' — never as a
+	 * top-level `backfill` field (removed in v2.6 typed-evidence migration). */
+	evidence?: ReceiptEvidence | null;
+};
+
+export type BackfillCandidate = {
+	memory_id: string;
+	content_preview: string;
+	shared_entities: string[];
+	age_days_before_failure: number;
+	similarity_rank: number | null;
+	backfill_score: number;
+	promoted: boolean;
+	candidate_edge_persisted?: boolean;
+};
+
+export type BackfillEvidence = {
+	schema: string;
+	schema_version: number;
+	failure_id: string;
+	failure_preview: string;
+	scanned: number;
+	lookback_days: number;
+	baseline: string;
+	/** Ordered, persisted evidence route from the earlier candidate to the
+	 * observed failure. Observatory must render this verbatim or not render a
+	 * route at all; it may never fill gaps with graph topology. */
+	path_ids?: string[];
+	candidates: BackfillCandidate[];
+	claim_boundary: string;
+};
+
+/** Fail-closed extractor: only complete receipt-authored Backfill evidence. */
+export function receiptBackfill(receipt: Receipt | null | undefined): BackfillEvidence | null {
+	const evidence = receipt?.evidence;
+	if (!evidence || evidence.kind !== 'backfill') return null;
+	const path = evidence.predicate.path_ids;
+	if (!path || path.length < 2) return null;
+	return evidence.predicate;
+}
+
+export type BackfillResponse = {
+	triggered: boolean;
+	headline?: string;
+	failure?: { id: string; content_preview: string };
+	causes?: BackfillCandidate[];
+	note?: string;
+	runId: string;
+	receiptId: string | null;
+	receipt: Receipt | null;
 };
 
 export type ReceiptListResponse = { total: number; receipts: Receipt[] };
+
+export type ChangelogEvent = {
+	type: string;
+	timestamp: string;
+	data: Record<string, unknown>;
+};
+export type ChangelogResponse = {
+	events: ChangelogEvent[];
+	totalEvents: number;
+	filter?: { start: string | null; end: string | null; limit: number };
+};
 
 export type MemoryPrAction =
 	| 'promote'

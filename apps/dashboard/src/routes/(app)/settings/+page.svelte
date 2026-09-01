@@ -1,402 +1,160 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import RouteStage, { type RouteFramePass } from '$lib/observatory/RouteStage.svelte';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import type { RouteSceneModel } from '$lib/observatory/route-scene';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 	import { api } from '$stores/api';
-	import { websocket, isConnected, memoryCount, avgRetention } from '$stores/websocket';
-	import { fireDemoSequence } from '$stores/toast';
-	import PageHeader from '$lib/components/PageHeader.svelte';
-	import Icon from '$lib/components/Icon.svelte';
-	import { reveal } from '$lib/actions/reveal';
+	import { isConnected } from '$stores/websocket';
+	import type { ConsolidationResult, DreamResult, HealthCheck, RetentionDistribution, SystemStats } from '$types';
 
-	// v2.3 Birth Ritual demo — injects a synthetic MemoryCreated event so
-	// Graph3D spawns a birth orb without needing a real ingest. Node types
-	// cycle so back-to-back clicks show different colors. Pure dev/demo
-	// affordance; production users see orbs fire on real ingests.
-	const DEMO_NODE_TYPES = ['fact', 'concept', 'pattern', 'decision', 'person', 'place'];
-	let birthCount = $state(0);
-	function fireBirthRitualDemo() {
-		const type = DEMO_NODE_TYPES[birthCount % DEMO_NODE_TYPES.length];
-		birthCount++;
-		websocket.injectEvent({
-			type: 'MemoryCreated',
-			data: {
-				id: `demo-birth-${Date.now()}`,
-				content: `Demo memory #${birthCount} — ${type}`,
-				node_type: type,
-				tags: ['demo', 'v2.3-birth-ritual'],
-				retention: 0.9,
-			},
-		});
-	}
+	let stats = $state<SystemStats | null>(null);
+	let health = $state<HealthCheck | null>(null);
+	let retention = $state<RetentionDistribution | null>(null);
+	let consolidation = $state<ConsolidationResult | null>(null);
+	let dream = $state<DreamResult | null>(null);
+	let busy = $state<null | 'consolidate' | 'dream' | 'refresh'>(null);
+	let statusLine = $state('Ready to maintain the local memory system.');
+	let loading = $state(true);
+	let error = $state<string | null>(null);
+	let systemField: LivingFieldPass | null = null;
 
-	// Operation states
-	let consolidating = $state(false);
-	let dreaming = $state(false);
-	let consolidationResult = $state<Record<string, unknown> | null>(null);
-	let dreamResult = $state<Record<string, unknown> | null>(null);
+	const settingsScene = $derived.by<RouteSceneModel>(() => ({
+		organ: 'settings', nodes: [], edges: [], events: [], receipts: [], alive: true,
+		scalars: { memories: stats?.totalMemories ?? 0, retention: stats?.averageRetention ?? 0, coverage: stats?.embeddingCoverage ?? 0 }
+	}));
 
-	// Stats
-	let stats = $state<Record<string, unknown> | null>(null);
-	let retentionDist = $state<Record<string, unknown> | null>(null);
-	let loadingStats = $state(true);
-
-	// Health
-	let health = $state<Record<string, unknown> | null>(null);
-
-	onMount(() => {
-		loadAllData();
+	$effect(() => {
+		void [retention, stats, busy];
+		systemField?.setCells(buildFieldCells());
 	});
 
-	async function loadAllData() {
-		loadingStats = true;
+	onMount(() => void loadData());
+
+	function buildFieldCells() {
+		const data: FieldDatum[] = [];
+		for (const [index, bucket] of (retention?.distribution ?? []).entries()) {
+			const score = (index + 0.5) / Math.max(1, retention?.distribution.length ?? 1);
+			for (let cell = 0; cell < Math.min(60, Math.ceil(bucket.count / 8)); cell += 1) {
+				data.push({
+					id: `settings:${index}:${cell}`, score, energy: 0.35 + score * 0.6, metric2: score,
+					hue: score > .66 ? FIELD_HUE.oxygen : score > .33 ? FIELD_HUE.healthy : FIELD_HUE.debt,
+					scar: score < .2, kind: 'retention-tissue', payload: { range: bucket.range, count: bucket.count }
+				});
+			}
+		}
+		return layoutGalaxy(data, { maxRadius: .96, minCellR: .01, maxCellR: .04 });
+	}
+
+	function createSettingsPasses(engine: ObservatoryEngine, _scene: RouteSceneModel): RouteFramePass[] {
+		const field = new LivingFieldPass(engine);
+		systemField = field;
+		field.setIntensity(.7);
+		field.setReadingWell({ x: -.1, y: 0, hw: .68, hh: .78, floor: .1, soft: .18 });
+		field.setCells(buildFieldCells());
+		return [{
+			compute: (encoder) => field.compute(encoder),
+			render: (renderPass) => field.render(renderPass),
+			dispose: () => { field.dispose(); if (systemField === field) systemField = null; }
+		}];
+	}
+
+	async function loadData() {
+		loading = true;
+		error = null;
 		try {
-			const [s, h, r] = await Promise.all([
-				api.stats().catch(() => null),
-				api.health().catch(() => null),
-				api.retentionDistribution().catch(() => null),
-			]);
-			stats = s as Record<string, unknown> | null;
-			health = h as Record<string, unknown> | null;
-			retentionDist = r as Record<string, unknown> | null;
+			const [nextStats, nextRetention, nextHealth] = await Promise.all([api.stats(), api.retentionDistribution(), api.health()]);
+			stats = nextStats;
+			retention = nextRetention;
+			health = nextHealth;
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : 'Unable to load system state';
+			statusLine = 'System state could not be loaded.';
 		} finally {
-			loadingStats = false;
+			loading = false;
 		}
 	}
 
-	async function runConsolidation() {
-		consolidating = true;
-		consolidationResult = null;
+	async function runRefresh() {
+		busy = 'refresh';
+		statusLine = 'Refreshing live system vitals…';
+		try { await loadData(); if (!error) statusLine = 'Live system vitals refreshed.'; } finally { busy = null; }
+	}
+
+	async function runConsolidate() {
+		busy = 'consolidate'; consolidation = null; dream = null;
+		statusLine = 'Consolidating memory: recalculating retention and maintenance state…';
 		try {
-			consolidationResult = await api.consolidate() as unknown as Record<string, unknown>;
-			await loadAllData();
-		} catch { /* ignore */ }
-		finally { consolidating = false; }
+			consolidation = await api.consolidate();
+			await loadData();
+			statusLine = 'Consolidation complete. The receipt below is from this run.';
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : 'Consolidation failed';
+			statusLine = 'Consolidation did not complete.';
+		} finally { busy = null; }
 	}
 
 	async function runDream() {
-		dreaming = true;
-		dreamResult = null;
+		busy = 'dream'; dream = null; consolidation = null;
+		statusLine = 'Running a dream cycle: replaying memory and finding connections…';
 		try {
-			dreamResult = await api.dream() as unknown as Record<string, unknown>;
-			await loadAllData();
-		} catch { /* ignore */ }
-		finally { dreaming = false; }
+			dream = await api.dream();
+			await loadData();
+			statusLine = 'Dream cycle complete. The insight below is from this run.';
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : 'Dream cycle failed';
+			statusLine = 'Dream cycle did not complete.';
+		} finally { busy = null; }
 	}
+
+	function bandWidth(count: number) { return `${Math.max(4, Math.min(100, (count / Math.max(1, ...(retention?.distribution ?? []).map((bucket) => bucket.count))) * 100))}%`; }
 </script>
 
-<div class="p-6 max-w-4xl mx-auto space-y-8 enter">
-	<PageHeader
-		icon="settings"
-		title="Settings & System"
-		subtitle="Tune the cognitive engine, watch the system breathe, and run the rituals that keep memory alive."
-		accent="synapse"
-	>
-		<span class="conn-pill" class:idle={!$isConnected}>
-			<span
-				class="conn-dot w-2 h-2 rounded-full"
-				class:ping-host={$isConnected}
-				class:breathe={!$isConnected}
-				style="color:{$isConnected ? 'var(--color-recall)' : 'var(--color-decay)'};background:{$isConnected ? 'var(--color-recall)' : 'var(--color-decay)'}"
-			></span>
-			<span>{$isConnected ? 'Connected' : 'Offline'}</span>
-		</span>
-		<button onclick={loadAllData} class="refresh-btn">
-			<Icon name="activation" size={13} />
-			<span>Refresh</span>
-		</button>
-	</PageHeader>
+<svelte:head><title>System Care · Vestige</title></svelte:head>
 
-	<!-- System Health Overview -->
-	<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-		<div class="p-4 glass rounded-xl text-center lift" use:reveal={{ delay: 0 }}>
-			<div class="text-2xl text-bright font-bold tabular-nums">{$memoryCount}</div>
-			<div class="text-xs text-dim mt-1">Memories</div>
-		</div>
-		<div class="p-4 glass rounded-xl text-center lift" use:reveal={{ delay: 60 }}>
-			<div class="text-2xl font-bold tabular-nums" style="color: {$avgRetention > 0.7 ? '#10b981' : $avgRetention > 0.4 ? '#f59e0b' : '#ef4444'}">{($avgRetention * 100).toFixed(1)}%</div>
-			<div class="text-xs text-dim mt-1">Avg Retention</div>
-		</div>
-		<div class="p-4 glass rounded-xl text-center lift" use:reveal={{ delay: 120 }}>
-			<div class="text-2xl text-bright font-bold flex items-center justify-center gap-2">
-				<span
-					class="w-2.5 h-2.5 rounded-full"
-					class:ping-host={$isConnected}
-					class:breathe={!$isConnected}
-					style="color:{$isConnected ? 'var(--color-recall)' : 'var(--color-decay)'};background:{$isConnected ? 'var(--color-recall)' : 'var(--color-decay)'}"
-				></span>
-				<span class="text-sm">{$isConnected ? 'Online' : 'Offline'}</span>
-			</div>
-			<div class="text-xs text-dim mt-1">WebSocket</div>
-		</div>
-		<div class="p-4 glass rounded-xl text-center lift" use:reveal={{ delay: 180 }}>
-			<div class="text-2xl text-synapse-glow font-bold">v2.1</div>
-			<div class="text-xs text-dim mt-1">Vestige</div>
-		</div>
-	</div>
+<RouteStage organ="settings" seed={`settings-field:${stats?.totalMemories ?? 0}:${retention?.total ?? 0}`} scene={settingsScene} passes={createSettingsPasses} loading={false} {error} />
 
-	<!-- Cognitive Operations -->
-	<section class="space-y-4" use:reveal={{ delay: 60 }}>
-		<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-			<Icon name="dreams" size={16} class="text-dream" /> Cognitive Operations
-		</h2>
+<main class="system-shell">
+	<header class="system-head">
+		<div><p class="eyebrow">SYSTEM CARE</p><h1>Keep the memory system alive.</h1><p>These controls run real local maintenance. Their results are recorded below, never implied by animation.</p></div>
+		<div class:online={$isConnected} class="connection"><span></span>{$isConnected ? 'Live local connection' : 'Connecting locally'}</div>
+	</header>
 
-		<!-- v2.2 Pulse — demo the InsightToast stream -->
-		<div class="p-4 glass rounded-xl space-y-3 lift">
-			<div class="flex items-center justify-between">
-				<div>
-					<div class="text-sm text-text font-medium">Pulse Toast Preview</div>
-					<div class="text-xs text-dim">Fire a synthetic event sequence — useful for UI demos</div>
-				</div>
-				<button onclick={fireDemoSequence}
-					class="px-4 py-2 bg-synapse/20 border border-synapse/40 text-synapse-glow text-sm rounded-xl hover:bg-synapse/30 transition flex items-center gap-2">
-					<Icon name="sparkle" size={14} /> Preview Pulse
-				</button>
-			</div>
-		</div>
+	{#if loading}
+		<div class="glass-panel system-state">Loading live system state…</div>
+	{:else if error && !stats}
+		<div class="glass-panel system-state error">{error}<button type="button" onclick={runRefresh}>Try again</button></div>
+	{:else}
+		<dl class="system-vitals" aria-label="Current system metrics">
+			<div><dt>Local memories</dt><dd>{stats?.totalMemories ?? 0}</dd></div>
+			<div><dt>Average retention</dt><dd>{Math.round((stats?.averageRetention ?? 0) * 100)}%</dd></div>
+			<div><dt>Embedding coverage</dt><dd>{Math.round(stats?.embeddingCoverage ?? 0)}%</dd></div>
+			<div><dt>Running version</dt><dd>v{health?.version ?? 'unknown'}</dd></div>
+		</dl>
 
-		<!-- v2.3 Terrarium — demo the Memory Birth Ritual on the Graph page -->
-		<div class="p-4 glass rounded-xl space-y-3 lift">
-			<div class="flex items-center justify-between">
-				<div>
-					<div class="text-sm text-text font-medium">Birth Ritual Preview</div>
-					<div class="text-xs text-dim">Inject a synthetic memory — switch to Graph to watch the orb fly in</div>
-				</div>
-				<button onclick={fireBirthRitualDemo}
-					class="px-4 py-2 bg-dream/20 border border-dream/40 text-dream-glow text-sm rounded-xl hover:bg-dream/30 transition flex items-center gap-2">
-					<Icon name="memories" size={14} /> Trigger Birth
-				</button>
-			</div>
-		</div>
+		<section class="system-grid">
+			<figure class="glass-panel retention"><figcaption><span>RETENTION DISTRIBUTION</span><small>{retention?.total ?? 0} memories</small></figcaption>
+				{#each retention?.distribution ?? [] as bucket}
+					<div class="retention-row"><span>{bucket.range}</span><div><i style={`width:${bandWidth(bucket.count)}`}></i></div><strong>{bucket.count}</strong></div>
+				{/each}
+			</figure>
 
-		<!-- Consolidation -->
-		<div class="p-4 glass rounded-xl space-y-3 lift">
-			<div class="flex items-center justify-between">
-				<div>
-					<div class="text-sm text-text font-medium">FSRS-6 Consolidation</div>
-					<div class="text-xs text-dim">Apply spaced-repetition decay, regenerate embeddings, run maintenance</div>
-				</div>
-				<button onclick={runConsolidation} disabled={consolidating}
-					class="px-4 py-2 bg-warning/20 border border-warning/40 text-warning text-sm rounded-xl hover:bg-warning/30 transition disabled:opacity-50 flex items-center gap-2">
-					{#if consolidating}
-						<span class="w-3 h-3 border border-warning/50 border-t-warning rounded-full animate-spin"></span>
-						Running...
-					{:else}
-						Consolidate
-					{/if}
-				</button>
-			</div>
-			{#if consolidationResult}
-				<div class="bg-white/[0.02] p-3 rounded-lg border border-synapse/10">
-					<div class="grid grid-cols-3 gap-3 text-center">
-						{#if consolidationResult.nodesProcessed !== undefined}
-							<div>
-								<div class="text-lg text-text font-semibold tabular-nums">{consolidationResult.nodesProcessed}</div>
-								<div class="text-[10px] text-muted">Processed</div>
-							</div>
-						{/if}
-						{#if consolidationResult.decayApplied !== undefined}
-							<div>
-								<div class="text-lg text-decay font-semibold tabular-nums">{consolidationResult.decayApplied}</div>
-								<div class="text-[10px] text-muted">Decayed</div>
-							</div>
-						{/if}
-						{#if consolidationResult.embeddingsGenerated !== undefined}
-							<div>
-								<div class="text-lg text-synapse-glow font-semibold tabular-nums">{consolidationResult.embeddingsGenerated}</div>
-								<div class="text-[10px] text-muted">Embedded</div>
-							</div>
-						{/if}
-					</div>
-				</div>
-			{/if}
-		</div>
-
-		<!-- Dream -->
-		<div class="p-4 glass rounded-xl space-y-3 lift">
-			<div class="flex items-center justify-between">
-				<div>
-					<div class="text-sm text-text font-medium">Memory Dream Cycle</div>
-					<div class="text-xs text-dim">Replay memories, discover hidden connections, synthesize insights</div>
-				</div>
-				<button onclick={runDream} disabled={dreaming}
-					class="px-4 py-2 bg-dream/20 border border-dream/40 text-dream-glow text-sm rounded-xl hover:bg-dream/30 transition disabled:opacity-50 flex items-center gap-2
-						{dreaming ? 'glow-dream animate-pulse-glow' : ''}">
-					{#if dreaming}
-						<span class="w-3 h-3 border border-dream/50 border-t-dream rounded-full animate-spin"></span>
-						Dreaming...
-					{:else}
-						Dream
-					{/if}
-				</button>
-			</div>
-			{#if dreamResult}
-				<div class="bg-white/[0.02] p-3 rounded-lg border border-synapse/10 space-y-2">
-					{#if dreamResult.insights && Array.isArray(dreamResult.insights)}
-						<div class="text-xs text-bright font-medium">Insights Discovered:</div>
-						{#each dreamResult.insights as insight}
-							<div class="text-xs text-dim bg-dream/5 border border-dream/10 rounded-lg p-2">
-								{typeof insight === 'string' ? insight : JSON.stringify(insight)}
-							</div>
-						{/each}
-					{/if}
-					{#if dreamResult.connections_found !== undefined}
-						<div class="text-xs text-dim">Connections found: <span class="text-dream-glow">{dreamResult.connections_found}</span></div>
-					{/if}
-					{#if dreamResult.memories_replayed !== undefined}
-						<div class="text-xs text-dim">Memories replayed: <span class="text-text">{dreamResult.memories_replayed}</span></div>
-					{/if}
-				</div>
-			{/if}
-		</div>
-	</section>
-
-	<!-- Retention Distribution -->
-	{#if retentionDist}
-		<section class="space-y-4" use:reveal={{ delay: 120 }}>
-			<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-				<Icon name="importance" size={16} class="text-recall" /> Retention Distribution
-			</h2>
-			<div class="p-4 glass rounded-xl">
-				{#if retentionDist.distribution && Array.isArray(retentionDist.distribution)}
-					<div class="flex items-end gap-1 h-32">
-						{#each retentionDist.distribution as bucket, i}
-							{@const maxCount = Math.max(...(retentionDist.distribution as {count: number}[]).map((b: {count: number}) => b.count), 1)}
-							{@const height = ((bucket as {count: number}).count / maxCount) * 100}
-							{@const color = i < 2 ? '#ef4444' : i < 4 ? '#f59e0b' : i < 7 ? '#6366f1' : '#10b981'}
-							<div class="flex-1 flex flex-col items-center gap-1">
-								<div class="text-[9px] text-muted">{(bucket as {count: number}).count}</div>
-								<div
-									class="w-full rounded-t transition-all duration-500"
-									style="height: {Math.max(height, 2)}%; background: {color}; opacity: 0.7"
-								></div>
-								<div class="text-[9px] text-muted">{i * 10}%</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			</div>
+			<section class="glass-panel rituals" aria-label="Memory maintenance actions">
+				<p class="eyebrow">MAINTENANCE RITUALS</p><h2>Run with intent.</h2>
+				<button type="button" disabled={busy !== null} onclick={runConsolidate}><strong>{busy === 'consolidate' ? 'Consolidating…' : 'Consolidate memory'}</strong><span>Recalculate retention, decay, embeddings and duplicates.</span></button>
+				<button type="button" disabled={busy !== null} onclick={runDream}><strong>{busy === 'dream' ? 'Dreaming…' : 'Run dream cycle'}</strong><span>Replay local memories and discover durable connections.</span></button>
+				<button type="button" class="refresh" disabled={busy !== null} onclick={runRefresh}>{busy === 'refresh' ? 'Refreshing…' : 'Refresh live vitals'}</button>
+			</section>
 		</section>
 	{/if}
 
-	<!-- Keyboard Shortcuts -->
-	<section class="space-y-4" use:reveal={{ delay: 160 }}>
-		<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-			<Icon name="command" size={16} class="text-synapse" /> Keyboard Shortcuts
-		</h2>
-		<div class="p-4 glass-subtle rounded-xl">
-			<div class="grid grid-cols-2 gap-2 text-xs">
-				{#each [
-					{ key: '⌘ K', desc: 'Command palette' },
-					{ key: '/', desc: 'Focus search' },
-					{ key: 'G', desc: 'Go to Graph' },
-					{ key: 'M', desc: 'Go to Memories' },
-					{ key: 'T', desc: 'Go to Timeline' },
-					{ key: 'F', desc: 'Go to Feed' },
-					{ key: 'E', desc: 'Go to Explore' },
-					{ key: 'S', desc: 'Go to Stats' },
-				] as shortcut}
-					<div class="flex items-center gap-2 py-1">
-						<kbd class="px-1.5 py-0.5 bg-white/[0.04] rounded text-[10px] font-mono text-muted min-w-[2rem] text-center">{shortcut.key}</kbd>
-						<span class="text-dim">{shortcut.desc}</span>
-					</div>
-				{/each}
-			</div>
-		</div>
+	<section class="glass-panel operation-receipt" aria-live="polite"><p class="eyebrow">OPERATION STATUS</p><output>{statusLine}</output>
+		{#if consolidation}<dl><div><dt>Processed</dt><dd>{consolidation.nodesProcessed}</dd></div><div><dt>Decayed</dt><dd>{consolidation.decayApplied}</dd></div><div><dt>Embeddings</dt><dd>{consolidation.embeddingsGenerated}</dd></div><div><dt>Merged</dt><dd>{consolidation.duplicatesMerged}</dd></div><div><dt>Duration</dt><dd>{consolidation.durationMs} ms</dd></div></dl>{/if}
+		{#if dream}<dl><div><dt>Replayed</dt><dd>{dream.memoriesReplayed}</dd></div><div><dt>Connections</dt><dd>{dream.connectionsPersisted}</dd></div><div><dt>Insights</dt><dd>{dream.insights.length}</dd></div></dl>{#if dream.insights[0]}<blockquote>{dream.insights[0].insight}</blockquote>{/if}{/if}
 	</section>
-
-	<!-- About -->
-	<section class="space-y-4" use:reveal={{ delay: 200 }}>
-		<h2 class="text-sm text-bright font-semibold flex items-center gap-2">
-			<Icon name="logo" size={16} class="text-memory" /> About
-		</h2>
-		<div class="p-4 glass rounded-xl space-y-3 lift">
-			<div class="flex items-center gap-4">
-				<div class="logo-tile w-12 h-12 rounded-xl bg-gradient-to-br from-dream to-synapse flex items-center justify-center text-bright shadow-lg shadow-synapse/20">
-					<Icon name="logo" size={20} strokeWidth={1.8} />
-				</div>
-				<div>
-					<div class="text-sm text-bright font-semibold">Vestige v2.1 "Nuclear Dashboard"</div>
-					<div class="text-xs text-dim">Your AI's long-term memory system</div>
-				</div>
-			</div>
-			<div class="grid grid-cols-2 gap-2 text-xs text-dim pt-2 border-t border-synapse/10">
-				<div>29 cognitive modules</div>
-				<div>FSRS-6 spaced repetition</div>
-				<div>Nomic Embed v1.5 (256d)</div>
-				<div>Jina Reranker v1 Turbo</div>
-				<div>USearch HNSW (20x FAISS)</div>
-				<div>Local-first, zero cloud</div>
-			</div>
-			<div class="text-[10px] text-muted pt-1">
-				Built with Rust + Axum + SvelteKit 2 + Svelte 5 + Three.js + Tailwind CSS 4
-			</div>
-		</div>
-	</section>
-</div>
+</main>
 
 <style>
-	/* ── Live connection pill in the header right-slot ──────────────────────── */
-	.conn-pill {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.5rem;
-		padding: 0.3rem 0.7rem;
-		border-radius: 999px;
-		font-size: 0.75rem;
-		font-weight: 600;
-		color: var(--color-recall, #34d399);
-		background: color-mix(in srgb, var(--color-recall, #34d399) 12%, transparent);
-		border: 1px solid color-mix(in srgb, var(--color-recall, #34d399) 28%, transparent);
-		white-space: nowrap;
-	}
-	.conn-pill.idle {
-		color: var(--color-dim, #8b95a5);
-		background: rgba(255, 255, 255, 0.04);
-		border-color: rgba(255, 255, 255, 0.08);
-	}
-	.conn-dot {
-		display: inline-block;
-		flex-shrink: 0;
-	}
-
-	/* ── Refresh button ─────────────────────────────────────────────────────── */
-	.refresh-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.3rem;
-		padding: 0.3rem 0.65rem;
-		border-radius: 999px;
-		font-size: 0.75rem;
-		color: var(--color-muted, #6b7280);
-		background: rgba(255, 255, 255, 0.02);
-		border: 1px solid rgba(255, 255, 255, 0.06);
-		transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
-	}
-	.refresh-btn:hover {
-		color: var(--color-text, #e5e7eb);
-		background: rgba(255, 255, 255, 0.05);
-		border-color: rgba(255, 255, 255, 0.12);
-	}
-
-	/* ── About logo tile — a soft synapse glow so the masthead reads alive ──── */
-	.logo-tile {
-		position: relative;
-	}
-	.logo-tile::after {
-		content: '';
-		position: absolute;
-		inset: -1px;
-		border-radius: inherit;
-		box-shadow: 0 0 18px -2px var(--color-synapse-glow, #818cf8);
-		opacity: 0.4;
-		pointer-events: none;
-	}
-	@media not (prefers-reduced-motion: reduce) {
-		.logo-tile::after {
-			animation: logo-glow 4s ease-in-out infinite;
-		}
-		@keyframes logo-glow {
-			0%, 100% { opacity: 0.25; }
-			50% { opacity: 0.55; }
-		}
-	}
+	.system-shell{position:relative;z-index:2;max-width:1180px;min-height:100%;margin:0 auto;padding:2rem clamp(1rem,3vw,2.5rem) 5rem;color:#eaf9f6;pointer-events:none}.system-head,.system-grid,.system-vitals,.operation-receipt dl{display:flex}.system-head{justify-content:space-between;align-items:flex-end;gap:2rem}.eyebrow{margin:0;color:#66e6d3;font:700 .68rem/1.2 ui-monospace,monospace;letter-spacing:.14em}.system-head h1{max-width:20ch;margin:.55rem 0;font-size:clamp(1.7rem,3.3vw,2.75rem);line-height:1.05;letter-spacing:-.045em}.system-head p:not(.eyebrow){max-width:62ch;color:#a9c4c0;line-height:1.5}.connection{flex:0 0 auto;color:#9ab9b3;font:.7rem ui-monospace,monospace}.connection span{display:inline-block;width:.5rem;height:.5rem;margin-right:.4rem;border-radius:50%;background:#e3b554}.connection.online span{background:#62e6d1;box-shadow:0 0 12px #62e6d1}.glass-panel{border:1px solid rgba(124,198,187,.2);border-radius:1rem;background:linear-gradient(135deg,rgba(7,24,27,.9),rgba(4,12,15,.84));backdrop-filter:blur(14px);box-shadow:0 18px 70px rgba(0,0,0,.24)}.system-vitals{gap:.65rem;justify-content:space-between;margin:1.25rem 0}.system-vitals div{min-width:0;flex:1;border-left:1px solid rgba(102,230,211,.3);padding-left:.8rem}.system-vitals dt{color:#8da9a5;font-size:.7rem}.system-vitals dd{margin:.25rem 0 0;color:#72e7d5;font-size:1.35rem}.system-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr);gap:1rem;pointer-events:auto}.retention,.rituals,.operation-receipt,.system-state{padding:1.1rem}.retention figcaption{display:flex;justify-content:space-between;margin-bottom:1rem;color:#b4d4ce;font:700 .68rem ui-monospace,monospace;letter-spacing:.08em}.retention figcaption small{color:#66e6d3;font-size:.64rem}.retention-row{display:grid;grid-template-columns:4.5rem 1fr 2rem;align-items:center;gap:.55rem;margin:.55rem 0;color:#9bb9b4;font:.69rem ui-monospace,monospace}.retention-row>div{height:.45rem;border-radius:99px;background:rgba(123,202,190,.12);overflow:hidden}.retention-row i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#38bea9,#9af06a);box-shadow:0 0 13px rgba(86,231,207,.4)}.retention-row strong{color:#d8f5ef;text-align:right}.rituals h2{margin:.65rem 0 1rem;font-size:1.25rem}.rituals button{display:block;width:100%;margin:.55rem 0;border:1px solid rgba(95,227,205,.28);border-radius:.7rem;background:rgba(4,23,25,.82);padding:.8rem;color:#e8fdf8;text-align:left;cursor:pointer}.rituals button:hover:not(:disabled){border-color:#65e5d1;background:rgba(0,216,188,.12)}.rituals button:disabled{cursor:wait;opacity:.6}.rituals button strong,.rituals button span{display:block}.rituals button strong{font-size:.82rem}.rituals button span{margin-top:.22rem;color:#91b3ad;font-size:.71rem;line-height:1.35}.rituals .refresh{color:#6ce4d1;font-weight:700;text-align:center}.operation-receipt{position:relative;margin-top:1rem;pointer-events:auto}.operation-receipt output{display:block;margin:.6rem 0;color:#d9f4ee;line-height:1.45}.operation-receipt dl{flex-wrap:wrap;gap:.75rem;margin:.85rem 0 0}.operation-receipt dl div{border-left:1px solid rgba(102,230,211,.25);padding-left:.6rem}.operation-receipt dt{color:#8ba9a4;font-size:.67rem}.operation-receipt dd{margin:.2rem 0 0;color:#70e6d4;font-size:.9rem}.operation-receipt blockquote{margin:.8rem 0 0;border-left:2px solid #69e2d0;padding-left:.75rem;color:#b6d5cf;font-size:.82rem;line-height:1.5}.system-state{pointer-events:auto;color:#a9c7c2}.system-state button{margin-left:.75rem;border:0;border-radius:.45rem;background:#3cc8b4;padding:.45rem .6rem;color:#05100f;cursor:pointer}.error{color:#ffa198}@media(max-width:760px){.system-head,.system-grid{display:grid;grid-template-columns:1fr}.system-vitals{display:grid;grid-template-columns:1fr 1fr}.system-head{gap:.5rem}.connection{margin-top:.25rem}.operation-receipt dl{display:grid;grid-template-columns:1fr 1fr}}
 </style>

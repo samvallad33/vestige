@@ -25,19 +25,19 @@
 		{
 			num: 1,
 			name: 'Replay',
-			color: '#818cf8',
+			color: '#22C7DE',
 			desc: 'Hippocampal replay: tagged memories surface for consolidation.'
 		},
 		{
 			num: 2,
 			name: 'Cross-reference',
-			color: '#a855f7',
+			color: '#1BD6FF',
 			desc: 'Semantic proximity check — new edges discovered across memories.'
 		},
 		{
 			num: 3,
 			name: 'Strengthen',
-			color: '#c084fc',
+			color: '#29F2A9',
 			desc: 'Co-activated memories strengthen; FSRS stability grows.'
 		},
 		{

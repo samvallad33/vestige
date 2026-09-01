@@ -14,16 +14,23 @@
 import type { GraphResponse } from '$types';
 import type { ObservatoryEngine, FramePass } from './engine';
 import { DemoClock } from './demo-clock';
-import { orbitCamera } from './camera';
+import { IDENTITY_RIG, orbitWithRig, type CameraRigState } from './camera-rig';
 import {
 	buildObservatoryGraph,
 	buildNodeStateArray,
 	buildEdgeIndexArray
 } from './graph-upload';
-import { FLOATS_PER_NODE, NODE_LANE, type ObservatoryGraph } from './types';
+import {
+	FLOATS_PER_NODE,
+	NODE_LANE,
+	UINTS_PER_PATHSTEP,
+	type ObservatoryGraph,
+	type ObservatoryEdge
+} from './types';
 import { renderNodesWGSL } from './shaders/render-nodes.wgsl';
 import { simulateWGSL } from './shaders/simulate.wgsl';
 import { renderPathWGSL } from './shaders/render-path.wgsl';
+import { renderEdgesWGSL } from './shaders/render-edges.wgsl';
 import { buildRecallPath, type PathStepMeta } from './path-builder';
 
 /** mat4 (16) + right vec4 (4) + up vec4 (4) floats. */
@@ -31,6 +38,15 @@ const CAMERA_FLOATS = 24;
 
 /** Orbit distance fitted to the default field radius (graph-upload). */
 const ORBIT_DISTANCE = 300;
+
+/**
+ * Fixed PathStep buffer capacity (vec4<u32> = 16B each → 2KB). Sizing the
+ * buffer to a cap ONCE means a live recall / receipt-replay only rewrites its
+ * contents (writeBuffer) instead of destroying+recreating the buffer and
+ * recompiling 3 shader modules + pipelines every ~4s — the periodic frame
+ * hitch the launch audit caught. Recall/birth/rescue paths are all ≤ ~40 beats.
+ */
+const MAX_PATH_STEPS = 128;
 
 export class NodeRenderer implements FramePass {
 	private engine: ObservatoryEngine;
@@ -47,10 +63,23 @@ export class NodeRenderer implements FramePass {
 	private simBindGroup: GPUBindGroup | null = null;
 	private pathBuffer: GPUBuffer | null = null;
 
+	// v2.3 living field — per-node LIVE retrievability (one f32/node), recomputed
+	// on the real FSRS curve each frame by the LiveBridge and read by the sim
+	// compute pass to overwrite vel_retention.w. Created at upload with node
+	// count; seeded to the static retention snapshot so a pre-bridge field is
+	// unchanged.
+	private liveRetentionBuffer: GPUBuffer | null = null;
+	private edgeCapacityBytes = 0;
+	private edgeCount = 0;
+	private cameraRig: CameraRigState = { ...IDENTITY_RIG };
+	private hoveredIndex = -1;
+
 	// Path edge wavefront (Increment 6)
 	private pathPipeline: GPURenderPipeline | null = null;
 	private pathBindGroup: GPUBindGroup | null = null;
 	private pathStepCount = 0;
+	private axonPipeline: GPURenderPipeline | null = null;
+	private axonBindGroup: GPUBindGroup | null = null;
 
 	graph: ObservatoryGraph | null = null;
 	/** Beat metadata for the timeline spine overlay (Increment 6). */
@@ -94,13 +123,32 @@ export class NodeRenderer implements FramePass {
 		device.queue.writeBuffer(this.nodeBuffer, 0, data.buffer as ArrayBuffer);
 
 		const edgeData = buildEdgeIndexArray(graph);
+		this.edgeCount = graph.edges.length;
 		this.edgeBuffer?.destroy();
+		this.edgeCapacityBytes = Math.max(edgeData.byteLength * 2, 64);
 		this.edgeBuffer = device.createBuffer({
 			label: 'observatory-edge-index',
-			size: edgeData.byteLength,
+			size: this.edgeCapacityBytes,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
 		});
 		device.queue.writeBuffer(this.edgeBuffer, 0, edgeData.buffer as ArrayBuffer);
+
+		// v2.3 live retrievability — one f32 per node, seeded to each node's
+		// static retention so the field is unchanged until the LiveBridge starts
+		// recomputing on the real FSRS curve. Padded to ≥16 bytes so a tiny
+		// graph still makes a valid storage buffer.
+		const liveRet = new Float32Array(Math.max(nodeCount, 4));
+		// Floor at 0.001: exact 0.0 is the FOSSIL LIGHT "not yet born" sentinel
+		// (render mask collapses those sprites), and a fully-decayed-but-real
+		// memory must stay faintly visible — forgotten, never deleted.
+		for (let i = 0; i < nodeCount; i++) liveRet[i] = Math.max(0.001, graph.nodes[i].retention);
+		this.liveRetentionBuffer?.destroy();
+		this.liveRetentionBuffer = device.createBuffer({
+			label: 'observatory-live-retention',
+			size: liveRet.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+		});
+		device.queue.writeBuffer(this.liveRetentionBuffer, 0, liveRet.buffer as ArrayBuffer);
 
 		// Recall path: deterministic story beats → PathStep storage buffer.
 		// (Skipped for demo modes with their own choreography — the buffer is
@@ -109,14 +157,23 @@ export class NodeRenderer implements FramePass {
 			? buildRecallPath(response, graph)
 			: { steps: [], data: new Uint32Array(4) };
 		this.pathSteps = recall.steps;
+		// Fixed-capacity path buffer, created ONCE. Later setPathSteps calls
+		// (live recall, receipt replay) only writeBuffer into it — no realloc,
+		// no pipeline rebuild.
 		this.pathBuffer?.destroy();
 		this.pathBuffer = device.createBuffer({
 			label: 'observatory-path-steps',
-			size: recall.data.byteLength,
+			size: MAX_PATH_STEPS * UINTS_PER_PATHSTEP * 4,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
 		});
-		device.queue.writeBuffer(this.pathBuffer, 0, recall.data.buffer as ArrayBuffer);
-		this.pathStepCount = this.pathSteps.length;
+		device.queue.writeBuffer(
+			this.pathBuffer,
+			0,
+			recall.data.buffer as ArrayBuffer,
+			0,
+			Math.min(recall.data.byteLength, MAX_PATH_STEPS * UINTS_PER_PATHSTEP * 4)
+		);
+		this.pathStepCount = Math.min(this.pathSteps.length, MAX_PATH_STEPS);
 
 		// Per-frame counts for every shader that reads Params.
 		this.engine.params[2] = nodeCount;
@@ -135,24 +192,117 @@ export class NodeRenderer implements FramePass {
 	}
 
 	/**
-	 * Replace the PathStep buffer after upload (Moment B: the birth engrave
-	 * steps ride the same wavefront machinery as recall). Rebuilds the
-	 * pipelines/bind groups so they reference the new buffer.
+	 * Replace the PathStep contents (Moment B birth engrave; live recall; the
+	 * receipt-replay cold-open). The buffer is fixed-capacity and created once at
+	 * upload, so the HOT PATH here is a single writeBuffer + count update — NO
+	 * buffer realloc, NO shader recompile, NO pipeline/bind-group rebuild. This
+	 * is what makes the ~4s receipt replay allocation-free instead of a periodic
+	 * frame hitch (launch audit finding). Only the cold case (buffer not yet
+	 * created, or a path longer than capacity) falls back to a full rebuild.
 	 */
 	setPathSteps(data: Uint32Array<ArrayBuffer>, steps: PathStepMeta[]): void {
 		const device = this.engine.gpuDevice;
 		if (!device) return;
 		this.pathSteps = steps;
-		this.pathStepCount = steps.length;
+		const capBytes = MAX_PATH_STEPS * UINTS_PER_PATHSTEP * 4;
+
+		if (this.pathBuffer && data.byteLength <= capBytes) {
+			// Hot path: overwrite in place, clamp the draw/step count.
+			this.pathStepCount = Math.min(steps.length, MAX_PATH_STEPS);
+			device.queue.writeBuffer(this.pathBuffer, 0, data.buffer as ArrayBuffer, 0, data.byteLength);
+			this.engine.params[4] = this.pathStepCount;
+			return;
+		}
+
+		// Cold path: (re)create at capacity and rebuild pipelines once.
+		this.pathStepCount = Math.min(steps.length, MAX_PATH_STEPS);
 		this.pathBuffer?.destroy();
 		this.pathBuffer = device.createBuffer({
 			label: 'observatory-path-steps',
-			size: Math.max(data.byteLength, 16),
+			size: capBytes,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
 		});
-		device.queue.writeBuffer(this.pathBuffer, 0, data.buffer as ArrayBuffer);
-		this.engine.params[4] = steps.length;
+		device.queue.writeBuffer(this.pathBuffer, 0, data.buffer as ArrayBuffer, 0, Math.min(data.byteLength, capBytes));
+		this.engine.params[4] = this.pathStepCount;
 		this.createPipeline(device);
+	}
+
+	/**
+	 * v2.3 living field — replace the edge set (Phase 3, dream storm). A
+	 * setPathSteps clone for the EDGE index buffer: rebuild it at the new size,
+	 * update the CPU graph edge list (so the force sim's springs pull the new
+	 * connections together — clusters merge is the emergent settle), bump
+	 * params.edge_count, and rebuild the sim pipeline/bind group so it references
+	 * the regrown buffer. The dream handler streams real ConnectionDiscovered
+	 * pairs; the LiveBridge accumulates them and calls this so each new edge
+	 * physically tugs its endpoints closer, live.
+	 */
+	setCameraRig(rig: CameraRigState): void {
+		this.cameraRig = rig;
+	}
+
+	setHovered(index: number): void {
+		this.hoveredIndex = index;
+	}
+
+	private currentOrbit() {
+		const w = this.engine.params[6] || 1;
+		const h = this.engine.params[7] || 1;
+		const phase = this.engine.params[1];
+		return orbitWithRig(phase, w / h, ORBIT_DISTANCE, this.cameraRig);
+	}
+
+	/**
+	 * v2.3 living field — replace the edge set (Phase 3, dream storm). Capacity
+	 * doubles on overflow and only then rebuilds the pipeline; otherwise a
+	 * writeBuffer. Dream storms must not hitch on shader recompiles.
+	 */
+	setEdges(edges: ObservatoryEdge[]): void {
+		const device = this.engine.gpuDevice;
+		if (!device || !this.graph) return;
+		this.graph.edges = edges;
+		this.edgeCount = edges.length;
+		const edgeData = buildEdgeIndexArray(this.graph);
+		const need = Math.max(edgeData.byteLength, 8);
+		let grew = false;
+		if (!this.edgeBuffer || need > this.edgeCapacityBytes) {
+			this.edgeBuffer?.destroy();
+			this.edgeCapacityBytes = Math.max(need * 2, 64);
+			this.edgeBuffer = device.createBuffer({
+				label: 'observatory-edge-index',
+				size: this.edgeCapacityBytes,
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+			});
+			grew = true;
+		}
+		device.queue.writeBuffer(this.edgeBuffer, 0, edgeData.buffer as ArrayBuffer);
+		this.engine.params[3] = edges.length;
+		if (grew) this.createPipeline(device);
+	}
+
+	/**
+	 * v2.3 living field — push freshly-computed per-node live retrievability to
+	 * the GPU. The LiveBridge calls this (throttled) with a Float32Array whose
+	 * length is the node count; the sim compute pass reads it to overwrite each
+	 * node's vel_retention.w, so render-nodes dims every memory on its REAL FSRS
+	 * curve. One writeBuffer, no pipeline rebuild — the buffer is already bound.
+	 */
+	uploadLiveRetention(data: Float32Array): void {
+		const device = this.engine.gpuDevice;
+		if (!device || !this.liveRetentionBuffer) return;
+		const n = Math.min(data.length, this.nodeCount);
+		if (n <= 0) return;
+		device.queue.writeBuffer(this.liveRetentionBuffer, 0, data.buffer as ArrayBuffer, 0, n * 4);
+	}
+
+	/**
+	 * Fossil Light's source contract. The radiance pass reads the SAME mutable
+	 * node state and camera that this renderer just wrote in the current frame;
+	 * it must never approximate the 3D graph on the CPU or read it back.
+	 */
+	getFossilLightSources(): { nodeBuffer: GPUBuffer; cameraBuffer: GPUBuffer; nodeCount: number } | null {
+		if (!this.nodeBuffer || !this.cameraBuffer || this.nodeCount <= 0) return null;
+		return { nodeBuffer: this.nodeBuffer, cameraBuffer: this.cameraBuffer, nodeCount: this.nodeCount };
 	}
 
 	private createPipeline(device: GPUDevice): void {
@@ -176,6 +326,9 @@ export class NodeRenderer implements FramePass {
 			];
 			if (this.edgeBuffer) {
 				simEntries.push({ binding: 3, resource: { buffer: this.edgeBuffer } });
+			}
+			if (this.liveRetentionBuffer) {
+				simEntries.push({ binding: 4, resource: { buffer: this.liveRetentionBuffer } });
 			}
 			this.simBindGroup = device.createBindGroup({
 				label: 'observatory-recall-sim-bind',
@@ -256,6 +409,43 @@ export class NodeRenderer implements FramePass {
 				]
 			});
 		}
+
+		if (this.edgeBuffer && this.pathBuffer && this.nodeBuffer) {
+			const axonModule = device.createShaderModule({
+				label: 'observatory-render-axons',
+				code: renderEdgesWGSL
+			});
+			this.axonPipeline = device.createRenderPipeline({
+				label: 'observatory-axons',
+				layout: 'auto',
+				vertex: { module: axonModule, entryPoint: 'vs_main' },
+				fragment: {
+					module: axonModule,
+					entryPoint: 'fs_main',
+					targets: [
+						{
+							format: this.engine.sceneFormat,
+							blend: {
+								color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+								alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' }
+							}
+						}
+					]
+				},
+				primitive: { topology: 'line-list' }
+			});
+			this.axonBindGroup = device.createBindGroup({
+				label: 'observatory-axons-bind',
+				layout: this.axonPipeline.getBindGroupLayout(0),
+				entries: [
+					{ binding: 0, resource: { buffer: this.engine.paramsBuffer } },
+					{ binding: 1, resource: { buffer: this.cameraBuffer } },
+					{ binding: 2, resource: { buffer: this.edgeBuffer } },
+					{ binding: 3, resource: { buffer: this.pathBuffer } },
+					{ binding: 4, resource: { buffer: this.nodeBuffer } }
+				]
+			});
+		}
 	}
 
 	/**
@@ -266,11 +456,7 @@ export class NodeRenderer implements FramePass {
 		const device = this.engine.gpuDevice;
 		if (!device || !this.cameraBuffer) return;
 
-		const w = this.engine.params[6] || 1;
-		const h = this.engine.params[7] || 1;
-		const phase = this.engine.params[1];
-
-		const cam = orbitCamera(phase, w / h, ORBIT_DISTANCE);
+		const cam = this.currentOrbit();
 		this.cameraData.set(cam.viewProj, 0);
 		this.cameraData[16] = cam.right[0];
 		this.cameraData[17] = cam.right[1];
@@ -291,8 +477,13 @@ export class NodeRenderer implements FramePass {
 		}
 	}
 
-	/** FramePass — instanced additive draws: nodes, then path ribbons on top. */
+	/** FramePass — axons under nodes, then nodes, then path ribbons. */
 	render(pass: GPURenderPassEncoder): void {
+		if (this.axonPipeline && this.axonBindGroup && this.edgeCount > 0) {
+			pass.setPipeline(this.axonPipeline);
+			pass.setBindGroup(0, this.axonBindGroup);
+			pass.draw(2, this.edgeCount);
+		}
 		if (!this.pipeline || !this.bindGroup || this.nodeCount === 0) return;
 		pass.setPipeline(this.pipeline);
 		pass.setBindGroup(0, this.bindGroup);
@@ -363,10 +554,7 @@ export class NodeRenderer implements FramePass {
 		staging.destroy();
 
 		// Same camera inputs the frame pass uses (compute() above).
-		const w = this.engine.params[6] || 1;
-		const h = this.engine.params[7] || 1;
-		const phase = this.engine.params[1];
-		const m = orbitCamera(phase, w / h, ORBIT_DISTANCE).viewProj; // column-major
+		const m = this.currentOrbit().viewProj; // column-major
 
 		// Projected-disc hit test: fovY 50° → f = 1/tan(25°); a node of world
 		// radius r at clip-w distance projects to ~r·f/w in NDC y. A small
@@ -388,7 +576,8 @@ export class NodeRenderer implements FramePass {
 			const cy = (m[1] * x + m[5] * y + m[9] * z + m[13]) / cw;
 			const projR = Math.max((r * f) / cw, 0.012);
 			const score = Math.hypot(cx - ndcX, cy - ndcY) / projR;
-			if (score < 1.6 && score < bestScore) {
+			const hoverBias = i === this.hoveredIndex ? 0.85 : 1;
+			if (score < 1.6 * hoverBias && score < bestScore) {
 				bestScore = score;
 				best = i;
 			}
@@ -402,15 +591,21 @@ export class NodeRenderer implements FramePass {
 		this.edgeBuffer?.destroy();
 		this.cameraBuffer?.destroy();
 		this.pathBuffer?.destroy();
+		this.liveRetentionBuffer?.destroy();
 		this.nodeBuffer = null;
 		this.edgeBuffer = null;
 		this.cameraBuffer = null;
 		this.pathBuffer = null;
+		this.liveRetentionBuffer = null;
 		this.pipeline = null;
 		this.bindGroup = null;
 		this.simPipeline = null;
 		this.simBindGroup = null;
 		this.pathPipeline = null;
 		this.pathBindGroup = null;
+		this.axonPipeline = null;
+		this.axonBindGroup = null;
+		this.edgeCapacityBytes = 0;
+		this.edgeCount = 0;
 	}
 }

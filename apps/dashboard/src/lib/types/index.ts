@@ -147,6 +147,12 @@ export interface GraphNode {
 	// v2.0.5 Active Forgetting — top-down suppression state
 	suppression_count?: number;
 	suppressed_at?: string;
+	// v2.3 living field — real FSRS state so the graph can render LIVE decay
+	// (retrievability recomputed each frame on the true forgetting curve).
+	// stability in days; lastAccessed is an ISO timestamp. Optional so an old
+	// serializer (pre-2026-07) still parses.
+	stability?: number;
+	lastAccessed?: string;
 }
 
 export interface GraphEdge {
@@ -237,6 +243,11 @@ export type VestigeEventType =
 	| 'ActivationSpread'
 	| 'ImportanceScored'
 	| 'DeepReferenceCompleted'
+	// v2.3 living field — RSB causal recall receipt (Phase 4): a failure-
+	// triggered backward-only causal path with shared-entity join keys, so the
+	// field lights the REAL cause chain instead of a random pulse.
+	| 'BackfillFired'
+	| 'CausalReceipt'
 	| 'HookVerdictRecorded'
 	| 'TraceEvent'
 	| 'MemoryPrOpened'
@@ -476,12 +487,12 @@ export interface MemoryAuditResponse {
 // Node type colors for visualization — bioluminescent palette
 export const NODE_TYPE_COLORS: Record<string, string> = {
 	fact: '#00A8FF',      // electric blue
-	concept: '#9D00FF',   // deep violet
+	concept: '#1A8FA8',   // fossil teal — never purple
 	event: '#FFB800',     // golden amber
 	person: '#00FFD1',    // bioluminescent cyan
 	place: '#00D4FF',     // bright cyan
 	note: '#8B95A5',      // soft steel
-	pattern: '#FF3CAC',   // hot pink
+	pattern: '#E07A3D',   // fossil ochre
 	decision: '#FF4757',  // vivid red
 };
 
@@ -491,20 +502,20 @@ export const EVENT_TYPE_COLORS: Record<string, string> = {
 	MemoryDeleted: '#FF4757',
 	MemoryPromoted: '#00FF88',
 	MemoryDemoted: '#FF6B35',
-	MemorySuppressed: '#A33FFF',
+	MemorySuppressed: '#FF3B30',
 	MemoryUnsuppressed: '#14E8C6',
-	Rac1CascadeSwept: '#6E3FFF',
-	SearchPerformed: '#818CF8',
-	DeepReferenceCompleted: '#C4B5FD',
+	Rac1CascadeSwept: '#FF6B35',
+	SearchPerformed: '#22C7DE',
+	DeepReferenceCompleted: '#29F2A9',
 	HookVerdictRecorded: '#F59E0B',
-	DreamStarted: '#9D00FF',
-	DreamProgress: '#B44AFF',
-	DreamCompleted: '#C084FC',
+	DreamStarted: '#29F2A9',
+	DreamProgress: '#1BD6FF',
+	DreamCompleted: '#22C7DE',
 	ConsolidationStarted: '#FFB800',
 	ConsolidationCompleted: '#FF9500',
 	RetentionDecayed: '#FF4757',
 	ConnectionDiscovered: '#00D4FF',
 	ActivationSpread: '#14E8C6',
-	ImportanceScored: '#FF3CAC',
+	ImportanceScored: '#E07A3D',
 	Heartbeat: '#8B95A5',
 };

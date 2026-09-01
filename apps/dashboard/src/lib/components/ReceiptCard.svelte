@@ -8,9 +8,9 @@
 	//  the receipt's primary memory, starting the (protected) Cinema flythrough
 	//  over the exact memory set the receipt names.
 	// ═══════════════════════════════════════════════════════════════════════
-	import { goto } from '$app/navigation';
 	import Icon from './Icon.svelte';
 	import type { Receipt } from '$lib/stores/api';
+	import { osGoto } from '$lib/os-nav';
 
 	interface Props {
 		receipt: Receipt;
@@ -24,11 +24,13 @@
 		high: '#f43f5e'
 	};
 
-	function openInCinema() {
-		const primary = receipt.retrieved[0];
-		if (!primary) return;
-		const focus = receipt.retrieved.join(',');
-		goto(`/graph?center=${encodeURIComponent(primary)}&focus=${encodeURIComponent(focus)}`);
+	// Launch-slice handoff: the Observatory receives the immutable receipt id,
+	// refetches it, and renders only memory ids actually named by that receipt.
+	// The route is base-safe through osGoto (a bare goto('/observatory') can
+	// escape the /dashboard base in production).
+	function openInObservatory() {
+		if (!receipt.retrieved.length && !receipt.suppressed.length) return;
+		osGoto('/observatory', { receipt: receipt.receipt_id });
 	}
 </script>
 
@@ -90,9 +92,13 @@
 		{/if}
 	{/if}
 
-	<button class="cinema-btn" onclick={openInCinema} disabled={!receipt.retrieved.length}>
+	<button
+		class="cinema-btn"
+		onclick={openInObservatory}
+		disabled={!receipt.retrieved.length && !receipt.suppressed.length}
+	>
 		<Icon name="sparkle" size={14} />
-		Open receipt in Cinema
+		Open exact receipt in Observatory
 	</button>
 </div>
 
@@ -119,7 +125,7 @@
 	}
 	.r-id {
 		font-size: 0.78rem;
-		color: var(--color-synapse-glow, #818cf8);
+		color: var(--color-synapse-glow, #22c7de);
 		word-break: break-all;
 	}
 	.r-risk {
@@ -203,7 +209,7 @@
 		border-radius: 9px;
 		border: 1px solid color-mix(in oklab, var(--color-synapse) 40%, transparent);
 		background: color-mix(in oklab, var(--color-synapse) 12%, transparent);
-		color: var(--color-synapse-glow, #818cf8);
+		color: var(--color-synapse-glow, #22c7de);
 		cursor: pointer;
 		transition: all 0.18s ease;
 	}

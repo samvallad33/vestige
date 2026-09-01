@@ -32,10 +32,10 @@
 	let extraCount = $derived(extraSourceCount(insight.sourceMemories, 2));
 
 	const TYPE_COLORS: Record<string, string> = {
-		connection: '#818cf8',
-		pattern: '#ec4899',
+		connection: '#22C7DE',
+		pattern: '#E07A3D',
 		contradiction: '#ef4444',
-		synthesis: '#c084fc',
+		synthesis: '#29F2A9',
 		emergence: '#f59e0b',
 		cluster: '#06b6d4'
 	};

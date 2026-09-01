@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
 	buildRescuePlan,
+	buildReceiptRescuePlan,
 	rescueEnvelopes,
 	pickFailureIndex,
 	bfsFromFailure,
@@ -113,6 +114,69 @@ describe('determinism', () => {
 		expect(Array.from(p1.waveData)).toEqual(Array.from(p2.waveData));
 		expect(Array.from(p1.pathData)).toEqual(Array.from(p2.pathData));
 		expect(Array.from(p1.hopDepths)).toEqual(Array.from(p2.hopDepths));
+	});
+});
+
+describe('receipt-scoped Backfill proof', () => {
+	it('renders the persisted route verbatim, including its intermediate receipt id', () => {
+		const response = mainFixture();
+		const graph = buildObservatoryGraph(response);
+		const plan = buildReceiptRescuePlan(response, graph, {
+			failureId: 'fail',
+			pathIds: ['cause', 'h2', 'h1', 'fail'],
+			candidates: [{
+				memoryId: 'cause',
+				sharedEntities: ['db.config.yaml'],
+				ageDays: 21,
+				similarityRank: 389,
+				promoted: false
+			}]
+		});
+		const idx = (id: string) => graph.indexById.get(id)!;
+		expect(plan.viable).toBe(true);
+		expect(plan.lookalikeIndices).toEqual([]);
+		expect(plan.causeDepth).toBe(3);
+		expect(Array.from(plan.pathData)).toEqual([
+			idx('cause'), idx('h2'), 260, 1,
+			idx('h2'), idx('h1'), 344, 1,
+			idx('h1'), idx('fail'), 428, 1
+		]);
+		expect(plan.pathMetas.map((step) => step.nodeId)).toEqual(['h2', 'h1', 'fail']);
+		expect(plan.verdict.receipt).toContain('embedding rank #389');
+	});
+
+	it('refuses to invent a direct route when the receipt lacks a complete ordered path', () => {
+		const response = mainFixture();
+		const graph = buildObservatoryGraph(response);
+		const plan = buildReceiptRescuePlan(response, graph, {
+			failureId: 'fail',
+			candidates: [{
+				memoryId: 'cause',
+				sharedEntities: ['db.config.yaml'],
+				ageDays: 21,
+				similarityRank: 389,
+				promoted: false
+			}]
+		});
+		expect(plan.viable).toBe(false);
+		expect(plan.pathMetas).toEqual([]);
+	});
+
+	it('refuses a route with an absent waypoint rather than joining the visible endpoints', () => {
+		const response = mainFixture();
+		const graph = buildObservatoryGraph(response);
+		const plan = buildReceiptRescuePlan(response, graph, {
+			failureId: 'fail',
+			pathIds: ['cause', 'not-in-graph', 'fail'],
+			candidates: [{
+				memoryId: 'cause',
+				sharedEntities: [],
+				ageDays: 21,
+				similarityRank: null,
+				promoted: false
+			}]
+		});
+		expect(plan.viable).toBe(false);
 	});
 });
 

@@ -5,12 +5,28 @@
 	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
 	import Icon from '$components/Icon.svelte';
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
+	import RouteStage, { type RoutePick, type RouteFramePass } from '$lib/observatory/RouteStage.svelte';
+	import { createContradictionsPasses } from '$lib/observatory/contradictions/contradictions-pass';
+	import type { ObservatoryEngine } from '$lib/observatory/engine';
+	import type { RouteSceneModel } from '$lib/observatory/route-scene';
+	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
+	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
+	import { retentionColor } from '$lib/observatory/cognitive-palette';
+	import type { Memory } from '$types';
+	import {
+		normalizeContradictionsScene,
+		type ContradictionsScene,
+		type ImmuneSynapsePair
+	} from '$lib/observatory/contradictions/contradictions-scene';
 	import { reveal } from '$lib/actions/reveal';
 	import { api } from '$stores/api';
+	import { osHref } from '$lib/os-nav';
+	import { eventFeed } from '$stores/websocket';
 	import {
 		severityColor,
 		severityLabel,
 		truncate,
+		uniqueMemoryCount,
 		avgTrustDelta as avgTrustDeltaFn,
 	} from '$components/contradiction-helpers';
 
@@ -21,12 +37,34 @@
 	// System-wide count from the backend, vs. the derived stats below which
 	// reflect only the pairs the page holds.
 	let totalDetected = $state(0);
-	// How many memories the backend actually scanned — it only analyzes the
-	// most recent `limit` memories, so the stat copy must say so instead of
-	// implying a whole-corpus sweep.
 	let memoriesAnalyzed = $state(0);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+	let selectedSynapsePair = $state<ImmuneSynapsePair | null>(null);
+	let suppressBusy = $state(false);
+	let suppressArmed = $state(false);
+	let suppressNotice = $state<string | null>(null);
+
+	// Portrait phones: the full descriptive subtitle wraps to 6-7 lines, eating the
+	// top ~40% before the focal card and pushing its last line into the WebGPU
+	// telemetry band (the green "CONTRADICTIONS - NNNf" chrome sits at y~0.88). A
+	// compact one-line subtitle clears that band and restores a single focal point.
+	// Gated to portrait/narrow aspect (< 0.85) from the LIVE viewport via matchMedia
+	// so the desktop render stays byte-identical. Not a hardcoded phone width.
+	let isPortrait = $state(false);
+	onMount(() => {
+		if (typeof window === 'undefined') return;
+		const mq = window.matchMedia('(max-aspect-ratio: 85/100)');
+		isPortrait = mq.matches;
+		const onChange = (e: MediaQueryListEvent) => (isPortrait = e.matches);
+		mq.addEventListener('change', onChange);
+		return () => mq.removeEventListener('change', onChange);
+	});
+	const subtitle = $derived(
+		isPortrait
+			? 'Contradictory memories face off across a scarlet seam.'
+			: 'Contradictory memories face each other across a scarlet trust-weighted seam. Click a fracture for the receipt.'
+	);
 
 	async function load() {
 		loading = true;
@@ -47,6 +85,102 @@
 	}
 
 	onMount(() => load());
+
+	async function suppressWeaker() {
+		const pair = selectedSynapsePair;
+		if (!pair || suppressBusy) return;
+		if (!suppressArmed) {
+			suppressArmed = true;
+			return;
+		}
+		suppressBusy = true;
+		suppressNotice = null;
+		try {
+			await api.memories.suppress(pair.weaker.id, 'contradiction-weaker-side');
+			suppressNotice = `Weaker side suppressed · ${pair.weaker.id.slice(0, 8)}`;
+			suppressArmed = false;
+			selectedSynapsePair = { ...pair, resolved: true };
+			await load();
+		} catch (cause) {
+			suppressNotice = cause instanceof Error ? cause.message : 'Suppress failed';
+		} finally {
+			suppressBusy = false;
+		}
+	}
+
+	// Patrolled tissue: the memory pool the immune system is watching. Even with
+	// zero standing contradictions the arena reads as living tissue (dim healthy
+	// cells), and any contradiction pair lights scarlet on top via the arcs pass.
+	let tissuePool = $state<Memory[]>([]);
+	let tissueField: LivingFieldPass | null = null;
+	onMount(() => {
+		void api.memories
+			.list({ limit: '90' })
+			.then((res) => {
+				tissuePool = res.memories;
+				tissueField?.setCells(buildTissueCells());
+			})
+			.catch(() => {});
+	});
+
+	function buildTissueCells() {
+		const data: FieldDatum[] = tissuePool.map((m) => {
+			const retention = clamp01Local(m.retentionStrength);
+			// contradiction pairs (if any) will be marked scarlet by the arcs pass;
+			// here every cell is calm healthy tissue tinted by retention.
+			return {
+				id: m.id,
+				score: 0.3 + 0.4 * retention,
+				hue: retentionColor(retention),
+				energy: 0.16 + 0.3 * retention,
+				metric2: retention,
+				kind: 'immune-tissue',
+				payload: m
+			} satisfies FieldDatum;
+		});
+		void FIELD_HUE;
+		return layoutGalaxy(data, { maxRadius: 0.95, minCellR: 0.012, maxCellR: 0.044 });
+	}
+
+	function clamp01Local(v: number): number {
+		return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
+	}
+
+	function createArenaPasses(engine: ObservatoryEngine, scene: RouteSceneModel): RouteFramePass[] {
+		const field = new LivingFieldPass(engine);
+		tissueField = field;
+		// Preserve the verified portrait treatment exactly. On desktop the DOM's
+		// glass panels already protect the dense reading surfaces, so let the immune
+		// tissue breathe more strongly around a tighter well instead of leaving the
+		// remaining viewport near-black. Derive the branch from the engine's live
+		// viewport (never a device-width constant).
+		let viewportWidth = engine.params[6];
+		let viewportHeight = engine.params[7];
+		if ((viewportWidth <= 0 || viewportHeight <= 0) && typeof window !== 'undefined') {
+			viewportWidth = window.innerWidth;
+			viewportHeight = window.innerHeight;
+		}
+		const aspect = viewportWidth / Math.max(1, viewportHeight);
+		if (aspect < 0.85) {
+			field.setIntensity(0.24);
+			field.setReadingWell({ x: 0, y: 0, hw: 0.9, hh: 0.85, floor: 0.08, soft: 0.28 });
+		} else {
+			field.setIntensity(1.3);
+			field.setReadingWell({ x: 0, y: 0, hw: 0.55, hh: 0.58, floor: 0.1, soft: 0.18 });
+		}
+		field.setCells(buildTissueCells());
+		const fieldWrapper: RouteFramePass = {
+			compute: (encoder) => field.compute(encoder),
+			render: (pass) => field.render(pass),
+			pickAt: (x, y) => field.pickAt(x, y),
+			dispose: () => {
+				field.dispose();
+				if (tissueField === field) tissueField = null;
+			}
+		};
+		// Field FIRST (behind), then the real contradiction arcs/seams on top.
+		return [fieldWrapper, ...createContradictionsPasses(engine, scene)];
+	}
 
 	// --- Filters ---
 	type Filter = 'all' | 'recent' | 'high-trust' | 'topic';
@@ -117,46 +251,89 @@
 
 	function selectPair(i: number | null) {
 		focusedPairIndex = i;
+		selectedSynapsePair = i == null ? null : visibleList[i]?.scenePair ?? null;
 	}
 
-	// --- Stats. `totalDetected` + `memoriesAnalyzed` come from the backend
-	// (which scans only the most recent `limit` memories); everything else is
-	// derived from the pairs the page actually holds so the numbers are
+	function sameUnorderedPair(a1: string, b1: string, a2: string, b2: string) {
+		return (a1 === a2 && b1 === b2) || (a1 === b2 && b1 === a2);
+	}
+
+	// --- Stats. `totalDetected` is the backend's system-wide count; everything
+	// else is derived from the pairs the page actually holds so the numbers are
 	// self-consistent with what the user sees. ---
+	const totalMemoriesInvolved = $derived(uniqueMemoryCount(contradictions));
 	const avgTrustDelta = $derived(avgTrustDeltaFn(contradictions));
 
 	// Map filtered index -> original index in `contradictions` so the
 	// constellation and sidebar stay in sync regardless of which filter is on.
-	const visibleList = $derived.by<{ orig: number; c: Contradiction }[]>(() => {
+	const contradictionsScene = $derived.by<ContradictionsScene>(() =>
+		normalizeContradictionsScene({
+			contradictions,
+			total: totalDetected,
+			memoriesAnalyzed,
+			deepReferenceEvents: $eventFeed
+		})
+	);
+
+	const visibleList = $derived.by<{ orig: number; c: Contradiction; scenePair: ImmuneSynapsePair | null }[]>(() => {
 		const byId = new Map(contradictions.map((c, i) => [c.memory_a_id + '|' + c.memory_b_id, i]));
 		return filtered.map((c) => ({
 			orig: byId.get(c.memory_a_id + '|' + c.memory_b_id) ?? 0,
-			c
+			c,
+			scenePair:
+				contradictionsScene.pairs.find((p) =>
+					sameUnorderedPair(p.stronger.id, p.weaker.id, c.memory_a_id, c.memory_b_id)
+				) ?? null
 		}));
 	});
 
 	// The ContradictionArcs component receives the filtered list; its internal
 	// indices run 0..filtered.length-1. We translate when the sidebar clicks.
 	function sidebarClick(localIndex: number) {
-		focusedPairIndex = focusedPairIndex === localIndex ? null : localIndex;
+		const next = focusedPairIndex === localIndex ? null : localIndex;
+		focusedPairIndex = next;
+		selectedSynapsePair = next == null ? null : visibleList[next]?.scenePair ?? null;
+	}
+
+	function handleRoutePick(pick: RoutePick) {
+		if (pick.kind !== 'contradiction-seam') return;
+		const pair = pick.payload as ImmuneSynapsePair;
+		selectedSynapsePair = pair;
+		const visibleIndex = visibleList.findIndex((entry) =>
+			sameUnorderedPair(pair.stronger.id, pair.weaker.id, entry.c.memory_a_id, entry.c.memory_b_id)
+		);
+		focusedPairIndex = visibleIndex >= 0 ? visibleIndex : null;
 	}
 </script>
 
-<div class="min-h-full p-6 space-y-6">
+<RouteStage
+	organ="contradictions"
+	seed={`immune-synapse-arena:${totalDetected}:${memoriesAnalyzed}`}
+	scene={contradictionsScene}
+	passes={createArenaPasses}
+	loading={loading}
+	error={error}
+	emptyLabel="CALM IMMUNE FIELD - NO STANDING CONTRADICTIONS"
+	onpick={handleRoutePick}
+/>
+
+<div class="relative z-10 min-h-full p-6 space-y-6 pointer-events-none">
+	<div class="pointer-events-auto">
 	<!-- Header -->
 	<PageHeader
 		icon="contradictions"
-		title="Contradiction Constellation"
-		subtitle="Where your memory disagrees with itself"
+		title="Immune Synapse Arena"
+		{subtitle}
 		accent="warning"
 	>
 		<span class="text-dim text-sm tabular-nums inline-flex items-center gap-1.5">
 			<AnimatedNumber value={filtered.length} /> in view
 		</span>
 	</PageHeader>
+	</div>
 
 	{#if error}
-		<div class="glass-panel flex flex-col items-center gap-3 rounded-2xl p-10 text-center">
+		<div class="glass-panel pointer-events-auto flex flex-col items-center gap-3 rounded-2xl p-10 text-center">
 			<div class="text-sm text-decay">Couldn't load contradictions</div>
 			<div class="max-w-md text-xs text-muted">{error}</div>
 			<button
@@ -168,17 +345,17 @@
 			</button>
 		</div>
 	{:else if loading}
-		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 pointer-events-auto">
 			{#each Array(4) as _}
 				<div class="glass-subtle shimmer h-20 rounded-xl"></div>
 			{/each}
 		</div>
-		<div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4">
+		<div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4 pointer-events-auto">
 			<div class="glass-subtle shimmer min-h-[520px] rounded-2xl"></div>
 			<div class="glass-subtle shimmer h-[520px] rounded-2xl"></div>
 		</div>
 	{:else if contradictions.length === 0}
-		<div class="glass-panel enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center">
+		<div class="glass-panel pointer-events-auto enter flex flex-col items-center gap-3 rounded-2xl p-12 text-center">
 			<div
 				class="flex h-14 w-14 items-center justify-center rounded-2xl border border-recall/25 bg-recall/10 text-recall"
 			>
@@ -193,13 +370,13 @@
 		</div>
 	{:else}
 	<!-- Stats bar -->
-	<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+	<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 pointer-events-auto">
 		<div use:reveal={{ delay: 0, y: 12 }} class="p-4 glass rounded-xl lift">
 			<div class="text-2xl text-bright font-bold tabular-nums">
 				<AnimatedNumber value={totalDetected} />
 			</div>
 			<div class="text-xs text-dim mt-1">
-				contradictions among the {memoriesAnalyzed.toLocaleString()} most recent memories
+				contradictions across {totalMemoriesInvolved.toLocaleString()} memories
 			</div>
 		</div>
 		<div use:reveal={{ delay: 60, y: 12 }} class="p-4 glass rounded-xl lift">
@@ -228,7 +405,7 @@
 	</div>
 
 	<!-- Filter bar -->
-	<div class="flex flex-wrap gap-3 items-end enter">
+	<div class="flex flex-wrap gap-3 items-end enter pointer-events-auto">
 		<Dropdown
 			options={filterOptions}
 			value={filter}
@@ -247,7 +424,10 @@
 		{/if}
 		{#if focusedPairIndex !== null}
 			<button
-				onclick={() => (focusedPairIndex = null)}
+				onclick={() => {
+					focusedPairIndex = null;
+					selectedSynapsePair = null;
+				}}
 				class="ml-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs border border-subtle/30 text-dim hover:text-text hover:border-synapse/30 hover:bg-white/[0.03] transition lift"
 			>
 				<Icon name="close" size={13} />
@@ -257,7 +437,7 @@
 	</div>
 
 	<!-- Main view: constellation + sidebar -->
-	<div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4">
+	<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,0.9fr)_380px] gap-4 pointer-events-auto">
 		<!-- Constellation. NOTE: no `use:reveal` on this wrapper or the
 		     ContradictionArcs SVG container — a transform/opacity entrance here
 		     would interfere with the constellation's own layout. -->
@@ -360,5 +540,104 @@
 			{/each}
 		</aside>
 	</div>
+
+	{#if selectedSynapsePair}
+		<section class="glass-panel pointer-events-auto rounded-2xl p-5 border-[#FF3B30]/35 shadow-[0_0_40px_rgba(255,59,48,0.12)]">
+			<div class="flex flex-wrap items-start justify-between gap-3 border-b border-[#FF3B30]/20 pb-3">
+				<div>
+					<div class="font-mono text-[10px] uppercase tracking-[0.22em] text-[#FF3B30]">Contradiction receipt</div>
+					<h2 class="mt-1 text-lg font-semibold text-bright">{selectedSynapsePair.topic}</h2>
+				</div>
+				<button
+					type="button"
+					onclick={() => {
+						selectedSynapsePair = null;
+						focusedPairIndex = null;
+						suppressArmed = false;
+						suppressNotice = null;
+					}}
+					class="rounded-lg border border-subtle/30 px-3 py-1.5 text-xs text-muted transition hover:border-[#FF3B30]/40 hover:text-[#FF3B30]"
+				>
+					Close
+				</button>
+			</div>
+
+			<div class="mt-4 grid gap-4 lg:grid-cols-2">
+				<div class="rounded-xl border border-[#F4F1D0]/18 bg-[#020307]/70 p-4">
+					<div class="mb-2 flex items-center justify-between gap-2">
+						<span class="font-mono text-[10px] uppercase tracking-wider text-[#F4F1D0]">Higher-trust membrane</span>
+						<span class="font-mono text-xs text-[#F4F1D0]">{(selectedSynapsePair.stronger.trust * 100).toFixed(0)}%</span>
+					</div>
+					<div class="text-xs text-muted break-all">
+						<a class="text-synapse-glow hover:underline" href={osHref('/memories', { memory: selectedSynapsePair.stronger.id })}>{selectedSynapsePair.stronger.id}</a>
+					</div>
+					<p class="mt-3 text-sm text-text">{selectedSynapsePair.stronger.preview}</p>
+					{#if selectedSynapsePair.stronger.date}
+						<div class="mt-3 text-[11px] text-dim">{selectedSynapsePair.stronger.date}</div>
+					{/if}
+				</div>
+				<div class="rounded-xl border border-[#FF3B30]/24 bg-[#160407]/70 p-4">
+					<div class="mb-2 flex items-center justify-between gap-2">
+						<span class="font-mono text-[10px] uppercase tracking-wider text-[#FF3B30]">Opposing evidence</span>
+						<span class="font-mono text-xs text-[#FF3B30]">{(selectedSynapsePair.weaker.trust * 100).toFixed(0)}%</span>
+					</div>
+					<div class="text-xs text-muted break-all">
+						<a class="text-synapse-glow hover:underline" href={osHref('/memories', { memory: selectedSynapsePair.weaker.id })}>{selectedSynapsePair.weaker.id}</a>
+					</div>
+					<p class="mt-3 text-sm text-text">{selectedSynapsePair.weaker.preview}</p>
+					{#if selectedSynapsePair.weaker.date}
+						<div class="mt-3 text-[11px] text-dim">{selectedSynapsePair.weaker.date}</div>
+					{/if}
+				</div>
+			</div>
+
+			<div class="mt-4 grid gap-3 md:grid-cols-4">
+				<div class="rounded-xl bg-white/[0.03] p-3">
+					<div class="text-[10px] uppercase tracking-wider text-muted">topic overlap</div>
+					<div class="mt-1 font-mono text-lg text-[#FF3B30]">{(selectedSynapsePair.topic_overlap * 100).toFixed(0)}%</div>
+				</div>
+				<div class="rounded-xl bg-white/[0.03] p-3">
+					<div class="text-[10px] uppercase tracking-wider text-muted">trust delta</div>
+					<div class="mt-1 font-mono text-lg text-[#F4F1D0]">{selectedSynapsePair.trust_delta.toFixed(2)}</div>
+				</div>
+				<div class="rounded-xl bg-white/[0.03] p-3">
+					<div class="text-[10px] uppercase tracking-wider text-muted">status</div>
+					<div class="mt-1 font-mono text-lg {selectedSynapsePair.resolved ? 'text-recall' : 'text-[#FF3B30]'}">
+						{selectedSynapsePair.resolved ? 'resolved' : 'unresolved'}
+					</div>
+				</div>
+				<div class="rounded-xl bg-white/[0.03] p-3">
+					<div class="text-[10px] uppercase tracking-wider text-muted">provenance</div>
+					<div class="mt-1 truncate font-mono text-xs text-dim" title={selectedSynapsePair.provenance.id}>{selectedSynapsePair.provenance.kind}:{selectedSynapsePair.provenance.id}</div>
+				</div>
+			</div>
+
+			<div class="mt-4 flex flex-wrap items-center gap-3">
+				<button
+					type="button"
+					disabled={suppressBusy || selectedSynapsePair.resolved}
+					onclick={() => void suppressWeaker()}
+					class="rounded-lg border px-3 py-2 text-xs font-medium transition
+						{suppressArmed
+							? 'border-[#FF3B30] bg-[#FF3B30]/20 text-[#FF3B30]'
+							: 'border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10'}"
+				>
+					{suppressBusy
+						? 'Suppressing…'
+						: selectedSynapsePair.resolved
+							? 'Weaker side already treated'
+							: suppressArmed
+								? 'Confirm suppress weaker side'
+								: 'Suppress weaker side'}
+				</button>
+				{#if suppressArmed && !selectedSynapsePair.resolved}
+					<span class="text-[11px] text-muted">This compounds active forgetting. Click again to confirm.</span>
+				{/if}
+				{#if suppressNotice}
+					<span class="text-[11px] text-recall">{suppressNotice}</span>
+				{/if}
+			</div>
+		</section>
+	{/if}
 	{/if}
 </div>

@@ -27,7 +27,7 @@ export const MIN_VISIBLE = 0.05;
 export const FALLBACK_COLOR = '#8B95A5';
 
 /** Source node colour (synapse-glow). Distinct from any node-type colour. */
-export const SOURCE_COLOR = '#818cf8';
+export const SOURCE_COLOR = '#22C7DE';
 
 /** Radial spacing between concentric rings (px). */
 export const RING_GAP = 140;

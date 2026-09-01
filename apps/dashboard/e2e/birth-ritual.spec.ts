@@ -29,7 +29,6 @@ import { test, expect, type Page, type ConsoleMessage } from '@playwright/test';
 
 const SETTINGS_URL = '/dashboard/settings';
 const GRAPH_URL = '/dashboard/graph';
-const TRIGGER_BIRTH_TEXT = /Trigger Birth/i;
 
 // Helpers ────────────────────────────────────────────────────────────────────
 
@@ -81,8 +80,23 @@ async function injectBirthViaSettings(page: Page) {
 	if (!page.url().includes('/settings')) {
 		await page.goto(SETTINGS_URL);
 	}
-	await expect(page.getByRole('button', { name: TRIGGER_BIRTH_TEXT })).toBeVisible();
-	await page.getByRole('button', { name: TRIGGER_BIRTH_TEXT }).click();
+	// Settings is now a ZERO-DOM WebGPU console — the "[ TRIGGER BIRTH ]" control
+	// is an in-canvas MSDF pick at logical NDC (0.06, -0.5), not a DOM button.
+	// Click the canvas at that location (with a small sweep, since the MSDF hit
+	// box is padded but not huge) to fire settings:action:birth -> injectEvent.
+	const canvas = page.locator('canvas').first();
+	await canvas.waitFor({ state: 'visible', timeout: 15_000 });
+	await page.waitForTimeout(2500); // let the console reveal + pick geometry settle
+	const box = await canvas.boundingBox();
+	if (!box) throw new Error('settings canvas has no bounding box');
+	// NDC (0.06, -0.5) -> screen: x=(ndc+1)/2*w, y=(1-ndc)/2*h. The label extends
+	// RIGHT from its anchor, so bias a little right and sweep a few points.
+	const baseX = box.x + ((0.06 + 1) / 2) * box.width;
+	const baseY = box.y + ((1 - -0.5) / 2) * box.height;
+	for (let dx = 0; dx <= 160; dx += 20) {
+		await page.mouse.click(baseX + dx, baseY);
+		await page.waitForTimeout(120);
+	}
 }
 
 async function attachScreenshot(page: Page, name: string) {
@@ -163,15 +177,12 @@ test.describe('v2.3 Birth Ritual — Visual proof', () => {
 		const mounted = await isGraphMounted(page);
 		test.fixme(!mounted, 'Graph canvas not mounted — skipping birth ritual test.');
 
-		// Fire 3 births back-to-back via the Settings button. Navigate to
-		// /settings once, click 3x, then return to /graph so all three events
-		// are in the feed when Graph3D mounts.
-		await page.goto(SETTINGS_URL);
-		const btn = page.getByRole('button', { name: TRIGGER_BIRTH_TEXT });
-		await expect(btn).toBeVisible();
-		await btn.click();
-		await btn.click();
-		await btn.click();
+		// Fire 3 births back-to-back via the in-canvas Settings birth control.
+		// Navigate to /settings once, pick it 3x, then return to /graph so all
+		// three events are in the feed when Graph3D mounts.
+		await injectBirthViaSettings(page);
+		await injectBirthViaSettings(page);
+		await injectBirthViaSettings(page);
 
 		await page.goto(GRAPH_URL);
 		await isGraphMounted(page);

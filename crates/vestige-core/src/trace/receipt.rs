@@ -169,17 +169,76 @@ impl Receipt {
                 mutation.id = replacement.to_string();
             }
         }
-        if let Some(ReceiptEvidence::SynapticCapture(evidence)) = &mut self.evidence {
-            if evidence.trigger.memory_id == memory_id {
-                evidence.trigger.memory_id = replacement.to_string();
-            }
-            for candidate in &mut evidence.candidates {
-                if candidate.memory_id.as_deref() == Some(memory_id) {
-                    candidate.memory_id = None;
+        match &mut self.evidence {
+            Some(ReceiptEvidence::SynapticCapture(evidence)) => {
+                if evidence.trigger.memory_id == memory_id {
+                    evidence.trigger.memory_id = replacement.to_string();
+                }
+                for candidate in &mut evidence.candidates {
+                    if candidate.memory_id.as_deref() == Some(memory_id) {
+                        candidate.memory_id = None;
+                    }
                 }
             }
+            Some(ReceiptEvidence::Backfill {
+                failure_id,
+                path_ids,
+                candidates,
+                ..
+            }) => {
+                if failure_id == memory_id {
+                    *failure_id = replacement.to_string();
+                }
+                for id in path_ids.iter_mut() {
+                    if id == memory_id {
+                        *id = replacement.to_string();
+                    }
+                }
+                for candidate in candidates.iter_mut() {
+                    if candidate.memory_id == memory_id {
+                        candidate.memory_id = replacement.to_string();
+                    }
+                }
+            }
+            Some(ReceiptEvidence::CounterfactualReplay { .. }) | None => {}
         }
     }
+
+    /// Receipt-authored backfill route when the persisted evidence carries a
+    /// complete ordered path. Callers must not invent topology when this is
+    /// `None`.
+    pub fn backfill_path_ids(&self) -> Option<&[String]> {
+        match &self.evidence {
+            Some(ReceiptEvidence::Backfill { path_ids, .. }) if path_ids.len() >= 2 => {
+                Some(path_ids.as_slice())
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Stable schema URI for Retroactive Salience Backfill receipt evidence.
+pub const BACKFILL_RECEIPT_SCHEMA_V1: &str = "https://vestige.dev/schemas/receipt/backfill/v1";
+
+/// Explicit epistemic boundary for Backfill receipts: candidate evidence only.
+pub const BACKFILL_RECEIPT_CLAIM_BOUNDARY: &str = "Explicit-entity backward candidate evidence from a salient failure; not an asserted root cause or a universal claim about vector search.";
+
+/// One earlier memory surfaced by a Backfill run. Records *candidate* evidence
+/// rather than asserting an unverified root cause.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BackfillCandidateEvidence {
+    pub memory_id: String,
+    pub content_preview: String,
+    pub shared_entities: Vec<String>,
+    pub age_days_before_failure: f64,
+    pub similarity_rank: Option<usize>,
+    pub backfill_score: f64,
+    pub promoted: bool,
+    /// Whether the explicit candidate→failure evidence edge was durably
+    /// written before this receipt was saved. Separate from promotion: a
+    /// preview can record evidence without strengthening a memory.
+    #[serde(default)]
+    pub candidate_edge_persisted: bool,
 }
 
 /// Typed predicate carried by a persisted receipt.
@@ -196,6 +255,21 @@ pub enum ReceiptEvidence {
         replay_id: String,
         capsule_id: String,
         result: crate::storage::CounterfactualReplayResult,
+    },
+    /// Retroactive Salience Backfill proof. `path_ids` is the only route a
+    /// live scene may animate; incomplete paths fail closed (no render).
+    Backfill {
+        schema: String,
+        schema_version: u32,
+        failure_id: String,
+        failure_preview: String,
+        scanned: usize,
+        lookback_days: i64,
+        baseline: String,
+        /// Ordered, receipt-authoritative route: `candidate_id -> failure_id`.
+        path_ids: Vec<String>,
+        candidates: Vec<BackfillCandidateEvidence>,
+        claim_boundary: String,
     },
 }
 
@@ -529,5 +603,80 @@ mod tests {
         assert_eq!(evidence.schema_version, 1);
         assert!(evidence.receipt_role.is_none());
         assert!(evidence.capture_window.context_threshold.is_none());
+    }
+
+    #[test]
+    fn legacy_receipt_without_backfill_evidence_deserializes_untouched() {
+        let json = serde_json::json!({
+            "receipt_id": "r_2026_06_22_legacy",
+            "retrieved": ["mem_1"],
+            "suppressed": [],
+            "activation_path": ["mem_1"],
+            "trust_floor": 0.7,
+            "decay_risk": "low",
+            "mutations": []
+        });
+        let receipt: Receipt = serde_json::from_value(json).expect("pre-backfill receipt row");
+        assert!(receipt.evidence.is_none());
+        assert!(receipt.backfill_path_ids().is_none());
+    }
+
+    #[test]
+    fn backfill_evidence_round_trips_and_requires_complete_path() {
+        let receipt = Receipt::build(
+            chrono::Utc::now(),
+            "run_bf",
+            vec!["cause_1".into()],
+            vec![],
+            vec!["cause_1 -> fail_1".into()],
+            &[0.8],
+            vec![],
+        )
+        .with_evidence(ReceiptEvidence::Backfill {
+            schema: BACKFILL_RECEIPT_SCHEMA_V1.into(),
+            schema_version: 1,
+            failure_id: "fail_1".into(),
+            failure_preview: "crashed".into(),
+            scanned: 12,
+            lookback_days: 30,
+            baseline: "embedding cosine rank within the scanned candidate set".into(),
+            path_ids: vec!["cause_1".into(), "fail_1".into()],
+            candidates: vec![BackfillCandidateEvidence {
+                memory_id: "cause_1".into(),
+                content_preview: "Set API_TIMEOUT=2".into(),
+                shared_entities: vec!["API_TIMEOUT".into()],
+                age_days_before_failure: 3.0,
+                similarity_rank: Some(9),
+                backfill_score: 0.91,
+                promoted: false,
+                candidate_edge_persisted: true,
+            }],
+            claim_boundary: BACKFILL_RECEIPT_CLAIM_BOUNDARY.into(),
+        });
+        let encoded = serde_json::to_value(&receipt).expect("serialize");
+        assert_eq!(encoded["evidence"]["kind"], "backfill");
+        assert_eq!(encoded["evidence"]["predicate"]["schema_version"], 1);
+        assert_eq!(
+            encoded["evidence"]["predicate"]["path_ids"],
+            serde_json::json!(["cause_1", "fail_1"])
+        );
+        let decoded: Receipt = serde_json::from_value(encoded).expect("deserialize");
+        assert_eq!(
+            decoded.backfill_path_ids(),
+            Some(["cause_1".to_string(), "fail_1".to_string()].as_slice())
+        );
+        let incomplete = decoded.with_evidence(ReceiptEvidence::Backfill {
+            schema: BACKFILL_RECEIPT_SCHEMA_V1.into(),
+            schema_version: 1,
+            failure_id: "fail_1".into(),
+            failure_preview: "crashed".into(),
+            scanned: 1,
+            lookback_days: 30,
+            baseline: "baseline".into(),
+            path_ids: vec!["only_one".into()],
+            candidates: vec![],
+            claim_boundary: BACKFILL_RECEIPT_CLAIM_BOUNDARY.into(),
+        });
+        assert!(incomplete.backfill_path_ids().is_none());
     }
 }

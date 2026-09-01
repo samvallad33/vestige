@@ -113,7 +113,7 @@ function createToastStore() {
 	}
 
 	function translate(event: VestigeEvent): Omit<Toast, 'id' | 'createdAt'> | null {
-		const color = EVENT_TYPE_COLORS[event.type] ?? '#818CF8';
+		const color = EVENT_TYPE_COLORS[event.type] ?? '#22C7DE';
 		const d = event.data as Record<string, unknown>;
 
 		switch (event.type) {

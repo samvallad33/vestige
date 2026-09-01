@@ -157,7 +157,7 @@
 	/* Subtle mode-specific accent tint so the button itself reflects
 	 * the active mode at a glance. */
 	.theme-toggle[data-mode='dark'] {
-		color: var(--color-synapse-glow, #818cf8);
+		color: var(--color-synapse-glow, #22c7de);
 	}
 	.theme-toggle[data-mode='light'] {
 		color: var(--color-warning, #f59e0b);

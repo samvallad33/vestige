@@ -254,6 +254,7 @@ pub struct RedactionSafeReceiptBindingV1 {
 pub enum ReceiptBindingEvidenceKind {
     SynapticCapture,
     CounterfactualReplay,
+    Backfill,
 }
 
 impl RedactionSafeReceiptBindingV1 {
@@ -267,6 +268,7 @@ impl RedactionSafeReceiptBindingV1 {
             Some(ReceiptEvidence::CounterfactualReplay { .. }) => {
                 Some(ReceiptBindingEvidenceKind::CounterfactualReplay)
             }
+            Some(ReceiptEvidence::Backfill { .. }) => Some(ReceiptBindingEvidenceKind::Backfill),
         };
         Ok(Self {
             retrieved_count: u32::try_from(receipt.retrieved.len())
@@ -2153,14 +2155,27 @@ fn receipt_memory_ids(receipt: &Receipt) -> HashSet<&str> {
             .iter()
             .map(|mutation| mutation.id.as_str()),
     );
-    if let Some(ReceiptEvidence::SynapticCapture(evidence)) = receipt.evidence.as_ref() {
-        ids.insert(evidence.trigger.memory_id.as_str());
-        ids.extend(
-            evidence
-                .candidates
-                .iter()
-                .filter_map(|candidate| candidate.memory_id.as_deref()),
-        );
+    match receipt.evidence.as_ref() {
+        Some(ReceiptEvidence::SynapticCapture(evidence)) => {
+            ids.insert(evidence.trigger.memory_id.as_str());
+            ids.extend(
+                evidence
+                    .candidates
+                    .iter()
+                    .filter_map(|candidate| candidate.memory_id.as_deref()),
+            );
+        }
+        Some(ReceiptEvidence::Backfill {
+            failure_id,
+            path_ids,
+            candidates,
+            ..
+        }) => {
+            ids.insert(failure_id.as_str());
+            ids.extend(path_ids.iter().map(String::as_str));
+            ids.extend(candidates.iter().map(|candidate| candidate.memory_id.as_str()));
+        }
+        Some(ReceiptEvidence::CounterfactualReplay { .. }) | None => {}
     }
     ids
 }

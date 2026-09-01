@@ -7,7 +7,6 @@
 	 * (Increment 3 gate, spec §4).
 	 */
 	import { onMount, onDestroy } from 'svelte';
-	import { base } from '$app/paths';
 	import { ObservatoryEngine, type EngineStatus } from '$lib/observatory/engine';
 	import type { DemoMode } from '$lib/observatory/types';
 
@@ -16,19 +15,19 @@
 		seed: string;
 		/** Capture mode: freeze the sim at this loop frame (?frame=N). */
 		freezeFrame?: number | null;
+		/**
+		 * Upper pixel-density budget for this organ. A bounded 3D receipt view
+		 * remains crisp at 1.25 DPR while avoiding a four-times-larger HDR/bloom
+		 * target on high-density displays.
+		 */
+		maxDpr?: number;
 		/** Telemetry callback: loop frame + fps estimate. */
 		onframe?: (frame: number, fps: number) => void;
 		/** Fired when the engine is running (the route uploads the graph here). */
 		onready?: (engine: ObservatoryEngine) => void;
-		/**
-		 * Fired on every engine status change. Hosts use this to auto-fallback
-		 * when WebGPU boot fails (requestAdapter null / requestDevice throw /
-		 * device lost) even though `'gpu' in navigator` was true.
-		 */
-		onstatus?: (status: EngineStatus) => void;
 	}
 
-	let { demo, seed, freezeFrame = null, onframe, onready, onstatus }: Props = $props();
+	let { demo, seed, freezeFrame = null, maxDpr = 2, onframe, onready }: Props = $props();
 
 	let canvasEl: HTMLCanvasElement;
 	let engine: ObservatoryEngine | null = null;
@@ -42,13 +41,10 @@
 			demo,
 			seed,
 			freezeFrame,
-			maxDpr: 2,
+			maxDpr,
 			onFrame: (frame, fps) => onframe?.(frame, fps)
 		});
-		unsubStatus = engine.onStatus((s) => {
-			status = s;
-			onstatus?.(s);
-		});
+		unsubStatus = engine.onStatus((s) => (status = s));
 
 		// Keep the drawing buffer in lockstep with layout size (DPR-clamped).
 		resizeObserver = new ResizeObserver(() => engine?.resize());
@@ -71,17 +67,28 @@
 </script>
 
 <!-- Full-bleed canvas: the living memory field (void #05060a is cleared on-GPU). -->
-<canvas bind:this={canvasEl} class="observatory-canvas" aria-label="Vestige memory field"
+<canvas
+	bind:this={canvasEl}
+	class="observatory-canvas"
+	aria-label="Vestige 3D memory field"
+	aria-describedby="webgpu-field-status"
 ></canvas>
 
 {#if status.state === 'unsupported' || status.state === 'error'}
-	<!-- Readable fallback — never a crash (spec §4 Increment 3 gate). -->
-	<div class="fallback" role="alert">
-		<div class="fallback-title">MEMORY FIELD OFFLINE</div>
-		<div class="fallback-reason">{status.reason}</div>
+	<!-- This is deliberately a truthful failure state, not a deceptive substitute
+	     visual. Graph used to be advertised here as an SVG fallback, but it is
+	     itself GPU-rendered in the current product. Navigation remains available
+	     through the persistent shell; this surface never claims that a 3D field
+	     has rendered when WebGPU could not be created. -->
+	<div id="webgpu-field-status" class="fallback" role="alert">
+		<div class="fallback-title">3D MEMORY FIELD UNAVAILABLE</div>
+		<div class="fallback-reason">
+			This browser or device could not create a WebGPU graphics context, so this
+			visual field has not rendered.
+		</div>
 		<div class="fallback-hint">
-			WebGPU is required for the Observatory. Chrome 113+, Edge 113+, or Safari 18+ —
-			the classic <a href="{base}/graph">Graph view</a> works everywhere.
+			Your local memories have not been changed. Use the persistent navigation to
+			continue in another tool, or open this view in a WebGPU-capable browser.
 		</div>
 	</div>
 {/if}
@@ -131,11 +138,5 @@
 		font-size: 0.75rem;
 		max-width: 34rem;
 		line-height: 1.6;
-	}
-
-	.fallback-hint a {
-		color: #cfe9ff;
-		text-decoration: underline;
-		text-underline-offset: 3px;
 	}
 </style>

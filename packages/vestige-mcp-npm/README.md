@@ -160,7 +160,7 @@ You'll never run out of space. A heavy user creating 100 memories/day would use 
 
 ## Embeddings
 
-On first use, Vestige downloads the nomic-embed-text-v1.5 model (~130MB). This is a one-time download and all subsequent operations are fully offline.
+Vestige does not download embedding models on startup or first use. Optional embedding profiles are explicitly installed from verified local artifacts, evaluated, migrated into their own vector space, and activated by the user.
 
 The model is stored in Vestige's OS cache directory, or you can set a global location:
 

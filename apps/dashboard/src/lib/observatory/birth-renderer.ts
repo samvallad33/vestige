@@ -270,15 +270,15 @@ fn vs_main(
 	out.clip = camera.view_proj * vec4<f32>(world, 1.0);
 	out.uv = corner;
 
-	// Color: violet dust (0.55, 0.32, 1.00) with spectral rim.
+	// Color: luciferin dust (doctrine ignition — never purple).
 	let phase = particle.color_phase.w;
 	let spectralW = fract(params.loop_phase + phase);
 	var spectralColor: vec3<f32>;
 	var stops = array<vec3<f32>, 4>(
-		vec3<f32>(0.55, 0.32, 1.00), // violet base
-		vec3<f32>(0.40, 0.60, 1.00), // blue-violet
-		vec3<f32>(0.70, 0.45, 1.00), // magenta-violet
-		vec3<f32>(0.55, 0.32, 1.00)  // wrap
+		vec3<f32>(0.91, 1.00, 0.72), // luciferin
+		vec3<f32>(0.16, 0.95, 0.66), // recall jade
+		vec3<f32>(0.13, 0.84, 1.00), // bridge cyan
+		vec3<f32>(0.91, 1.00, 0.72)  // wrap
 	);
 	let f = spectralW * 4.0;
 	let i = u32(floor(f)) % 4u;
@@ -456,9 +456,9 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 		discard;
 	}
 
-	// Flash: white-hot core, violet rim.
+	// Flash: white-hot core, luciferin rim.
 	let flashIntensity = 1.0 - smoothstep(0.0, 0.7, d);
-	let color = vec3<f32>(0.7, 0.4, 1.0) * flashIntensity * 2.0;
+	let color = vec3<f32>(0.91, 1.00, 0.72) * flashIntensity * 2.0;
 
 	// Fade out as flash ends.
 	let frame = params.frame;

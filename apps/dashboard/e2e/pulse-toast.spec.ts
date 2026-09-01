@@ -47,7 +47,13 @@ async function firePulse(page: Page) {
 	await page.getByRole('button', { name: PREVIEW_PULSE_TEXT }).click();
 }
 
-test.describe('v2.2 Pulse Toast — Demo sequence', () => {
+// QUARANTINED (Jul 2026): the Pulse Toast is a pre-WebGPU-rework DOM
+// notification component that no longer exists in the zero-DOM Cognitive OS
+// dashboard (only a "Preview Pulse" trigger button remains in settings; the
+// toast UI it popped was removed). These assertions look for DOM toast elements
+// that are gone → "element(s) not found". Kept for history; unquarantine only
+// if a DOM toast surface is reintroduced.
+test.describe.fixme('v2.2 Pulse Toast — Demo sequence', () => {
 	test('1. first toast appears promptly after clicking Preview Pulse', async ({ page }) => {
 		await gotoSettings(page);
 		await clearAllToasts(page);
