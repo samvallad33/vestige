@@ -318,3 +318,31 @@ recovery layer goes back to redesign.
 
 The claim boundary is unchanged and applies to C2 verbatim: receipt-backed
 upstream candidates, never automatic root cause.
+
+### Run 2026-09-01T05:57:42Z — the C2 one-shot on frozen seed 20260901 (official)
+
+Preregistration commit `ae21b27`; test stores untouched between the v2 FAIL
+and this run; single attempt as declared. `dataset_id=d9be9f1265ccd9e2`.
+
+| Arm | recall@1 | recall@3 | MRR | sep vs A | multi-hop r@3 |
+|-----|----------|----------|-----|----------|---------------|
+| A OR+BM25 | 0.000 | 0.000 | 0.000 | — | 0.0 |
+| B backfill | 0.078 | 0.667 | 0.396 | — | 0.0 |
+| C1 causal-graph | 0.156 | 0.644 | 0.454 | 0.644 | 0.1 |
+| **C2 evidence-typed** | **1.000** | **1.000** | **1.000** | **1.000** | **1.000** |
+
+C2 gate (locked thresholds): r@1 ≥ 0.60 ✓, r@3 ≥ 0.80 ✓, sep ≥ 0.40 ✓,
+C ≥ B ✓, multi-hop ≥ 0.50 ✓. **Outcome: PASS.** The same construction fails
+B, fails C1, and failed C2's pre-fix dev incarnation (0.522) — the gate can
+fail, and this run passed it.
+
+Licensed: the evidence-typed causal layer surfaces receipt-backed upstream
+candidates that similarity search misses, on blinded planted pairs, including
+two-hop roots through quiet intermediates. NOT licensed: automatic root
+cause, and NOT yet licensed: live-corpus recovery — the S3 probe stands
+unchanged (the documented real pairs are not separable nodes in the live
+store; ingestion granularity is v3.0 scope, not a ranking problem).
+
+**v3.0 scope locks** per the gate as amended: the causal graph release is a
+go, with the evidence-typed recovery layer as its ranking core and
+ingestion-granularity (separable cause/failure nodes) as scope item #1.

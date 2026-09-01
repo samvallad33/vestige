@@ -1,0 +1,20 @@
+{
+  "arm": "causal-graph-v2",
+  "commit": "ae21b27a5db107f410dd08c8bb5d8b11842aec0c",
+  "seed": 20260901,
+  "n_pairs": 90,
+  "recall_at_1": 1.0,
+  "recall_at_3": 1.0,
+  "mrr": 1.0,
+  "mean_wall_clock_ms": 0.03855184444444444,
+  "search_mode": "causal_graph_v2_evidence_typed",
+  "n_multihop": 10,
+  "multihop_recall_at_3": 1.0,
+  "separation_rate_vs_lexical": 1.0,
+  "separation_rate_vs_lexical_or": null,
+  "accumulation_ms": 1.635916,
+  "amortized_ms_per_query": 0.05672868888888889,
+  "mean_list_len": 4.111111111111111,
+  "empty_list_rate": 0.0,
+  "n_answered_pairs": 90
+}
