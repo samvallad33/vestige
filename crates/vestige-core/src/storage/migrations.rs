@@ -1816,6 +1816,111 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
     }
 }
 
+/// Repair legacy-profile vectors whose stored width disagrees with the
+/// profile's declared dimension (issue #191).
+///
+/// v1.x stores held raw 768-dim nomic vectors in `node_embeddings`; the V28
+/// migration copies them verbatim under `nomic-v1.5-legacy-raw-256`, which
+/// declares 256 dimensions, so the strict per-vector dimension check aborted
+/// storage init on every long-lived 1.x store that was never re-embedded.
+///
+/// Nomic v1.5 is a Matryoshka model: the leading 256 dimensions of a 768-dim
+/// vector are that vector's 256-dim representation, so oversized vectors are
+/// truncated and L2-renormalized in place — no model, no network, no data
+/// loss, and semantic recall keeps working immediately. A vector narrower
+/// than the declared dimension cannot be widened; that row is dropped so the
+/// background legacy backfill regenerates it from the untouched
+/// `knowledge_nodes` content. Scoped strictly to the legacy profile:
+/// a dimension mismatch on a pinned installed profile remains a hard error.
+///
+/// Runs on every startup and is a no-op once the store is clean, which also
+/// heals databases already broken by an earlier v2.6.0 open.
+pub(crate) fn repair_legacy_raw_profile_vectors(
+    conn: &rusqlite::Connection,
+    legacy_profile_id: &str,
+) -> rusqlite::Result<(u64, u64)> {
+    let declared: i64 = match conn.query_row(
+        "SELECT embedding_dimension FROM embedding_profiles WHERE profile_id = ?1",
+        [legacy_profile_id],
+        |row| row.get(0),
+    ) {
+        Ok(dimension) => dimension,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok((0, 0)),
+        Err(error) => return Err(error),
+    };
+    let declared_len = usize::try_from(declared).unwrap_or(0);
+    if declared_len == 0 {
+        return Ok((0, 0));
+    }
+
+    // The `dimensions` column is untrusted here; the blob length is ground
+    // truth (4 bytes per f32). Fetch anything whose recorded OR actual width
+    // disagrees with the profile.
+    let mismatched: Vec<(String, Vec<u8>)> = {
+        let mut stmt = conn.prepare(
+            "SELECT node_id, embedding FROM embedding_profile_vectors \
+             WHERE profile_id = ?1 AND (dimensions <> ?2 OR length(embedding) <> ?2 * 4)",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![legacy_profile_id, declared], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if mismatched.is_empty() {
+        return Ok((0, 0));
+    }
+
+    let tx =
+        rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    let mut truncated: u64 = 0;
+    let mut dropped: u64 = 0;
+    for (node_id, blob) in mismatched {
+        let widened_enough = blob.len().is_multiple_of(4) && blob.len() / 4 >= declared_len;
+        if widened_enough {
+            // Matryoshka truncation: keep the leading `declared_len` floats,
+            // then L2-renormalize (mirrors embeddings::matryoshka_truncate).
+            let mut vector: Vec<f32> = blob
+                .chunks_exact(4)
+                .take(declared_len)
+                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect();
+            let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for x in &mut vector {
+                    *x /= norm;
+                }
+            }
+            let repaired: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+            tx.execute(
+                "UPDATE embedding_profile_vectors SET embedding = ?1, dimensions = ?2 \
+                 WHERE profile_id = ?3 AND node_id = ?4",
+                rusqlite::params![repaired, declared, legacy_profile_id, node_id],
+            )?;
+            truncated += 1;
+        } else {
+            tx.execute(
+                "DELETE FROM embedding_profile_vectors WHERE profile_id = ?1 AND node_id = ?2",
+                rusqlite::params![legacy_profile_id, node_id],
+            )?;
+            dropped += 1;
+        }
+    }
+    tx.execute(
+        "UPDATE embedding_profile_manifests SET vector_count = \
+         (SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = ?1), \
+         updated_at = datetime('now') WHERE profile_id = ?1",
+        [legacy_profile_id],
+    )?;
+    tx.commit()?;
+    tracing::info!(
+        truncated,
+        dropped,
+        profile_id = legacy_profile_id,
+        "Repaired legacy embedding-profile vectors with mismatched dimensions (issue #191)"
+    );
+    Ok((truncated, dropped))
+}
+
 fn apply_migrations_once(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
     let initial_version = get_current_version(conn)?;
     let mut applied = 0;
@@ -2678,6 +2783,170 @@ mod tests {
             )
             .expect("query retained vector");
         assert_eq!(copied_after_reopen, 1, "V28 copy is idempotent");
+    }
+
+    /// Issue #191 regression: a v1.x store holding RAW 768-dim nomic vectors
+    /// (the population the V28 test above misses — it seeds 256-dim) must
+    /// come out of migration + repair with every legacy vector at the
+    /// declared 256 dimensions, Matryoshka-truncated and L2-renormalized,
+    /// so the strict startup dimension check can no longer abort init.
+    #[test]
+    fn repair_truncates_v1_raw_768_vectors_to_the_declared_dimension() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 27);
+        for (node_id, dims) in [("raw-768-node", 768_usize), ("clean-256-node", 256_usize)] {
+            conn.execute(
+                "INSERT INTO knowledge_nodes (id, content, node_type, created_at, updated_at, last_accessed, \
+                 stability, difficulty, reps, lapses, learning_state, storage_strength, retrieval_strength, \
+                 retention_strength, next_review, scheduled_days, has_embedding) \
+                 VALUES (?1, 'legacy vector source', 'fact', datetime('now'), datetime('now'), datetime('now'), \
+                 1.0, 0.3, 0, 0, 'new', 1.0, 1.0, 1.0, datetime('now'), 1, 1)",
+                [node_id],
+            )
+            .expect("seed V27 node");
+            let blob: Vec<u8> = (0..dims)
+                .flat_map(|i| ((i as f32) + 1.0).to_le_bytes())
+                .collect();
+            conn.execute(
+                "INSERT INTO node_embeddings (node_id, embedding, dimensions, model, created_at) \
+                 VALUES (?1, ?2, ?3, 'nomic-ai/nomic-embed-text-v1.5', datetime('now'))",
+                rusqlite::params![node_id, blob, dims as i64],
+            )
+            .expect("seed legacy vector");
+        }
+
+        apply_migrations(&conn).expect("apply through current version");
+        // Confirm the pre-fix broken state V28 produces for a 1.x store.
+        let copied_dims: i64 = conn
+            .query_row(
+                "SELECT dimensions FROM embedding_profile_vectors \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256' AND node_id = 'raw-768-node'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("copied raw vector");
+        assert_eq!(copied_dims, 768, "V28 copies the raw width verbatim");
+
+        let clean_before: Vec<u8> = conn
+            .query_row(
+                "SELECT embedding FROM embedding_profile_vectors \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256' AND node_id = 'clean-256-node'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("clean vector before repair");
+
+        let (truncated, dropped) =
+            repair_legacy_raw_profile_vectors(&conn, "nomic-v1.5-legacy-raw-256")
+                .expect("repair succeeds");
+        assert_eq!((truncated, dropped), (1, 0));
+
+        let (repaired_dims, repaired_blob): (i64, Vec<u8>) = conn
+            .query_row(
+                "SELECT dimensions, embedding FROM embedding_profile_vectors \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256' AND node_id = 'raw-768-node'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("repaired vector");
+        assert_eq!(repaired_dims, 256);
+        assert_eq!(repaired_blob.len(), 256 * 4);
+        let repaired: Vec<f32> = repaired_blob
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let norm = repaired.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 0.001,
+            "repaired vector must be L2-normalized, got norm {norm}"
+        );
+        // Matryoshka prefix: direction of the leading floats is preserved
+        // (original values 1.0 and 2.0, so element[1] / element[0] == 2).
+        assert!((repaired[1] / repaired[0] - 2.0).abs() < 0.001);
+
+        let clean_after: Vec<u8> = conn
+            .query_row(
+                "SELECT embedding FROM embedding_profile_vectors \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256' AND node_id = 'clean-256-node'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("clean vector after repair");
+        assert_eq!(clean_after, clean_before, "valid rows are untouched");
+
+        let manifest_count: i64 = conn
+            .query_row(
+                "SELECT vector_count FROM embedding_profile_manifests \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("manifest row");
+        assert_eq!(manifest_count, 2, "manifest reflects post-repair count");
+
+        assert_eq!(
+            repair_legacy_raw_profile_vectors(&conn, "nomic-v1.5-legacy-raw-256")
+                .expect("second pass"),
+            (0, 0),
+            "repair is idempotent"
+        );
+    }
+
+    /// A legacy vector narrower than the declared dimension cannot be widened;
+    /// the row is dropped so the background legacy backfill regenerates it
+    /// from the untouched `knowledge_nodes` content.
+    #[test]
+    fn repair_drops_undersized_legacy_vectors_for_backfill() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 27);
+        conn.execute(
+            "INSERT INTO knowledge_nodes (id, content, node_type, created_at, updated_at, last_accessed, \
+             stability, difficulty, reps, lapses, learning_state, storage_strength, retrieval_strength, \
+             retention_strength, next_review, scheduled_days, has_embedding) \
+             VALUES ('narrow-node', 'legacy vector source', 'fact', datetime('now'), datetime('now'), datetime('now'), \
+             1.0, 0.3, 0, 0, 'new', 1.0, 1.0, 1.0, datetime('now'), 1, 1)",
+            [],
+        )
+        .expect("seed V27 node");
+        conn.execute(
+            "INSERT INTO node_embeddings (node_id, embedding, dimensions, model, created_at) \
+             VALUES ('narrow-node', ?1, 128, 'nomic-ai/nomic-embed-text-v1.5', datetime('now'))",
+            [vec![9_u8; 128 * 4]],
+        )
+        .expect("seed narrow vector");
+
+        apply_migrations(&conn).expect("apply through current version");
+        let (truncated, dropped) =
+            repair_legacy_raw_profile_vectors(&conn, "nomic-v1.5-legacy-raw-256")
+                .expect("repair succeeds");
+        assert_eq!((truncated, dropped), (0, 1));
+
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM embedding_profile_vectors \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(remaining, 0, "unrepairable row is dropped for backfill");
+        let node_intact: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_nodes WHERE id = 'narrow-node'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("node count");
+        assert_eq!(node_intact, 1, "memory content is never touched");
+        let manifest_count: i64 = conn
+            .query_row(
+                "SELECT vector_count FROM embedding_profile_manifests \
+                 WHERE profile_id = 'nomic-v1.5-legacy-raw-256'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("manifest row");
+        assert_eq!(manifest_count, 0, "manifest reflects the dropped row");
     }
 
     #[test]
