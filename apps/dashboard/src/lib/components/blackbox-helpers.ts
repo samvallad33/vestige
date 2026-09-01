@@ -13,11 +13,11 @@ export type TraceKind = TraceEvent['type'];
 export function eventColor(kind: TraceKind): string {
 	switch (kind) {
 		case 'mcp.call':
-			return 'var(--color-synapse-glow, #818cf8)';
+			return 'var(--color-synapse-glow, #22C7DE)';
 		case 'memory.retrieve':
 			return 'var(--color-recall, #10b981)';
 		case 'memory.suppress':
-			return '#a78bfa'; // violet — the forgetting hue
+			return '#FF3B30'; // scarlet — the forgetting hue
 		case 'memory.write':
 			return '#38bdf8'; // sky — a new write
 		case 'contradiction.detected':
@@ -25,9 +25,9 @@ export function eventColor(kind: TraceKind): string {
 		case 'sanhedrin.veto':
 			return '#f43f5e'; // red — a block
 		case 'dream.patch':
-			return '#c084fc'; // purple — dream
+			return '#29F2A9'; // luciferin — dream
 		default:
-			return 'var(--color-synapse, #6366f1)';
+			return 'var(--color-synapse, #22C7DE)';
 	}
 }
 

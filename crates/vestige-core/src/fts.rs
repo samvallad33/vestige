@@ -269,26 +269,4 @@ mod tests {
         // Operator-only input yields nothing.
         assert_eq!(sanitize_fts5_terms("AND OR NOT").map(|_| ()), None);
     }
-
-    #[test]
-    fn terms_strips_all_bare_operators_even_when_doubled() {
-        // Regression: doubled/chained operators must never leak a bare operator
-        // into the raw MATCH (which aborts with a syntax error or silently flips
-        // implicit-AND to boolean-OR).
-        for op in FTS5_OPERATORS {
-            let doubled = format!("foo {op} {op} {op} bar");
-            let out = sanitize_fts5_terms(&doubled).unwrap();
-            for tok in out.split_whitespace() {
-                assert!(
-                    !FTS5_OPERATORS.iter().any(|o| tok.eq_ignore_ascii_case(o)),
-                    "operator {op} leaked into output {out:?}"
-                );
-            }
-            assert_eq!(out, "foo bar", "only real terms should survive: {out:?}");
-        }
-        // Lowercase + leading/trailing operators are stripped too.
-        assert_eq!(sanitize_fts5_terms("or foo and bar or").unwrap(), "foo bar");
-        // Operator-only input yields nothing.
-        assert_eq!(sanitize_fts5_terms("AND OR NOT").map(|_| ()), None);
-    }
 }

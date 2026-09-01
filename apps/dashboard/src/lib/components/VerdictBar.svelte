@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$stores/api';
+	import { eventFeed } from '$stores/websocket';
+	import { shouldRefreshVerdicts } from '$lib/observatory/route-event-pulse';
 	import type {
 		SanhedrinAppealReason,
 		SanhedrinClaim,
@@ -31,8 +33,13 @@
 
 	onMount(() => {
 		refresh();
-		const timer = window.setInterval(refresh, 4000);
+		const timer = window.setInterval(refresh, 30000);
 		return () => window.clearInterval(timer);
+	});
+
+	$effect(() => {
+		const head = $eventFeed[0];
+		if (head && shouldRefreshVerdicts(head)) void refresh();
 	});
 
 	async function refresh() {
@@ -305,7 +312,7 @@
 	}
 
 	.tone-appealed {
-		--verdict-color: #818cf8;
+		--verdict-color: #22c7de;
 	}
 
 	@media (max-width: 900px) {

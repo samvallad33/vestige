@@ -100,9 +100,10 @@ export function orbitCamera(
 	phase: number,
 	aspect: number,
 	distance: number,
-	elevation = 0.35
+	elevation = 0.35,
+	yawOffset = 0
 ): OrbitCamera {
-	const angle = phase * Math.PI * 2;
+	const angle = phase * Math.PI * 2 + yawOffset;
 	const eye: [number, number, number] = [
 		Math.sin(angle) * distance,
 		distance * elevation,

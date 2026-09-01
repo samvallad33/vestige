@@ -4,6 +4,7 @@
 	import { base } from '$app/paths';
 	import { page } from '$app/stores';
 	import ObservatoryCanvas from '$lib/components/ObservatoryCanvas.svelte';
+	import PickReceipt, { type PickProvenance } from '$lib/observatory/overlays/PickReceipt.svelte';
 	import type { ObservatoryEngine, FramePass } from '$lib/observatory/engine';
 	import { CAUSAL, IMMUNE, RETENTION, rgb01 } from '$lib/observatory/cognitive-palette';
 	import { type DemoMode } from '$lib/observatory/types';
@@ -82,6 +83,8 @@
 	let cursorSmoothed: { x: number; y: number } | null = null;
 	let focusedChromeRun: string | null = null;
 	let lastChromeSignature: string | null = null;
+	let hoverAt = 0;
+	let lastPick = $state<PickProvenance | null>(null);
 
 	const CYAN = [...rgb01(CAUSAL.forward), 1] satisfies [number, number, number, number];
 	const DIM_GREEN = [...rgb01(RETENTION.recall), 0.58] satisfies [number, number, number, number];
@@ -352,6 +355,16 @@
 			chromeText?.setRunDepth(nextFocus, 1.0);
 		}
 		if (canvasLayerEl) canvasLayerEl.style.cursor = navHit || chromeHit || onpick ? 'crosshair' : 'default';
+		void hoverScan(ndc);
+	}
+
+	async function hoverScan(ndc: { x: number; y: number }) {
+		const now = performance.now();
+		if (now - hoverAt < 125) return;
+		hoverAt = now;
+		for (const pass of routePasses) {
+			await pass.pickAt?.(ndc.x, ndc.y);
+		}
 	}
 
 	function handlePointerLeave() {
@@ -361,6 +374,7 @@
 		cursorSmoothed = null;
 		engine?.setCursorPreNdc(999, 999, 0, 0);
 		if (canvasLayerEl) canvasLayerEl.style.cursor = 'default';
+		for (const pass of routePasses) void pass.pickAt?.(999, 999);
 	}
 
 	async function handleFieldClick(e: MouseEvent) {
@@ -384,6 +398,11 @@
 		for (let i = routePasses.length - 1; i >= 0; i--) {
 			const hit = await routePasses[i].pickAt?.(ndc.x, ndc.y);
 			if (hit) {
+				lastPick = {
+					kind: hit.kind,
+					id: hit.id,
+					label: hit.kind.replace(/-/g, ' ')
+				};
 				onpick?.(hit);
 				return;
 			}
@@ -427,6 +446,7 @@
 	>
 		{paused ? 'RESUME MOTION' : 'PAUSE MOTION'}
 	</button>
+	<PickReceipt pick={lastPick} onclose={() => (lastPick = null)} />
 </div>
 
 <style>

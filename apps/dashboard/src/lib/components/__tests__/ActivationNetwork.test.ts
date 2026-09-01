@@ -458,7 +458,7 @@ describe('exported constants (contract pinning)', () => {
 		expect(RING_GAP).toBe(140);
 	});
 
-	it('SOURCE_COLOR is synapse-glow #818cf8', () => {
-		expect(SOURCE_COLOR).toBe('#818cf8');
+	it('SOURCE_COLOR is synapse-glow #22C7DE', () => {
+		expect(SOURCE_COLOR).toBe('#22C7DE');
 	});
 });

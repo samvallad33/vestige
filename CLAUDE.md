@@ -61,11 +61,16 @@ Run the narrowest check that covers the change, then run the release gates
 before tagging:
 
 ```sh
+cargo check -p vestige-mcp
 cargo test --workspace --no-fail-fast
 cargo clippy --workspace -- -D warnings
 pnpm --filter @vestige/dashboard check
 pnpm --filter @vestige/dashboard build
 ```
+
+On `feat/vestigeos-revival`, always run `cargo check -p vestige-mcp` before
+commits that touch dashboard HTTP routes or MCP tools — frontend gates do not
+compile Rust.
 
 For documentation-only changes, at minimum run:
 

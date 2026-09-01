@@ -91,7 +91,7 @@ struct FieldOpts {
 	well_hh: f32,     // half-height NDC
 	well_floor: f32,  // min multiplier inside the well (e.g. 0.10)
 	well_soft: f32,   // edge softness NDC (e.g. 0.22)
-	_pad: f32,
+	hover_index: f32, // instance index of the hovered cell; <0 = none
 };
 
 // 1.0 outside the well, ramping down to well_floor inside it (a soft rectangle).
@@ -298,14 +298,15 @@ fn vs_cell(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
 	let phase = c.phase_flags.x;
 	let flags = c.phase_flags.y;
 	let selected = select(0.0, 1.0, flags == 1.0 || flags == 3.0 || flags == 5.0 || flags == 7.0);
+	let hovered = select(0.0, 1.0, abs(f32(ii) - fopts.hover_index) < 0.5);
 	let beat = 1.0 + 0.22 * sin(params.time * 2.3 + c.extra.y * 1.7);
-	let r = c.pos_radius.z * (0.85 + c.hue_energy.w * 0.9 + selected * 1.3) * beat;
+	let r = c.pos_radius.z * (0.85 + c.hue_energy.w * 0.9 + selected * 1.3 + hovered * 0.55) * beat;
 	let center = orbit(c.pos_radius.xy, phase, c.phase_flags.w);
 	var out: VSOut;
 	out.clip = vec4f(center + corner * r, 0.0, 1.0);
 	out.uv = corner;
 	out.hue_energy = c.hue_energy;
-	out.info = c.phase_flags;
+	out.info = vec4f(c.phase_flags.x, c.phase_flags.y, c.phase_flags.z, hovered);
 	out.extra = c.extra;
 	out.center_ndc = center;
 	return out;
@@ -322,6 +323,7 @@ fn fs_cell(in: VSOut) -> @location(0) vec4f {
 	let energy = clamp(in.hue_energy.w, 0.0, 1.0);
 	let flags = in.info.y;
 	let selected = select(0.0, 1.0, flags == 1.0 || flags == 3.0 || flags == 5.0 || flags == 7.0);
+	let hovered = in.info.w;
 	let scar = select(0.0, 1.0, (flags >= 2.0 && flags < 4.0) || flags >= 6.0);
 	let phase = in.info.x;
 	// Per-cell persistence is supplied by the real organ mapper (retention where
@@ -347,13 +349,14 @@ fn fs_cell(in: VSOut) -> @location(0) vec4f {
 	let scarlet = vec3f(0.85, 0.22, 0.18);
 	let ivory = vec3f(0.90, 0.96, 0.86);
 	var color = soma_tone * soma + tinted * neurites + tinted * scatter;
-	// The rim is a selected-only instrument mark, never a global decorative glow.
+	// The rim is a selected-only instrument mark; hover gets a quieter spare float.
 	color = color + ivory * rim * selected * 0.32;
+	color = color + ivory * rim * hovered * 0.22;
 	// Scarred/suppressed cells lose normal emission and leave a small oxide seam.
 	let scar_ring = smoothstep(0.70, 0.78, d) * (1.0 - smoothstep(0.80, 0.90, d));
 	color = mix(color, color * 0.10 + scarlet * scar_ring * 0.12, scar);
 	// selected/scar stay a touch brighter than the dimmed backdrop so meaning survives.
-	let keep = max(intensity, (selected + scar) * 0.7);
+	let keep = max(intensity, (selected + scar + hovered) * 0.7);
 	let well = reading_well(in.center_ndc, fopts);
 	return vec4f(color * keep * well, 1.0);
 }

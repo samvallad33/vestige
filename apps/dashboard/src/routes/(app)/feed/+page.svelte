@@ -5,7 +5,6 @@
 		eventFeed,
 		isConnected,
 		isReconnecting,
-		heartbeat,
 		uptimeSeconds,
 		formatUptime
 	} from '$stores/websocket';
@@ -25,6 +24,8 @@
 	import Dropdown, { type DropdownOption } from '$components/Dropdown.svelte';
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
 	import { reveal } from '$lib/actions/reveal';
+	import { feedJumps } from '$lib/observatory/feed-jumps';
+	import { base } from '$app/paths';
 
 	type FeedTextItem = TextLayerItem & { event?: VestigeEvent; eventKey?: string };
 
@@ -825,7 +826,7 @@
 							onclick={() => selectRow(row.key)}
 							class="w-full text-left rounded-xl border px-3 py-2.5 transition lift
 								{isSel
-									? 'bg-synapse/10 border-synapse/40 shadow-[0_0_12px_rgba(99,102,241,0.18)]'
+									? 'bg-synapse/10 border-synapse/40 shadow-[0_0_12px_rgba(34,199,222,0.18)]'
 									: 'border-subtle/20 hover:border-synapse/30 hover:bg-white/[0.02]'}"
 						>
 							<div class="flex items-center gap-2.5">
@@ -846,6 +847,7 @@
 		<aside class="glass rounded-2xl p-4 space-y-3 max-h-[560px] overflow-y-auto">
 			{#if selectedRow}
 				{@const tone = eventTone(selectedRow.event.type)}
+				{@const jumps = feedJumps(selectedRow.event.data, selectedRow.event.type, base)}
 				<div class="flex items-start justify-between gap-2 border-b border-subtle/20 pb-3">
 					<div class="min-w-0">
 						<div class="flex items-center gap-2">
@@ -868,8 +870,21 @@
 					<span class="font-mono text-dim tabular-nums">{eventClock(selectedRow.event)}</span>
 				</div>
 
+				{#if jumps.length}
+					<div class="flex flex-wrap gap-2">
+						{#each jumps as jump (jump.kind + jump.id)}
+							<a
+								href={jump.href}
+								class="rounded-lg border border-synapse/35 bg-synapse/10 px-2.5 py-1 text-[11px] text-synapse-glow transition hover:border-synapse/60"
+							>
+								{jump.label}
+							</a>
+						{/each}
+					</div>
+				{/if}
+
 				<div class="space-y-1.5">
-					<div class="text-[10px] uppercase tracking-wider text-muted">Payload</div>
+					<div class="text-[10px] uppercase tracking-wider text-muted">Fields</div>
 					{#if eventEntries(selectedRow.event).length === 0}
 						<div class="text-[11px] text-muted">This event carries no payload fields.</div>
 					{:else}
@@ -891,14 +906,12 @@
 					<p class="max-w-[220px] text-[11px] text-muted">
 						Click any row to inspect its full payload here. Selecting an event highlights it in the field behind — it never changes your data.
 					</p>
-					{#if $heartbeat}
-						<div class="mt-2 w-full rounded-lg bg-white/[0.03] px-3 py-2 text-left">
-							<div class="text-[10px] uppercase tracking-wider text-muted">Last heartbeat</div>
-							<div class="mt-1 font-mono text-[11px] text-dim">
-								{payloadSummary($heartbeat.data)}
-							</div>
+					<div class="mt-2 w-full rounded-lg bg-white/[0.03] px-3 py-2 text-left">
+						<div class="text-[10px] uppercase tracking-wider text-muted">Socket</div>
+						<div class="mt-1 font-mono text-[11px] text-dim">
+							{$isConnected ? 'live' : 'offline'} · {feedEvents.length} events in this session
 						</div>
-					{/if}
+					</div>
 				</div>
 			{/if}
 		</aside>

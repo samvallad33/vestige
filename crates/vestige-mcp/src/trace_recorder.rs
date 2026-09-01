@@ -34,7 +34,8 @@ use vestige_core::storage::{
     },
 };
 use vestige_core::{
-    MemoryTraceEvent, REPLAY_SELECTION_BOUNDARY, Receipt, ReplayDecayRisk,
+    BACKFILL_RECEIPT_CLAIM_BOUNDARY, BACKFILL_RECEIPT_SCHEMA_V1, BackfillCandidateEvidence,
+    MemoryTraceEvent, REPLAY_SELECTION_BOUNDARY, Receipt, ReceiptEvidence, ReplayDecayRisk,
     RetrievalReplayCapsuleDraft, RetrievalReplayItemDraft, Storage, SuppressReason,
     SuppressedReceiptEntry, WriteSource, private_evidence_digest, replay_evidence_slot,
     replay_policy_digest,
@@ -956,6 +957,9 @@ pub fn build_and_save_receipt(
     tool: &str,
     result: &serde_json::Value,
 ) -> Option<serde_json::Value> {
+    if tool == "backfill" {
+        return build_and_save_backfill_receipt(storage, run_id, result);
+    }
     if !is_retrieval_tool(tool) {
         return None;
     }
@@ -1060,6 +1064,129 @@ fn receipt_persistence_unavailable() -> serde_json::Value {
         "claimBoundary": "Receipt evidence was not persisted; no durable receipt is claimed.",
         "message": "Receipt persistence is temporarily unavailable. Retry the retrieval to obtain durable evidence."
     })
+}
+
+/// Persist the exact output of a Backfill run as typed receipt evidence.
+/// Records candidates, not an asserted root cause — the UI must keep that
+/// epistemic boundary. Incomplete `path_ids` still save the receipt but
+/// fail closed at render time via [`Receipt::backfill_path_ids`].
+fn build_and_save_backfill_receipt(
+    storage: &Arc<Storage>,
+    run_id: &str,
+    result: &Value,
+) -> Option<Value> {
+    if !result.get("triggered")?.as_bool()? {
+        return None;
+    }
+    let failure = result.get("failure")?;
+    let failure_id = failure.get("id")?.as_str()?.to_string();
+    let failure_preview = failure
+        .get("content_preview")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let candidates: Vec<BackfillCandidateEvidence> = result
+        .get("causes")
+        .and_then(|v| v.as_array())?
+        .iter()
+        .filter_map(|cause| {
+            Some(BackfillCandidateEvidence {
+                memory_id: cause.get("memory_id")?.as_str()?.to_string(),
+                content_preview: cause
+                    .get("content_preview")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                shared_entities: cause
+                    .get("shared_entities")
+                    .and_then(|v| v.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(ToString::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                age_days_before_failure: cause
+                    .get("age_days_before_failure")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                similarity_rank: cause
+                    .get("similarity_rank")
+                    .and_then(|v| v.as_u64())
+                    .map(|rank| rank as usize),
+                backfill_score: cause
+                    .get("backfill_score")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                promoted: cause
+                    .get("promoted")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                candidate_edge_persisted: cause
+                    .get("candidate_edge_persisted")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            })
+        })
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let retrieved: Vec<String> = candidates
+        .iter()
+        .map(|candidate| candidate.memory_id.clone())
+        .collect();
+    let activation_path: Vec<String> = candidates
+        .iter()
+        .map(|candidate| format!("{} -> {}", candidate.memory_id, failure_id))
+        .collect();
+    let mutations = candidates
+        .iter()
+        .filter(|candidate| candidate.promoted)
+        .map(|candidate| vestige_core::ReceiptMutation {
+            id: candidate.memory_id.clone(),
+            kind: "backfill_candidate_promoted".to_string(),
+            note: Some("Promoted after an explicit-entity backward candidate match".to_string()),
+        })
+        .collect();
+    let path_ids: Vec<String> = result
+        .get("path_ids")
+        .and_then(|value| value.as_array())
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str().map(ToString::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let receipt = Receipt::build(
+        Utc::now(),
+        run_id,
+        retrieved,
+        Vec::new(),
+        activation_path,
+        &[],
+        mutations,
+    )
+    .with_evidence(ReceiptEvidence::Backfill {
+        schema: BACKFILL_RECEIPT_SCHEMA_V1.to_string(),
+        schema_version: 1,
+        failure_id,
+        failure_preview,
+        scanned: result.get("scanned").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+        lookback_days: result
+            .get("lookback_days")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(30),
+        baseline: "embedding cosine rank within the scanned candidate set".to_string(),
+        path_ids,
+        candidates,
+        claim_boundary: BACKFILL_RECEIPT_CLAIM_BOUNDARY.to_string(),
+    });
+    if let Err(error) = storage.save_receipt(&receipt, Some(run_id), Some("backfill"), None) {
+        tracing::warn!(%error, "backfill receipt save failed");
+    }
+    Some(serde_json::to_value(receipt).unwrap_or(Value::Null))
 }
 
 /// Derive the run id for a tool call. Honours a client-supplied `runId` /

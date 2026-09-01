@@ -287,8 +287,8 @@
 			</feMerge>
 		</filter>
 		<radialGradient id="ripple-grad" cx="50%" cy="50%" r="50%">
-			<stop offset="70%" stop-color="#818cf8" stop-opacity="0" />
-			<stop offset="100%" stop-color="#818cf8" stop-opacity="0.7" />
+			<stop offset="70%" stop-color="#22C7DE" stop-opacity="0" />
+			<stop offset="100%" stop-color="#22C7DE" stop-opacity="0.7" />
 		</radialGradient>
 	</defs>
 
@@ -299,7 +299,7 @@
 			cy={r.y}
 			r={r.radius}
 			fill="none"
-			stroke="#818cf8"
+			stroke="#22C7DE"
 			stroke-width="1.5"
 			opacity={r.opacity}
 		/>
@@ -314,7 +314,7 @@
 				y1={pt.y1}
 				x2={pt.x2}
 				y2={pt.y2}
-				stroke="#818cf8"
+				stroke="#22C7DE"
 				stroke-width="1.2"
 				stroke-linecap="round"
 				opacity={0.35 * e.drawProgress}

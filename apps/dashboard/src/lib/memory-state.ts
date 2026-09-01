@@ -45,7 +45,7 @@ export function getMemoryState(retention: number): MemoryState {
 export const MEMORY_STATE_COLORS: Record<MemoryState, string> = {
 	active: '#10b981', // emerald — easily retrievable
 	dormant: '#f59e0b', // amber — retrievable with effort
-	silent: '#8b5cf6', // violet — difficult, needs cues
+	silent: '#4A7D8C', // fossil cyan — difficult, needs cues (never purple)
 	unavailable: '#6b7280', // slate — needs reinforcement
 };
 

@@ -5,10 +5,9 @@ const MAX_EVENTS = 200;
 
 /**
  * The dashboard API and its socket are one origin from the browser's point of
- * view.  Keeping the port/protocol from `location` lets Vite proxy `/ws` in
+ * view. Keeping the port/protocol from `location` lets Vite proxy `/ws` in
  * development and uses the deployed origin in production (including WSS on
- * HTTPS).  The old development-only `:3927` exception bypassed the dashboard
- * proxy and made the live organs silently connect to the wrong service.
+ * HTTPS).
  */
 export function defaultWebSocketUrl(location: Pick<Location, 'protocol' | 'host'>): string {
 	const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -35,6 +34,11 @@ function createWebSocketStore() {
 	let reconnectAttempts = 0;
 
 	function connect(url?: string) {
+		// Same-host always: the release binary serves /ws itself and the vite
+		// dev server proxies /ws (any port — never hardcode a dev port here:
+		// a 5173-only branch silently killed the live layer on other ports).
+		// window is only touched when no explicit url is given (Node tests
+		// always pass one).
 		const wsUrl = url || defaultWebSocketUrl(window.location);
 
 		if (ws?.readyState === WebSocket.OPEN) return;
@@ -98,11 +102,24 @@ function createWebSocketStore() {
 			ws.close();
 		}
 		ws = null;
-		set({ connected: false, reconnecting: false, events: [], lastHeartbeat: null, error: null });
+		// Keep lastHeartbeat: it is the last-known truth, and zeroing it made
+		// every consumer flash "0 memories" on remount. Stale-but-real beats
+		// fresh-but-false; the next heartbeat replaces it within seconds.
+		update(s => ({ ...s, connected: false, reconnecting: false, events: [], error: null }));
 	}
 
 	function clearEvents() {
 		update(s => ({ ...s, events: [] }));
+	}
+
+	/**
+	 * Full teardown INCLUDING lastHeartbeat — unlike disconnect(), which keeps
+	 * the last-known vitals so consumers never flash a lying zero. Use for a
+	 * true fresh-start (tests, switching stores), never for route unmounts.
+	 */
+	function reset() {
+		disconnect();
+		set({ connected: false, reconnecting: false, events: [], lastHeartbeat: null, error: null });
 	}
 
 	/**
@@ -123,6 +140,7 @@ function createWebSocketStore() {
 		subscribe,
 		connect,
 		disconnect,
+		reset,
 		clearEvents,
 		injectEvent
 	};
@@ -135,11 +153,14 @@ export const isConnected = derived(websocket, $ws => $ws.connected);
 export const isReconnecting = derived(websocket, $ws => $ws.reconnecting);
 export const eventFeed = derived(websocket, $ws => $ws.events);
 export const heartbeat = derived(websocket, $ws => $ws.lastHeartbeat);
+// null = no heartbeat yet — render "—", never a lying literal 0. A store
+// with 3,000 memories must not claim "0 memories" for the first seconds of
+// every page load (or forever, when the socket can't connect).
 export const memoryCount = derived(websocket, $ws =>
-	($ws.lastHeartbeat?.data?.memory_count as number) ?? 0
+	($ws.lastHeartbeat?.data?.memory_count as number | undefined) ?? null
 );
 export const avgRetention = derived(websocket, $ws =>
-	($ws.lastHeartbeat?.data?.avg_retention as number) ?? 0
+	($ws.lastHeartbeat?.data?.avg_retention as number | undefined) ?? null
 );
 // v2.0.5: count of memories actively being forgotten (suppression_count > 0)
 export const suppressedCount = derived(websocket, $ws =>

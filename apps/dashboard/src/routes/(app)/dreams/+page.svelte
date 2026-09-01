@@ -11,6 +11,7 @@
 	import AnimatedNumber from '$components/AnimatedNumber.svelte';
 	import { reveal } from '$lib/actions/reveal';
 	import { api } from '$stores/api';
+	import { osHref } from '$lib/os-nav';
 	import type { ChangelogEvent } from '$stores/api';
 	import type { DreamInsight, DreamResult, Memory } from '$types';
 
@@ -675,6 +676,13 @@
 					<div class="rounded-xl bg-white/[0.03] p-3">
 						<div class="text-[10px] uppercase tracking-wider text-muted">source memories</div>
 						<div class="mt-1 font-mono text-lg text-bright tabular-nums">{selectedInsight.sourceMemories?.length ?? 0}</div>
+						{#if selectedInsight.sourceMemories?.length}
+							<div class="mt-2 flex flex-col gap-1">
+								{#each selectedInsight.sourceMemories.slice(0, 6) as id (id)}
+									<a class="font-mono text-[11px] text-synapse-glow hover:underline break-all" href={osHref('/memories', { memory: id })}>{id}</a>
+								{/each}
+							</div>
+						{/if}
 					</div>
 				{:else}
 					<p class="text-sm text-muted">

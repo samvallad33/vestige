@@ -20,6 +20,7 @@
 	} from '$lib/observatory/contradictions/contradictions-scene';
 	import { reveal } from '$lib/actions/reveal';
 	import { api } from '$stores/api';
+	import { osHref } from '$lib/os-nav';
 	import { eventFeed } from '$stores/websocket';
 	import {
 		severityColor,
@@ -40,6 +41,9 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let selectedSynapsePair = $state<ImmuneSynapsePair | null>(null);
+	let suppressBusy = $state(false);
+	let suppressArmed = $state(false);
+	let suppressNotice = $state<string | null>(null);
 
 	// Portrait phones: the full descriptive subtitle wraps to 6-7 lines, eating the
 	// top ~40% before the focal card and pushing its last line into the WebGPU
@@ -81,6 +85,28 @@
 	}
 
 	onMount(() => load());
+
+	async function suppressWeaker() {
+		const pair = selectedSynapsePair;
+		if (!pair || suppressBusy) return;
+		if (!suppressArmed) {
+			suppressArmed = true;
+			return;
+		}
+		suppressBusy = true;
+		suppressNotice = null;
+		try {
+			await api.memories.suppress(pair.weaker.id, 'contradiction-weaker-side');
+			suppressNotice = `Weaker side suppressed · ${pair.weaker.id.slice(0, 8)}`;
+			suppressArmed = false;
+			selectedSynapsePair = { ...pair, resolved: true };
+			await load();
+		} catch (cause) {
+			suppressNotice = cause instanceof Error ? cause.message : 'Suppress failed';
+		} finally {
+			suppressBusy = false;
+		}
+	}
 
 	// Patrolled tissue: the memory pool the immune system is watching. Even with
 	// zero standing contradictions the arena reads as living tissue (dim healthy
@@ -527,6 +553,8 @@
 					onclick={() => {
 						selectedSynapsePair = null;
 						focusedPairIndex = null;
+						suppressArmed = false;
+						suppressNotice = null;
 					}}
 					class="rounded-lg border border-subtle/30 px-3 py-1.5 text-xs text-muted transition hover:border-[#FF3B30]/40 hover:text-[#FF3B30]"
 				>
@@ -540,7 +568,9 @@
 						<span class="font-mono text-[10px] uppercase tracking-wider text-[#F4F1D0]">Higher-trust membrane</span>
 						<span class="font-mono text-xs text-[#F4F1D0]">{(selectedSynapsePair.stronger.trust * 100).toFixed(0)}%</span>
 					</div>
-					<div class="text-xs text-muted break-all">{selectedSynapsePair.stronger.id}</div>
+					<div class="text-xs text-muted break-all">
+						<a class="text-synapse-glow hover:underline" href={osHref('/memories', { memory: selectedSynapsePair.stronger.id })}>{selectedSynapsePair.stronger.id}</a>
+					</div>
 					<p class="mt-3 text-sm text-text">{selectedSynapsePair.stronger.preview}</p>
 					{#if selectedSynapsePair.stronger.date}
 						<div class="mt-3 text-[11px] text-dim">{selectedSynapsePair.stronger.date}</div>
@@ -551,7 +581,9 @@
 						<span class="font-mono text-[10px] uppercase tracking-wider text-[#FF3B30]">Opposing evidence</span>
 						<span class="font-mono text-xs text-[#FF3B30]">{(selectedSynapsePair.weaker.trust * 100).toFixed(0)}%</span>
 					</div>
-					<div class="text-xs text-muted break-all">{selectedSynapsePair.weaker.id}</div>
+					<div class="text-xs text-muted break-all">
+						<a class="text-synapse-glow hover:underline" href={osHref('/memories', { memory: selectedSynapsePair.weaker.id })}>{selectedSynapsePair.weaker.id}</a>
+					</div>
 					<p class="mt-3 text-sm text-text">{selectedSynapsePair.weaker.preview}</p>
 					{#if selectedSynapsePair.weaker.date}
 						<div class="mt-3 text-[11px] text-dim">{selectedSynapsePair.weaker.date}</div>
@@ -578,6 +610,32 @@
 					<div class="text-[10px] uppercase tracking-wider text-muted">provenance</div>
 					<div class="mt-1 truncate font-mono text-xs text-dim" title={selectedSynapsePair.provenance.id}>{selectedSynapsePair.provenance.kind}:{selectedSynapsePair.provenance.id}</div>
 				</div>
+			</div>
+
+			<div class="mt-4 flex flex-wrap items-center gap-3">
+				<button
+					type="button"
+					disabled={suppressBusy || selectedSynapsePair.resolved}
+					onclick={() => void suppressWeaker()}
+					class="rounded-lg border px-3 py-2 text-xs font-medium transition
+						{suppressArmed
+							? 'border-[#FF3B30] bg-[#FF3B30]/20 text-[#FF3B30]'
+							: 'border-[#FF3B30]/40 text-[#FF3B30] hover:bg-[#FF3B30]/10'}"
+				>
+					{suppressBusy
+						? 'Suppressing…'
+						: selectedSynapsePair.resolved
+							? 'Weaker side already treated'
+							: suppressArmed
+								? 'Confirm suppress weaker side'
+								: 'Suppress weaker side'}
+				</button>
+				{#if suppressArmed && !selectedSynapsePair.resolved}
+					<span class="text-[11px] text-muted">This compounds active forgetting. Click again to confirm.</span>
+				{/if}
+				{#if suppressNotice}
+					<span class="text-[11px] text-recall">{suppressNotice}</span>
+				{/if}
 			</div>
 		</section>
 	{/if}

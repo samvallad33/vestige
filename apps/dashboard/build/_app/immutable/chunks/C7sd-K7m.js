@@ -1,0 +1,1 @@
+import{_ as y,q as _,a0 as u,a1 as o,v as e,a2 as g,a3 as i,a4 as l,a5 as d,a6 as p,a7 as v}from"./Dw_4PDAU.js";function C(n,r){let t=null,E=e;var s;if(e){t=p;for(var a=v(document.head);a!==null&&(a.nodeType!==g||a.data!==n);)a=i(a);if(a===null)l(!1);else{var f=i(a);a.remove(),d(f)}}e||(s=document.head.appendChild(y()));try{_(()=>r(s),u|o)}finally{E&&(l(!0),d(t))}}export{C as h};

@@ -47,11 +47,24 @@ import {
 	uptimeSeconds,
 	heartbeat,
 	formatUptime,
-	defaultWebSocketUrl,
+	defaultWebSocketUrl
 } from '../websocket';
 import type { VestigeEvent } from '$types';
 
 const MAX_EVENTS = 200;
+
+describe('defaultWebSocketUrl', () => {
+	it('uses ws:// on http hosts including non-5173 ports', () => {
+		expect(defaultWebSocketUrl({ protocol: 'http:', host: '127.0.0.1:5199' })).toBe(
+			'ws://127.0.0.1:5199/ws'
+		);
+	});
+	it('uses wss:// on https hosts', () => {
+		expect(defaultWebSocketUrl({ protocol: 'https:', host: 'app.vestige.dev' })).toBe(
+			'wss://app.vestige.dev/ws'
+		);
+	});
+});
 
 function makeEvent(
 	type: VestigeEvent['type'] = 'MemoryCreated',
@@ -95,16 +108,6 @@ beforeEach(() => {
 	// below). For the derived-store defaults tests we call disconnect() to
 	// fully reset the store.
 	websocket.clearEvents();
-});
-
-describe('defaultWebSocketUrl', () => {
-	it('keeps development on the dashboard origin so Vite can proxy /ws', () => {
-		expect(defaultWebSocketUrl({ protocol: 'http:', host: '127.0.0.1:5199' })).toBe('ws://127.0.0.1:5199/ws');
-	});
-
-	it('uses WSS when the dashboard is served over HTTPS', () => {
-		expect(defaultWebSocketUrl({ protocol: 'https:', host: 'app.vestige.dev' })).toBe('wss://app.vestige.dev/ws');
-	});
 });
 
 // ---------------------------------------------------------------------------
@@ -177,14 +180,14 @@ describe('injectEvent', () => {
 		// injects a Heartbeat, it lands in the events array, and lastHeartbeat
 		// is untouched. Callers who want a heartbeat-like derived-store update
 		// must route through the WebSocket handler instead.
-		websocket.disconnect(); // reset lastHeartbeat to null
+		websocket.reset(); // full teardown including lastHeartbeat
 		const hb = makeHeartbeat({ memory_count: 42 });
 		websocket.injectEvent(hb);
 		const feed = get(eventFeed);
 		expect(feed.length).toBe(1);
 		expect(feed[0]).toEqual(hb);
-		// memoryCount still 0 because lastHeartbeat was never written.
-		expect(get(memoryCount)).toBe(0);
+		// memoryCount still null because lastHeartbeat was never written.
+		expect(get(memoryCount)).toBeNull();
 		expect(get(heartbeat)).toBeNull();
 	});
 });
@@ -195,8 +198,8 @@ describe('injectEvent', () => {
 
 describe('derived stores — defaults with no heartbeat', () => {
 	beforeEach(() => {
-		// Full reset so lastHeartbeat is null.
-		websocket.disconnect();
+		// Full reset so lastHeartbeat is null (disconnect() now preserves it).
+		websocket.reset();
 	});
 
 	it('isConnected is false after disconnect', () => {
@@ -207,12 +210,12 @@ describe('derived stores — defaults with no heartbeat', () => {
 		expect(get(heartbeat)).toBeNull();
 	});
 
-	it('memoryCount returns 0 when no heartbeat has arrived', () => {
-		expect(get(memoryCount)).toBe(0);
+	it('memoryCount returns null when no heartbeat has arrived (never a lying 0)', () => {
+		expect(get(memoryCount)).toBeNull();
 	});
 
-	it('avgRetention returns 0 when no heartbeat has arrived', () => {
-		expect(get(avgRetention)).toBe(0);
+	it('avgRetention returns null when no heartbeat has arrived (never a lying 0)', () => {
+		expect(get(avgRetention)).toBeNull();
 	});
 
 	it('suppressedCount returns 0 when no heartbeat has arrived', () => {
@@ -248,13 +251,13 @@ describe('derived stores — after heartbeat delivery', () => {
 	});
 
 	it('heartbeat events do NOT enter the events array (handled by onmessage)', () => {
-		websocket.disconnect();
+		websocket.reset();
 		deliverHeartbeat(makeHeartbeat({ memory_count: 1 }));
 		expect(get(eventFeed).length).toBe(0);
 	});
 
 	it('non-heartbeat events delivered via onmessage enter the events array', () => {
-		websocket.disconnect();
+		websocket.reset();
 		websocket.connect('ws://test.invalid/ws');
 		const ws = FakeWS.last!;
 		ws.onmessage!({ data: JSON.stringify(makeEvent('MemoryCreated', { id: 'x' })) });

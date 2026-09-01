@@ -94,6 +94,12 @@ export async function exportLoopMp4({
 	return new Uint8Array(buffer);
 }
 
+/** Receipt replay clip — same loop encoder, named for the run receipt. */
+export function receiptExportFilename(receiptId: string, demo = 'recall-path'): string {
+	const slug = receiptId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24) || 'receipt';
+	return `vestige-receipt-${slug}-${demo}-loop.mp4`;
+}
+
 /** Hand the finished clip to the user as a download. */
 export function downloadClip(buffer: Uint8Array, filename: string): void {
 	// Honest telemetry: the clip's real size, before the download hand-off

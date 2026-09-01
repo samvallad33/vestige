@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
+	import { osGoto } from '$lib/os-nav';
 	import { page } from '$app/stores';
 	import Icon from '$components/Icon.svelte';
 	// MEMORY CINEMA IS PROTECTED. The Witness route keeps its finished
@@ -176,11 +176,11 @@
 
 	function openBlackBox() {
 		if (!selectedRunId) return;
-		window.location.href = `${base}/blackbox?run=${encodeURIComponent(selectedRunId)}`;
+		void osGoto('/blackbox', { run: selectedRunId });
 	}
 
 	function openMemory(id: string) {
-		window.location.href = `${base}/memories?memory=${encodeURIComponent(id)}`;
+		void osGoto('/memories', { memory: id });
 	}
 
 	$effect(() => {

@@ -14,7 +14,7 @@
 import type { GraphResponse } from '$types';
 import type { ObservatoryEngine, FramePass } from './engine';
 import { DemoClock } from './demo-clock';
-import { orbitCamera } from './camera';
+import { IDENTITY_RIG, orbitWithRig, type CameraRigState } from './camera-rig';
 import {
 	buildObservatoryGraph,
 	buildNodeStateArray,
@@ -30,6 +30,7 @@ import {
 import { renderNodesWGSL } from './shaders/render-nodes.wgsl';
 import { simulateWGSL } from './shaders/simulate.wgsl';
 import { renderPathWGSL } from './shaders/render-path.wgsl';
+import { renderEdgesWGSL } from './shaders/render-edges.wgsl';
 import { buildRecallPath, type PathStepMeta } from './path-builder';
 
 /** mat4 (16) + right vec4 (4) + up vec4 (4) floats. */
@@ -68,11 +69,17 @@ export class NodeRenderer implements FramePass {
 	// count; seeded to the static retention snapshot so a pre-bridge field is
 	// unchanged.
 	private liveRetentionBuffer: GPUBuffer | null = null;
+	private edgeCapacityBytes = 0;
+	private edgeCount = 0;
+	private cameraRig: CameraRigState = { ...IDENTITY_RIG };
+	private hoveredIndex = -1;
 
 	// Path edge wavefront (Increment 6)
 	private pathPipeline: GPURenderPipeline | null = null;
 	private pathBindGroup: GPUBindGroup | null = null;
 	private pathStepCount = 0;
+	private axonPipeline: GPURenderPipeline | null = null;
+	private axonBindGroup: GPUBindGroup | null = null;
 
 	graph: ObservatoryGraph | null = null;
 	/** Beat metadata for the timeline spine overlay (Increment 6). */
@@ -116,10 +123,12 @@ export class NodeRenderer implements FramePass {
 		device.queue.writeBuffer(this.nodeBuffer, 0, data.buffer as ArrayBuffer);
 
 		const edgeData = buildEdgeIndexArray(graph);
+		this.edgeCount = graph.edges.length;
 		this.edgeBuffer?.destroy();
+		this.edgeCapacityBytes = Math.max(edgeData.byteLength * 2, 64);
 		this.edgeBuffer = device.createBuffer({
 			label: 'observatory-edge-index',
-			size: edgeData.byteLength,
+			size: this.edgeCapacityBytes,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
 		});
 		device.queue.writeBuffer(this.edgeBuffer, 0, edgeData.buffer as ArrayBuffer);
@@ -228,20 +237,47 @@ export class NodeRenderer implements FramePass {
 	 * pairs; the LiveBridge accumulates them and calls this so each new edge
 	 * physically tugs its endpoints closer, live.
 	 */
+	setCameraRig(rig: CameraRigState): void {
+		this.cameraRig = rig;
+	}
+
+	setHovered(index: number): void {
+		this.hoveredIndex = index;
+	}
+
+	private currentOrbit() {
+		const w = this.engine.params[6] || 1;
+		const h = this.engine.params[7] || 1;
+		const phase = this.engine.params[1];
+		return orbitWithRig(phase, w / h, ORBIT_DISTANCE, this.cameraRig);
+	}
+
+	/**
+	 * v2.3 living field — replace the edge set (Phase 3, dream storm). Capacity
+	 * doubles on overflow and only then rebuilds the pipeline; otherwise a
+	 * writeBuffer. Dream storms must not hitch on shader recompiles.
+	 */
 	setEdges(edges: ObservatoryEdge[]): void {
 		const device = this.engine.gpuDevice;
 		if (!device || !this.graph) return;
 		this.graph.edges = edges;
+		this.edgeCount = edges.length;
 		const edgeData = buildEdgeIndexArray(this.graph);
-		this.edgeBuffer?.destroy();
-		this.edgeBuffer = device.createBuffer({
-			label: 'observatory-edge-index',
-			size: Math.max(edgeData.byteLength, 8),
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-		});
+		const need = Math.max(edgeData.byteLength, 8);
+		let grew = false;
+		if (!this.edgeBuffer || need > this.edgeCapacityBytes) {
+			this.edgeBuffer?.destroy();
+			this.edgeCapacityBytes = Math.max(need * 2, 64);
+			this.edgeBuffer = device.createBuffer({
+				label: 'observatory-edge-index',
+				size: this.edgeCapacityBytes,
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+			});
+			grew = true;
+		}
 		device.queue.writeBuffer(this.edgeBuffer, 0, edgeData.buffer as ArrayBuffer);
 		this.engine.params[3] = edges.length;
-		this.createPipeline(device);
+		if (grew) this.createPipeline(device);
 	}
 
 	/**
@@ -373,6 +409,43 @@ export class NodeRenderer implements FramePass {
 				]
 			});
 		}
+
+		if (this.edgeBuffer && this.pathBuffer && this.nodeBuffer) {
+			const axonModule = device.createShaderModule({
+				label: 'observatory-render-axons',
+				code: renderEdgesWGSL
+			});
+			this.axonPipeline = device.createRenderPipeline({
+				label: 'observatory-axons',
+				layout: 'auto',
+				vertex: { module: axonModule, entryPoint: 'vs_main' },
+				fragment: {
+					module: axonModule,
+					entryPoint: 'fs_main',
+					targets: [
+						{
+							format: this.engine.sceneFormat,
+							blend: {
+								color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+								alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' }
+							}
+						}
+					]
+				},
+				primitive: { topology: 'line-list' }
+			});
+			this.axonBindGroup = device.createBindGroup({
+				label: 'observatory-axons-bind',
+				layout: this.axonPipeline.getBindGroupLayout(0),
+				entries: [
+					{ binding: 0, resource: { buffer: this.engine.paramsBuffer } },
+					{ binding: 1, resource: { buffer: this.cameraBuffer } },
+					{ binding: 2, resource: { buffer: this.edgeBuffer } },
+					{ binding: 3, resource: { buffer: this.pathBuffer } },
+					{ binding: 4, resource: { buffer: this.nodeBuffer } }
+				]
+			});
+		}
 	}
 
 	/**
@@ -383,11 +456,7 @@ export class NodeRenderer implements FramePass {
 		const device = this.engine.gpuDevice;
 		if (!device || !this.cameraBuffer) return;
 
-		const w = this.engine.params[6] || 1;
-		const h = this.engine.params[7] || 1;
-		const phase = this.engine.params[1];
-
-		const cam = orbitCamera(phase, w / h, ORBIT_DISTANCE);
+		const cam = this.currentOrbit();
 		this.cameraData.set(cam.viewProj, 0);
 		this.cameraData[16] = cam.right[0];
 		this.cameraData[17] = cam.right[1];
@@ -408,8 +477,13 @@ export class NodeRenderer implements FramePass {
 		}
 	}
 
-	/** FramePass — instanced additive draws: nodes, then path ribbons on top. */
+	/** FramePass — axons under nodes, then nodes, then path ribbons. */
 	render(pass: GPURenderPassEncoder): void {
+		if (this.axonPipeline && this.axonBindGroup && this.edgeCount > 0) {
+			pass.setPipeline(this.axonPipeline);
+			pass.setBindGroup(0, this.axonBindGroup);
+			pass.draw(2, this.edgeCount);
+		}
 		if (!this.pipeline || !this.bindGroup || this.nodeCount === 0) return;
 		pass.setPipeline(this.pipeline);
 		pass.setBindGroup(0, this.bindGroup);
@@ -480,10 +554,7 @@ export class NodeRenderer implements FramePass {
 		staging.destroy();
 
 		// Same camera inputs the frame pass uses (compute() above).
-		const w = this.engine.params[6] || 1;
-		const h = this.engine.params[7] || 1;
-		const phase = this.engine.params[1];
-		const m = orbitCamera(phase, w / h, ORBIT_DISTANCE).viewProj; // column-major
+		const m = this.currentOrbit().viewProj; // column-major
 
 		// Projected-disc hit test: fovY 50° → f = 1/tan(25°); a node of world
 		// radius r at clip-w distance projects to ~r·f/w in NDC y. A small
@@ -505,7 +576,8 @@ export class NodeRenderer implements FramePass {
 			const cy = (m[1] * x + m[5] * y + m[9] * z + m[13]) / cw;
 			const projR = Math.max((r * f) / cw, 0.012);
 			const score = Math.hypot(cx - ndcX, cy - ndcY) / projR;
-			if (score < 1.6 && score < bestScore) {
+			const hoverBias = i === this.hoveredIndex ? 0.85 : 1;
+			if (score < 1.6 * hoverBias && score < bestScore) {
 				bestScore = score;
 				best = i;
 			}
@@ -531,5 +603,9 @@ export class NodeRenderer implements FramePass {
 		this.simBindGroup = null;
 		this.pathPipeline = null;
 		this.pathBindGroup = null;
+		this.axonPipeline = null;
+		this.axonBindGroup = null;
+		this.edgeCapacityBytes = 0;
+		this.edgeCount = 0;
 	}
 }

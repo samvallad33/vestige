@@ -53,9 +53,9 @@ export const META: Record<AuditAction, Meta> = {
 	promoted: { label: 'Promoted', color: '#10b981', glyph: '', kind: 'arrow-up' },
 	demoted: { label: 'Demoted', color: '#f59e0b', glyph: '', kind: 'arrow-down' },
 	edited: { label: 'Edited', color: '#facc15', glyph: '', kind: 'pencil' },
-	suppressed: { label: 'Suppressed', color: '#a855f7', glyph: '', kind: 'x' },
-	dreamed: { label: 'Dreamed', color: '#c084fc', glyph: '', kind: 'star' },
-	reconsolidated: { label: 'Reconsolidated', color: '#ec4899', glyph: '', kind: 'circle-arrow' }
+	suppressed: { label: 'Suppressed', color: '#FF3B30', glyph: '', kind: 'x' },
+	dreamed: { label: 'Dreamed', color: '#29F2A9', glyph: '', kind: 'star' },
+	reconsolidated: { label: 'Reconsolidated', color: '#1BD6FF', glyph: '', kind: 'circle-arrow' }
 };
 
 export const VISIBLE_LIMIT = 15;
@@ -101,10 +101,9 @@ export function makeRand(initialSeed: number): () => number {
 }
 
 /**
- * Deterministic mock audit-trail generator. Same `memoryId` + `nowMs`
- * ALWAYS yields the same event sequence (critical for snapshot stability
- * and for tests). An empty `memoryId` yields no events — the audit trail
- * panel should never invent history for a non-existent memory.
+ * TEST-ONLY deterministic mock. Same `memoryId` + `nowMs` ALWAYS yields
+ * the same event sequence. Shipping UI uses `api.memoryAudit`. An empty
+ * `memoryId` yields no events — never invent history for a missing memory.
  *
  * `countOverride` lets tests force a specific number of events (e.g.
  * to cross the 15-event visibility threshold, which the default range

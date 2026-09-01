@@ -8,6 +8,11 @@
 	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
 	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
 	import { layoutGalaxy, type FieldDatum } from '$lib/observatory/field/cell-layout';
+	import { eventFeed } from '$stores/websocket';
+	import { shouldRefreshMemories } from '$lib/observatory/route-event-pulse';
+	import MemoryAuditTrail from '$lib/components/MemoryAuditTrail.svelte';
+	import MemoryStateChip from '$lib/components/MemoryStateChip.svelte';
+	import MemoryStateLegend from '$lib/components/MemoryStateLegend.svelte';
 
 	type MemoryTextItem = TextLayerItem & { memoryId?: string };
 
@@ -68,6 +73,11 @@
 			}
 			selectedMemoryId = wanted;
 		});
+		const unsub = eventFeed.subscribe((events) => {
+			const head = events[0];
+			if (head && shouldRefreshMemories(head)) void loadMemories();
+		});
+		return unsub;
 	});
 
 	onDestroy(() => {
@@ -126,9 +136,12 @@
 		loading = true;
 		error = null;
 		try {
-			const res = await api.memories.list({ limit: String(MEMORY_LIMIT) });
+			const [res, stats] = await Promise.all([
+				api.memories.list({ limit: String(MEMORY_LIMIT) }),
+				api.stats().catch(() => null)
+			]);
 			memories = res.memories;
-			total = res.total;
+			total = stats?.totalMemories ?? res.total;
 		} catch (err) {
 			memories = [];
 			total = 0;
@@ -432,6 +445,7 @@
 						>
 							<span class="memory-dot" style={`--strength:${Math.round(memory.retentionStrength * 100)}%`}></span>
 							<span class="memory-copy"><strong>{memory.content}</strong><small>{memory.id.slice(0, 8)} · {Math.round(memory.retentionStrength * 100)}% retention</small></span>
+							<MemoryStateChip retention={memory.retentionStrength} compact />
 						</button>
 					{/each}
 				</div>
@@ -444,6 +458,7 @@
 				<h2>{selectedMemory.content}</h2>
 				<div class="metric-row"><span>Retention</span><strong>{Math.round(selectedMemory.retentionStrength * 100)}%</strong></div>
 				<div class="metric-row"><span>Retrieval strength</span><strong>{Math.round((selectedMemory.retrievalStrength ?? 0) * 100)}%</strong></div>
+				<div class="metric-row"><span>Accessibility</span><MemoryStateChip retention={selectedMemory.retentionStrength} /></div>
 				<div class="tags">{#each selectedMemory.tags as tag}<span>{tag}</span>{/each}</div>
 				<code>{selectedMemory.id}</code>
 				<div class="action-row">
@@ -453,7 +468,12 @@
 						<button type="button" class="danger" onclick={suppressSelected}>Suppress from retrieval</button>
 					{/if}
 				</div>
-				<p class="inspector-note">Managing a memory is explicit. This does not rewrite its content.</p>
+				<p class="inspector-note">Managing a memory is explicit. This does not rewrite its content. State chips are retention-derived until the backend exposes the true accessibility field.</p>
+				<div class="sources">
+					<p class="eyebrow">SOURCES</p>
+					<MemoryAuditTrail memoryId={selectedMemory.id} />
+				</div>
+				<div class="legend-slot"><MemoryStateLegend /></div>
 			{:else}
 				<div class="empty-inspector"><p class="eyebrow">FIELD IS LIVE</p><h2>Select a memory to inspect its state.</h2><p>The ambient field reacts to real retention and retrieval strength. The details stay readable here.</p></div>
 			{/if}
@@ -467,6 +487,6 @@
 	.library-grid { display:grid; grid-template-columns:minmax(0,1.28fr) minmax(300px,.72fr); gap:1rem; pointer-events:auto; } .glass-panel { flex-direction:column; border:1px solid rgba(124,198,187,.2); border-radius:1rem; background:linear-gradient(135deg,rgba(9,26,29,.9),rgba(5,14,16,.82)); backdrop-filter:blur(12px); box-shadow:0 18px 70px rgba(0,0,0,.24); }
 	.memory-list { min-height:38rem; padding:1rem; } .list-tools label { display:block; color:#b8d0cc; font-size:.75rem; font-weight:700; } .list-tools input { width:100%; box-sizing:border-box; margin-top:.45rem; border:1px solid rgba(110,204,191,.28); border-radius:.65rem; background:rgba(0,0,0,.22); padding:.75rem .8rem; color:#effefb; outline:none; } .list-tools input:focus { border-color:#61e4d0; box-shadow:0 0 0 3px rgba(80,228,208,.12); }
 	.memory-rows { flex-direction:column; gap:.45rem; margin-top:.9rem; overflow:auto; max-height:34rem; } .memory-rows button { display:flex; gap:.7rem; width:100%; border:1px solid transparent; border-radius:.7rem; background:rgba(255,255,255,.02); padding:.8rem; color:inherit; text-align:left; cursor:pointer; } .memory-rows button:hover,.memory-rows button.active { border-color:rgba(83,231,209,.48); background:rgba(0,223,195,.09); } .memory-dot { flex:0 0 .55rem; height:.55rem; margin-top:.25rem; border-radius:50%; background:#4ee3cd; box-shadow:0 0 calc(var(--strength) / 6) #4ee3cd; } .memory-copy { min-width:0; } .memory-copy strong { display:block; overflow:hidden; color:#ddf2ee; font-size:.86rem; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; } .memory-copy small { display:block; margin-top:.25rem; color:#82a39e; font: .66rem ui-monospace,monospace; } .state-line { padding:2rem .6rem; color:#94b8b1; }.state-line.error{color:#ff9b91}
-	.inspector { min-height:25rem; padding:1.35rem; align-self:start; } .inspector h2,.empty-inspector h2 { margin:.75rem 0 1rem; color:#f1fffc; font-size:1.15rem; line-height:1.45; } .metric-row { display:flex; justify-content:space-between; border-top:1px solid rgba(137,190,183,.15); padding:.7rem 0; color:#92b3ae; font-size:.8rem; } .metric-row strong { color:#77e7d6; }.tags { display:flex; flex-wrap:wrap; gap:.35rem; margin:.75rem 0; }.tags span { border:1px solid rgba(108,182,171,.24); border-radius:99px; padding:.25rem .45rem; color:#accbc6; font-size:.67rem;}.inspector code{display:block;color:#73938e;font-size:.66rem;overflow-wrap:anywhere}.action-row{margin-top:1.2rem}.action-row button{border:0;border-radius:.6rem;padding:.65rem .8rem;color:#effffd;font-weight:700;cursor:pointer}.danger{background:rgba(217,74,63,.78)}.secondary{background:rgba(0,205,177,.75)}.inspector-note{margin-top:.8rem;color:#8aa9a5;font-size:.74rem;line-height:1.45}.empty-inspector{margin:auto 0}.empty-inspector p:last-child{font-size:.83rem}
+	.inspector { min-height:25rem; padding:1.35rem; align-self:start; } .inspector h2,.empty-inspector h2 { margin:.75rem 0 1rem; color:#f1fffc; font-size:1.15rem; line-height:1.45; } .metric-row { display:flex; justify-content:space-between; border-top:1px solid rgba(137,190,183,.15); padding:.7rem 0; color:#92b3ae; font-size:.8rem; } .metric-row strong { color:#77e7d6; }.tags { display:flex; flex-wrap:wrap; gap:.35rem; margin:.75rem 0; }.tags span { border:1px solid rgba(108,182,171,.24); border-radius:99px; padding:.25rem .45rem; color:#accbc6; font-size:.67rem;}.inspector code{display:block;color:#73938e;font-size:.66rem;overflow-wrap:anywhere}.action-row{margin-top:1.2rem}.action-row button{border:0;border-radius:.6rem;padding:.65rem .8rem;color:#effffd;font-weight:700;cursor:pointer}.danger{background:rgba(217,74,63,.78)}.secondary{background:rgba(0,205,177,.75)}.inspector-note{margin-top:.8rem;color:#8aa9a5;font-size:.74rem;line-height:1.45}.empty-inspector{margin:auto 0}.empty-inspector p:last-child{font-size:.83rem}.sources{margin-top:1.2rem}.legend-slot{margin-top:1rem}
 	@media(max-width:760px){.library-head,.library-grid{grid-template-columns:1fr;display:grid}.library-stat{border-left:0;border-top:1px solid rgba(99,230,211,.35);padding:1rem 0 0}.memory-list{min-height:20rem}.memory-rows{max-height:22rem}}
 </style>

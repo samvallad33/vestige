@@ -7,8 +7,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use vestige_core::storage::ReceiptAttestationStatus;
 use vestige_core::{
-    REPLAY_CLAIM_BOUNDARY, Receipt, ReceiptEvidence, ReplayPrivacyState,
-    SYNAPTIC_CAPTURE_CLAIM_BOUNDARY, Storage,
+    BACKFILL_RECEIPT_CLAIM_BOUNDARY, REPLAY_CLAIM_BOUNDARY, Receipt, ReceiptEvidence,
+    ReplayPrivacyState, SYNAPTIC_CAPTURE_CLAIM_BOUNDARY, Storage,
 };
 
 const COUNTERFACTUAL_REPLAY_SCHEMA: &str =
@@ -93,6 +93,7 @@ fn claim_boundary_for_receipt(receipt: &Receipt) -> &'static str {
     match &receipt.evidence {
         Some(ReceiptEvidence::CounterfactualReplay { .. }) => REPLAY_CLAIM_BOUNDARY,
         Some(ReceiptEvidence::SynapticCapture(_)) => SYNAPTIC_CAPTURE_CLAIM_BOUNDARY,
+        Some(ReceiptEvidence::Backfill { .. }) => BACKFILL_RECEIPT_CLAIM_BOUNDARY,
         None => LEGACY_RECEIPT_CLAIM_BOUNDARY,
     }
 }

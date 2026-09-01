@@ -125,7 +125,7 @@
 	}
 	.r-id {
 		font-size: 0.78rem;
-		color: var(--color-synapse-glow, #818cf8);
+		color: var(--color-synapse-glow, #22c7de);
 		word-break: break-all;
 	}
 	.r-risk {
@@ -209,7 +209,7 @@
 		border-radius: 9px;
 		border: 1px solid color-mix(in oklab, var(--color-synapse) 40%, transparent);
 		background: color-mix(in oklab, var(--color-synapse) 12%, transparent);
-		color: var(--color-synapse-glow, #818cf8);
+		color: var(--color-synapse-glow, #22c7de);
 		cursor: pointer;
 		transition: all 0.18s ease;
 	}

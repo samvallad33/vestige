@@ -305,6 +305,20 @@ export type TraceDetail = {
 	events: TraceEvent[];
 };
 
+export type ReceiptEvidence =
+	| {
+			kind: 'synaptic_capture';
+			predicate: Record<string, unknown>;
+	  }
+	| {
+			kind: 'counterfactual_replay';
+			predicate: Record<string, unknown>;
+	  }
+	| {
+			kind: 'backfill';
+			predicate: BackfillEvidence;
+	  };
+
 export type Receipt = {
 	receipt_id: string;
 	retrieved: string[];
@@ -313,7 +327,9 @@ export type Receipt = {
 	trust_floor: number;
 	decay_risk: 'low' | 'medium' | 'high';
 	mutations: { id: string; kind: string; note?: string }[];
-	backfill?: BackfillEvidence;
+	/** Typed proof payload. Backfill lives here as kind:'backfill' — never as a
+	 * top-level `backfill` field (removed in v2.6 typed-evidence migration). */
+	evidence?: ReceiptEvidence | null;
 };
 
 export type BackfillCandidate = {
@@ -324,9 +340,12 @@ export type BackfillCandidate = {
 	similarity_rank: number | null;
 	backfill_score: number;
 	promoted: boolean;
+	candidate_edge_persisted?: boolean;
 };
 
 export type BackfillEvidence = {
+	schema: string;
+	schema_version: number;
 	failure_id: string;
 	failure_preview: string;
 	scanned: number;
@@ -337,7 +356,17 @@ export type BackfillEvidence = {
 	 * route at all; it may never fill gaps with graph topology. */
 	path_ids?: string[];
 	candidates: BackfillCandidate[];
+	claim_boundary: string;
 };
+
+/** Fail-closed extractor: only complete receipt-authored Backfill evidence. */
+export function receiptBackfill(receipt: Receipt | null | undefined): BackfillEvidence | null {
+	const evidence = receipt?.evidence;
+	if (!evidence || evidence.kind !== 'backfill') return null;
+	const path = evidence.predicate.path_ids;
+	if (!path || path.length < 2) return null;
+	return evidence.predicate;
+}
 
 export type BackfillResponse = {
 	triggered: boolean;

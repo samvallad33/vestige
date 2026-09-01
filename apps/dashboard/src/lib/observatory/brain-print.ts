@@ -453,5 +453,191 @@ export function printPermalink(currentHref: string, demo: string, printId: strin
 	url.searchParams.delete('frame');
 	url.searchParams.delete('capture');
 	url.searchParams.delete('receipt');
+	url.searchParams.delete('brain');
 	return url.toString();
+}
+
+/**
+ * Compact structure-only `?brain=` payload. JSON→base64url of the quantized
+ * vector + extra type lanes. A receiver rebuilds the SAME print + synthetic
+ * field with ZERO backend round-trips and ZERO memory text.
+ */
+export function encodeBrainParam(shape: BrainShape): string {
+	const vector = encodeShapeVector(shape);
+	const types = typeMap(shape.byType);
+	const extras: Record<string, number> = {};
+	for (const [key, count] of types) {
+		if (!(TYPE_LANES as readonly string[]).includes(key) && count > 0) extras[key] = count;
+	}
+	const json = JSON.stringify({ v: vector, e: extras });
+	return `v1.${btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')}`;
+}
+
+export function decodeBrainParam(raw: string): BrainShape | null {
+	const m = /^v1\.([A-Za-z0-9_-]+)$/.exec(raw.trim());
+	if (!m) return null;
+	try {
+		const b64 = m[1]!.replace(/-/g, '+').replace(/_/g, '/');
+		const pad = b64.length % 4 === 0 ? '' : '='.repeat(4 - (b64.length % 4));
+		const parsed = JSON.parse(atob(b64 + pad)) as { v?: number[]; e?: Record<string, number> };
+		if (!Array.isArray(parsed.v) || parsed.v.length < 19) return null;
+		const shape = shapeFromVector(parsed.v.map((n) => intLane(Number(n))));
+		if (parsed.e && typeof parsed.e === 'object') {
+			for (const [key, count] of Object.entries(parsed.e)) {
+				const slug = slugType(key);
+				if (!slug) continue;
+				shape.byType[slug] = intLane(count);
+			}
+		}
+		return shape;
+	} catch {
+		return null;
+	}
+}
+
+/** Rebuild a BrainShape from the quantized vector lanes (no extras). */
+export function shapeFromVector(vector: number[]): BrainShape {
+	const v = vector.length >= 19 ? vector : [...vector, ...Array(19 - vector.length).fill(0)];
+	const byType: Record<string, number> = {};
+	TYPE_LANES.forEach((lane, i) => {
+		const n = intLane(v[9 + i] ?? 0);
+		if (n > 0) byType[lane] = n;
+	});
+	const retentionBuckets = RETENTION_RANGES.map((range, i) => ({
+		range,
+		count: intLane(v[17 + i] ?? 0)
+	}));
+	return {
+		totalMemories: intLane(v[1] ?? 0),
+		dueForReview: intLane(v[2] ?? 0),
+		averageRetention: intLane(v[3] ?? 0) / 1000,
+		embeddingCoverage: intLane(v[4] ?? 0) / 10,
+		endangeredCount: intLane(v[5] ?? 0),
+		byType,
+		retentionBuckets,
+		nodeCount: intLane(v[6] ?? 0),
+		edgeCount: intLane(v[7] ?? 0)
+	};
+}
+
+/**
+ * Content-free synthetic graph from a shape — structure only. Labels are
+ * type·index tokens; ids are deterministic syn-<printId>-N. Same shape +
+ * print ⇒ identical topology for offline `?brain=` receivers.
+ */
+export function synthesizeStructureGraph(shape: BrainShape, printId: string): import('$types').GraphResponse {
+	const targetNodes = Math.min(200, Math.max(0, intLane(shape.nodeCount) || intLane(shape.totalMemories)));
+	const types = typeMap(shape.byType);
+	const present = [...types.entries()].filter(([, n]) => n > 0);
+	const typeTotal = present.reduce((s, [, n]) => s + n, 0) || 1;
+	const buckets = [...bucketMap(shape.retentionBuckets).entries()];
+	const bucketTotal = buckets.reduce((s, [, n]) => s + n, 0) || 1;
+
+	const nodes: import('$types').GraphNode[] = [];
+	for (let i = 0; i < targetNodes; i++) {
+		// Pick type by proportional walk
+		let tRoll = ((i * 2654435761) >>> 0) % typeTotal;
+		let type = present[0]?.[0] ?? 'note';
+		for (const [key, n] of present) {
+			tRoll -= n;
+			if (tRoll < 0) {
+				type = key;
+				break;
+			}
+		}
+		let bRoll = ((i * 1597334677) >>> 0) % bucketTotal;
+		let retention = 0.55;
+		for (const [range, n] of buckets) {
+			bRoll -= n;
+			if (bRoll < 0) {
+				const m = /^(\d+)\s*-\s*(\d+)/.exec(range);
+				const lo = m ? Number(m[1]) : 50;
+				const hi = m ? Number(m[2]) : 60;
+				retention = (lo + hi) / 200;
+				break;
+			}
+		}
+		const id = `syn-${printId}-${i.toString(16).padStart(3, '0')}`;
+		nodes.push({
+			id,
+			label: `${type}·${(i + 1).toString().padStart(3, '0')}`,
+			type,
+			retention,
+			tags: [],
+			createdAt: '1970-01-01T00:00:00.000Z',
+			updatedAt: '1970-01-01T00:00:00.000Z',
+			isCenter: i === 0
+		});
+	}
+
+	const density = targetNodes <= 0 ? 0 : intLane(shape.edgeCount) / Math.max(1, intLane(shape.nodeCount) || targetNodes);
+	const targetEdges = Math.min(
+		targetNodes * 12,
+		Math.round(targetNodes * Math.max(0.2, Math.min(8, density)))
+	);
+	const edges: import('$types').GraphEdge[] = [];
+	const seen = new Set<string>();
+	for (let e = 0; e < targetEdges && nodes.length > 1; e++) {
+		const a = ((e * 1103515245 + 12345) >>> 0) % nodes.length;
+		let b = ((e * 214013 + 2531011) >>> 0) % nodes.length;
+		if (b === a) b = (b + 1) % nodes.length;
+		const source = nodes[a]!.id;
+		const target = nodes[b]!.id;
+		const key = `${source}:${target}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		edges.push({ source, target, weight: 0.35 + ((e % 65) / 100), type: 'assoc' });
+	}
+
+	return {
+		nodes,
+		edges,
+		center_id: nodes[0]?.id ?? '',
+		depth: 3,
+		nodeCount: nodes.length,
+		edgeCount: edges.length
+	};
+}
+
+/** Permalink that carries the full structure vector (Task C). */
+export function brainPermalink(currentHref: string, demo: string, shape: BrainShape): string {
+	const print = computeBrainPrint(shape);
+	const url = new URL(currentHref);
+	url.searchParams.set('demo', demo);
+	url.searchParams.set('seed', print.printId);
+	url.searchParams.set('brain', encodeBrainParam(shape));
+	url.searchParams.delete('frame');
+	url.searchParams.delete('capture');
+	url.searchParams.delete('receipt');
+	return url.toString();
+}
+
+export async function captureBrainBundle(topology?: BrainTopology): Promise<{
+	shape: BrainShape;
+	print: BrainPrint;
+	archiveDays: number;
+}> {
+	const [stats, retention, graph] = await Promise.all([
+		api.stats(),
+		api.retentionDistribution(),
+		topology
+			? Promise.resolve(null)
+			: api.graph({ max_nodes: 200, depth: 3, sort: 'connected' }).catch(() => null)
+	]);
+	const topo =
+		topology ??
+		(graph ? { nodeCount: graph.nodeCount, edgeCount: graph.edgeCount } : undefined);
+	const shape = shapeFromStore({ stats, retention, topology: topo });
+	const print = computeBrainPrint(shape);
+	const oldest = stats.oldestMemory;
+	const newest = stats.newestMemory;
+	let archiveDays = 0;
+	if (oldest && newest) {
+		const a = Date.parse(oldest);
+		const b = Date.parse(newest);
+		if (Number.isFinite(a) && Number.isFinite(b)) {
+			archiveDays = Math.max(0, Math.round(Math.abs(b - a) / 86_400_000));
+		}
+	}
+	return { shape, print, archiveDays };
 }

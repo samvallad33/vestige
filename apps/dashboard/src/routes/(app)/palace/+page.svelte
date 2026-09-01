@@ -5,6 +5,7 @@
 	import ObservatoryCanvas from '$lib/components/ObservatoryCanvas.svelte';
 	import type { ObservatoryEngine } from '$lib/observatory/engine';
 	import { PalaceBrainPass } from '$lib/observatory/palace-brain-pass';
+	import { buildOrganLabels } from '$lib/observatory/palace-labels';
 	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
 	import {
 		BITEMPORAL,
@@ -39,6 +40,7 @@
 	let clickPoint = { x: 0, y: 0 };
 	let navigationStarted = false;
 	let reducedMotion = false;
+	let lastLabelFrame = -1;
 
 	let freezeFrame = $derived.by(() => {
 		const raw = $page.url.searchParams.get('frame');
@@ -165,7 +167,23 @@
 	}
 
 	function refreshText() {
-		textPass?.setText(buildText());
+		const hud = buildText();
+		const labels = pass
+			? buildOrganLabels(pass.getScreenPositions(), {
+					hoveredHref,
+					dimUnhovered: Boolean(hoveredHref),
+					aspect:
+						(engineRef?.params[6] || 0) / Math.max(1, engineRef?.params[7] || 1)
+				})
+			: [];
+		textPass?.setText([...hud, ...labels]);
+	}
+
+	function handleFrame(frame: number) {
+		if (frame === lastLabelFrame) return;
+		if (frame % 2 !== 0) return;
+		lastLabelFrame = frame;
+		refreshText();
 	}
 
 	function pointerToNdc(e: PointerEvent): { x: number; y: number } | null {
@@ -276,6 +294,7 @@
 		demo="recall-path"
 		seed="vestige-palace-swarm-v2"
 		{freezeFrame}
+		onframe={handleFrame}
 		onready={handleReady}
 	/>
 </div>

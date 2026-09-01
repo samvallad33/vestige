@@ -11,26 +11,35 @@
 	import { LivingFieldPass } from '$lib/observatory/field/living-field-pass';
 	import { layoutGalaxy, type FieldDatum } from '$lib/observatory/field/cell-layout';
 	import { saliencePalette, salienceEnergy } from '$lib/observatory/cognitive-palette';
-	import { api, type Receipt } from '$stores/api';
+	import { api, receiptBackfill, type Receipt } from '$stores/api';
 	import {
 		exportLoopMp4,
 		downloadClip,
-		loopExportSupported
+		loopExportSupported,
+		receiptExportFilename
 	} from '$lib/observatory/export/loop-export';
 	import {
-		captureBrainPrint,
+		captureBrainBundle,
 		isBrainPrintSeed,
 		loopExportFilename,
 		printPermalink,
-		type BrainPrint
+		brainPermalink,
+		decodeBrainParam,
+		encodeBrainParam,
+		synthesizeStructureGraph,
+		computeBrainPrint,
+		type BrainPrint,
+		type BrainShape
 	} from '$lib/observatory/brain-print';
 	import BrainPrintPanel from '$lib/observatory/overlays/BrainPrintPanel.svelte';
+	import { renderWrappedCard, downloadBlob } from '$lib/observatory/export/wrapped-card';
 	import type { GraphNode, GraphResponse } from '$types';
 
 	type ObservatoryTextItem = TextLayerItem & { action?: 'demo' | 'exit'; demo?: DemoMode };
 
 	const params = browser ? new URLSearchParams(window.location.search) : new URLSearchParams();
 	const receiptParam = params.get('receipt');
+	const brainParam = params.get('brain');
 	const demoParam = receiptParam ? 'recall-path' : (params.get('demo') ?? 'recall-path');
 	let demo = $state<DemoMode>(isDemoMode(demoParam) ? demoParam : 'recall-path');
 	let seedValue = $state(params.get('seed') ?? 'vestige-observatory-v1');
@@ -199,7 +208,7 @@
 	}
 
 	const backfillEvidence = $derived.by(() => {
-		const proof = receipt?.backfill;
+		const proof = receiptBackfill(receipt);
 		if (!proof) return undefined;
 		return {
 			failureId: proof.failure_id,
@@ -214,31 +223,43 @@
 		};
 	});
 
-	const receiptIds = $derived(
-		receipt
-			? [
-					...new Set([
-						...receipt.retrieved,
-						...receipt.suppressed.map((entry) => entry.id),
-						...(receipt.backfill
-							? [
-									receipt.backfill.failure_id,
-									...(receipt.backfill.path_ids ?? []),
-									...receipt.backfill.candidates.map((candidate) => candidate.memory_id)
-								]
-							: [])
-					])
-				]
-			: []
-	);
+	const receiptIds = $derived.by(() => {
+		if (!receipt) return [] as string[];
+		const proof = receiptBackfill(receipt);
+		return [
+			...new Set([
+				...receipt.retrieved,
+				...receipt.suppressed.map((entry) => entry.id),
+				...(proof
+					? [
+							proof.failure_id,
+							...(proof.path_ids ?? []),
+							...proof.candidates.map((candidate) => candidate.memory_id)
+						]
+					: [])
+			])
+		];
+	});
 
 	async function loadReceiptThenGraph() {
 		if (receiptParam) {
 			try {
 				receipt = await api.receipts.get(receiptParam);
-				if (receipt.backfill) demo = 'salience-rescue';
+				if (receiptBackfill(receipt)) demo = 'salience-rescue';
 			} catch (err) {
 				receiptError = err instanceof Error ? err.message : 'Receipt unavailable';
+			}
+		} else if (brainParam) {
+			const shape = decodeBrainParam(brainParam);
+			if (shape) {
+				structureShape = shape;
+				const print = computeBrainPrint(shape);
+				brainPrint = print;
+				seedValue = print.seed;
+				graphData = synthesizeStructureGraph(shape, print.printId);
+				structureGraph = graphData;
+				loading = false;
+				return;
 			}
 		}
 		await loadGraph();
@@ -650,7 +671,10 @@
 				engine,
 				onProgress: (p) => (exportProgress = p)
 			});
-			downloadClip(clip, loopExportFilename(seedValue, demo));
+			const name = receipt
+				? receiptExportFilename(receipt.receipt_id, demo)
+				: loopExportFilename(seedValue, demo);
+			downloadClip(clip, name);
 		} catch (e) {
 			exportError = e instanceof Error ? e.message : 'Export failed';
 		} finally {
@@ -698,17 +722,21 @@
 	// ?seed=vb1-<8 hex> and remounts the field on that seed. Permalink is
 	// the URL; the clip name follows the print when one is active.
 	let brainPrint = $state<BrainPrint | null>(null);
+	let structureShape = $state<BrainShape | null>(null);
 	let printing = $state(false);
+	let wrapping = $state(false);
 	let printError = $state<string | null>(null);
 	let permalinkCopied = $state(false);
+	let structureGraph = $state<GraphResponse | null>(null);
 	const activePrintId = $derived(
 		brainPrint?.printId ?? (isBrainPrintSeed(seedValue) ? seedValue : null)
 	);
 
-	function applyPrintSeed(printId: string) {
+	function applyPrintSeed(printId: string, shape?: BrainShape | null) {
 		seedValue = printId;
 		const url = new URL(window.location.href);
 		url.searchParams.set('seed', printId);
+		if (shape) url.searchParams.set('brain', encodeBrainParam(shape));
 		history.replaceState(history.state, '', url);
 	}
 
@@ -722,11 +750,12 @@
 				receipt || !graphData
 					? undefined
 					: { nodeCount: graphData.nodeCount, edgeCount: graphData.edgeCount };
-			const print = await captureBrainPrint(topology);
-			brainPrint = print;
-			applyPrintSeed(print.printId);
+			const bundle = await captureBrainBundle(topology);
+			brainPrint = bundle.print;
+			structureShape = bundle.shape;
+			applyPrintSeed(bundle.print.printId, bundle.shape);
 			console.info(
-				`[brain-print] ${print.printId} traits=${print.traits.map((t) => t.id).join(',')} vector=${print.vector.length}`
+				`[brain-print] ${bundle.print.printId} traits=${bundle.print.traits.map((t) => t.id).join(',')} vector=${bundle.print.vector.length}`
 			);
 		} catch (e) {
 			printError = e instanceof Error ? e.message : 'Brain print failed';
@@ -738,13 +767,46 @@
 	async function copyPrintPermalink() {
 		const id = activePrintId;
 		if (!id) return;
-		const href = printPermalink(window.location.href, demo, id);
+		const href = structureShape
+			? brainPermalink(window.location.href, demo, structureShape)
+			: printPermalink(window.location.href, demo, id);
 		try {
 			await navigator.clipboard.writeText(href);
 			permalinkCopied = true;
 			console.info(`[brain-print] permalink ${href}`);
 		} catch {
 			printError = 'Clipboard unavailable — copy the URL from the address bar.';
+		}
+	}
+
+	async function startWrappedCard() {
+		if (wrapping) return;
+		wrapping = true;
+		printError = null;
+		try {
+			const topology =
+				receipt || !graphData
+					? undefined
+					: { nodeCount: graphData.nodeCount, edgeCount: graphData.edgeCount };
+			const bundle = structureShape && brainPrint
+				? { shape: structureShape, print: brainPrint, archiveDays: 0 }
+				: await captureBrainBundle(topology);
+			if (!structureShape) {
+				structureShape = bundle.shape;
+				brainPrint = bundle.print;
+				applyPrintSeed(bundle.print.printId, bundle.shape);
+			}
+			const card = await renderWrappedCard({
+				shape: bundle.shape,
+				print: bundle.print,
+				archiveDays: bundle.archiveDays,
+				fieldBitmap: engineRef?.canvasElement ?? null
+			});
+			downloadBlob(card.blob, card.filename);
+		} catch (e) {
+			printError = e instanceof Error ? e.message : 'Memory report failed';
+		} finally {
+			wrapping = false;
 		}
 	}
 
@@ -819,7 +881,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div bind:this={hostEl} class="fixed inset-0 bg-[#020307]" onpointerdown={handlePointerDown} onpointermove={handlePointerMove} onpointerleave={handlePointerLeave}>
-	{#key `${demo}:${seedValue}:${receipt?.receipt_id ?? 'all'}`}
+	{#key `${demo}:${seedValue}:${receipt?.receipt_id ?? 'all'}:${structureGraph ? 'brain' : 'live'}`}
 		<ObservatoryStage
 			{demo}
 			seed={seedValue}
@@ -827,7 +889,8 @@
 			capture={captureMode}
 			showSwitcher={false}
 			chrome="none"
-			live
+			live={!structureGraph}
+			graphOverride={structureGraph}
 			focusIds={receiptIds}
 			{backfillEvidence}
 			onready={handleReady}
@@ -844,10 +907,10 @@
 -->
 <div class="obs-ui">
 	<header class="obs-head">
-		<h1 class="obs-title">{receipt?.backfill ? 'Backfill Replay' : receipt ? 'Memory Replay' : 'Cognitive Observatory'}</h1>
+		<h1 class="obs-title">{backfillEvidence ? 'Backfill Replay' : receipt ? 'Memory Replay' : 'Cognitive Observatory'}</h1>
 		<p class="obs-sub">
-			{#if receipt?.backfill}
-				This field replays only the recorded Backfill candidate evidence in receipt <code>{receipt.receipt_id}</code>.
+			{#if backfillEvidence}
+				This field replays only the recorded Backfill candidate evidence in receipt <code>{receipt?.receipt_id}</code>.
 			{:else if receipt}
 				This field contains only memories named by receipt <code>{receipt.receipt_id}</code>.
 			{:else}
@@ -900,10 +963,13 @@
 			{printing}
 			error={printError}
 			copied={permalinkCopied}
-			disabled={loading || exporting}
+			disabled={loading || exporting || wrapping}
 			onprint={startBrainPrint}
 			oncopy={copyPrintPermalink}
 		/>
+		<button class="obs-exit" onclick={startWrappedCard} disabled={wrapping || exporting} type="button">
+			{wrapping ? 'Rendering report…' : 'Memory report PNG'}
+		</button>
 		<button class="obs-exit" onclick={startExport} disabled={exporting} type="button">
 			{exporting
 				? exportProgress
@@ -911,7 +977,9 @@
 						? 'Sealing clip…'
 						: `Rendering ${exportProgress.done}/${exportProgress.total}`
 					: 'Preparing…'
-				: 'Export loop ↓'}
+				: receipt
+					? 'Export receipt replay ↓'
+					: 'Export loop ↓'}
 		</button>
 		{#if exportError}
 			<span class="obs-export-error">{exportError}</span>
@@ -936,6 +1004,7 @@
 				chrome="none"
 				embedded
 				maxDpr={1}
+				graphOverride={structureGraph}
 				focusIds={receiptIds}
 				{backfillEvidence}
 				onready={handleExportEngine}

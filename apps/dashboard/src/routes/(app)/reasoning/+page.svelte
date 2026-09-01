@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$stores/api';
+	import { api, type Receipt } from '$stores/api';
+	import { base } from '$app/paths';
 	import PageHeader from '$components/PageHeader.svelte';
 	import Icon from '$components/Icon.svelte';
 	import AmbientField from '$components/AmbientField.svelte';
@@ -20,10 +21,11 @@
 	let receiptId = $state<string | null>(null);
 	let input: HTMLInputElement | null = $state(null);
 
+	let receiptSeal = $state<Receipt | null>(null);
 	const EXAMPLES = ['refund compliance exception', 'What port does the dev server use?', 'How does FSRS-6 trust scoring work?'];
 	const confidence = $derived(Math.round((scene?.recommended?.trust_score ?? 0) * 100));
-	const receiptUrl = $derived(receiptId ? `/dashboard/observatory?receipt=${encodeURIComponent(receiptId)}` : null);
-	const blackBoxUrl = $derived(runId ? `/dashboard/blackbox?run=${encodeURIComponent(runId)}` : '/dashboard/blackbox');
+	const receiptUrl = $derived(receiptId ? `${base}/observatory?receipt=${encodeURIComponent(receiptId)}` : null);
+	const blackBoxUrl = $derived(runId ? `${base}/blackbox?run=${encodeURIComponent(runId)}` : `${base}/blackbox`);
 
 	function freshRunId() {
 		return `run_replay_${Date.now().toString(36)}`;
@@ -51,6 +53,14 @@
 			scene = normalizeDeepReferenceResponse(raw);
 			runId = stringAt(raw, 'runId', 'run_id') ?? nextRunId;
 			receiptId = stringAt(raw, 'receiptId', 'receipt_id');
+			receiptSeal = null;
+			if (receiptId) {
+				try {
+					receiptSeal = await api.receipts.get(receiptId);
+				} catch {
+					receiptSeal = null;
+				}
+			}
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : 'Unable to retrieve the supporting memory.';
 		} finally {
@@ -69,6 +79,7 @@
 		error = null;
 		runId = null;
 		receiptId = null;
+		receiptSeal = null;
 		input?.focus();
 	}
 
@@ -183,6 +194,12 @@
 					{#if receiptUrl}<a class="secondary" href={receiptUrl}>Open exact receipt <span>→</span></a>{/if}
 					<button class="quiet" type="button" onclick={reset}>New question</button>
 				</div>
+				{#if receiptSeal}
+					<div class="receipt-seal">
+						<strong>Receipt seal</strong>
+						<span>{receiptSeal.retrieved.length} retrieved · {receiptSeal.suppressed.length} suppressed · trust floor {receiptSeal.trust_floor}</span>
+					</div>
+				{/if}
 				{#if runId}<code class="run-id">RUN {runId}</code>{/if}
 			</section>
 
@@ -207,7 +224,7 @@
 						<article class:primary={evidence.role === 'primary'} class:conflict={evidence.role === 'contradicting'}>
 							<div class="evidence-top"><span>{labelFor(evidence)}</span><b>{Math.round(evidence.trust * 100)}% trust</b></div>
 							<p>{evidence.preview || 'Memory content is unavailable in this response.'}</p>
-							<code>{evidence.id}</code>
+							<a href={`${base}/memories?memory=${encodeURIComponent(evidence.id)}`}><code>{evidence.id}</code></a>
 						</article>
 					{/each}
 				</div>
@@ -252,7 +269,7 @@
 	.examples { display: flex; flex-wrap: wrap; gap: .45rem; align-items: center; margin-top: .8rem; color: #7d9c99; font-size: .72rem; } .examples button { border: 1px solid rgba(134, 184, 177, .22); border-radius: 99px; background: transparent; padding: .35rem .6rem; color: #b9d5d1; font-size: .72rem; } .examples button:hover { border-color: #54ddc9; color: #effffd; }
 	.proof-strip { display: grid; grid-template-columns: repeat(4, 1fr); margin: 1rem 0; overflow: hidden; border: 1px solid rgba(139, 192, 184, .16); border-radius: .9rem; background: rgba(9, 24, 26, .8); } .proof-strip > div { padding: 1rem 1.15rem; border-right: 1px solid rgba(139, 192, 184, .15); } .proof-strip > div:last-child { border: 0; } .proof-strip strong { display: block; color: #eafffb; font-size: 1.1rem; } .proof-strip span { display: block; margin-top: .2rem; color: #82a39f; font-size: .7rem; } .proof-strip .ready strong { color: #5be6cf; }
 	.results-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(250px, .65fr); gap: 1rem; } .decision-card, .method-card, .evidence-panel, .attribution-panel { padding: clamp(1.15rem, 2vw, 1.6rem); } .section-kicker { display: flex; align-items: center; gap: .5rem; } .decision-card h2 { max-width: 30ch; margin: 1rem 0; color: #f4fffd; font-size: clamp(1.3rem, 2.4vw, 1.85rem); line-height: 1.25; letter-spacing: -.025em; } .honesty { margin: 0; border-left: 2px solid #5ce3d0; padding-left: .85rem; color: #a8c6c1; font-size: .83rem; line-height: 1.5; }
-	.action-row { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1.3rem; } .action-row a, .quiet { border: 1px solid rgba(102, 226, 205, .38); border-radius: .6rem; background: rgba(0, 225, 195, .11); padding: .6rem .75rem; color: #75f0dc; font-size: .78rem; font-weight: 700; text-decoration: none; } .action-row .secondary, .quiet { border-color: rgba(158, 190, 186, .25); background: transparent; color: #aec9c5; } .run-id { display: block; margin-top: 1rem; color: #60817c; font-size: .66rem; overflow-wrap: anywhere; }
+	.action-row { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1.3rem; } .action-row a, .quiet { border: 1px solid rgba(102, 226, 205, .38); border-radius: .6rem; background: rgba(0, 225, 195, .11); padding: .6rem .75rem; color: #75f0dc; font-size: .78rem; font-weight: 700; text-decoration: none; } .action-row .secondary, .quiet { border-color: rgba(158, 190, 186, .25); background: transparent; color: #aec9c5; } .receipt-seal { margin-top: 1rem; display: grid; gap: .2rem; padding: .7rem .8rem; border: 1px solid rgba(34, 199, 222, .28); border-radius: .6rem; background: rgba(2, 12, 16, .7); color: #9fd9d0; font-size: .74rem; } .receipt-seal strong { color: #7ff3e6; font-size: .62rem; letter-spacing: .12em; text-transform: uppercase; } .run-id { display: block; margin-top: 1rem; color: #60817c; font-size: .66rem; overflow-wrap: anywhere; }
 	.method-card { background: linear-gradient(180deg, rgba(10, 29, 31, .96), rgba(7, 17, 19, .96)); } .method-card ol { margin: 1.2rem 0 0; padding: 0; list-style: none; } .method-card li { display: flex; gap: .7rem; margin: 1rem 0; } .method-card li > span { display: grid; place-items: center; flex: 0 0 1.55rem; height: 1.55rem; border-radius: 50%; background: rgba(0,226,196,.12); color: #60e6d2; font-size: .72rem; font-weight: 800; } .method-card strong { display: block; font-size: .85rem; } .method-card small { display: block; margin-top: .18rem; color: #87a6a2; line-height: 1.35; }
 	.evidence-panel, .attribution-panel { margin-top: 1rem; } .evidence-panel header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; } .evidence-panel h2, .attribution-panel h2 { margin: .45rem 0 0; color: #effdfa; font-size: 1.13rem; } .evidence-panel header > span { border-radius: 99px; background: rgba(103, 157, 150, .12); padding: .35rem .55rem; color: #94b9b4; font-size: .7rem; white-space: nowrap; }
 	.evidence-list { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 285px), 1fr)); } .evidence-list article { min-width: 0; border: 1px solid rgba(144, 191, 184, .17); border-radius: .75rem; background: rgba(1, 12, 13, .34); padding: 1rem; } .evidence-list article.primary { border-color: rgba(60, 225, 198, .46); box-shadow: inset 3px 0 #2ce0c4; } .evidence-list article.conflict { border-color: rgba(255, 115, 104, .42); } .evidence-top { display: flex; justify-content: space-between; gap: .5rem; color: #5ce2cf; font-size: .68rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; } .evidence-list article.conflict .evidence-top { color: #ff9c91; } .evidence-top b { color: #a3c3bf; font-weight: 600; } .evidence-list p { min-height: 3.2em; margin: .75rem 0; color: #d6e8e5; font-size: .86rem; line-height: 1.5; } .evidence-list code, .attribution-panel code { color: #6e9690; font-size: .65rem; overflow-wrap: anywhere; }

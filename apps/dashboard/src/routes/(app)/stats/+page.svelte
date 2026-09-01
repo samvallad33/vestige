@@ -10,7 +10,8 @@
 	import { layoutGalaxy, FIELD_HUE, type FieldDatum } from '$lib/observatory/field/cell-layout';
 	import { reveal } from '$lib/actions/reveal';
 	import { api } from '$stores/api';
-	import type { ConsolidationResult, HealthCheck, RetentionDistribution, SystemStats } from '$types';
+	import type { SystemStats, RetentionDistribution, HealthCheck, ConsolidationResult } from '$types';
+	import { getMemoryState } from '$lib/memory-state';
 
 	type VitalReceipt = RouteReceipt & {
 		metric: string;
@@ -35,6 +36,22 @@
 	const embeddingCoverage = $derived(stats?.embeddingCoverage ?? 0);
 	const dueForReview = $derived(stats?.dueForReview ?? 0);
 	const distribution = $derived(retention?.distribution ?? []);
+	const bands = $derived.by(() => {
+		let active = 0;
+		let dormant = 0;
+		let silent = 0;
+		let unavailable = 0;
+		for (const bucket of distribution) {
+			const m = /^(\d+)/.exec(bucket.range);
+			const lo = m ? Number(m[1]) : 0;
+			const state = getMemoryState((lo + 5) / 100);
+			if (state === 'active') active += bucket.count;
+			else if (state === 'dormant') dormant += bucket.count;
+			else if (state === 'silent') silent += bucket.count;
+			else unavailable += bucket.count;
+		}
+		return { active, dormant, silent, unavailable };
+	});
 	const maxBucketCount = $derived(Math.max(1, ...distribution.map((bucket) => bucket.count)));
 	const distributionTotal = $derived(distribution.reduce((sum, bucket) => sum + bucket.count, 0));
 	const healthLabel = $derived(health?.status ?? 'unknown');
@@ -385,9 +402,19 @@
 				<div class="mt-1 text-[10px] text-muted">{stats?.withEmbeddings.toLocaleString() ?? 0} memories searchable by meaning</div>
 			</button>
 			<button type="button" aria-pressed={selectedVitalId === 'stats:dueForReview'} onclick={() => (selectedVitalId = 'stats:dueForReview')} use:reveal={{ delay: 180, y: 12 }} class="glass rounded-xl p-5 text-left lift transition {selectedVitalId === 'stats:dueForReview' ? 'border-warning/50 bg-warning/10' : ''}">
-				<div class="text-3xl font-bold tabular-nums {dueForReview > 0 ? 'text-warning' : 'text-recall'}"><AnimatedNumber value={dueForReview} /></div>
-				<div class="mt-2 text-[11px] font-medium uppercase tracking-wider text-dim">Due for review</div>
-				<div class="mt-1 text-[10px] text-muted">Ready for the next consolidation cycle</div>
+				<div class="flex items-end justify-between gap-2">
+					<div>
+						<div class="text-3xl font-bold tabular-nums text-recall"><AnimatedNumber value={bands.active} /></div>
+						<div class="mt-2 text-[11px] font-medium uppercase tracking-wider text-dim">Active</div>
+					</div>
+					<div class="text-right">
+						<div class="text-lg font-bold tabular-nums text-warning"><AnimatedNumber value={bands.dormant} /></div>
+						<div class="text-[10px] uppercase tracking-wider text-muted">Dormant</div>
+						<div class="text-lg font-bold tabular-nums text-dim"><AnimatedNumber value={bands.silent + bands.unavailable} /></div>
+						<div class="text-[10px] uppercase tracking-wider text-muted">Silent</div>
+					</div>
+				</div>
+				<div class="mt-1 text-[10px] text-muted">Retention-derived bands · {dueForReview} due next cycle</div>
 			</button>
 		</section>
 

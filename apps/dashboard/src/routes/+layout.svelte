@@ -7,8 +7,6 @@
 	import {
 		websocket,
 		isConnected,
-		memoryCount,
-		avgRetention,
 		suppressedCount,
 		uptimeSeconds,
 		formatUptime,
@@ -109,12 +107,24 @@
 	// old hand-rolled .animate-page-in keyframe on the route content wrapper.
 	onNavigate((navigation) => {
 		if (!document.startViewTransition || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-		return new Promise((resolve) => {
-			document.startViewTransition(async () => {
-				resolve();
-				await navigation.complete;
+		// A second startViewTransition while one is running throws InvalidStateError
+		// (Safari TP / Chromium). Skip the crossfade rather than crashing the route.
+		if (document.documentElement.dataset.vt === '1') return;
+		try {
+			document.documentElement.dataset.vt = '1';
+			return new Promise<void>((resolve) => {
+				const transition = document.startViewTransition(async () => {
+					resolve();
+					await navigation.complete;
+				});
+				void transition.finished.finally(() => {
+					delete document.documentElement.dataset.vt;
+				});
 			});
-		});
+		} catch {
+			delete document.documentElement.dataset.vt;
+			return;
+		}
 	});
 
 	// ── All nav surfaces derive from the ONE canonical registry (os-routes.ts) ──
@@ -392,7 +402,7 @@
 		height: 2.6rem;
 		margin: 0 auto 0.35rem;
 		border-radius: 0.7rem;
-		background: linear-gradient(135deg, var(--dream, #818cf8), var(--synapse, #6366f1));
+		background: linear-gradient(135deg, var(--dream, #29F2A9), var(--synapse, #22C7DE));
 		color: #fff;
 		flex-shrink: 0;
 		box-shadow: 0 0 18px rgba(99, 102, 241, 0.35);

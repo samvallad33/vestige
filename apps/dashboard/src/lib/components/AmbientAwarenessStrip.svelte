@@ -37,10 +37,25 @@
 	} from './awareness-helpers';
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// 1. Retention vitals — derived straight from heartbeat stores
+	// 1. Retention vitals — heartbeat first, HTTP-seeded fallback second,
+	//    "—" third. NEVER a lying zero before the first heartbeat lands.
 	// ─────────────────────────────────────────────────────────────────────────
-	const retentionPct = $derived(Math.round(($avgRetention ?? 0) * 100));
-	const retentionHealthy = $derived(($avgRetention ?? 0) >= 0.5);
+	let statsSeed = $state<{ memories: number; retention: number } | null>(null);
+
+	async function loadStatsSeed(): Promise<void> {
+		try {
+			const s = await api.stats();
+			statsSeed = { memories: s.totalMemories, retention: s.averageRetention };
+		} catch {
+			statsSeed = null;
+		}
+	}
+
+	const liveMemoryCount = $derived($memoryCount ?? statsSeed?.memories ?? null);
+	const liveRetention = $derived($avgRetention ?? statsSeed?.retention ?? null);
+	const retentionPct = $derived(liveRetention === null ? null : Math.round(liveRetention * 100));
+	const retentionKnown = $derived(liveRetention !== null);
+	const retentionHealthy = $derived((liveRetention ?? 0) >= 0.5);
 
 	// ─────────────────────────────────────────────────────────────────────────
 	// 2. At-risk count — fetched once from /retention-distribution.
@@ -136,6 +151,7 @@
 	// (dreaming window, activity window, suppression flash) refresh smoothly.
 	// ─────────────────────────────────────────────────────────────────────────
 	onMount(() => {
+		void loadStatsSeed();
 		void loadAtRisk();
 		void loadIntentions();
 		void loadSanhedrinTelemetry();
@@ -144,6 +160,7 @@
 		}, 1000);
 		// Refresh the slow API-backed counts every 60s so they don't go stale.
 		const slowHandle = setInterval(() => {
+			void loadStatsSeed();
 			void loadAtRisk();
 			void loadIntentions();
 			void loadSanhedrinTelemetry();
@@ -165,20 +182,22 @@
 		<span class="relative inline-flex h-2 w-2 items-center justify-center">
 			<span
 				class="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75"
-				class:bg-recall={retentionHealthy}
-				class:bg-warning={!retentionHealthy}
+				class:bg-recall={retentionKnown && retentionHealthy}
+				class:bg-warning={retentionKnown && !retentionHealthy}
+				class:bg-muted={!retentionKnown}
 			></span>
 			<span
 				class="relative inline-flex h-2 w-2 rounded-full"
-				class:bg-recall={retentionHealthy}
-				class:bg-warning={!retentionHealthy}
+				class:bg-recall={retentionKnown && retentionHealthy}
+				class:bg-warning={retentionKnown && !retentionHealthy}
+				class:bg-muted={!retentionKnown}
 			></span>
 		</span>
-		<span class="text-text/80 tabular-nums">{$memoryCount}</span>
+		<span class="text-text/80 tabular-nums">{liveMemoryCount === null ? '—' : liveMemoryCount}</span>
 		<span class="text-muted">memories</span>
 		<span class="text-muted/60">·</span>
-		<span class:text-recall={retentionHealthy} class:text-warning={!retentionHealthy}>
-			{retentionPct}%
+		<span class:text-recall={retentionKnown && retentionHealthy} class:text-warning={retentionKnown && !retentionHealthy}>
+			{retentionPct === null ? '—' : `${retentionPct}%`}
 		</span>
 		<span class="text-muted">avg retention</span>
 	</div>

@@ -119,6 +119,7 @@ export class LivingFieldPass implements FramePass {
 	private membranePipeline: GPURenderPipeline | null = null;
 	private cellPipeline: GPURenderPipeline | null = null;
 	private cellCount = 0;
+	private hoverIndex = -1;
 
 	constructor(engine: ObservatoryEngine) {
 		this.engine = engine;
@@ -135,6 +136,18 @@ export class LivingFieldPass implements FramePass {
 		if (d) this.writeOpts(d); // membrane picks it up immediately
 		// cells read intensity from extra.z, so re-bake the cell buffer too
 		if (this.cells.length) this.setCells(this.cells, this.scalars);
+	}
+
+	/**
+	 * Hover is a spare-cell float + rim, driven by FieldOpts.hover_index so an
+	 * 8Hz pickAt never rewrites the cell storage buffer.
+	 */
+	setHovered(index: number): void {
+		const next = Number.isFinite(index) ? Math.trunc(index) : -1;
+		if (next === this.hoverIndex) return;
+		this.hoverIndex = next;
+		const device = this.engine.gpuDevice;
+		if (device) this.writeOpts(device);
 	}
 
 	/** Upload a fresh set of cells (a data change). Rebuilds the GPU buffer. */
@@ -162,7 +175,7 @@ export class LivingFieldPass implements FramePass {
 			entries: [
 				{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
 				{ binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
-				{ binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }
+				{ binding: 2, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }
 			]
 		});
 		this.blurBindLayout = device.createBindGroupLayout({
@@ -295,7 +308,7 @@ export class LivingFieldPass implements FramePass {
 				well.hh,
 				well.floor,
 				well.soft,
-				0
+				this.hoverIndex
 			])
 		);
 	}
@@ -477,6 +490,7 @@ export class LivingFieldPass implements FramePass {
 				bestDist = d;
 			}
 		}
+		this.setHovered(best?.index ?? -1);
 		return best;
 	}
 

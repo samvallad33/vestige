@@ -44,6 +44,8 @@
 	import { LiveBridge } from '$lib/observatory/live-bridge';
 	import { ChronoShuttlePass } from '$lib/observatory/chrono/shuttle-pass';
 	import { FossilLightTransportPass } from '$lib/observatory/chrono/radiance-cascade-pass';
+	import { CameraRigController } from '$lib/observatory/camera-rig';
+	import PickReceipt, { type PickProvenance } from '$lib/observatory/overlays/PickReceipt.svelte';
 
 	interface Props {
 		demo: DemoMode;
@@ -101,6 +103,12 @@
 		 * stay deterministic (live=false).
 		 */
 		live?: boolean;
+		/**
+		 * Offline structure field (`?brain=`). When set, skip the live graph
+		 * fetch and upload this topology instead. Labels are type·index tokens
+		 * only — zero memory text.
+		 */
+		graphOverride?: import('$types').GraphResponse | null;
 	}
 
 	let {
@@ -118,7 +126,8 @@
 		maxDpr = 2,
 		focusIds = [],
 		backfillEvidence,
-		live = false
+		live = false,
+		graphOverride = null
 	}: Props = $props();
 
 	// FOSSIL LIGHT — the memory time axis. ONE signed control in days relative
@@ -273,20 +282,67 @@
 
 	// GPU picking — screen px → NDC → NodeRenderer.pickAt (one readback/click).
 	let canvasLayerEl: HTMLDivElement | null = $state(null);
+	const cameraRig = new CameraRigController();
+	let lastPick = $state<PickProvenance | null>(null);
+	let hoverAt = 0;
+	let hoverLabel = $state('');
+
 	async function handleFieldClick(e: MouseEvent) {
-		// A rail drag ends in a click on this same layer — never turn the tail
-		// of a time-scrub into an accidental GPU pick.
+		// A rail drag OR camera orbit ends in a click on this same layer —
+		// never turn the tail of a scrub/orbit into an accidental GPU pick.
 		if (suppressNextClick) {
 			suppressNextClick = false;
 			return;
 		}
-		if (!onpick || !renderer || !canvasLayerEl) return;
+		if (!renderer || !canvasLayerEl) return;
 		const rect = canvasLayerEl.getBoundingClientRect();
 		if (rect.width === 0 || rect.height === 0) return;
 		const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
 		const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
 		const hit = await renderer.pickAt(ndcX, ndcY);
-		if (hit) onpick(hit.id);
+		if (hit) {
+			lastPick = { kind: 'memory', id: hit.id, label: 'Field cell' };
+			onpick?.(hit.id);
+		}
+	}
+
+	function fieldPointerDown(e: PointerEvent) {
+		railPointerDown(e);
+		if (railDragging || capture) return;
+		cameraRig.enabled = !capture;
+		cameraRig.onPointerDown(e);
+	}
+	function fieldPointerMove(e: PointerEvent) {
+		railPointerMove(e);
+		if (railDragging || capture) return;
+		if (cameraRig.onPointerMove(e)) {
+			suppressNextClick = true;
+			renderer?.setCameraRig(cameraRig.state);
+		}
+		const now = performance.now();
+		if (now - hoverAt < 120 || !renderer || !canvasLayerEl) return;
+		hoverAt = now;
+		const rect = canvasLayerEl.getBoundingClientRect();
+		if (rect.width === 0) return;
+		const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+		const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+		void renderer.pickAt(ndcX, ndcY).then((hit) => {
+			renderer?.setHovered(hit?.index ?? -1);
+			hoverLabel = hit?.id?.slice(0, 8) ?? '';
+			if (canvasLayerEl) canvasLayerEl.style.cursor = hit ? 'crosshair' : 'grab';
+		});
+	}
+	function fieldPointerUp(e: PointerEvent) {
+		railPointerUp(e);
+		cameraRig.onPointerUp(e);
+	}
+	function fieldPointerCancel() {
+		railPointerCancel();
+		cameraRig.onPointerUp({ pointerId: -1 } as PointerEvent);
+	}
+	function fieldWheel(e: WheelEvent) {
+		if (capture || inRailBand(e as unknown as PointerEvent)) return;
+		if (cameraRig.onWheel(e)) renderer?.setCameraRig(cameraRig.state);
 	}
 
 	// Human labels for the switcher chips — short, mono, uppercase (visual DNA §7.3).
@@ -369,11 +425,13 @@
 		loading = true;
 		error = '';
 		try {
-			// Pull the DENSE real subgraph (the well-connected hotspot), not the
-			// newest-memory neighborhood — 'recent' centers on a lonely fresh node
-			// (~12 nodes), while 'connected' surfaces the populous, edge-rich field
-			// (~150 real memories, thousands of edges) so the Observatory reads as
-			// a living brain doing real work, not a sparse placeholder.
+			if (graphOverride) {
+				graphData = graphOverride;
+				nodeCount = graphOverride.nodeCount;
+				edgeCount = graphOverride.edgeCount;
+				centerId = graphOverride.center_id;
+				return;
+			}
 			const focus = new Set(focusIds.filter(Boolean));
 			const scoped = focus.size
 				? await (async () => {
@@ -506,6 +564,9 @@
 		uploaded = false;
 		engine = e;
 		renderer = new NodeRenderer(e);
+		cameraRig.enabled = !capture;
+		if (capture) cameraRig.reset();
+		renderer.setCameraRig(cameraRig.state);
 		onready?.(e);
 	}
 
@@ -522,7 +583,7 @@
 			});
 
 			if (isBirth) {
-				// Moment B: violet dust converges into a newborn memory.
+				// Moment B: luciferin dust converges into a newborn memory.
 				birthRenderer = new BirthRenderer({ engine, nodeRenderer: renderer, seed });
 				birthRenderer.upload(seed);
 
@@ -755,10 +816,11 @@
 		role="application"
 		aria-label="Interactive 3D memory field"
 		onclick={handleFieldClick}
-		onpointerdown={railPointerDown}
-		onpointermove={railPointerMove}
-		onpointerup={railPointerUp}
-		onpointercancel={railPointerCancel}
+		onpointerdown={fieldPointerDown}
+		onpointermove={fieldPointerMove}
+		onpointerup={fieldPointerUp}
+		onpointercancel={fieldPointerCancel}
+		onwheel={fieldWheel}
 	>
 		<ObservatoryCanvas
 			{demo}
@@ -988,5 +1050,12 @@
 	</div>
 	{/if}
 </div>
+
+<PickReceipt pick={lastPick} onclose={() => (lastPick = null)} />
+{#if hoverLabel && !capture}
+	<div class="pointer-events-none fixed left-4 bottom-24 z-30 font-mono text-[10px] tracking-widest text-[#7ff3e6]/80">
+		HOVER {hoverLabel}
+	</div>
+{/if}
 
 <!-- VISUAL DNA §7: void #05060a is the base (bg utility above) — no exceptions -->

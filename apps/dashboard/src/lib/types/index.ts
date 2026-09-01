@@ -487,12 +487,12 @@ export interface MemoryAuditResponse {
 // Node type colors for visualization — bioluminescent palette
 export const NODE_TYPE_COLORS: Record<string, string> = {
 	fact: '#00A8FF',      // electric blue
-	concept: '#9D00FF',   // deep violet
+	concept: '#1A8FA8',   // fossil teal — never purple
 	event: '#FFB800',     // golden amber
 	person: '#00FFD1',    // bioluminescent cyan
 	place: '#00D4FF',     // bright cyan
 	note: '#8B95A5',      // soft steel
-	pattern: '#FF3CAC',   // hot pink
+	pattern: '#E07A3D',   // fossil ochre
 	decision: '#FF4757',  // vivid red
 };
 
@@ -502,20 +502,20 @@ export const EVENT_TYPE_COLORS: Record<string, string> = {
 	MemoryDeleted: '#FF4757',
 	MemoryPromoted: '#00FF88',
 	MemoryDemoted: '#FF6B35',
-	MemorySuppressed: '#A33FFF',
+	MemorySuppressed: '#FF3B30',
 	MemoryUnsuppressed: '#14E8C6',
-	Rac1CascadeSwept: '#6E3FFF',
-	SearchPerformed: '#818CF8',
-	DeepReferenceCompleted: '#C4B5FD',
+	Rac1CascadeSwept: '#FF6B35',
+	SearchPerformed: '#22C7DE',
+	DeepReferenceCompleted: '#29F2A9',
 	HookVerdictRecorded: '#F59E0B',
-	DreamStarted: '#9D00FF',
-	DreamProgress: '#B44AFF',
-	DreamCompleted: '#C084FC',
+	DreamStarted: '#29F2A9',
+	DreamProgress: '#1BD6FF',
+	DreamCompleted: '#22C7DE',
 	ConsolidationStarted: '#FFB800',
 	ConsolidationCompleted: '#FF9500',
 	RetentionDecayed: '#FF4757',
 	ConnectionDiscovered: '#00D4FF',
 	ActivationSpread: '#14E8C6',
-	ImportanceScored: '#FF3CAC',
+	ImportanceScored: '#E07A3D',
 	Heartbeat: '#8B95A5',
 };

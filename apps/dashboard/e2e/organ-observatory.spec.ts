@@ -217,23 +217,30 @@ test.describe('/observatory organ — real-data WebGPU cognitive field', () => {
 			trust_floor: 0.6,
 			decay_risk: 'medium',
 			mutations: [],
-			backfill: {
-				failure_id: failureId,
-				failure_preview: 'Checkout connection-acquisition timeout',
-				scanned: 19,
-				lookback_days: 30,
-				baseline: 'embedding cosine rank within the scanned candidate set',
-				path_ids: [causeId, bridgeId, failureId],
-				candidates: [{
-					memory_id: causeId,
-					content_preview: 'Lowered connection-pool max from 100 to 20',
-					shared_entities: ['db.config.yaml'],
-					age_days_before_failure: 21,
-					similarity_rank: 389,
-					backfill_score: 0.92,
-					promoted: false,
-					candidate_edge_persisted: true
-				}]
+			evidence: {
+				kind: 'backfill',
+				predicate: {
+					schema: 'https://vestige.dev/schemas/receipt/backfill/v1',
+					schema_version: 1,
+					failure_id: failureId,
+					failure_preview: 'Checkout connection-acquisition timeout',
+					scanned: 19,
+					lookback_days: 30,
+					baseline: 'embedding cosine rank within the scanned candidate set',
+					path_ids: [causeId, bridgeId, failureId],
+					candidates: [{
+						memory_id: causeId,
+						content_preview: 'Lowered connection-pool max from 100 to 20',
+						shared_entities: ['db.config.yaml'],
+						age_days_before_failure: 21,
+						similarity_rank: 389,
+						backfill_score: 0.92,
+						promoted: false,
+						candidate_edge_persisted: true
+					}],
+					claim_boundary:
+						'Explicit-entity backward candidate evidence from a salient failure; not an asserted root cause or a universal claim about vector search.'
+				}
 			}
 		};
 		const graph = {

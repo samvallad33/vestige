@@ -12,6 +12,8 @@
 	import Icon, { type IconName } from '$lib/components/Icon.svelte';
 	import AnimatedNumber from '$lib/components/AnimatedNumber.svelte';
 	import { reveal } from '$lib/actions/reveal';
+	import { viewMemoryPrDiff } from '$lib/observatory/export/memory-pr-diff';
+	import { base } from '$app/paths';
 
 	type MemoryPrTextItem = TextLayerItem & { prId?: string };
 	type WhySignal = { code: string; detail: string };
@@ -467,6 +469,7 @@
 			{#each prs as pr, i (pr.id)}
 				{@const isSelected = selectedPrId === pr.id}
 				{@const isPending = pr.status === 'pending'}
+				{@const diff = viewMemoryPrDiff(pr.diff)}
 				<div
 					id={`pr-card-${pr.id}`}
 					use:reveal={{ delay: Math.min(i * 30, 300), y: 12 }}
@@ -541,6 +544,25 @@
 									{/if}
 								</div>
 							{/if}
+
+							<div class="space-y-2 rounded-xl border border-white/[0.06] bg-black/20 p-3">
+								<div class="text-[10px] uppercase tracking-wider text-muted">Proposed change</div>
+								{#if diff.targetId}
+									<a class="block font-mono text-[11px] text-synapse-glow hover:underline" href={`${base}/memories?memory=${encodeURIComponent(diff.targetId)}`}>target {diff.targetId}</a>
+								{/if}
+								{#if diff.before}
+									<div class="text-[11px]"><span class="text-muted">Before:</span> {diff.before}</div>
+								{/if}
+								{#if diff.proposed || diff.after}
+									<div class="text-[11px] text-bright"><span class="text-muted">Proposed:</span> {diff.proposed ?? diff.after}</div>
+								{/if}
+								{#if !diff.proposed && !diff.after && !diff.before}
+									<div class="text-[11px] text-muted">No content diff was attached to this PR.</div>
+								{/if}
+								{#each diff.rest.slice(0, 4) as row (row.key)}
+									<div class="flex gap-2 text-[10px] font-mono text-dim"><span>{row.key}</span><span class="ml-auto break-all">{row.value.slice(0, 120)}</span></div>
+								{/each}
+							</div>
 						</div>
 					{/if}
 

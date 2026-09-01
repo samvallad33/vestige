@@ -57,11 +57,13 @@ struct Node {
 // spectral(w) (visual DNA §7.1): indigo → cyan-teal → mint → magenta rim.
 fn spectral(w_in: f32) -> vec3<f32> {
 	let w = fract(w_in);
+	// Fossil band (doctrine): sediment → amber → jade → chalk. Magenta is
+	// reserved for backward-causal kind=1 wavefronts only (RSB).
 	let stops = array<vec3<f32>, 4>(
-		vec3<f32>(0.20, 0.28, 0.95), // indigo
-		vec3<f32>(0.20, 0.85, 0.90), // cyan-teal
-		vec3<f32>(0.45, 1.00, 0.72), // mint
-		vec3<f32>(0.85, 0.45, 1.00)  // magenta rim
+		vec3<f32>(0.18, 0.16, 0.08), // sediment
+		vec3<f32>(0.96, 0.62, 0.16), // amber debt
+		vec3<f32>(0.16, 0.95, 0.66), // jade recall
+		vec3<f32>(0.91, 1.00, 0.72)  // luciferin chalk
 	);
 	let f = w * 4.0;
 	let i = u32(floor(f)) % 4u;

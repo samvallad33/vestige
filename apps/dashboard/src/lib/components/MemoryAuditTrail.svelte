@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { api } from '$stores/api';
 	import {
 		META,
-		generateMockAuditTrail,
 		relativeTime,
 		formatRetentionDelta,
 		splitVisible,
@@ -10,15 +10,8 @@
 	} from './audit-trail-helpers';
 
 	/**
-	 * MemoryAuditTrail — per-memory "Sources" panel.
-	 *
-	 * Renders a vertical bioluminescent timeline of every event that has touched
-	 * a memory: creation, accesses, promotions/demotions, edits, suppressions,
-	 * dream-cycle activations, and reconsolidations (5-min labile window edits).
-	 *
-	 * Backend `/api/changelog?memory_id=X` does NOT yet exist. A typed mock
-	 * fetcher lives in `audit-trail-helpers.ts` and will be swapped for
-	 * `api.memoryChangelog(id)` once the backend route ships.
+	 * MemoryAuditTrail — per-memory Sources panel.
+	 * Live `/api/memories/{id}/audit`. Empty is honest. Never invents history.
 	 */
 
 	interface Props {
@@ -31,26 +24,42 @@
 	let loading = $state(true);
 	let errored = $state(false);
 	let showAllOlder = $state(false);
+	let gen = 0;
 
-	// TODO: swap for api.memoryChangelog(id) when backend ships
 	async function fetchAuditTrail(id: string): Promise<AuditEvent[]> {
-		return generateMockAuditTrail(id, Date.now());
+		const res = await api.memoryAudit(id, 100);
+		return (res.events ?? []) as AuditEvent[];
 	}
 
-	onMount(async () => {
-		if (!memoryId) {
-			events = [];
-			loading = false;
-			return;
-		}
-		try {
-			events = await fetchAuditTrail(memoryId);
-		} catch {
-			events = [];
-			errored = true;
-		} finally {
-			loading = false;
-		}
+	$effect(() => {
+		const id = memoryId;
+		const token = ++gen;
+		loading = true;
+		errored = false;
+		showAllOlder = false;
+		void (async () => {
+			if (!id) {
+				if (token !== gen) return;
+				events = [];
+				loading = false;
+				return;
+			}
+			try {
+				const next = await fetchAuditTrail(id);
+				if (token !== gen) return;
+				events = next;
+			} catch {
+				if (token !== gen) return;
+				events = [];
+				errored = true;
+			} finally {
+				if (token === gen) loading = false;
+			}
+		})();
+	});
+
+	onMount(() => () => {
+		gen += 1;
 	});
 
 	const split = $derived(splitVisible(events, showAllOlder));
@@ -74,10 +83,9 @@
 	{:else}
 		<ol class="relative pl-6 border-l border-synapse/15 space-y-3">
 			{#each visibleEvents as ev, i (ev.timestamp + i)}
-				{@const m = META[ev.action]}
+				{@const m = META[ev.action] ?? META.accessed}
 				{@const delta = formatRetentionDelta(ev.old_value, ev.new_value)}
 				<li class="relative" style="animation-delay: {i * 40}ms;">
-					<!-- Marker -->
 					<span
 						class="marker absolute -left-[29px] top-0.5 w-4 h-4 flex items-center justify-center rounded-full"
 						style="background: rgba(10,10,26,0.9); box-shadow: 0 0 10px {m.color}88; border: 1px solid {m.color};"
@@ -118,7 +126,6 @@
 						{/if}
 					</span>
 
-					<!-- Event content -->
 					<div class="glass-subtle rounded-lg px-3 py-2 space-y-1">
 						<div class="flex items-center justify-between gap-2 flex-wrap">
 							<div class="flex items-center gap-2 text-xs">

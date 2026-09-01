@@ -130,20 +130,20 @@ fn hash11(x: f32) -> f32 {
 	return fract(sin(x * 12.9898 + 78.233) * 43758.5453);
 }
 
-// 5-stop iridescent memory spectrum: magenta to violet to blue to cyan to
-// emerald (wraps). s flows over time so the whole cloud is never static.
+// Fossil-graded family spectrum: sediment → amber → jade → cyan → luciferin.
+// Magenta is reserved for RSB and must never paint the Palace home.
 fn spectrum(s: f32) -> vec3<f32> {
-	let magenta = vec3<f32>(0.98, 0.24, 0.86);
-	let violet  = vec3<f32>(0.56, 0.34, 1.00);
-	let blue    = vec3<f32>(0.22, 0.46, 1.00);
-	let cyan    = vec3<f32>(0.14, 0.86, 0.98);
-	let emerald = vec3<f32>(0.22, 0.96, 0.58);
+	let sediment = vec3<f32>(0.07, 0.08, 0.04);
+	let amber    = vec3<f32>(0.96, 0.62, 0.16);
+	let jade     = vec3<f32>(0.16, 0.95, 0.66);
+	let cyan     = vec3<f32>(0.13, 0.78, 0.87);
+	let chalk    = vec3<f32>(0.91, 1.00, 0.72);
 	let x = fract(s) * 5.0;
-	if (x < 1.0) { return mix(magenta, violet, x); }
-	if (x < 2.0) { return mix(violet, blue, x - 1.0); }
-	if (x < 3.0) { return mix(blue, cyan, x - 2.0); }
-	if (x < 4.0) { return mix(cyan, emerald, x - 3.0); }
-	return mix(emerald, magenta, x - 4.0);
+	if (x < 1.0) { return mix(sediment, amber, x); }
+	if (x < 2.0) { return mix(amber, jade, x - 1.0); }
+	if (x < 3.0) { return mix(jade, cyan, x - 2.0); }
+	if (x < 4.0) { return mix(cyan, chalk, x - 3.0); }
+	return mix(chalk, sediment, x - 4.0);
 }
 
 // Living color: the hue wheel rotates over time, traveling waves ripple across

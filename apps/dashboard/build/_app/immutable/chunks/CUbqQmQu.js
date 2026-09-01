@@ -1,0 +1,1 @@
+import{i as c,x as i,y as o,z as d,A as m}from"./Dw_4PDAU.js";function x(e,n,f){c(()=>{var r=i(()=>n(e,f==null?void 0:f())||{});if(f&&(r!=null&&r.update)){var a=!1,t={};o(()=>{var s=f();d(s),a&&m(t,s)&&(t=s,r.update(s))}),a=!0}if(r!=null&&r.destroy)return()=>r.destroy()})}export{x as a};

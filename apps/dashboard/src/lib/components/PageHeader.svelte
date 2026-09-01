@@ -1,37 +1,34 @@
 <script lang="ts">
 	import Icon, { type IconName } from './Icon.svelte';
 
-	// ═══════════════════════════════════════════════════════════════════
-	//  PAGE HEADER — the shared "alive" page title used on every route.
-	// ───────────────────────────────────────────────────────────────────
-	//  A drawn-on unique route icon in a glowing tile, an aurora-gradient
-	//  title, an optional subtitle, and an optional right-aligned slot for
-	//  live counts / actions. Replaces the flat `<h1>` each page had, giving
-	//  the whole app one premium, consistent, animated masthead.
-	// ═══════════════════════════════════════════════════════════════════
+	// Static accent map — Tailwind cannot see `bg-{accent}/12` at compile time,
+	// so every masthead was silently unstyled. These are doctrine hues, never purple.
+	const ACCENT_TILE: Record<string, string> = {
+		synapse: 'background: rgba(34, 199, 222, 0.12); border-color: rgba(34, 199, 222, 0.28); color: #7ff3e6;',
+		recall: 'background: rgba(41, 242, 169, 0.12); border-color: rgba(41, 242, 169, 0.28); color: #29F2A9;',
+		warning: 'background: rgba(255, 209, 102, 0.12); border-color: rgba(255, 209, 102, 0.28); color: #FFD166;',
+		dream: 'background: rgba(168, 255, 94, 0.12); border-color: rgba(168, 255, 94, 0.28); color: #A8FF5E;',
+		decay: 'background: rgba(255, 59, 48, 0.12); border-color: rgba(255, 59, 48, 0.28); color: #FF3B30;',
+		memory: 'background: rgba(27, 214, 255, 0.12); border-color: rgba(27, 214, 255, 0.28); color: #1BD6FF;'
+	};
+
 	interface Props {
 		icon: IconName;
 		title: string;
 		subtitle?: string;
-		/** Tailwind color token name for the icon tile accent (e.g. 'synapse'). */
+		/** Token name for the icon tile accent (e.g. 'synapse'). */
 		accent?: string;
 		children?: import('svelte').Snippet;
 	}
 	let { icon, title, subtitle, accent = 'synapse', children }: Props = $props();
+	const tileStyle = $derived(ACCENT_TILE[accent] ?? ACCENT_TILE.synapse);
 </script>
 
-<!--
-	Layout: on a phone the title/subtitle and the right-side actions STACK
-	vertically (flex-col) so the subtitle keeps the full viewport width and can
-	never collapse into a one-word-per-line column when a wide action (dropdown /
-	button) sits beside a long subtitle. From `sm` up it's the original single
-	row with actions right-aligned. Desktop render is unchanged.
--->
 <header class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4 mb-6 enter">
 	<div class="flex items-center gap-3.5 min-w-0">
 		<div
-			class="header-tile relative flex items-center justify-center w-11 h-11 rounded-xl shrink-0
-				bg-{accent}/12 border border-{accent}/25 text-{accent}-glow"
+			class="header-tile relative flex items-center justify-center w-11 h-11 rounded-xl shrink-0 border"
+			style={tileStyle}
 		>
 			<Icon name={icon} size={22} draw />
 		</div>
@@ -50,8 +47,6 @@
 </header>
 
 <style>
-	/* Soft outward glow that gently pulses, so the masthead icon reads as
-	   "live" the moment the page lands. */
 	.header-tile::after {
 		content: '';
 		position: absolute;
