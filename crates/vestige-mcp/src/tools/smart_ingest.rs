@@ -43,7 +43,7 @@ pub fn schema() -> Value {
             },
             "node_type": {
                 "type": "string",
-                "description": "Type of knowledge: fact, concept, event, person, place, note, pattern, decision",
+                "description": "Type of knowledge: fact, concept, event, person, place, note, pattern, decision, state. 'state' is for current-state snapshots (version numbers, progress, inventories) that rot: unless validUntil is given, it expires VESTIGE_STATE_TTL_DAYS (default 30) after ingest; expired memories are down-ranked to the bottom of recall and marked currentlyValid=false (still retrievable for audit via validAt).",
                 "default": "fact"
             },
             "tags": {
@@ -344,6 +344,48 @@ fn resolve_validity_range(
         inferred_phrase,
         ambiguous_phrases,
     })
+}
+
+/// Default lifetime of a `state` memory when the caller gives no `validUntil`.
+/// Overridable with `VESTIGE_STATE_TTL_DAYS`; `0` disables the default.
+const DEFAULT_STATE_TTL_DAYS: i64 = 30;
+
+fn state_ttl_days() -> i64 {
+    std::env::var("VESTIGE_STATE_TTL_DAYS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|days| *days >= 0)
+        .unwrap_or(DEFAULT_STATE_TTL_DAYS)
+}
+
+/// "Current state" memories (version numbers, progress percentages,
+/// inventories) are the rot class that pollutes recall worst: they never stop
+/// being true in the store long after they stopped being true in the world.
+/// A `state` node therefore expires by default instead of by discipline.
+/// An explicit `validUntil` always wins; other node types are untouched.
+fn apply_state_ttl(
+    resolution: &mut ValidityResolution,
+    node_type: Option<&str>,
+    now: DateTime<Utc>,
+) {
+    if !node_type.is_some_and(|kind| kind.eq_ignore_ascii_case("state")) {
+        return;
+    }
+    if resolution.range.until.is_some() {
+        return;
+    }
+    let ttl = state_ttl_days();
+    if ttl == 0 {
+        return;
+    }
+    let until = now + chrono::Duration::days(ttl);
+    if resolution.range.from.is_some_and(|from| from >= until) {
+        return;
+    }
+    resolution.range.until = Some(until);
+    if resolution.source == "none" {
+        resolution.source = "state_default_ttl";
+    }
 }
 
 fn validity_response(resolution: &ValidityResolution) -> Value {
@@ -669,11 +711,12 @@ pub async fn execute(
     let content = args.content.ok_or(
         "Missing 'content' field. Provide 'content' for single mode or 'items' for batch mode.",
     )?;
-    let validity = resolve_validity_range(
+    let mut validity = resolve_validity_range(
         &content,
         args.valid_from.as_deref(),
         args.valid_until.as_deref(),
     )?;
+    apply_state_ttl(&mut validity, args.node_type.as_deref(), Utc::now());
     let secret_policy = if args.allow_secrets.unwrap_or(false) {
         SecretPolicy::AllowExplicitly
     } else {
@@ -950,7 +993,7 @@ async fn execute_batch(
             .scope
             .clone()
             .unwrap_or_else(|| default_scope.to_string());
-        let validity = match resolve_validity_range(
+        let mut validity = match resolve_validity_range(
             &item.content,
             item.valid_from.as_deref(),
             item.valid_until.as_deref(),
@@ -966,6 +1009,7 @@ async fn execute_batch(
                 continue;
             }
         };
+        apply_state_ttl(&mut validity, item.node_type.as_deref(), Utc::now());
         // Skip empty content
         if item.content.trim().is_empty() {
             results.push(serde_json::json!({
@@ -2008,6 +2052,40 @@ mod tests {
             infer_as_of_dates("as of 2026-03-04-05 must not match").is_empty(),
             "a trailing hyphen means the token is not a date"
         );
+    }
+
+    #[test]
+    fn state_nodes_expire_by_default_and_only_state_nodes() {
+        let now = Utc::now();
+        let mut state = resolve_validity_range("version is 2.6.0", None, None).unwrap();
+        apply_state_ttl(&mut state, Some("state"), now);
+        let until = state
+            .range
+            .until
+            .expect("state node gets a default validUntil");
+        assert_eq!(until, now + chrono::Duration::days(DEFAULT_STATE_TTL_DAYS));
+        assert_eq!(state.source, "state_default_ttl");
+
+        // Case-insensitive on the type, and an explicit validUntil always wins.
+        let mut explicit =
+            resolve_validity_range("progress 40%", None, Some("2030-01-01")).unwrap();
+        apply_state_ttl(&mut explicit, Some("State"), now);
+        assert_eq!(
+            explicit.range.until.unwrap(),
+            Utc.with_ymd_and_hms(2030, 1, 1, 0, 0, 0).unwrap()
+        );
+        assert_eq!(explicit.source, "explicit");
+
+        // Every other node type is untouched.
+        for kind in [Some("fact"), Some("decision"), None] {
+            let mut other = resolve_validity_range("durable lesson", None, None).unwrap();
+            apply_state_ttl(&mut other, kind, now);
+            assert!(
+                other.range.until.is_none(),
+                "{kind:?} must not expire by default"
+            );
+            assert_eq!(other.source, "none");
+        }
     }
 
     #[test]

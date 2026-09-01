@@ -5,9 +5,46 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.6.0] - 2026-08-30 — "Nothing deletes your memories except you"
+## [2.6.1] - 2026-09-01 — "1.x stores open again"
 
-## [Unreleased]
+### Fixed — 1.x stores open again after upgrading (#191)
+
+A store created on Vestige 1.x holds raw 768-dimension Nomic vectors. The
+2.x migration registered it under the 256-dimension legacy profile, so the
+strict dimension check aborted storage init and the MCP connection closed at
+session start. Reported with a full diagnosis, a rehearsed workaround, and
+fix directions by @aaronukgarcia in #191 and the field report in #190.
+
+- Legacy-profile vectors whose width disagrees with the profile are now
+  repaired on open: Matryoshka-truncated to the declared dimension and
+  L2-renormalized in place, no model or network needed, memories untouched.
+  Undersized vectors are dropped for the background backfill to regenerate.
+  Scoped strictly to the legacy profile; a mismatch on a pinned profile stays
+  a hard error.
+- New `vestige-cli upgrade --dry-run`: copies the store (with WAL/SHM) to a
+  temp directory, reports what the strict checks see on disk, runs every
+  migration against the copy, and leaves the original untouched.
+- `vestige-cli health` no longer prints "Embedding Service: Not Ready" as if
+  it were a store verdict; the CLI never starts the embedder, and it now says
+  so. `consolidate` explains 0 generated embeddings the same way.
+- `embeddings install` on the released Nomic profile now explains that Nomic
+  needs no install, that legacy stores are repaired on open, and where the
+  legal `migrate` targets are listed, instead of a bare refusal.
+
+### Added — `state` node type that expires by default
+
+"Current state" memories (version numbers, progress percentages,
+inventories) are the rot class that pollutes recall worst: they stay true in
+the store long after they stopped being true in the world. `smart_ingest`
+now accepts `node_type: "state"`, which sets `validUntil` to
+`VESTIGE_STATE_TTL_DAYS` (default 30, `0` disables) after ingest unless the
+caller gives one. Once expired, recall down-ranks the memory to the bottom
+of results and marks it `currentlyValid: false` (it stays retrievable for
+audit through `validAt`), so stale state stops polluting the top of recall
+on its own instead of by discipline. Requested by @aaronukgarcia after seven
+months of enforcing the same rule by hand (#182, #190).
+
+## [2.6.0] - 2026-08-30 — "Nothing deletes your memories except you"
 
 ### Fixed — Consolidation can no longer delete your memories
 
