@@ -3,6 +3,7 @@
 
 mod arms;
 mod git;
+mod probe;
 mod rng;
 mod run;
 mod score;
@@ -49,6 +50,15 @@ enum Cmd {
         #[arg(long)]
         manifest: PathBuf,
     },
+    /// Rank B for one id on a caller-supplied store copy. Never used on live.
+    Probe {
+        #[arg(long)]
+        store: PathBuf,
+        #[arg(long)]
+        failure_id: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -68,6 +78,22 @@ fn main() -> Result<()> {
         Cmd::Score { runs, manifest } => {
             let path = score::score(&runs, &manifest)?;
             eprintln!("scored → {}", path.display());
+        }
+        Cmd::Probe {
+            store,
+            failure_id,
+            out,
+        } => {
+            let result = probe::probe(&store, &failure_id)?;
+            let encoded = serde_json::to_vec_pretty(&result)?;
+            if let Some(path) = out {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(path, &encoded)?;
+            } else {
+                println!("{}", String::from_utf8_lossy(&encoded));
+            }
         }
     }
     Ok(())

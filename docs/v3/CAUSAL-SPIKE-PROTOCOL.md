@@ -226,3 +226,33 @@ OR+BM25. Do not mix v1 and v2 run directories. `lexical-or` remains
 deserializable as an alias of OR+BM25 for v1 erratum files.
 
 The v2 numbers are the only ones that can lock v3.0 scope.
+
+### Run 2026-09-01T05:39:32Z — seed=20260901 (v2 official)
+
+- HEAD: `a0ea030a4c3f341fe6302a3d3fffb6250f6aa5ff` (v2 amendment + harness, committed before this seed).
+- Stores: `benchmarks/causal-spike/data/v2/` `dataset_id=d9be9f1265ccd9e2`. 90 pairs, 10 multi-hop, 27 A-fair. v1 stores untouched.
+- `embedding_ready=true` on `lexical-embed` (`search_mode=hybrid_embeddings`). Other arms recorded `false` because they do not call `init_embeddings`.
+- Metrics: `benchmarks/causal-spike/results/*-a0ea030-20260901T053932Z.json`
+- Runs: `benchmarks/causal-spike/data/runs-v2/` (gitignored)
+
+| Arm | r@1 | r@3 | MRR | sep vs A | multi-hop r@3 | mean list len | empty-list | mean ms | amortized ms |
+|-----|-----|-----|-----|----------|---------------|---------------|------------|---------|--------------|
+| A lexical (`fts_or_bm25`) | 0.00 | 0.00 | 0.00 | — | 0.00 | 10.00 | 0.00 | 1.91 | — |
+| A-and (`fts_keyword_and`) | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 1.00 | 1.89 | — |
+| A-embed (`hybrid_embeddings`) | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 10.00 | 0.00 | 19.93 | — |
+| B backfill | 0.078 | 0.667 | 0.396 | 0.667 | 0.00 (0/10) | 4.00 | 0.00 | 3.81 | — |
+| C causal-graph | 0.156 | 0.644 | 0.454 | 0.644 | 0.10 (1/10) | 4.11 | 0.00 | 0.027 | 75.35 (incl. 6779 ms accumulation) |
+
+Locked gate: C r@1 ≥ 0.60 ✗ (0.156), C r@3 ≥ 0.80 ✗ (0.644), C sep vs A ≥ 0.40 ✓ (0.644), C r@3 ≥ B r@3 ✗ (0.644 < 0.667), C multi-hop r@3 ≥ 0.50 ✗ (0.10).
+
+**Outcome: FAIL.** v3.0 scope does not lock. Operative Arm A returned lists of 10 and recovered 0/90 planted causes (including all 27 A-fair pairs). B's list length is exactly 4.00 (planted cause + 3 backward entity-chatter); recency often ranks chatter above the cause, so recall@1 collapses from v1's tautological 1.00 to 0.078. C beats B on recall@1 and MRR but loses recall@3 and only recovers 1/10 roots. Claim licensed if this were a pass: receipt-backed upstream candidates that similarity search misses — NEVER automatic root cause. No such license.
+
+### S3 live-store copy probe (after v2 verdict)
+
+Copied the platform default Vestige `vestige.db` (165,076,992 bytes, 2,806 nodes) plus WAL/SHM to `/tmp`; never opened the live file via Vestige. Keyword search on the copy:
+
+- fp16lib→MSVC pin: not present as a separable cause/failure pair (hits are build/release notes).
+- w20-optimizer→immortality: not present (`w20-optimizer` = 0 rows).
+- plain-cp→exit-137: `exit-137` is not an incident node. The Jul 8 macOS `plain cp` codesign break exists as **one combined memory** (`6b566dce-6713-49a5-9690-c45ea5d2bf1d`), not a two-node pair.
+
+Per-query backfill on that combined memory (copy only): `looks_like_failure=true`, 10 backward candidates. Top ranks are other Vestige ship/audit notes, not a distinct upstream cause node — expected, because the cause text lives in the same row as the failure. Artifacts: `results/s3-live-copy-probe-a0ea030.json`, `results/s3-plain-cp-probe-a0ea030.json`. S3 does not license live-corpus causal recovery.

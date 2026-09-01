@@ -1,0 +1,20 @@
+{
+  "arm": "lexical-and",
+  "commit": "a0ea030a4c3f341fe6302a3d3fffb6250f6aa5ff",
+  "seed": 20260901,
+  "n_pairs": 90,
+  "recall_at_1": 0.0,
+  "recall_at_3": 0.0,
+  "mrr": 0.0,
+  "mean_wall_clock_ms": 1.8865421777777773,
+  "search_mode": "fts_keyword_and",
+  "n_multihop": 10,
+  "multihop_recall_at_3": 0.0,
+  "separation_rate_vs_lexical": 0.0,
+  "separation_rate_vs_lexical_or": null,
+  "accumulation_ms": null,
+  "amortized_ms_per_query": null,
+  "mean_list_len": 0.0,
+  "empty_list_rate": 1.0,
+  "n_answered_pairs": 90
+}

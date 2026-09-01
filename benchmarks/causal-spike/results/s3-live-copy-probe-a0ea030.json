@@ -1,0 +1,76 @@
+{
+  "probe": "S3 live-store copy",
+  "live_path_not_opened": "<platform Vestige data dir>/vestige.db (copied, never opened live)",
+  "copy": "/tmp/causal-spike-s3-11365/vestige.db",
+  "copy_bytes": 165076992,
+  "nodes": 2806,
+  "pairs_sought": [
+    {
+      "name": "fp16lib\u2192MSVC pin",
+      "status": "not_found_as_separable_pair",
+      "note": "fp16lib LIKE hits are build/release notes, not a failure\u2192cause pair"
+    },
+    {
+      "name": "w20-optimizer\u2192immortality",
+      "status": "not_found",
+      "note": "zero rows for w20-optimizer; immortality only in later v3 moonshot text"
+    },
+    {
+      "name": "plain-cp\u2192exit-137",
+      "status": "partial",
+      "note": "exit-137 not present as an incident node. plain-cp codesign failure exists as a single combined memory 6b566dce (cause and failure in one node)."
+    }
+  ],
+  "plain_cp_memory_id": "6b566dce-6713-49a5-9690-c45ea5d2bf1d",
+  "backfill_on_plain_cp": {
+    "store": "/tmp/causal-spike-s3-11365/vestige.db",
+    "failure_id": "6b566dce-6713-49a5-9690-c45ea5d2bf1d",
+    "looks_like_failure": true,
+    "embedding_ready": false,
+    "backfill_top": [
+      [
+        "88dac8b7-6438-475b-be6b-46e9cdb5e670",
+        3.4292941342292154
+      ],
+      [
+        "ab49ee57-c211-4dfc-bf76-1bdae3627df8",
+        2.441230743339161
+      ],
+      [
+        "23413868-87a4-4280-b55a-8392d1e9507a",
+        2.401725198517649
+      ],
+      [
+        "161f6488-dd47-4b41-82c7-849ce6e55543",
+        1.5282064267698119
+      ],
+      [
+        "9992c04d-8e08-45a0-a5ac-ec2d969a8300",
+        1.4972580166663236
+      ],
+      [
+        "5de3301f-8454-4094-ac16-83680c6a22b5",
+        1.4942176590857827
+      ],
+      [
+        "e4f698ab-88f6-4821-bbef-387aa07ba27f",
+        1.4941422619962716
+      ],
+      [
+        "ce669826-7646-434f-a29b-161a80c9fa4f",
+        1.4747023533282602
+      ],
+      [
+        "ca585d3a-8be6-464d-a891-d3c8e7206288",
+        1.4714922557769143
+      ],
+      [
+        "fb581554-cba3-4eb8-8fcd-af47a9dc6164",
+        1.4536736260210144
+      ]
+    ],
+    "causal_graph_top": [],
+    "graph_note": "S3 probe ranks per-query backfill only; Arm C accumulate on a 2.8k-node live copy is not this measurement"
+  },
+  "claim": "S3 does not license causal recovery on the live corpus. The three named incidents are not separable planted-style pairs in this store."
+}
