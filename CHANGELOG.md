@@ -5,9 +5,7 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.6.0] - 2026-08-30 — "Nothing deletes your memories except you"
-
-## [Unreleased]
+## [2.6.1] - 2026-09-01 — "1.x stores open again"
 
 ### Fixed — 1.x stores open again after upgrading (#191)
 
@@ -45,6 +43,8 @@ of results and marks it `currentlyValid: false` (it stays retrievable for
 audit through `validAt`), so stale state stops polluting the top of recall
 on its own instead of by discipline. Requested by @aaronukgarcia after seven
 months of enforcing the same rule by hand (#182, #190).
+
+## [2.6.0] - 2026-08-30 — "Nothing deletes your memories except you"
 
 ### Fixed — Consolidation can no longer delete your memories
 
