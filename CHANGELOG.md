@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Interactive postinstall / `vestige` welcome for Vestige Pro & Operator: after
   a successful binary install, a TTY session prints the announcement and waits
-  for Enter to open the live account site at
-  `https://vestige-pro-production.fly.dev` (`q` / Ctrl-C / 15s timeout skip).
+  for Enter to open the Pro screen at
+  `https://github.com/samvallad33/vestige#vestige-pro` (`q` / Ctrl-C / 15s
+  timeout skip).
   CI, `npm -y`, and non-TTY installs never block. `vestige` with no args and
   `vestige health` carry the same short block. Local memory stays free.
 
