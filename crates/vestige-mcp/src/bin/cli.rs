@@ -5,15 +5,16 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, IsTerminal, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{NaiveDate, Utc};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use vestige_core::{
     IngestInput, PortableImportMode, SecretConfidence, SecretPolicy, Storage, scan_secrets,
@@ -28,17 +29,29 @@ use vestige_core::{
 #[command(
     long_about = "Vestige is a cognitive memory system based on 130 years of memory research.\n\nIt implements FSRS-6, spreading activation, synaptic tagging, and more."
 )]
-#[command(
-    after_help = "Vestige Pro: your memory on every machine, end-to-end encrypted. $19/mo -> https://github.com/samvallad33/vestige#vestige-pro"
-)]
+#[command(after_help = VESTIGE_PRO_AFTER_HELP)]
 struct Cli {
     /// Use a specific Vestige data directory for this command.
     #[arg(long, global = true, value_name = "DIR")]
     data_dir: Option<PathBuf>,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
+
+/// Destination opened from the Pro & Operator welcome. Named so we can
+/// retarget later without hunting copy.
+const VESTIGE_PRO_SCREEN_URL: &str = "https://vestige-pro-production.fly.dev";
+
+const VESTIGE_PRO_AFTER_HELP: &str = "\
+✦  Vestige Pro & Operator — out now.
+
+   Continuity across every machine.
+   Receipt → permit → effect. Fail closed.
+
+   https://vestige-pro-production.fly.dev";
+
+const VESTIGE_PRO_WELCOME_TIMEOUT: Duration = Duration::from_secs(15);
 
 static CLI_DB_PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -423,7 +436,12 @@ fn main() -> anyhow::Result<()> {
             .map_err(|_| anyhow::anyhow!("data directory was initialized more than once"))?;
     }
 
-    match cli.command {
+    let command = match cli.command {
+        Some(command) => command,
+        None => return run_bare_invocation(),
+    };
+
+    match command {
         Commands::Stats { tagging, states } => run_stats(tagging, states),
         Commands::Health => run_health(),
         Commands::Consolidate => run_consolidate(),
@@ -2082,6 +2100,97 @@ fn print_distribution_bar(label: &str, count: usize, total: usize, color: &str) 
     );
 }
 
+fn env_flag_enabled(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn should_offer_pro_screen_with(
+    stdout_tty: bool,
+    stdin_tty: bool,
+    ci: bool,
+    continuous_integration: bool,
+    npm_yes: bool,
+) -> bool {
+    if ci || continuous_integration || npm_yes {
+        return false;
+    }
+    stdout_tty && stdin_tty
+}
+
+fn should_offer_pro_screen() -> bool {
+    should_offer_pro_screen_with(
+        io::stdout().is_terminal(),
+        io::stdin().is_terminal(),
+        env_flag_enabled("CI"),
+        env_flag_enabled("CONTINUOUS_INTEGRATION"),
+        env_flag_enabled("npm_config_yes"),
+    )
+}
+
+fn print_pro_operator_notice() {
+    println!("{}", "✦  Vestige Pro & Operator — out now.".cyan().bold());
+    println!();
+    println!("   Continuity across every machine.");
+    println!("   Receipt → permit → effect. Fail closed.");
+    println!();
+    println!("   {}", VESTIGE_PRO_SCREEN_URL.white());
+}
+
+fn open_pro_screen() {
+    if open::that(VESTIGE_PRO_SCREEN_URL).is_err() {
+        println!("Could not open the browser. Open this URL:");
+        println!("   {VESTIGE_PRO_SCREEN_URL}");
+    }
+}
+
+fn offer_pro_screen_interactive() -> anyhow::Result<()> {
+    if !should_offer_pro_screen() {
+        return Ok(());
+    }
+
+    println!();
+    println!("   Press Enter to open the screen · q to skip");
+    io::stdout().flush()?;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = io::stdin().read_line(&mut line);
+        let _ = tx.send(line);
+    });
+
+    match rx.recv_timeout(VESTIGE_PRO_WELCOME_TIMEOUT) {
+        Ok(line) => {
+            if line.trim().is_empty() {
+                println!("Opening the screen…");
+                open_pro_screen();
+            }
+        }
+        Err(_) => {
+            println!();
+            println!("Timed out. Open the screen anytime:");
+            println!("   {VESTIGE_PRO_SCREEN_URL}");
+        }
+    }
+    Ok(())
+}
+
+/// `vestige` with no args: existing help, plus a one-shot TTY prompt.
+fn run_bare_invocation() -> anyhow::Result<()> {
+    let mut cmd = Cli::command();
+    cmd.print_help()?;
+    println!();
+    offer_pro_screen_interactive()
+}
+
 /// Run health check
 fn run_health() -> anyhow::Result<()> {
     let storage = open_storage()?;
@@ -2220,13 +2329,7 @@ fn run_health() -> anyhow::Result<()> {
     }
 
     println!();
-    println!(
-        "{} {}",
-        "Pro:".cyan().bold(),
-        "sync this memory across machines, end-to-end encrypted ($19/mo) — \
-         https://github.com/samvallad33/vestige#vestige-pro"
-            .white()
-    );
+    print_pro_operator_notice();
 
     Ok(())
 }
@@ -4083,5 +4186,39 @@ mod tests {
         assert_eq!(user_hooks[0]["command"], "/tmp/custom-user-hook.sh");
         assert!(settings["hooks"].get("Stop").is_none());
         assert_eq!(settings["other"], true);
+    }
+
+    #[test]
+    fn pro_screen_url_is_the_named_account_site() {
+        assert_eq!(
+            VESTIGE_PRO_SCREEN_URL,
+            "https://vestige-pro-production.fly.dev"
+        );
+        assert!(VESTIGE_PRO_AFTER_HELP.contains("Vestige Pro & Operator — out now."));
+        assert!(VESTIGE_PRO_AFTER_HELP.contains("Receipt → permit → effect. Fail closed."));
+        assert!(VESTIGE_PRO_AFTER_HELP.contains(VESTIGE_PRO_SCREEN_URL));
+        assert!(!VESTIGE_PRO_AFTER_HELP.contains("$19"));
+    }
+
+    #[test]
+    fn pro_screen_gate_requires_a_real_tty_and_skips_ci() {
+        assert!(should_offer_pro_screen_with(
+            true, true, false, false, false
+        ));
+        assert!(!should_offer_pro_screen_with(
+            true, true, true, false, false
+        ));
+        assert!(!should_offer_pro_screen_with(
+            true, true, false, true, false
+        ));
+        assert!(!should_offer_pro_screen_with(
+            true, true, false, false, true
+        ));
+        assert!(!should_offer_pro_screen_with(
+            false, true, false, false, false
+        ));
+        assert!(!should_offer_pro_screen_with(
+            true, false, false, false, false
+        ));
     }
 }

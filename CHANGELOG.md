@@ -5,6 +5,17 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Interactive postinstall / `vestige` welcome for Vestige Pro & Operator: after
+  a successful binary install, a TTY session prints the announcement and waits
+  for Enter to open `https://vestige-pro-production.fly.dev`
+  (`q` / Ctrl-C / 15s timeout skip). CI, `npm -y`, and non-TTY installs never
+  block. `vestige` with no args and `vestige health` carry the same short
+  block. Local memory stays free.
+
 ## [2.7.1] - 2026-09-02 — "The first cloud write is never unconditional"
 
 ### Fixed — Managed Continuity first upload

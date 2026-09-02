@@ -7,6 +7,8 @@ const os = require('os');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
+const { offerWelcome } = require('./welcome');
+
 const packageJson = require('../package.json');
 const VERSION = packageJson.version;
 const BINARY_VERSION = VERSION;
@@ -265,9 +267,13 @@ async function main() {
     console.log('  2. Restart your MCP client.');
     console.log('  3. Test with: "remember that my preferred editor is VS Code"');
     console.log('');
-    console.log('Local memory is free forever. Vestige Pro syncs it across machines,');
-    console.log('end-to-end encrypted ($19/mo): https://github.com/samvallad33/vestige#vestige-pro');
+    console.log('Local memory is free forever.');
     console.log('');
+
+    // TTY-only: announces Pro & Operator and waits for Enter. CI / `npm -y` /
+    // non-TTY installs return immediately so the binary download path stays
+    // identical and never hangs a pipeline.
+    await offerWelcome();
 
   } catch (err) {
     console.error('');
