@@ -129,6 +129,22 @@ export class ObservatoryEngine {
 	 */
 	private paused = false;
 
+	/**
+	 * Surge envelope added to the global breath lane (params[5]) so an organ's
+	 * whole field visibly reacts to a real moment: a scene arriving, a route
+	 * entered, a live event landing. Decays per rendered frame. Ignored in
+	 * capture and export modes so stills and clips stay byte-stable.
+	 */
+	private surge = 0;
+	private surgeAt = 0;
+
+	kick(strength = 1): void {
+		if (this.freezeFrame !== null || this.exportMode) return;
+		this.surge = Math.min(1.2, Math.max(this.surge, strength));
+		this.surgeAt = performance.now();
+		this.requestRender();
+	}
+
 	constructor(opts: EngineOptions) {
 		this.canvas = opts.canvas;
 		this.demo = opts.demo;
@@ -512,6 +528,17 @@ export class ObservatoryEngine {
 		// Breath: exactly 4 cycles per 720-frame loop (0.333 Hz ≈ spec §7.2's
 		// ~0.32 Hz) — integer cycles/loop is what makes the seam invisible.
 		p[5] = 0.5 + 0.5 * Math.sin(2 * Math.PI * 4 * phase);
+		// Live surges ride on top of the breath (never in capture/export: kick()
+		// refuses them there, so the loop stays periodic by construction).
+		if (this.surge > 0) {
+			p[5] = Math.min(1.6, p[5] + this.surge);
+			// Wall-clock decay (about 2.5 s to fade) so 60 Hz and 120 Hz displays
+			// feel the same surge; surges never exist in capture or export mode.
+			const now = performance.now();
+			const dt = Math.min(0.1, Math.max(0, (now - this.surgeAt) / 1000));
+			this.surgeAt = now;
+			this.surge = this.surge < 0.004 ? 0 : this.surge * Math.pow(0.06, dt);
+		}
 		p[6] = this.canvas.width;
 		p[7] = this.canvas.height;
 		// p[8] brightness — set by the canvas component
