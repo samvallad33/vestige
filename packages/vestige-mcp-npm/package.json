@@ -10,7 +10,9 @@
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
-    "test:pnpm-global-install": "node --test tests/pnpm-global-install.test.js"
+    "test": "node --check scripts/postinstall.js && node --check scripts/welcome.js && node --test tests/*.test.js",
+    "test:pnpm-global-install": "node --test tests/pnpm-global-install.test.js",
+    "test:welcome": "node --test tests/welcome.test.js"
   },
   "keywords": [
     "mcp",
