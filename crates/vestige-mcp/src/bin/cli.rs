@@ -41,7 +41,7 @@ struct Cli {
 
 /// Destination opened from the Pro & Operator welcome. Named so we can
 /// retarget later without hunting copy.
-const VESTIGE_PRO_SCREEN_URL: &str = "https://github.com/samvallad33/vestige#vestige-pro";
+const VESTIGE_PRO_SCREEN_URL: &str = "https://vestige-pro-production.fly.dev";
 
 const VESTIGE_PRO_AFTER_HELP: &str = "\
 ✦  Vestige Pro & Operator — out now.
@@ -49,7 +49,7 @@ const VESTIGE_PRO_AFTER_HELP: &str = "\
    Continuity across every machine.
    Receipt → permit → effect. Fail closed.
 
-   https://github.com/samvallad33/vestige#vestige-pro";
+   https://vestige-pro-production.fly.dev";
 
 const VESTIGE_PRO_WELCOME_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -4189,10 +4189,10 @@ mod tests {
     }
 
     #[test]
-    fn pro_screen_url_is_the_named_pro_section() {
+    fn pro_screen_url_is_the_named_account_site() {
         assert_eq!(
             VESTIGE_PRO_SCREEN_URL,
-            "https://github.com/samvallad33/vestige#vestige-pro"
+            "https://vestige-pro-production.fly.dev"
         );
         assert!(VESTIGE_PRO_AFTER_HELP.contains("Vestige Pro & Operator — out now."));
         assert!(VESTIGE_PRO_AFTER_HELP.contains("Receipt → permit → effect. Fail closed."));

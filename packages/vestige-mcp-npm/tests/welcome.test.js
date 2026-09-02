@@ -43,8 +43,8 @@ test('postinstall.js and welcome.js still parse', () => {
   }
 });
 
-test('destination URL is a named constant pointing at the Pro section', () => {
-  assert.equal(VESTIGE_PRO_SCREEN_URL, 'https://github.com/samvallad33/vestige#vestige-pro');
+test('destination URL is a named constant pointing at the Pro account site', () => {
+  assert.equal(VESTIGE_PRO_SCREEN_URL, 'https://vestige-pro-production.fly.dev');
   assert.equal(WELCOME_TIMEOUT_MS, 15_000);
 });
 

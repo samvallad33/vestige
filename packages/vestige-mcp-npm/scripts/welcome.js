@@ -6,7 +6,7 @@ const { spawn } = require('child_process');
  * Destination opened when the user presses Enter on the Pro & Operator
  * welcome. Named so we can retarget later without hunting install copy.
  */
-const VESTIGE_PRO_SCREEN_URL = 'https://github.com/samvallad33/vestige#vestige-pro';
+const VESTIGE_PRO_SCREEN_URL = 'https://vestige-pro-production.fly.dev';
 const WELCOME_TIMEOUT_MS = 15_000;
 
 const WELCOME_BANNER = [
