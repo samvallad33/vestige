@@ -5,6 +5,39 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.1] - 2026-09-02 — "The first cloud write is never unconditional"
+
+### Fixed — Managed Continuity first upload
+
+- The cloud-sync client now sends `If-None-Match: *` when its initial read
+  proves that no remote archive exists. The hosted service has always required
+  an explicit create-only or ETag-matched write, so released 2.7.0 clients
+  received `428 Precondition Required` on their first encrypted upload.
+- Existing archives continue to update with `If-Match: <etag>`. The client
+  never sends both conditions, and a concurrent create or stale update remains
+  a fail-closed `412` conflict instead of an overwrite.
+- The conditional-write regression fixture now records both headers and proves
+  the create, update, and conflict branches independently.
+
+### Fixed — Dashboard route arrivals
+
+- Observatory organs now receive a visible, data-driven arrival surge instead
+  of reading as static prints, while capture and export remain deterministic.
+- Duplicate in-canvas shortcut and pause chrome no longer overprints route
+  content; the DOM dock and native motion control remain the accessible UI.
+- Empty first-frame timeline, contradiction, and duplicate draws are guarded,
+  eliminating zero-instance WebGPU console noise.
+
+### Verification
+
+- The repository cloud-sync lane passes all 18 encryption, transport,
+  conditional-write, downgrade, redaction, and conflict tests.
+- A production acceptance used two distinct device credentials and one shared
+  local encryption key: Device A created the encrypted archive, Device B pulled
+  and merged it, and exact recall resolved from Device B. Authenticated
+  readback was a `VSTGENC1` envelope whose ETag matched its ciphertext hash;
+  neither the acceptance content nor its identifier appeared in server bytes.
+
 ## [2.7.0] - 2026-09-01 — "Share your brain, not your memories"
 
 The dashboard becomes VestigeOS: a living WebGPU observatory of your memory,
