@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
-use reqwest::header::{AUTHORIZATION, ETAG, IF_MATCH};
+use reqwest::header::{AUTHORIZATION, ETAG, IF_MATCH, IF_NONE_MATCH};
 
 use super::portable::PortableArchive;
 use super::sqlite::{PortableSyncBackend, Result, StorageError};
@@ -260,10 +260,12 @@ impl PortableSyncBackend for HttpPortableSyncBackend {
             .body(body);
 
         // Optimistic concurrency: only overwrite the object we pulled. If the
-        // remote had no archive, require that it still doesn't exist (`If-Match: *`
-        // would require existence, so we omit the header to allow first create).
+        // remote had no archive, require that it still does not exist before
+        // creating it. Every write is therefore conditional and fail-closed.
         if let Some(etag) = self.last_etag.borrow_mut().take() {
             req = req.header(IF_MATCH, etag);
+        } else {
+            req = req.header(IF_NONE_MATCH, "*");
         }
 
         let resp = req
@@ -324,6 +326,7 @@ mod tests {
         method: String,
         authorization: Option<String>,
         if_match: Option<String>,
+        if_none_match: Option<String>,
         content_type: Option<String>,
     }
 
@@ -350,6 +353,8 @@ mod tests {
                         cap.authorization = Some(v.trim().to_string());
                     } else if let Some(v) = line.strip_prefix("if-match: ") {
                         cap.if_match = Some(v.trim().to_string());
+                    } else if let Some(v) = line.strip_prefix("if-none-match: ") {
+                        cap.if_none_match = Some(v.trim().to_string());
                     } else if let Some(v) = line.strip_prefix("content-type: ") {
                         cap.content_type = Some(v.trim().to_string());
                     }
@@ -543,6 +548,7 @@ mod tests {
         assert_eq!(cap.method, "PUT");
         assert_eq!(cap.authorization.as_deref(), Some("Bearer secret"));
         assert_eq!(cap.if_match.as_deref(), Some("\"v1-abc\""));
+        assert!(cap.if_none_match.is_none());
         assert_eq!(
             cap.content_type.as_deref(),
             Some("application/octet-stream")
@@ -550,14 +556,15 @@ mod tests {
     }
 
     #[test]
-    fn write_omits_if_match_for_first_create() {
+    fn write_sends_if_none_match_for_first_create() {
         let (base, rx) = spawn_mock(|_| http_response("201 Created", "", ""));
         let be = encrypted_backend(base, "secret");
-        // No prior read → no etag → no If-Match (allow create).
+        // No prior read means create only if the remote archive is still absent.
         be.write_archive(&sample_archive()).expect("write ok");
         let cap = rx.recv().unwrap();
         assert_eq!(cap.method, "PUT");
         assert!(cap.if_match.is_none());
+        assert_eq!(cap.if_none_match.as_deref(), Some("*"));
     }
 
     #[test]

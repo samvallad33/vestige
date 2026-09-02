@@ -513,7 +513,7 @@ export class ContradictionsPass implements FramePass {
 		});
 		splat.setPipeline(this.splatPipeline);
 		splat.setBindGroup(0, res.splatBindGroup);
-		splat.draw(6, this.pairCount * 2);
+		if (this.pairCount > 0) splat.draw(6, this.pairCount * 2);
 		splat.end();
 
 		const blurH = encoder.beginRenderPass({

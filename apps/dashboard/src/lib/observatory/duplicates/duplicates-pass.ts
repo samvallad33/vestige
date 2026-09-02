@@ -796,7 +796,7 @@ export class DuplicatesPass implements FramePass {
 		});
 		splat.setPipeline(this.splatPipeline);
 		splat.setBindGroup(0, res.splatBindGroup);
-		splat.draw(6, this.cellCount + this.neckCount);
+		if (this.cellCount + this.neckCount > 0) splat.draw(6, this.cellCount + this.neckCount);
 		splat.end();
 
 		const blurH = encoder.beginRenderPass({

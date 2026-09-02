@@ -527,7 +527,7 @@ export class TimelinePass implements FramePass {
 		const splat = encoder.beginRenderPass({ label: 'timeline-field-splat-pass', colorAttachments: [{ view: res.fieldAView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }] });
 		splat.setPipeline(this.splatPipeline);
 		splat.setBindGroup(0, res.splatBindGroup);
-		splat.draw(6, this.cellCount);
+		if (this.cellCount > 0) splat.draw(6, this.cellCount);
 		splat.end();
 		const blurH = encoder.beginRenderPass({ label: 'timeline-field-blur-h-pass', colorAttachments: [{ view: res.fieldBView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }] });
 		blurH.setPipeline(this.blurPipeline);

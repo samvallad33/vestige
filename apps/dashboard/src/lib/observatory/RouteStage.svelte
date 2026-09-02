@@ -9,6 +9,7 @@
 	import { CAUSAL, IMMUNE, RETENTION, rgb01 } from '$lib/observatory/cognitive-palette';
 	import { type DemoMode } from '$lib/observatory/types';
 	import { TextLayerPass, type TextLayerItem } from '$lib/observatory/text/text-layer';
+	import { OS_ROUTES } from '$lib/os-routes';
 	import {
 		createNavLayerPass,
 		type NavLayerPass,
@@ -74,6 +75,17 @@
 	let engine = $state<ObservatoryEngine | null>(null);
 	let chromeText: TextLayerPass | null = null;
 	let navPass: NavLayerPass | null = null;
+	const IN_CANVAS_NAV = false;
+	// Arrival story: the organ says what it is and what it holds, once, when its
+	// scene lands. Frame-stamped so the MSDF reveal types it in, then it fades.
+	let storyFrame = -1;
+	let storyStartedAt = 0;
+	let storyText = $state('');
+	const STORY_MS = 9000;
+	const STORY_FADE_MS = 1500;
+	const HEARTBEAT_MS = 8000;
+	let lastBeatAt = 0;
+	let storyVisible = $state(false);
 	let routePasses: RouteFramePass[] = [];
 	let frameCount = $state(0);
 	let fpsEstimate = $state(0);
@@ -120,7 +132,38 @@
 		if (import.meta.env.DEV) assertProvenance(sceneToUpload);
 		for (const pass of routePasses) pass.uploadScene?.(sceneToUpload);
 		engine.demoClock.reset();
+		// A scene arriving is a moment: the field surges, and the organ tells its
+		// story in one line built from the route registry and the scene's real
+		// scalars (never a decoration: swap the data and the line changes).
+		engine.kick(sceneToUpload.alive ? 1.0 : 0.35);
+		storyFrame = 0;
+		storyStartedAt = performance.now();
+		storyText = sceneToUpload.alive ? arrivalStory(sceneToUpload) : '';
+		storyVisible = Boolean(storyText);
 		updateChromeText();
+	}
+
+	function arrivalStory(sceneToTell: RouteSceneModel): string {
+		const href = organ === 'witness' ? '/graph' : `/${organ}`;
+		const route = OS_ROUTES.find((r) => r.href === href);
+		const label = (route?.label ?? organ).toUpperCase();
+		const purpose = route?.purpose ?? '';
+		const facts = Object.entries(sceneToTell.scalars)
+			.filter(([, v]) => Number.isFinite(v))
+			.slice(0, 3)
+			.map(([k, v]) => {
+				const name = k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').toUpperCase();
+				const value = Math.abs(v) < 1 && v !== 0 ? `${Math.round(v * 100)}%` : `${Math.round(v)}`;
+				return `${name} ${value}`;
+			});
+		const counts = `${sceneToTell.nodes.length} CELLS - ${sceneToTell.edges.length} LINKS - ${sceneToTell.events.length} EVENTS`;
+		// Whole facts only: never cut a number mid-word.
+		let line = `${label} - ${purpose}`;
+		for (const fact of facts.length ? facts : [counts]) {
+			if (`${line} - ${fact}`.length > 132) break;
+			line = `${line} - ${fact}`;
+		}
+		return asciiSafe(line);
 	}
 
 	function handleFrame(frame: number, fps: number) {
@@ -134,6 +177,19 @@
 			fpsEstimate = fps;
 		}
 		navPass?.setActivePath(currentDashboardPath());
+		// Heartbeat: every eight seconds the whole organ takes a breath that is
+		// deeper than the ambient one, so no route ever sits still like a print.
+		if (storyFrame >= 0) storyFrame += 1;
+		const now = performance.now();
+		if (storyVisible && now - storyStartedAt > STORY_MS) {
+			storyVisible = false;
+			storyText = '';
+			updateChromeText(frame, fps);
+		}
+		if (!paused && now - lastBeatAt > HEARTBEAT_MS) {
+			lastBeatAt = now;
+			engine?.kick(0.4);
+		}
 		updateChromeText(frame, fps);
 	}
 
@@ -146,12 +202,16 @@
 		routePasses = typeof passes === 'function' ? passes(e, currentScene) : (passes ?? []);
 		for (const pass of routePasses) e.addPass(pass);
 
-		navPass = createNavLayerPass(e, { activePath: currentDashboardPath() });
+		// The DOM dock in +layout.svelte is the navigation on every viewport. The
+		// in-canvas shortcut column duplicated it, and its fixed NDC anchor landed
+		// on organ content at wide aspect ratios (a column of P O G M T B over the
+		// hero copy). It stays available behind IN_CANVAS_NAV for zero-DOM stages.
+		navPass = IN_CANVAS_NAV ? createNavLayerPass(e, { activePath: currentDashboardPath() }) : null;
 		chromeText = new TextLayerPass(e);
 		lastChromeSignature = null;
-		e.addPass(navPass);
+		if (navPass) e.addPass(navPass);
 		e.addPass(chromeText);
-		await Promise.all([navPass.init(), chromeText.init()]);
+		await Promise.all([navPass?.init(), chromeText.init()]);
 		if (engine !== e) return;
 		ready = true;
 		upload(currentScene);
@@ -208,19 +268,12 @@
 		const portrait = isPortrait();
 		// Desktop: floating PAUSE (always) + FPS telemetry (dev builds only — it's
 		// debug noise a launch user shouldn't see). Phone: neither (see isPortrait).
+		// The pause control is the native DOM button below (keyboard + AT reachable).
+		// The in-canvas PAUSE glyphs at a fixed NDC anchor overprinted organ content
+		// on square and tall displays, so the canvas no longer draws one.
 		const items: TextLayerItem[] = portrait
 			? []
 			: [
-					{
-						id: 'route-chrome:pause',
-						kind: 'route-chrome',
-						text: paused ? '> RESUME' : '|| PAUSE',
-						x: 0.66,
-						y: -0.86,
-						size: 0.034,
-						color: paused ? AMBER : CYAN,
-						revealSpan: 1
-					},
 					...(import.meta.env.DEV && organ !== 'witness'
 						? [
 								{
@@ -437,6 +490,9 @@
 	onpointerleave={handlePointerLeave}
 >
 	<ObservatoryCanvas {demo} {seed} {maxDpr} onframe={handleFrame} onready={handleReady} />
+	{#if storyVisible && storyText}
+		<p class="route-story" role="status" aria-live="polite">{storyText}</p>
+	{/if}
 	<button
 		type="button"
 		class="route-motion-control"
@@ -450,6 +506,60 @@
 </div>
 
 <style>
+	/* The organ's arrival line: one sentence built from the route registry and the
+	   scene's real scalars, typed in on scene arrival and gone after nine seconds.
+	   DOM (not canvas) so route panels never cover it and screen readers hear it. */
+	.route-story {
+		position: fixed;
+		left: 4.9rem;
+		bottom: 1.15rem;
+		z-index: 41;
+		margin: 0;
+		max-width: min(64vw, 72ch);
+		padding: 0.45rem 0.75rem;
+		border: 1px solid rgba(233, 255, 183, 0.18);
+		border-radius: 0.55rem;
+		background: rgba(2, 3, 7, 0.62);
+		backdrop-filter: blur(10px);
+		-webkit-backdrop-filter: blur(10px);
+		color: #e9ffb7;
+		font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+		font-size: 0.66rem;
+		letter-spacing: 0.08em;
+		line-height: 1.4;
+		text-transform: uppercase;
+		text-shadow: 0 0 14px rgba(233, 255, 183, 0.35);
+		pointer-events: none;
+		clip-path: inset(0 100% 0 0);
+		animation:
+			route-story-in 1.6s steps(48, end) forwards,
+			route-story-out 1.2s ease 7.8s forwards;
+	}
+	@keyframes route-story-in {
+		to {
+			clip-path: inset(0 0 0 0);
+		}
+	}
+	@keyframes route-story-out {
+		to {
+			opacity: 0;
+			translate: 0 6px;
+		}
+	}
+	@media (max-width: 767px) {
+		.route-story {
+			left: 1rem;
+			right: 1rem;
+			bottom: 4.6rem;
+			max-width: none;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.route-story {
+			animation: none;
+			clip-path: none;
+		}
+	}
 	.route-motion-control {
 		position: fixed;
 		right: 1rem;

@@ -1,0 +1,1 @@
+import{fB as f}from"../chunks/CFnBgO4x.js";export{f as component};
