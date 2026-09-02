@@ -13,6 +13,15 @@ Vestige remembers your decisions, catches contradictions before they cost you, a
 
 ---
 
+<p align="center">
+  <a href="https://raw.githubusercontent.com/samvallad33/vestige/media/vestige-black-box.mp4">
+    <img src="https://raw.githubusercontent.com/samvallad33/vestige/media/black-box-cause.gif" alt="Vestige Black Box: a SIGSEGV on startup traced back to a version pin set 23 days earlier, with the receipt" width="100%">
+  </a>
+</p>
+
+<p align="center"><sub><b>A real store, a real run.</b> A SIGSEGV on startup in an arm64 container. The cause: a version pin set 23 days earlier that shares zero words with the failure. Semantic search cannot reach it. Vestige reached back across history and handed over the receipt. It names the suspects. It never calls the verdict. <a href="https://raw.githubusercontent.com/samvallad33/vestige/media/vestige-black-box.mp4">Watch the full 58 second walk</a>.</sub></p>
+
+
 Agents re-learn the same lessons: they recommend a change you already tested and rejected, re-derive a fix that was already written down, and treat every session as if the last one never happened. Vestige is the memory layer that ends that. Any MCP-capable agent (Claude Code, Claude Desktop, Codex, Cursor, and others) writes memories as you work and retrieves them later, modeled on real cognitive science: redundant memories merge, contradicted ones are flagged, unused ones fade, and when a failure hits, Vestige reaches **backward** to the decision that set it up.
 
 The cause never looks like the bug. That is the whole product.
