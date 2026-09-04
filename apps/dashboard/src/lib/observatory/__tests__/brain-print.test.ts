@@ -221,3 +221,23 @@ describe('encodeShapeVector', () => {
 		expect(vector.every((n) => Number.isInteger(n) && n >= 0)).toBe(true);
 	});
 });
+
+describe('brain print determinism: stored shape only, never wall-clock', () => {
+	it('dueForReview does not change the print id, the vector, or the traits', () => {
+		// Same store, captured before and after cards cross their due date. The
+		// only difference is the live `next_review <= now` count, which is not
+		// part of the store's shape. The print must not re-key.
+		const morning = shape({ dueForReview: 0 });
+		const evening = shape({ dueForReview: 41 });
+		const a = computeBrainPrint(morning);
+		const b = computeBrainPrint(evening);
+		expect(a.printId).toBe(b.printId);
+		expect(a.seed).toBe(b.seed);
+		expect(a.vector).toEqual(b.vector);
+		expect(a.traits).toEqual(b.traits);
+		expect(canonicalShapePayload(morning)).toBe(canonicalShapePayload(evening));
+		// Lane 2 is reserved and always zero.
+		expect(a.vector[2]).toBe(0);
+		expect(a.traits.map((t) => t.id)).not.toContain('review-pressure');
+	});
+});

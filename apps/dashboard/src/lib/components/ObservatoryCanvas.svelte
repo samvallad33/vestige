@@ -44,7 +44,19 @@
 			maxDpr,
 			onFrame: (frame, fps) => onframe?.(frame, fps)
 		});
-		unsubStatus = engine.onStatus((s) => (status = s));
+		let recovering = false;
+		unsubStatus = engine.onStatus((s) => {
+			status = s;
+			// A device-loss recovery re-runs boot inside the same engine. The
+			// owner must re-register its passes exactly as on first boot, so
+			// re-fire onready when `running` follows `recovering`.
+			if (s.state === 'recovering') recovering = true;
+			if (s.state === 'running' && recovering && engine) {
+				recovering = false;
+				engine.resize();
+				onready?.(engine);
+			}
+		});
 
 		// Keep the drawing buffer in lockstep with layout size (DPR-clamped).
 		resizeObserver = new ResizeObserver(() => engine?.resize());
@@ -74,7 +86,16 @@
 	aria-describedby="webgpu-field-status"
 ></canvas>
 
-{#if status.state === 'unsupported' || status.state === 'error'}
+{#if status.state === 'recovering'}
+	<!-- The GPU device was lost (reset, driver update, backgrounding). The
+	     engine re-acquires it with backoff; the field returns on its own. -->
+	<div id="webgpu-field-status" class="fallback" role="status" aria-live="polite">
+		<div class="fallback-title">GPU DEVICE LOST · RECOVERING</div>
+		<div class="fallback-reason">
+			Re-acquiring the graphics device (attempt {status.attempt} of 5). {status.reason}
+		</div>
+	</div>
+{:else if status.state === 'unsupported' || status.state === 'error'}
 	<!-- This is deliberately a truthful failure state, not a deceptive substitute
 	     visual. Graph used to be advertised here as an SVG fallback, but it is
 	     itself GPU-rendered in the current product. Navigation remains available

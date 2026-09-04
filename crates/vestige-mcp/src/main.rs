@@ -38,7 +38,7 @@ use std::io;
 use std::path::{Component, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{Level, error, info, warn};
+use tracing::{Level, debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 // Use vestige-core for the cognitive science engine
@@ -341,6 +341,52 @@ async fn main() {
         });
     }
 
+    // Startup hygiene: sweep Black Box traces past VESTIGE_TRACE_RETENTION_DAYS
+    // now, not only when the consolidation cycle next runs. Best-effort.
+    match storage.prune_agent_traces() {
+        Ok(deleted) if deleted > 0 => info!(deleted, "Pruned expired agent trace events at startup"),
+        Ok(_) => {}
+        Err(e) => warn!("Startup trace retention sweep failed: {}", e),
+    }
+
+    // Periodic WAL checkpoint. `wal_autocheckpoint` already runs on commit, but
+    // a PASSIVE checkpoint every 60 s (never blocks readers or writers) folds
+    // the .wal back into the main file across long uptimes and reports a WAL
+    // that keeps growing instead of letting it reach gigabytes unnoticed.
+    {
+        let storage_clone = storage.clone();
+        tokio::spawn(async move {
+            // Roughly 40 MB at the 4 KiB default page size, 80 MB at 8 KiB.
+            const WAL_WARN_FRAMES: i64 = 10_000;
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticker.tick().await; // the first tick completes immediately; skip it
+            loop {
+                ticker.tick().await;
+                let storage = storage_clone.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    storage.checkpoint_wal(vestige_core::storage::WalCheckpointMode::Passive)
+                })
+                .await;
+                match result {
+                    Ok(Ok(status)) if status.log_frames > WAL_WARN_FRAMES => warn!(
+                        log_frames = status.log_frames,
+                        checkpointed_frames = status.checkpointed_frames,
+                        busy = status.busy,
+                        "WAL is large after a passive checkpoint; a long-running reader may be pinning it"
+                    ),
+                    Ok(Ok(status)) => debug!(
+                        log_frames = status.log_frames,
+                        checkpointed_frames = status.checkpointed_frames,
+                        "Periodic WAL checkpoint"
+                    ),
+                    Ok(Err(e)) => warn!("Periodic WAL checkpoint failed: {}", e),
+                    Err(e) => warn!("Periodic WAL checkpoint task failed to run: {}", e),
+                }
+            }
+        });
+    }
+
     // Spawn periodic auto-consolidation so FSRS-6 decay scores stay fresh.
     // Runs on startup (if needed) and then every N hours (default: 6).
     // Configurable via VESTIGE_CONSOLIDATION_INTERVAL_HOURS env var.
@@ -436,7 +482,9 @@ async fn main() {
 
     // Create shared event broadcast channel for dashboard <-> MCP tool events
     let (event_tx, _) =
-        tokio::sync::broadcast::channel::<vestige_mcp::dashboard::events::VestigeEvent>(1024);
+        tokio::sync::broadcast::channel::<vestige_mcp::dashboard::events::VestigeEvent>(
+            vestige_mcp::dashboard::state::EVENT_CHANNEL_CAPACITY,
+        );
 
     // v2.0.9 "Autopilot" — spawn the backend event-subscriber that routes
     // every live WebSocket event into the cognitive modules that already
@@ -529,8 +577,26 @@ async fn main() {
         tokio::spawn(async move {
             // Small delay so we don't block the stdio handshake
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            let mut cog = cog_clone.lock().await;
-            cog.reranker.init_cross_encoder();
+            // The model load is synchronous and downloads ~150MB on a fresh
+            // install. Doing it under the CognitiveEngine mutex stalled every
+            // tool that shares that lock (explore, predict, session_context,
+            // memory_unified, dream, and the rest) for the whole download, on
+            // every startup rather than on demand, and it blocked a tokio
+            // worker thread while it ran. Load on the blocking pool holding
+            // nothing, then take the lock only to install the result.
+            let loaded = tokio::task::spawn_blocking(
+                vestige_core::search::Reranker::load_cross_encoder,
+            )
+            .await;
+            match loaded {
+                Ok(Some(model)) => {
+                    let mut cog = cog_clone.lock().await;
+                    cog.reranker.install_cross_encoder(model);
+                }
+                // `None` already logged its reason; BM25 fallback stands.
+                Ok(None) => {}
+                Err(e) => warn!("Cross-encoder load task failed: {e}"),
+            }
         });
     }
 

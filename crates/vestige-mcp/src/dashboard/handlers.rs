@@ -1865,11 +1865,22 @@ pub async fn trigger_dream(State(state): State<AppState>) -> Result<Json<Value>,
         })
         .collect();
 
-    // Run dream through CognitiveEngine
-    let cog = cognitive.lock().await;
-    let (dream_result, new_connections) = cog.dreamer.dream_with_connections(&dream_memories).await;
-    let insights = cog.dreamer.synthesize_insights(&dream_memories);
-    drop(cog);
+    // Run the dream OFF the engine lock: snapshot the (Arc-sharing) dreamer
+    // under a short lock, then scan on the blocking pool so the MCP tools that
+    // share `CognitiveEngine` keep answering during the O(n²) walk.
+    let dreamer = {
+        let cog = cognitive.lock().await;
+        cog.dreamer.clone()
+    };
+    let (dream_result, new_connections, insights, dream_memories) =
+        tokio::task::spawn_blocking(move || {
+            let (dream_result, new_connections) =
+                dreamer.dream_with_connections_blocking(&dream_memories);
+            let insights = dreamer.synthesize_insights(&dream_memories);
+            (dream_result, new_connections, insights, dream_memories)
+        })
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Persist new connections
     let mut connections_persisted = 0u64;

@@ -609,7 +609,7 @@ describe('spine beats', () => {
 		expect(labels[0]).toContain('checkout 500s on submit');
 		expect(labels.some((l) => l.includes('lookalike ✗'))).toBe(true);
 		expect(labels.some((l) => l.includes('schema migration dropped index'))).toBe(true);
-		expect(labels[labels.length - 1]).toBe('root cause found');
+		expect(labels[labels.length - 1]).toBe('candidate cause found');
 	});
 });
 
@@ -625,7 +625,8 @@ describe('verdict', () => {
 		expect(plan.verdict.causeDate).toBe('2025-03-01');
 		expect(plan.verdict.hops).toBe(3);
 		expect(plan.verdict.k).toBe(4);
-		expect(plan.verdict.receipt).toBe('3 hops back · 2025-03-01 · vector search: 0 for 4');
+		expect(plan.verdict.headline).toBe('candidate cause found');
+		expect(plan.verdict.receipt).toBe('3 hops back · 2025-03-01 · heuristic, no receipt · vector search: 0 for 4');
 	});
 
 	it('labels truncate at 64 chars with an ellipsis', () => {

@@ -342,12 +342,6 @@ async fn post_mcp(
 
     if is_initialize {
         // ── New session ──
-        // Take write lock immediately to avoid TOCTOU race on MAX_SESSIONS check.
-        let mut sessions = state.sessions.write().await;
-        if sessions.len() >= MAX_SESSIONS {
-            return (StatusCode::SERVICE_UNAVAILABLE, "Too many active sessions").into_response();
-        }
-
         let server = McpServer::new_with_events(
             Arc::clone(&state.storage),
             Arc::clone(&state.cognitive),
@@ -362,7 +356,25 @@ async fn post_mcp(
             protocol_version: crate::protocol::types::MCP_VERSION.to_string(),
         }));
 
-        // Handle the initialize request
+        // Reserve the slot under ONE write-lock acquisition, so the
+        // MAX_SESSIONS check and the insert still cannot race, and then
+        // release the lock before handling anything. The previous shape held
+        // this global map lock across `handle_request().await`, which
+        // serialised every other HTTP client behind one client's initialize,
+        // on the transport that exists for multi-agent use. Publishing the id
+        // early is not reachable by anyone else: it is a fresh UUID that has
+        // not been returned yet, and the per-session mutex below would queue a
+        // guesser behind this initialize regardless.
+        {
+            let mut sessions = state.sessions.write().await;
+            if sessions.len() >= MAX_SESSIONS {
+                return (StatusCode::SERVICE_UNAVAILABLE, "Too many active sessions")
+                    .into_response();
+            }
+            sessions.insert(session_id.clone(), Arc::clone(&session));
+        }
+
+        // Handle the initialize request holding no global lock.
         let response = {
             let mut sess = session.lock().await;
             sess.server.handle_request(request).await
@@ -371,15 +383,15 @@ async fn post_mcp(
         match response {
             Some(resp) => {
                 let Some(protocol_version) = response_protocol_version(&resp) else {
-                    drop(sessions);
+                    // Not a usable initialize result: release the reservation
+                    // instead of leaving a session nobody can address.
+                    state.sessions.write().await.remove(&session_id);
                     return (StatusCode::OK, HeaderMap::new(), Json(resp)).into_response();
                 };
                 {
                     let mut sess = session.lock().await;
                     sess.protocol_version = protocol_version.clone();
                 }
-                sessions.insert(session_id.clone(), session);
-                drop(sessions);
                 let mut resp_headers = HeaderMap::new();
                 resp_headers.insert(
                     "mcp-session-id",
@@ -393,7 +405,8 @@ async fn post_mcp(
                 (StatusCode::OK, resp_headers, Json(resp)).into_response()
             }
             None => {
-                drop(sessions);
+                // No response body means no usable session; release the slot.
+                state.sessions.write().await.remove(&session_id);
                 (StatusCode::ACCEPTED, HeaderMap::new()).into_response()
             }
         }

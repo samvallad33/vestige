@@ -983,16 +983,129 @@ pub fn get_current_version(conn: &rusqlite::Connection) -> rusqlite::Result<u32>
         return Ok(0);
     }
 
-    conn.query_row(
+    // Every migration decision trusts this one value, so validate it instead
+    // of letting a damaged row either replay early ALTER migrations over live
+    // tables (a `duplicate column` failure on every boot) or surface as a bare
+    // type-mismatch error that never names the real problem.
+    let rows: i64 = conn.query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))?;
+    if rows > 1 {
+        // The ledger is one row updated in place. More than one row means an
+        // older runner or a hand edit left extras; MAX() still picks the
+        // highest, which is the right answer, but say so instead of hiding it.
+        tracing::warn!(rows, "schema_version holds more than one row; using the highest version");
+    }
+    let raw: rusqlite::types::Value = conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_version",
         [],
         |row| row.get(0),
+    )?;
+    let version = match raw {
+        rusqlite::types::Value::Integer(version) => version,
+        other => {
+            return Err(schema_version_corrupt(format!(
+                "schema_version.version must be an integer, found {other:?}; \
+                 the version row is corrupted"
+            )));
+        }
+    };
+    if version <= 0 {
+        return Err(schema_version_corrupt(format!(
+            "schema_version.version is {version} on a populated database, expected a \
+             positive integer; refusing to replay migrations over live tables"
+        )));
+    }
+    let Ok(version) = u32::try_from(version) else {
+        return Err(schema_version_corrupt(format!(
+            "schema_version.version {version} is out of range; the version row is corrupted"
+        )));
+    };
+    let latest = MIGRATIONS.last().map(|m| m.version).unwrap_or(0);
+    if version > latest {
+        tracing::warn!(
+            stored = version,
+            latest,
+            "database schema is newer than this binary's migrations; opening without downgrading"
+        );
+    }
+    Ok(version)
+}
+
+/// A schema-version corruption error that names the problem in its message
+/// (surfaced verbatim by `Display`), tagged `SQLITE_CORRUPT` so callers that
+/// match on the code treat it as damage, not as a transient lock.
+fn schema_version_corrupt(message: String) -> rusqlite::Error {
+    rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+        Some(message),
     )
 }
 
 /// Run an `ALTER TABLE ... ADD COLUMN` statement, treating a "duplicate column
 /// name" failure as success so migration replay stays idempotent (SQLite has no
 /// `ADD COLUMN IF NOT EXISTS`).
+/// Split every `ALTER TABLE ... ADD COLUMN ...;` statement out of a migration
+/// body. Returns the statements (without the trailing `;`) and the body with
+/// them removed, so the runner can apply each column through
+/// [`add_column_if_missing`] and execute the rest as one batch. Comment lines
+/// are left in the body untouched; a statement may span several lines and
+/// ends at the first `;`.
+pub(crate) fn split_add_column_statements(up: &str) -> (Vec<String>, String) {
+    let mut statements = Vec::new();
+    let mut remaining = String::with_capacity(up.len());
+    // An ALTER statement under construction: its joined text plus the original
+    // lines, so a non-ADD COLUMN ALTER (RENAME, DROP) can be put back verbatim.
+    let mut pending: Option<(String, Vec<&str>)> = None;
+
+    fn finish(
+        statement: String,
+        lines: Vec<&str>,
+        statements: &mut Vec<String>,
+        remaining: &mut String,
+    ) {
+        if statement.to_ascii_uppercase().contains(" ADD COLUMN ") {
+            statements.push(statement.trim_end_matches(';').trim().to_string());
+        } else {
+            for line in lines {
+                remaining.push_str(line);
+                remaining.push('\n');
+            }
+        }
+    }
+
+    for line in up.lines() {
+        if let Some((statement, lines)) = pending.as_mut() {
+            statement.push(' ');
+            statement.push_str(line.trim());
+            lines.push(line);
+            if line.trim_end().ends_with(';') {
+                let (statement, lines) = pending.take().expect("pending statement");
+                finish(statement, lines, &mut statements, &mut remaining);
+            }
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.to_ascii_uppercase().starts_with("ALTER TABLE") {
+            if trimmed.ends_with(';') {
+                finish(trimmed.to_string(), vec![line], &mut statements, &mut remaining);
+            } else {
+                pending = Some((trimmed.to_string(), vec![line]));
+            }
+            continue;
+        }
+        remaining.push_str(line);
+        remaining.push('\n');
+    }
+    if let Some((_, lines)) = pending {
+        // A body that ends mid-statement is a bug in the migration text; keep
+        // the lines so the batch reports the real SQL error.
+        for line in lines {
+            remaining.push_str(line);
+            remaining.push('\n');
+        }
+    }
+    (statements, remaining)
+}
+
 fn add_column_if_missing(conn: &rusqlite::Connection, sql: &str) -> rusqlite::Result<()> {
     match conn.execute(sql, []) {
         Ok(_) => Ok(()),
@@ -1387,6 +1500,13 @@ INSERT OR IGNORE INTO embedding_profile_manifests (
     (SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = 'nomic-v1.5-legacy-raw-256'),
     0, NULL, datetime('now')
 );
+-- Postcondition: the manifest count is authoritative on replay. `OR IGNORE`
+-- above keeps a row a pre-release build already wrote, so reconcile it.
+UPDATE embedding_profile_manifests
+   SET vector_count = (SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = 'nomic-v1.5-legacy-raw-256'),
+       updated_at = datetime('now')
+ WHERE profile_id = 'nomic-v1.5-legacy-raw-256'
+   AND vector_count <> (SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = 'nomic-v1.5-legacy-raw-256');
 UPDATE schema_version SET version = 28, applied_at = datetime('now');
 "#;
 
@@ -1835,6 +1955,46 @@ pub fn apply_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
 ///
 /// Runs on every startup and is a no-op once the store is clean, which also
 /// heals databases already broken by an earlier v2.6.0 open.
+/// Make `embedding_profile_manifests.vector_count` equal to the real number of
+/// rows in `embedding_profile_vectors` for `profile_id`. Writes only when the
+/// two disagree, so a healthy store costs one SELECT per open.
+pub(crate) fn reconcile_profile_manifest_vector_count(
+    conn: &rusqlite::Connection,
+    profile_id: &str,
+) -> rusqlite::Result<bool> {
+    use rusqlite::OptionalExtension;
+    let recorded: Option<i64> = conn
+        .query_row(
+            "SELECT vector_count FROM embedding_profile_manifests WHERE profile_id = ?1",
+            [profile_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(recorded) = recorded else {
+        return Ok(false);
+    };
+    let actual: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM embedding_profile_vectors WHERE profile_id = ?1",
+        [profile_id],
+        |row| row.get(0),
+    )?;
+    if recorded == actual {
+        return Ok(false);
+    }
+    conn.execute(
+        "UPDATE embedding_profile_manifests SET vector_count = ?2, updated_at = datetime('now') \
+         WHERE profile_id = ?1",
+        rusqlite::params![profile_id, actual],
+    )?;
+    tracing::warn!(
+        profile_id,
+        recorded,
+        actual,
+        "Reconciled a stale embedding-profile manifest vector_count on open"
+    );
+    Ok(true)
+}
+
 pub(crate) fn repair_legacy_raw_profile_vectors(
     conn: &rusqlite::Connection,
     legacy_profile_id: &str,
@@ -1876,6 +2036,9 @@ pub(crate) fn repair_legacy_raw_profile_vectors(
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
     if mismatched.is_empty() {
+        // Nothing to repair, but keep the manifest honest: a stale count
+        // (pre-release build, interrupted tooling) is reconciled on open.
+        reconcile_profile_manifest_vector_count(conn, legacy_profile_id)?;
         return Ok((0, 0));
     }
 
@@ -2025,8 +2188,21 @@ fn apply_migrations_once(conn: &rusqlite::Connection) -> rusqlite::Result<u32> {
                     }
                 }
 
+                // Every `ALTER TABLE ... ADD COLUMN` in the migration body runs
+                // through the idempotent guard, whatever version it belongs to.
+                // The per-migration transaction already makes a crash replay
+                // clean; this additionally absorbs a database whose columns
+                // were added by an older, pre-transactional runner or by a
+                // pre-release build, so no migration can ever brick a store
+                // with `duplicate column name`. Columns are added before the
+                // rest of the body so indexes that reference them still work.
+                let (add_column_statements, remaining_sql) =
+                    split_add_column_statements(migration.up);
+                for stmt in &add_column_statements {
+                    add_column_if_missing(&tx, stmt)?;
+                }
                 // Use execute_batch to handle multi-statement SQL including triggers
-                tx.execute_batch(migration.up)?;
+                tx.execute_batch(&remaining_sql)?;
 
                 // V25 keeps the reusable schema contract free of the repository's
                 // schema-version bookkeeping so isolated storage tests can apply it
@@ -2225,6 +2401,203 @@ mod tests {
             )
             .expect("query schema version table");
         assert_eq!(recreated, 0, "failed startup must not mutate the database");
+    }
+
+    #[test]
+    fn every_migration_replays_as_a_no_op_with_an_identical_schema() {
+        // Regression guard for the migration-idempotence class: a fully
+        // migrated database re-run through the runner must apply nothing and
+        // leave sqlite_master byte-for-byte unchanged. Any future migration
+        // whose replay is not a no-op (a bare ALTER outside its transaction, a
+        // post-commit step that is not idempotent) fails here.
+        fn schema_dump(conn: &rusqlite::Connection) -> Vec<(String, String, Option<String>)> {
+            let mut stmt = conn
+                .prepare("SELECT type, name, sql FROM sqlite_master ORDER BY type, name")
+                .expect("prepare schema dump");
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .expect("query schema dump")
+                .map(|row| row.expect("schema row"))
+                .collect()
+        }
+
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        let first = apply_migrations(&conn).expect("first apply");
+        assert!(first > 0, "a fresh database must apply every migration");
+        let version = get_current_version(&conn).expect("version after first apply");
+        assert_eq!(version, MIGRATIONS.last().expect("migrations").version);
+        let before = schema_dump(&conn);
+
+        let second = apply_migrations(&conn).expect("replay on a migrated database");
+        assert_eq!(second, 0, "replaying a fully migrated database must apply nothing");
+        assert_eq!(get_current_version(&conn).expect("version after replay"), version);
+        assert_eq!(schema_dump(&conn), before, "replay must not alter the schema");
+    }
+
+    #[test]
+    fn empty_schema_version_on_a_populated_database_fails_closed() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 3);
+        conn.execute("DELETE FROM schema_version", [])
+            .expect("empty the version ledger");
+
+        let error = apply_migrations(&conn).expect_err("must not replay migrations over live tables");
+        let message = error.to_string();
+        assert!(
+            message.contains("schema_version") && message.contains("positive"),
+            "error must name the corrupted version row: {message}"
+        );
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))
+            .expect("count version rows");
+        assert_eq!(rows, 0, "a failed startup must not mutate the database");
+    }
+
+    #[test]
+    fn zero_negative_or_out_of_range_schema_version_names_the_corruption() {
+        // `version INTEGER PRIMARY KEY` is a rowid alias, so SQLite itself
+        // refuses TEXT there ("datatype mismatch"); the reachable corruptions
+        // are zero, negative, and absurdly large integers.
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 3);
+        assert!(
+            conn.execute("UPDATE schema_version SET version = 'banana'", [])
+                .is_err(),
+            "rowid alias must reject text"
+        );
+
+        for (corrupt, expected) in [
+            ("0", "positive integer"),
+            ("-7", "positive integer"),
+            ("9223372036854775807", "out of range"),
+        ] {
+            conn.execute(&format!("UPDATE schema_version SET version = {corrupt}"), [])
+                .expect("corrupt the version");
+            let error = get_current_version(&conn)
+                .expect_err("a corrupted version must fail closed");
+            assert!(
+                error.to_string().contains(expected),
+                "version {corrupt}: unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn split_add_column_statements_extracts_every_alter_and_keeps_the_rest() {
+        let body = "-- ALTER TABLE in a comment stays put\n\
+CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY);\n\
+ALTER TABLE t ADD COLUMN a TEXT;\n\
+ALTER TABLE t\n    ADD COLUMN b INTEGER NOT NULL DEFAULT 0;\n\
+CREATE INDEX IF NOT EXISTS idx_t_a ON t(a);\n\
+ALTER TABLE t RENAME COLUMN a TO a2;\n\
+UPDATE schema_version SET version = 99;\n";
+        let (alters, rest) = split_add_column_statements(body);
+        assert_eq!(
+            alters,
+            vec![
+                "ALTER TABLE t ADD COLUMN a TEXT".to_string(),
+                "ALTER TABLE t ADD COLUMN b INTEGER NOT NULL DEFAULT 0".to_string(),
+            ]
+        );
+        assert!(rest.contains("-- ALTER TABLE in a comment stays put"));
+        assert!(rest.contains("CREATE TABLE IF NOT EXISTS t"));
+        assert!(rest.contains("CREATE INDEX IF NOT EXISTS idx_t_a"));
+        assert!(rest.contains("UPDATE schema_version SET version = 99;"));
+        assert!(rest.contains("ALTER TABLE t RENAME COLUMN a TO a2;"), "non-ADD ALTERs stay: {rest}");
+        assert!(!rest.contains("ADD COLUMN"), "ALTERs must leave the batch: {rest}");
+    }
+
+    #[test]
+    fn every_migration_with_added_columns_survives_a_half_applied_replay() {
+        // The historic failure shape: a pre-transactional runner (or a
+        // pre-release build) added a migration's columns but never advanced
+        // schema_version. Replaying that migration must absorb the existing
+        // columns instead of failing with `duplicate column name`.
+        let mut exercised = 0;
+        for migration in MIGRATIONS {
+            let (alters, _) = split_add_column_statements(migration.up);
+            if alters.is_empty() {
+                continue;
+            }
+            exercised += 1;
+            let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+            apply_migrations_through(&conn, migration.version - 1);
+            for stmt in &alters {
+                conn.execute(stmt, [])
+                    .unwrap_or_else(|error| panic!("v{} half-apply {stmt}: {error}", migration.version));
+            }
+            apply_migrations(&conn).unwrap_or_else(|error| {
+                panic!(
+                    "v{} must replay over its own half-applied columns: {error}",
+                    migration.version
+                )
+            });
+            assert_eq!(
+                get_current_version(&conn).expect("version"),
+                MIGRATIONS.last().expect("migrations").version
+            );
+        }
+        assert!(exercised >= 5, "expected the ADD COLUMN migrations to be exercised, got {exercised}");
+    }
+
+    #[test]
+    fn v28_reconciles_a_stale_manifest_vector_count() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        apply_migrations_through(&conn, 27);
+        // Two legacy vectors to copy.
+        for node in ["n1", "n2"] {
+            conn.execute(
+                "INSERT INTO knowledge_nodes (id, content, node_type, created_at, updated_at, last_accessed, next_review)
+                 VALUES (?1, 'x', 'fact', '2026-01-01', '2026-01-01', '2026-01-01', '2026-01-02')",
+                [node],
+            )
+            .expect("seed node");
+            conn.execute(
+                "INSERT INTO node_embeddings (node_id, embedding, dimensions, model, created_at)
+                 VALUES (?1, X'0000803F', 1, 'legacy', '2026-01-01')",
+                [node],
+            )
+            .expect("seed embedding");
+        }
+        // A pre-release build already wrote the V28 tables and a manifest row
+        // with a wrong count; OR IGNORE must not preserve that count.
+        let (_, v28_without_version) = split_add_column_statements(MIGRATION_V28_UP);
+        conn.execute_batch(&v28_without_version.replace(
+            "UPDATE schema_version SET version = 28, applied_at = datetime('now');",
+            "",
+        ))
+        .expect("pre-release V28 shape");
+        conn.execute(
+            "UPDATE embedding_profile_manifests SET vector_count = 40 WHERE profile_id = 'nomic-v1.5-legacy-raw-256'",
+            [],
+        )
+        .expect("stale count");
+
+        apply_migrations(&conn).expect("replay V28");
+        let count: i64 = conn
+            .query_row(
+                "SELECT vector_count FROM embedding_profile_manifests WHERE profile_id = 'nomic-v1.5-legacy-raw-256'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("manifest count");
+        assert_eq!(count, 2, "manifest count must equal the real vector count after replay");
+
+        // And the on-open reconciliation catches drift that appears later.
+        conn.execute(
+            "UPDATE embedding_profile_manifests SET vector_count = 7 WHERE profile_id = 'nomic-v1.5-legacy-raw-256'",
+            [],
+        )
+        .expect("drift");
+        assert!(reconcile_profile_manifest_vector_count(&conn, "nomic-v1.5-legacy-raw-256").expect("reconcile"));
+        let count: i64 = conn
+            .query_row(
+                "SELECT vector_count FROM embedding_profile_manifests WHERE profile_id = 'nomic-v1.5-legacy-raw-256'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("manifest count");
+        assert_eq!(count, 2);
+        assert!(!reconcile_profile_manifest_vector_count(&conn, "nomic-v1.5-legacy-raw-256").expect("no-op"));
     }
 
     #[test]

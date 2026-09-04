@@ -107,10 +107,32 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     loop {
         tokio::select! {
             // Broadcast event from cognitive engine
-            Ok(event) = event_rx.recv() => {
-                let json = event.to_json();
-                if sender.send(Message::Text(json.into())).await.is_err() {
-                    break;
+            received = event_rx.recv() => {
+                match received {
+                    Ok(event) => {
+                        let json = event.to_json();
+                        if sender.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    // The broadcast channel is bounded; a subscriber that
+                    // falls behind loses the oldest events. Never resume
+                    // silently: tell the client how many it missed so it can
+                    // refetch state instead of trusting a stream with a hole.
+                    Err(broadcast::error::RecvError::Lagged(missed)) => {
+                        warn!(missed, "WebSocket subscriber lagged; events dropped");
+                        let gap = serde_json::json!({
+                            "type": "EventsDropped",
+                            "data": {
+                                "missed": missed,
+                                "timestamp": Utc::now().to_rfc3339(),
+                            }
+                        });
+                        if sender.send(Message::Text(gap.to_string().into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
             // Heartbeat

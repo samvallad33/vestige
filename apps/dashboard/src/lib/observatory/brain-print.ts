@@ -8,6 +8,11 @@
  * the permalink is safe by construction.
  *
  * Same store twice → identical print. Two stores → different prints.
+ *
+ * Determinism rule: only STORED shape enters the print. `dueForReview` is a
+ * wall-clock property (`next_review <= now`), so it is carried on the shape
+ * for display but never hashed or scored — otherwise an untouched store would
+ * re-key every time a card crossed its due date.
  */
 
 import { api } from '$stores/api';
@@ -155,7 +160,9 @@ export function encodeShapeVector(shape: BrainShape): number[] {
 	return [
 		BRAIN_PRINT_VERSION,
 		intLane(shape.totalMemories),
-		intLane(shape.dueForReview),
+		// Lane 2 is reserved (always 0). It carried dueForReview until the Sep 2026
+		// determinism fix; that leaked wall-clock time into the hash (header contract).
+		0,
 		milliLane(shape.averageRetention),
 		percentMilli(shape.embeddingCoverage),
 		intLane(shape.endangeredCount),
@@ -188,7 +195,6 @@ export function canonicalShapePayload(shape: BrainShape): string {
 
 interface ShapeMetrics {
 	total: number;
-	dueRatio: number;
 	avgRet: number;
 	coverage: number;
 	endangeredRatio: number;
@@ -238,7 +244,6 @@ function metricsOf(shape: BrainShape): ShapeMetrics {
 	}
 	return {
 		total,
-		dueRatio: intLane(shape.dueForReview) / denom,
 		avgRet: milliLane(shape.averageRetention) / 1000,
 		coverage: percentMilli(shape.embeddingCoverage) / 1000,
 		endangeredRatio: intLane(shape.endangeredCount) / denom,
@@ -283,12 +288,6 @@ const TRAIT_RULES: TraitRule[] = [
 		label: 'sedimentary dark',
 		group: 'vitality',
 		score: (m) => (m.lowRetFrac >= 0.3 || m.endangeredRatio >= 0.22 ? 1.1 + m.lowRetFrac : 0)
-	},
-	{
-		id: 'review-pressure',
-		label: 'review pressure',
-		group: 'vitality',
-		score: (m) => (m.dueRatio >= 0.22 ? 1 + m.dueRatio : 0)
 	},
 	{
 		id: 'oxygen-rich',

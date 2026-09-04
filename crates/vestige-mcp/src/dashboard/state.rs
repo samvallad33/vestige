@@ -9,7 +9,14 @@ use super::events::VestigeEvent;
 use crate::cognitive::CognitiveEngine;
 
 /// Broadcast channel capacity — how many events can buffer before old ones drop.
-const EVENT_CHANNEL_CAPACITY: usize = 1024;
+// 4096 events of headroom before a slow dashboard subscriber lags. A lagging
+// subscriber is told how many events it missed (see websocket.rs) instead of
+// silently resuming mid-stream.
+pub const EVENT_CHANNEL_CAPACITY: usize = 4096;
+// Public so the two servers that build their own channel (the MCP binary
+// and `vestige-cli serve`) cannot drift away from the dashboard's value:
+// a hardcoded 4096 beside a tunable constant silently stops matching the
+// moment anyone tunes it.
 
 /// Shared application state for the dashboard
 #[derive(Clone)]

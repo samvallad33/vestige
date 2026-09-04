@@ -71,6 +71,11 @@
 		 *           and the takeover overlay).
 		 * 'none'  — pure living canvas + loading/error text only; the host page
 		 *           provides all chrome (the main graph's field renderer).
+		 *
+		 * DEFAULT IS 'none'. The 'full' overlays render real
+		 * memory labels (spine beats, verdict cards), and the export/capture
+		 * paths mount this component; a mount that forgets to pass `chrome`
+		 * must never start exporting labels by accident. Opt IN to 'full'.
 		 */
 		chrome?: 'full' | 'none';
 		/**
@@ -83,7 +88,7 @@
 		/**
 		 * Devicepixel clamp forwarded to the engine. Export mounts pin this to 1
 		 * so a 1920×1080 host renders a bitmap of exactly 1920×1080 — the fixed
-		 * resolution the byte-identical clip contract requires.
+		 * resolution the pixel-identical clip contract requires.
 		 */
 		maxDpr?: number;
 		/**
@@ -120,7 +125,7 @@
 		ondemochange,
 		onexit,
 		embedded = false,
-		chrome = 'full',
+		chrome = 'none',
 		onpick,
 		onready,
 		maxDpr = 2,
@@ -560,8 +565,11 @@
 	}
 
 	function handleReady(e: ObservatoryEngine) {
-		// A fresh engine (first boot or HMR re-create) always needs an upload.
+		// A fresh engine (first boot, HMR re-create, or a device-loss recovery)
+		// always needs an upload. Release the previous renderer's GPU buffers
+		// first so a recovered device never inherits handles from the dead one.
 		uploaded = false;
+		renderer?.dispose();
 		engine = e;
 		renderer = new NodeRenderer(e);
 		cameraRig.enabled = !capture;
@@ -724,7 +732,7 @@
 				// Capture mode (?frame=N / ?capture) must stay pixel-reproducible:
 				// the shuttle's scrub position and the light field's idle cadence
 				// both derive from wall-clock NOW, so neither instrument mounts
-				// during a capture — the field itself stays byte-identical.
+				// during a capture — the field itself stays pixel-identical.
 				if (!capture) {
 					radiancePass = new FossilLightTransportPass(engine, renderer, fossilLightSourceIndices());
 					engine.addPass(radiancePass);
@@ -786,6 +794,11 @@
 		return () => {
 			stopGlide();
 			cleanupMotion?.();
+			// Free the field's GPU buffers with the component. The canvas owner
+			// disposes the engine (and device) separately; this releases the
+			// renderer's handles and tells any in-flight pick to drop its result.
+			renderer?.dispose();
+			renderer = null;
 			// Clear the dev/verification global so a demo/receipt remount doesn't
 			// retain a disposed LiveBridge → engine → renderer → 200-node graph
 			// forever (one orphaned brain per switch otherwise).

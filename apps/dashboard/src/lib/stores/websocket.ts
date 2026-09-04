@@ -54,6 +54,13 @@ function createWebSocketStore() {
 			ws.onmessage = (event) => {
 				try {
 					const parsed: VestigeEvent = JSON.parse(event.data);
+					if (parsed.type === 'EventsDropped') {
+						// A hole in the stream is a fact worth stating out loud: the
+						// feed keeps the marker so the UI can show the gap and refetch.
+						console.warn(
+							`[vestige] live feed dropped ${String(parsed.data?.missed ?? '?')} events (slow subscriber); state may be stale until the next refresh`
+						);
+					}
 					update(s => {
 						if (parsed.type === 'Heartbeat') {
 							return { ...s, lastHeartbeat: parsed };

@@ -6,9 +6,10 @@
  * offline, and each rendered frame is handed to the encoder at its exact
  * timestamp (Mediabunny CanvasSource → WebCodecs hardware encode →
  * Mp4OutputFormat → in-memory buffer). Because the loop clock is a pure
- * function of the frame index, every machine exports the byte-identical
- * clip of the same loop — a slow laptop just takes longer to finish, it
- * never drops a frame.
+ * function of the frame index, every machine renders pixel-identical frames
+ * of the same loop — a slow laptop just takes longer to finish, it never
+ * drops a frame. The encoded H.264 bytes are NOT guaranteed identical
+ * across machines (hardware encoders differ); the rendered pixels are.
  *
  * Privacy contract: the export mount renders the pure canvas stage
  * (chrome 'none') — the field, the moments, the choreography — and no DOM

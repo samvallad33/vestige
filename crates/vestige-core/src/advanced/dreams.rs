@@ -1107,7 +1107,12 @@ pub enum DiscoveredConnectionType {
 }
 
 /// Memory dreamer for enhanced consolidation
-#[derive(Debug)]
+///
+/// `Clone` is cheap and SHARES state: history, insights, and discovered
+/// connections live behind `Arc<RwLock<_>>`, so a clone can run a dream on a
+/// blocking thread without holding the owning `CognitiveEngine` lock, and the
+/// engine's own dreamer still sees everything that run recorded.
+#[derive(Debug, Clone)]
 pub struct MemoryDreamer {
     /// Configuration
     config: DreamConfig,
@@ -1156,7 +1161,7 @@ impl MemoryDreamer {
         &self,
         memories: &[DreamMemory],
     ) -> (DreamResult, Vec<DiscoveredConnection>) {
-        self.run_dream(memories, &self.config).await
+        self.run_dream(memories, &self.config)
     }
 
     /// Run a dream cycle with a temporary config and return this run's connections.
@@ -1165,10 +1170,30 @@ impl MemoryDreamer {
         memories: &[DreamMemory],
         config: DreamConfig,
     ) -> (DreamResult, Vec<DiscoveredConnection>) {
-        self.run_dream(memories, &config).await
+        self.run_dream(memories, &config)
     }
 
-    async fn run_dream(
+    /// Synchronous twin of [`Self::dream_with_connections`] for callers that
+    /// run the O(n²) pairwise scan on a blocking thread (`spawn_blocking`)
+    /// instead of under an async lock. The scan never awaits anything, so the
+    /// async wrappers above are thin shims over this.
+    pub fn dream_with_connections_blocking(
+        &self,
+        memories: &[DreamMemory],
+    ) -> (DreamResult, Vec<DiscoveredConnection>) {
+        self.run_dream(memories, &self.config)
+    }
+
+    /// Synchronous twin of [`Self::dream_with_config_and_connections`].
+    pub fn dream_with_config_and_connections_blocking(
+        &self,
+        memories: &[DreamMemory],
+        config: DreamConfig,
+    ) -> (DreamResult, Vec<DiscoveredConnection>) {
+        self.run_dream(memories, &config)
+    }
+
+    fn run_dream(
         &self,
         memories: &[DreamMemory],
         config: &DreamConfig,
