@@ -558,16 +558,26 @@ fn discover_answers_before_any_handshake_and_does_not_overclaim() {
     // Deliberately no initialize.
     let result = server.result("server/discover", None);
 
-    assert_eq!(result["serverInfo"]["name"], json!("vestige"));
+    // `DiscoverResult` shape: identity under `_meta`, cache hints, resultType.
+    // The first version of this handler invented `protocolVersions` and
+    // `serverInfo`, and a conforming client read "no revisions offered" (#175).
+    let identity = &result["_meta"]["io.modelcontextprotocol/serverInfo"];
+    assert_eq!(identity["name"], json!("vestige"));
     assert!(
-        result["serverInfo"]["version"].is_string(),
+        identity["version"].is_string(),
         "discover must report a version: {result}"
+    );
+    assert_eq!(result["resultType"], json!("complete"));
+    assert_eq!(result["cacheScope"], json!("public"));
+    assert!(
+        result["ttlMs"].as_u64().is_some(),
+        "ttlMs must be a non-negative integer: {result}"
     );
     assert_eq!(result["capabilities"]["tools"]["listChanged"], json!(false));
 
-    let versions: Vec<String> = result["protocolVersions"]
+    let versions: Vec<String> = result["supportedVersions"]
         .as_array()
-        .expect("protocolVersions array")
+        .expect("supportedVersions array")
         .iter()
         .map(|v| v.as_str().expect("version string").to_string())
         .collect();
@@ -609,7 +619,12 @@ fn uninitialized_requests_are_refused_but_discover_is_exempt() {
     let dir = data_dir();
     let mut server = Server::spawn(dir.path());
 
-    for method in ["tools/list", "resources/list", "ping"] {
+    for method in [
+        "tools/list",
+        "resources/list",
+        "resources/templates/list",
+        "ping",
+    ] {
         let error = server.error(method, None);
         assert_eq!(
             error["code"],
@@ -618,12 +633,48 @@ fn uninitialized_requests_are_refused_but_discover_is_exempt() {
         );
     }
     assert!(
-        server.result("server/discover", None)["protocolVersions"].is_array(),
+        server.result("server/discover", None)["supportedVersions"].is_array(),
         "server/discover must remain callable before initialize"
     );
 
     server.handshake();
     assert!(server.result("tools/list", None)["tools"].is_array());
+
+    server.shutdown();
+}
+
+/// `resources/templates/list` belongs to the `resources` capability the server
+/// declares, so it must answer (with nothing to advertise) rather than
+/// method-not-found, and an unknown pagination cursor on any list method must be
+/// refused with `-32602` instead of being answered with page one.
+///
+/// Catches: a client that believes it is paginating looping on page one forever,
+/// and a conformance suite that cannot verify the templates surface at all while
+/// it errors (#175).
+#[test]
+fn list_methods_reject_unknown_cursors_and_templates_list_is_empty() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let templates = server.result("resources/templates/list", None);
+    assert_eq!(templates["resourceTemplates"], json!([]));
+
+    for method in ["tools/list", "resources/list", "resources/templates/list"] {
+        let error = server.error(method, Some(json!({ "cursor": "not-one-we-issued" })));
+        assert_eq!(
+            error["code"],
+            json!(-32602),
+            "{method} with an unknown cursor must be invalid params: {error}"
+        );
+        // Absent-equivalent cursors are not an error.
+        assert!(server
+            .result(method, Some(json!({ "cursor": null })))
+            .is_object());
+        assert!(server
+            .result(method, Some(json!({ "cursor": "" })))
+            .is_object());
+    }
 
     server.shutdown();
 }

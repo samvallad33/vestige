@@ -68,6 +68,36 @@ fn supported_protocol_versions() -> &'static [&'static str] {
     &["2024-11-05", "2025-03-26", "2025-06-18", MCP_VERSION]
 }
 
+/// Cache hint for `server/discover`. The payload is compile-time constant
+/// (supported revisions, capabilities and identity are baked into the binary),
+/// so an hour is an honest hint, and "stable across calls within its own TTL"
+/// holds trivially.
+const DISCOVER_TTL_MS: u64 = 3_600_000;
+
+/// Reject a pagination cursor this server never issued.
+///
+/// `tools/list`, `resources/list` and `resources/templates/list` return every
+/// entry in one page and never emit a `nextCursor`, so any cursor a client sends
+/// back is by definition one Vestige did not hand out. The spec says an unknown
+/// cursor SHOULD be answered with `-32602` rather than silently ignored, and
+/// ignoring it is worse than pedantic: a client that believes it is paginating
+/// would loop on page one forever. Flagged by the conformance suite in #175.
+///
+/// `null` and `""` are treated as absent, so a client that always serialises
+/// the field is not punished for a cursor it never really set.
+fn reject_unknown_cursor(params: Option<&serde_json::Value>) -> Result<(), JsonRpcError> {
+    let Some(cursor) = params.and_then(|p| p.get("cursor")) else {
+        return Ok(());
+    };
+    match cursor {
+        serde_json::Value::Null => Ok(()),
+        serde_json::Value::String(s) if s.is_empty() => Ok(()),
+        _ => Err(JsonRpcError::invalid_params(
+            "unknown pagination cursor: this server returns a single page and never issues one",
+        )),
+    }
+}
+
 /// Whether `VESTIGE_TRACE` enables Black Box trace recording. ON by default:
 /// unset, empty, or any malformed value → true (fail-open to the documented
 /// default); only an explicit `0` / `false` / `off` / `no` turns it off.
@@ -197,9 +227,12 @@ impl McpServer {
             "notifications/initialized" => Err(JsonRpcError::invalid_request(
                 "notifications/initialized must be sent without an id",
             )),
-            "tools/list" => self.handle_tools_list().await,
+            "tools/list" => self.handle_tools_list(request.params.as_ref()).await,
             "tools/call" => self.handle_tools_call(request.params).await,
-            "resources/list" => self.handle_resources_list().await,
+            "resources/list" => self.handle_resources_list(request.params.as_ref()).await,
+            "resources/templates/list" => {
+                self.handle_resources_templates_list(request.params.as_ref())
+            }
             "resources/read" => self.handle_resources_read(request.params).await,
             "server/discover" => self.handle_server_discover(),
             "ping" => Ok(serde_json::json!({})),
@@ -234,16 +267,34 @@ impl McpServer {
     ///
     /// Unlike `initialize`, this neither takes params nor mutates session state,
     /// so it is safe to call at any point, including before initialization.
+    ///
+    /// The shape is `DiscoverResult` from the 2026-07-28 schema, because that is
+    /// the only schema that defines the method: `resultType`,
+    /// `supportedVersions`, `capabilities`, `ttlMs` and `cacheScope` are
+    /// required, `instructions` is optional, and server identity lives in
+    /// `_meta` under `io.modelcontextprotocol/serverInfo`. The first version of
+    /// this handler invented its own field names (`protocolVersions`,
+    /// `serverInfo`); a conforming client could not read them, concluded the
+    /// server offered no revision at all, and tested the newest one anyway
+    /// (#175).
     fn handle_server_discover(&self) -> Result<serde_json::Value, JsonRpcError> {
         Ok(serde_json::json!({
-            "protocolVersions": supported_protocol_versions(),
-            "serverInfo": {
-                "name": "vestige",
-                "version": env!("CARGO_PKG_VERSION"),
-            },
+            "resultType": "complete",
+            "supportedVersions": supported_protocol_versions(),
             "capabilities": {
                 "tools": { "listChanged": false },
                 "resources": { "listChanged": false },
+            },
+            "instructions": build_instructions(),
+            "ttlMs": DISCOVER_TTL_MS,
+            // Nothing here is caller-specific: revisions, capabilities and build
+            // identity are the same for everyone, so a shared cache is fine.
+            "cacheScope": "public",
+            "_meta": {
+                "io.modelcontextprotocol/serverInfo": {
+                    "name": "vestige",
+                    "version": env!("CARGO_PKG_VERSION"),
+                }
             },
         }))
     }
@@ -310,7 +361,12 @@ impl McpServer {
     }
 
     /// Handle tools/list request
-    async fn handle_tools_list(&self) -> Result<serde_json::Value, JsonRpcError> {
+    async fn handle_tools_list(
+        &self,
+        params: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, JsonRpcError> {
+        reject_unknown_cursor(params)?;
+
         // v2.3: 14 advertised tools after adding the controlled `receipt`
         // surface and retaining the distinct flagship `backfill` primitive.
         // 22 deprecated/folded names still work as hidden redirects in
@@ -1497,7 +1553,12 @@ impl McpServer {
     }
 
     /// Handle resources/list request
-    async fn handle_resources_list(&self) -> Result<serde_json::Value, JsonRpcError> {
+    async fn handle_resources_list(
+        &self,
+        params: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, JsonRpcError> {
+        reject_unknown_cursor(params)?;
+
         let resources = vec![
             // Memory resources
             ResourceDescription {
@@ -1575,6 +1636,22 @@ impl McpServer {
 
         let result = ListResourcesResult { resources };
         serde_json::to_value(result).map_err(|e| JsonRpcError::internal_error(&e.to_string()))
+    }
+
+    /// Handle resources/templates/list request.
+    ///
+    /// Every Vestige resource is a fixed `memory://` URI, so there are no URI
+    /// templates to advertise. The answer is an empty list rather than
+    /// `-32601`: the method belongs to the `resources` capability we declare,
+    /// and a client discovering templates should learn "none" instead of
+    /// "method not found". The conformance suite could not verify this surface
+    /// while it errored (#175).
+    fn handle_resources_templates_list(
+        &self,
+        params: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, JsonRpcError> {
+        reject_unknown_cursor(params)?;
+        Ok(serde_json::json!({ "resourceTemplates": [] }))
     }
 
     /// Handle resources/read request
@@ -2510,6 +2587,124 @@ mod tests {
         assert!(!parse_trace_enabled(Some("FALSE")));
         assert!(!parse_trace_enabled(Some("OFF")));
         assert!(!parse_trace_enabled(Some(" no ")));
+    }
+
+    // ========================================================================
+    // DISCOVERY, PAGINATION AND TEMPLATES (#175)
+    // ========================================================================
+
+    fn error_code(response: &JsonRpcResponse) -> Option<i64> {
+        serde_json::to_value(response.error.as_ref()?)
+            .ok()?
+            .get("code")?
+            .as_i64()
+    }
+
+    /// `server/discover` must be a `DiscoverResult`: the schema-required fields
+    /// present, identity under `_meta`, and no revision we do not implement. The
+    /// first handler invented `protocolVersions`/`serverInfo`, and a conforming
+    /// client concluded the server offered no revision at all.
+    #[tokio::test]
+    async fn discover_is_a_schema_shaped_discover_result() {
+        let (mut server, _dir) = test_server().await;
+        // No initialize on purpose: discover precedes the handshake.
+        let response = server
+            .handle_request(make_request("server/discover", None))
+            .await
+            .unwrap();
+        assert!(response.error.is_none(), "{:?}", response.error);
+        let result = response.result.unwrap();
+
+        assert_eq!(result["resultType"], "complete");
+        assert_eq!(result["cacheScope"], "public");
+        assert!(result["ttlMs"].as_u64().is_some(), "ttlMs must be an integer");
+        assert_eq!(
+            result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+            "vestige"
+        );
+        assert!(result.get("protocolVersions").is_none());
+        assert!(result.get("serverInfo").is_none());
+
+        let versions: Vec<&str> = result["supportedVersions"]
+            .as_array()
+            .expect("supportedVersions must be an array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(versions.contains(&MCP_VERSION));
+        assert!(
+            !versions.contains(&"2026-07-28"),
+            "never advertise a revision the server does not implement"
+        );
+        for version in versions {
+            assert!(
+                supported_protocol_versions().contains(&version),
+                "every advertised revision must be one initialize accepts: {version}"
+            );
+        }
+    }
+
+    /// An unknown pagination cursor on any list method is `-32602`, while `null`
+    /// and `""` count as absent. Vestige returns one page and never issues a
+    /// cursor, so any non-empty cursor is one it did not hand out.
+    #[tokio::test]
+    async fn unknown_cursors_are_rejected_and_absent_equivalents_are_not() {
+        let (mut server, _dir) = test_server().await;
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await
+            .unwrap();
+
+        for method in ["tools/list", "resources/list", "resources/templates/list"] {
+            let rejected = server
+                .handle_request(make_request(
+                    method,
+                    Some(serde_json::json!({ "cursor": "not-one-we-issued" })),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                error_code(&rejected),
+                Some(-32602),
+                "{method} with an unknown cursor must be invalid params: {:?}",
+                rejected.result
+            );
+
+            for absent in [serde_json::Value::Null, serde_json::json!("")] {
+                let accepted = server
+                    .handle_request(make_request(
+                        method,
+                        Some(serde_json::json!({ "cursor": absent })),
+                    ))
+                    .await
+                    .unwrap();
+                assert!(
+                    accepted.error.is_none(),
+                    "{method} with an absent-equivalent cursor must succeed: {:?}",
+                    accepted.error
+                );
+            }
+        }
+    }
+
+    /// `resources/templates/list` answers with an empty list, not method-not-found:
+    /// the method belongs to the `resources` capability the server declares.
+    #[tokio::test]
+    async fn resources_templates_list_is_empty_not_method_not_found() {
+        let (mut server, _dir) = test_server().await;
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await
+            .unwrap();
+        let response = server
+            .handle_request(make_request("resources/templates/list", None))
+            .await
+            .unwrap();
+        assert!(response.error.is_none(), "{:?}", response.error);
+        assert_eq!(
+            response.result.unwrap()["resourceTemplates"],
+            serde_json::json!([])
+        );
     }
 
     // ========================================================================

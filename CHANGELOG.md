@@ -183,6 +183,18 @@ on), so those got regression tests and a checkpoint hook rather than rewrites.
   `error`, refuses to re-acquire or paint an error once the engine is
   disposed, and runs one loop at a time when `device.lost` fires twice.
 
+### Fixed — MCP conformance
+
+- `server/discover` now answers with the `DiscoverResult` shape the 2026-07-28
+  schema defines (`supportedVersions`, `resultType`, `cacheScope`, `ttlMs`,
+  identity under `_meta`) instead of a home-grown `protocolVersions` object. A
+  conforming client could not read our supported revisions from the old answer,
+  concluded the server offered none, and tested the newest revision anyway,
+  which is exactly what the reporter's harness did in #175. Vestige still does
+  not advertise 2026-07-28. `resources/templates/list` returns an empty list
+  instead of method-not-found, and an unrecognised pagination cursor on any list
+  method is rejected with `-32602` instead of being answered with page one.
+
 ## [2.7.1] - 2026-09-02 — "The first cloud write is never unconditional"
 
 ### Fixed — Managed Continuity first upload
