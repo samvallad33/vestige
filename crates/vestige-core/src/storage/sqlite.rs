@@ -760,6 +760,7 @@ fn warn_skipped_row<T>(operation: &'static str) -> impl FnMut(rusqlite::Result<T
 /// not consult the busy handler for that upgrade. Writers go through
 /// [`SqliteMemoryStore::begin_write_transaction`], which begins IMMEDIATE. The
 /// `write_transaction_policy` lint enforces both halves of that split.
+#[cfg(all(feature = "embeddings", feature = "vector-search"))]
 fn begin_read_snapshot(conn: &Connection) -> Result<rusqlite::Transaction<'_>> {
     Ok(rusqlite::Transaction::new_unchecked(
         conn,
