@@ -14,6 +14,23 @@ starvation findings did not reproduce (every migration already runs inside one
 IMMEDIATE transaction with its own version bump, and `wal_autocheckpoint` is
 on), so those got regression tests and a checkpoint hook rather than rewrites.
 
+### Fixed — Vector index
+
+- A long-lived MCP server process now sees exactly the vectors its sibling
+  processes wrote (#181). The refresh that shipped in 2.7.0 noticed that
+  *something* had changed (`PRAGMA data_version`) but then re-read every
+  vector row for the active profile on every external commit, and it skipped
+  any id already in its index, so a peer re-embedding an existing memory left
+  a stale vector behind until restart. Migration V32 adds `vector_journal`, an
+  append-only, trigger-fed record of every insert, update and delete on
+  `embedding_profile_vectors`, keyed by an AUTOINCREMENT sequence that is
+  allocated inside the writer's transaction and never reused. The refresh reads
+  only the rows past its watermark, replaces re-embedded vectors, and drops
+  purged ones; a process whose watermark has fallen behind the pruned journal
+  reconciles against the table instead of trusting it. The journal holds ids
+  only. Six tests cover it, including two stores open on one file, and each
+  guard was negative-tested by reintroducing the defect it prevents.
+
 ### Fixed — Concurrency
 
 - `purge_node` released its SQLite writer guard only after touching the

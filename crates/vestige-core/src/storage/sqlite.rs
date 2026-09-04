@@ -680,15 +680,54 @@ pub struct SqliteMemoryStore {
     attached_profile_runtime: RwLock<Option<AttachedProfileRuntime>>,
     /// Cached model signature. `None` until the first embedding is written.
     registered_model: std::sync::RwLock<Option<crate::storage::memory_store::ModelSignature>>,
+    /// Where this process's vector index stands relative to the shared
+    /// database: the last `PRAGMA data_version` it saw and the last
+    /// `vector_journal.seq` it absorbed. See `refresh_vector_index_if_stale`.
+    #[cfg(feature = "vector-search")]
+    vector_index_watermark: Mutex<VectorIndexWatermark>,
+}
+
+/// Where the in-process vector index stands relative to the shared database
+/// (#181). See `SqliteMemoryStore::refresh_vector_index_if_stale`.
+#[cfg(feature = "vector-search")]
+#[derive(Debug, Clone, Copy)]
+struct VectorIndexWatermark {
     /// Last `PRAGMA data_version` observed on the reader connection.
     ///
     /// SQLite increments this on a connection whenever ANOTHER connection commits
-    /// to the database. It is the cheapest possible cross-process change signal --
-    /// no table scan, no file stat -- and it is what lets a long-lived process
-    /// notice that a peer has written memories it has never seen. See
-    /// `refresh_vector_index_if_stale`.
-    #[cfg(feature = "vector-search")]
-    last_seen_data_version: Mutex<i64>,
+    /// to the database. It is the cheapest possible cross-process change signal:
+    /// no table scan, no file stat. It only says THAT something changed; the
+    /// journal says what. `-1` means never read.
+    data_version: i64,
+    /// Highest `vector_journal.seq` this index has absorbed. Every row past it
+    /// is a vector write this process has not seen. `-1` means unknown, which
+    /// makes the next refresh reconcile the index against the table instead of
+    /// trusting the journal.
+    journal_seq: i64,
+}
+
+#[cfg(feature = "vector-search")]
+impl Default for VectorIndexWatermark {
+    fn default() -> Self {
+        Self {
+            data_version: -1,
+            journal_seq: -1,
+        }
+    }
+}
+
+/// What a refresh found in the journal past the watermark.
+#[cfg(all(feature = "embeddings", feature = "vector-search"))]
+enum VectorRefreshPlan {
+    /// The journal is intact: apply exactly these per-node changes (`None` is a
+    /// removal) and move the watermark to `head`.
+    Incremental {
+        changes: Vec<(String, Option<Vec<u8>>)>,
+        head: i64,
+    },
+    /// The watermark is unknown or the journal was pruned past it: compare the
+    /// index against the table instead.
+    Reconcile,
 }
 
 #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -709,6 +748,23 @@ fn warn_skipped_row<T>(operation: &'static str) -> impl FnMut(rusqlite::Result<T
             None
         }
     }
+}
+
+/// Begin a READ snapshot on the reader connection.
+///
+/// A DEFERRED transaction on a connection that only reads gives several
+/// statements one consistent view of the database (WAL snapshot isolation),
+/// which is what a "rows plus the journal position that describes them" read
+/// needs. It must never be used on the writer: a DEFERRED transaction that
+/// reads and then writes can fail with `SQLITE_BUSY_SNAPSHOT`, and SQLite does
+/// not consult the busy handler for that upgrade. Writers go through
+/// [`SqliteMemoryStore::begin_write_transaction`], which begins IMMEDIATE. The
+/// `write_transaction_policy` lint enforces both halves of that split.
+fn begin_read_snapshot(conn: &Connection) -> Result<rusqlite::Transaction<'_>> {
+    Ok(rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Deferred,
+    )?)
 }
 
 impl SqliteMemoryStore {
@@ -1531,7 +1587,7 @@ impl SqliteMemoryStore {
             #[cfg(feature = "vector-search")]
             vector_index,
             #[cfg(feature = "vector-search")]
-            last_seen_data_version: Mutex::new(-1),
+            vector_index_watermark: Mutex::new(VectorIndexWatermark::default()),
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
             query_cache,
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -1668,11 +1724,14 @@ impl SqliteMemoryStore {
         let active_profile_id = Self::active_profile_id_from_conn(&reader)?
             .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.to_string());
         drop(reader);
-        let rebuilt = self.build_embedding_profile_index(&active_profile_id)?;
-        let mut index = index
-            .lock()
-            .map_err(|_| StorageError::Init("Vector index lock poisoned".to_string()))?;
-        *index = rebuilt;
+        let (rebuilt, journal_seq) = self.build_embedding_profile_index(&active_profile_id)?;
+        {
+            let mut index = index
+                .lock()
+                .map_err(|_| StorageError::Init("Vector index lock poisoned".to_string()))?;
+            *index = rebuilt;
+        }
+        self.reset_vector_index_watermark(journal_seq);
         Ok(())
     }
 
@@ -1680,12 +1739,15 @@ impl SqliteMemoryStore {
     /// index. Activation uses this preflight so an invalid destination can
     /// never become the visible database pointer.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    fn build_embedding_profile_index(&self, profile_id: &str) -> Result<VectorIndex> {
+    fn build_embedding_profile_index(&self, profile_id: &str) -> Result<(VectorIndex, i64)> {
         let reader = self
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-        let profile_dimension: usize = reader
+        // One read snapshot for the rows AND the journal head, so the watermark
+        // handed back describes exactly the rows that went into this index (#181).
+        let snapshot = begin_read_snapshot(&reader)?;
+        let profile_dimension: usize = snapshot
             .query_row(
                 "SELECT embedding_dimension FROM embedding_profiles WHERE profile_id = ?1",
                 params![profile_id],
@@ -1698,7 +1760,7 @@ impl SqliteMemoryStore {
                     profile_id
                 ))
             })?;
-        let mut stmt = reader.prepare(
+        let mut stmt = snapshot.prepare(
             "SELECT node_id, embedding, model
              FROM embedding_profile_vectors
              WHERE profile_id = ?1",
@@ -1734,6 +1796,12 @@ impl SqliteMemoryStore {
         }
 
         drop(stmt);
+        let journal_seq: i64 = snapshot.query_row(
+            "SELECT COALESCE(MAX(seq), 0) FROM vector_journal",
+            [],
+            |row| row.get(0),
+        )?;
+        drop(snapshot);
         drop(reader);
 
         // An index is a profile-scoped structure. In particular, never
@@ -1766,7 +1834,7 @@ impl SqliteMemoryStore {
                 ))
             })?;
         }
-        Ok(index)
+        Ok((index, journal_seq))
     }
 
     fn secret_findings_for_input(input: &IngestInput) -> Vec<SecretFinding> {
@@ -2924,13 +2992,17 @@ impl SqliteMemoryStore {
     ) -> Result<()> {
         let now = Utc::now();
 
-        {
+        // One transaction for the three rows, with the journal head read inside
+        // it. We hold the write lock, so no peer can commit between our INSERT
+        // and that read: `journal_head` is the seq the trigger just appended.
+        let journal_head: i64 = {
             let writer = self
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            let tx = Self::begin_write_transaction(&writer, "persist_node_embedding")?;
             if mirror_to_legacy_table {
-                writer.execute(
+                tx.execute(
                     "INSERT OR REPLACE INTO node_embeddings (node_id, embedding, dimensions, model, created_at)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![
@@ -2943,9 +3015,9 @@ impl SqliteMemoryStore {
                 )?;
             }
 
-            let active_profile_id = Self::active_profile_id_from_conn(&writer)?
+            let active_profile_id = Self::active_profile_id_from_conn(&tx)?
                 .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.to_string());
-            writer.execute(
+            tx.execute(
                 "INSERT OR REPLACE INTO embedding_profile_vectors
                     (profile_id, node_id, embedding, dimensions, model, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -2959,11 +3031,18 @@ impl SqliteMemoryStore {
                 ],
             )?;
 
-            writer.execute(
+            tx.execute(
                 "UPDATE knowledge_nodes SET has_embedding = 1, embedding_model = ?2 WHERE id = ?1",
                 params![node_id, model_name],
             )?;
-        }
+            let head: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(seq), 0) FROM vector_journal",
+                [],
+                |row| row.get(0),
+            )?;
+            tx.commit()?;
+            head
+        };
 
         if let Some(index) = self.vector_index.as_ref() {
             let mut index = index
@@ -2972,6 +3051,17 @@ impl SqliteMemoryStore {
             index
                 .add(node_id, vector)
                 .map_err(|e| StorageError::Init(format!("Vector index add failed: {}", e)))?;
+        }
+
+        // Our own write bumps the reader's data_version exactly like a peer's
+        // would, but the vector is already in the index. If ours is the only
+        // journal row since the last refresh, absorb it now so the next search
+        // does not re-add it. Anything else in between (a peer's row, an unknown
+        // watermark) is left for the refresh, which re-adds ours harmlessly.
+        if let Ok(mut watermark) = self.vector_index_watermark.lock()
+            && watermark.journal_seq + 1 == journal_head
+        {
+            watermark.journal_seq = journal_head;
         }
 
         Ok(())
@@ -3488,9 +3578,21 @@ impl SqliteMemoryStore {
         // in-memory-index handoff. The replacement was built and fully checked
         // before the pointer was ever visible.
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-        if let (Some(live_index), Some(rebuilt_index)) = (live_index.as_deref_mut(), rebuilt_index)
         {
-            *live_index = rebuilt_index;
+            let swapped_journal_seq = if let (Some(live_index), Some((rebuilt_index, journal_seq))) =
+                (live_index.as_deref_mut(), rebuilt_index)
+            {
+                *live_index = rebuilt_index;
+                Some(journal_seq)
+            } else {
+                None
+            };
+            // Release the index before touching the watermark: the refresh path
+            // never holds both locks at once, so neither may this one.
+            drop(live_index);
+            if let Some(journal_seq) = swapped_journal_seq {
+                self.reset_vector_index_watermark(journal_seq);
+            }
         }
         Ok(ActiveEmbeddingProfile {
             profile_id: profile_id.clone(),
@@ -6794,14 +6896,15 @@ impl SqliteMemoryStore {
     }
 
     /// Bring the in-process vector index up to date with vectors written by OTHER
-    /// processes since this one last looked.
+    /// processes since this one last looked. Returns the number of index
+    /// mutations applied: vectors added, replaced or removed.
     ///
     /// THE BUG THIS FIXES (#181). The HNSW index is process-local: it is built once
     /// at startup from `embedding_profile_vectors` and thereafter only ever appended
     /// to by THIS process's own ingests. A second MCP server writing to the same
-    /// SQLite file is therefore invisible to it. In a normal setup -- a desktop
-    /// client, an editor integration, a CLI and a dashboard all pointed at one store
-    /// -- every long-lived process is semantically blind to everything its peers have
+    /// SQLite file is therefore invisible to it. In a normal setup, a desktop
+    /// client, an editor integration, a CLI and a dashboard all pointed at one store,
+    /// every long-lived process is semantically blind to everything its peers have
     /// written since it booted. The consequences are silent: the prediction-error
     /// gate sees no similar candidate and creates a duplicate instead of reinforcing,
     /// and recall returns an incomplete answer with no indication anything is missing.
@@ -6811,17 +6914,32 @@ impl SqliteMemoryStore {
     /// THE SIGNAL. `PRAGMA data_version` is incremented on a connection whenever a
     /// DIFFERENT connection commits. Reading it is a single pragma with no table
     /// access, so this check is affordable on every query, and when nothing has
-    /// changed it costs one integer comparison.
+    /// changed it costs one integer comparison. It only says THAT something changed.
     ///
-    /// LOCK DISCIPLINE. This deliberately acquires the reader lock and the index lock
-    /// SEQUENTIALLY and never holds both at once: read the version, drop; read the
-    /// missing rows, drop; then take the index and add. `semantic_search_raw` holds
-    /// only the index lock, so no ordering cycle exists and this cannot deadlock
-    /// against it.
+    /// WHAT CHANGED comes from `vector_journal` (migration V32). Three triggers append
+    /// one row per insert, update or delete of `embedding_profile_vectors`, keyed by
+    /// an AUTOINCREMENT `seq` that is allocated inside the writer's transaction: so it
+    /// is monotonic in commit order, never reused, and independent of wall clocks.
+    /// The index remembers the last `seq` it absorbed and reads exactly the rows past
+    /// it. A peer re-embedding an existing node is an upsert row, so the stale vector
+    /// is replaced; a peer's purge is a delete row, so the dead vector leaves the
+    /// index. The first version of this refresh rescanned every vector row, blob
+    /// included, on every external commit, and could not see re-embeddings at all
+    /// because it skipped any id the index already held.
+    ///
+    /// RECONCILE. If the watermark is unknown, or the journal has been pruned past
+    /// it, the index is compared against the table instead: one covering scan of
+    /// node ids for the active profile, add what is missing, drop what is gone. That
+    /// is O(N) over ids only, and it runs in exactly those two cases.
+    ///
+    /// LOCK DISCIPLINE. This acquires the reader lock, the watermark lock and the
+    /// index lock SEQUENTIALLY and never holds two at once. `semantic_search_raw`
+    /// holds only the index lock, so no ordering cycle exists and this cannot
+    /// deadlock against it.
     ///
     /// FAILS OPEN. A refresh problem must degrade to a possibly-stale index, never
-    /// break the query -- returning an error here would turn a peer's write into an
-    /// outage. Returns the number of vectors added.
+    /// break the query: returning an error here would turn a peer's write into an
+    /// outage.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn refresh_vector_index_if_stale(&self) -> usize {
         let Some(index_mutex) = self.vector_index.as_ref() else {
@@ -6838,67 +6956,304 @@ impl SqliteMemoryStore {
                 Err(_) => return 0,
             }
         };
-        {
-            let Ok(mut seen) = self.last_seen_data_version.lock() else {
+        // --- watermark lock: compare, and take the journal position ---
+        let last_seq = {
+            let Ok(mut watermark) = self.vector_index_watermark.lock() else {
                 return 0;
             };
-            if *seen == current_version {
+            if watermark.data_version == current_version {
                 return 0; // nothing has changed since we last looked
             }
-            *seen = current_version;
-        }
+            watermark.data_version = current_version;
+            watermark.journal_seq
+        };
 
         let Ok(Some(active)) = self.active_embedding_profile() else {
             return 0;
         };
+        let profile_id = active.profile_id.as_str();
 
-        // --- reader lock: which vectors exist for the active profile? ---
-        let rows: Vec<(String, Vec<u8>)> = {
+        // --- reader lock, one snapshot: what changed past the watermark? ---
+        let plan = {
             let Ok(reader) = self.reader.lock() else {
                 return 0;
             };
-            let Ok(mut stmt) = reader.prepare(
-                "SELECT node_id, embedding FROM embedding_profile_vectors WHERE profile_id = ?1",
-            ) else {
+            let Ok(snapshot) = begin_read_snapshot(&reader) else {
                 return 0;
             };
-            let Ok(mapped) = stmt.query_map(params![active.profile_id.as_str()], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-            }) else {
-                return 0;
-            };
-            mapped.filter_map(warn_skipped_row("refresh_vector_index_if_stale")).collect()
+            match Self::vector_refresh_plan(&snapshot, profile_id, last_seq) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "vector index refresh could not read the journal; the index may be stale until the next query"
+                    );
+                    return 0;
+                }
+            }
         };
 
-        // --- index lock: add only what we do not already have ---
-        let Ok(mut index) = index_mutex.lock() else {
-            return 0;
+        let (changes, head) = match plan {
+            VectorRefreshPlan::Reconcile => {
+                return self.reconcile_vector_index(index_mutex, profile_id);
+            }
+            VectorRefreshPlan::Incremental { changes, head } => (changes, head),
         };
-        let mut added = 0usize;
-        for (node_id, blob) in rows {
-            if index.contains(&node_id) {
-                continue;
-            }
-            // Same decoder the startup index builder uses, so a vector added here
-            // is byte-identical to one added by a full rebuild.
-            let Some(embedding) = Embedding::from_bytes(&blob) else {
-                continue; // unreadable vector: skip it, never fail the query
+
+        // --- index lock: apply exactly what the journal named ---
+        let mut applied = 0usize;
+        if !changes.is_empty() {
+            let Ok(mut index) = index_mutex.lock() else {
+                return 0;
             };
-            if embedding.dimensions != index.dimensions() {
-                continue; // wrong profile/dimension: not ours to add
-            }
-            if index.add(&node_id, &embedding.vector).is_ok() {
-                added += 1;
+            for (node_id, blob) in changes {
+                let mutated = match blob {
+                    None => matches!(index.remove(&node_id), Ok(true)),
+                    Some(blob) => Self::add_journaled_vector(&mut index, &node_id, &blob),
+                };
+                if mutated {
+                    applied += 1;
+                }
             }
         }
-        if added > 0 {
+        // --- watermark lock: current through `head` ---
+        if let Ok(mut watermark) = self.vector_index_watermark.lock()
+            && watermark.journal_seq < head
+        {
+            watermark.journal_seq = head;
+        }
+        if applied > 0 {
             tracing::debug!(
-                added,
+                applied,
+                head,
                 data_version = current_version,
                 "refreshed vector index with memories written by another process"
             );
         }
-        added
+        applied
+    }
+
+    /// Read the journal past `last_seq` for `profile_id` inside `snapshot`, and
+    /// decide whether the index can follow it or must reconcile.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn vector_refresh_plan(
+        snapshot: &Connection,
+        profile_id: &str,
+        last_seq: i64,
+    ) -> rusqlite::Result<VectorRefreshPlan> {
+        if last_seq < 0 {
+            return Ok(VectorRefreshPlan::Reconcile);
+        }
+        let (oldest, head): (Option<i64>, i64) = snapshot.query_row(
+            "SELECT MIN(seq), COALESCE(MAX(seq), 0) FROM vector_journal",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        // Pruned past us: rows between our watermark and the oldest survivor are
+        // gone, or the journal was emptied after we had already seen rows.
+        let pruned_past_us = match oldest {
+            Some(oldest) => oldest > last_seq + 1,
+            None => last_seq > 0,
+        };
+        if pruned_past_us {
+            return Ok(VectorRefreshPlan::Reconcile);
+        }
+
+        // Last op per node wins; the journal is read in seq order.
+        let mut latest: HashMap<String, bool> = HashMap::new();
+        let mut stmt = snapshot.prepare(
+            "SELECT node_id, op FROM vector_journal
+             WHERE profile_id = ?1 AND seq > ?2
+             ORDER BY seq",
+        )?;
+        let rows = stmt.query_map(params![profile_id, last_seq], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (node_id, op) = row?;
+            latest.insert(node_id, op == "delete");
+        }
+        drop(stmt);
+
+        let mut fetch = snapshot.prepare(
+            "SELECT embedding FROM embedding_profile_vectors WHERE profile_id = ?1 AND node_id = ?2",
+        )?;
+        let mut changes = Vec::with_capacity(latest.len());
+        for (node_id, deleted) in latest {
+            if deleted {
+                changes.push((node_id, None));
+                continue;
+            }
+            // Same snapshot as the journal read, so an upsert whose row is
+            // nevertheless absent can only be a later delete we also saw.
+            let blob: Option<Vec<u8>> = fetch
+                .query_row(params![profile_id, &node_id], |row| row.get(0))
+                .optional()?;
+            changes.push((node_id, blob));
+        }
+        Ok(VectorRefreshPlan::Incremental { changes, head })
+    }
+
+    /// Decode and add one journaled vector. Same decoder the startup builder
+    /// uses, so a vector added here is identical to one added by a rebuild. A
+    /// vector this index cannot hold (unreadable, wrong dimension) is skipped;
+    /// the memory stays keyword-searchable and never fails a query.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn add_journaled_vector(index: &mut VectorIndex, node_id: &str, blob: &[u8]) -> bool {
+        let Some(embedding) = Embedding::from_bytes(blob) else {
+            tracing::warn!(node_id, "skipping an unreadable vector during index refresh");
+            return false;
+        };
+        if embedding.dimensions != index.dimensions() {
+            return false; // another profile's width: not ours to hold
+        }
+        index.add(node_id, &embedding.vector).is_ok()
+    }
+
+    /// Compare the index against `embedding_profile_vectors` for `profile_id`
+    /// and fix the difference. Used when the journal cannot be trusted to be
+    /// complete: an unknown watermark, or a journal pruned past it. O(N) over
+    /// node ids (a covering index scan), fetching only the vectors that are
+    /// missing. Returns the number of index mutations.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn reconcile_vector_index(&self, index_mutex: &Mutex<VectorIndex>, profile_id: &str) -> usize {
+        // --- reader lock, one snapshot: every id the table holds, and the head ---
+        let (present, head): (HashSet<String>, i64) = {
+            let Ok(reader) = self.reader.lock() else {
+                return 0;
+            };
+            let Ok(snapshot) = begin_read_snapshot(&reader) else {
+                return 0;
+            };
+            let Ok(mut stmt) = snapshot
+                .prepare("SELECT node_id FROM embedding_profile_vectors WHERE profile_id = ?1")
+            else {
+                return 0;
+            };
+            let Ok(rows) = stmt.query_map(params![profile_id], |row| row.get::<_, String>(0))
+            else {
+                return 0;
+            };
+            let present: HashSet<String> = rows
+                .filter_map(warn_skipped_row("reconcile_vector_index"))
+                .collect();
+            drop(stmt);
+            let head: i64 = match snapshot.query_row(
+                "SELECT COALESCE(MAX(seq), 0) FROM vector_journal",
+                [],
+                |row| row.get(0),
+            ) {
+                Ok(head) => head,
+                Err(_) => return 0,
+            };
+            (present, head)
+        };
+
+        // --- index lock: the two differences ---
+        let (missing, gone): (Vec<String>, Vec<String>) = {
+            let Ok(index) = index_mutex.lock() else {
+                return 0;
+            };
+            let missing = present
+                .iter()
+                .filter(|id| !index.contains(id))
+                .cloned()
+                .collect();
+            let gone = index
+                .keys()
+                .filter(|key| !present.contains(*key))
+                .map(str::to_string)
+                .collect();
+            (missing, gone)
+        };
+
+        // --- reader lock: fetch only what is missing ---
+        let blobs: Vec<(String, Vec<u8>)> = if missing.is_empty() {
+            Vec::new()
+        } else {
+            let Ok(reader) = self.reader.lock() else {
+                return 0;
+            };
+            let Ok(mut stmt) = reader.prepare(
+                "SELECT embedding FROM embedding_profile_vectors WHERE profile_id = ?1 AND node_id = ?2",
+            ) else {
+                return 0;
+            };
+            missing
+                .into_iter()
+                .filter_map(|node_id| {
+                    stmt.query_row(params![profile_id, &node_id], |row| row.get::<_, Vec<u8>>(0))
+                        .optional()
+                        .ok()
+                        .flatten()
+                        .map(|blob| (node_id, blob))
+                })
+                .collect()
+        };
+
+        // --- index lock: apply ---
+        let mut applied = 0usize;
+        {
+            let Ok(mut index) = index_mutex.lock() else {
+                return 0;
+            };
+            for node_id in gone {
+                if matches!(index.remove(&node_id), Ok(true)) {
+                    applied += 1;
+                }
+            }
+            for (node_id, blob) in blobs {
+                if Self::add_journaled_vector(&mut index, &node_id, &blob) {
+                    applied += 1;
+                }
+            }
+        }
+        // A vector this process wrote between the snapshot and the apply above
+        // may have been removed as `gone`; its journal row sits past `head`, so
+        // the next refresh puts it back.
+        if let Ok(mut watermark) = self.vector_index_watermark.lock()
+            && watermark.journal_seq < head
+        {
+            watermark.journal_seq = head;
+        }
+        tracing::info!(
+            applied,
+            head,
+            profile_id,
+            "reconciled the vector index against the database"
+        );
+        applied
+    }
+
+    /// Point the watermark at a freshly built index: it holds every vector row
+    /// as of journal position `journal_seq`, and the next search must look at
+    /// the journal once regardless of what the reader's data_version says.
+    #[cfg(feature = "vector-search")]
+    fn reset_vector_index_watermark(&self, journal_seq: i64) {
+        if let Ok(mut watermark) = self.vector_index_watermark.lock() {
+            watermark.journal_seq = journal_seq;
+            watermark.data_version = -1;
+        }
+    }
+
+    /// Trim `vector_journal` (#181). A row is needed only until every peer has
+    /// absorbed it, and a peer that has been away long enough to miss trimmed
+    /// rows reconciles against the table, so this keeps the newest 10,000 rows
+    /// plus everything younger than seven days and deletes the rest. Ids only;
+    /// there is no content in this table to protect. Returns rows deleted.
+    pub(crate) fn prune_vector_journal(&self) -> Result<usize> {
+        const KEEP_ROWS: i64 = 10_000;
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let deleted = writer.execute(
+            "DELETE FROM vector_journal
+             WHERE seq <= (SELECT COALESCE(MAX(seq), 0) FROM vector_journal) - ?1
+               AND at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days')",
+            params![KEEP_ROWS],
+        )?;
+        Ok(deleted)
     }
 
     /// Semantic search returning scores
@@ -7413,6 +7768,10 @@ impl SqliteMemoryStore {
 
         // 6. Prune old access log entries (keep 90 days)
         let _ = self.prune_access_log();
+
+        // 6b. Prune the vector journal (#181): ids only, kept long enough for
+        // every peer process to absorb them, then trimmed.
+        let _ = self.prune_vector_journal();
 
         // 6.5. Prune old Black Box trace events (keep 30 days by default;
         // VESTIGE_TRACE_RETENTION_DAYS overrides, 0 = keep forever). Best-effort
@@ -20009,6 +20368,266 @@ mod tests {
     }
 
     // =========================================================================
+    // #181: the in-process vector index follows writes made by peer processes
+    // =========================================================================
+
+    /// Write a caller-supplied vector for `node_id` through the production
+    /// funnel every embedding write uses, so the row lands in the active
+    /// profile's table, the legacy mirror, the `has_embedding` flag and THIS
+    /// store's in-memory index exactly as a real ingest would.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn persist_test_vector(storage: &Storage, node_id: &str, vector: &[f32]) {
+        let bytes = Embedding::new(vector.to_vec()).to_bytes();
+        storage
+            .persist_node_embedding(node_id, &bytes, vector.len(), "test-model", vector, true)
+            .unwrap();
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn index_contains(storage: &Storage, node_id: &str) -> bool {
+        storage
+            .vector_index
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .contains(node_id)
+    }
+
+    /// Id of the top hit for `vector` in this store's in-memory index.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn nearest(storage: &Storage, vector: &[f32]) -> Option<String> {
+        storage
+            .vector_index
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .search(vector, 1)
+            .unwrap()
+            .into_iter()
+            .next()
+            .map(|(id, _)| id)
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn ingest_plain(storage: &Storage, content: &str) -> String {
+        storage
+            .ingest(IngestInput {
+                content: content.to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+    }
+
+    /// #181: a memory written by a peer process must become semantically
+    /// searchable in THIS process without a restart. The pre-refresh assertion
+    /// is the negative half: it is exactly what every process saw before the fix.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn peer_process_write_is_visible_to_the_vector_index_without_restart() {
+        let dir = tempdir().unwrap();
+        let ours = create_test_storage_at(&dir, "shared.db");
+        let peer = create_test_storage_at(&dir, "shared.db");
+
+        let id = ingest_plain(&peer, "written by a sibling MCP server process");
+        persist_test_vector(&peer, &id, &axis_vector(3, 0.01));
+
+        assert!(
+            !index_contains(&ours, &id),
+            "a process-local index cannot know about a peer's write until it refreshes"
+        );
+
+        assert_eq!(
+            ours.refresh_vector_index_if_stale(),
+            1,
+            "exactly the peer's row is absorbed"
+        );
+        assert!(index_contains(&ours, &id));
+        assert_eq!(nearest(&ours, &axis_vector(3, 0.0)).as_deref(), Some(id.as_str()));
+
+        assert_eq!(
+            ours.refresh_vector_index_if_stale(),
+            0,
+            "nothing new since: one PRAGMA and an early return"
+        );
+    }
+
+    /// #181: a peer re-embedding an existing node through the UPSERT path (used by
+    /// profile repair, which keeps the row's rowid) must replace the stale vector
+    /// here. A rowid or contains()-based refresh could never notice this write.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn peer_reembedding_replaces_the_stale_vector_here() {
+        let dir = tempdir().unwrap();
+        let ours = create_test_storage_at(&dir, "shared.db");
+        let peer = create_test_storage_at(&dir, "shared.db");
+
+        let moved = ingest_plain(&peer, "a memory whose vector will be regenerated");
+        let decoy = ingest_plain(&peer, "a decoy that stays on the old axis");
+        persist_test_vector(&peer, &moved, &axis_vector(3, 0.01));
+        persist_test_vector(&peer, &decoy, &axis_vector(3, 0.02));
+        assert_eq!(ours.refresh_vector_index_if_stale(), 2);
+        assert_eq!(
+            nearest(&ours, &axis_vector(3, 0.01)).as_deref(),
+            Some(moved.as_str())
+        );
+
+        let active = peer
+            .active_embedding_profile()
+            .unwrap()
+            .expect("test stores have an active profile")
+            .profile_id
+            .to_string();
+        peer.put_embedding_profile_vector(&EmbeddingProfileVector {
+            profile_id: active,
+            node_id: moved.clone(),
+            embedding: Embedding::new(axis_vector(9, 0.01)).to_bytes(),
+            dimensions: EMBEDDING_DIMENSIONS as u32,
+            model: "test-model".to_string(),
+            created_at: Utc::now(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            ours.refresh_vector_index_if_stale(),
+            1,
+            "one upsert row, one replaced vector"
+        );
+        assert_eq!(
+            nearest(&ours, &axis_vector(9, 0.0)).as_deref(),
+            Some(moved.as_str())
+        );
+        assert_eq!(
+            nearest(&ours, &axis_vector(3, 0.02)).as_deref(),
+            Some(decoy.as_str()),
+            "the moved node must no longer win its old axis"
+        );
+    }
+
+    /// #181: a peer's purge cascades to its vector row, the delete trigger
+    /// journals it, and the dead vector leaves this index too.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn peer_purge_removes_the_vector_here() {
+        let dir = tempdir().unwrap();
+        let ours = create_test_storage_at(&dir, "shared.db");
+        let peer = create_test_storage_at(&dir, "shared.db");
+
+        let id = ingest_plain(&peer, "a memory the peer will purge");
+        persist_test_vector(&peer, &id, &axis_vector(4, 0.01));
+        assert_eq!(ours.refresh_vector_index_if_stale(), 1);
+        assert!(index_contains(&ours, &id));
+
+        peer.purge_node(&id, Some("peer purge")).unwrap();
+
+        assert_eq!(
+            ours.refresh_vector_index_if_stale(),
+            1,
+            "one delete row, one removal"
+        );
+        assert!(!index_contains(&ours, &id));
+    }
+
+    /// #181: this process's own writes bump the reader's data_version exactly
+    /// like a peer's would, but the vector is already in the index. The journal
+    /// head says so, and the refresh re-adds nothing.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn own_writes_are_not_reabsorbed_as_peer_changes() {
+        let storage = create_test_storage();
+        let id = ingest_plain(&storage, "written by this very process");
+        persist_test_vector(&storage, &id, &axis_vector(5, 0.01));
+        assert!(index_contains(&storage, &id));
+        assert_eq!(storage.refresh_vector_index_if_stale(), 0);
+    }
+
+    /// #181: when the journal has been pruned past this process's watermark, the
+    /// refresh must not trust it. It reconciles against the table and still
+    /// absorbs everything the peers wrote, including rows the journal no longer
+    /// names.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn a_journal_pruned_past_the_watermark_reconciles_against_the_table() {
+        let dir = tempdir().unwrap();
+        let ours = create_test_storage_at(&dir, "shared.db");
+        let peer = create_test_storage_at(&dir, "shared.db");
+
+        let first = ingest_plain(&peer, "first peer memory");
+        let second = ingest_plain(&peer, "second peer memory");
+        persist_test_vector(&peer, &first, &axis_vector(1, 0.01));
+        persist_test_vector(&peer, &second, &axis_vector(2, 0.01));
+
+        // A prune that ran before this process caught up: only the newest row
+        // survives, so the journal alone would name just one of the two.
+        {
+            let writer = peer.writer.lock().unwrap();
+            writer
+                .execute(
+                    "DELETE FROM vector_journal WHERE seq < (SELECT MAX(seq) FROM vector_journal)",
+                    [],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            ours.refresh_vector_index_if_stale(),
+            2,
+            "reconcile absorbs both peer vectors, not just the journal survivor"
+        );
+        assert!(index_contains(&ours, &first));
+        assert!(index_contains(&ours, &second));
+        assert_eq!(
+            ours.refresh_vector_index_if_stale(),
+            0,
+            "the watermark moved to the head, so the next look is incremental and empty"
+        );
+    }
+
+    /// #181 housekeeping: pruning removes only rows that are both older than
+    /// the retention window AND further behind the head than the keep window.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn vector_journal_prune_keeps_recent_rows_and_the_head() {
+        let storage = create_test_storage();
+        let id = ingest_plain(&storage, "one vector, at least one journal row");
+        persist_test_vector(&storage, &id, &axis_vector(6, 0.01));
+        assert_eq!(
+            storage.prune_vector_journal().unwrap(),
+            0,
+            "fresh rows are never pruned"
+        );
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE vector_journal SET at = '2000-01-01T00:00:00.000Z'",
+                    [],
+                )
+                .unwrap();
+            // Push the head far past the keep window with one synthetic row.
+            writer
+                .execute(
+                    "INSERT INTO vector_journal (seq, profile_id, node_id, op)
+                     VALUES (20000, 'synthetic', 'head', 'upsert')",
+                    [],
+                )
+                .unwrap();
+        }
+        let deleted = storage.prune_vector_journal().unwrap();
+        assert!(deleted >= 1, "old rows far behind the head must go");
+        let remaining: i64 = storage
+            .reader
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM vector_journal", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining, 1, "only the fresh head row survives");
+    }
+
+    // =========================================================================
     // Phase 1 trait-method unit tests
     // =========================================================================
     use crate::storage::memory_store::{
@@ -21922,6 +22541,7 @@ mod write_transaction_policy {
         let deferred_writer = ["writer.", "transaction()?"].concat();
         let deferred_unchecked = ["unchecked_", "transaction()?"].concat();
         let bypasses_helper = ["writer.", "transaction_with_behavior("].concat();
+        let snapshot_on_writer = ["begin_read_", "snapshot(&writer"].concat();
 
         let mut offenders: Vec<String> = Vec::new();
         for (name, source) in STORAGE_SOURCES {
@@ -21938,6 +22558,12 @@ mod write_transaction_policy {
                     offenders.push(format!(
                         "{name}:{number} opens a writer transaction directly; use \
                          SqliteMemoryStore::begin_write_transaction so BUSY retries are logged"
+                    ));
+                }
+                if line.contains(&snapshot_on_writer) {
+                    offenders.push(format!(
+                        "{name}:{number} opens a DEFERRED read snapshot on the writer connection; \
+                         snapshots belong on the reader, writers begin IMMEDIATE"
                     ));
                 }
             }
