@@ -12947,72 +12947,117 @@ impl SqliteMemoryStore {
         let now = Utc::now();
         let op_id = uuid::Uuid::new_v4().to_string();
 
-        // Snapshot everything we need to undo, BEFORE mutating.
-        let mut undo = serde_json::Map::new();
-        undo.insert("plan_id".into(), serde_json::json!(plan_id));
-        undo.insert("kind".into(), serde_json::json!(plan.kind.as_str()));
-        undo.insert("survivor_id".into(), serde_json::json!(plan.survivor_id));
-
-        match plan.kind {
-            PlanKind::Merge => {
-                let survivor = self
-                    .get_node(&plan.survivor_id)?
-                    .ok_or_else(|| StorageError::NotFound(plan.survivor_id.clone()))?;
-                undo.insert(
-                    "survivor_prev_content".into(),
-                    serde_json::json!(survivor.content),
-                );
-                undo.insert(
-                    "survivor_prev_tags".into(),
-                    serde_json::json!(survivor.tags),
-                );
-
-                // Capture prior valid_until / superseded_by of each absorbed node.
-                let mut absorbed = Vec::new();
-                for id in &plan.invalidated_ids {
-                    let (vu, sb) = self.read_bitemporal(id)?;
-                    absorbed.push(serde_json::json!({
-                        "id": id,
-                        "prev_valid_until": vu,
-                        "prev_superseded_by": sb,
-                    }));
-                }
-                undo.insert("absorbed".into(), serde_json::json!(absorbed));
-
-                // Apply: rewrite survivor, invalidate absorbed.
-                self.rewrite_survivor(&plan.survivor_id, &plan.result_content, &plan.result_tags)?;
-                for id in &plan.invalidated_ids {
-                    self.invalidate_node(id, &plan.survivor_id, now)?;
-                }
-            }
-            PlanKind::Supersede => {
-                let old_id = &plan.member_ids[0];
-                let (vu, sb) = self.read_bitemporal(old_id)?;
-                undo.insert(
-                    "absorbed".into(),
-                    serde_json::json!([{
-                        "id": old_id,
-                        "prev_valid_until": vu,
-                        "prev_superseded_by": sb,
-                    }]),
-                );
-                self.invalidate_node(old_id, &plan.survivor_id, now)?;
-            }
-        }
-
-        // Record the reversible operation.
-        let affected: Vec<String> = {
-            let mut v = vec![plan.survivor_id.clone()];
-            v.extend(plan.invalidated_ids.clone());
-            v
-        };
-        let signals = serde_json::to_string(&plan.signals).unwrap_or_else(|_| "{}".into());
+        // The whole apply is ONE IMMEDIATE transaction, and the undo row is
+        // written FIRST inside it.
+        //
+        // The old shape mutated through helpers that each committed on their
+        // own, and only afterwards inserted the reflog row. Any failure between
+        // the survivor rewrite and that insert left the survivor's content
+        // overwritten with NO undo row at all: unrecoverable. SQLITE_BUSY was
+        // the realistic trigger, because several MCP server processes share one
+        // database file. The plan-status check was not atomic with the
+        // mutations either, so two processes could both pass it and both apply.
+        //
+        // Now: the status re-check, the undo row, the plan transition, the
+        // survivor rewrite and the invalidations either all commit or none do,
+        // and the status re-check inside the transaction closes the race.
+        //
+        // The embedding is deliberately NOT regenerated in here. That is model
+        // inference behind a tokio runtime, and holding the write lock across
+        // it is the same defect as holding a mutex across a model load. The
+        // transaction marks the survivor `has_embedding = 0` instead, and the
+        // regeneration runs after COMMIT. If it fails, or the process dies
+        // first, the node is already flagged and the consolidation cycle's
+        // `generate_missing_embeddings` rebuilds it. Stale-but-flagged is
+        // recoverable; overwritten-with-no-undo-row is not.
+        let mut content_changed = false;
         {
             let writer = self
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-            writer.execute(
+            let tx = Self::begin_write_transaction(&writer, "apply_plan")?;
+
+            // Re-check status INSIDE the transaction. Two processes can both
+            // pass the read above; only one can pass this.
+            let status: Option<String> = tx
+                .query_row(
+                    "SELECT status FROM merge_plans WHERE id = ?1",
+                    params![plan_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match status.as_deref() {
+                Some("applied") => {
+                    return Err(StorageError::Init(format!(
+                        "plan {plan_id} was already applied"
+                    )));
+                }
+                Some("cancelled") => {
+                    return Err(StorageError::Init(format!("plan {plan_id} was cancelled")));
+                }
+                _ => {}
+            }
+
+            // Snapshot everything we need to undo, BEFORE mutating, and from
+            // inside the same transaction so the snapshot and the mutation see
+            // one consistent state.
+            let mut undo = serde_json::Map::new();
+            undo.insert("plan_id".into(), serde_json::json!(plan_id));
+            undo.insert("kind".into(), serde_json::json!(plan.kind.as_str()));
+            undo.insert("survivor_id".into(), serde_json::json!(plan.survivor_id));
+
+            match plan.kind {
+                PlanKind::Merge => {
+                    let (prev_content, prev_tags_json): (String, String) = tx
+                        .query_row(
+                            "SELECT content, COALESCE(tags, '[]') FROM knowledge_nodes WHERE id = ?1",
+                            params![plan.survivor_id],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .optional()?
+                        .ok_or_else(|| StorageError::NotFound(plan.survivor_id.clone()))?;
+                    let prev_tags: Vec<String> =
+                        serde_json::from_str(&prev_tags_json).unwrap_or_default();
+                    undo.insert("survivor_prev_content".into(), serde_json::json!(prev_content));
+                    undo.insert("survivor_prev_tags".into(), serde_json::json!(prev_tags));
+
+                    let mut absorbed = Vec::new();
+                    for id in &plan.invalidated_ids {
+                        let (vu, sb) = Self::read_bitemporal_in_transaction(&tx, id)?;
+                        absorbed.push(serde_json::json!({
+                            "id": id,
+                            "prev_valid_until": vu,
+                            "prev_superseded_by": sb,
+                        }));
+                    }
+                    undo.insert("absorbed".into(), serde_json::json!(absorbed));
+                    content_changed = prev_content != plan.result_content;
+                }
+                PlanKind::Supersede => {
+                    let old_id = &plan.member_ids[0];
+                    let (vu, sb) = Self::read_bitemporal_in_transaction(&tx, old_id)?;
+                    undo.insert(
+                        "absorbed".into(),
+                        serde_json::json!([{
+                            "id": old_id,
+                            "prev_valid_until": vu,
+                            "prev_superseded_by": sb,
+                        }]),
+                    );
+                }
+            }
+
+            let affected: Vec<String> = {
+                let mut v = vec![plan.survivor_id.clone()];
+                v.extend(plan.invalidated_ids.clone());
+                v
+            };
+            let signals = serde_json::to_string(&plan.signals).unwrap_or_else(|_| "{}".into());
+
+            // The undo row goes in FIRST. Nothing below it can leave a mutation
+            // without its reversal, because nothing below it commits alone.
+            tx.execute(
                 "INSERT INTO merge_operations
                     (id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
                      survivor_id, affected_ids, confidence, signals, reason, undo_payload)
@@ -13030,10 +13075,68 @@ impl SqliteMemoryStore {
                     serde_json::Value::Object(undo).to_string(),
                 ],
             )?;
-            writer.execute(
+            tx.execute(
                 "UPDATE merge_plans SET status = 'applied', applied_at = ?1 WHERE id = ?2",
                 params![now.to_rfc3339(), plan_id],
             )?;
+
+            match plan.kind {
+                PlanKind::Merge => {
+                    let tags_json =
+                        serde_json::to_string(&plan.result_tags).unwrap_or_else(|_| "[]".into());
+                    tx.execute(
+                        "UPDATE knowledge_nodes SET content = ?1, tags = ?2, updated_at = ?3
+                         WHERE id = ?4",
+                        params![
+                            plan.result_content,
+                            tags_json,
+                            now.to_rfc3339(),
+                            plan.survivor_id
+                        ],
+                    )?;
+                    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+                    if content_changed {
+                        // Flag for rebuild before COMMIT, so a crash between
+                        // here and the regeneration below is self-healing.
+                        tx.execute(
+                            "UPDATE knowledge_nodes SET has_embedding = 0 WHERE id = ?1",
+                            params![plan.survivor_id],
+                        )?;
+                    }
+                    for id in &plan.invalidated_ids {
+                        Self::invalidate_node_in_transaction(&tx, id, &plan.survivor_id, now)?;
+                    }
+                }
+                PlanKind::Supersede => {
+                    let old_id = &plan.member_ids[0];
+                    Self::invalidate_node_in_transaction(&tx, old_id, &plan.survivor_id, now)?;
+                }
+            }
+
+            tx.commit()?;
+        }
+
+        // Committed. Regenerate the survivor's embedding outside the write
+        // lock; `has_embedding = 0` is already persisted, so failure here is
+        // recoverable by the next consolidation cycle rather than silent.
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        if content_changed {
+            if let Some(index) = self.vector_index.as_ref()
+                && let Ok(mut index) = index.lock()
+            {
+                let _ = index.remove(&plan.survivor_id);
+            }
+            if self.active_embedding_runtime_ready().unwrap_or(false)
+                && let Err(e) =
+                    self.generate_embedding_for_node(&plan.survivor_id, &plan.result_content)
+            {
+                tracing::warn!(
+                    survivor_id = %plan.survivor_id,
+                    error = %e,
+                    "apply_plan committed but could not regenerate the survivor embedding; \
+                     it stays has_embedding=0 for the next consolidation sweep"
+                );
+            }
         }
 
         self.read_operation(&op_id)?
@@ -13264,6 +13367,11 @@ impl SqliteMemoryStore {
     }
 
     /// Read (valid_until, superseded_by) for a node.
+    /// Read a node's bitemporal columns off the reader connection. Production
+    /// now snapshots inside the apply transaction instead (see
+    /// [`Self::read_bitemporal_in_transaction`]); this remains as the assertion
+    /// helper the merge/supersede tests read state through.
+    #[cfg(test)]
     fn read_bitemporal(&self, id: &str) -> Result<(Option<String>, Option<String>)> {
         let reader = self
             .reader
@@ -13284,14 +13392,37 @@ impl SqliteMemoryStore {
         res.ok_or_else(|| StorageError::NotFound(id.to_string()))
     }
 
-    /// Bitemporally invalidate a node: stamp valid_until=now and superseded_by,
-    /// keeping the row fully queryable (Graphiti-style invalidate, don't delete).
-    fn invalidate_node(&self, id: &str, superseded_by: &str, now: DateTime<Utc>) -> Result<()> {
-        let writer = self
-            .writer
-            .lock()
-            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        writer.execute(
+    /// `read_bitemporal` against an open transaction, so a snapshot and the
+    /// mutation it protects observe the same database state.
+    fn read_bitemporal_in_transaction(
+        tx: &rusqlite::Transaction<'_>,
+        id: &str,
+    ) -> Result<(Option<String>, Option<String>)> {
+        let res = tx
+            .query_row(
+                "SELECT valid_until, superseded_by FROM knowledge_nodes WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )
+            .optional()?;
+        res.ok_or_else(|| StorageError::NotFound(id.to_string()))
+    }
+
+    /// `invalidate_node` against an open transaction. The helper that takes the
+    /// writer lock itself cannot be called from inside a transaction: the lock
+    /// is not reentrant, so it would deadlock.
+    fn invalidate_node_in_transaction(
+        tx: &rusqlite::Transaction<'_>,
+        id: &str,
+        superseded_by: &str,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        tx.execute(
             "UPDATE knowledge_nodes
              SET valid_until = ?1, superseded_by = ?2, updated_at = ?1
              WHERE id = ?3",
@@ -20269,6 +20400,80 @@ mod tests {
             storage.plan_status(&plan.id).unwrap().as_deref(),
             Some("pending")
         );
+    }
+
+    /// #180: `apply_plan` used to mutate through helpers that each committed on
+    /// their own and only afterwards insert the undo row, and its plan-status
+    /// check was not atomic with those mutations. Two MCP server processes
+    /// sharing one database file could both pass the check and both apply, and
+    /// a failure between the survivor rewrite and the undo insert left the
+    /// survivor overwritten with no way back. The whole apply is one IMMEDIATE
+    /// transaction now, so the plan applies exactly once no matter how many
+    /// callers race it, and every mutation is covered by an undo row.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn concurrent_apply_of_one_plan_applies_it_exactly_once() {
+        let storage = std::sync::Arc::new(create_test_storage());
+        let survivor = seed_node(&storage, "Canonical race note", &["r"], axis_vector(5, 0.02));
+        let absorbed = seed_node(&storage, "Detail to absorb", &["r", "s"], axis_vector(5, 0.01));
+
+        let plan = storage
+            .plan_merge(
+                &[survivor.clone(), absorbed.clone()],
+                Some(&survivor),
+                MergePolicy::default(),
+            )
+            .unwrap();
+
+        let racers: Vec<_> = (0..2)
+            .map(|_| {
+                let storage = std::sync::Arc::clone(&storage);
+                let plan_id = plan.id.clone();
+                std::thread::spawn(move || storage.apply_plan(&plan_id, true).is_ok())
+            })
+            .collect();
+        let wins = racers
+            .into_iter()
+            .filter_map(|handle| handle.join().ok())
+            .filter(|applied| *applied)
+            .count();
+
+        assert_eq!(
+            wins, 1,
+            "exactly one racer may apply the plan; the other must be refused"
+        );
+
+        // Exactly one reflog row, so the mutation that happened is reversible
+        // and did not happen twice.
+        let ops: i64 = {
+            let reader = storage.reader.lock().unwrap();
+            reader
+                .query_row(
+                    "SELECT COUNT(*) FROM merge_operations WHERE plan_id = ?1 AND status = 'applied'",
+                    params![plan.id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(ops, 1, "one apply must leave exactly one undo row");
+
+        // And the undo row actually carries what it needs to reverse.
+        let payload: String = {
+            let reader = storage.reader.lock().unwrap();
+            reader
+                .query_row(
+                    "SELECT undo_payload FROM merge_operations WHERE plan_id = ?1",
+                    params![plan.id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        let undo: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert!(
+            undo.get("survivor_prev_content").is_some(),
+            "undo row must snapshot the survivor's pre-merge content: {undo}"
+        );
+        assert_eq!(storage.plan_status(&plan.id).unwrap().as_deref(), Some("applied"));
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
