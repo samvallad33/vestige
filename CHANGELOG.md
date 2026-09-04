@@ -45,6 +45,23 @@ on), so those got regression tests and a checkpoint hook rather than rewrites.
   skipped the retry helper. Both go through `begin_write_transaction` now, and
   the lint reports the offending file and line.
 
+- The cross-encoder reranker (Jina v1 Turbo, ~150MB) was loaded under the
+  shared `CognitiveEngine` mutex, one second after every startup. The load is
+  synchronous: it downloads the model on a fresh install and reads it from
+  disk on every later start. So the same lock the `dream` finding was about
+  was held for the length of a 150MB download, stalling `explore`, `predict`,
+  `session_context`, `memory_unified` and the rest, unconditionally rather
+  than on demand, and it blocked a tokio worker thread while it ran. The load
+  is now a `Reranker::load_cross_encoder` associated function that runs on the
+  blocking pool holding nothing; the lock is taken only to install the result.
+- The HTTP transport held the global `sessions` write lock across
+  `handle_request().await` while answering `initialize`, so every other client
+  on the multi-agent transport queued behind one client's handshake. The slot
+  is now reserved under one write-lock acquisition (the `MAX_SESSIONS` check
+  and the insert still cannot race), the lock is released, and the request is
+  handled with no global lock held. A handshake that produces no usable
+  protocol version releases its reservation instead of leaking a session.
+
 ### Fixed — Determinism and honest claims
 
 - The Observatory brain print (`vb1-…`) folded `dueForReview` into the hashed
@@ -141,6 +158,18 @@ on), so those got regression tests and a checkpoint hook rather than rewrites.
   it stays in `error` with the original reason.
 - Regression tests pin the stage's `chrome` default to `'none'` and forbid
   any route from mounting it with `chrome="full"`.
+- Every writer transaction in the storage layer now goes through
+  `begin_write_transaction`, not just the ones in `sqlite.rs`. Thirteen
+  writers in `synaptic_store`, `replay_store` and `attestation_store` began
+  `IMMEDIATE` by hand, which is correct but silent: they took the write lock
+  up front and then gave up on the first refusal past the 5 s busy timeout
+  with nothing in the log to say a writer had lost a race. The policy lint now
+  enforces the DEFERRED rule across nine storage modules and the
+  helper-routing rule across five.
+- The dashboard event-channel capacity is defined once. The MCP binary and
+  `vestige-cli serve` each hardcoded `4096` beside `EVENT_CHANNEL_CAPACITY`,
+  so tuning the constant would have silently left two servers on the old
+  value.
 
 ### Added
 

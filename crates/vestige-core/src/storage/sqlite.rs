@@ -21893,8 +21893,25 @@ mod write_transaction_policy {
 
     /// Modules whose writers must additionally route through the shared
     /// helper, so a BUSY past the busy timeout is retried and logged rather
-    /// than surfacing to the caller on the first refusal.
-    const HELPER_ROUTED: [&str; 2] = ["sqlite.rs", "trace_store.rs"];
+    /// than surfacing to the caller on the first refusal. Beginning IMMEDIATE
+    /// by hand is correct but silent: it takes the write lock up front and
+    /// then gives up on the first refusal past the 5 s busy timeout, with
+    /// nothing in the log to say a writer lost a race.
+    ///
+    /// The needle matches the single-line form production used (the guard
+    /// receiver and the behaviour call on one line). Test fixtures that
+    /// genuinely need to drive a transaction by hand (a rollback or
+    /// lock-contention harness on their own connection) build it across lines
+    /// and are deliberately not caught. Note this comment cannot spell the
+    /// needle out: the lint reads this file, so a literal spelling would flag
+    /// itself, which is exactly what it did on the first draft of this text.
+    const HELPER_ROUTED: [&str; 5] = [
+        "sqlite.rs",
+        "trace_store.rs",
+        "synaptic_store.rs",
+        "replay_store.rs",
+        "attestation_store.rs",
+    ];
 
     /// Production transactions propagate with `?`; test fixtures `.unwrap()`
     /// on their own in-memory connections. The `?` suffix is what separates

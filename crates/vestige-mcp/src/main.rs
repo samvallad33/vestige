@@ -482,7 +482,9 @@ async fn main() {
 
     // Create shared event broadcast channel for dashboard <-> MCP tool events
     let (event_tx, _) =
-        tokio::sync::broadcast::channel::<vestige_mcp::dashboard::events::VestigeEvent>(4096);
+        tokio::sync::broadcast::channel::<vestige_mcp::dashboard::events::VestigeEvent>(
+            vestige_mcp::dashboard::state::EVENT_CHANNEL_CAPACITY,
+        );
 
     // v2.0.9 "Autopilot" — spawn the backend event-subscriber that routes
     // every live WebSocket event into the cognitive modules that already
@@ -575,8 +577,26 @@ async fn main() {
         tokio::spawn(async move {
             // Small delay so we don't block the stdio handshake
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            let mut cog = cog_clone.lock().await;
-            cog.reranker.init_cross_encoder();
+            // The model load is synchronous and downloads ~150MB on a fresh
+            // install. Doing it under the CognitiveEngine mutex stalled every
+            // tool that shares that lock (explore, predict, session_context,
+            // memory_unified, dream, and the rest) for the whole download, on
+            // every startup rather than on demand, and it blocked a tokio
+            // worker thread while it ran. Load on the blocking pool holding
+            // nothing, then take the lock only to install the result.
+            let loaded = tokio::task::spawn_blocking(
+                vestige_core::search::Reranker::load_cross_encoder,
+            )
+            .await;
+            match loaded {
+                Ok(Some(model)) => {
+                    let mut cog = cog_clone.lock().await;
+                    cog.reranker.install_cross_encoder(model);
+                }
+                // `None` already logged its reason; BM25 fallback stands.
+                Ok(None) => {}
+                Err(e) => warn!("Cross-encoder load task failed: {e}"),
+            }
         });
     }
 
