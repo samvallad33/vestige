@@ -16,26 +16,46 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fail if retracted CauseBench figures reappear
+      - name: Fail if the retracted CauseBench harness or its figures reappear
         run: |
           # CauseBench was withdrawn and its numbers retracted (CHANGELOG,
-          # v2.2.x). This job fails if any retracted figure reappears outside
-          # the files that legitimately QUOTE it inside a retraction notice.
+          # v2.2.x). Two independent guards, because ONE pattern list already
+          # failed in production: on 2026-08-19, commit 4417bd0 ("checkpoint
+          # before checking out main") put benchmarks/causebench/ back on main
+          # and this job stayed green for sixteen days. It had two blind spots.
+          # First, it matched the phrasing of the old marketing copy, while the
+          # harness README says "causal bridge recall@1" and "synthetic: 60%",
+          # which matched none of the patterns. Second, it never scanned *.py,
+          # and CauseBench is a Python harness. A guard that gives false
+          # assurance is worse than no guard.
           set -u
-          PATTERNS='root-cause recall@1|Vestige 60%|vector search 0%|on CauseBench'
+          fail=0
+
+          # Guard 1: the harness must not exist at all. A path check cannot be
+          # defeated by rewording, which is exactly how Guard 2 was defeated.
+          if [ -e benchmarks/causebench ]; then
+            echo "::error::benchmarks/causebench/ is back in the tree. It is retracted, and CHANGELOG.md states it no longer exists."
+            fail=1
+          fi
+
+          # Guard 2: the retracted figures, in every phrasing seen so far.
+          PATTERNS='root-cause recall@1|causal bridge recall@1|Vestige 60%|vector search 0%|on CauseBench|baselines recall@1'
           ALLOW='^(CHANGELOG\.md|docs/launch/causal-brain-demo\.html|docs/launch/backward-trace-animation-storyboard\.md|\.github/workflows/ci\.yml)'
           HITS=$(grep -rInE "$PATTERNS" \
             --include='*.md' --include='*.html' --include='*.rs' \
             --include='*.ts' --include='*.svelte' --include='*.js' \
+            --include='*.py' --include='*.sh' --include='*.json' \
             --exclude-dir=node_modules --exclude-dir=target \
             --exclude-dir=build . 2>/dev/null \
             | sed 's|^\./||' | grep -vE "$ALLOW" || true)
           if [ -n "$HITS" ]; then
             echo "::error::Retracted CauseBench figures found — these numbers were withdrawn and must not be republished:"
             echo "$HITS"
-            exit 1
+            fail=1
           fi
-          echo "clean: no retracted figures outside retraction notices"
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "clean: harness absent, and no retracted figures outside retraction notices"
 
   test:
     name: Test (${{ matrix.os }})
