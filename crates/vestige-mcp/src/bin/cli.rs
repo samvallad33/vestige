@@ -3929,7 +3929,9 @@ fn run_serve(port: u16, with_dashboard: bool, dashboard_port: u16) -> anyhow::Re
         }
 
         let (event_tx, _) =
-            tokio::sync::broadcast::channel::<vestige_mcp::dashboard::events::VestigeEvent>(1024);
+            tokio::sync::broadcast::channel::<vestige_mcp::dashboard::events::VestigeEvent>(
+                vestige_mcp::dashboard::state::EVENT_CHANNEL_CAPACITY,
+            );
 
         // Optionally start dashboard
         if with_dashboard {

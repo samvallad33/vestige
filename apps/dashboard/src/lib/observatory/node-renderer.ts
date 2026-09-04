@@ -69,6 +69,10 @@ export class NodeRenderer implements FramePass {
 	// count; seeded to the static retention snapshot so a pre-bridge field is
 	// unchanged.
 	private liveRetentionBuffer: GPUBuffer | null = null;
+	/** Shared readback for clicks that land while one is already in flight. */
+	private pickReadback: Promise<Float32Array | null> | null = null;
+	/** Set by dispose(); a late pick result is ignored, never used. */
+	private disposed = false;
 	private edgeCapacityBytes = 0;
 	private edgeCount = 0;
 	private cameraRig: CameraRigState = { ...IDENTITY_RIG };
@@ -530,28 +534,22 @@ export class NodeRenderer implements FramePass {
 	 * @param ndcY click y in NDC (-1..1, up = +)
 	 */
 	async pickAt(ndcX: number, ndcY: number): Promise<{ index: number; id: string } | null> {
+		if (this.disposed) return null;
 		const device = this.engine.gpuDevice;
 		if (!device || !this.nodeBuffer || !this.graph || this.nodeCount === 0) return null;
 
-		const byteSize = this.nodeCount * FLOATS_PER_NODE * 4;
-		const staging = device.createBuffer({
-			label: 'observatory-pick-staging',
-			size: byteSize,
-			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-		});
-		const encoder = device.createCommandEncoder({ label: 'observatory-pick-copy' });
-		encoder.copyBufferToBuffer(this.nodeBuffer, 0, staging, 0, byteSize);
-		device.queue.submit([encoder.finish()]);
-		let data: Float32Array;
-		try {
-			await staging.mapAsync(GPUMapMode.READ);
-			data = new Float32Array(staging.getMappedRange().slice(0));
-		} catch {
-			staging.destroy();
-			return null;
+		// One GPU readback per in-flight window: rapid clicks share the same
+		// snapshot instead of each allocating a staging buffer. Every exit of
+		// readNodePositions() destroys its buffer (try/finally), so an unmount
+		// while the map is pending cannot leak it; the late result is simply
+		// ignored below once the renderer is disposed.
+		if (!this.pickReadback) {
+			this.pickReadback = this.readNodePositions(device).finally(() => {
+				this.pickReadback = null;
+			});
 		}
-		staging.unmap();
-		staging.destroy();
+		const data = await this.pickReadback;
+		if (!data || this.disposed || !this.graph) return null;
 
 		// Same camera inputs the frame pass uses (compute() above).
 		const m = this.currentOrbit().viewProj; // column-major
@@ -586,7 +584,38 @@ export class NodeRenderer implements FramePass {
 		return { index: best, id: this.graph.nodes[best].id };
 	}
 
+	/**
+	 * Copy the live node buffer to a MAP_READ staging buffer and read it back.
+	 * The staging buffer is destroyed on EVERY exit path — success, GPU
+	 * error, device loss, or a disposal that raced the map — so a click that
+	 * outlives its component never leaks GPU memory.
+	 */
+	private async readNodePositions(device: GPUDevice): Promise<Float32Array | null> {
+		if (!this.nodeBuffer) return null;
+		const byteSize = this.nodeCount * FLOATS_PER_NODE * 4;
+		const staging = device.createBuffer({
+			label: 'observatory-pick-staging',
+			size: byteSize,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+		});
+		try {
+			const encoder = device.createCommandEncoder({ label: 'observatory-pick-copy' });
+			encoder.copyBufferToBuffer(this.nodeBuffer, 0, staging, 0, byteSize);
+			device.queue.submit([encoder.finish()]);
+			await staging.mapAsync(GPUMapMode.READ);
+			const data = new Float32Array(staging.getMappedRange().slice(0));
+			staging.unmap();
+			return data;
+		} catch {
+			return null;
+		} finally {
+			// destroy() is valid in any buffer state, mapped included.
+			staging.destroy();
+		}
+	}
+
 	dispose(): void {
+		this.disposed = true;
 		this.nodeBuffer?.destroy();
 		this.edgeBuffer?.destroy();
 		this.cameraBuffer?.destroy();

@@ -50,7 +50,16 @@ export type EngineStatus =
 	| { state: 'running' }
 	| { state: 'unsupported'; reason: string }
 	| { state: 'error'; reason: string }
+	/** The GPU device was lost (reset, backgrounding); a re-acquire is scheduled. */
+	| { state: 'recovering'; attempt: number; reason: string }
 	| { state: 'disposed' };
+
+/**
+ * Exponential backoff for re-acquiring a lost GPU device: 0.5 s, 1 s, 2 s,
+ * 4 s, 8 s. After the last attempt the engine stays in `error` and the host
+ * shows the reload affordance.
+ */
+export const DEVICE_RECOVERY_DELAYS_MS = [500, 1000, 2000, 4000, 8000] as const;
 
 /**
  * Frame hook contract for later increments: each registered pass gets the
@@ -84,6 +93,8 @@ export class ObservatoryEngine {
 	private rafId = 0;
 	private running = false;
 	private disposed = false;
+	/** True while a device-loss recovery loop is running. */
+	private recovering = false;
 	private maxDpr: number;
 	private onFrame?: (frame: number, fps: number) => void;
 	private lastRenderTs = Number.NEGATIVE_INFINITY;
@@ -337,8 +348,8 @@ export class ObservatoryEngine {
 
 		this.device.lost.then((info) => {
 			if (this.disposed || info.reason === 'destroyed') return;
-			this.setStatus({ state: 'error', reason: `GPU device lost: ${info.message}` });
 			this.stopLoop();
+			void this.recoverFromDeviceLoss(info.message);
 		});
 
 		// Surface shader/pipeline validation errors loudly — a silent black
@@ -379,6 +390,50 @@ export class ObservatoryEngine {
 		// stops/resumes the loop for real tab switches.
 		this.resumeLoop();
 		return true;
+	}
+
+	/**
+	 * Re-acquire the GPU after `device.lost` (GPU reset, driver update, mobile
+	 * backgrounding). Every pass holds resources from the dead device, so the
+	 * device-bound state is released, `start()` runs again, and a new
+	 * `running` status tells the canvas owner to re-register its passes (the
+	 * stage treats every ready as a fresh engine and re-uploads). Attempts
+	 * back off per DEVICE_RECOVERY_DELAYS_MS; after the last one the engine
+	 * stays in `error` with the original reason.
+	 */
+	private async recoverFromDeviceLoss(reason: string): Promise<void> {
+		if (this.recovering) return;
+		this.recovering = true;
+		try {
+			for (let attempt = 0; attempt < DEVICE_RECOVERY_DELAYS_MS.length; attempt++) {
+				if (this.disposed) return;
+				this.setStatus({ state: 'recovering', attempt: attempt + 1, reason });
+				await new Promise<void>((resolve) => setTimeout(resolve, DEVICE_RECOVERY_DELAYS_MS[attempt]));
+				if (this.disposed) return;
+				this.releaseDeviceResources();
+				if (await this.start()) return;
+			}
+			if (!this.disposed) {
+				this.setStatus({ state: 'error', reason: `GPU device lost: ${reason}` });
+			}
+		} finally {
+			this.recovering = false;
+		}
+	}
+
+	/**
+	 * Drop everything bound to the current device without disposing the
+	 * engine: passes (each disposed), post stack, params buffer, context. The
+	 * owner re-registers passes on the next `running` status.
+	 */
+	private releaseDeviceResources(): void {
+		this.clearPasses();
+		this.post?.dispose();
+		this.post = null;
+		this.paramsBuffer?.destroy();
+		this.paramsBuffer = null;
+		this.context = null;
+		this.device = null;
 	}
 
 	/** Resize the drawing buffer to the canvas' CSS size × clamped DPR. */
@@ -612,8 +667,9 @@ export class ObservatoryEngine {
 	//
 	// The deterministic clock means an exported clip is not a screen recording:
 	// we step the loop frame by frame and hand each rendered frame to the
-	// encoder at its exact timestamp. Every machine exports the byte-identical
-	// video of the same loop, regardless of its live frame rate.
+	// encoder at its exact timestamp. Every machine renders pixel-identical
+	// frames of the same loop, regardless of its live frame rate. (The H.264
+	// bytes may still differ between encoders; the pixels do not.)
 	// ------------------------------------------------------------------------
 
 	/** true while an offline export is stepping the loop. */

@@ -68,14 +68,23 @@ impl ReviewMode {
         }
     }
 
-    /// Parse from a label (case-insensitive, tolerant of `-`/`_`). Falls back to
-    /// the default [`ReviewMode::RiskGated`] on anything unrecognised.
-    pub fn from_label(s: &str) -> Self {
+    /// Strict parse (case-insensitive, tolerant of `-`/`_`): `None` for any
+    /// label that is not `fast`, `risk_gated`, or `paranoid`, so callers can
+    /// warn about a misconfiguration instead of silently landing on the default.
+    pub fn try_from_label(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-            "fast" => ReviewMode::Fast,
-            "paranoid" => ReviewMode::Paranoid,
-            _ => ReviewMode::RiskGated,
+            "fast" => Some(ReviewMode::Fast),
+            "risk_gated" => Some(ReviewMode::RiskGated),
+            "paranoid" => Some(ReviewMode::Paranoid),
+            _ => None,
         }
+    }
+
+    /// Lenient parse. Falls back to the default [`ReviewMode::RiskGated`] on
+    /// anything unrecognised; prefer [`Self::try_from_label`] where the caller
+    /// can surface the fallback.
+    pub fn from_label(s: &str) -> Self {
+        Self::try_from_label(s).unwrap_or_default()
     }
 }
 
@@ -798,5 +807,24 @@ mod tests {
         assert!(!MemoryPrAction::Forget.releases_memory());
         assert!(!MemoryPrAction::Quarantine.releases_memory());
         assert!(!MemoryPrAction::AskAgentWhy.releases_memory());
+    }
+}
+
+#[cfg(test)]
+mod review_mode_labels {
+    use super::ReviewMode;
+
+    #[test]
+    fn try_from_label_is_strict_and_from_label_is_lenient() {
+        assert_eq!(ReviewMode::try_from_label("fast"), Some(ReviewMode::Fast));
+        assert_eq!(ReviewMode::try_from_label(" Risk-Gated "), Some(ReviewMode::RiskGated));
+        assert_eq!(ReviewMode::try_from_label("PARANOID"), Some(ReviewMode::Paranoid));
+        // A typo must be visible to the caller, not silently the default.
+        assert_eq!(ReviewMode::try_from_label("fsat"), None);
+        assert_eq!(ReviewMode::try_from_label(""), None);
+        assert_eq!(ReviewMode::from_label("fsat"), ReviewMode::RiskGated);
+        for mode in [ReviewMode::Fast, ReviewMode::RiskGated, ReviewMode::Paranoid] {
+            assert_eq!(ReviewMode::try_from_label(mode.as_str()), Some(mode));
+        }
     }
 }

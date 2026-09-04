@@ -7,7 +7,7 @@
 //! and inserts the complete typed receipt payload.
 
 use chrono::{DateTime, TimeZone, Utc};
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uuid::Uuid;
@@ -199,11 +199,11 @@ impl SqliteMemoryStore {
     pub fn save_synaptic_tag(&self, tag: &SynapticTag) -> Result<String> {
         let created_at_ms = tag.created_at.timestamp_millis();
         let tag_id = deterministic_id("stag", &format!("{}|{}", tag.memory_id, created_at_ms));
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "save_synaptic_tag")?;
         let transaction_at_ms = Utc::now().timestamp_millis();
         let eligible: Option<i64> = tx
             .query_row(
@@ -302,11 +302,11 @@ impl SqliteMemoryStore {
         &self,
         request: &SynapticIngestRequest,
     ) -> Result<SynapticIngestOutcome> {
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "process_synaptic_ingest")?;
         let transaction_at_ms = Utc::now().timestamp_millis();
 
         tx.execute(
@@ -484,11 +484,11 @@ impl SqliteMemoryStore {
         // the same request from the same snapshot yields the same state.
         let recorded_at = request.occurred_at;
 
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "capture_synaptic_event")?;
         // Sample current validity only after this writer owns the SQLite
         // transaction. A capture queued behind another writer must observe any
         // suppression/tombstone that writer committed while it was waiting.
@@ -2231,6 +2231,9 @@ fn disposition_label(value: SynapticCaptureDisposition) -> &'static str {
 mod tests {
     use super::*;
     use crate::{IngestInput, Storage};
+    // Only the blocker fixture drives a transaction by hand; production
+    // writers go through SqliteMemoryStore::begin_write_transaction.
+    use rusqlite::TransactionBehavior;
     use tempfile::TempDir;
 
     fn policy() -> SynapticCapturePolicy {

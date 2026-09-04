@@ -47,6 +47,7 @@ pub use replay_store::{
     StoredCounterfactualReplay, ablate_frozen_context, private_evidence_digest,
     replay_evidence_slot, replay_idempotency_key, replay_policy_digest,
 };
+pub use sqlite::{WalCheckpointMode, WalCheckpointStatus};
 pub use sqlite::{
     ACCESS_LOG_RETENTION_DAYS, CompositionEventRecord, CompositionMemberRecord,
     CompositionNeighborRecord, CompositionOutcomeRecord, ConnectionRecord, ConnectorCursor,

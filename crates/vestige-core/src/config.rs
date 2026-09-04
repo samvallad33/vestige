@@ -128,12 +128,29 @@ impl VestigeConfig {
         data_dir.join(CONFIG_FILE)
     }
 
+    /// Largest `vestige.toml` that will be read (1 MiB). Anything bigger is
+    /// treated as corrupt and ignored with a warning.
+    pub const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+
     /// Load config from a data directory. A missing or unreadable file yields
     /// the built-in default (never an error) so a fresh install just works.
     /// A present-but-malformed file is parsed leniently: only well-formed lines
     /// are honored.
     pub fn load_from_data_dir(data_dir: &Path) -> Self {
         let path = Self::path_for_data_dir(data_dir);
+        // A real vestige.toml is a few hundred bytes. Refuse to slurp a corrupt
+        // or runaway file into memory on every startup; defaults are always safe.
+        if let Ok(meta) = std::fs::metadata(&path)
+            && meta.len() > Self::MAX_CONFIG_BYTES
+        {
+            tracing::warn!(
+                path = %path.display(),
+                bytes = meta.len(),
+                limit = Self::MAX_CONFIG_BYTES,
+                "vestige.toml is implausibly large; ignoring it and using the built-in defaults"
+            );
+            return Self::default();
+        }
         match std::fs::read_to_string(&path) {
             Ok(contents) => Self::parse(&contents),
             Err(_) => Self::default(),
@@ -382,5 +399,26 @@ mod tests {
         // default profile has no limit -> builtin fallback used
         let def = OutputConfig::default();
         assert_eq!(def.resolve_limit(None, 10), 10);
+    }
+}
+
+#[cfg(test)]
+mod config_size_cap {
+    use super::VestigeConfig;
+
+    #[test]
+    fn an_oversized_config_file_is_ignored_with_defaults() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = VestigeConfig::path_for_data_dir(dir.path());
+        let mut oversized = String::from("[embedding]\n");
+        while (oversized.len() as u64) <= VestigeConfig::MAX_CONFIG_BYTES {
+            oversized.push_str("# padding padding padding padding padding padding padding\n");
+        }
+        std::fs::write(&path, oversized).expect("write oversized config");
+        assert_eq!(
+            VestigeConfig::load_from_data_dir(dir.path()),
+            VestigeConfig::default(),
+            "an implausibly large vestige.toml must not be parsed"
+        );
     }
 }

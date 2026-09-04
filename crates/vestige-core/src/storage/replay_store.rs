@@ -16,7 +16,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -572,11 +572,12 @@ impl SqliteMemoryStore {
         if receipt.receipt_id != draft.source_receipt_id {
             return Err(replay_error(ReplayBuildError::ReceiptCapsuleMismatch));
         }
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx =
+            Self::begin_write_transaction(&writer, "save_retrieval_receipt_with_replay_capsule")?;
         insert_or_validate_receipt(&tx, receipt, run_id, tool)?;
         let durable = Self::save_retrieval_replay_capsule_in_transaction(&tx, draft)?;
         tx.commit()?;
@@ -588,11 +589,11 @@ impl SqliteMemoryStore {
         &self,
         draft: &RetrievalReplayCapsuleDraft,
     ) -> Result<DurableRetrievalReplayCapsule> {
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "save_retrieval_replay_capsule")?;
         let durable = Self::save_retrieval_replay_capsule_in_transaction(&tx, draft)?;
         tx.commit()?;
         Ok(durable)
@@ -699,11 +700,11 @@ impl SqliteMemoryStore {
         source_receipt_id: &str,
         withheld_slots: &[String],
     ) -> Result<DurableCounterfactualReplay> {
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "create_context_ablation_replay")?;
         let capsule = load_capsule_by_source(&tx, source_receipt_id)?.ok_or_else(|| {
             StorageError::NotFound(format!("replay capsule for receipt {source_receipt_id}"))
         })?;
@@ -810,11 +811,11 @@ impl SqliteMemoryStore {
                 replay_id.to_string(),
             )));
         }
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "link_context_ablation_receipt")?;
         let receipt_exists: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM memory_receipts WHERE receipt_id = ?1)",
             params![receipt_id],
@@ -857,11 +858,11 @@ impl SqliteMemoryStore {
         run_id: Option<&str>,
         tool: Option<&str>,
     ) -> Result<()> {
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "save_counterfactual_replay_receipt")?;
         let replay = load_replay_by_id(&tx, replay_id)?
             .ok_or_else(|| StorageError::NotFound(replay_id.to_string()))?;
         if replay.privacy_state != ReplayPrivacyState::Active {
@@ -958,11 +959,11 @@ impl SqliteMemoryStore {
         memory_id: &str,
         reason: ReplayInvalidationReason,
     ) -> Result<ReplayPrivacyInvalidation> {
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "invalidate_replay_evidence_for_memory")?;
         let report =
             Self::invalidate_replay_evidence_for_memory_in_transaction(&tx, memory_id, reason)?;
         tx.commit()?;
@@ -997,11 +998,11 @@ impl SqliteMemoryStore {
         capsule_id: &str,
         reason: ReplayInvalidationReason,
     ) -> Result<ReplayPrivacyInvalidation> {
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "invalidate_replay_capsule")?;
         let report = invalidate_capsules_in_transaction(&tx, &[capsule_id.to_string()], reason)?;
         tx.commit()?;
         Ok(report)
@@ -2003,6 +2004,9 @@ fn scrub_dependent_replay_receipts(tx: &Transaction<'_>, capsule_id: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the rollback fixture drives a transaction by hand; production
+    // writers go through SqliteMemoryStore::begin_write_transaction.
+    use rusqlite::TransactionBehavior;
 
     fn keyed(slot: &str, text: &str) -> String {
         private_evidence_digest(&[7; 32], slot, text.as_bytes())

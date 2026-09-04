@@ -7,7 +7,7 @@
 //! `legacy_unsigned`; this module has no attach/retro-sign API.
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, params};
 use std::collections::HashSet;
 #[cfg(unix)]
 use std::io::{Read, Write};
@@ -285,11 +285,11 @@ impl SqliteMemoryStore {
     /// an identical record is idempotent; a conflicting key id fails closed.
     pub fn register_receipt_signing_key(&self, key: &TrustedSigningKey) -> Result<bool> {
         validate_registry_key(key)?;
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "register_receipt_signing_key")?;
         let existing: Option<RegisteredSigningKeyRow> = tx
             .query_row(
                 "SELECT public_key, public_key_fingerprint, status, valid_from,
@@ -361,11 +361,11 @@ impl SqliteMemoryStore {
         transition: ReceiptSigningKeyTransition,
     ) -> Result<()> {
         validate_registry_key_id(key_id)?;
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "transition_receipt_signing_key")?;
         let existing: Option<String> = tx
             .query_row(
                 "SELECT status FROM receipt_signing_keys WHERE key_id = ?1",
@@ -460,11 +460,11 @@ impl SqliteMemoryStore {
                 StorageError::Init(format!("receipt projection serialize: {error}"))
             })?;
 
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = Self::begin_write_transaction(&writer, "save_signed_receipt_atomic_inner")?;
         let trusted_keys = load_trusted_signing_keys(&tx)?;
         let chain = write.attestation.chain();
         let chain_id = chain.chain_id().as_str();

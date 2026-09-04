@@ -105,6 +105,25 @@ impl fmt::Display for SecretFinding {
 /// matches are blocking; the high-entropy fallback is review-only.
 pub fn scan_secrets(content: &str) -> Vec<SecretFinding> {
     let mut findings = Vec::new();
+    // Work budget: the scan is linear per pattern, so a pathological blob is
+    // bounded at MAX_SCAN_BYTES (far above any ingest cap) and the tail is
+    // reported instead of silently skipped. Findings are also deduplicated by
+    // fingerprint, and capped per kind (see `push_finding`), so a blob that
+    // repeats one token a million times costs one entry, not a million.
+    let content = if content.len() > MAX_SCAN_BYTES {
+        let mut end = MAX_SCAN_BYTES;
+        while !content.is_char_boundary(end) {
+            end -= 1;
+        }
+        tracing::warn!(
+            bytes = content.len(),
+            scanned = end,
+            "Secret scan truncated to its byte budget; the tail was not scanned"
+        );
+        &content[..end]
+    } else {
+        content
+    };
 
     // Google API keys are `AIza` followed by 35 URL-safe base64 characters.
     for value in exact_prefixed_runs(content, "AIza", 35, is_urlsafe_key_char) {
@@ -186,12 +205,23 @@ pub fn scan_secrets(content: &str) -> Vec<SecretFinding> {
     findings
 }
 
+/// Largest content the secret scanner will walk (16 MiB). Ingest paths cap
+/// content far below this; the budget only bounds a runaway caller.
+pub const MAX_SCAN_BYTES: usize = 16 * 1024 * 1024;
+
+/// Most distinct findings kept per secret kind. One is enough to block a
+/// write; the cap keeps a blob of thousands of tokens from growing the report.
+pub const MAX_FINDINGS_PER_KIND: usize = 64;
+
 fn push_finding(
     findings: &mut Vec<SecretFinding>,
     kind: SecretKind,
     confidence: SecretConfidence,
     value: &str,
 ) {
+    if findings.iter().filter(|f| f.kind == kind).count() >= MAX_FINDINGS_PER_KIND {
+        return;
+    }
     let digest = blake3::hash(value.as_bytes()).to_hex().to_string();
     let finding = SecretFinding {
         kind,
@@ -529,5 +559,41 @@ mod tests {
             "Set OPENAI_API_KEY in the shell and rotate credentials outside the repository.",
         );
         assert!(findings.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod scan_budget {
+    use super::{MAX_FINDINGS_PER_KIND, MAX_SCAN_BYTES, SecretKind, scan_secrets};
+
+    #[test]
+    fn findings_are_capped_per_kind() {
+        // 500 distinct GitHub tokens in one blob: the report keeps at most the cap.
+        let mut blob = String::new();
+        for i in 0..500 {
+            blob.push_str(&format!("ghp_{:036} ", i));
+        }
+        let findings = scan_secrets(&blob);
+        let github = findings
+            .iter()
+            .filter(|f| f.kind == SecretKind::GitHubToken)
+            .count();
+        assert!(github > 0, "tokens must still be detected");
+        assert!(github <= MAX_FINDINGS_PER_KIND, "{github} findings exceed the per-kind cap");
+    }
+
+    #[test]
+    fn oversized_content_is_scanned_up_to_the_budget_and_never_panics() {
+        // A token before the budget is found; the scan does not panic on a
+        // multibyte boundary at the cut.
+        let mut blob = String::from("ghp_");
+        blob.push_str(&"a".repeat(36));
+        blob.push(' ');
+        blob.push_str(&"é".repeat(MAX_SCAN_BYTES / 2 + 8));
+        let findings = scan_secrets(&blob);
+        assert!(
+            findings.iter().any(|f| f.kind == SecretKind::GitHubToken),
+            "token before the budget must be reported"
+        );
     }
 }

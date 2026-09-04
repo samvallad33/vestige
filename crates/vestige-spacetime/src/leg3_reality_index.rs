@@ -56,26 +56,52 @@ pub struct RealityPage {
     pub manifest_seal: String,
 }
 
+/// Ordinals are `u32` because the eligibility sets are `RoaringBitmap`s, which
+/// index by `u32`. The space is 4,294,967,296 memories; exhausting it is a
+/// graceful limit, not a crash: [`OrdinalDirectory::ensure`] returns `None`
+/// and the caller counts the memory as unindexed (see
+/// [`RealityIndex::ordinal_overflow_count`]).
 #[derive(Clone, Debug, Default)]
 pub struct OrdinalDirectory {
     next: u32,
+    exhausted: bool,
     id_to_ord: HashMap<String, u32>,
     ord_to_id: HashMap<u32, String>,
 }
 
 impl OrdinalDirectory {
-    pub fn ensure(&mut self, memory_id: &str) -> u32 {
+    /// Return the ordinal for `memory_id`, assigning the next free one on
+    /// first sight. `None` once every `u32` ordinal has been handed out.
+    pub fn ensure(&mut self, memory_id: &str) -> Option<u32> {
         if let Some(value) = self.id_to_ord.get(memory_id) {
-            return *value;
+            return Some(*value);
+        }
+        if self.exhausted {
+            return None;
         }
         let value = self.next;
-        self.next = self
-            .next
-            .checked_add(1)
-            .expect("u32 ordinal space exhausted");
+        match self.next.checked_add(1) {
+            Some(next) => self.next = next,
+            None => self.exhausted = true,
+        }
         self.id_to_ord.insert(memory_id.into(), value);
         self.ord_to_id.insert(value, memory_id.into());
-        value
+        Some(value)
+    }
+
+    /// Number of ordinals assigned so far.
+    pub fn len(&self) -> usize {
+        self.id_to_ord.len()
+    }
+
+    /// True when no ordinal has been assigned.
+    pub fn is_empty(&self) -> bool {
+        self.id_to_ord.is_empty()
+    }
+
+    /// True once the `u32` ordinal space is used up.
+    pub fn is_exhausted(&self) -> bool {
+        self.exhausted
     }
 
     pub fn memory_id(&self, ordinal: u32) -> Option<&str> {
@@ -103,6 +129,9 @@ pub struct CompiledEligibleSet {
 pub struct RealityIndex {
     pub page_size: usize,
     pub ordinals: OrdinalDirectory,
+    /// Memories skipped by the last `rebuild` because the `u32` ordinal space
+    /// was exhausted. Zero on every real store; nonzero is reported, not fatal.
+    pub ordinal_overflow: u64,
     pub context_members: HashMap<String, RoaringBitmap>,
     pub all_context_members_bitmap: RoaringBitmap,
     pub global_members: RoaringBitmap,
@@ -120,6 +149,7 @@ impl RealityIndex {
         Self {
             page_size: page_size.max(1),
             ordinals: OrdinalDirectory::default(),
+            ordinal_overflow: 0,
             context_members: HashMap::new(),
             all_context_members_bitmap: RoaringBitmap::new(),
             global_members: RoaringBitmap::new(),
@@ -133,6 +163,12 @@ impl RealityIndex {
         }
     }
 
+    /// Memories the last `rebuild` could not index because every `u32`
+    /// ordinal was already assigned.
+    pub fn ordinal_overflow_count(&self) -> u64 {
+        self.ordinal_overflow
+    }
+
     pub fn rebuild(&mut self, memories: &MemoryMap) {
         self.context_members.clear();
         self.all_context_members_bitmap.clear();
@@ -142,8 +178,15 @@ impl RealityIndex {
         self.origin_members.clear();
         self.authority_members.clear();
 
+        self.ordinal_overflow = 0;
         for memory in memories.values() {
-            let ordinal = self.ordinals.ensure(&memory.memory_id);
+            let Some(ordinal) = self.ordinals.ensure(&memory.memory_id) else {
+                // Past the u32 ordinal space: the memory stays out of every
+                // eligibility set rather than aliasing another ordinal or
+                // crashing the process. Counted so callers can report it.
+                self.ordinal_overflow += 1;
+                continue;
+            };
             match memory.scope {
                 ScopeKind::Global => {
                     self.global_members.insert(ordinal);
@@ -996,5 +1039,25 @@ mod tests {
         assert_eq!(before.universe_seal, after.universe_seal);
         assert_eq!(before.reality_checkpoint, after.reality_checkpoint);
         assert_ne!(before.routing_plan_seal, after.routing_plan_seal);
+    }
+}
+
+#[cfg(test)]
+mod ordinal_limits {
+    use super::OrdinalDirectory;
+
+    #[test]
+    fn exhausting_the_ordinal_space_is_a_limit_not_a_panic() {
+        let mut directory = OrdinalDirectory {
+            next: u32::MAX,
+            ..OrdinalDirectory::default()
+        };
+        assert_eq!(directory.ensure("last"), Some(u32::MAX));
+        assert!(directory.is_exhausted());
+        assert_eq!(directory.ensure("one-too-many"), None);
+        // Known ids still resolve after exhaustion.
+        assert_eq!(directory.ensure("last"), Some(u32::MAX));
+        assert_eq!(directory.memory_id(u32::MAX), Some("last"));
+        assert_eq!(directory.len(), 1);
     }
 }

@@ -109,15 +109,45 @@ fn is_write_decision(label: &str) -> bool {
 /// This is the single source of truth: the dashboard handler delegates here so
 /// the MCP write path and the dashboard can never disagree about the mode.
 pub fn read_review_mode(storage: &Storage) -> vestige_core::ReviewMode {
-    std::fs::read_to_string(storage.data_dir().join("review_mode.json"))
+    let path = storage.data_dir().join("review_mode.json");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        // No file is the normal first-run state: default, quietly.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return vestige_core::ReviewMode::default();
+        }
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "review_mode.json is unreadable; using the default risk_gated review mode"
+            );
+            return vestige_core::ReviewMode::default();
+        }
+    };
+    let label = serde_json::from_str::<Value>(&raw)
         .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| {
-            v.get("mode")
-                .and_then(|m| m.as_str())
-                .map(vestige_core::ReviewMode::from_label)
-        })
-        .unwrap_or_default()
+        .and_then(|v| v.get("mode").and_then(|m| m.as_str()).map(str::to_owned));
+    // Never fall back silently: an operator who wrote `fast` with a typo must
+    // learn they are still risk-gated from the log, not from a surprise later.
+    match label.as_deref().map(vestige_core::ReviewMode::try_from_label) {
+        Some(Some(mode)) => mode,
+        Some(None) => {
+            tracing::warn!(
+                path = %path.display(),
+                label = label.as_deref().unwrap_or_default(),
+                "review_mode.json names an unknown review mode (known: fast, risk_gated, paranoid); using the default risk_gated review mode"
+            );
+            vestige_core::ReviewMode::default()
+        }
+        None => {
+            tracing::warn!(
+                path = %path.display(),
+                "review_mode.json has no string \"mode\" field; using the default risk_gated review mode"
+            );
+            vestige_core::ReviewMode::default()
+        }
+    }
 }
 
 /// Risk-gate the writes in a tool result. For each write the tool just made,
