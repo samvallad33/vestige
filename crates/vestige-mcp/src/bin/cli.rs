@@ -3570,8 +3570,9 @@ fn run_backfill(
         .map_err(|e| anyhow::anyhow!(e))?;
 
     // Machine-readable path: dump the raw tool result (includes per-cause
-    // memory_id, shared_entities, similarity_rank) and stop. Used by tooling and
-    // the CauseBench harness so it can score against real engine output.
+    // memory_id, shared_entities, similarity_rank) and stop. Used by tooling
+    // and by any scoring harness that needs real engine output rather than the
+    // human-readable rendering. (It once named CauseBench, which is retracted.)
     if json {
         println!("{}", serde_json::to_string(&result)?);
         return Ok(());
