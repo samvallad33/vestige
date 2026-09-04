@@ -738,11 +738,15 @@ impl SqliteMemoryStore {
         let now = Utc::now();
 
         let effect = {
-            let mut writer = self
+            let writer = self
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-            let tx = writer.transaction()?;
+            // Writer transactions begin IMMEDIATE through the shared helper so
+            // the 5 s busy timeout applies to the write lock and BUSY/LOCKED
+            // past it is retried with a logged reason, same as every other
+            // writer in the storage layer.
+            let tx = Self::begin_write_transaction(&writer, "decide_pending_memory_mutation")?;
 
             let changed = tx.execute(
                 "UPDATE memory_prs SET status = ?1, decision = ?2, decided_at = ?3

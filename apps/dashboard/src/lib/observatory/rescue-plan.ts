@@ -67,7 +67,13 @@ export interface RescueShaderConsts {
 }
 
 export interface RescueVerdictCopy {
-	headline: 'root cause found' | 'candidate cause found';
+	/**
+	 * Always a CANDIDATE. The heuristic (no-receipt) walk and the receipt-backed
+	 * walk both surface a candidate cause; nothing in the field asserts a root
+	 * cause automatically. Product rule: candidate causes, never automatic
+	 * root cause.
+	 */
+	headline: 'candidate cause found';
 	causeLabel: string;
 	failureLabel: string;
 	causeDate: string;
@@ -457,7 +463,7 @@ function emptyPlan(nodeCount: number): RescuePlan {
 		pathMetas: [],
 		spineBeats: [],
 		verdict: {
-			headline: 'root cause found',
+			headline: 'candidate cause found',
 			causeLabel: '',
 			failureLabel: '',
 			causeDate: '',
@@ -621,19 +627,21 @@ export function buildRescuePlan(
 		spine(W(causeDepth), 1, `scrubbing past · ${causeDepth} hops`, 'rescue-wave-deep');
 	}
 	spine(ARC_FRAME, 1, `causal arc · ${causeLabel}`, graph.nodes[causeIndex].id);
-	spine(VERDICT_START, 1, 'root cause found', 'rescue-verdict');
+	spine(VERDICT_START, 1, 'candidate cause found', 'rescue-verdict');
 
 	// --- Verdict copy (REAL memory labels + real date) ---
 	const createdAt = response.nodes.find((nd) => nd.id === graph.nodes[causeIndex].id)?.createdAt ?? '';
 	const causeDate = createdAt ? createdAt.slice(0, 10) : '';
 	const verdict: RescueVerdictCopy = {
-		headline: 'root cause found',
+		headline: 'candidate cause found',
 		causeLabel,
 		failureLabel,
 		causeDate,
 		hops: causeDepth,
 		k: K,
-		receipt: `${causeDepth} hops back · ${causeDate} · vector search: 0 for ${K}`
+		// Honest provenance: this walk is a deterministic heuristic over the
+		// field's own edges. It has no persisted receipt, and the copy says so.
+		receipt: `${causeDepth} hops back · ${causeDate} · heuristic, no receipt · vector search: 0 for ${K}`
 	};
 
 	return {

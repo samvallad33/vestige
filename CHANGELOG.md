@@ -5,6 +5,155 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Hardening pass driven by Aaron Garcia's (@aaronukgarcia) independent audit of
+v2.7.0, verified finding by finding against `main` before anything changed.
+Confirmed items are fixed below; the audit's migration-idempotence and WAL
+starvation findings did not reproduce (every migration already runs inside one
+IMMEDIATE transaction with its own version bump, and `wal_autocheckpoint` is
+on), so those got regression tests and a checkpoint hook rather than rewrites.
+
+### Fixed — Concurrency
+
+- `purge_node` released its SQLite writer guard only after touching the
+  vector-index lock, while `activate_embedding_profile` takes those two locks
+  in the opposite order. A purge racing a profile activation could deadlock
+  the process with no timeout. The writer is now dropped before the index is
+  touched, matching every other combined lock site, and a threaded regression
+  test races the two paths under a 30 s watchdog.
+- The `dream` tool and the dashboard `POST /api/dream` held the shared
+  `CognitiveEngine` mutex across the whole synchronous O(n²) pairwise scan, so
+  one dream stalled every other tool that takes that lock (`explore`,
+  `predict`, `session_context`, `memory_unified`, `autopilot`, and more) for
+  the duration. The dreamer is now snapshotted under a short lock (its state is
+  `Arc`-shared, so the engine still records the run) and the scan runs on the
+  blocking pool. `MemoryDreamer` gained `Clone` and synchronous
+  `*_blocking` entry points; the async wrappers are unchanged.
+- Every writer transaction now begins `IMMEDIATE`. A `DEFERRED` transaction
+  that reads before it writes can fail with `SQLITE_BUSY_SNAPSHOT` when another
+  process (the CLI beside the MCP server) commits in between, and SQLite does
+  not consult `busy_timeout` for that upgrade. `BEGIN IMMEDIATE` takes the
+  write lock up front, where the 5 s busy timeout applies, and SQLite then
+  guarantees no `SQLITE_BUSY` until `COMMIT`. A source-policy test keeps it
+  that way, across every storage module rather than one file: the first
+  version of that lint read `sqlite.rs` alone, and two writers sat in its
+  blind spot. The open-time foreign-key repair (`repair_cascade_orphans`) read
+  `PRAGMA foreign_key_list` and then `DELETE`d inside one `unchecked`
+  DEFERRED transaction, so a CLI writing beside the server could fail the
+  store open; the memory-PR decide path in `trace_store` opened DEFERRED and
+  skipped the retry helper. Both go through `begin_write_transaction` now, and
+  the lint reports the offending file and line.
+
+### Fixed — Determinism and honest claims
+
+- The Observatory brain print (`vb1-…`) folded `dueForReview` into the hashed
+  shape payload and into the `review-pressure` trait. That count is
+  `next_review <= now`, so an untouched store re-keyed every time a card
+  crossed its due date, breaking "same store twice, identical print". Only
+  stored shape is hashed now; vector lane 2 is reserved (always 0). Existing
+  prints re-key exactly once.
+- The salience-rescue walk without a receipt announced `root cause found`
+  with a receipt-shaped line, while the receipt-backed walk said
+  `candidate cause found`. Both now say `candidate cause found`, and the
+  heuristic verdict's provenance line reads `heuristic, no receipt`. Nothing in
+  the field asserts a root cause automatically.
+- `ObservatoryStage` now defaults to `chrome="none"`. The `'full'` overlays
+  render real memory labels and the export/capture paths mount this component,
+  so a future mount that forgets the prop can no longer start exporting labels
+  by accident; opt in to `'full'` explicitly (both routes already did).
+- Loop-export comments no longer promise a "byte-identical" clip. The rendered
+  frames are pixel-identical across machines; the H.264 bytes depend on the
+  encoder.
+
+### Fixed — Silent fallbacks now speak
+
+- `schema_version` is validated before any migration decision: a non-integer,
+  negative, or missing version on a populated database fails closed with a
+  message that names the corrupted row instead of replaying early `ALTER`
+  migrations into a `duplicate column` loop, and a store newer than the binary
+  logs a warning instead of nothing.
+- Vector-index rebuilds and vector loads count and log the rows they skip
+  instead of dropping unreadable or undecodable embeddings silently. That
+  includes the legacy `node_embeddings` mirror inside `get_all_embeddings`,
+  which is the branch a store still on the legacy profile actually takes, and
+  which kept dropping rows silently while the profile-table half above it
+  logged; one summary line now covers both sources.
+- `review_mode.json` with an unknown mode (a typo for `fast`, say) now logs a
+  warning naming the accepted labels instead of silently running risk-gated.
+  `ReviewMode::try_from_label` is the strict parser behind it.
+- `vestige.toml` larger than 1 MiB is ignored with a warning instead of being
+  read into memory on every startup.
+
+### Fixed — Second pass: every remaining audit item, reproduced or not
+
+- Every `ALTER TABLE ... ADD COLUMN` in every migration now runs through the
+  idempotent `add_column_if_missing` guard, whatever version it belongs to
+  (the runner splits them out of the migration body and applies the rest as
+  one batch). The per-migration transaction already made crash replay clean;
+  this additionally absorbs a database whose columns were added by an older
+  runner or a pre-release build. A test half-applies every column-adding
+  migration and proves the replay succeeds.
+- V28's manifest count is authoritative on replay (`INSERT OR IGNORE` kept a
+  row a pre-release build wrote), and the legacy repair pass reconciles a
+  stale `vector_count` on open even when no vector needs repair.
+- `schema_version` with more than one row logs a warning instead of silently
+  taking `MAX()`.
+- Writer transactions go through one helper: `BEGIN IMMEDIATE`, then three
+  logged retries (100/200/400 ms) on `BUSY`/`LOCKED` past the busy timeout.
+- Every remaining `filter_map(|r| r.ok())` on a SQLite row stream logs the
+  row it skipped and the operation that skipped it (15 sites).
+- `purge_node_in_transaction` now fails closed. Its three reference sweeps
+  (`insights.source_memories`, `memory_receipts.payload`, `agent_traces.
+  payload`) selected the rows that still name the memory being erased and then
+  dropped any unreadable one with `filter_map(|row| row.ok())`, so a row the
+  scrub could not read kept its reference while the caller was told the purge
+  succeeded. On an erasure path that is the one failure that must never be
+  silent, so an unreadable row now aborts the whole purge and the transaction
+  rolls back with nothing half-scrubbed. A payload that parses as neither a
+  `Receipt` nor a `MemoryTraceEvent` still falls through to the raw-text
+  sweeps, but says so in the log instead of vanishing. Regression test seeds
+  an insight whose TEXT primary key holds a BLOB: on the old code the purge
+  returned `Ok`, on the fix it refuses and leaves the memory intact.
+- `MemoryStoreSend::insert` indexes a supplied embedding under the active
+  profile (vector table, `has_embedding`, in-memory index, legacy mirror) or
+  fails loudly; it can no longer accept a vector and leave the memory
+  unsearchable. The persistence is shared with the embedder path.
+- The secret scanner has a work budget: 16 MiB scanned (the tail is logged,
+  never silently skipped) and at most 64 distinct findings per kind.
+- `OrdinalDirectory` exhaustion is a graceful limit: `ensure` returns `None`
+  and the reality index counts the unindexed memory instead of panicking.
+- The MCP server runs a `PASSIVE` WAL checkpoint every 60 s and warns when
+  the WAL stays large afterwards, and sweeps expired agent traces at startup
+  as well as during consolidation.
+- Dashboard WebSocket subscribers that lag receive an explicit
+  `EventsDropped { missed }` event instead of resuming mid-stream, the
+  closed-channel case ends the socket cleanly, and the broadcast buffer grew
+  from 1024 to 4096 events. The client logs the gap.
+- Observatory pick readback runs inside `try/finally` (the staging buffer is
+  destroyed on every exit), rapid clicks share one in-flight readback, the
+  stage disposes its `NodeRenderer` on unmount and before a re-create, and a
+  disposed renderer ignores late results.
+- The WebGPU engine recovers from `device.lost`: it releases device-bound
+  state and re-acquires the device with exponential backoff (0.5 s to 8 s,
+  five attempts), reporting a `recovering` status; the canvas re-fires
+  `onready` so the stage re-registers and re-uploads. After the last attempt
+  it stays in `error` with the original reason.
+- Regression tests pin the stage's `chrome` default to `'none'` and forbid
+  any route from mounting it with `chrome="full"`.
+
+### Added
+
+- The consolidation cycle ends with a `PASSIVE` WAL checkpoint, so long
+  uptimes fold the `.wal` back into the main file between busy periods.
+- Migration regression test: applying every migration twice must apply nothing
+  the second time and leave `sqlite_master` identical.
+- Device-loss recovery is covered by behaviour tests, not just its delay
+  table: the loop reports a numbered `recovering` status per attempt, stops at
+  the first successful re-acquire, keeps the original reason in the terminal
+  `error`, refuses to re-acquire or paint an error once the engine is
+  disposed, and runs one loop at a time when `device.lost` fires twice.
+
 ## [2.7.1] - 2026-09-02 — "The first cloud write is never unconditional"
 
 ### Fixed — Managed Continuity first upload

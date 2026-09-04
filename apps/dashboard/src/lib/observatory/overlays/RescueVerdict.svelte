@@ -32,7 +32,7 @@
 		// Fade in over 600→620, hold fully readable through the field's decay to
 		// rest, then fade out just before the seamless wrap (705→719, back to 0
 		// at 719 so the loop seam stays clean). This is the demo money-card: the
-		// viewer needs seconds to read "root cause found", not a blink.
+		// viewer needs seconds to read "candidate cause found", not a blink.
 		fadeWindow = [600, 620, 705, 719],
 		tone = 'triumph'
 	}: Props = $props();

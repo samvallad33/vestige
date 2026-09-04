@@ -698,6 +698,19 @@ struct AttachedProfileRuntime {
     embedder: Arc<ProfiledEmbedder>,
 }
 
+/// Row-mapping errors are never dropped silently. Each unreadable row is
+/// logged with the operation that skipped it; the operation still completes
+/// on the rows it could read.
+fn warn_skipped_row<T>(operation: &'static str) -> impl FnMut(rusqlite::Result<T>) -> Option<T> {
+    move |row| match row {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!(%error, operation, "Skipping an unreadable row");
+            None
+        }
+    }
+}
+
 impl SqliteMemoryStore {
     #[cfg(feature = "vector-search")]
     fn vector_search_enabled_by_cpu() -> bool {
@@ -1008,7 +1021,12 @@ impl SqliteMemoryStore {
         let mut cascade_ok: std::collections::HashMap<String, bool> =
             std::collections::HashMap::new();
         let mut repaired = 0_u64;
-        let tx = conn.unchecked_transaction()?;
+        // This transaction reads (`PRAGMA foreign_key_list`) before it writes
+        // (`DELETE`), which is exactly the shape that returns
+        // `SQLITE_BUSY_SNAPSHOT` under DEFERRED without consulting the busy
+        // handler. It runs while the store is being opened, so a CLI writing
+        // beside the server must not be able to fail the open.
+        let tx = Self::begin_write_transaction(conn, "repair_cascade_orphans")?;
         for (table, rowid) in violations {
             let Some(rowid) = rowid else { continue };
             let ok = match cascade_ok.get(&table) {
@@ -1550,6 +1568,54 @@ impl SqliteMemoryStore {
     /// be used only after application writers have stopped (for example, at a
     /// quiesced backup or graceful-shutdown boundary); it is not what makes an
     /// already-acknowledged hardened commit durable.
+    /// Begin a WRITE transaction on the writer connection.
+    ///
+    /// `BEGIN IMMEDIATE` takes the write lock up front, where `busy_timeout`
+    /// (5 s) applies, and SQLite then guarantees no `SQLITE_BUSY` until
+    /// `COMMIT`; a DEFERRED transaction that reads first could instead fail
+    /// with `SQLITE_BUSY_SNAPSHOT` the moment another process committed. On
+    /// top of the busy timeout this retries `BUSY`/`LOCKED` three times with
+    /// 100/200/400 ms backoff and logs each retry with the calling operation,
+    /// so a CLI backup running beside the MCP server shows up in the log
+    /// instead of as a failed write.
+    pub(super) fn begin_write_transaction<'c>(
+        conn: &'c Connection,
+        operation: &'static str,
+    ) -> Result<rusqlite::Transaction<'c>> {
+        const RETRY_DELAYS_MS: [u64; 3] = [100, 200, 400];
+        let mut attempt = 0usize;
+        loop {
+            // `new_unchecked` takes a shared borrow (the writer connection is
+            // already exclusive behind its mutex), which lets the retry loop
+            // return the transaction without fighting the borrow checker.
+            match rusqlite::Transaction::new_unchecked(
+                conn,
+                rusqlite::TransactionBehavior::Immediate,
+            ) {
+                Ok(tx) => return Ok(tx),
+                Err(rusqlite::Error::SqliteFailure(error, message))
+                    if matches!(
+                        error.code,
+                        rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                    ) && attempt < RETRY_DELAYS_MS.len() =>
+                {
+                    let delay_ms = RETRY_DELAYS_MS[attempt];
+                    attempt += 1;
+                    tracing::warn!(
+                        operation,
+                        attempt,
+                        delay_ms,
+                        code = ?error.code,
+                        detail = message.as_deref().unwrap_or(""),
+                        "SQLite write lock busy; retrying"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
     pub fn checkpoint_wal(&self, mode: WalCheckpointMode) -> Result<WalCheckpointStatus> {
         let writer = self
             .writer
@@ -1638,12 +1704,34 @@ impl SqliteMemoryStore {
              WHERE profile_id = ?1",
         )?;
 
+        // Never drop rows silently: a row this rebuild cannot read is a memory
+        // that stays invisible to semantic search until it is re-embedded, and
+        // the operator must be able to see that in the log.
+        let mut unreadable_rows = 0_usize;
         let embeddings: Vec<(String, Vec<u8>, String)> = stmt
             .query_map(params![profile_id], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| match r {
+                Ok(row) => Some(row),
+                Err(error) => {
+                    unreadable_rows += 1;
+                    tracing::warn!(
+                        %error,
+                        profile_id,
+                        "Skipping an unreadable embedding_profile_vectors row during vector index rebuild"
+                    );
+                    None
+                }
+            })
             .collect();
+        if unreadable_rows > 0 {
+            tracing::warn!(
+                unreadable_rows,
+                profile_id,
+                "Vector index rebuild skipped rows; those memories stay keyword-searchable only until re-embedded"
+            );
+        }
 
         drop(stmt);
         drop(reader);
@@ -2521,21 +2609,47 @@ impl SqliteMemoryStore {
             "SELECT node_id, embedding FROM embedding_profile_vectors WHERE profile_id = ?1",
         )?;
 
+        let mut unreadable_rows = 0_usize;
+        let mut undecodable_rows = 0_usize;
         let mut results: Vec<(String, Vec<f32>)> = stmt
             .query_map(params![&active_profile_id], |row| {
                 let node_id: String = row.get(0)?;
                 let embedding_bytes: Vec<u8> = row.get(1)?;
                 Ok((node_id, embedding_bytes))
             })?
-            .filter_map(|r| r.ok())
-            .filter_map(|(id, bytes)| {
-                Embedding::from_bytes(&bytes).map(|embedding| (id, embedding.vector))
+            .filter_map(|r| match r {
+                Ok(row) => Some(row),
+                Err(error) => {
+                    unreadable_rows += 1;
+                    tracing::warn!(
+                        %error,
+                        profile_id = %active_profile_id,
+                        "Skipping an unreadable embedding row while loading vectors"
+                    );
+                    None
+                }
+            })
+            .filter_map(|(id, bytes)| match Embedding::from_bytes(&bytes) {
+                Some(embedding) => Some((id, embedding.vector)),
+                None => {
+                    undecodable_rows += 1;
+                    tracing::warn!(
+                        node_id = %id,
+                        profile_id = %active_profile_id,
+                        "Skipping an undecodable embedding blob while loading vectors"
+                    );
+                    None
+                }
             })
             .collect();
-
         // Keep direct writes to the historic table readable for the legacy
         // profile only. The anti-join avoids duplicate node ids after V20's
         // one-time copy, while non-legacy profiles never see this mirror.
+        //
+        // This mirror is the branch an unmigrated store actually takes, so it
+        // gets the same "never drop a row silently" treatment as the profile
+        // table above: a row skipped here is a memory that stays invisible to
+        // semantic search, and the operator has to be able to see it.
         if active_profile_id == LEGACY_EMBEDDING_PROFILE_ID {
             drop(stmt);
             let mut legacy_stmt = reader.prepare(
@@ -2551,10 +2665,40 @@ impl SqliteMemoryStore {
                     .query_map(params![LEGACY_EMBEDDING_PROFILE_ID], |row| {
                         Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
                     })?
-                    .filter_map(|row| row.ok())
-                    .filter_map(|(id, bytes)| {
-                        Embedding::from_bytes(&bytes).map(|embedding| (id, embedding.vector))
+                    .filter_map(|row| match row {
+                        Ok(row) => Some(row),
+                        Err(error) => {
+                            unreadable_rows += 1;
+                            tracing::warn!(
+                                %error,
+                                profile_id = %active_profile_id,
+                                "Skipping an unreadable node_embeddings row while loading legacy vectors"
+                            );
+                            None
+                        }
+                    })
+                    .filter_map(|(id, bytes)| match Embedding::from_bytes(&bytes) {
+                        Some(embedding) => Some((id, embedding.vector)),
+                        None => {
+                            undecodable_rows += 1;
+                            tracing::warn!(
+                                node_id = %id,
+                                profile_id = %active_profile_id,
+                                "Skipping an undecodable node_embeddings blob while loading legacy vectors"
+                            );
+                            None
+                        }
                     }),
+            );
+        }
+
+        // Summarised after the legacy mirror so one line covers both sources.
+        if unreadable_rows + undecodable_rows > 0 {
+            tracing::warn!(
+                unreadable_rows,
+                undecodable_rows,
+                profile_id = %active_profile_id,
+                "Vector load skipped rows; those memories stay keyword-searchable only until re-embedded"
             );
         }
 
@@ -2752,6 +2896,32 @@ impl SqliteMemoryStore {
             )));
         }
 
+        self.persist_node_embedding(
+            node_id,
+            &embedding_bytes,
+            embedding_dimensions,
+            &model_name,
+            &vector,
+            active.profile_id.as_str() == LEGACY_EMBEDDING_PROFILE_ID,
+        )
+    }
+
+    /// Write one node's vector everywhere semantic search reads it: the
+    /// active profile's vector table (and the historic `node_embeddings`
+    /// mirror while the legacy profile is active), the node's
+    /// `has_embedding` flag, and the in-memory vector index. Shared by the
+    /// embedder path and by [`MemoryStoreSend::insert`] for caller-supplied
+    /// vectors, so no path can accept an embedding and drop it.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn persist_node_embedding(
+        &self,
+        node_id: &str,
+        embedding_bytes: &[u8],
+        embedding_dimensions: usize,
+        model_name: &str,
+        vector: &[f32],
+        mirror_to_legacy_table: bool,
+    ) -> Result<()> {
         let now = Utc::now();
 
         {
@@ -2759,15 +2929,15 @@ impl SqliteMemoryStore {
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-            if active.profile_id.as_str() == LEGACY_EMBEDDING_PROFILE_ID {
+            if mirror_to_legacy_table {
                 writer.execute(
                     "INSERT OR REPLACE INTO node_embeddings (node_id, embedding, dimensions, model, created_at)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![
                         node_id,
-                        &embedding_bytes,
+                        embedding_bytes,
                         embedding_dimensions as i32,
-                        &model_name,
+                        model_name,
                         now.to_rfc3339(),
                     ],
                 )?;
@@ -2782,16 +2952,16 @@ impl SqliteMemoryStore {
                 params![
                     active_profile_id,
                     node_id,
-                    &embedding_bytes,
+                    embedding_bytes,
                     embedding_dimensions as i32,
-                    &model_name,
+                    model_name,
                     now.to_rfc3339(),
                 ],
             )?;
 
             writer.execute(
                 "UPDATE knowledge_nodes SET has_embedding = 1, embedding_model = ?2 WHERE id = ?1",
-                params![node_id, &model_name],
+                params![node_id, model_name],
             )?;
         }
 
@@ -2800,11 +2970,63 @@ impl SqliteMemoryStore {
                 .lock()
                 .map_err(|_| StorageError::Init("Vector index lock poisoned".to_string()))?;
             index
-                .add(node_id, &vector)
+                .add(node_id, vector)
                 .map_err(|e| StorageError::Init(format!("Vector index add failed: {}", e)))?;
         }
 
         Ok(())
+    }
+
+    /// Index a caller-supplied embedding under the active profile, or refuse
+    /// it loudly. Used by [`MemoryStoreSend::insert`]: a record that carries
+    /// a vector is either searchable when the call returns or the call fails.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn index_supplied_embedding(
+        &self,
+        node_id: &str,
+        vector: &[f32],
+        model_name: Option<&str>,
+    ) -> crate::storage::memory_store::MemoryStoreResult<()> {
+        use crate::storage::memory_store::MemoryStoreError;
+        let active = self
+            .active_embedding_profile()
+            .map_err(|e| MemoryStoreError::Backend(e.to_string()))?
+            .ok_or_else(|| {
+                MemoryStoreError::InvalidInput(
+                    "record carries an embedding but the store has no active embedding profile to index it under"
+                        .to_string(),
+                )
+            })?;
+        let manifest = self
+            .embedding_profile_manifest(&active.profile_id)
+            .map_err(|e| MemoryStoreError::Backend(e.to_string()))?
+            .ok_or_else(|| {
+                MemoryStoreError::Backend(format!(
+                    "active embedding profile '{}' has no manifest",
+                    active.profile_id
+                ))
+            })?;
+        if vector.len() != manifest.profile.embedding_dimension {
+            return Err(MemoryStoreError::InvalidInput(format!(
+                "embedding length {} != active profile '{}' dimension {}",
+                vector.len(),
+                active.profile_id,
+                manifest.profile.embedding_dimension
+            )));
+        }
+        let bytes: Vec<u8> = vector.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let model = model_name
+            .map(str::to_string)
+            .unwrap_or_else(|| active.profile_id.to_string());
+        self.persist_node_embedding(
+            node_id,
+            &bytes,
+            vector.len(),
+            &model,
+            vector,
+            active.profile_id.as_str() == LEGACY_EMBEDDING_PROFILE_ID,
+        )
+        .map_err(|e| MemoryStoreError::Backend(e.to_string()))
     }
 
     /// Read the active profile pointer from a caller-held connection. The
@@ -2918,11 +3140,11 @@ impl SqliteMemoryStore {
             .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
         let state = Self::profile_state_text(manifest.state)?;
         let now = Utc::now();
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction()?;
+        let tx = Self::begin_write_transaction(&writer, "save_embedding_profile_manifest")?;
         let existing: Option<(String, i64)> = tx
             .query_row(
                 "SELECT pm.manifest_json, pm.vector_count
@@ -3126,11 +3348,11 @@ impl SqliteMemoryStore {
             ),
             None => None,
         };
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction()?;
+        let tx = Self::begin_write_transaction(&writer, "activate_embedding_profile")?;
         let current: Option<String> = tx
             .query_row(
                 "SELECT active_profile_id FROM embedding_profile_state WHERE singleton = 1",
@@ -3302,11 +3524,11 @@ impl SqliteMemoryStore {
                     .to_string(),
             ));
         }
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction()?;
+        let tx = Self::begin_write_transaction(&writer, "put_embedding_profile_vector")?;
         let declared_dimension: Option<i64> = tx
             .query_row(
                 "SELECT embedding_dimension FROM embedding_profiles WHERE profile_id = ?1",
@@ -3457,11 +3679,11 @@ impl SqliteMemoryStore {
         let state = Self::migration_state_text(checkpoint.state)?;
         let failed_memory_ids = serde_json::to_string(&checkpoint.failed_memory_ids)
             .map_err(|error| StorageError::InvalidEmbeddingProfile(error.to_string()))?;
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction()?;
+        let tx = Self::begin_write_transaction(&writer, "save_profile_migration_checkpoint")?;
         let profiles: i64 = tx.query_row(
             "SELECT COUNT(*) FROM embedding_profiles WHERE profile_id IN (?1, ?2)",
             params![
@@ -3614,11 +3836,11 @@ impl SqliteMemoryStore {
                 "profile vector dimensions must be positive".to_string(),
             ));
         }
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction()?;
+        let tx = Self::begin_write_transaction(&writer, "put_embedding_profile_vector_with_migration_checkpoint")?;
         let destination_profile: Option<String> = tx
             .query_row(
                 "SELECT destination_profile_id FROM embedding_profile_migrations WHERE migration_id = ?1",
@@ -4411,11 +4633,11 @@ impl SqliteMemoryStore {
     pub fn suppress_memory(&self, id: &str) -> Result<KnowledgeNode> {
         let now = Utc::now();
         {
-            let mut writer = self
+            let writer = self
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-            let tx = writer.transaction()?;
+            let tx = Self::begin_write_transaction(&writer, "suppress_memory")?;
             let changed = tx.execute(
                 // NOTE: last_accessed is deliberately NOT touched here. apply_decay
                 // RECOMPUTES retrieval_strength/retention_strength from
@@ -5029,13 +5251,19 @@ impl SqliteMemoryStore {
             tracing::info!(memory_id = %id, reason, "purging memory");
         }
         let deleted_at = Utc::now();
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction()?;
+        let tx = Self::begin_write_transaction(&writer, "purge_node")?;
         let cleanup = Self::purge_node_in_transaction(&tx, id, deleted_at, true)?;
         tx.commit()?;
+        // Release the writer BEFORE taking the vector-index lock. Every other
+        // combined site in this file orders writer -> drop -> index, and
+        // `activate_embedding_profile` orders index -> writer, so holding the
+        // writer here while waiting on the index is an AB/BA deadlock between a
+        // purge and a concurrent profile activation.
+        drop(writer);
 
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         if cleanup.is_some()
@@ -5115,9 +5343,12 @@ impl SqliteMemoryStore {
                 "SELECT id, source_memories FROM insights WHERE source_memories LIKE ?1",
             )?;
             let pattern = format!("%{}%", id);
+            // Purge fails closed. A row this scrub cannot read is a row that
+            // still references the memory the caller asked us to erase, and
+            // reporting a successful purge over it is the one lie this store
+            // must never tell. Propagating rolls the whole purge back.
             stmt.query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .filter_map(|row| row.ok())
-                .collect()
+                .collect::<rusqlite::Result<Vec<_>>>()?
         };
 
         let mut insights_rewritten = 0_i64;
@@ -5200,12 +5431,22 @@ impl SqliteMemoryStore {
             let mut stmt = tx
                 .prepare("SELECT receipt_id, payload FROM memory_receipts WHERE payload LIKE ?1")?;
             let pattern = format!("%{}%", id);
+            // Purge fails closed. A row this scrub cannot read is a row that
+            // still references the memory the caller asked us to erase, and
+            // reporting a successful purge over it is the one lie this store
+            // must never tell. Propagating rolls the whole purge back.
             stmt.query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .filter_map(|row| row.ok())
-                .collect()
+                .collect::<rusqlite::Result<Vec<_>>>()?
         };
         for (receipt_id, payload) in receipt_refs {
             let Ok(mut receipt) = serde_json::from_str::<crate::trace::Receipt>(&payload) else {
+                // Not structurally redactable. The raw-text sweeps below still
+                // strip the content; say so, because the id may survive here.
+                tracing::warn!(
+                    receipt_id = %receipt_id,
+                    memory_id = %id,
+                    "purge could not parse a receipt payload for structured redaction; the raw-text sweep still applies"
+                );
                 continue;
             };
             receipt.redact_memory_id(id, "purged_1");
@@ -5231,13 +5472,23 @@ impl SqliteMemoryStore {
             let mut stmt =
                 tx.prepare("SELECT id, payload FROM agent_traces WHERE payload LIKE ?1")?;
             let pattern = format!("%{}%", id);
+            // Purge fails closed. A row this scrub cannot read is a row that
+            // still references the memory the caller asked us to erase, and
+            // reporting a successful purge over it is the one lie this store
+            // must never tell. Propagating rolls the whole purge back.
             stmt.query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .filter_map(|row| row.ok())
-                .collect()
+                .collect::<rusqlite::Result<Vec<_>>>()?
         };
         for (trace_id, payload) in trace_refs {
             let Ok(mut event) = serde_json::from_str::<crate::trace::MemoryTraceEvent>(&payload)
             else {
+                // Same as receipts: unparseable payloads fall through to the
+                // raw-text delete below, but the operator should see it.
+                tracing::warn!(
+                    trace_id = %trace_id,
+                    memory_id = %id,
+                    "purge could not parse a trace payload for structured redaction; the raw-text sweep still applies"
+                );
                 continue;
             };
             event.redact_memory_id(id, "purged_1");
@@ -5507,7 +5758,7 @@ impl SqliteMemoryStore {
             // floor. Relative BM25 ordering is preserved among pure keyword hits,
             // but any literal match now outranks any non-literal one.
             let scored_rows: Vec<(KnowledgeNode, f64)> = rows
-                .filter_map(|r| r.ok())
+                .filter_map(warn_skipped_row("concrete_search_filtered"))
                 .filter(|(node, _)| {
                     Self::node_matches_type_filters(node, include_types, exclude_types)
                 })
@@ -6523,7 +6774,7 @@ impl SqliteMemoryStore {
             .query_map(params_ref.as_slice(), |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)? as f32))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(warn_skipped_row("keyword_search_with_scores"))
             .map(|(id, rank)| (id, (-rank).max(0.0)))
             .collect();
 
@@ -6616,7 +6867,7 @@ impl SqliteMemoryStore {
             }) else {
                 return 0;
             };
-            mapped.filter_map(|r| r.ok()).collect()
+            mapped.filter_map(warn_skipped_row("refresh_vector_index_if_stale")).collect()
         };
 
         // --- index lock: add only what we do not already have ---
@@ -6805,7 +7056,7 @@ impl SqliteMemoryStore {
                     row.get::<_, Option<String>>(2)?,
                 ))
             })?;
-            return Ok(rows.filter_map(|r| r.ok()).collect());
+            return Ok(rows.filter_map(warn_skipped_row("embedding_regeneration_candidates")).collect());
         }
 
         if force {
@@ -6822,7 +7073,7 @@ impl SqliteMemoryStore {
                     row.get::<_, Option<String>>(2)?,
                 ))
             })?;
-            return Ok(rows.filter_map(|r| r.ok()).collect());
+            return Ok(rows.filter_map(warn_skipped_row("embedding_regeneration_candidates")).collect());
         }
 
         let mut stmt = reader.prepare(
@@ -6842,7 +7093,7 @@ impl SqliteMemoryStore {
                 ))
             },
         )?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+        Ok(rows.filter_map(warn_skipped_row("embedding_regeneration_candidates")).collect())
     }
 
     /// Query memories valid at a specific time
@@ -6995,7 +7246,7 @@ impl SqliteMemoryStore {
                             row.get(5)?,
                         ))
                     })?
-                    .filter_map(|r| r.ok())
+                    .filter_map(warn_skipped_row("apply_decay"))
                     .collect()
             };
 
@@ -7007,11 +7258,11 @@ impl SqliteMemoryStore {
 
             // Write batch using writer transaction
             {
-                let mut writer = self
+                let writer = self
                     .writer
                     .lock()
                     .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-                let tx = writer.transaction()?;
+                let tx = Self::begin_write_transaction(&writer, "apply_decay")?;
 
                 for (id, last_accessed, storage_strength, _, sentiment_mag, stability) in &batch {
                     let last = DateTime::parse_from_rfc3339(last_accessed)
@@ -7124,7 +7375,7 @@ impl SqliteMemoryStore {
                          WHERE storage_strength < 10.0",
                     )?
                     .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-                    .filter_map(|r| r.ok())
+                    .filter_map(warn_skipped_row("run_consolidation"))
                     .collect()
             };
 
@@ -7167,6 +7418,22 @@ impl SqliteMemoryStore {
         // VESTIGE_TRACE_RETENTION_DAYS overrides, 0 = keep forever). Best-effort
         // like the access-log sweep: a failure never blocks consolidation.
         let _ = self.prune_agent_traces();
+
+        // 6.6. Fold the WAL back into the main database while the store is
+        // quiet. `wal_autocheckpoint` (1000 pages) already runs on commit, but
+        // a PASSIVE checkpoint here keeps the .wal from ratcheting upward over
+        // long uptimes. Best-effort like the sweeps above.
+        match self.checkpoint_wal(WalCheckpointMode::Passive) {
+            Ok(status) => tracing::debug!(
+                log_frames = status.log_frames,
+                checkpointed_frames = status.checkpointed_frames,
+                busy = status.busy,
+                "WAL checkpoint after consolidation"
+            ),
+            Err(error) => {
+                tracing::warn!(%error, "WAL checkpoint after consolidation failed")
+            }
+        }
 
         // 7. Optimize w20 if enough usage data
         let w20_optimized = self.optimize_w20_if_ready().unwrap_or(None);
@@ -7828,16 +8095,16 @@ impl SqliteMemoryStore {
                      WHERE access_type NOT IN ('search_hit', 'retrieval_shown')",
                 )?
                 .query_map([], |row| row.get(0))?
-                .filter_map(|r| r.ok())
+                .filter_map(warn_skipped_row("compute_act_r_activations"))
                 .collect()
         };
 
         let mut count = 0i64;
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction()?;
+        let tx = Self::begin_write_transaction(&writer, "compute_act_r_activations")?;
 
         // Discard residual activation from legacy search-hit rows as well as
         // new retrieval-only telemetry. Otherwise historical passive reads
@@ -7865,7 +8132,7 @@ impl SqliteMemoryStore {
                      LIMIT 500",
                 )?
                 .query_map(params![node_id], |row| row.get(0))?
-                .filter_map(|r| r.ok())
+                .filter_map(warn_skipped_row("compute_act_r_activations"))
                 .collect();
 
             if timestamps.is_empty() {
@@ -7952,7 +8219,7 @@ impl SqliteMemoryStore {
                  ) ORDER BY accessed_at ASC",
             )?
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-            .filter_map(|r| r.ok())
+            .filter_map(warn_skipped_row("optimize_w20_if_ready"))
             .collect();
 
         for (node_id, access_type, accessed_at) in &logs {
@@ -8265,11 +8532,11 @@ impl SqliteMemoryStore {
         members: &[CompositionMemberRecord],
         outcomes: &[CompositionOutcomeRecord],
     ) -> Result<()> {
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction()?;
+        let tx = Self::begin_write_transaction(&writer, "save_composition")?;
 
         let metadata_json =
             serde_json::to_string(&event.metadata).unwrap_or_else(|_| "{}".to_string());
@@ -10198,7 +10465,7 @@ impl SqliteMemoryStore {
         };
 
         {
-            let mut writer = self
+            let writer = self
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
@@ -10218,7 +10485,7 @@ impl SqliteMemoryStore {
                 PortableImportMode::Merge => {}
             }
 
-            let tx = writer.transaction()?;
+            let tx = Self::begin_write_transaction(&writer, "import_portable_archive_with_secret_policy")?;
             let mut merge_state = PortableMergeState::default();
 
             for table_name in PORTABLE_TABLES {
@@ -11236,7 +11503,7 @@ impl SqliteMemoryStore {
                 "SELECT avg_retention FROM retention_snapshots ORDER BY snapshot_at DESC LIMIT 5",
             )?
             .query_map([], |row| row.get(0))?
-            .filter_map(|r| r.ok())
+            .filter_map(warn_skipped_row("get_retention_trend"))
             .collect();
 
         if snapshots.len() < 3 {
@@ -11312,7 +11579,7 @@ impl SqliteMemoryStore {
                 "SELECT id FROM knowledge_nodes WHERE retention_strength < ?1 AND created_at < ?2",
             )?;
             stmt.query_map(params![threshold, cutoff], |row| row.get(0))?
-                .filter_map(|r| r.ok())
+                .filter_map(warn_skipped_row("gc_below_retention"))
                 .filter(|id: &String| !protected.contains(id))
                 .collect()
         };
@@ -11349,7 +11616,7 @@ impl SqliteMemoryStore {
                  HAVING access_count >= 3",
             )?;
             stmt.query_map(params![twenty_four_hours_ago], |row| row.get(0))?
-                .filter_map(|r| r.ok())
+                .filter_map(warn_skipped_row("auto_promote_frequent_access"))
                 .collect()
         };
 
@@ -12241,11 +12508,11 @@ impl SqliteMemoryStore {
         Self::enforce_secret_policy_for_content(&reason, SecretPolicy::Reject)?;
         let now = Utc::now();
         let operation_id = Uuid::new_v4().to_string();
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction()?;
+        let tx = Self::begin_write_transaction(&writer, "apply_tag_mutation_with_limits")?;
 
         // Recompute the exact preview state while holding the write transaction.
         // A token from an older/different scope, tag set, target, or row state
@@ -12365,11 +12632,11 @@ impl SqliteMemoryStore {
             )));
         }
 
-        let mut writer = self
+        let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = writer.transaction()?;
+        let tx = Self::begin_write_transaction(&writer, "undo_tag_mutation")?;
         let payload: String = tx.query_row(
             "SELECT undo_payload FROM merge_operations WHERE id = ?1",
             params![operation_id],
@@ -13320,6 +13587,7 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         Self::enforce_secret_policy_for_record(record, SecretPolicy::Reject)
             .map_err(MemoryStoreError::from)?;
         // Enforce model registry if embedding is provided
+        let mut supplied_model: Option<String> = None;
         if let Some(vec) = &record.embedding {
             // Derive a signature from metadata if present, or use a generic sentinel
             let sig: Option<ModelSignature> = record
@@ -13348,6 +13616,7 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
                         s.dimension
                     )));
                 }
+                supplied_model = Some(s.name.clone());
             }
         }
         // Insert directly using the record's own id so the caller-supplied UUID is
@@ -13401,6 +13670,22 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
                     ],
                 )
                 .map_err(|e| MemoryStoreError::Backend(e.to_string()))?;
+        }
+        // A supplied embedding is indexed under the active profile or the
+        // insert fails; it is never accepted and silently left unsearchable.
+        if let Some(vector) = &record.embedding {
+            #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+            {
+                self.index_supplied_embedding(&id_str, vector, supplied_model.as_deref())?;
+            }
+            #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
+            {
+                let _ = (vector, supplied_model);
+                return Err(MemoryStoreError::InvalidInput(
+                    "record carries an embedding but this build cannot index vectors (embeddings/vector-search features disabled)"
+                        .to_string(),
+                ));
+            }
         }
         Ok(record.id)
     }
@@ -14419,7 +14704,7 @@ impl SqliteMemoryStore {
             let rows = stmt.query_map(params![source_system, scope], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?;
-            rows.filter_map(|r| r.ok()).collect()
+            rows.filter_map(warn_skipped_row("reconcile_source_tombstones")).collect()
         };
 
         let considered = local.len();
@@ -19617,6 +19902,56 @@ mod tests {
         assert_eq!(has_content_column, 0);
     }
 
+    /// Purge is an erasure guarantee, so a referencing row the scrub cannot
+    /// read has to abort the whole purge rather than be skipped. Before this,
+    /// the three reference sweeps in `purge_node_in_transaction` used
+    /// `filter_map(|row| row.ok())`, so an unreadable row silently kept its
+    /// reference to a memory the caller was told had been erased.
+    #[test]
+    fn purge_fails_closed_when_a_referencing_row_cannot_be_read() {
+        let storage = create_test_storage();
+        let doomed = storage
+            .ingest(IngestInput {
+                content: "Purge target with an unreadable referrer".to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // `insights` is a non-STRICT table, so a BLOB survives in the TEXT
+        // primary key. rusqlite then refuses to read it as a String, which is
+        // exactly the "row we cannot read" the sweep used to swallow.
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "INSERT INTO insights (
+                        id, insight, source_memories, confidence, novelty_score, insight_type, generated_at
+                     ) VALUES (?1, 'unreadable id', ?2, 0.9, 0.2, 'synthesis', ?3)",
+                    params![
+                        vec![0xF0_u8, 0x9F, 0x92, 0xA9, 0xFF, 0xFE],
+                        serde_json::to_string(&vec![doomed.id.clone()]).unwrap(),
+                        Utc::now().to_rfc3339()
+                    ],
+                )
+                .unwrap();
+        }
+
+        // The purge must refuse, not report success.
+        let error = storage.purge_node(&doomed.id, None).unwrap_err();
+        let rendered = error.to_string().to_lowercase();
+        assert!(
+            rendered.contains("type") || rendered.contains("column") || rendered.contains("convert"),
+            "expected a read failure to surface, got: {rendered}"
+        );
+
+        // And the transaction rolled back: nothing was half-erased.
+        assert!(
+            storage.get_node(&doomed.id).unwrap().is_some(),
+            "a refused purge must leave the memory intact, not partially scrubbed"
+        );
+    }
+
     // ========================================================================
     // Merge / Supersede controls (Phase 3 — v2.1.25)
     //
@@ -21071,6 +21406,66 @@ mod tests {
     /// profile so smart-ingest gate decisions run end to end without a model
     /// download. Mirrors the lifecycle install/evaluate/migrate/activate flow;
     /// the Ready promotion is applied directly to the persisted manifest since
+    /// Regression: a purge (writer lock, then vector-index lock) racing a
+    /// profile activation (index lock, then writer lock) deadlocked the process
+    /// before the Sep 2026 hardening pass because `purge_node` kept its writer
+    /// guard alive while it waited on the index. Both paths must run to
+    /// completion under a watchdog.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn purge_and_profile_activation_do_not_deadlock() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = std::sync::Arc::new(storage_with_marker_gate_runtime(&dir));
+        let ids: Vec<String> = (0..48)
+            .map(|i| {
+                storage
+                    .ingest(IngestInput {
+                        content: format!("alpha purge race memory number {i}"),
+                        ..Default::default()
+                    })
+                    .unwrap()
+                    .id
+            })
+            .collect();
+        let active = storage
+            .active_embedding_profile()
+            .unwrap()
+            .expect("marker fixture activates a profile");
+
+        let (done_tx, done_rx) = mpsc::channel::<&'static str>();
+        let purger = {
+            let storage = std::sync::Arc::clone(&storage);
+            let done_tx = done_tx.clone();
+            std::thread::spawn(move || {
+                for id in ids {
+                    storage.purge_node(&id, Some("lock-order race")).unwrap();
+                }
+                let _ = done_tx.send("purge");
+            })
+        };
+        let activator = {
+            let storage = std::sync::Arc::clone(&storage);
+            std::thread::spawn(move || {
+                for _ in 0..48 {
+                    storage
+                        .activate_embedding_profile(&active.profile_id)
+                        .unwrap();
+                }
+                let _ = done_tx.send("activate");
+            })
+        };
+        for _ in 0..2 {
+            done_rx.recv_timeout(Duration::from_secs(30)).expect(
+                "purge vs profile activation deadlocked (writer->index vs index->writer)",
+            );
+        }
+        purger.join().unwrap();
+        activator.join().unwrap();
+    }
+
     /// the process-local registry is private to the lifecycle module.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn storage_with_marker_gate_runtime(dir: &tempfile::TempDir) -> Storage {
@@ -21466,5 +21861,89 @@ mod tests {
             .update_node_validity(&node.id, Some(until), Some(from))
             .unwrap_err();
         assert!(matches!(error, StorageError::InvalidTimestamp(_)));
+    }
+}
+
+/// Policy lint: every writer transaction in this file must begin IMMEDIATE.
+///
+/// A DEFERRED transaction that reads before it writes can fail with
+/// `SQLITE_BUSY_SNAPSHOT` the moment another process (the CLI next to the MCP
+/// server) commits in between, and SQLite does not consult the busy handler
+/// for that upgrade. `BEGIN IMMEDIATE` takes the write lock up front, where
+/// `busy_timeout` applies, and SQLite then guarantees no `SQLITE_BUSY` until
+/// COMMIT. Read-only transactions on the reader connection stay DEFERRED.
+#[cfg(test)]
+mod write_transaction_policy {
+    /// Every storage module that can open a transaction on a writer
+    /// connection. The rule is module-wide, not file-wide: the first version
+    /// of this lint read `sqlite.rs` alone, and two writers drifted DEFERRED
+    /// in the blind spot (`trace_store.rs`'s memory-PR decide path, and this
+    /// file's own `unchecked_transaction` in the open-time FK repair).
+    const STORAGE_SOURCES: [(&str, &str); 9] = [
+        ("sqlite.rs", include_str!("sqlite.rs")),
+        ("migrations.rs", include_str!("migrations.rs")),
+        ("trace_store.rs", include_str!("trace_store.rs")),
+        ("synaptic_store.rs", include_str!("synaptic_store.rs")),
+        ("replay_store.rs", include_str!("replay_store.rs")),
+        ("attestation_store.rs", include_str!("attestation_store.rs")),
+        ("unlearning_store.rs", include_str!("unlearning_store.rs")),
+        ("memory_store.rs", include_str!("memory_store.rs")),
+        ("portable.rs", include_str!("portable.rs")),
+    ];
+
+    /// Modules whose writers must additionally route through the shared
+    /// helper, so a BUSY past the busy timeout is retried and logged rather
+    /// than surfacing to the caller on the first refusal.
+    const HELPER_ROUTED: [&str; 2] = ["sqlite.rs", "trace_store.rs"];
+
+    /// Production transactions propagate with `?`; test fixtures `.unwrap()`
+    /// on their own in-memory connections. The `?` suffix is what separates
+    /// the two here, and it is the convention the storage layer already uses.
+    #[test]
+    fn writer_transactions_begin_immediate() {
+        // Assembled at runtime so this lint never matches its own source lines.
+        let deferred_writer = ["writer.", "transaction()?"].concat();
+        let deferred_unchecked = ["unchecked_", "transaction()?"].concat();
+        let bypasses_helper = ["writer.", "transaction_with_behavior("].concat();
+
+        let mut offenders: Vec<String> = Vec::new();
+        for (name, source) in STORAGE_SOURCES {
+            for (index, line) in source.lines().enumerate() {
+                let number = index + 1;
+                if line.contains(&deferred_writer) || line.contains(&deferred_unchecked) {
+                    offenders.push(format!(
+                        "{name}:{number} opens a DEFERRED writer transaction; a read-then-write \
+                         DEFERRED transaction can fail with SQLITE_BUSY_SNAPSHOT and SQLite does \
+                         not consult the busy handler for that upgrade"
+                    ));
+                }
+                if HELPER_ROUTED.contains(&name) && line.contains(&bypasses_helper) {
+                    offenders.push(format!(
+                        "{name}:{number} opens a writer transaction directly; use \
+                         SqliteMemoryStore::begin_write_transaction so BUSY retries are logged"
+                    ));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "writer transactions must begin IMMEDIATE:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_write_transaction_helper_exists_and_is_shared() {
+        let source = include_str!("sqlite.rs");
+        assert!(
+            source.contains("fn begin_write_transaction"),
+            "the write-transaction helper must exist"
+        );
+        // Sibling storage modules are not descendants of this one, so the
+        // helper has to stay at least `pub(super)` for them to reach it.
+        assert!(
+            source.contains(["pub(super) fn begin_write_", "transaction"].concat().as_str()),
+            "the helper must stay visible to sibling storage modules"
+        );
     }
 }

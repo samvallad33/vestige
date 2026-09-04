@@ -106,20 +106,33 @@ pub async fn execute(
         })
         .collect();
 
-    let cog = cognitive.lock().await;
-    let (dream_result, new_connections) = if let Some(min_similarity) = min_similarity {
-        let config = vestige_core::DreamConfig {
-            min_similarity,
-            ..vestige_core::DreamConfig::default()
-        };
-        cog.dreamer
-            .dream_with_config_and_connections(&dream_memories, config)
-            .await
-    } else {
-        cog.dreamer.dream_with_connections(&dream_memories).await
+    // Run the dream OFF the engine lock. Snapshot the dreamer under a short
+    // lock (its history/insights/connections are Arc-shared, so the engine's
+    // dreamer still records this run), then do the synchronous O(n²) pairwise
+    // scan on the blocking pool. Holding `CognitiveEngine` across that scan
+    // starved every other tool that takes the same mutex (explore, predict,
+    // session_context, memory_unified, autopilot, ...) for the whole dream,
+    // which presented as a server hang under multi-agent use.
+    let dreamer = {
+        let cog = cognitive.lock().await;
+        cog.dreamer.clone()
     };
-    let insights = cog.dreamer.synthesize_insights(&dream_memories);
-    drop(cog);
+    let (dream_result, new_connections, insights, dream_memories) =
+        tokio::task::spawn_blocking(move || {
+            let (dream_result, new_connections) = if let Some(min_similarity) = min_similarity {
+                let config = vestige_core::DreamConfig {
+                    min_similarity,
+                    ..vestige_core::DreamConfig::default()
+                };
+                dreamer.dream_with_config_and_connections_blocking(&dream_memories, config)
+            } else {
+                dreamer.dream_with_connections_blocking(&dream_memories)
+            };
+            let insights = dreamer.synthesize_insights(&dream_memories);
+            (dream_result, new_connections, insights, dream_memories)
+        })
+        .await
+        .map_err(|e| format!("Dream scan task failed: {e}"))?;
 
     // v2.1.0: Persist dream insights to database (Bug #4 fix)
     let mut insights_persisted = 0u64;

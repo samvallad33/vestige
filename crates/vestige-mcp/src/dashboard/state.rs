@@ -9,7 +9,10 @@ use super::events::VestigeEvent;
 use crate::cognitive::CognitiveEngine;
 
 /// Broadcast channel capacity — how many events can buffer before old ones drop.
-const EVENT_CHANNEL_CAPACITY: usize = 1024;
+// 4096 events of headroom before a slow dashboard subscriber lags. A lagging
+// subscriber is told how many events it missed (see websocket.rs) instead of
+// silently resuming mid-stream.
+const EVENT_CHANNEL_CAPACITY: usize = 4096;
 
 /// Shared application state for the dashboard
 #[derive(Clone)]

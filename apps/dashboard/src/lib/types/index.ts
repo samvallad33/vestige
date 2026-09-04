@@ -252,7 +252,10 @@ export type VestigeEventType =
 	| 'TraceEvent'
 	| 'MemoryPrOpened'
 	| 'MemoryPrDecided'
-	| 'Heartbeat';
+	| 'Heartbeat'
+	// The server's broadcast buffer overflowed for this socket: `data.missed`
+	// events were dropped. Explicit, never silent; consumers refetch state.
+	| 'EventsDropped';
 
 export interface VestigeEvent {
 	type: VestigeEventType;
