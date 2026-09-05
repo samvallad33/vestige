@@ -14,6 +14,27 @@ starvation findings did not reproduce (every migration already runs inside one
 IMMEDIATE transaction with its own version bump, and `wal_autocheckpoint` is
 on), so those got regression tests and a checkpoint hook rather than rewrites.
 
+### Added — Android (Termux) build profile
+
+- The no-embeddings configuration (`--no-default-features --features
+  connectors,cloud-sync`) is now a first-class build (#145). It is the
+  configuration Termux users build from source, and the first time it was
+  checked it carried eight dead-code warnings behind `cfg` gates the default
+  build never sees. Each item is now gated to match its callers, and a new CI
+  job (`no-embeddings-build`) runs clippy with warnings as errors plus the core
+  and server test suites in that configuration, so it cannot rot again.
+- `codebase-git` feature, on by default. libgit2 (with OpenSSL and libssh2) is
+  now optional; a build without it keeps the whole `codebase` tool and answers
+  git-history questions with "git history is not available in this build"
+  instead of failing to compile. The git data types moved to a shared module so
+  both variants expose the same API.
+- Honest status in builds without an embedding runtime: `vestige-cli health`
+  says "not compiled into this build" instead of "Not Ready", `memory_status`
+  and the dashboard report `embeddingBackend`, and `smart_ingest` responses
+  carry `"dedup": "unavailable in this build"` when the prediction-error gate
+  is compiled out.
+- `docs/INSTALL-TERMUX.md`: the from-source recipe for Android.
+
 ### Fixed — Vector index
 
 - A long-lived MCP server process now sees exactly the vectors its sibling

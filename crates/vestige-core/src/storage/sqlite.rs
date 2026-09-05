@@ -175,6 +175,7 @@ pub struct TagVocabulary {
     pub skipped_overlong: usize,
 }
 
+#[cfg(any(test, all(feature = "embeddings", feature = "vector-search")))]
 fn temporal_candidate_is_eligible(
     incoming_from: Option<DateTime<Utc>>,
     incoming_until: Option<DateTime<Utc>>,
@@ -646,6 +647,7 @@ pub(crate) struct PurgeCleanup {
 
 const DATA_DIR_ENV: &str = "VESTIGE_DATA_DIR";
 const DATABASE_FILE: &str = "vestige.db";
+#[cfg(feature = "vector-search")]
 const VESTIGE_DISABLE_VECTOR_SEARCH: &str = "VESTIGE_DISABLE_VECTOR_SEARCH";
 /// Immutable compatibility identity for vectors written before Embedding
 /// Profiles existed. It is deliberately explicit: raw-text vectors must never
@@ -820,11 +822,6 @@ impl SqliteMemoryStore {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn vector_search_available(&self) -> bool {
         self.vector_index.is_some()
-    }
-
-    #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
-    fn vector_search_available(&self) -> bool {
-        false
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -2857,6 +2854,7 @@ impl SqliteMemoryStore {
         Ok(())
     }
 
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn close_node_validity(&self, id: &str, valid_until: DateTime<Utc>) -> Result<()> {
         let writer = self
             .writer
@@ -12693,6 +12691,7 @@ impl SqliteMemoryStore {
     }
 
     /// Persist a plan row (status pending). Idempotent on plan id.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn persist_plan(&self, plan: &crate::advanced::MergePlan) -> Result<()> {
         let writer = self
             .writer
@@ -13731,7 +13730,7 @@ impl SqliteMemoryStore {
     /// now snapshots inside the apply transaction instead (see
     /// [`Self::read_bitemporal_in_transaction`]); this remains as the assertion
     /// helper the merge/supersede tests read state through.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "embeddings", feature = "vector-search"))]
     fn read_bitemporal(&self, id: &str) -> Result<(Option<String>, Option<String>)> {
         let reader = self
             .reader
@@ -13754,6 +13753,7 @@ impl SqliteMemoryStore {
 
     /// `read_bitemporal` against an open transaction, so a snapshot and the
     /// mutation it protects observe the same database state.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn read_bitemporal_in_transaction(
         tx: &rusqlite::Transaction<'_>,
         id: &str,
@@ -13776,6 +13776,7 @@ impl SqliteMemoryStore {
     /// `invalidate_node` against an open transaction. The helper that takes the
     /// writer lock itself cannot be called from inside a transaction: the lock
     /// is not reentrant, so it would deadlock.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn invalidate_node_in_transaction(
         tx: &rusqlite::Transaction<'_>,
         id: &str,
@@ -13792,6 +13793,7 @@ impl SqliteMemoryStore {
     }
 
     /// Restore a node's bitemporal columns (used by undo).
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn restore_bitemporal(
         &self,
         id: &str,
@@ -13813,6 +13815,7 @@ impl SqliteMemoryStore {
 
     /// Rewrite a survivor's content and tags (used by merge apply + undo).
     /// Content rewrite regenerates the embedding via `update_node_content`.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn rewrite_survivor(&self, id: &str, content: &str, tags: &[String]) -> Result<()> {
         self.update_node_content(id, content)?;
         let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
@@ -14337,6 +14340,7 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
     ) -> crate::storage::memory_store::MemoryStoreResult<
         Vec<crate::storage::memory_store::SearchResult>,
     > {
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         use crate::storage::memory_store::{MemoryStoreError, SearchResult};
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         {
@@ -15232,6 +15236,7 @@ impl SqliteMemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     use crate::advanced::{MatchClass, MergePolicy};
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};

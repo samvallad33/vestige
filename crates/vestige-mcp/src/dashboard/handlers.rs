@@ -1369,6 +1369,7 @@ fn dashboard_stats_response(stats: &vestige_core::memory::MemoryStats) -> Value 
         "withActiveEmbeddings": stats.nodes_with_active_embeddings,
         "mismatchedEmbeddings": stats.nodes_with_mismatched_embeddings,
         "embeddingCoverage": embedding_coverage,
+        "embeddingsCompiledIn": crate::embeddings_compiled_in(),
         "embeddingModel": stats.embedding_model,
         "activeEmbeddingModel": stats.active_embedding_model,
         "oldestMemory": stats.oldest_memory.map(|dt| dt.to_rfc3339()),
@@ -1570,6 +1571,7 @@ pub async fn health_check(State(state): State<AppState>) -> Result<Json<Value>, 
         "totalMemories": stats.total_nodes,
         "averageRetention": stats.average_retention,
         "version": env!("CARGO_PKG_VERSION"),
+        "embeddingsCompiledIn": crate::embeddings_compiled_in(),
     })))
 }
 

@@ -108,6 +108,41 @@ jobs:
       - name: Test paid cloud-sync path
         run: cargo test --locked --package vestige-core --features cloud-sync cloud --lib
 
+  no-embeddings-build:
+    # The configuration Termux users build from source (#145): no ONNX Runtime,
+    # no usearch, no libgit2. Every cfg gate that keeps it compiling is invisible
+    # to the default build, so without this job it rots between releases. The
+    # first time it was checked it carried eight dead-code warnings.
+    name: No-embeddings build (Android / Termux profile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo (registry only)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-noembed-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-noembed-v1-
+
+      - name: Clippy without embeddings, vector search or git2 (warnings are errors)
+        run: cargo clippy -p vestige-mcp -p vestige-core --no-default-features --features vestige-mcp/connectors,vestige-mcp/cloud-sync --all-targets -- -D warnings
+
+      - name: Test vestige-core without embeddings
+        run: cargo test -p vestige-core --no-default-features --features bundled-sqlite --lib
+
+      - name: Test vestige-mcp without embeddings
+        run: cargo test -p vestige-mcp --no-default-features --features connectors,cloud-sync --lib
+
   release-build:
     name: Release Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}

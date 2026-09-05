@@ -966,6 +966,7 @@ fn build_and_verify_sidecar(
     Err(EmbeddingLifecycleError::SidecarUnavailable)
 }
 
+#[cfg(feature = "vector-search")]
 fn bytes_to_f32(bytes: &[u8], dimensions: usize) -> Result<Vec<f32>, EmbeddingLifecycleError> {
     if bytes.len() != dimensions * std::mem::size_of::<f32>() {
         return Err(EmbeddingLifecycleError::InvalidFixture(format!(
