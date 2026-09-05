@@ -23140,15 +23140,15 @@ mod write_transaction_policy {
     /// in the blind spot (`trace_store.rs`'s memory-PR decide path, and this
     /// file's own `unchecked_transaction` in the open-time FK repair).
     const STORAGE_SOURCES: [(&str, &str); 9] = [
-        ("sqlite.rs", include_str!("sqlite.rs")),
-        ("migrations.rs", include_str!("migrations.rs")),
-        ("trace_store.rs", include_str!("trace_store.rs")),
-        ("synaptic_store.rs", include_str!("synaptic_store.rs")),
-        ("replay_store.rs", include_str!("replay_store.rs")),
-        ("attestation_store.rs", include_str!("attestation_store.rs")),
-        ("unlearning_store.rs", include_str!("unlearning_store.rs")),
-        ("memory_store.rs", include_str!("memory_store.rs")),
-        ("portable.rs", include_str!("portable.rs")),
+        ("sqlite/mod.rs", include_str!("mod.rs")),
+        ("migrations.rs", include_str!("../migrations.rs")),
+        ("trace_store.rs", include_str!("../trace_store.rs")),
+        ("synaptic_store.rs", include_str!("../synaptic_store.rs")),
+        ("replay_store.rs", include_str!("../replay_store.rs")),
+        ("attestation_store.rs", include_str!("../attestation_store.rs")),
+        ("unlearning_store.rs", include_str!("../unlearning_store.rs")),
+        ("memory_store.rs", include_str!("../memory_store.rs")),
+        ("portable.rs", include_str!("../portable.rs")),
     ];
 
     /// Modules whose writers must additionally route through the shared
@@ -23166,7 +23166,7 @@ mod write_transaction_policy {
     /// needle out: the lint reads this file, so a literal spelling would flag
     /// itself, which is exactly what it did on the first draft of this text.
     const HELPER_ROUTED: [&str; 5] = [
-        "sqlite.rs",
+        "sqlite/mod.rs",
         "trace_store.rs",
         "synaptic_store.rs",
         "replay_store.rs",
@@ -23218,7 +23218,7 @@ mod write_transaction_policy {
 
     #[test]
     fn the_write_transaction_helper_exists_and_is_shared() {
-        let source = include_str!("sqlite.rs");
+        let source = include_str!("mod.rs");
         assert!(
             source.contains("fn begin_write_transaction"),
             "the write-transaction helper must exist"
