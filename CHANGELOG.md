@@ -98,6 +98,20 @@ on), so those got regression tests and a checkpoint hook rather than rewrites.
   held for review and their authors had to come back for them. Five tests
   cover the branches, including a fake token fixture checked against the
   secret scanner. `docs/CONFIGURATION.md` states the rule.
+### Fixed — Test isolation
+
+- `cargo test -p vestige-core --lib vector` no longer fails three `peer_*`
+  tests on every run. `with_vector_search_disabled` set
+  `VESTIGE_DISABLE_VECTOR_SEARCH` in the process environment, so every other
+  test thread building a `Storage` in that window silently got no vector index;
+  the full suite passed only by scheduling luck. Both env-gated test helpers
+  (vector search and `VESTIGE_AUTO_CONSOLIDATE_MERGE`) now pin a thread-local
+  override that the gates read in test builds, `ENV_LOCK` is gone, and two
+  tests assert that a sibling thread never sees the override.
+- The vector-search gate and its "why is it off" report now parse the
+  variable the same way. `VESTIGE_DISABLE_VECTOR_SEARCH=0` leaves the index on
+  and is reported as on; before, any value made the report say disabled while
+  the index stayed on.
 
 ### Fixed — Vector index
 

@@ -649,6 +649,40 @@ const DATA_DIR_ENV: &str = "VESTIGE_DATA_DIR";
 const DATABASE_FILE: &str = "vestige.db";
 #[cfg(feature = "vector-search")]
 const VESTIGE_DISABLE_VECTOR_SEARCH: &str = "VESTIGE_DISABLE_VECTOR_SEARCH";
+
+// Test-only override for the runtime vector-search gate, scoped to the
+// current thread. Tests run in parallel inside one process, so a test that
+// wants the index disabled must not touch the process environment: every
+// other test thread building a `Storage` at that moment would silently get
+// no index. This cell is what `with_vector_search_disabled` flips instead.
+#[cfg(all(test, feature = "vector-search"))]
+thread_local! {
+    static VECTOR_SEARCH_DISABLED_FOR_TEST: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+// Test-only override for `VESTIGE_AUTO_CONSOLIDATE_MERGE`, scoped to the
+// current thread for the same reason as the vector-search override: this
+// gate decides whether consolidation hard-deletes near-duplicates, so a
+// process-wide flag would reach every consolidation test running at once.
+// `Some(None)` pins the variable unset; `Some(Some(v))` pins a value.
+#[cfg(all(test, feature = "embeddings", feature = "vector-search"))]
+thread_local! {
+    static AUTO_CONSOLIDATE_MERGE_FOR_TEST: std::cell::RefCell<Option<Option<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Whether an environment value asks for vector search to be turned off.
+/// Only affirmative values count, so `VESTIGE_DISABLE_VECTOR_SEARCH=0` leaves
+/// the index on and reports it as on.
+#[cfg(feature = "vector-search")]
+fn env_value_disables_vector_search(value: &std::ffi::OsStr) -> bool {
+    let value = value.to_ascii_lowercase();
+    matches!(
+        value.to_str(),
+        Some("1" | "true" | "yes" | "on" | "enable" | "enabled")
+    )
+}
 /// Immutable compatibility identity for vectors written before Embedding
 /// Profiles existed. It is deliberately explicit: raw-text vectors must never
 /// be confused with the corrected Nomic retrieval encoding contract.
@@ -792,29 +826,24 @@ impl SqliteMemoryStore {
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
         let has_required_features = true;
 
-        let disabled_by_env = std::env::var_os(VESTIGE_DISABLE_VECTOR_SEARCH)
-            .and_then(|v| {
-                let value = v.to_ascii_lowercase();
-                if value == "1"
-                    || value == "true"
-                    || value == "yes"
-                    || value == "on"
-                    || value == "enable"
-                    || value == "enabled"
-                {
-                    Some(())
-                } else {
-                    None
-                }
-            })
-            .is_some();
+        has_required_features && !Self::vector_search_disable_requested()
+    }
 
-        has_required_features && !disabled_by_env
+    /// The runtime opt-out, read the same way by the gate and by the
+    /// "why is it off" report so the two can never disagree.
+    #[cfg(feature = "vector-search")]
+    fn vector_search_disable_requested() -> bool {
+        #[cfg(test)]
+        if VECTOR_SEARCH_DISABLED_FOR_TEST.with(|cell| cell.get()) {
+            return true;
+        }
+        std::env::var_os(VESTIGE_DISABLE_VECTOR_SEARCH)
+            .is_some_and(|value| env_value_disables_vector_search(&value))
     }
 
     #[cfg(feature = "vector-search")]
     fn vector_search_unavailable_reason() -> Option<&'static str> {
-        if std::env::var_os(VESTIGE_DISABLE_VECTOR_SEARCH).is_some() {
+        if Self::vector_search_disable_requested() {
             return Some("disabled by VESTIGE_DISABLE_VECTOR_SEARCH");
         }
 
@@ -8386,6 +8415,18 @@ impl SqliteMemoryStore {
         })
     }
 
+    /// The raw `VESTIGE_AUTO_CONSOLIDATE_MERGE` value, or a test's pinned
+    /// value for this thread. Parsing stays in the caller so the fail-closed
+    /// rule is read next to the destructive pass it guards.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn auto_consolidate_merge_value() -> Option<String> {
+        #[cfg(test)]
+        if let Some(pinned) = AUTO_CONSOLIDATE_MERGE_FOR_TEST.with(|cell| cell.borrow().clone()) {
+            return pinned;
+        }
+        std::env::var("VESTIGE_AUTO_CONSOLIDATE_MERGE").ok()
+    }
+
     /// Auto-deduplicate similar memories during consolidation (episodic → semantic merge)
     ///
     /// Finds clusters with cosine similarity >= 0.85, keeps the strongest node,
@@ -8405,7 +8446,7 @@ impl SqliteMemoryStore {
         // unaffected by this gate. Gate here (not the caller) so it stays
         // with the pin filter and self-protects against a future second
         // caller.
-        let auto_merge = std::env::var("VESTIGE_AUTO_CONSOLIDATE_MERGE")
+        let auto_merge = Self::auto_consolidate_merge_value()
             .map(|v| {
                 let v = v.trim();
                 v.eq_ignore_ascii_case("true")
@@ -15475,9 +15516,6 @@ mod tests {
     // alias keeps all existing tests compiling without modification.
     use SqliteMemoryStore as Storage;
 
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
     fn create_test_storage() -> Storage {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
@@ -16610,31 +16648,83 @@ mod tests {
         assert_eq!(res2.node_id, created.node_id);
     }
 
+    /// Run `f` with vector search disabled for this thread only. It used to
+    /// set `VESTIGE_DISABLE_VECTOR_SEARCH` in the process environment under
+    /// `ENV_LOCK`, but every other test thread building a `Storage` during
+    /// that window got no vector index: `cargo test --lib vector` failed the
+    /// three `peer_*` tests on every run, and the full suite passed only by
+    /// scheduling luck.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn with_vector_search_disabled<T>(f: impl FnOnce() -> T) -> T {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let previous = std::env::var_os(VESTIGE_DISABLE_VECTOR_SEARCH);
-
-        // Tests serialize access with ENV_LOCK because process environment
-        // mutation is global and unsafe under Rust 2024.
-        unsafe {
-            std::env::set_var(VESTIGE_DISABLE_VECTOR_SEARCH, "1");
-        }
-
+        VECTOR_SEARCH_DISABLED_FOR_TEST.with(|cell| cell.set(true));
         let result = catch_unwind(AssertUnwindSafe(f));
-
-        unsafe {
-            if let Some(value) = previous {
-                std::env::set_var(VESTIGE_DISABLE_VECTOR_SEARCH, value);
-            } else {
-                std::env::remove_var(VESTIGE_DISABLE_VECTOR_SEARCH);
-            }
-        }
+        VECTOR_SEARCH_DISABLED_FOR_TEST.with(|cell| cell.set(false));
 
         match result {
             Ok(value) => value,
             Err(payload) => resume_unwind(payload),
         }
+    }
+
+    #[cfg(feature = "vector-search")]
+    #[test]
+    fn vector_search_env_value_parsing() {
+        use std::ffi::OsStr;
+        for on in ["1", "true", "TRUE", "yes", "On", "enable", "enabled"] {
+            assert!(
+                env_value_disables_vector_search(OsStr::new(on)),
+                "{on} must disable"
+            );
+        }
+        for off in ["", "0", "false", "no", "off", "disabled", "banana"] {
+            assert!(
+                !env_value_disables_vector_search(OsStr::new(off)),
+                "{off:?} must not disable"
+            );
+        }
+    }
+
+    /// The regression guard for the test race itself: disabling vector search
+    /// in one test must be invisible to a storage built on another thread.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn disabling_vector_search_in_one_test_does_not_leak_to_other_threads() {
+        with_vector_search_disabled(|| {
+            assert!(!Storage::vector_search_enabled_by_cpu());
+            let sibling = std::thread::spawn(|| {
+                let dir = tempdir().unwrap();
+                let storage = create_test_storage_at(&dir, "sibling-thread.db");
+                (
+                    Storage::vector_search_enabled_by_cpu(),
+                    storage.vector_index.is_some(),
+                )
+            })
+            .join()
+            .unwrap();
+            assert_eq!(
+                sibling,
+                (true, true),
+                "a sibling thread saw this test's vector-search override"
+            );
+        });
+        assert!(Storage::vector_search_enabled_by_cpu());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn pinning_auto_merge_in_one_test_does_not_leak_to_other_threads() {
+        let real = std::env::var("VESTIGE_AUTO_CONSOLIDATE_MERGE").ok();
+        with_auto_merge_env(Some("1"), || {
+            assert_eq!(
+                Storage::auto_consolidate_merge_value().as_deref(),
+                Some("1")
+            );
+            let sibling = std::thread::spawn(Storage::auto_consolidate_merge_value)
+                .join()
+                .unwrap();
+            assert_eq!(sibling, real, "a sibling thread saw this test's pin");
+        });
+        assert_eq!(Storage::auto_consolidate_merge_value(), real);
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -21621,31 +21711,17 @@ mod tests {
             .unwrap();
     }
 
-    /// Run `f` with VESTIGE_AUTO_CONSOLIDATE_MERGE pinned to `value`
-    /// (None = pinned-unset, i.e. the documented ON default), serialized via
-    /// ENV_LOCK and restored afterward (process env is global + unsafe under
-    /// Rust 2024). Sibling of `with_vector_search_disabled`.
+    /// Run `f` with VESTIGE_AUTO_CONSOLIDATE_MERGE pinned to `value` for this
+    /// thread (None = pinned-unset, the documented fail-closed default).
+    /// Sibling of `with_vector_search_disabled`; like it, this no longer
+    /// touches the process environment, so consolidation tests on other
+    /// threads keep reading the real one.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn with_auto_merge_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
-        const KEY: &str = "VESTIGE_AUTO_CONSOLIDATE_MERGE";
-        let _guard = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = std::env::var_os(KEY);
-        unsafe {
-            match value {
-                Some(v) => std::env::set_var(KEY, v),
-                None => std::env::remove_var(KEY),
-            }
-        }
+        AUTO_CONSOLIDATE_MERGE_FOR_TEST
+            .with(|cell| *cell.borrow_mut() = Some(value.map(str::to_string)));
         let result = catch_unwind(AssertUnwindSafe(f));
-        unsafe {
-            if let Some(prev) = previous {
-                std::env::set_var(KEY, prev);
-            } else {
-                std::env::remove_var(KEY);
-            }
-        }
+        AUTO_CONSOLIDATE_MERGE_FOR_TEST.with(|cell| *cell.borrow_mut() = None);
         match result {
             Ok(value) => value,
             Err(payload) => resume_unwind(payload),
