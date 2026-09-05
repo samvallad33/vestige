@@ -668,12 +668,16 @@ fn list_methods_reject_unknown_cursors_and_templates_list_is_empty() {
             "{method} with an unknown cursor must be invalid params: {error}"
         );
         // Absent-equivalent cursors are not an error.
-        assert!(server
-            .result(method, Some(json!({ "cursor": null })))
-            .is_object());
-        assert!(server
-            .result(method, Some(json!({ "cursor": "" })))
-            .is_object());
+        assert!(
+            server
+                .result(method, Some(json!({ "cursor": null })))
+                .is_object()
+        );
+        assert!(
+            server
+                .result(method, Some(json!({ "cursor": "" })))
+                .is_object()
+        );
     }
 
     server.shutdown();
@@ -757,6 +761,26 @@ fn tools_list_is_deterministic_across_restarts_and_carries_cache_hints() {
         json!(300_000),
         "recall lost its result-size annotation: {recall}"
     );
+
+    // Behaviour hints reach the client in MCP's camelCase shape, and the two
+    // hints a client acts on (read-only, destructive) are set for every tool.
+    for tool in a["tools"].as_array().unwrap() {
+        let name = tool["name"].as_str().unwrap();
+        assert!(tool["title"].is_string(), "{name} has no title on the wire");
+        let ann = &tool["annotations"];
+        assert!(ann["readOnlyHint"].is_boolean(), "{name}: {ann}");
+        assert!(ann["destructiveHint"].is_boolean(), "{name}: {ann}");
+        assert!(ann["idempotentHint"].is_boolean(), "{name}: {ann}");
+        assert!(ann["openWorldHint"].is_boolean(), "{name}: {ann}");
+    }
+    assert_eq!(recall["annotations"]["readOnlyHint"], json!(true));
+    let memory = a["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == json!("memory"))
+        .expect("memory tool");
+    assert_eq!(memory["annotations"]["destructiveHint"], json!(true));
 }
 
 /// Malformed, unknown, oversized and structurally wrong input must all produce

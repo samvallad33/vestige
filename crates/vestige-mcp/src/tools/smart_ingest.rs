@@ -43,7 +43,7 @@ pub fn schema() -> Value {
             },
             "node_type": {
                 "type": "string",
-                "description": "Type of knowledge: fact, concept, event, person, place, note, pattern, decision, state. 'state' is for current-state snapshots (version numbers, progress, inventories) that rot: unless validUntil is given, it expires VESTIGE_STATE_TTL_DAYS (default 30) after ingest; expired memories are down-ranked to the bottom of recall and marked currentlyValid=false (still retrievable for audit via validAt).",
+                "description": "fact, concept, event, person, place, note, pattern, decision, or state. 'state' is a snapshot that rots (versions, progress, inventories): without validUntil it expires after VESTIGE_STATE_TTL_DAYS (default 30), then is downranked and marked currentlyValid=false, still auditable via validAt.",
                 "default": "fact"
             },
             "tags": {
@@ -61,7 +61,7 @@ pub fn schema() -> Value {
             },
             "validFrom": {
                 "type": "string",
-                "description": "When this fact becomes true. Use RFC3339 or an exact YYYY-MM-DD date. When omitted, one unambiguous 'as of YYYY-MM-DD' phrase in content is inferred as validFrom and reported in the response."
+                "description": "When the fact becomes true (RFC3339 or YYYY-MM-DD). If omitted, one unambiguous 'as of YYYY-MM-DD' phrase in content is inferred and reported."
             },
             "validUntil": {
                 "type": "string",
@@ -85,17 +85,17 @@ pub fn schema() -> Value {
             "acceptedTagSuggestions": {
                 "type": "object",
                 "additionalProperties": { "type": "string" },
-                "description": "Explicitly accepted input-tag to existing-tag mappings from a preflight response. Each mapping is revalidated against current same-scope suggestions before ingest."
+                "description": "Accepted input-tag to existing-tag mappings from a preflight response, revalidated against current same-scope suggestions before ingest."
             },
             "batchMergePolicy": {
                 "type": "string",
                 "enum": ["force_create", "smart"],
-                "description": "Batch mode only. Defaults to 'force_create' so caller-separated items stay separate. Use 'smart' to allow Prediction Error Gating against existing memories.",
+                "description": "Batch only. 'force_create' (default) keeps caller-separated items separate; 'smart' allows Prediction Error Gating against existing memories.",
                 "default": "force_create"
             },
             "items": {
                 "type": "array",
-                "description": "Batch mode: array of items to save (max 20). Defaults to force-creating each caller-separated item; set batchMergePolicy='smart' to allow Prediction Error Gating against existing memories. Use at session end or before context compaction.",
+                "description": "Batch mode: up to 20 items to save, each force-created unless batchMergePolicy='smart'. Use at session end or before context compaction.",
                 "maxItems": 20,
                 "items": {
                     "type": "object",

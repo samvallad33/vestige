@@ -81,14 +81,42 @@ pub struct ServerCapabilities {
 // TOOLS
 // ============================================================================
 
+/// Behaviour hints for a tool, from the MCP `ToolAnnotations` schema.
+///
+/// Every hint is serialised explicitly, so a client that reads the list
+/// never has to fall back on the spec defaults (which assume the worst:
+/// writable, destructive, open-world). The hints describe the tool's effect
+/// on the user's memory store, which is the environment an agent cares
+/// about. `recall`, for example, records receipts and access statistics
+/// as it runs, but it never changes what a memory says, so it is read-only
+/// in the sense the hint exists to convey.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolAnnotations {
+    /// The tool does not modify memory content.
+    pub read_only_hint: bool,
+    /// The tool can delete, merge, or overwrite existing memories.
+    pub destructive_hint: bool,
+    /// Calling the tool twice with the same arguments has no extra effect.
+    pub idempotent_hint: bool,
+    /// The tool reaches outside the local store (network, external systems).
+    pub open_world_hint: bool,
+}
+
 /// Tool description for tools/list
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDescription {
     pub name: String,
+    /// Human-readable display name; clients show it instead of `name`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub input_schema: Value,
+    /// Behaviour hints (read-only, destructive, idempotent, open-world).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
     /// Per-tool `_meta` annotations from the MCP wire spec.
     ///
     /// Notable keys recognized by Claude Code (v2.1.91+):
