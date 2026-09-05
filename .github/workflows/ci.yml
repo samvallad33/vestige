@@ -287,8 +287,10 @@ jobs:
 
   # Windows is otherwise compiled only by release.yml when a tag is cut, so an
   # MSVC-only break (usearch 2.24.0 referencing POSIX MAP_FAILED, #93 before it)
-  # surfaces after the release exists. This compiles the default feature set on
-  # MSVC on every pull request, so a dependency bump proves itself first.
+  # surfaces after the release exists. This job mirrors release.yml's Windows
+  # job: the dashboard check, test and build first (the v2.8.0 release build
+  # died on a dashboard test that had never run on Windows), then the default
+  # feature set compiled on MSVC, so both prove themselves on every pull request.
   windows-msvc-build:
     name: Windows MSVC build (x86_64-pc-windows-msvc)
     runs-on: windows-latest
@@ -298,6 +300,24 @@ jobs:
       github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Dashboard check, test and build on Windows
+        shell: bash
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @vestige/dashboard check
+          pnpm --filter @vestige/dashboard test
+          pnpm --filter @vestige/dashboard build
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

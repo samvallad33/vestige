@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Privacy regression guard for the Observatory stage.
@@ -10,8 +11,10 @@ import { join } from 'node:path';
  * so the prop must default to `'none'` and no route may opt into `'full'`
  * without a deliberate change to this test.
  */
-const OBSERVATORY = new URL('..', import.meta.url).pathname;
-const ROUTES = new URL('../../../routes', import.meta.url).pathname;
+// fileURLToPath, not `.pathname`: on Windows the pathname of a file URL is
+// `/D:/a/...`, and join() turns that into `D:\D:\a\...` (ENOENT in CI).
+const OBSERVATORY = fileURLToPath(new URL('..', import.meta.url));
+const ROUTES = fileURLToPath(new URL('../../../routes', import.meta.url));
 
 function svelteFiles(dir: string): string[] {
 	const out: string[] = [];
