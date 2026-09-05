@@ -2225,3 +2225,394 @@ fn corrupt_fts_rebuild_preserves_embeddings() {
     reopened.shutdown();
     assert_store_is_healthy(dir.path());
 }
+
+// ============================================================================
+// 6. Every advertised tool, against the real binary
+// ============================================================================
+//
+// Until this section existed the suite exercised four of the fourteen tools
+// (memory, smart_ingest, recall, suppress). A tool that is advertised but never
+// driven over stdio can break its wire shape, its argument validation or its
+// error text without any test noticing. Each tool below gets a happy path and
+// an error path, with a payload ceiling so a response cannot quietly bloat.
+// The last test reads this file and fails when an advertised tool has fewer
+// than two calls in it.
+
+fn payload_bytes(value: &Value) -> usize {
+    serde_json::to_string(value).map(|s| s.len()).unwrap_or(usize::MAX)
+}
+
+fn assert_keys(value: &Value, keys: &[&str], context: &str) {
+    for key in keys {
+        assert!(
+            value.get(*key).is_some(),
+            "{context}: response is missing `{key}`: {value}"
+        );
+    }
+}
+
+fn assert_under(value: &Value, ceiling: usize, context: &str) {
+    let bytes = payload_bytes(value);
+    assert!(
+        bytes <= ceiling,
+        "{context}: {bytes} bytes exceeds the {ceiling} byte ceiling; the response grew: {value}"
+    );
+}
+
+fn assert_error_mentions(value: &Value, needle: &str, context: &str) {
+    let error = value["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{context}: expected an error, got {value}"));
+    assert!(
+        error.to_lowercase().contains(&needle.to_lowercase()),
+        "{context}: error {error:?} does not mention {needle:?}"
+    );
+}
+
+#[test]
+fn session_start_returns_a_budgeted_context_and_rejects_a_bad_budget() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only("The user prefers tabs over spaces in Rust files", &["preference"]);
+
+    let value = server.call_tool_ok(
+        "session_start",
+        json!({ "queries": ["user preferences"], "token_budget": 800 }),
+    );
+    assert_keys(
+        &value,
+        &["context", "profile", "tokenBudget", "tokensUsed", "automationTriggers"],
+        "session_start",
+    );
+    assert_eq!(value["tokenBudget"], json!(800));
+    assert_under(&value, 6_000, "session_start");
+
+    let bad = server.call_tool("session_start", json!({ "token_budget": "eight hundred" }));
+    assert_error_mentions(&bad, "invalid", "session_start with a string budget");
+    server.shutdown();
+}
+
+#[test]
+fn memory_status_every_view_has_its_shape_and_an_unknown_view_errors() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only("A memory so the store is not empty", &["e2e"]);
+
+    let health = server.call_tool_ok("memory_status", json!({ "view": "health" }));
+    assert_keys(
+        &health,
+        &["embeddingsCompiledIn", "embeddingReady", "cognitiveHealth", "averageRetention"],
+        "memory_status health",
+    );
+    assert_under(&health, 8_000, "memory_status health");
+
+    let stats = server.call_tool_ok("memory_status", json!({ "view": "stats" }));
+    assert_keys(&stats, &["counts", "lifecycle", "retentionDistribution", "population"], "stats");
+    assert_under(&stats, 24_000, "memory_status stats");
+
+    let timeline = server.call_tool_ok("memory_status", json!({ "view": "timeline" }));
+    assert_keys(&timeline, &["days", "timeline", "totalMemories"], "timeline");
+    assert_eq!(timeline["totalMemories"], json!(1));
+    assert_under(&timeline, 4_000, "memory_status timeline");
+
+    let changelog = server.call_tool_ok("memory_status", json!({ "view": "changelog" }));
+    assert_keys(&changelog, &["events", "totalEvents"], "changelog");
+    assert_under(&changelog, 4_000, "memory_status changelog");
+
+    let retention = server.call_tool_ok("memory_status", json!({ "view": "retention" }));
+    assert_keys(&retention, &["avgRetention", "distribution", "trend", "totalMemories"], "retention");
+    assert_under(&retention, 3_000, "memory_status retention");
+
+    let bad = server.call_tool("memory_status", json!({ "view": "weather" }));
+    assert!(bad.get("error").is_some(), "unknown view must error: {bad}");
+    server.shutdown();
+}
+
+#[test]
+fn dedup_scan_policy_and_undo_answer_and_apply_needs_a_plan() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only("Rotate the payments cache key every deploy", &["ops"]);
+    server.ingest_keyword_only("Rotate the payments cache key on every deploy", &["ops"]);
+
+    let scan = server.call_tool_ok("dedup", json!({ "action": "scan" }));
+    assert_keys(&scan, &["duplicateClusters", "mergeCandidates", "nextStep"], "dedup scan");
+    assert_under(&scan, 8_000, "dedup scan");
+
+    let policy = server.call_tool_ok("dedup", json!({ "action": "policy" }));
+    assert_keys(&policy, &["matchThreshold", "possibleThreshold", "autoApply"], "dedup policy");
+    assert_under(&policy, 2_000, "dedup policy");
+
+    let undo = server.call_tool_ok("dedup", json!({ "action": "undo" }));
+    assert_keys(&undo, &["operations", "tagOperations", "totalOperations"], "dedup undo");
+    assert_under(&undo, 4_000, "dedup undo");
+
+    let bad = server.call_tool("dedup", json!({ "action": "apply" }));
+    assert!(bad.get("error").is_some(), "apply without plan_id must error: {bad}");
+    server.shutdown();
+}
+
+#[test]
+fn graph_recent_predict_and_memory_graph_answer_and_chain_needs_endpoints() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only("The deploy pipeline caches build artifacts by branch", &["deploy"]);
+
+    let recent = server.call_tool_ok("graph", json!({ "action": "recent" }));
+    assert_keys(&recent, &["events"], "graph recent");
+    assert_under(&recent, 4_000, "graph recent");
+
+    let predict = server.call_tool_ok(
+        "graph",
+        json!({ "action": "predict", "context": { "current_topics": ["deploy"] } }),
+    );
+    assert_keys(&predict, &["predictions", "suggestions"], "graph predict");
+    assert_under(&predict, 4_000, "graph predict");
+
+    let subgraph = server.call_tool_ok("graph", json!({ "action": "memory_graph", "query": "deploy" }));
+    assert_keys(&subgraph, &["nodes", "edges", "nodeCount", "edgeCount"], "graph memory_graph");
+    assert_under(&subgraph, 8_000, "graph memory_graph");
+
+    let bad = server.call_tool("graph", json!({ "action": "chain" }));
+    assert!(bad.get("error").is_some(), "chain without from/to must error: {bad}");
+    server.shutdown();
+}
+
+#[test]
+fn intention_set_list_check_update_round_trip_and_a_bad_trigger_errors() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let set = server.call_tool_ok(
+        "intention",
+        json!({
+            "action": "set",
+            "description": "rotate the payments cache key before the next deploy",
+            "trigger": { "type": "context", "topic": "deploy" }
+        }),
+    );
+    assert!(set.get("error").is_none(), "{set}");
+    assert_under(&set, 3_000, "intention set");
+
+    let list = server.call_tool_ok("intention", json!({ "action": "list" }));
+    assert_keys(&list, &["intentions", "total"], "intention list");
+    assert_eq!(list["total"], json!(1), "{list}");
+    let id = list["intentions"][0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("intention list carries no id: {list}"))
+        .to_string();
+
+    let check = server.call_tool_ok(
+        "intention",
+        json!({ "action": "check", "context": { "topics": ["deploy"] } }),
+    );
+    assert!(check.get("error").is_none(), "{check}");
+    assert_under(&check, 3_000, "intention check");
+
+    let done = server.call_tool_ok(
+        "intention",
+        json!({ "action": "update", "id": id, "status": "complete" }),
+    );
+    assert!(done.get("error").is_none(), "{done}");
+
+    let bad = server.call_tool(
+        "intention",
+        json!({ "action": "set", "description": "x", "trigger": "deploy" }),
+    );
+    assert_error_mentions(&bad, "invalid", "intention set with a string trigger");
+    server.shutdown();
+}
+
+#[test]
+fn maintain_scores_importance_dry_runs_gc_consolidates_and_restore_needs_a_path() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only("A memory for the maintenance pass to touch", &["e2e"]);
+
+    let score = server.call_tool_ok(
+        "maintain",
+        json!({ "action": "importance_score", "content": "the cache key rotation broke production" }),
+    );
+    assert_keys(&score, &["composite", "channels", "dominantSignal"], "maintain importance_score");
+    assert_under(&score, 6_000, "maintain importance_score");
+
+    let gc = server.call_tool_ok("maintain", json!({ "action": "gc" }));
+    assert_keys(&gc, &["dryRun", "candidateCount", "totalMemories"], "maintain gc");
+    assert_eq!(gc["dryRun"], json!(true), "gc must default to a dry run: {gc}");
+    assert_under(&gc, 3_000, "maintain gc");
+
+    let consolidate = server.call_tool_ok("maintain", json!({ "action": "consolidate" }));
+    assert_keys(&consolidate, &["nodesProcessed", "decayApplied", "durationMs"], "maintain consolidate");
+    assert_under(&consolidate, 3_000, "maintain consolidate");
+
+    let bad = server.call_tool("maintain", json!({ "action": "restore" }));
+    assert!(bad.get("error").is_some(), "restore without a path must error: {bad}");
+    server.shutdown();
+}
+
+#[test]
+fn codebase_remembers_a_decision_returns_context_verifies_and_needs_its_fields() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let remembered = server.call_tool_ok(
+        "codebase",
+        json!({
+            "action": "remember_decision",
+            "codebase": "e2e-probe",
+            "decision": "Use content-hashed cache keys for build artifacts",
+            "rationale": "stale keys shipped a broken build",
+            "files": ["src/cache.rs"]
+        }),
+    );
+    assert!(remembered.get("error").is_none(), "{remembered}");
+    assert_under(&remembered, 4_000, "codebase remember_decision");
+
+    let context = server.call_tool_ok(
+        "codebase",
+        json!({ "action": "get_context", "codebase": "e2e-probe" }),
+    );
+    assert_keys(&context, &["decisions", "patterns", "staleMemories"], "codebase get_context");
+    // `decisions` is `{ count, items }`; the anchor to src/cache.rs is reported
+    // missing because that file does not exist here, which is the honest answer.
+    assert_eq!(
+        context["decisions"]["count"],
+        json!(1),
+        "the decision must come back in context: {context}"
+    );
+    assert_under(&context, 6_000, "codebase get_context");
+
+    let verify = server.call_tool_ok("codebase", json!({ "action": "verify", "codebase": "e2e-probe" }));
+    assert_keys(&verify, &["checked", "fresh", "stale", "unverifiable"], "codebase verify");
+    assert_under(&verify, 6_000, "codebase verify");
+
+    let bad = server.call_tool("codebase", json!({ "action": "remember_decision" }));
+    assert_error_mentions(&bad, "decision", "remember_decision without a decision");
+    server.shutdown();
+}
+
+#[test]
+fn backfill_dry_run_surfaces_an_upstream_cause_and_an_empty_store_errors() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let empty = server.call_tool("backfill", json!({ "promote": false }));
+    assert_error_mentions(&empty, "no failure", "backfill on an empty store");
+
+    server.ingest_keyword_only(
+        "Switched PAYMENTS_REDIS_URL to the new cluster during the maintenance window",
+        &["ops"],
+    );
+    server.ingest_keyword_only(
+        "The payments service crashed on startup: connection refused to PAYMENTS_REDIS_URL",
+        &["incident"],
+    );
+    let dry = server.call_tool_ok("backfill", json!({ "promote": false }));
+    assert!(dry.get("error").is_none(), "{dry}");
+    assert!(
+        dry.as_object().is_some_and(|o| !o.is_empty()),
+        "backfill must return a structured report: {dry}"
+    );
+    assert_under(&dry, 8_000, "backfill dry run");
+    server.shutdown();
+}
+
+#[test]
+fn receipt_get_returns_the_receipt_a_recall_produced_and_an_unknown_id_errors() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only("Receipts record what a retrieval used", &["e2e"]);
+
+    let recall = server.call_tool_ok("recall", json!({ "query": "receipts record", "concrete": true }));
+    let receipt_id = recall["receiptId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recall carried no receiptId: {recall}"))
+        .to_string();
+
+    let receipt = server.call_tool_ok(
+        "receipt",
+        json!({ "action": "get", "receipt_id": receipt_id }),
+    );
+    assert!(receipt.get("error").is_none(), "{receipt}");
+    assert!(
+        serde_json::to_string(&receipt).unwrap().contains(&receipt_id),
+        "the receipt response must reference its own id: {receipt}"
+    );
+    assert_under(&receipt, 8_000, "receipt get");
+
+    let bad = server.call_tool("receipt", json!({ "action": "get", "receipt_id": "r_does_not_exist" }));
+    assert_error_mentions(&bad, "not found", "receipt get with an unknown id");
+    server.shutdown();
+}
+
+/// `source_sync` reaches an external system, so it has no offline happy path.
+/// Both of its tests are error paths by design; the connector itself is
+/// covered by the unit tests in `vestige-core`.
+#[test]
+fn source_sync_rejects_an_unknown_source_and_a_missing_repo_without_touching_the_network() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let unknown = server.call_tool("source_sync", json!({ "source": "gitlab", "repo": "a/b" }));
+    assert!(unknown.get("error").is_some(), "unknown source must error: {unknown}");
+
+    let missing = server.call_tool("source_sync", json!({ "source": "github" }));
+    assert!(missing.get("error").is_some(), "github without repo must error: {missing}");
+    server.shutdown();
+}
+
+#[test]
+fn smart_ingest_and_suppress_reject_calls_without_their_subject() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let no_content = server.call_tool("smart_ingest", json!({ "tags": ["orphan"] }));
+    assert!(no_content.get("error").is_some(), "smart_ingest without content must error: {no_content}");
+
+    let no_id = server.call_tool("suppress", json!({ "reason": "no subject" }));
+    assert!(no_id.get("error").is_some(), "suppress without id must error: {no_id}");
+    server.shutdown();
+}
+
+/// The guard: every tool the server advertises has at least two calls in this
+/// file. Adding a tool without driving it over stdio fails here, not in a
+/// user's client.
+#[test]
+fn every_advertised_tool_is_called_at_least_twice_in_this_suite() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    let list = server.result("tools/list", None);
+    server.shutdown();
+
+    // rustfmt wraps long calls onto several lines, so count on a copy with the
+    // whitespace removed.
+    let source: String = include_str!("e2e_real_binary.rs")
+        .split_whitespace()
+        .collect();
+    let mut thin = Vec::new();
+    for tool in list["tools"].as_array().expect("tools array") {
+        let name = tool["name"].as_str().expect("tool name");
+        let calls = source.matches(&format!("call_tool(\"{name}\"")).count()
+            + source.matches(&format!("call_tool_ok(\"{name}\"")).count()
+            + source.matches(&format!("\"name\":\"{name}\"")).count();
+        if calls < 2 {
+            thin.push(format!("{name} ({calls})"));
+        }
+    }
+    assert!(
+        thin.is_empty(),
+        "advertised tools with fewer than two e2e calls: {thin:?}"
+    );
+}

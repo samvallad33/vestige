@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Every tool is driven over stdio in the e2e suite
+
+- The real-binary suite exercised four of the fourteen tools. It now drives
+  all fourteen: a happy path and an error path for `session_start`,
+  `memory_status` (every view), `dedup`, `graph`, `intention`, `maintain`,
+  `codebase`, `backfill`, `receipt` and `source_sync` (error paths only, since
+  it has no offline happy path), each with a payload ceiling so a response
+  cannot quietly bloat, plus missing-subject error paths for `smart_ingest` and
+  `suppress`. A guard test reads the suite and fails when an advertised tool
+  has fewer than two calls in it.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with
