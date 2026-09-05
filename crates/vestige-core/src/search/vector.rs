@@ -244,6 +244,11 @@ impl VectorIndex {
         self.key_to_id.contains_key(key)
     }
 
+    /// Every key currently in the index, in no particular order.
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.key_to_id.keys().map(String::as_str)
+    }
+
     /// Search for similar vectors
     pub fn search(
         &self,

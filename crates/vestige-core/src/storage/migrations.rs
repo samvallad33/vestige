@@ -159,6 +159,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Self-verifying code memory: content-hashed source anchors so a code memory can be checked against the code it describes instead of being served with false confidence",
         up: MIGRATION_V31_UP,
     },
+    Migration {
+        version: 32,
+        description: "Cross-process vector index refresh: a trigger-fed, append-only journal of embedding_profile_vectors writes so a long-lived process absorbs exactly the vectors its peers wrote instead of rescanning the table",
+        up: MIGRATION_V32_UP,
+    },
 ];
 
 /// A database migration
@@ -2345,9 +2350,74 @@ CREATE INDEX IF NOT EXISTS idx_code_anchors_path ON code_memory_anchors(file_pat
 UPDATE schema_version SET version = 31, applied_at = datetime('now');
 "#;
 
+/// V32: vector journal (#181).
+///
+/// Every MCP server process holds its own in-memory HNSW index and only ever
+/// appends its own ingests to it. `refresh_vector_index_if_stale` (sqlite.rs)
+/// brings that index up to date with what OTHER processes wrote. It needs a
+/// cheap, exact answer to "which vector rows changed since I last looked?", and
+/// SQLite keeps no per-row version to ask that of. rowid cannot serve: SQLite
+/// reuses a rowid once the highest rows are deleted, and an UPSERT keeps its
+/// rowid. Timestamps cannot serve either: a writer stamps `created_at` before
+/// it waits for the write lock, so stamp order and commit order can disagree
+/// under contention.
+///
+/// So the table keeps the answer itself. Three AFTER triggers append one row per
+/// insert, update or delete of `embedding_profile_vectors` to `vector_journal`,
+/// whose `seq` is AUTOINCREMENT: allocated inside the writer's transaction, so
+/// monotonic in commit order, and never reused even after pruning. Every write
+/// path is covered by construction: INSERT OR REPLACE fires the insert trigger,
+/// INSERT ... ON CONFLICT DO UPDATE fires the update trigger, and a purge's
+/// ON DELETE CASCADE fires the delete trigger (all three verified against
+/// SQLite 3.51). A reader remembers the last `seq` it absorbed and reads
+/// `seq > that`.
+///
+/// The journal carries ids only, never content or vectors. The consolidation
+/// cycle prunes rows that are both old and far behind the head; a reader that
+/// has fallen behind the pruned horizon reconciles against the table instead.
+const MIGRATION_V32_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS vector_journal (
+    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id  TEXT NOT NULL,
+    node_id     TEXT NOT NULL,
+    -- 'upsert' for an insert or update, 'delete' for a delete.
+    op          TEXT NOT NULL CHECK (op IN ('upsert', 'delete')),
+    at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_journal_profile_seq ON vector_journal(profile_id, seq);
+
+CREATE TRIGGER IF NOT EXISTS trg_vector_journal_insert
+AFTER INSERT ON embedding_profile_vectors
+BEGIN
+    INSERT INTO vector_journal (profile_id, node_id, op) VALUES (NEW.profile_id, NEW.node_id, 'upsert');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_vector_journal_update
+AFTER UPDATE ON embedding_profile_vectors
+BEGIN
+    INSERT INTO vector_journal (profile_id, node_id, op) VALUES (NEW.profile_id, NEW.node_id, 'upsert');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_vector_journal_delete
+AFTER DELETE ON embedding_profile_vectors
+BEGIN
+    INSERT INTO vector_journal (profile_id, node_id, op) VALUES (OLD.profile_id, OLD.node_id, 'delete');
+END;
+
+UPDATE schema_version SET version = 32, applied_at = datetime('now');
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The latest migration, read from the registry. Tests that used to pin
+    /// this as a literal broke on every new migration for no defect at all,
+    /// the "asserted a constant instead of a behaviour" pattern.
+    fn latest_version() -> u32 {
+        MIGRATIONS.last().expect("migrations").version
+    }
     use std::sync::{Arc, Barrier};
     use std::thread;
     use std::time::Duration;
@@ -3044,8 +3114,9 @@ UPDATE schema_version SET version = 99;\n";
 
         let applied = apply_migrations(&conn).expect("V20+ apply on a V19 database");
         assert_eq!(
-            applied, 12,
-            "V20 through V31 should apply on a V19 database"
+            applied,
+            latest_version() - 19,
+            "every migration after V19 should apply on a V19 database"
         );
         assert_eq!(
             get_current_version(&conn).expect("version"),
@@ -3058,16 +3129,16 @@ UPDATE schema_version SET version = 99;\n";
         );
     }
 
-    /// Fresh database: all migrations apply cleanly through V31 and the cursor
-    /// table exists and is empty (nothing to clear, no error).
+    /// Fresh database: all migrations apply cleanly through the latest and the
+    /// cursor table exists and is empty (nothing to clear, no error).
     #[test]
     fn v20_applies_cleanly_on_a_fresh_database() {
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
-        apply_migrations(&conn).expect("fresh migrations succeed through V31");
+        apply_migrations(&conn).expect("fresh migrations succeed through the latest");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            31,
-            "latest migration must be V31"
+            latest_version(),
+            "a fresh database must land on the latest migration"
         );
         assert_eq!(cursor_row_count(&conn), 0);
     }
@@ -3118,11 +3189,11 @@ UPDATE schema_version SET version = 99;\n";
         )
         .expect("seed legacy vector");
 
-        apply_migrations(&conn).expect("apply V28 through V31");
+        apply_migrations(&conn).expect("apply V28 through the latest");
         assert_eq!(
             get_current_version(&conn).expect("version"),
-            31,
-            "V28 profile migration is followed by the V29 scope index, the V30 FTS rebuild, and the V31 code anchors"
+            latest_version(),
+            "the V28 profile migration must be followed by every later migration"
         );
         let copied: i64 = conn
             .query_row(
@@ -3534,7 +3605,10 @@ UPDATE schema_version SET version = 99;\n";
         )
         .expect("mark V25 fixture current");
 
-        assert_eq!(apply_migrations(&conn).expect("apply V26 through V31"), 6);
+        assert_eq!(
+            apply_migrations(&conn).expect("apply V26 through the latest"),
+            latest_version() - 25
+        );
         let columns: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('receipt_envelopes')

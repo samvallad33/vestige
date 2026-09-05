@@ -259,6 +259,21 @@ Internally the `Storage` type holds **separate reader and writer connections**, 
 - Writers serialize on the writer connection lock.
 - WAL lets readers continue while a writer commits — they don't block each other at the SQLite level.
 
+### The vector index follows peer writes
+
+Each process holds its own in-memory HNSW index, rebuilt from
+`embedding_profile_vectors` at startup. Before every semantic search it reads
+`PRAGMA data_version`, which SQLite bumps when another connection commits, so
+the check costs one pragma when nothing changed. Since schema V32 it also learns
+*what* changed: every insert, update and delete on the vector table is journaled
+by trigger into `vector_journal` (ids only, keyed by an AUTOINCREMENT sequence
+that is monotonic in commit order and never reused), and the index applies
+exactly the journaled rows past its watermark. A sibling process's new memory,
+re-embedding or purge is therefore visible on the next query without a restart.
+The consolidation cycle prunes the journal to the newest 10,000 rows plus the
+last seven days; a process whose watermark has fallen behind that horizon
+reconciles its index against the table instead of trusting the journal.
+
 ### What works today
 
 | Pattern | Status | Notes |
