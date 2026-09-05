@@ -143,6 +143,83 @@ jobs:
       - name: Test vestige-mcp without embeddings
         run: cargo test -p vestige-mcp --no-default-features --features connectors,cloud-sync --lib
 
+  # The Termux target built by CI instead of by hand (#145). cargo-ndk drives
+  # the NDK clang that GitHub's ubuntu-24.04 image ships (ANDROID_NDK_HOME is
+  # preset), API 24 is Termux's floor, and the no-embeddings profile is the one
+  # that compiles without ONNX Runtime. The readelf gate is the point of the
+  # job: a binary that quietly links libc++_shared or a host library would
+  # start on the runner and die on the phone.
+  android-build:
+    name: Android build (aarch64-linux-android, no embeddings)
+    runs-on: ubuntu-24.04
+    needs: [no-embeddings-build]
+    if: |
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'pull_request'
+    env:
+      ANDROID_API: "24"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Add target to the pinned toolchain
+        run: rustup target add aarch64-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-aarch64-linux-android-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      # openssl-src (git2's vendored OpenSSL) configures Android through the
+      # NDK's clang wrappers, which it looks for on PATH under ANDROID_NDK_ROOT.
+      # cargo-ndk sets the Rust-side CC, AR, and linker variables.
+      - name: Point OpenSSL's build at the NDK
+        run: |
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Build (release, no embeddings)
+        env:
+          CXXSTDLIB: c++_static
+        run: |
+          cargo ndk -t arm64-v8a -p "$ANDROID_API" build --release -p vestige-mcp \
+            --no-default-features --features connectors,cloud-sync
+
+      - name: Only bionic may be a runtime dependency
+        run: |
+          BIN=target/aarch64-linux-android/release/vestige-mcp
+          READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$READELF" -h "$BIN" | grep -E 'Machine:\s+AArch64'
+          "$READELF" -d "$BIN" | grep NEEDED | tee needed.txt
+          if grep -vE '\[(libc|libm|libdl|liblog)\.so\]' needed.txt; then
+            echo "::error::vestige-mcp links a library Termux does not guarantee (listed above)"
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          cd target/aarch64-linux-android/release
+          tar czf ../../../vestige-mcp-aarch64-linux-android.tar.gz vestige-mcp
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-mcp-aarch64-linux-android
+          path: vestige-mcp-aarch64-linux-android.tar.gz
+
   release-build:
     name: Release Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
