@@ -386,7 +386,7 @@ impl McpServer {
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid keyword and semantic search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradictions; needs 'query', use when accuracy matters. 'contradictions': disagreement pairs for a 'topic'. Reading never changes strength; promote what helped via memory.".to_string()),
+description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid keyword and semantic search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradictions; needs 'query', use when accuracy matters (its reasoning text is assembled from computed values, not written by a model). 'contradictions': disagreement pairs for a 'topic'. Reading never changes strength; promote what helped via memory.".to_string()),
                 input_schema: tools::recall::schema(),
                 ..Default::default()
             },
