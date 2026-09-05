@@ -14,6 +14,39 @@ starvation findings did not reproduce (every migration already runs inside one
 IMMEDIATE transaction with its own version bump, and `wal_autocheckpoint` is
 on), so those got regression tests and a checkpoint hook rather than rewrites.
 
+### Changed — MCP surface
+
+- Every advertised tool now carries a `title` and all four MCP behaviour hints
+  (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`),
+  serialised explicitly so clients never fall back on the spec defaults that
+  assume the worst. `recall`, `receipt`, `memory_status`, and `session_start`
+  are read-only (they record receipts and access statistics, never memory
+  content); `memory`, `intention`, `maintain`, and `dedup` are destructive;
+  only `source_sync` reaches outside the local store. `graph` stays writable
+  because `label` records an outcome. A unit test pins the exact sets and the
+  e2e suite checks the wire shape.
+- 45 tool and property descriptions were rewritten to say the same thing in
+  fewer words (3,710 bytes removed), and `codebase` now advertises its
+  `verify` action. With the hints added, `tools/list` went from 38,474 to
+  35,019 bytes. The rest of the weight is schema structure and is tracked as
+  its own issue.
+- `recall` with `detail_level: "brief"` now returns `receiptId` without the
+  full receipt and without the `contextReinstatement` block. The receipt is
+  persisted and one `receipt` call away. Default and full responses are
+  unchanged.
+
+### Fixed — Memory PR gate
+
+- A single sensitive word deep inside a long note no longer quarantines the
+  write. The `sensitive_topic` signal fires when a tag names the topic, a
+  credential-shaped value sits in the content, the write is short (60 words
+  or fewer), the topic leads the text (first 12 words), or two distinct
+  topics appear. On the real store the incidental case produced most holds:
+  ordinary engineering notes that mentioned "token" or "identity" once were
+  held for review and their authors had to come back for them. Five tests
+  cover the branches, including a fake token fixture checked against the
+  secret scanner. `docs/CONFIGURATION.md` states the rule.
+
 ### Fixed — Vector index
 
 - A long-lived MCP server process now sees exactly the vectors its sibling

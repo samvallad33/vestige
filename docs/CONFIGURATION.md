@@ -82,7 +82,7 @@ opens a **Memory PR** you decide in the dashboard (Memory PRs tab) or via
 | Mode | Behavior |
 |------|----------|
 | `fast` | Never gate. Every write auto-commits. |
-| `risk_gated` | **Default.** Ordinary writes auto-commit; risky ones (contradicting high-trust memories, destructive ops, sensitive topics) open a Memory PR. |
+| `risk_gated` | **Default.** Ordinary writes auto-commit; risky ones (contradicting high-trust memories, destructive ops, sensitive topics) open a Memory PR. A write counts as touching a sensitive topic when a tag names it, a credential-shaped value sits next to it, the write is short, the topic leads the text, or two distinct topics appear. One sensitive word buried in a long note is a mention, not a subject, and does not gate. |
 | `paranoid` | Gate every write. Nothing enters the brain without approval. |
 
 The mode is stored in `<data_dir>/review_mode.json` and set from the dashboard

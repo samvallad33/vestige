@@ -25,7 +25,7 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["remember_pattern", "remember_decision", "get_context", "verify"],
-                "description": "Action to perform: 'remember_pattern' stores a code pattern, 'remember_decision' stores an architectural decision, 'get_context' retrieves patterns and decisions (each annotated with whether the code it describes still matches), 'verify' re-checks every anchored code memory against the working tree and reports which ones have gone stale"
+                "description": "'remember_pattern' stores a code pattern, 'remember_decision' an architectural decision, 'get_context' returns both with a current-or-stale mark, 'verify' re-checks every anchored code memory against the working tree"
             },
             // remember_pattern fields
             "name": {
@@ -54,11 +54,11 @@ pub fn schema() -> Value {
             "files": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Files where this pattern is used or affected by this decision. Accepts a plain path ('src/state.py'), a path plus symbol ('src/state.py#load_config'), or a path plus line span ('src/state.py:552-580'). Anything more specific than a plain path is content-hashed at save time so the memory can later tell you itself whether the code it describes has changed."
+                "description": "Files this pattern or decision touches: a path ('src/state.py'), path plus symbol ('src/state.py#load_config'), or path plus lines ('src/state.py:552-580'). Anything beyond a plain path is content-hashed so the memory can report when the code changed."
             },
             "anchors": {
                 "type": "array",
-                "description": "Structured form of 'files', for callers that already know the symbol. Each anchor is content-hashed at save time so staleness becomes detectable instead of invisible.",
+                "description": "Structured form of 'files' for callers that know the symbol. Each anchor is content-hashed at save time so staleness is detectable.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -808,9 +808,8 @@ async fn execute_verify(storage: &Arc<Storage>, args: &CodebaseArgs) -> Result<V
     // Predict for the memories verification cannot reach. The predictor
     // refuses to fit without enough evidence, and a prediction is a
     // probability shown next to the memory, never an action taken on it.
-    let predictor = vestige_core::codebase::staleness::StalenessPredictor::fit(
-        &staleness_observations,
-    );
+    let predictor =
+        vestige_core::codebase::staleness::StalenessPredictor::fit(&staleness_observations);
     let unverifiable_memories: Vec<Value> = unanchored
         .iter()
         .map(|(id, age_days)| match &predictor {

@@ -29,7 +29,7 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["set", "check", "update", "list"],
-                "description": "The action to perform: 'set' creates a new intention, 'check' finds triggered intentions, 'update' modifies status (complete/snooze/cancel), 'list' shows intentions"
+                "description": "'set' creates, 'check' finds triggered intentions, 'update' changes status (complete, snooze, cancel), 'list' shows them"
             },
             // SET action parameters
             "description": {

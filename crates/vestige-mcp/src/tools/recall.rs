@@ -47,7 +47,7 @@ pub fn schema() -> Value {
                     "type": "string",
                     "enum": ["lookup", "reason", "contradictions"],
                     "default": "lookup",
-                    "description": "Retrieval mode. 'lookup' (default): fast hybrid search — use for plain recall. 'reason': deep cognitive reasoning across memories (FSRS-6 trust scoring, spreading activation, supersession, contradiction analysis) — use when accuracy matters; needs 'query'. 'contradictions': surface trust-weighted disagreement pairs for a 'topic' (or recent memories)."
+                    "description": "'lookup' (default): fast hybrid search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradiction analysis; needs 'query'. 'contradictions': trust-weighted disagreement pairs for a 'topic', or recent memories."
                 }),
             );
             // reason (deep_reference) extra field.

@@ -26,7 +26,7 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["get", "replay"],
-                "description": "get: inspect one persisted receipt and its safe replay-capsule summary. replay: withhold named receipt-local evidence slots from the exact frozen final context without rerunning retrieval."
+                "description": "'get': one persisted receipt with its safe replay-capsule summary. 'replay': withhold named evidence slots from the frozen final context without rerunning retrieval."
             },
             "receipt_id": {
                 "type": "string",

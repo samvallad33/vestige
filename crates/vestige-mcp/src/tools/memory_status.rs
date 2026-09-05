@@ -36,7 +36,7 @@ pub fn schema() -> Value {
                 "type": "string",
                 "enum": ["health", "retention", "timeline", "changelog", "stats"],
                 "default": "health",
-                "description": "Which status view. 'health' (default): full system health + stats + FSRS preview + warnings + recommendations. 'retention': lightweight retention dashboard (avg/distribution/trend). 'timeline': browse memories chronologically. 'changelog': audit trail of memory state changes. 'stats': complete hygiene counts by type/tag/age/retention/lifecycle plus bounded never-accessed and largest-node lists and recent tag-operation audit."
+                "description": "'health' (default): system health, stats, decay preview, warnings, recommendations. 'retention': average, distribution, trend. 'timeline': memories by date. 'changelog': state-change audit trail. 'stats': hygiene counts by type, tag, age, retention, and lifecycle, with bounded detail lists and recent tag operations."
             },
             // --- [health view] ---
             "schema_introspection": {
@@ -68,7 +68,7 @@ pub fn schema() -> Value {
             // --- shared: limit (per-view ranges differ; clamped internally) ---
             "limit": {
                 "type": "integer",
-                "description": "Max results. [timeline] default 50, max 200. [changelog] default 20, clamped to 100. [stats] detail lists default 50, clamped to 200; aggregate counts always cover the full selected store. Ignored by health/retention.",
+                "description": "Max results. timeline: default 50, max 200. changelog: default 20, max 100. stats detail lists: default 50, max 200 (aggregate counts always cover the whole store). Ignored by health and retention.",
                 "minimum": 1, "maximum": 200
             }
         }

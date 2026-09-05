@@ -15,7 +15,7 @@ use crate::dashboard::events::VestigeEvent;
 use crate::protocol::messages::{
     CallToolRequest, CallToolResult, InitializeRequest, InitializeResult, ListResourcesResult,
     ListToolsResult, ReadResourceRequest, ReadResourceResult, ResourceDescription,
-    ServerCapabilities, ServerInfo, ToolDescription,
+    ServerCapabilities, ServerInfo, ToolAnnotations, ToolDescription,
 };
 use crate::protocol::types::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, MCP_VERSION};
 use crate::resources;
@@ -379,13 +379,27 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "recall".to_string(),
-                description: Some("Retrieve from memory. Modes: 'lookup' (default — fast hybrid search: keyword + semantic + convex fusion; retrieval is audit-only, and promote is the explicit usefulness signal), 'reason' (deep cognitive reasoning across memories with FSRS-6 trust scoring, spreading activation, supersession, and contradiction analysis; use when accuracy matters, needs 'query'), 'contradictions' (surface trust-weighted disagreement pairs for a 'topic'). Default mode is fast — only 'reason' pays the deep-analysis cost.".to_string()),
+                title: Some("Recall".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: true,
+                    destructive_hint: false,
+                    idempotent_hint: true,
+                    open_world_hint: false,
+                }),
+description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid keyword and semantic search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradictions; needs 'query', use when accuracy matters. 'contradictions': disagreement pairs for a 'topic'. Reading never changes strength; promote what helped via memory.".to_string()),
                 input_schema: tools::recall::schema(),
                 ..Default::default()
             },
             ToolDescription {
                 name: "receipt".to_string(),
-                description: Some("Inspect a persisted memory receipt or run a controlled post-retrieval context ablation. Actions: 'get' returns the receipt and a privacy-safe frozen-capsule summary; 'replay' compares the exact final recorded evidence pack with the same pack minus specified receipt-local slots. Replay never reruns search, backfills candidates, expands the graph, calls a model, or establishes causality.".to_string()),
+                title: Some("Receipt".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: true,
+                    destructive_hint: false,
+                    idempotent_hint: true,
+                    open_world_hint: false,
+                }),
+description: Some("Inspect a persisted retrieval receipt ('get') or run a controlled ablation of its frozen evidence pack ('replay', which withholds named slots without rerunning search, calling a model, or claiming causality).".to_string()),
                 input_schema: tools::receipt::schema(),
                 ..Default::default()
             },
@@ -394,19 +408,40 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "memory".to_string(),
-                description: Some("Unified memory management tool. Actions: 'get' (retrieve full node), 'purge' (irreversibly remove content/embeddings with confirm=true), 'delete' (legacy alias for purge), 'state' (get accessibility state), 'promote' (thumbs up — increases retrieval strength), 'demote' (thumbs down — decreases retrieval strength, does NOT delete), 'edit' (update content in-place, preserves FSRS state).".to_string()),
+                title: Some("Memory".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: true,
+                    idempotent_hint: false,
+                    open_world_hint: false,
+                }),
+description: Some("Manage one memory. Actions: 'get', 'get_batch' (ids), 'state' (accessibility), 'promote' and 'demote' (adjust retrieval strength; demote never deletes), 'edit' (replace content, keep FSRS state), 'purge' (remove content and embeddings for good; confirm=true). 'delete' is an alias for purge.".to_string()),
                 input_schema: tools::memory_unified::schema(),
                 ..Default::default()
             },
             ToolDescription {
                 name: "codebase".to_string(),
-                description: Some("Unified codebase tool. Actions: 'remember_pattern' (store code pattern), 'remember_decision' (store architectural decision), 'get_context' (retrieve patterns and decisions).".to_string()),
+                title: Some("Codebase".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: false,
+                    idempotent_hint: false,
+                    open_world_hint: false,
+                }),
+description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions, each marked current or stale), 'verify' (re-check anchored code memories against the working tree).".to_string()),
                 input_schema: tools::codebase_unified::schema(),
                 ..Default::default()
             },
             ToolDescription {
                 name: "intention".to_string(),
-                description: Some("Unified intention management tool. Actions: 'set' (create), 'check' (find triggered), 'update' (complete/snooze/cancel), 'list' (show intentions).".to_string()),
+                title: Some("Intention".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: true,
+                    idempotent_hint: false,
+                    open_world_hint: false,
+                }),
+description: Some("Intentions. Actions: 'set', 'check' (find triggered), 'update' (complete, snooze, cancel), 'list'.".to_string()),
                 input_schema: tools::intention_unified::schema(),
                 ..Default::default()
             },
@@ -415,7 +450,14 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "smart_ingest".to_string(),
-                description: Some("INTELLIGENT memory ingestion with Prediction Error Gating. Single mode: provide 'content' to auto-decide CREATE/UPDATE/SUPERSEDE. Batch mode: provide 'items' array (max 20) for session-end saves — each item runs the full cognitive pipeline (importance scoring, intent detection, synaptic tagging).".to_string()),
+                title: Some("Smart Ingest".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: false,
+                    idempotent_hint: false,
+                    open_world_hint: false,
+                }),
+description: Some("Save to memory with Prediction Error Gating: 'content' is created, merged into a similar memory, or supersedes an outdated one. Batch mode: 'items' (max 20) for session-end saves, each through the full pipeline.".to_string()),
                 input_schema: tools::smart_ingest::schema(),
                 ..Default::default()
             },
@@ -424,7 +466,14 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "source_sync".to_string(),
-                description: Some("Index an external system into Vestige as a durable, offline, semantically-searchable index that cites back to the canonical record. GitHub: source='github', repo='owner/name' (auth via GITHUB_TOKEN env). Redmine: source='redmine', project='<id>' (host via REDMINE_URL, auth via REDMINE_API_KEY env). Idempotent: re-running updates changed issues without duplicating; set reconcile=true to tombstone issues removed upstream.".to_string()),
+                title: Some("Source Sync".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: false,
+                    idempotent_hint: true,
+                    open_world_hint: true,
+                }),
+description: Some("Index an external system into local, searchable memories that cite the canonical record. source='github' (repo='owner/name', GITHUB_TOKEN env) or 'redmine' (project, REDMINE_URL and REDMINE_API_KEY env). Re-runs update changed items; reconcile=true tombstones items removed upstream.".to_string()),
                 input_schema: tools::source_sync::schema(),
                 ..Default::default()
             },
@@ -436,7 +485,14 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "memory_status".to_string(),
-                description: Some("Memory status & history. Views: 'health' (default — full system health + stats + FSRS preview + cognitive-module health + warnings + recommendations), 'retention' (lightweight retention dashboard: avg, distribution, trend), 'timeline' (browse memories chronologically, grouped by day), 'changelog' (audit trail of memory state changes — per-memory transitions or system-wide), 'stats' (full-store hygiene counts by type/tag/age/retention/lifecycle, bounded never-accessed and largest-node details, and recent tag-operation audit).".to_string()),
+                title: Some("Memory Status".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: true,
+                    destructive_hint: false,
+                    idempotent_hint: true,
+                    open_world_hint: false,
+                }),
+description: Some("Store status. view 'health' (default: stats, decay preview, module health, warnings), 'retention' (average, distribution, trend), 'timeline' (memories by day), 'changelog' (state-change audit trail), 'stats' (hygiene counts by type, tag, age, retention, lifecycle).".to_string()),
                 input_schema: tools::memory_status::schema(),
                 ..Default::default()
             },
@@ -447,7 +503,14 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "maintain".to_string(),
-                description: Some("Memory maintenance & lifecycle. Actions: 'consolidate' (run FSRS-6 decay/embedding cycle), 'dream' (replay memories → insights/connections + strengthen patterns), 'gc' (garbage-collect stale memories; dry_run=true by default for safety), 'importance_score' (4-channel neuroscience score for 'content'), 'backup' (SQLite DB backup), 'export' (memories as JSON/JSONL with tag/date filters), 'restore' (restore from a JSON backup at 'path').".to_string()),
+                title: Some("Maintain".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: true,
+                    idempotent_hint: false,
+                    open_world_hint: false,
+                }),
+description: Some("Lifecycle maintenance. Actions: 'consolidate' (decay and embedding cycle), 'dream' (replay memories into insights and connections), 'gc' (collect stale memories; dry_run=true by default), 'importance_score' (score 'content'), 'backup', 'export' (JSON or JSONL with filters), 'restore' (from 'path').".to_string()),
                 input_schema: tools::maintain::schema(),
                 ..Default::default()
             },
@@ -459,7 +522,14 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "dedup".to_string(),
-                description: Some("Deduplication, merge/supersede, and exact tag maintenance. Actions: 'scan' (default — surface duplicate clusters via cosine + merge candidates via Fellegi-Sunter, read-only), 'plan_merge' (preview a reversible merge plan for 2+ member_ids → plan_id), 'plan_supersede' (preview superseding old_id with new_id → plan_id), 'apply' (execute a plan_id; 'possible'/'non_match' need confirm=true), 'undo' (reverse an operation_id, or omit to list the mixed reflog plus a dedicated tagOperations list that cannot be buried by merge activity), 'tag_rename'/'tag_merge' (exact, scoped, preview-token-gated tag maintenance), 'protect' (pin a memory against auto-merge/supersede/forget), 'policy' (get/set Fellegi-Sunter thresholds). Old memories are invalidated, never deleted.".to_string()),
+                title: Some("Dedup".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: true,
+                    idempotent_hint: false,
+                    open_world_hint: false,
+                }),
+description: Some("Duplicates, merges, supersession, and exact tag maintenance. Actions: 'scan' (default, read-only: duplicate clusters and merge candidates), 'plan_merge' (member_ids to plan_id), 'plan_supersede' (old_id, new_id to plan_id), 'apply' (run a plan_id; weak matches need confirm=true), 'undo' (reverse an operation_id, or omit to list the reflog), 'tag_rename' and 'tag_merge' (preview-token gated), 'protect' (pin against auto-merge), 'policy' (get or set match thresholds). Merged memories are invalidated, never deleted.".to_string()),
                 input_schema: tools::dedup::unified_schema(),
                 ..Default::default()
             },
@@ -473,7 +543,16 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "graph".to_string(),
-                description: Some("Memory graph & associations. Actions: 'chain' (reasoning path from→to), 'associations' (related memories via spreading activation, needs 'from'), 'bridges' (connectors between from/to), 'predict' (what memories you'll need next, from 'context'), 'memory_graph' (force-directed subgraph for viz, from center_id or query), 'recent'/'get'/'memory'/'neighbors'/'never_composed'/'bounty_mode' (composition topology), 'label' (record a composition outcome — the only write).".to_string()),
+                title: Some("Graph".to_string()),
+                // Every graph action reads, except 'label', which records a
+                // composition outcome. One write makes the tool not read-only.
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: false,
+                    idempotent_hint: false,
+                    open_world_hint: false,
+                }),
+description: Some("Memory graph. Actions: 'chain' (path from, to), 'associations' (spreading activation from 'from'), 'bridges' (connectors between from and to), 'predict' (what you will need next, from 'context'), 'memory_graph' (subgraph around center_id or query), 'recent', 'get', 'memory', 'neighbors', 'never_composed', 'bounty_mode' (composition topology), 'label' (record an outcome; the only write).".to_string()),
                 input_schema: tools::graph_unified::schema(),
                 ..Default::default()
             },
@@ -486,7 +565,14 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "session_start".to_string(),
-                description: Some("One-call session initialization. Combines search, intentions, status, predictions, and codebase context into a single token-budgeted response. Call this once at the start of a session instead of 5 separate calls. (Renamed from 'session_context' in v2.2.)".to_string()),
+                title: Some("Session Start".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: true,
+                    destructive_hint: false,
+                    idempotent_hint: true,
+                    open_world_hint: false,
+                }),
+description: Some("Start-of-session context in one call: relevant memories, open intentions, store status, predictions, and codebase context under one token budget. Replaces separate recall, intention, memory_status, and codebase calls.".to_string()),
                 input_schema: tools::session_context::schema(),
                 ..Default::default()
             },
@@ -506,7 +592,14 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "suppress".to_string(),
-                description: Some("Actively suppress a memory via top-down inhibitory control (Anderson 2025 SIF + Davis Rac1). Distinct from delete: the memory persists but is inhibited from retrieval and actively decays. Each call compounds. A background Rac1 worker cascades decay to co-activated neighbors. Reversible within 24 hours via reverse=true.".to_string()),
+                title: Some("Suppress".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: false,
+                    idempotent_hint: true,
+                    open_world_hint: false,
+                }),
+description: Some("Inhibit a memory without deleting it (top-down suppression, Anderson 2025 and Davis Rac1): it drops out of retrieval and decays faster, each call compounds, and a background worker spreads accelerated decay to co-activated neighbours. reverse=true undoes it within 24 hours.".to_string()),
                 input_schema: tools::suppress::schema(),
                 ..Default::default()
             },
@@ -519,7 +612,14 @@ impl McpServer {
             // ================================================================
             ToolDescription {
                 name: "backfill".to_string(),
-                description: Some("Memory with hindsight. When a FAILURE (bug/crash/regression) is recorded, reach BACKWARD in time and promote the quiet earlier memory that caused it — the root cause a vector search structurally cannot surface because it isn't similar to the failure, only causally upstream (shares an entity: same file/env-var/service). Faithful port of Cai 2024 Nature; backward-only by construction. Pass failure_id (or it auto-finds the latest failure), manual=true to force, promote=false for a dry run.".to_string()),
+                title: Some("Backfill".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: false,
+                    idempotent_hint: false,
+                    open_world_hint: false,
+                }),
+description: Some("Memory with hindsight. After a failure is recorded, reach backward in time and promote the quiet earlier memory that caused it (same file, env var, or service), which similarity search cannot surface because a root cause rarely resembles the bug. Backward-only by construction (Cai 2024). Pass failure_id (defaults to the latest failure), manual=true to force, promote=false for a dry run.".to_string()),
                 input_schema: tools::backfill::schema(),
                 ..Default::default()
             },
@@ -1417,7 +1517,13 @@ impl McpServer {
                     obj.entry("runId".to_string())
                         .or_insert_with(|| serde_json::json!(trace_run_id));
                     obj.insert("receiptId".to_string(), serde_json::json!(receipt_id));
-                    obj.insert("receipt".to_string(), receipt);
+                    // A caller that asked for `detail_level: "brief"` wants the
+                    // smallest useful answer. The full receipt is persisted and
+                    // one `receipt` call away by id, so only the id ships.
+                    let brief = obj.get("detailLevel").and_then(|v| v.as_str()) == Some("brief");
+                    if !brief {
+                        obj.insert("receipt".to_string(), receipt);
+                    }
                 }
 
                 // Memory PR gate: classify the writes this tool just made under
@@ -2617,7 +2723,10 @@ mod tests {
 
         assert_eq!(result["resultType"], "complete");
         assert_eq!(result["cacheScope"], "public");
-        assert!(result["ttlMs"].as_u64().is_some(), "ttlMs must be an integer");
+        assert!(
+            result["ttlMs"].as_u64().is_some(),
+            "ttlMs must be an integer"
+        );
         assert_eq!(
             result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
             "vestige"
@@ -2885,6 +2994,54 @@ mod tests {
         );
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+
+        // Every advertised tool carries a display title and all four MCP
+        // behaviour hints, and the hints match what the tool actually does
+        // to the store. A missing hint reads as "assume the worst" to clients.
+        let mut read_only = Vec::new();
+        let mut destructive = Vec::new();
+        let mut open_world = Vec::new();
+        for tool in tools {
+            let name = tool["name"].as_str().unwrap();
+            assert!(
+                tool["title"].as_str().is_some_and(|t| !t.is_empty()),
+                "{name} has no title"
+            );
+            let ann = &tool["annotations"];
+            for hint in [
+                "readOnlyHint",
+                "destructiveHint",
+                "idempotentHint",
+                "openWorldHint",
+            ] {
+                assert!(ann[hint].is_boolean(), "{name} is missing {hint}: {ann}");
+            }
+            assert!(
+                !(ann["readOnlyHint"] == true && ann["destructiveHint"] == true),
+                "{name} cannot be both read-only and destructive"
+            );
+            if ann["readOnlyHint"] == true {
+                read_only.push(name);
+            }
+            if ann["destructiveHint"] == true {
+                destructive.push(name);
+            }
+            if ann["openWorldHint"] == true {
+                open_world.push(name);
+            }
+        }
+        read_only.sort();
+        destructive.sort();
+        assert_eq!(
+            read_only,
+            ["memory_status", "recall", "receipt", "session_start"]
+        );
+        assert_eq!(destructive, ["dedup", "intention", "maintain", "memory"]);
+        assert_eq!(
+            open_world,
+            ["source_sync"],
+            "only the connector sync leaves the local store"
+        );
 
         // Unified tools
         // (search folded into `recall` mode='lookup' in v2.2)
