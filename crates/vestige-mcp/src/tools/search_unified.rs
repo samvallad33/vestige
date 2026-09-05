@@ -44,110 +44,110 @@ pub fn schema() -> Value {
             },
             "min_retention": {
                 "type": "number",
-                "description": "Minimum retention strength (0.0-1.0, default: 0.0)",
+                "description": "Minimum retention strength, 0 to 1 (default 0).",
                 "default": 0.0,
                 "minimum": 0.0,
                 "maximum": 1.0
             },
             "min_similarity": {
                 "type": "number",
-                "description": "Minimum similarity threshold (0.0-1.0, default: 0.5)",
+                "description": "Minimum similarity, 0 to 1 (default 0.5).",
                 "default": 0.5,
                 "minimum": 0.0,
                 "maximum": 1.0
             },
             "detail_level": {
                 "type": "string",
-                "description": "'brief': id, type, tags, score. 'summary' (default): the 8-field response. 'full': every field, including FSRS state and timestamps.",
+                "description": "'brief': id, type, tags, score. 'summary' (default): 8 fields. 'full': everything, including FSRS state.",
                 "enum": ["brief", "summary", "full"],
                 "default": "summary"
             },
             "context_topics": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Optional topics for context-dependent retrieval boosting"
+                "description": "Topics that boost context-dependent retrieval."
             },
             "exclude_types": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Node types to exclude. Reflections are excluded by default so they do not pollute factual queries."
+                "description": "Node types to exclude (reflections are excluded by default)."
             },
             "include_types": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "If set, only return nodes of these types. Overrides exclude_types."
+                "description": "Only these node types; overrides exclude_types."
             },
             "token_budget": {
                 "type": "integer",
-                "description": "Max tokens for the response; content is truncated to fit. Fetch full content by id with memory(action='get').",
+                "description": "Max response tokens; content is truncated to fit. memory(action='get') has the full text.",
                 "minimum": 100,
                 "maximum": 100000
             },
             "retrieval_mode": {
                 "type": "string",
-                "description": "'precise': top results only, skips activation and competition. 'balanced' (default): the full cognitive pipeline. 'exhaustive': 5x overfetch, deep graph traversal, no competition.",
+                "description": "'precise': top hits, no activation or competition. 'balanced' (default): full pipeline. 'exhaustive': 5x overfetch, deep traversal.",
                 "enum": ["precise", "balanced", "exhaustive"],
                 "default": "balanced"
             },
             "concrete": {
                 "type": "boolean",
-                "description": "Literal search: no semantic expansion, reweighting, activation, or side effects. Auto-enabled for quoted strings, env vars, UUIDs, paths, and code identifiers.",
+                "description": "Literal search, no semantic expansion or side effects. Auto-on for quoted strings, env vars, UUIDs, paths, identifiers.",
                 "default": false
             },
             "rank_native_fusion": {
                 "type": "boolean",
-                "description": "Experimental: fuse the post-retrieval stages as ranked lists (weighted RRF) instead of score multipliers. Default off.",
+                "description": "Experimental: fuse post-retrieval stages by weighted RRF instead of multipliers.",
                 "default": false
             },
             "tag_prefix": {
                 "type": "string",
-                "description": "Keep only results with a tag starting with this prefix (case-insensitive), e.g. 'meeting:' matches 'meeting:standup'. Post-filter; raise 'limit' if it thins results heavily."
+                "description": "Only results with a tag starting with this prefix (case-insensitive). Post-filter; raise 'limit' if it thins results."
             },
             "scope": {
                 "type": "string",
-                "description": "Project namespace. Defaults to 'user', so project memories never bleed into an unscoped recall."
+                "description": "Project namespace (default 'user'); project memories never bleed into an unscoped recall."
             },
             "includeCrossScope": {
                 "type": "boolean",
-                "description": "Search across all project namespaces. Defaults to false; set only when cross-project retrieval is intentional.",
+                "description": "Search every project namespace. Only when cross-project retrieval is intended.",
                 "default": false
             },
             "validAt": {
                 "type": "string",
-                "description": "Only facts valid at this time: 'now', RFC3339, or YYYY-MM-DD. When omitted, expired and future facts stay auditable but are downranked."
+                "description": "Only facts valid at this time ('now', RFC3339, YYYY-MM-DD). Omitted: expired and future facts are downranked, not hidden."
             },
             "source_system": {
                 "type": "string",
-                "description": "Only memories ingested from this external system, e.g. 'github' or 'redmine'. Post-filter; raise 'limit' if it thins results heavily."
+                "description": "Only memories ingested from this external system ('github', 'redmine'). Post-filter."
             },
             "source_project": {
                 "type": "string",
-                "description": "Only memories from this source project or repo, exact match (GitHub 'owner/repo', Redmine project id)."
+                "description": "Only this source project or repo, exact match."
             },
             "source_id": {
                 "type": "string",
-                "description": "Only this source record id (issue number or ticket id). Pair with source_system."
+                "description": "Only this source record id; pair with source_system."
             },
             "source_type": {
                 "type": "string",
-                "description": "Investigation filter: source record type, e.g. 'issue', 'comment'."
+                "description": "Source record type, e.g. 'issue', 'comment'."
             },
             "source_author": {
                 "type": "string",
-                "description": "Investigation filter: the source author/reporter (not assignee)."
+                "description": "Source author or reporter (not assignee)."
             },
             "source_updated_after": {
                 "type": "string",
-                "description": "Investigation filter: only records whose source was updated at/after this RFC3339 timestamp (inclusive)."
+                "description": "Source updated at or after this RFC3339 time."
             },
             "source_updated_before": {
                 "type": "string",
-                "description": "Investigation filter: only records whose source was updated at/before this RFC3339 timestamp (inclusive)."
+                "description": "Source updated at or before this RFC3339 time."
             },
             "source_status": {
                 "type": "string",
                 "enum": ["any", "valid", "tombstoned"],
-                "description": "'any' (default), 'valid' (currently visible upstream), or 'tombstoned' (removed upstream, kept for audit).",
+                "description": "'any' (default), 'valid' (visible upstream), 'tombstoned' (removed upstream, kept for audit).",
                 "default": "any"
             }
         },

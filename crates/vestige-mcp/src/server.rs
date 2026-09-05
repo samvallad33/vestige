@@ -399,7 +399,7 @@ description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid ke
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Inspect a persisted retrieval receipt ('get') or run a controlled ablation of its frozen evidence pack ('replay', which withholds named slots without rerunning search, calling a model, or claiming causality).".to_string()),
+description: Some("Inspect a persisted retrieval receipt ('get') or ablate its frozen evidence pack ('replay'): named slots withheld, no rerun, no model, no causal claim.".to_string()),
                 input_schema: tools::receipt::schema(),
                 ..Default::default()
             },
@@ -415,7 +415,7 @@ description: Some("Inspect a persisted retrieval receipt ('get') or run a contro
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Manage one memory. Actions: 'get', 'get_batch' (ids), 'state' (accessibility), 'promote' and 'demote' (adjust retrieval strength; demote never deletes), 'edit' (replace content, keep FSRS state), 'purge' (remove content and embeddings for good; confirm=true). 'delete' is an alias for purge.".to_string()),
+description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (keeps FSRS state), 'purge' (for good; confirm=true). 'delete' aliases purge.".to_string()),
                 input_schema: tools::memory_unified::schema(),
                 ..Default::default()
             },
@@ -428,7 +428,7 @@ description: Some("Manage one memory. Actions: 'get', 'get_batch' (ids), 'state'
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions, each marked current or stale), 'verify' (re-check anchored code memories against the working tree).".to_string()),
+description: Some("Code memory: 'remember_pattern', 'remember_decision', 'get_context' (marked current or stale), 'verify' (re-check anchors against the tree).".to_string()),
                 input_schema: tools::codebase_unified::schema(),
                 ..Default::default()
             },
@@ -457,7 +457,7 @@ description: Some("Intentions. Actions: 'set', 'check' (find triggered), 'update
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Save to memory with Prediction Error Gating: 'content' is created, merged into a similar memory, or supersedes an outdated one. Batch mode: 'items' (max 20) for session-end saves, each through the full pipeline.".to_string()),
+description: Some("Save to memory through Prediction Error Gating: 'content' is created, merged into a similar memory, or supersedes an outdated one. Batch: 'items' (max 20).".to_string()),
                 input_schema: tools::smart_ingest::schema(),
                 ..Default::default()
             },
@@ -473,7 +473,7 @@ description: Some("Save to memory with Prediction Error Gating: 'content' is cre
                     idempotent_hint: true,
                     open_world_hint: true,
                 }),
-description: Some("Index an external system into local, searchable memories that cite the canonical record. source='github' (repo='owner/name', GITHUB_TOKEN env) or 'redmine' (project, REDMINE_URL and REDMINE_API_KEY env). Re-runs update changed items; reconcile=true tombstones items removed upstream.".to_string()),
+description: Some("Index an external system into local memories that cite the source. source='github' (repo, GITHUB_TOKEN) or 'redmine' (project, REDMINE_URL, REDMINE_API_KEY). Re-runs update; reconcile=true tombstones removals.".to_string()),
                 input_schema: tools::source_sync::schema(),
                 ..Default::default()
             },
@@ -492,7 +492,7 @@ description: Some("Index an external system into local, searchable memories that
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Store status. view 'health' (default: stats, decay preview, module health, warnings), 'retention' (average, distribution, trend), 'timeline' (memories by day), 'changelog' (state-change audit trail), 'stats' (hygiene counts by type, tag, age, retention, lifecycle).".to_string()),
+description: Some("Store status: view 'health' (default), 'retention', 'timeline', 'changelog', 'stats'.".to_string()),
                 input_schema: tools::memory_status::schema(),
                 ..Default::default()
             },
@@ -510,7 +510,7 @@ description: Some("Store status. view 'health' (default: stats, decay preview, m
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Lifecycle maintenance. Actions: 'consolidate' (decay and embedding cycle), 'dream' (replay memories into insights and connections), 'gc' (collect stale memories; dry_run=true by default), 'importance_score' (score 'content'), 'backup', 'export' (JSON or JSONL with filters), 'restore' (from 'path').".to_string()),
+description: Some("Lifecycle: 'consolidate', 'dream', 'gc' (dry_run default true), 'importance_score', 'backup', 'export', 'restore'.".to_string()),
                 input_schema: tools::maintain::schema(),
                 ..Default::default()
             },
@@ -529,7 +529,7 @@ description: Some("Lifecycle maintenance. Actions: 'consolidate' (decay and embe
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Duplicates, merges, supersession, and exact tag maintenance. Actions: 'scan' (default, read-only: duplicate clusters and merge candidates), 'plan_merge' (member_ids to plan_id), 'plan_supersede' (old_id, new_id to plan_id), 'apply' (run a plan_id; weak matches need confirm=true), 'undo' (reverse an operation_id, or omit to list the reflog), 'tag_rename' and 'tag_merge' (preview-token gated), 'protect' (pin against auto-merge), 'policy' (get or set match thresholds). Merged memories are invalidated, never deleted.".to_string()),
+description: Some("Duplicates and merges: 'scan' (read-only), 'plan_merge' / 'plan_supersede' (preview), 'apply' (plan_id; weak matches need confirm), 'undo' (reflog), 'tag_rename' / 'tag_merge' (preview-token gated), 'protect', 'policy'. Merged memories are invalidated, never deleted.".to_string()),
                 input_schema: tools::dedup::unified_schema(),
                 ..Default::default()
             },
@@ -552,7 +552,7 @@ description: Some("Duplicates, merges, supersession, and exact tag maintenance. 
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Memory graph. Actions: 'chain' (path from, to), 'associations' (spreading activation from 'from'), 'bridges' (connectors between from and to), 'predict' (what you will need next, from 'context'), 'memory_graph' (subgraph around center_id or query), 'recent', 'get', 'memory', 'neighbors', 'never_composed', 'bounty_mode' (composition topology), 'label' (record an outcome; the only write).".to_string()),
+description: Some("Memory graph: 'chain', 'associations', 'bridges', 'predict', 'memory_graph', composition topology ('recent', 'get', 'memory', 'neighbors', 'never_composed', 'bounty_mode'), 'label' (the only write).".to_string()),
                 input_schema: tools::graph_unified::schema(),
                 ..Default::default()
             },
@@ -572,7 +572,7 @@ description: Some("Memory graph. Actions: 'chain' (path from, to), 'associations
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Start-of-session context in one call: relevant memories, open intentions, store status, predictions, and codebase context under one token budget. Replaces separate recall, intention, memory_status, and codebase calls.".to_string()),
+description: Some("Start-of-session context in one call: relevant memories, open intentions, status, predictions, codebase context, under one token budget.".to_string()),
                 input_schema: tools::session_context::schema(),
                 ..Default::default()
             },
@@ -599,7 +599,7 @@ description: Some("Start-of-session context in one call: relevant memories, open
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Inhibit a memory without deleting it (top-down suppression, Anderson 2025 and Davis Rac1): it drops out of retrieval and decays faster, each call compounds, and a background worker spreads accelerated decay to co-activated neighbours. reverse=true undoes it within 24 hours.".to_string()),
+description: Some("Inhibit a memory without deleting it: out of retrieval, faster decay, compounding per call, neighbours affected over 72 hours. reverse=true undoes it within 24 hours.".to_string()),
                 input_schema: tools::suppress::schema(),
                 ..Default::default()
             },
@@ -619,7 +619,7 @@ description: Some("Inhibit a memory without deleting it (top-down suppression, A
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Memory with hindsight. After a failure is recorded, reach backward in time and promote the quiet earlier memory that caused it (same file, env var, or service), which similarity search cannot surface because a root cause rarely resembles the bug. Backward-only by construction (Cai 2024). Pass failure_id (defaults to the latest failure), manual=true to force, promote=false for a dry run.".to_string()),
+description: Some("Memory with hindsight: after a failure is recorded, reach backward and promote the quiet earlier memory that caused it (same file, env var or service), which similarity search cannot surface. failure_id (default: latest failure), manual=true to force, promote=false for a dry run.".to_string()),
                 input_schema: tools::backfill::schema(),
                 ..Default::default()
             },

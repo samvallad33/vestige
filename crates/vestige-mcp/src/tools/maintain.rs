@@ -35,7 +35,7 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["consolidate", "dream", "gc", "importance_score", "backup", "export", "restore"],
-                "description": "'consolidate' (decay and embedding cycle), 'dream' (replay into insights and connections), 'gc' (stale memories; dry_run=true by default), 'importance_score' (score 'content'), 'backup', 'export' (JSON or JSONL with filters), 'restore' (JSON backup at 'path')."
+                "description": "'consolidate' (decay and embeddings), 'dream' (replay into insights), 'gc' (stale memories; dry_run default true), 'importance_score' ('content'), 'backup', 'export' (JSON or JSONL), 'restore' ('path')."
             },
             // --- gc ---
             "min_retention": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "[gc] Collect memories below this retention (default 0.1)." },

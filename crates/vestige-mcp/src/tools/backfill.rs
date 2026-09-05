@@ -29,11 +29,11 @@ pub fn schema() -> Value {
         "properties": {
             "failure_id": {
                 "type": "string",
-                "description": "ID of the failure/'aversive event' memory to backfill from. If omitted, the most recent memory that looks like a failure is used."
+                "description": "Failure memory to backfill from. Omitted: the most recent failure-like memory."
             },
             "manual": {
                 "type": "boolean",
-                "description": "Force the backfill even if the event isn't auto-detected as salient (manual override). Default false.",
+                "description": "Force the backfill when the event is not auto-detected as salient. Default false.",
                 "default": false
             },
             "lookback_days": {
@@ -45,7 +45,7 @@ pub fn schema() -> Value {
             },
             "promote": {
                 "type": "boolean",
-                "description": "Whether to actually promote (boost) the surfaced cause(s) in storage. Default true. Set false for a dry-run preview.",
+                "description": "Promote the surfaced causes in storage. Default true; false for a dry run.",
                 "default": true
             },
             "scan_limit": {

@@ -762,6 +762,15 @@ fn tools_list_is_deterministic_across_restarts_and_carries_cache_hints() {
         "recall lost its result-size annotation: {recall}"
     );
 
+    // Every client pays this payload on every session start. Measured at
+    // 38,474 bytes before the description work, 28,731 after it; the ceiling
+    // stops it creeping back without anyone noticing. Raise it deliberately.
+    let bytes = serde_json::to_string(&a).unwrap().len();
+    assert!(
+        bytes <= 30_000,
+        "tools/list is {bytes} bytes, over the 30,000 byte ceiling; a schema or description grew"
+    );
+
     // Behaviour hints reach the client in MCP's camelCase shape, and the two
     // hints a client acts on (read-only, destructive) are set for every tool.
     for tool in a["tools"].as_array().unwrap() {

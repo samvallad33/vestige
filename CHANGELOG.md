@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — tools/list is 18 percent smaller
+
+- 126 schema and tool descriptions were rewritten to say the same thing in
+  fewer words, and the batch item schema of `smart_ingest` no longer repeats
+  the descriptions of the single-mode fields it mirrors. Measured on the built
+  binary: 35,019 bytes to 28,731 (38,474 before 2.8.0). The e2e suite now pins
+  a 30,000 byte ceiling so the payload cannot creep back unnoticed. The 20 KB
+  target in #212 needs fewer parameters, not shorter prose; the issue stays
+  open with the numbers.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with

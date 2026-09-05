@@ -24,12 +24,12 @@ use vestige_core::neuroscience::prospective_memory::IntentionTrigger as Prospect
 pub fn schema() -> Value {
     serde_json::json!({
         "type": "object",
-        "description": "Unified intention management tool. Supports setting, checking, updating (complete/snooze/cancel), and listing intentions.",
+        "description": "Prospective memory: set, check, update (complete, snooze, cancel) and list intentions.",
         "properties": {
             "action": {
                 "type": "string",
                 "enum": ["set", "check", "update", "list"],
-                "description": "'set' creates, 'check' finds triggered intentions, 'update' changes status (complete, snooze, cancel), 'list' shows them"
+                "description": "'set' creates, 'check' finds triggered, 'update' changes status, 'list' shows."
             },
             // SET action parameters
             "description": {
@@ -43,7 +43,7 @@ pub fn schema() -> Value {
                     "type": {
                         "type": "string",
                         "enum": ["time", "context", "event"],
-                        "description": "Trigger type: time-based, context-based, or event-based"
+                        "description": "Trigger type: time, context or event."
                     },
                     "at": {
                         "type": "string",
@@ -89,12 +89,12 @@ pub fn schema() -> Value {
             "status": {
                 "type": "string",
                 "enum": ["complete", "snooze", "cancel"],
-                "description": "[update] New status: 'complete' marks as fulfilled, 'snooze' delays, 'cancel' cancels"
+                "description": "[update] 'complete', 'snooze' (delay) or 'cancel'."
             },
             "snooze_minutes": {
                 "type": "integer",
                 "default": 30,
-                "description": "[update] Minutes to snooze for (when status is 'snooze')"
+                "description": "[update] Minutes to snooze."
             },
             // CHECK action parameters
             "context": {

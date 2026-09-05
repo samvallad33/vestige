@@ -40,13 +40,13 @@ pub fn schema() -> Value {
                     "recent", "get", "memory", "neighbors",
                     "never_composed", "bounty_mode", "label"
                 ],
-                "description": "Reasoning: 'chain' (from, to), 'associations' (spreading activation from 'from'), 'bridges' (connectors between from and to), 'predict' (next needs, from 'context'), 'memory_graph' (subgraph around 'center_id' or 'query'). Composition topology: 'recent', 'get' (event_id), 'memory' and 'neighbors' (memory_id), 'never_composed', 'bounty_mode', 'label' (record an outcome; the only write)."
+                "description": "Reasoning: 'chain' (from, to), 'associations' (from), 'bridges' (from, to), 'predict' (context), 'memory_graph' (center_id or query). Composition: 'recent', 'get' (event_id), 'memory', 'neighbors' (memory_id), 'never_composed', 'bounty_mode', 'label' (records an outcome; the only write)."
             },
             // --- explore (chain/associations/bridges) ---
             "from": { "type": "string", "description": "[chain/associations/bridges] Source memory ID." },
             "to": { "type": "string", "description": "[chain/bridges] Target memory ID." },
             // --- predict ---
-            "context": { "type": "object", "description": "[predict] Current context (current_file, current_topics, codebase)." },
+            "context": { "type": "object", "description": "[predict] Context: current_file, current_topics, codebase." },
             // --- memory_graph (viz subgraph) ---
             "center_id": { "type": "string", "description": "[memory_graph] Center node id (or use 'query')." },
             "query": { "type": "string", "description": "[memory_graph] Pick a center node by search query." },
@@ -59,10 +59,10 @@ pub fn schema() -> Value {
             "outcome_type": {
                 "type": "string",
                 "enum": OUTCOME_TYPES,
-                "description": "[label] Outcome to record for the composition (the only mutating action)."
+                "description": "[label] Outcome to record (the only write)."
             },
             // --- shared ---
-            "limit": { "type": "integer", "description": "Max results (per-action defaults; clamped internally).", "minimum": 1, "maximum": 100 }
+            "limit": { "type": "integer", "description": "Max results (per-action defaults, clamped).", "minimum": 1, "maximum": 100 }
         },
         "required": ["action"]
     })
