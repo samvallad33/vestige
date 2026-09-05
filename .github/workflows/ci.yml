@@ -108,6 +108,120 @@ jobs:
       - name: Test paid cloud-sync path
         run: cargo test --locked --package vestige-core --features cloud-sync cloud --lib
 
+  no-embeddings-build:
+    # The configuration Termux users build from source (#145): no ONNX Runtime,
+    # no usearch, no libgit2. Every cfg gate that keeps it compiling is invisible
+    # to the default build, so without this job it rots between releases. The
+    # first time it was checked it carried eight dead-code warnings.
+    name: No-embeddings build (Android / Termux profile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo (registry only)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-noembed-v1-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-noembed-v1-
+
+      - name: Clippy without embeddings, vector search or git2 (warnings are errors)
+        run: cargo clippy -p vestige-mcp -p vestige-core --no-default-features --features vestige-mcp/connectors,vestige-mcp/cloud-sync --all-targets -- -D warnings
+
+      - name: Test vestige-core without embeddings
+        run: cargo test -p vestige-core --no-default-features --features bundled-sqlite --lib
+
+      - name: Test vestige-mcp without embeddings
+        run: cargo test -p vestige-mcp --no-default-features --features connectors,cloud-sync --lib
+
+  # The Termux target built by CI instead of by hand (#145). cargo-ndk drives
+  # the NDK clang that GitHub's ubuntu-24.04 image ships (ANDROID_NDK_HOME is
+  # preset), API 24 is Termux's floor, and the no-embeddings profile is the one
+  # that compiles without ONNX Runtime. The readelf gate is the point of the
+  # job: a binary that quietly links libc++_shared or a host library would
+  # start on the runner and die on the phone.
+  android-build:
+    name: Android build (aarch64-linux-android, no embeddings)
+    runs-on: ubuntu-24.04
+    needs: [no-embeddings-build]
+    if: |
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'pull_request'
+    env:
+      ANDROID_API: "24"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Add target to the pinned toolchain
+        run: rustup target add aarch64-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-aarch64-linux-android-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      # openssl-src (git2's vendored OpenSSL) configures Android through the
+      # NDK's clang wrappers, which it looks for on PATH under ANDROID_NDK_ROOT.
+      # cargo-ndk sets the Rust-side CC, AR, and linker variables.
+      - name: Point OpenSSL's build at the NDK
+        run: |
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Build (release, no embeddings)
+        env:
+          CXXSTDLIB: c++_static
+        run: |
+          # cargo-ndk 4 takes the API level as --platform; a bare -p is handed
+          # to cargo as --package, and "unknown package: 24" is what you get.
+          cargo ndk -t arm64-v8a --platform "$ANDROID_API" build --release -p vestige-mcp \
+            --no-default-features --features connectors,cloud-sync
+
+      - name: Only bionic may be a runtime dependency
+        run: |
+          BIN=target/aarch64-linux-android/release/vestige-mcp
+          READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$READELF" -h "$BIN" | grep -E 'Machine:\s+AArch64'
+          "$READELF" -d "$BIN" | grep NEEDED | tee needed.txt
+          if grep -vE '\[(libc|libm|libdl|liblog)\.so\]' needed.txt; then
+            echo "::error::vestige-mcp links a library Termux does not guarantee (listed above)"
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          cd target/aarch64-linux-android/release
+          tar czf ../../../vestige-mcp-aarch64-linux-android.tar.gz vestige-mcp
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-mcp-aarch64-linux-android
+          path: vestige-mcp-aarch64-linux-android.tar.gz
+
   release-build:
     name: Release Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -170,6 +284,39 @@ jobs:
         with:
           name: vestige-mcp-${{ matrix.target }}
           path: vestige-mcp-${{ matrix.target }}.tar.gz
+
+  # Windows is otherwise compiled only by release.yml when a tag is cut, so an
+  # MSVC-only break (usearch 2.24.0 referencing POSIX MAP_FAILED, #93 before it)
+  # surfaces after the release exists. This compiles the default feature set on
+  # MSVC on every pull request, so a dependency bump proves itself first.
+  windows-msvc-build:
+    name: Windows MSVC build (x86_64-pc-windows-msvc)
+    runs-on: windows-latest
+    needs: [test]
+    if: |
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-x86_64-pc-windows-msvc-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release -p vestige-mcp
+
+      - name: Smoke the binary
+        run: ./target/release/vestige-mcp.exe --version
 
   # Linux-gnu is built in Ubuntu 22.04 (glibc 2.35), not ubuntu-latest.
   # ubuntu-latest is 24.04+/glibc 2.39, which is why the published 2.3.0

@@ -43,7 +43,7 @@ pub fn schema() -> Value {
             },
             "node_type": {
                 "type": "string",
-                "description": "Type of knowledge: fact, concept, event, person, place, note, pattern, decision, state. 'state' is for current-state snapshots (version numbers, progress, inventories) that rot: unless validUntil is given, it expires VESTIGE_STATE_TTL_DAYS (default 30) after ingest; expired memories are down-ranked to the bottom of recall and marked currentlyValid=false (still retrievable for audit via validAt).",
+                "description": "fact, concept, event, person, place, note, pattern, decision, or state. 'state' is a snapshot that rots (versions, progress, inventories): without validUntil it expires after VESTIGE_STATE_TTL_DAYS (default 30), then is downranked and marked currentlyValid=false, still auditable via validAt.",
                 "default": "fact"
             },
             "tags": {
@@ -61,7 +61,7 @@ pub fn schema() -> Value {
             },
             "validFrom": {
                 "type": "string",
-                "description": "When this fact becomes true. Use RFC3339 or an exact YYYY-MM-DD date. When omitted, one unambiguous 'as of YYYY-MM-DD' phrase in content is inferred as validFrom and reported in the response."
+                "description": "When the fact becomes true (RFC3339 or YYYY-MM-DD). If omitted, one unambiguous 'as of YYYY-MM-DD' phrase in content is inferred and reported."
             },
             "validUntil": {
                 "type": "string",
@@ -85,17 +85,17 @@ pub fn schema() -> Value {
             "acceptedTagSuggestions": {
                 "type": "object",
                 "additionalProperties": { "type": "string" },
-                "description": "Explicitly accepted input-tag to existing-tag mappings from a preflight response. Each mapping is revalidated against current same-scope suggestions before ingest."
+                "description": "Accepted input-tag to existing-tag mappings from a preflight response, revalidated against current same-scope suggestions before ingest."
             },
             "batchMergePolicy": {
                 "type": "string",
                 "enum": ["force_create", "smart"],
-                "description": "Batch mode only. Defaults to 'force_create' so caller-separated items stay separate. Use 'smart' to allow Prediction Error Gating against existing memories.",
+                "description": "Batch only. 'force_create' (default) keeps caller-separated items separate; 'smart' allows Prediction Error Gating against existing memories.",
                 "default": "force_create"
             },
             "items": {
                 "type": "array",
-                "description": "Batch mode: array of items to save (max 20). Defaults to force-creating each caller-separated item; set batchMergePolicy='smart' to allow Prediction Error Gating against existing memories. Use at session end or before context compaction.",
+                "description": "Batch mode: up to 20 items to save, each force-created unless batchMergePolicy='smart'. Use at session end or before context compaction.",
                 "maxItems": 20,
                 "items": {
                     "type": "object",
@@ -722,6 +722,7 @@ pub async fn execute(
     } else {
         SecretPolicy::Reject
     };
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     let input_has_secret_finding = !scan_secrets(&content).is_empty();
 
     // Validate content
@@ -855,6 +856,10 @@ pub async fn execute(
     }
 
     // Use smart ingest with prediction error gating
+    // Tags are consulted after `input` is consumed by the ingest below, by the
+    // failure hooks (backfill and failure feedback).
+    let hook_tags: Vec<String> = input.tags.clone();
+
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     {
         let result = storage
@@ -886,7 +891,8 @@ pub async fn execute(
             importance_snapshot.clone(),
         );
 
-        Ok(serde_json::json!({
+        let failure_hooks = run_failure_hooks(storage, &node_id, &node_content, &hook_tags).await;
+        let mut response = serde_json::json!({
             "success": true,
             "decision": result.decision,
             "nodeId": node_id,
@@ -917,7 +923,9 @@ pub async fn execute(
                 "add_context" => "Added new content as context to existing memory",
                 _ => "Memory processed successfully"
             }
-        }))
+        });
+        attach_failure_hooks(&mut response, failure_hooks);
+        Ok(response)
     }
 
     #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
@@ -939,22 +947,146 @@ pub async fn execute(
             importance_snapshot,
         );
 
-        Ok(serde_json::json!({
+        let failure_hooks = run_failure_hooks(storage, &node_id, &node_content, &hook_tags).await;
+        let mut response = serde_json::json!({
             "success": true,
             "decision": "create",
             "nodeId": node_id,
             "scope": scope,
-            "message": "Memory created (smart ingest requires embeddings feature)",
+            "message": "Memory created (this build has no embedding runtime, so the prediction-error gate did not run)",
             "hasEmbedding": false,
+            "embeddingsCompiledIn": false,
+            "dedup": "unavailable in this build",
             "predictionError": 1.0,
             "importanceScore": importance_composite,
             "synapticCapture": synaptic_capture,
-            "reason": "Embeddings not available - used regular ingest",
+            "reason": "built without embeddings: stored as a new memory, no dedup or reinforce decision",
             "validity": validity_response(&validity),
             "tagSuggestions": tag_suggestions.suggestions,
             "tagSuggestionStatus": tag_suggestions.status,
             "acceptedTagSuggestions": accepted_tag_suggestions,
-        }))
+        });
+        attach_failure_hooks(&mut response, failure_hooks);
+        Ok(response)
+    }
+}
+
+/// A kill switch read the way the other Vestige gates are: unset, empty or
+/// anything unrecognised means ON; only `0`, `false`, `off`, `no` turn it off.
+/// An on-by-default lever: unset means on, and only an explicit
+/// `0`/`false`/`off`/`no` turns it off.
+fn env_flag_enabled(name: &str) -> bool {
+    flag_enabled_from(std::env::var(name).ok().as_deref())
+}
+
+/// An opt-in lever: unset means off, and only an explicit
+/// `1`/`true`/`on`/`yes` turns it on. Typos stay off.
+fn env_flag_opt_in(name: &str) -> bool {
+    flag_opt_in_from(std::env::var(name).ok().as_deref())
+}
+
+fn flag_enabled_from(value: Option<&str>) -> bool {
+    match value {
+        Some(value) => {
+            let value = value.trim();
+            !(value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("no")
+                || value == "0")
+        }
+        None => true,
+    }
+}
+
+fn flag_opt_in_from(value: Option<&str>) -> bool {
+    match value {
+        Some(value) => {
+            let value = value.trim();
+            value == "1"
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("on")
+                || value.eq_ignore_ascii_case("yes")
+        }
+        None => false,
+    }
+}
+
+/// Post-ingest hooks that fire only when the new memory reads as a failure
+/// (crash, regression, outage, the same detector `backfill` uses).
+///
+/// 1. Retroactive Salience Backfill runs LIVE through the same pipeline as the
+///    `backfill` tool, receipts included. Zaki et al. (Nature 2025), the paper
+///    the mechanism is ported from, found offline co-reactivation linking is
+///    stronger during wake than sleep, so deferring it to the consolidation
+///    pass alone was the weaker schedule. Honours `VESTIGE_BACKFILL_AUTOFIRE`.
+/// 2. Post-retrieval failure feedback: the memories retrieved in the last
+///    thirty minutes of receipts lose accessibility by their reactivation
+///    strength (Heinbockel et al., eLife 2025). Opt-in through
+///    `VESTIGE_FAILURE_FEEDBACK=1` for now: it demotes memories on its own,
+///    so it becomes the default only once real-store data shows the
+///    demotions land on the right ones. Every delta is ledgered and
+///    reversible either way.
+///
+/// Neither hook can fail the ingest; problems are logged and the memory is
+/// already saved. Returns the hook results for the response, or None when the
+/// memory is not a failure.
+async fn run_failure_hooks(
+    storage: &Arc<Storage>,
+    node_id: &str,
+    content: &str,
+    tags: &[String],
+) -> Option<Value> {
+    if !vestige_core::advanced::retroactive_backfill::looks_like_failure(content, tags) {
+        return None;
+    }
+    let mut hooks = serde_json::Map::new();
+    if env_flag_opt_in("VESTIGE_FAILURE_FEEDBACK") {
+        match storage.apply_failure_feedback(node_id, chrono::Duration::minutes(30)) {
+            Ok(report) => {
+                hooks.insert(
+                    "failureFeedback".to_string(),
+                    serde_json::to_value(report).unwrap_or(Value::Null),
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, node_id, "post-retrieval failure feedback skipped");
+            }
+        }
+    }
+    if env_flag_enabled("VESTIGE_BACKFILL_AUTOFIRE") {
+        match super::backfill::execute(storage, Some(serde_json::json!({ "failure_id": node_id })))
+            .await
+        {
+            Ok(result) => {
+                let promoted = result
+                    .get("promoted")
+                    .and_then(Value::as_array)
+                    .map(|causes| causes.iter().filter(|c| c.get("promoted") == Some(&Value::Bool(true))).count())
+                    .unwrap_or(0);
+                hooks.insert(
+                    "backfill".to_string(),
+                    serde_json::json!({
+                        "triggered": result.get("triggered").cloned().unwrap_or(Value::Bool(false)),
+                        "causesPromoted": promoted,
+                        "receiptId": result.get("receipt_id").cloned().unwrap_or(Value::Null),
+                    }),
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, node_id, "live backfill skipped");
+            }
+        }
+    }
+    if hooks.is_empty() {
+        None
+    } else {
+        Some(Value::Object(hooks))
+    }
+}
+
+fn attach_failure_hooks(response: &mut Value, hooks: Option<Value>) {
+    if let (Some(object), Some(hooks)) = (response.as_object_mut(), hooks) {
+        object.insert("failureHooks".to_string(), hooks);
     }
 }
 
@@ -1039,6 +1171,7 @@ async fn execute_batch(
         } else {
             SecretPolicy::Reject
         };
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         let input_has_secret_finding = !scan_secrets(&item.content).is_empty();
 
         // ================================================================
@@ -1281,9 +1414,11 @@ async fn execute_batch(
                         "decision": "create",
                         "nodeId": node_id,
                         "scope": scope,
+                        "embeddingsCompiledIn": false,
+                        "dedup": "unavailable in this build",
                         "importanceScore": importance_composite,
                         "synapticCapture": synaptic_capture,
-                        "reason": "Embeddings not available - used regular ingest",
+                        "reason": "built without embeddings: stored as a new memory, no dedup or reinforce decision",
                         "validity": validity_response(&validity),
                         "tagSuggestions": tag_suggestions.suggestions,
                         "tagSuggestionStatus": tag_suggestions.status,
@@ -1545,6 +1680,27 @@ fn dominant_importance_event(snapshot: &SynapticSignalSnapshot) -> (&'static str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failure_hook_levers_parse_as_documented() {
+        use super::{flag_enabled_from, flag_opt_in_from};
+        // On-by-default lever (live backfill): unset is on, only explicit off words turn it off.
+        assert!(flag_enabled_from(None));
+        for off in ["0", "false", "OFF", "no", " off "] {
+            assert!(!flag_enabled_from(Some(off)), "{off:?} must disable");
+        }
+        for on in ["1", "true", "banana", ""] {
+            assert!(flag_enabled_from(Some(on)), "{on:?} must stay on");
+        }
+        // Opt-in lever (failure feedback): unset is off, only explicit on words turn it on.
+        assert!(!flag_opt_in_from(None));
+        for on in ["1", "true", "ON", "yes", " on "] {
+            assert!(flag_opt_in_from(Some(on)), "{on:?} must enable");
+        }
+        for off in ["0", "false", "banana", ""] {
+            assert!(!flag_opt_in_from(Some(off)), "{off:?} must stay off");
+        }
+    }
+
     use super::*;
     use crate::cognitive::CognitiveEngine;
     use tempfile::TempDir;
@@ -1602,7 +1758,7 @@ mod tests {
                 || value["reason"]
                     .as_str()
                     .unwrap()
-                    .contains("Embeddings not available")
+                    .contains("built without embeddings")
         );
     }
 

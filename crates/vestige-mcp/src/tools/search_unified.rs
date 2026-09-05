@@ -58,7 +58,7 @@ pub fn schema() -> Value {
             },
             "detail_level": {
                 "type": "string",
-                "description": "Level of detail in results. 'brief' = id/type/tags/score only (saves tokens). 'summary' = default 8-field response. 'full' = all fields including FSRS state and timestamps.",
+                "description": "'brief': id, type, tags, score. 'summary' (default): the 8-field response. 'full': every field, including FSRS state and timestamps.",
                 "enum": ["brief", "summary", "full"],
                 "default": "summary"
             },
@@ -70,7 +70,7 @@ pub fn schema() -> Value {
             "exclude_types": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Node types to exclude from results (e.g., ['reflection']). Reflections are excluded by default to prevent polluting factual queries."
+                "description": "Node types to exclude. Reflections are excluded by default so they do not pollute factual queries."
             },
             "include_types": {
                 "type": "array",
@@ -79,33 +79,33 @@ pub fn schema() -> Value {
             },
             "token_budget": {
                 "type": "integer",
-                "description": "Max tokens for response. Server truncates content to fit budget. Use memory(action='get') for full content of specific IDs. With 1M context models, budgets up to 100K are practical.",
+                "description": "Max tokens for the response; content is truncated to fit. Fetch full content by id with memory(action='get').",
                 "minimum": 100,
                 "maximum": 100000
             },
             "retrieval_mode": {
                 "type": "string",
-                "description": "precise: top results only (fast, token-efficient, skips activation/competition). balanced: full 7-stage cognitive pipeline (default). exhaustive: maximum recall with 5x overfetch, deep graph traversal, no competition suppression.",
+                "description": "'precise': top results only, skips activation and competition. 'balanced' (default): the full cognitive pipeline. 'exhaustive': 5x overfetch, deep graph traversal, no competition.",
                 "enum": ["precise", "balanced", "exhaustive"],
                 "default": "balanced"
             },
             "concrete": {
                 "type": "boolean",
-                "description": "Force literal/concrete search. Skips semantic expansion, FSRS reweighting, spreading activation, and cognitive side effects. Auto-enabled for quoted strings, env vars, UUIDs, paths, and code identifiers.",
+                "description": "Literal search: no semantic expansion, reweighting, activation, or side effects. Auto-enabled for quoted strings, env vars, UUIDs, paths, and code identifiers.",
                 "default": false
             },
             "rank_native_fusion": {
                 "type": "boolean",
-                "description": "Join the post-retrieval stages (temporal, accessibility, context, utility) as ranked lists via weighted RRF instead of score multipliers. Experimental; default off pending benchmark validation.",
+                "description": "Experimental: fuse the post-retrieval stages as ranked lists (weighted RRF) instead of score multipliers. Default off.",
                 "default": false
             },
             "tag_prefix": {
                 "type": "string",
-                "description": "Optional tag-prefix filter. When set, only results carrying at least one tag whose value starts with this prefix are returned (case-insensitive). Example: tag_prefix=\"meeting:\" matches memories tagged 'meeting:standup', 'meeting:1-on-1', etc. Applied as a post-filter; combine with a larger 'limit' if you expect heavy thinning."
+                "description": "Keep only results with a tag starting with this prefix (case-insensitive), e.g. 'meeting:' matches 'meeting:standup'. Post-filter; raise 'limit' if it thins results heavily."
             },
             "scope": {
                 "type": "string",
-                "description": "Project namespace to search. Defaults to the legacy 'user' namespace, so project memories never bleed into an unscoped recall."
+                "description": "Project namespace. Defaults to 'user', so project memories never bleed into an unscoped recall."
             },
             "includeCrossScope": {
                 "type": "boolean",
@@ -114,19 +114,19 @@ pub fn schema() -> Value {
             },
             "validAt": {
                 "type": "string",
-                "description": "Return only facts valid at this time. Accepts 'now', RFC3339, or YYYY-MM-DD. When omitted, expired/future facts remain auditable but are conservatively downranked."
+                "description": "Only facts valid at this time: 'now', RFC3339, or YYYY-MM-DD. When omitted, expired and future facts stay auditable but are downranked."
             },
             "source_system": {
                 "type": "string",
-                "description": "Investigation filter (#57): only memories ingested from this external system, e.g. 'github' or 'redmine'. Post-filter — non-connector memories are excluded. Combine with a larger 'limit' if thinning is heavy."
+                "description": "Only memories ingested from this external system, e.g. 'github' or 'redmine'. Post-filter; raise 'limit' if it thins results heavily."
             },
             "source_project": {
                 "type": "string",
-                "description": "Investigation filter: only memories from this source project/repo, exact match (GitHub 'owner/repo', Redmine project id)."
+                "description": "Only memories from this source project or repo, exact match (GitHub 'owner/repo', Redmine project id)."
             },
             "source_id": {
                 "type": "string",
-                "description": "Investigation filter: a specific source record id (issue number / ticket id). Pair with source_system to disambiguate across systems."
+                "description": "Only this source record id (issue number or ticket id). Pair with source_system."
             },
             "source_type": {
                 "type": "string",
@@ -147,7 +147,7 @@ pub fn schema() -> Value {
             "source_status": {
                 "type": "string",
                 "enum": ["any", "valid", "tombstoned"],
-                "description": "Investigation filter: 'any' (default), 'valid' (currently-valid records only), or 'tombstoned' (records no longer visible upstream, kept for audit).",
+                "description": "'any' (default), 'valid' (currently visible upstream), or 'tombstoned' (removed upstream, kept for audit).",
                 "default": "any"
             }
         },
@@ -944,10 +944,7 @@ pub async fn execute(
         let fused = fuse_rank_native(
             &base,
             &[
-                (
-                    fusion_signals.iter().map(|s| s.temporal).collect(),
-                    0.15,
-                ),
+                (fusion_signals.iter().map(|s| s.temporal).collect(), 0.15),
                 (
                     fusion_signals.iter().map(|s| s.accessibility).collect(),
                     0.30,
@@ -1125,8 +1122,11 @@ pub async fn execute(
     if !associations.is_empty() {
         response["associations"] = serde_json::json!(associations);
     }
-    // Include context reinstatement if computed
-    if let Some(ri) = reinstatement_info {
+    // Include context reinstatement if computed. Brief callers asked for the
+    // smallest useful answer, so the diagnostic block stays out of theirs.
+    if let Some(ri) = reinstatement_info
+        && detail_level != "brief"
+    {
         response["contextReinstatement"] = ri;
     }
     // Include competition stats
@@ -2676,7 +2676,10 @@ mod tests {
             fused[5] > fused[1],
             "agreeing signals across a wide gap must be able to reorder"
         );
-        assert!(fused[0] > fused[5] || fused[0] > fused[1], "base still anchors the head");
+        assert!(
+            fused[0] > fused[5] || fused[0] > fused[1],
+            "base still anchors the head"
+        );
     }
 
     #[test]

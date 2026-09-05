@@ -175,6 +175,7 @@ pub struct TagVocabulary {
     pub skipped_overlong: usize,
 }
 
+#[cfg(any(test, all(feature = "embeddings", feature = "vector-search")))]
 fn temporal_candidate_is_eligible(
     incoming_from: Option<DateTime<Utc>>,
     incoming_until: Option<DateTime<Utc>>,
@@ -646,7 +647,42 @@ pub(crate) struct PurgeCleanup {
 
 const DATA_DIR_ENV: &str = "VESTIGE_DATA_DIR";
 const DATABASE_FILE: &str = "vestige.db";
+#[cfg(feature = "vector-search")]
 const VESTIGE_DISABLE_VECTOR_SEARCH: &str = "VESTIGE_DISABLE_VECTOR_SEARCH";
+
+// Test-only override for the runtime vector-search gate, scoped to the
+// current thread. Tests run in parallel inside one process, so a test that
+// wants the index disabled must not touch the process environment: every
+// other test thread building a `Storage` at that moment would silently get
+// no index. This cell is what `with_vector_search_disabled` flips instead.
+#[cfg(all(test, feature = "vector-search"))]
+thread_local! {
+    static VECTOR_SEARCH_DISABLED_FOR_TEST: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+// Test-only override for `VESTIGE_AUTO_CONSOLIDATE_MERGE`, scoped to the
+// current thread for the same reason as the vector-search override: this
+// gate decides whether consolidation hard-deletes near-duplicates, so a
+// process-wide flag would reach every consolidation test running at once.
+// `Some(None)` pins the variable unset; `Some(Some(v))` pins a value.
+#[cfg(all(test, feature = "embeddings", feature = "vector-search"))]
+thread_local! {
+    static AUTO_CONSOLIDATE_MERGE_FOR_TEST: std::cell::RefCell<Option<Option<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Whether an environment value asks for vector search to be turned off.
+/// Only affirmative values count, so `VESTIGE_DISABLE_VECTOR_SEARCH=0` leaves
+/// the index on and reports it as on.
+#[cfg(feature = "vector-search")]
+fn env_value_disables_vector_search(value: &std::ffi::OsStr) -> bool {
+    let value = value.to_ascii_lowercase();
+    matches!(
+        value.to_str(),
+        Some("1" | "true" | "yes" | "on" | "enable" | "enabled")
+    )
+}
 /// Immutable compatibility identity for vectors written before Embedding
 /// Profiles existed. It is deliberately explicit: raw-text vectors must never
 /// be confused with the corrected Nomic retrieval encoding contract.
@@ -750,6 +786,18 @@ fn warn_skipped_row<T>(operation: &'static str) -> impl FnMut(rusqlite::Result<T
     }
 }
 
+/// What one post-retrieval failure feedback pass did. See
+/// [`SqliteMemoryStore::apply_failure_feedback`].
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailureFeedbackReport {
+    pub failure_id: String,
+    pub window_minutes: i64,
+    pub receipts_considered: usize,
+    pub memories_demoted: usize,
+    pub total_delta: f64,
+}
+
 /// Begin a READ snapshot on the reader connection.
 ///
 /// A DEFERRED transaction on a connection that only reads gives several
@@ -778,29 +826,24 @@ impl SqliteMemoryStore {
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
         let has_required_features = true;
 
-        let disabled_by_env = std::env::var_os(VESTIGE_DISABLE_VECTOR_SEARCH)
-            .and_then(|v| {
-                let value = v.to_ascii_lowercase();
-                if value == "1"
-                    || value == "true"
-                    || value == "yes"
-                    || value == "on"
-                    || value == "enable"
-                    || value == "enabled"
-                {
-                    Some(())
-                } else {
-                    None
-                }
-            })
-            .is_some();
+        has_required_features && !Self::vector_search_disable_requested()
+    }
 
-        has_required_features && !disabled_by_env
+    /// The runtime opt-out, read the same way by the gate and by the
+    /// "why is it off" report so the two can never disagree.
+    #[cfg(feature = "vector-search")]
+    fn vector_search_disable_requested() -> bool {
+        #[cfg(test)]
+        if VECTOR_SEARCH_DISABLED_FOR_TEST.with(|cell| cell.get()) {
+            return true;
+        }
+        std::env::var_os(VESTIGE_DISABLE_VECTOR_SEARCH)
+            .is_some_and(|value| env_value_disables_vector_search(&value))
     }
 
     #[cfg(feature = "vector-search")]
     fn vector_search_unavailable_reason() -> Option<&'static str> {
-        if std::env::var_os(VESTIGE_DISABLE_VECTOR_SEARCH).is_some() {
+        if Self::vector_search_disable_requested() {
             return Some("disabled by VESTIGE_DISABLE_VECTOR_SEARCH");
         }
 
@@ -820,11 +863,6 @@ impl SqliteMemoryStore {
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn vector_search_available(&self) -> bool {
         self.vector_index.is_some()
-    }
-
-    #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
-    fn vector_search_available(&self) -> bool {
-        false
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -2376,8 +2414,33 @@ impl SqliteMemoryStore {
                     let id = node.id.clone();
                     node = self.get_node(&id)?.ok_or(StorageError::NotFound(id))?;
                 }
+                // A protected strong memory keeps its content and gets a link
+                // instead of an append, so the relation survives without the
+                // strong record being rewritten (Yang, Duncan and Barense 2026).
+                if matches!(reason, crate::advanced::prediction_error::CreateReason::ProtectedStrongMemory) {
+                    let link_type = crate::memory::EdgeType::Semantic.to_string();
+                    for related in &related_memory_ids {
+                        let conn = ConnectionRecord {
+                            source_id: node.id.clone(),
+                            target_id: related.clone(),
+                            strength: (1.0 - prediction_error as f64).clamp(0.0, 1.0),
+                            link_type: link_type.clone(),
+                            created_at: Utc::now(),
+                            last_activated: Utc::now(),
+                            activation_count: 0,
+                        };
+                        if let Err(error) = self.save_connection(&conn) {
+                            tracing::warn!(%error, related, "could not link the new memory to the protected strong memory");
+                        }
+                    }
+                }
                 let mut reason = if related_memory_ids.is_empty() {
                     format!("Created new memory: {:?}", reason)
+                } else if matches!(reason, crate::advanced::prediction_error::CreateReason::ProtectedStrongMemory) {
+                    format!(
+                        "Created new memory linked to a strong existing memory kept intact: {:?}. Prediction error updates weak memories, not strong ones",
+                        related_memory_ids
+                    )
                 } else {
                     format!(
                         "Created new memory: {:?}. Semantically similar (not linked): {:?}",
@@ -2857,6 +2920,7 @@ impl SqliteMemoryStore {
         Ok(())
     }
 
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn close_node_validity(&self, id: &str, valid_until: DateTime<Utc>) -> Result<()> {
         let writer = self
             .writer
@@ -4710,6 +4774,195 @@ impl SqliteMemoryStore {
 
         self.get_node(id)?
             .ok_or_else(|| StorageError::NotFound(id.to_string()))
+    }
+
+    // ========================================================================
+    // Post-retrieval failure feedback (Heinbockel, Leicht, Wagner, Schwabe 2025)
+    // ========================================================================
+
+    /// Lower the accessibility of the memories retrieved shortly before a
+    /// failure landed, in proportion to how strongly each was reactivated.
+    ///
+    /// Heinbockel et al. (eLife 2025, PMID 39878439): noradrenergic arousal
+    /// after a memory was cued impaired its later recall, scaled by how strongly
+    /// the memory had been reactivated during cueing. The software reading: the
+    /// failure is the arousal event, the receipts already say which memories
+    /// informed the decisions just before it and in what order, and rank in a
+    /// receipt is the reactivation strength (weight 1/(rank+1)). A retrieval is
+    /// therefore not a monotone positive signal; this is the opposite-sign term
+    /// the FSRS review update lacks, and the first mechanism by which a wrong
+    /// memory leaves the top of recall without anyone demoting it by hand.
+    ///
+    /// Bounded: at most `FAILURE_FEEDBACK_PENALTY` (0.10) of retrieval strength
+    /// per memory per failure, never below the 0.05 floor, never touching
+    /// stability or content. Scoped: only memories in the failure's scope.
+    /// Idempotent per (failure, memory). Recorded in `failure_feedback` and
+    /// reversible with [`Self::revert_failure_feedback`]. Retrieval strength
+    /// recovers on the next successful access, exactly as after `demote`.
+    pub fn apply_failure_feedback(
+        &self,
+        failure_id: &str,
+        window: Duration,
+    ) -> Result<FailureFeedbackReport> {
+        const FAILURE_FEEDBACK_PENALTY: f64 = 0.10;
+        const MAX_RECEIPTS: i64 = 25;
+
+        let (failure_created_at, failure_scope): (String, String) = {
+            let reader = self
+                .reader
+                .lock()
+                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+            reader
+                .query_row(
+                    "SELECT created_at, COALESCE(scope, 'user') FROM knowledge_nodes WHERE id = ?1",
+                    params![failure_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .ok_or_else(|| StorageError::NotFound(failure_id.to_string()))?
+        };
+        let until = DateTime::parse_from_rfc3339(&failure_created_at)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+        let since = until - window;
+
+        // Receipts in the window, newest first. The payload is the serialized
+        // Receipt; `retrieved` is best-first, which is the rank we need.
+        let receipts: Vec<(String, String)> = {
+            let reader = self
+                .reader
+                .lock()
+                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+            let mut stmt = reader.prepare(
+                "SELECT receipt_id, payload FROM memory_receipts
+                 WHERE created_at >= ?1 AND created_at <= ?2
+                 ORDER BY created_at DESC LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(
+                params![since.to_rfc3339(), until.to_rfc3339(), MAX_RECEIPTS],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?;
+            rows.filter_map(warn_skipped_row("apply_failure_feedback")).collect()
+        };
+
+        // memory_id -> (weight, receipt_id, rank); the strongest reactivation wins.
+        let mut weights: HashMap<String, (f64, String, usize)> = HashMap::new();
+        for (receipt_id, payload) in &receipts {
+            let Ok(receipt) = serde_json::from_str::<crate::trace::Receipt>(payload)
+            else {
+                continue;
+            };
+            for (rank, memory_id) in receipt.retrieved.iter().enumerate() {
+                if memory_id == failure_id {
+                    continue;
+                }
+                let weight = 1.0 / (rank as f64 + 1.0);
+                let stronger = weights
+                    .get(memory_id)
+                    .is_none_or(|(existing, _, _)| weight > *existing);
+                if stronger {
+                    weights.insert(memory_id.clone(), (weight, receipt_id.clone(), rank));
+                }
+            }
+        }
+
+        let mut report = FailureFeedbackReport {
+            failure_id: failure_id.to_string(),
+            window_minutes: window.num_minutes(),
+            receipts_considered: receipts.len(),
+            memories_demoted: 0,
+            total_delta: 0.0,
+        };
+        if weights.is_empty() {
+            return Ok(report);
+        }
+
+        let mut demoted_ids = Vec::new();
+        {
+            let writer = self
+                .writer
+                .lock()
+                .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            let tx = Self::begin_write_transaction(&writer, "apply_failure_feedback")?;
+            let now = Utc::now().to_rfc3339();
+            for (memory_id, (weight, receipt_id, rank)) in weights {
+                let already: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM failure_feedback WHERE failure_id = ?1 AND memory_id = ?2",
+                    params![failure_id, &memory_id],
+                    |row| row.get(0),
+                )?;
+                if already > 0 {
+                    continue;
+                }
+                // Same scope only, and the memory must still exist.
+                let scope: Option<String> = tx
+                    .query_row(
+                        "SELECT COALESCE(scope, 'user') FROM knowledge_nodes WHERE id = ?1",
+                        params![&memory_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if scope.as_deref() != Some(failure_scope.as_str()) {
+                    continue;
+                }
+                let delta = FAILURE_FEEDBACK_PENALTY * weight;
+                tx.execute(
+                    "UPDATE knowledge_nodes
+                     SET retrieval_strength = MAX(0.05, retrieval_strength - ?1)
+                     WHERE id = ?2",
+                    params![delta, &memory_id],
+                )?;
+                tx.execute(
+                    "INSERT INTO failure_feedback
+                        (failure_id, memory_id, receipt_id, rank, delta, applied_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![failure_id, &memory_id, receipt_id, rank as i64, delta, now],
+                )?;
+                report.memories_demoted += 1;
+                report.total_delta += delta;
+                demoted_ids.push(memory_id);
+            }
+            tx.commit()?;
+        }
+        for memory_id in demoted_ids {
+            let _ = self.log_access(&memory_id, "failure_feedback");
+        }
+        Ok(report)
+    }
+
+    /// Undo every accessibility delta applied for `failure_id` that has not
+    /// been reverted yet. Returns how many memories were restored.
+    pub fn revert_failure_feedback(&self, failure_id: &str) -> Result<usize> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = Self::begin_write_transaction(&writer, "revert_failure_feedback")?;
+        let rows: Vec<(i64, String, f64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT id, memory_id, delta FROM failure_feedback
+                 WHERE failure_id = ?1 AND reverted_at IS NULL",
+            )?;
+            let mapped = stmt.query_map(params![failure_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?;
+            mapped.filter_map(warn_skipped_row("revert_failure_feedback")).collect()
+        };
+        let now = Utc::now().to_rfc3339();
+        for (row_id, memory_id, delta) in &rows {
+            tx.execute(
+                "UPDATE knowledge_nodes
+                 SET retrieval_strength = MIN(1.0, retrieval_strength + ?1)
+                 WHERE id = ?2",
+                params![delta, memory_id],
+            )?;
+            tx.execute(
+                "UPDATE failure_feedback SET reverted_at = ?1 WHERE id = ?2",
+                params![now, row_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(rows.len())
     }
 
     // ========================================================================
@@ -8162,6 +8415,18 @@ impl SqliteMemoryStore {
         })
     }
 
+    /// The raw `VESTIGE_AUTO_CONSOLIDATE_MERGE` value, or a test's pinned
+    /// value for this thread. Parsing stays in the caller so the fail-closed
+    /// rule is read next to the destructive pass it guards.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn auto_consolidate_merge_value() -> Option<String> {
+        #[cfg(test)]
+        if let Some(pinned) = AUTO_CONSOLIDATE_MERGE_FOR_TEST.with(|cell| cell.borrow().clone()) {
+            return pinned;
+        }
+        std::env::var("VESTIGE_AUTO_CONSOLIDATE_MERGE").ok()
+    }
+
     /// Auto-deduplicate similar memories during consolidation (episodic → semantic merge)
     ///
     /// Finds clusters with cosine similarity >= 0.85, keeps the strongest node,
@@ -8181,7 +8446,7 @@ impl SqliteMemoryStore {
         // unaffected by this gate. Gate here (not the caller) so it stays
         // with the pin filter and self-protects against a future second
         // caller.
-        let auto_merge = std::env::var("VESTIGE_AUTO_CONSOLIDATE_MERGE")
+        let auto_merge = Self::auto_consolidate_merge_value()
             .map(|v| {
                 let v = v.trim();
                 v.eq_ignore_ascii_case("true")
@@ -12693,6 +12958,7 @@ impl SqliteMemoryStore {
     }
 
     /// Persist a plan row (status pending). Idempotent on plan id.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn persist_plan(&self, plan: &crate::advanced::MergePlan) -> Result<()> {
         let writer = self
             .writer
@@ -13731,7 +13997,7 @@ impl SqliteMemoryStore {
     /// now snapshots inside the apply transaction instead (see
     /// [`Self::read_bitemporal_in_transaction`]); this remains as the assertion
     /// helper the merge/supersede tests read state through.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "embeddings", feature = "vector-search"))]
     fn read_bitemporal(&self, id: &str) -> Result<(Option<String>, Option<String>)> {
         let reader = self
             .reader
@@ -13754,6 +14020,7 @@ impl SqliteMemoryStore {
 
     /// `read_bitemporal` against an open transaction, so a snapshot and the
     /// mutation it protects observe the same database state.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn read_bitemporal_in_transaction(
         tx: &rusqlite::Transaction<'_>,
         id: &str,
@@ -13776,6 +14043,7 @@ impl SqliteMemoryStore {
     /// `invalidate_node` against an open transaction. The helper that takes the
     /// writer lock itself cannot be called from inside a transaction: the lock
     /// is not reentrant, so it would deadlock.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn invalidate_node_in_transaction(
         tx: &rusqlite::Transaction<'_>,
         id: &str,
@@ -13792,6 +14060,7 @@ impl SqliteMemoryStore {
     }
 
     /// Restore a node's bitemporal columns (used by undo).
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn restore_bitemporal(
         &self,
         id: &str,
@@ -13813,6 +14082,7 @@ impl SqliteMemoryStore {
 
     /// Rewrite a survivor's content and tags (used by merge apply + undo).
     /// Content rewrite regenerates the embedding via `update_node_content`.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn rewrite_survivor(&self, id: &str, content: &str, tags: &[String]) -> Result<()> {
         self.update_node_content(id, content)?;
         let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
@@ -14337,6 +14607,7 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
     ) -> crate::storage::memory_store::MemoryStoreResult<
         Vec<crate::storage::memory_store::SearchResult>,
     > {
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         use crate::storage::memory_store::{MemoryStoreError, SearchResult};
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         {
@@ -14662,8 +14933,10 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
                 row.map_err(|e| MemoryStoreError::Backend(e.to_string()))?;
             let centroid: Vec<f32> = centroid_bytes
                 .map(|b| {
-                    b.chunks_exact(4)
-                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    b.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| f32::from_le_bytes(*c))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -14718,8 +14991,10 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         };
         let centroid: Vec<f32> = centroid_bytes
             .map(|b| {
-                b.chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                b.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| f32::from_le_bytes(*c))
                     .collect()
             })
             .unwrap_or_default();
@@ -15232,6 +15507,7 @@ impl SqliteMemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     use crate::advanced::{MatchClass, MergePolicy};
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -15243,9 +15519,6 @@ mod tests {
     // The public struct was renamed from Storage to SqliteMemoryStore; this
     // alias keeps all existing tests compiling without modification.
     use SqliteMemoryStore as Storage;
-
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn create_test_storage() -> Storage {
         let dir = tempdir().unwrap();
@@ -16379,31 +16652,83 @@ mod tests {
         assert_eq!(res2.node_id, created.node_id);
     }
 
+    /// Run `f` with vector search disabled for this thread only. It used to
+    /// set `VESTIGE_DISABLE_VECTOR_SEARCH` in the process environment under
+    /// `ENV_LOCK`, but every other test thread building a `Storage` during
+    /// that window got no vector index: `cargo test --lib vector` failed the
+    /// three `peer_*` tests on every run, and the full suite passed only by
+    /// scheduling luck.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn with_vector_search_disabled<T>(f: impl FnOnce() -> T) -> T {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let previous = std::env::var_os(VESTIGE_DISABLE_VECTOR_SEARCH);
-
-        // Tests serialize access with ENV_LOCK because process environment
-        // mutation is global and unsafe under Rust 2024.
-        unsafe {
-            std::env::set_var(VESTIGE_DISABLE_VECTOR_SEARCH, "1");
-        }
-
+        VECTOR_SEARCH_DISABLED_FOR_TEST.with(|cell| cell.set(true));
         let result = catch_unwind(AssertUnwindSafe(f));
-
-        unsafe {
-            if let Some(value) = previous {
-                std::env::set_var(VESTIGE_DISABLE_VECTOR_SEARCH, value);
-            } else {
-                std::env::remove_var(VESTIGE_DISABLE_VECTOR_SEARCH);
-            }
-        }
+        VECTOR_SEARCH_DISABLED_FOR_TEST.with(|cell| cell.set(false));
 
         match result {
             Ok(value) => value,
             Err(payload) => resume_unwind(payload),
         }
+    }
+
+    #[cfg(feature = "vector-search")]
+    #[test]
+    fn vector_search_env_value_parsing() {
+        use std::ffi::OsStr;
+        for on in ["1", "true", "TRUE", "yes", "On", "enable", "enabled"] {
+            assert!(
+                env_value_disables_vector_search(OsStr::new(on)),
+                "{on} must disable"
+            );
+        }
+        for off in ["", "0", "false", "no", "off", "disabled", "banana"] {
+            assert!(
+                !env_value_disables_vector_search(OsStr::new(off)),
+                "{off:?} must not disable"
+            );
+        }
+    }
+
+    /// The regression guard for the test race itself: disabling vector search
+    /// in one test must be invisible to a storage built on another thread.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn disabling_vector_search_in_one_test_does_not_leak_to_other_threads() {
+        with_vector_search_disabled(|| {
+            assert!(!Storage::vector_search_enabled_by_cpu());
+            let sibling = std::thread::spawn(|| {
+                let dir = tempdir().unwrap();
+                let storage = create_test_storage_at(&dir, "sibling-thread.db");
+                (
+                    Storage::vector_search_enabled_by_cpu(),
+                    storage.vector_index.is_some(),
+                )
+            })
+            .join()
+            .unwrap();
+            assert_eq!(
+                sibling,
+                (true, true),
+                "a sibling thread saw this test's vector-search override"
+            );
+        });
+        assert!(Storage::vector_search_enabled_by_cpu());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn pinning_auto_merge_in_one_test_does_not_leak_to_other_threads() {
+        let real = std::env::var("VESTIGE_AUTO_CONSOLIDATE_MERGE").ok();
+        with_auto_merge_env(Some("1"), || {
+            assert_eq!(
+                Storage::auto_consolidate_merge_value().as_deref(),
+                Some("1")
+            );
+            let sibling = std::thread::spawn(Storage::auto_consolidate_merge_value)
+                .join()
+                .unwrap();
+            assert_eq!(sibling, real, "a sibling thread saw this test's pin");
+        });
+        assert_eq!(Storage::auto_consolidate_merge_value(), real);
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -16908,6 +17233,130 @@ mod tests {
             )
             .unwrap();
         assert_eq!(remaining, 0, "purge must cascade to every profile vector");
+    }
+
+    // =========================================================================
+    // Post-retrieval failure feedback (Heinbockel 2025)
+    // =========================================================================
+
+    fn set_retrieval_strength(storage: &Storage, id: &str, value: f64) {
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET retrieval_strength = ?1 WHERE id = ?2",
+                params![value, id],
+            )
+            .unwrap();
+    }
+
+    fn retrieval_strength(storage: &Storage, id: &str) -> f64 {
+        storage
+            .reader
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT retrieval_strength FROM knowledge_nodes WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn save_test_receipt(storage: &Storage, retrieved: Vec<String>) -> String {
+        let trust: Vec<f64> = retrieved.iter().map(|_| 0.9).collect();
+        let receipt = crate::trace::Receipt::build(
+            Utc::now(),
+            "test",
+            retrieved,
+            Vec::new(),
+            Vec::new(),
+            &trust,
+            Vec::new(),
+        );
+        let id = receipt.receipt_id.clone();
+        storage
+            .save_receipt(&receipt, None, Some("recall"), Some("what broke"))
+            .unwrap();
+        id
+    }
+
+    /// A failure right after a retrieval lowers the retrieved memories'
+    /// accessibility by rank (best-first is the strongest reactivation), once
+    /// per (failure, memory), and the ledger can undo it exactly.
+    #[test]
+    fn failure_feedback_demotes_recently_retrieved_memories_by_rank() {
+        let storage = create_test_storage();
+        let first = ingest_tagged_in_scope(&storage, "user", "redis url points at the old cluster", &["ops"]);
+        let second = ingest_tagged_in_scope(&storage, "user", "worker pool reads a cached secrets file", &["ops"]);
+        set_retrieval_strength(&storage, &first.id, 0.90);
+        set_retrieval_strength(&storage, &second.id, 0.90);
+        save_test_receipt(&storage, vec![first.id.clone(), second.id.clone()]);
+
+        let failure = ingest_tagged_in_scope(
+            &storage,
+            "user",
+            "Payments API crashed with 500s: queue backed up for 36 hours",
+            &["incident"],
+        );
+
+        let report = storage
+            .apply_failure_feedback(&failure.id, Duration::minutes(30))
+            .unwrap();
+        assert_eq!(report.receipts_considered, 1);
+        assert_eq!(report.memories_demoted, 2);
+        let after_first = retrieval_strength(&storage, &first.id);
+        let after_second = retrieval_strength(&storage, &second.id);
+        assert!((after_first - 0.80).abs() < 1e-6, "rank 0 loses the full penalty: {after_first}");
+        assert!((after_second - 0.85).abs() < 1e-6, "rank 1 loses half: {after_second}");
+        assert!(
+            retrieval_strength(&storage, &failure.id) > 0.0,
+            "the failure itself is never demoted"
+        );
+
+        // Idempotent per (failure, memory).
+        let again = storage
+            .apply_failure_feedback(&failure.id, Duration::minutes(30))
+            .unwrap();
+        assert_eq!(again.memories_demoted, 0);
+        assert!((retrieval_strength(&storage, &first.id) - 0.80).abs() < 1e-6);
+
+        // Reversible, exactly.
+        assert_eq!(storage.revert_failure_feedback(&failure.id).unwrap(), 2);
+        assert!((retrieval_strength(&storage, &first.id) - 0.90).abs() < 1e-6);
+        assert!((retrieval_strength(&storage, &second.id) - 0.90).abs() < 1e-6);
+        assert_eq!(
+            storage.revert_failure_feedback(&failure.id).unwrap(),
+            0,
+            "a second revert finds nothing left to undo"
+        );
+    }
+
+    /// Only memories in the failure's scope are touched, and a receipt outside
+    /// the window is ignored.
+    #[test]
+    fn failure_feedback_respects_scope_and_window() {
+        let storage = create_test_storage();
+        let elsewhere = ingest_tagged_in_scope(&storage, "other-project", "unrelated project note", &["x"]);
+        let here = ingest_tagged_in_scope(&storage, "user", "same-scope note", &["x"]);
+        set_retrieval_strength(&storage, &elsewhere.id, 0.90);
+        set_retrieval_strength(&storage, &here.id, 0.90);
+        save_test_receipt(&storage, vec![elsewhere.id.clone(), here.id.clone()]);
+
+        let failure = ingest_tagged_in_scope(&storage, "user", "Build failed: linker error", &["incident"]);
+        let report = storage
+            .apply_failure_feedback(&failure.id, Duration::minutes(30))
+            .unwrap();
+        assert_eq!(report.memories_demoted, 1, "only the same-scope memory is demoted");
+        assert!((retrieval_strength(&storage, &elsewhere.id) - 0.90).abs() < 1e-6);
+        assert!(retrieval_strength(&storage, &here.id) < 0.90);
+
+        // A zero-length window sees no receipts.
+        let none = storage
+            .apply_failure_feedback(&failure.id, Duration::zero())
+            .unwrap();
+        assert_eq!(none.receipts_considered, 0);
     }
 
     fn ingest_tagged_in_scope(
@@ -21266,31 +21715,17 @@ mod tests {
             .unwrap();
     }
 
-    /// Run `f` with VESTIGE_AUTO_CONSOLIDATE_MERGE pinned to `value`
-    /// (None = pinned-unset, i.e. the documented ON default), serialized via
-    /// ENV_LOCK and restored afterward (process env is global + unsafe under
-    /// Rust 2024). Sibling of `with_vector_search_disabled`.
+    /// Run `f` with VESTIGE_AUTO_CONSOLIDATE_MERGE pinned to `value` for this
+    /// thread (None = pinned-unset, the documented fail-closed default).
+    /// Sibling of `with_vector_search_disabled`; like it, this no longer
+    /// touches the process environment, so consolidation tests on other
+    /// threads keep reading the real one.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn with_auto_merge_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
-        const KEY: &str = "VESTIGE_AUTO_CONSOLIDATE_MERGE";
-        let _guard = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = std::env::var_os(KEY);
-        unsafe {
-            match value {
-                Some(v) => std::env::set_var(KEY, v),
-                None => std::env::remove_var(KEY),
-            }
-        }
+        AUTO_CONSOLIDATE_MERGE_FOR_TEST
+            .with(|cell| *cell.borrow_mut() = Some(value.map(str::to_string)));
         let result = catch_unwind(AssertUnwindSafe(f));
-        unsafe {
-            if let Some(prev) = previous {
-                std::env::set_var(KEY, prev);
-            } else {
-                std::env::remove_var(KEY);
-            }
-        }
+        AUTO_CONSOLIDATE_MERGE_FOR_TEST.with(|cell| *cell.borrow_mut() = None);
         match result {
             Ok(value) => value,
             Err(payload) => resume_unwind(payload),

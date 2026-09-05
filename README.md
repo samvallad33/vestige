@@ -30,6 +30,8 @@ The cause never looks like the bug. That is the whole product.
 
 You need Node.js. No Docker, no signup, no compile step (prebuilt for macOS ARM + Intel, Linux x86_64, Windows x86_64).
 
+Android (Termux) builds from source today; see [docs/INSTALL-TERMUX.md](docs/INSTALL-TERMUX.md).
+
 ```bash
 npm install -g vestige-mcp-server@latest
 ```
@@ -52,7 +54,7 @@ Connect it to your agent. Every MCP client understands this config:
 | Claude Desktop | [docs/CONFIGURATION.md](docs/CONFIGURATION.md#claude-desktop-macos) |
 | Cline / Continue / Zed / Goose | the JSON above, in that client's MCP settings |
 
-Verify: `vestige dashboard`, then open **http://localhost:3927/dashboard**. First run downloads a 130MB embedding model once; after that Vestige is fully offline, forever. Full walkthrough: [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
+Verify: `vestige dashboard`, then open **http://localhost:3927/dashboard**. First run downloads a 130MB embedding model and, in the background, a ~150MB reranker, once; after that Vestige is fully offline, forever. Full walkthrough: [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
 
 ## Why not just RAG?
 
@@ -138,10 +140,10 @@ Everything above is free forever and never metered. **Pro ($19/month)** is manag
 
 | | |
 |---|---|
-| Engine | Rust 2024, ~96k lines, single 25MB binary, 1,961 tests, clippy clean at `-D warnings` |
+| Engine | Rust 2024, ~145k lines, single 25MB binary, 2,000+ tests, clippy clean at `-D warnings` |
 | Retrieval | Nomic Embed v1.5 (Matryoshka 768d→256d) + USearch HNSW + SQLite FTS5, optional Qwen3 reranker |
 | Storage | SQLite, optional SQLCipher encryption ([docs/STORAGE.md](docs/STORAGE.md)) |
-| Offline | One 130MB model download on first run, then no network, ever |
+| Offline | Two model downloads on first run (130MB embedder, ~150MB reranker), then no network, ever |
 
 ## Go deeper
 

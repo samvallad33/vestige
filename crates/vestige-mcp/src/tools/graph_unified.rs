@@ -40,7 +40,7 @@ pub fn schema() -> Value {
                     "recent", "get", "memory", "neighbors",
                     "never_composed", "bounty_mode", "label"
                 ],
-                "description": "Graph operation. Reasoning paths: 'chain' (from→to), 'associations' (related via spreading activation, needs 'from'), 'bridges' (connectors between from/to). 'predict' (what memories you'll need next, from 'context'). 'memory_graph' (force-directed subgraph for viz, from 'center_id' or 'query'). Composition topology: 'recent', 'get' (event_id), 'memory' (memory_id), 'neighbors' (memory_id), 'never_composed', 'bounty_mode', 'label' (record an outcome — the only write)."
+                "description": "Reasoning: 'chain' (from, to), 'associations' (spreading activation from 'from'), 'bridges' (connectors between from and to), 'predict' (next needs, from 'context'), 'memory_graph' (subgraph around 'center_id' or 'query'). Composition topology: 'recent', 'get' (event_id), 'memory' and 'neighbors' (memory_id), 'never_composed', 'bounty_mode', 'label' (record an outcome; the only write)."
             },
             // --- explore (chain/associations/bridges) ---
             "from": { "type": "string", "description": "[chain/associations/bridges] Source memory ID." },

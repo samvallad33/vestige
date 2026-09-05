@@ -44,7 +44,7 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["get", "get_batch", "delete", "purge", "state", "promote", "demote", "edit"],
-                "description": "Action to perform: 'get' retrieves full memory node, 'get_batch' retrieves multiple memories by IDs (use 'ids' array), 'purge' permanently removes memory content and embeddings after confirm=true, 'delete' is a backwards-compatible alias for purge and also requires confirm=true, 'state' returns accessibility state, 'promote' increases retrieval strength (thumbs up), 'demote' decreases retrieval strength (thumbs down), 'edit' updates content in-place (preserves FSRS state)"
+                "description": "'get' (one node), 'get_batch' (by 'ids'), 'state' (accessibility), 'promote' and 'demote' (adjust retrieval strength; demote never deletes), 'edit' (replace content, keep FSRS state), 'purge' (remove content and embeddings for good; confirm=true). 'delete' is an alias for purge"
             },
             "id": {
                 "type": "string",
@@ -61,7 +61,7 @@ pub fn schema() -> Value {
             },
             "confirm": {
                 "type": "boolean",
-                "description": "Required for action='purge' and action='delete'. Purge/delete removes canonical content and embeddings. Legacy audit/sync records retain only opaque markers and limited metadata, so this action is not verified-local machine unlearning.",
+                "description": "Required for 'purge' and 'delete'. Purge removes canonical content and embeddings; legacy audit and sync records keep only opaque markers and limited metadata, so this is not verified machine unlearning.",
                 "default": false
             },
             "content": {

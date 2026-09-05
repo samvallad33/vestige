@@ -44,7 +44,8 @@ Qwen3 currently uses Hugging Face Hub's Candle loader directly, so use the stand
 | `VESTIGE_AUTH_TOKEN` | auto-generated | Dashboard + MCP HTTP bearer auth |
 | `VESTIGE_DASHBOARD_ENABLED` | `false` | Set `true` or `1` to enable the web dashboard |
 | `VESTIGE_CONSOLIDATION_INTERVAL_HOURS` | `6` | FSRS-6 decay cycle cadence |
-| `VESTIGE_BACKFILL_AUTOFIRE` | `on` | Retroactive Salience Backfill auto-fire during consolidation. On by default; set `0`/`false`/`off`/`no` to disable. The manual `backfill` tool + CLI stay available either way. When on, promotion is bounded (`stability = MIN(stability * 1.5, stability + 365)`) |
+| `VESTIGE_BACKFILL_AUTOFIRE` | `on` | Retroactive Salience Backfill auto-fire during consolidation and, since 2.8.0, live the moment a failure-shaped memory is ingested (same pipeline and receipts as the `backfill` tool). On by default; set `0`/`false`/`off`/`no` to disable both. The manual `backfill` tool + CLI stay available either way. When on, promotion is bounded (`stability = MIN(stability * 1.5, stability + 365)`) |
+| `VESTIGE_FAILURE_FEEDBACK` | `off` | Post-retrieval failure feedback (2.8.0): when a failure-shaped memory is ingested, the memories retrieved in the previous thirty minutes of receipts lose retrieval strength by rank (at most 0.10 each, floor 0.05, same scope, once per failure). Opt in with `1`/`true`/`on`/`yes`. Every delta is written to the `failure_feedback` ledger and `revert_failure_feedback` undoes it exactly. |
 | `VESTIGE_AUTO_CONSOLIDATE_MERGE` | `off` | Auto concat-merge of near-duplicate memories during consolidation (keeps the strongest, folds the rest in as `[MERGED]` blocks, deletes the originals). **Off by default since v2.6.0** — unattended destruction is opt-in: set `1`/`true`/`on`/`yes` to enable; anything else (including typos) stays off. Protected (`dedup protect`) memories are never absorbed or deleted by this pass. The `dedup` tool remains the previewable, reversible path. |
 | `VESTIGE_TRACE` | `on` | Agent Black Box trace recording. **On by default**: every MCP tool call writes rows to `agent_traces`/`agent_runs` in your local database. Set `0`/`false`/`off`/`no` to turn the recorder off. Read once per process, so changing it mid-process has no effect |
 | `VESTIGE_TRACE_RETENTION_DAYS` | `30` | How long Black Box traces are kept. The consolidation cycle deletes trace events older than this and drops any `agent_runs` roll-up left with no events. `0` keeps traces forever (sweep disabled); unset, empty, negative, or malformed values fall back to `30` |
@@ -82,7 +83,7 @@ opens a **Memory PR** you decide in the dashboard (Memory PRs tab) or via
 | Mode | Behavior |
 |------|----------|
 | `fast` | Never gate. Every write auto-commits. |
-| `risk_gated` | **Default.** Ordinary writes auto-commit; risky ones (contradicting high-trust memories, destructive ops, sensitive topics) open a Memory PR. |
+| `risk_gated` | **Default.** Ordinary writes auto-commit; risky ones (contradicting high-trust memories, destructive ops, sensitive topics) open a Memory PR. A write counts as touching a sensitive topic when a tag names it, a credential-shaped value sits next to it, the write is short, the topic leads the text, or two distinct topics appear. One sensitive word buried in a long note is a mention, not a subject, and does not gate. |
 | `paranoid` | Gate every write. Nothing enters the brain without approval. |
 
 The mode is stored in `<data_dir>/review_mode.json` and set from the dashboard
@@ -163,7 +164,7 @@ scores and timestamps are included:
 
 Resolved per call, highest to lowest:
 
-1. **Explicit MCP parameter** (e.g. `detail_level` / `limit` on a `search`
+1. **Explicit MCP parameter** (e.g. `detail_level` / `limit` on a `recall`
    call) — always wins.
 2. **`vestige.toml`** — the `[defaults]` keys and the selected profile.
 3. **Built-in default** — the `default` profile, identical to pre-v2.1.26
@@ -171,7 +172,7 @@ Resolved per call, highest to lowest:
 
 ### Affected tools
 
-`search`, `memory_timeline`, `codebase` (`get_context`), and `session_context`
+`recall`, `memory_status` (`timeline` view), `codebase` (`get_context`), and `session_start`
 resolve their default detail level and result limit through this config. Each of
 these tools also echoes the active `profile` in its response so you can confirm
 what was applied. Tools that take no `detail_level`/`limit` are unaffected.
@@ -420,6 +421,20 @@ vestige-mcp --version
 ---
 
 ## Development
+
+### Building without embeddings
+
+Some targets cannot carry ONNX Runtime yet (Android/Termux, #145). The
+`no-embeddings-build` CI job keeps this configuration compiling:
+
+```bash
+cargo build --release -p vestige-mcp --no-default-features --features connectors,cloud-sync
+```
+
+It drops `embeddings`, `vector-search` and `codebase-git` (libgit2, OpenSSL,
+libssh2). Recall is keyword only, `smart_ingest` stores without the
+prediction-error gate and says so in its response, and the `codebase` tool
+reports git history as unavailable. See [INSTALL-TERMUX.md](INSTALL-TERMUX.md).
 
 ```bash
 # Run tests

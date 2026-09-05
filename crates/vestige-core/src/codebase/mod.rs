@@ -70,7 +70,12 @@
 
 pub mod anchor;
 pub mod context;
+#[cfg(feature = "codebase-git")]
 pub mod git;
+#[cfg(not(feature = "codebase-git"))]
+#[path = "git_unavailable.rs"]
+pub mod git;
+mod git_types;
 pub mod patterns;
 pub mod relationships;
 pub mod staleness;
@@ -671,8 +676,12 @@ mod tests {
     fn create_test_repo() -> TempDir {
         let dir = TempDir::new().unwrap();
 
-        // Initialize git repo
-        git2::Repository::init(dir.path()).unwrap();
+        // Initialize git repo (only meaningful with the git analyzer compiled in;
+        // the stand-in accepts any directory).
+        #[cfg(feature = "codebase-git")]
+        {
+            git2::Repository::init(dir.path()).unwrap();
+        }
 
         // Create Cargo.toml
         std::fs::write(

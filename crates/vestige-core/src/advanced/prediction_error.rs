@@ -169,6 +169,11 @@ pub enum CreateReason {
     ExplicitCreate,
     /// First memory in the system
     FirstMemory,
+    /// The best candidate was similar but STRONG (high retrieval strength).
+    /// Prediction error updates weak memories, not strong ones (Yang, Duncan
+    /// and Barense 2026), so the new content is stored on its own and linked
+    /// to the strong memory instead of being merged into it.
+    ProtectedStrongMemory,
 }
 
 /// Types of updates to existing memories
@@ -279,6 +284,16 @@ pub struct PredictionErrorConfig {
     pub auto_supersede_demoted: bool,
     /// Whether to prefer updates over creates
     pub prefer_updates: bool,
+    /// Keep a strong existing memory out of the merge path.
+    ///
+    /// Yang, Duncan and Barense (2026, PMID 42421582): prediction error at
+    /// reactivation increased intrusion of new material into WEAK memories but
+    /// not strong ones, and memory age did not matter. Before this flag the
+    /// gate computed `was_promoted` and never read it, so a confirmed,
+    /// high-strength record could be appended to by any similar note. On by
+    /// default; `Reinforce` (near-identical) is unaffected because it never
+    /// touches content.
+    pub protect_strong_memories: bool,
 }
 
 impl Default for PredictionErrorConfig {
@@ -290,6 +305,7 @@ impl Default for PredictionErrorConfig {
             max_candidates: MAX_UPDATE_CANDIDATES,
             auto_supersede_demoted: false,
             prefer_updates: true,
+            protect_strong_memories: true,
         }
     }
 }
@@ -457,6 +473,27 @@ impl PredictionErrorGate {
                     self.stats.creates += 1;
                     return GateDecision::Create {
                         reason: CreateReason::DifferentDomain,
+                        prediction_error: best.prediction_error,
+                        related_memory_ids: vec![best.memory_id.clone()],
+                    };
+                }
+
+                // Prediction error updates WEAK memories, not strong ones.
+                // Yang, Duncan and Barense (2026) found PE-driven updating
+                // intruded new material into weak memories only, with memory
+                // age irrelevant. A high-strength existing record is therefore
+                // not rewritten by a merely similar new note: the note is
+                // stored on its own and linked, so both survive and the reflog
+                // stays clean. Reinforce (near-identical, above) is unaffected;
+                // it strengthens without touching content. Age is deliberately
+                // not consulted anywhere in this gate.
+                if best.similarity >= self.config.similarity_threshold
+                    && c.was_promoted
+                    && self.config.protect_strong_memories
+                {
+                    self.stats.creates += 1;
+                    return GateDecision::Create {
+                        reason: CreateReason::ProtectedStrongMemory,
                         prediction_error: best.prediction_error,
                         related_memory_ids: vec![best.memory_id.clone()],
                     };
@@ -973,5 +1010,106 @@ mod tests {
         assert_eq!(stats.total_evaluations, 2);
         assert_eq!(stats.creates, 1);
         assert_eq!(stats.updates, 1);
+    }
+
+    /// Unit vector `base` rotated toward an orthogonal direction so that
+    /// cos(result, base) == `target_cos` exactly (up to float error).
+    fn vector_with_cosine(base: &[f32], target_cos: f32) -> Vec<f32> {
+        // Build an orthogonal unit vector by swapping two coordinates with a sign flip
+        // on a copy that has been made orthogonal via Gram-Schmidt against `base`.
+        let n = base.len();
+        let norm_b: f32 = base.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let b: Vec<f32> = base.iter().map(|x| x / norm_b).collect();
+        let mut o: Vec<f32> = (0..n).map(|i| if i % 2 == 0 { 1.0 } else { -0.5 }).collect();
+        let dot: f32 = o.iter().zip(&b).map(|(x, y)| x * y).sum();
+        for (oi, bi) in o.iter_mut().zip(&b) {
+            *oi -= dot * bi;
+        }
+        let norm_o: f32 = o.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let sin = (1.0 - target_cos * target_cos).sqrt();
+        b.iter()
+            .zip(&o)
+            .map(|(bi, oi)| target_cos * bi + sin * (oi / norm_o))
+            .collect()
+    }
+
+    /// Yang, Duncan and Barense 2026: PE updates weak memories, never strong
+    /// ones. A strong (promoted) candidate in the update band must yield a
+    /// linked CREATE, not a merge into the strong memory.
+    #[test]
+    fn strong_memory_is_not_merged_into_by_similar_content() {
+        let mut gate = PredictionErrorGate::new();
+        let mut strong = make_candidate("strong", 1.0);
+        strong.was_promoted = true;
+        strong.retrieval_strength = 0.95;
+        let new_embedding = vector_with_cosine(&strong.embedding, 0.85);
+        let sim = cosine_similarity(&new_embedding, &strong.embedding);
+        assert!((0.75..0.92).contains(&sim), "test vector must sit in the update band, got {sim}");
+
+        let decision = gate.evaluate("a similar but distinct note", &new_embedding, &[strong.clone()]);
+        match decision {
+            GateDecision::Create {
+                reason: CreateReason::ProtectedStrongMemory,
+                related_memory_ids,
+                ..
+            } => assert_eq!(related_memory_ids, vec!["strong".to_string()]),
+            other => panic!("expected a protected create, got {other:?}"),
+        }
+    }
+
+    /// The same input against a WEAK candidate still merges, so the
+    /// protection is specific to strength and not a blanket change.
+    #[test]
+    fn weak_memory_still_merges_with_similar_content() {
+        let mut gate = PredictionErrorGate::new();
+        let weak = make_candidate("weak", 1.0);
+        assert!(!weak.was_promoted);
+        let new_embedding = vector_with_cosine(&weak.embedding, 0.85);
+
+        let decision = gate.evaluate("a similar but distinct note", &new_embedding, &[weak]);
+        match decision {
+            GateDecision::Update {
+                update_type: UpdateType::Merge,
+                target_id,
+                ..
+            } => assert_eq!(target_id, "weak"),
+            other => panic!("expected a merge update, got {other:?}"),
+        }
+    }
+
+    /// Near-identical content still REINFORCES a strong memory: reinforce
+    /// strengthens without touching content, so it is not an intrusion.
+    #[test]
+    fn strong_memory_is_still_reinforced_by_near_identical_content() {
+        let mut gate = PredictionErrorGate::new();
+        let mut strong = make_candidate("strong", 1.0);
+        strong.was_promoted = true;
+        let new_embedding = vector_with_cosine(&strong.embedding, 0.96);
+
+        let decision = gate.evaluate("Content for strong", &new_embedding, &[strong]);
+        assert!(
+            matches!(decision, GateDecision::Update { update_type: UpdateType::Reinforce, .. }),
+            "got {decision:?}"
+        );
+    }
+
+    /// The protection is a config switch, so a narrow reviewed workflow can
+    /// keep the old behaviour explicitly.
+    #[test]
+    fn strong_memory_protection_can_be_disabled() {
+        let config = PredictionErrorConfig {
+            protect_strong_memories: false,
+            ..Default::default()
+        };
+        let mut gate = PredictionErrorGate::with_config(config);
+        let mut strong = make_candidate("strong", 1.0);
+        strong.was_promoted = true;
+        let new_embedding = vector_with_cosine(&strong.embedding, 0.85);
+
+        let decision = gate.evaluate("a similar but distinct note", &new_embedding, &[strong]);
+        assert!(
+            matches!(decision, GateDecision::Update { update_type: UpdateType::Merge, .. }),
+            "got {decision:?}"
+        );
     }
 }
