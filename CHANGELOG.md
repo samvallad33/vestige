@@ -14,6 +14,19 @@ starvation findings did not reproduce (every migration already runs inside one
 IMMEDIATE transaction with its own version bump, and `wal_autocheckpoint` is
 on), so those got regression tests and a checkpoint hook rather than rewrites.
 
+### Changed — Dependencies
+
+- usearch `=2.23.0` is unpinned to `2.26`. The MSVC compile break that forced
+  the pin (2.24.0 referenced the POSIX `MAP_FAILED` macro, unum-cloud/usearch#746)
+  was fixed upstream in April 2026, and the `fp16lib` feature that 2.23.0 needed
+  no longer exists: 2.26 carries its own scalar fp16 conversion and its headers
+  have no `#warning` directive, so the MSVC fatal-error path that made `fp16lib`
+  load-bearing is gone. Default features stay off so release binaries do not
+  ship NumKong's AVX2/FMA dispatch kernels (#71). No re-embedding is needed.
+- CI now compiles the default feature set on Windows MSVC (`windows-msvc-build`)
+  on every pull request and on `main`. Until now Windows was compiled only when a
+  release tag was cut, which is how an MSVC-only break could ship (#93).
+
 ### Fixed — Vector index
 
 - A long-lived MCP server process now sees exactly the vectors its sibling
