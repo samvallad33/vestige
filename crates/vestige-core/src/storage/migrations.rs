@@ -2063,9 +2063,11 @@ pub(crate) fn repair_legacy_raw_profile_vectors(
             // Matryoshka truncation: keep the leading `declared_len` floats,
             // then L2-renormalize (mirrors embeddings::matryoshka_truncate).
             let mut vector: Vec<f32> = blob
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .take(declared_len)
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .map(|chunk| f32::from_le_bytes(*chunk))
                 .collect();
             let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
             if norm > 0.0 {
@@ -3337,8 +3339,10 @@ UPDATE schema_version SET version = 99;\n";
         assert_eq!(repaired_dims, 256);
         assert_eq!(repaired_blob.len(), 256 * 4);
         let repaired: Vec<f32> = repaired_blob
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect();
         let norm = repaired.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!(
