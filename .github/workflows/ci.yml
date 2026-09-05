@@ -195,7 +195,9 @@ jobs:
         env:
           CXXSTDLIB: c++_static
         run: |
-          cargo ndk -t arm64-v8a -p "$ANDROID_API" build --release -p vestige-mcp \
+          # cargo-ndk 4 takes the API level as --platform; a bare -p is handed
+          # to cargo as --package, and "unknown package: 24" is what you get.
+          cargo ndk -t arm64-v8a --platform "$ANDROID_API" build --release -p vestige-mcp \
             --no-default-features --features connectors,cloud-sync
 
       - name: Only bionic may be a runtime dependency
