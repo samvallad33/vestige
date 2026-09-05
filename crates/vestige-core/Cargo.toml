@@ -155,26 +155,18 @@ tokenizers = { version = "0.22.2", default-features = false, features = ["onig"]
 # ============================================================================
 # OPTIONAL: Vector Search (USearch - HNSW, 20x faster than FAISS)
 # ============================================================================
-# Pinned to 2.23.0 — 2.24.0 introduced a Windows MSVC compile break because
-# its memory_mapping_allocator_gt template references the POSIX MAP_FAILED
-# macro from <sys/mman.h>, which doesn't exist on MSVC. Tracked upstream in
-# unum-cloud/usearch#746. Unpin when the upstream fix lands.
+# usearch 2.26. The MSVC compile break that forced the 2.23.0 pin (2.24.0
+# referenced the POSIX MAP_FAILED macro, unum-cloud/usearch#746) was fixed
+# upstream in April 2026. The `fp16lib` feature that 2.23.0 needed no longer
+# exists: 2.26 carries its own scalar fp16 conversion and its headers have no
+# `#warning` directive, so the MSVC fatal-error C1021 path that made fp16lib
+# load-bearing is gone. The Windows MSVC job in ci.yml compiles this crate on
+# every pull request so that claim stays proven rather than remembered.
 #
-# Disable default features so release binaries do not include SimSIMD's
-# Haswell+/AVX2/FMA dispatch targets. Those kernels can trigger illegal
-# instructions on older x86_64 CPUs that Vestige otherwise supports (#71).
-#
-# But re-enable `fp16lib` explicitly. usearch's defaults are
-# ["simsimd", "fp16lib"]; with BOTH off, build.rs sets USEARCH_USE_FP16LIB=0
-# and USEARCH_USE_SIMSIMD=0, which selects the bare half-precision `#else`
-# branch in include/usearch/index_plugins.hpp. That branch carries a
-# `#warning` directive, which MSVC's cl.exe treats as fatal error C1021,
-# breaking the Windows build (GCC/Clang only warn). `fp16lib` is a scalar,
-# self-contained fp16<->fp32 conversion library with NO SIMD intrinsics, so
-# re-enabling it sets USEARCH_USE_FP16LIB=1 (taking the non-warning branch)
-# WITHOUT reintroducing the SimSIMD illegal-instruction risk from #71. Do not
-# drop this feature.
-usearch = { version = "=2.23.0", default-features = false, features = ["fp16lib"], optional = true }
+# Default features stay OFF so release binaries do not include NumKong (the
+# SimSIMD successor) and its Haswell+/AVX2/FMA dispatch kernels, which can
+# raise illegal instructions on older x86_64 CPUs that Vestige supports (#71).
+usearch = { version = "2.26", default-features = false, optional = true }
 
 # LRU cache for query embeddings
 lru = "0.16"
