@@ -11,10 +11,17 @@ keywords = ["memory", "spaced-repetition", "fsrs", "embeddings", "knowledge-grap
 categories = ["science", "database"]
 
 [features]
-default = ["embeddings", "ort-download", "vector-search", "bundled-sqlite"]
+default = ["embeddings", "ort-download", "vector-search", "bundled-sqlite", "codebase-git"]
 
 # SQLite backend (default, unencrypted)
 bundled-sqlite = ["rusqlite/bundled"]
+
+# Git history analysis for codebase memory. Pulls git2 + libgit2, which drag
+# OpenSSL and libssh2 into the build. On by default. Off for targets where
+# those C libraries are the difference between a binary and no binary
+# (Android/Termux, #145): the codebase tool then answers "git history is not
+# available in this build" instead of failing to build.
+codebase-git = ["dep:git2"]
 
 # Encrypted SQLite via SQLCipher (mutually exclusive with bundled-sqlite)
 # Use: --no-default-features --features encryption,embeddings,ort-download,vector-search
@@ -128,9 +135,9 @@ tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros"] }
 # Tracing for structured logging
 tracing = "0.1"
 
-# Git integration for codebase memory
+# Git integration for codebase memory (feature `codebase-git`, default on)
 # vendored-openssl: Compile OpenSSL from source for cross-compilation support
-git2 = { version = "0.20", features = ["vendored-openssl"] }
+git2 = { version = "0.20", features = ["vendored-openssl"], optional = true }
 
 # File watching for codebase memory
 notify = "8"
@@ -199,6 +206,8 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "search_bench"
 harness = false
+# Benchmarks the semantic pipeline; skipped by cargo in builds without it.
+required-features = ["embeddings", "vector-search"]
 
 [lib]
 name = "vestige_core"

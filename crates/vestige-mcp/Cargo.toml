@@ -10,9 +10,13 @@ categories = ["command-line-utilities", "database"]
 repository = "https://github.com/samvallad33/vestige"
 
 [features]
-default = ["embeddings", "ort-download", "vector-search", "connectors", "cloud-sync"]
+default = ["embeddings", "ort-download", "vector-search", "connectors", "cloud-sync", "codebase-git"]
 embeddings = ["vestige-core/embeddings"]
 vector-search = ["vestige-core/vector-search"]
+# Git history for the codebase tool (libgit2, OpenSSL, libssh2). On by default;
+# off for Android/Termux builds (#145), where the tool reports git history as
+# unavailable instead of the build failing on those C libraries.
+codebase-git = ["vestige-core/codebase-git"]
 # External-source connectors (#57): GitHub Issues / Redmine indexing via the
 # `source_sync` MCP tool. On by default so the tool works out of the box; turn
 # off for a build with no HTTP client.

@@ -168,6 +168,7 @@ pub async fn execute_system_status(
     };
 
     let embedding_ready = storage.is_embedding_ready();
+    let embeddings_compiled_in = crate::embeddings_compiled_in();
 
     let mut warnings = Vec::new();
     if stats.average_retention < 0.5 && stats.total_nodes > 0 {
@@ -176,10 +177,17 @@ pub async fn execute_system_status(
     if stats.nodes_due_for_review > 10 {
         warnings.push("Many memories are due for review");
     }
-    if stats.total_nodes > 0 && stats.nodes_with_active_embeddings == 0 {
+    // A build without an embedding runtime has nothing to generate, so the
+    // coverage warnings below would read as a failure that never happened.
+    if !embeddings_compiled_in {
+        warnings.push(
+            "Built without embeddings - semantic recall and the prediction-error gate are unavailable in this build (keyword search only)",
+        );
+    }
+    if embeddings_compiled_in && stats.total_nodes > 0 && stats.nodes_with_active_embeddings == 0 {
         warnings.push("No active-model embeddings generated - semantic search unavailable");
     }
-    if embedding_coverage < 50.0 && stats.total_nodes > 10 {
+    if embeddings_compiled_in && embedding_coverage < 50.0 && stats.total_nodes > 10 {
         warnings.push("Low embedding coverage - run consolidate to improve semantic search");
     }
     if stats.nodes_with_mismatched_embeddings > 0 {
@@ -196,7 +204,7 @@ pub async fn execute_system_status(
     if stats.nodes_due_for_review > 5 {
         recommendations.push("Review due memories to strengthen retention.");
     }
-    if stats.nodes_with_active_embeddings < stats.total_nodes {
+    if embeddings_compiled_in && stats.nodes_with_active_embeddings < stats.total_nodes {
         recommendations.push("Run 'consolidate' to generate active-model embeddings.");
     }
     if stats.total_nodes > 100 && stats.average_retention < 0.7 {
@@ -292,6 +300,7 @@ pub async fn execute_system_status(
         "warnings": warnings,
         "recommendations": recommendations,
         "embeddingReady": embedding_ready,
+        "embeddingsCompiledIn": embeddings_compiled_in,
         // Stats
         "totalMemories": stats.total_nodes,
         "dueForReview": stats.nodes_due_for_review,
@@ -302,6 +311,7 @@ pub async fn execute_system_status(
         "withActiveEmbeddings": stats.nodes_with_active_embeddings,
         "mismatchedEmbeddings": stats.nodes_with_mismatched_embeddings,
         "embeddingCoverage": format!("{:.1}%", embedding_coverage),
+        "embeddingsCompiledIn": embeddings_compiled_in,
         "embeddingModel": stats.embedding_model,
         "activeEmbeddingModel": stats.active_embedding_model,
         "oldestMemory": stats.oldest_memory.map(|dt| dt.to_rfc3339()),

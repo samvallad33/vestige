@@ -722,6 +722,7 @@ pub async fn execute(
     } else {
         SecretPolicy::Reject
     };
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     let input_has_secret_finding = !scan_secrets(&content).is_empty();
 
     // Validate content
@@ -944,12 +945,14 @@ pub async fn execute(
             "decision": "create",
             "nodeId": node_id,
             "scope": scope,
-            "message": "Memory created (smart ingest requires embeddings feature)",
+            "message": "Memory created (this build has no embedding runtime, so the prediction-error gate did not run)",
             "hasEmbedding": false,
+            "embeddingsCompiledIn": false,
+            "dedup": "unavailable in this build",
             "predictionError": 1.0,
             "importanceScore": importance_composite,
             "synapticCapture": synaptic_capture,
-            "reason": "Embeddings not available - used regular ingest",
+            "reason": "built without embeddings: stored as a new memory, no dedup or reinforce decision",
             "validity": validity_response(&validity),
             "tagSuggestions": tag_suggestions.suggestions,
             "tagSuggestionStatus": tag_suggestions.status,
@@ -1039,6 +1042,7 @@ async fn execute_batch(
         } else {
             SecretPolicy::Reject
         };
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         let input_has_secret_finding = !scan_secrets(&item.content).is_empty();
 
         // ================================================================
@@ -1281,9 +1285,11 @@ async fn execute_batch(
                         "decision": "create",
                         "nodeId": node_id,
                         "scope": scope,
+                        "embeddingsCompiledIn": false,
+                        "dedup": "unavailable in this build",
                         "importanceScore": importance_composite,
                         "synapticCapture": synaptic_capture,
-                        "reason": "Embeddings not available - used regular ingest",
+                        "reason": "built without embeddings: stored as a new memory, no dedup or reinforce decision",
                         "validity": validity_response(&validity),
                         "tagSuggestions": tag_suggestions.suggestions,
                         "tagSuggestionStatus": tag_suggestions.status,
@@ -1602,7 +1608,7 @@ mod tests {
                 || value["reason"]
                     .as_str()
                     .unwrap()
-                    .contains("Embeddings not available")
+                    .contains("built without embeddings")
         );
     }
 

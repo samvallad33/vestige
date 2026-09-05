@@ -421,6 +421,20 @@ vestige-mcp --version
 
 ## Development
 
+### Building without embeddings
+
+Some targets cannot carry ONNX Runtime yet (Android/Termux, #145). The
+`no-embeddings-build` CI job keeps this configuration compiling:
+
+```bash
+cargo build --release -p vestige-mcp --no-default-features --features connectors,cloud-sync
+```
+
+It drops `embeddings`, `vector-search` and `codebase-git` (libgit2, OpenSSL,
+libssh2). Recall is keyword only, `smart_ingest` stores without the
+prediction-error gate and says so in its response, and the `codebase` tool
+reports git history as unavailable. See [INSTALL-TERMUX.md](INSTALL-TERMUX.md).
+
 ```bash
 # Run tests
 cargo test --all-features
