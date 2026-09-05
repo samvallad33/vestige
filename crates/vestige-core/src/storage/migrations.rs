@@ -164,6 +164,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Cross-process vector index refresh: a trigger-fed, append-only journal of embedding_profile_vectors writes so a long-lived process absorbs exactly the vectors its peers wrote instead of rescanning the table",
         up: MIGRATION_V32_UP,
     },
+    Migration {
+        version: 33,
+        description: "Post-retrieval failure feedback ledger: every accessibility delta applied because a failure followed a retrieval, so it can be audited and reverted",
+        up: MIGRATION_V33_UP,
+    },
 ];
 
 /// A database migration
@@ -2406,6 +2411,32 @@ BEGIN
 END;
 
 UPDATE schema_version SET version = 32, applied_at = datetime('now');
+"#;
+
+/// V33: failure feedback ledger (Heinbockel, Leicht, Wagner, Schwabe 2025).
+///
+/// When a failure lands shortly after a retrieval, the memories that informed
+/// that retrieval lose accessibility in proportion to how strongly they were
+/// reactivated (their rank in the receipt). Every delta is recorded here so the
+/// effect is auditable per failure and reversible with
+/// `revert_failure_feedback`. Ids and numbers only, no content. Rows follow the
+/// nodes they reference: a purged memory takes its ledger rows with it.
+const MIGRATION_V33_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS failure_feedback (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    failure_id   TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+    memory_id    TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+    receipt_id   TEXT NOT NULL,
+    rank         INTEGER NOT NULL CHECK (rank >= 0),
+    delta        REAL NOT NULL CHECK (delta >= 0),
+    applied_at   TEXT NOT NULL,
+    reverted_at  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_failure_feedback_failure ON failure_feedback(failure_id);
+CREATE INDEX IF NOT EXISTS idx_failure_feedback_memory ON failure_feedback(memory_id);
+
+UPDATE schema_version SET version = 33, applied_at = datetime('now');
 "#;
 
 #[cfg(test)]
