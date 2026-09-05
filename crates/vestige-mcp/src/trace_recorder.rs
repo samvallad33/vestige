@@ -1793,7 +1793,7 @@ mod tests {
         let s = store();
         let secret = format!("ghp_{}", "A".repeat(36));
         let args = Some(serde_json::json!({
-            "content": format!("{secret}"),
+            "content": secret.to_string(),
             "runId": "run_secret_rejection"
         }));
 
@@ -1822,7 +1822,7 @@ mod tests {
         let args = Some(serde_json::json!({
             "items": [
                 { "content": "safe item" },
-                { "content": format!("{secret}") }
+                { "content": secret.to_string() }
             ]
         }));
 

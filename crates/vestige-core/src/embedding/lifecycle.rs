@@ -679,7 +679,12 @@ impl<'a> EmbeddingProfileLifecycle<'a> {
             )?,
         );
         self.registry
-            .install_verified(profile.clone(), &artifacts, granite_runtime(&profile), runner)
+            .install_verified(
+                profile.clone(),
+                &artifacts,
+                granite_runtime(&profile),
+                runner,
+            )
             .map_err(Into::into)
     }
 
@@ -974,8 +979,10 @@ fn bytes_to_f32(bytes: &[u8], dimensions: usize) -> Result<Vec<f32>, EmbeddingLi
         )));
     }
     let vector = bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| f32::from_le_bytes(*chunk))
         .collect::<Vec<_>>();
     if vector.iter().any(|value| !value.is_finite()) {
         return Err(EmbeddingLifecycleError::InvalidFixture(

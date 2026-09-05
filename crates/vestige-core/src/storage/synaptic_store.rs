@@ -2076,8 +2076,10 @@ fn load_node_context_tx(tx: &Transaction<'_>, memory_id: &str) -> Result<NodeCon
             let dimensions: Option<i64> = row.get(5)?;
             let embedding = match (blob, model, dimensions) {
                 (Some(blob), Some(model), Some(dimensions)) if blob.len() % 4 == 0 => Some((
-                    blob.chunks_exact(4)
-                        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                    blob.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|chunk| f32::from_le_bytes(*chunk))
                         .collect(),
                     model,
                     dimensions,

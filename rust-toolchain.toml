@@ -5,7 +5,9 @@
 # tree since v1.0.0.
 #
 # Bump this deliberately, and run `cargo clippy --workspace --all-targets -- -D warnings`
-# when you do.
+# when you do. 1.98.1 (Sep 2026) is also the Rust that Termux ships for
+# aarch64-linux-android, so Android users building from source (#145) compile
+# with the same toolchain CI does.
 [toolchain]
-channel = "1.97.1"
+channel = "1.98.1"
 components = ["rustfmt", "clippy"]

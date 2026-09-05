@@ -14,6 +14,21 @@ starvation findings did not reproduce (every migration already runs inside one
 IMMEDIATE transaction with its own version bump, and `wal_autocheckpoint` is
 on), so those got regression tests and a checkpoint hook rather than rewrites.
 
+### Changed — Toolchain and dependencies
+
+- The pinned Rust is 1.98.1 (from 1.97.1), the version Termux ships for
+  Android, so contributors building from source on a phone (#145) compile with
+  the same compiler CI does. The lints 1.98 adds under `-D warnings`
+  (`chunks_exact_to_as_chunks`, `drain_collect`, `useless_format`) are fixed at
+  their eleven sites; `slice::as_chunks` has been stable since 1.88, so
+  `rust-version = "1.91"` still holds.
+- `cargo update` within semver: tokio 1.53, rustls 0.23.43, axum 0.8.9, hyper
+  1.11, serde 1.0.229, openssl-src 3.6.3, libgit2-sys 1.9.7 (the CVE fix from
+  #207), and roughly two hundred transitive crates. ONNX Runtime (`ort`
+  2.0.0-rc.11) and fastembed 5.13.2 are deliberately held back: `cargo update`
+  moves them to rc.13 and 5.17 together, which changes the runtime that gets
+  downloaded at build time and is its own upgrade (#214).
+
 ### Fixed — Vector index
 
 - A long-lived MCP server process now sees exactly the vectors its sibling

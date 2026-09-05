@@ -14662,8 +14662,10 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
                 row.map_err(|e| MemoryStoreError::Backend(e.to_string()))?;
             let centroid: Vec<f32> = centroid_bytes
                 .map(|b| {
-                    b.chunks_exact(4)
-                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    b.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| f32::from_le_bytes(*c))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -14718,8 +14720,10 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         };
         let centroid: Vec<f32> = centroid_bytes
             .map(|b| {
-                b.chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                b.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| f32::from_le_bytes(*c))
                     .collect()
             })
             .unwrap_or_default();

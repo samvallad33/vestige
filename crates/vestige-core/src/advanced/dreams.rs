@@ -1517,7 +1517,7 @@ impl MemoryDreamer {
             for i in 0..clusters.len() {
                 for j in (i + 1)..clusters.len() {
                     if !clusters[i].is_disjoint(&clusters[j]) {
-                        let to_merge: HashSet<_> = clusters[j].drain().collect();
+                        let to_merge = std::mem::take(&mut clusters[j]);
                         clusters[i].extend(to_merge);
                         merged = true;
                         break;
