@@ -57,7 +57,7 @@ const RECEIPT_ATTESTATION_ALGORITHM_V1: &str = "mcp-retrieval-receipt-v1";
 fn is_write_tool(tool: &str) -> bool {
     matches!(
         tool,
-        "smart_ingest" | "ingest" | "session_checkpoint" | "memory" | "codebase"
+        "smart_ingest" | "ingest" | "session_checkpoint" | "memory" | "purge" | "codebase"
     )
 }
 
@@ -467,6 +467,25 @@ fn pending_memory_mutation(
             }
             Some(PendingMemoryMutation {
                 action,
+                id: args.get("id")?.as_str()?.to_string(),
+                reason: args
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            })
+        }
+        // The standalone tool is `memory(action='purge')` under another name;
+        // it meets the same pre-execution gate.
+        "purge" => {
+            if !args
+                .get("confirm")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            Some(PendingMemoryMutation {
+                action: "purge".to_string(),
                 id: args.get("id")?.as_str()?.to_string(),
                 reason: args
                     .get("reason")
@@ -2628,6 +2647,7 @@ mod tests {
     #[test]
     fn write_tool_set_includes_codebase_b2() {
         assert!(is_write_tool("codebase"));
+        assert!(is_write_tool("purge"));
         assert!(is_write_tool("memory"));
         assert!(!is_write_tool("search"));
         assert!(!is_write_tool("deep_reference"));

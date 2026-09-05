@@ -419,6 +419,26 @@ description: Some("Manage one memory. Actions: 'get', 'get_batch' (ids), 'state'
                 input_schema: tools::memory_unified::schema(),
                 ..Default::default()
             },
+            // ================================================================
+            // PURGE: the one irreversible call, on its own so a client can
+            // gate it without gating the reads that share `memory`. Claude
+            // Code honours `anthropic/requiresUserInteraction` with a prompt
+            // on every call, even under bypass. memory(action='purge') keeps
+            // working for one release.
+            // ================================================================
+            ToolDescription {
+                name: "purge".to_string(),
+                title: Some("Purge".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: true,
+                    idempotent_hint: false,
+                    open_world_hint: false,
+                }),
+                description: Some("Remove one memory's content and embeddings for good. Irreversible: confirm=true is required and the client asks before running it. Legacy audit and sync rows keep opaque markers, so this is not verified unlearning. Same path and review gate as memory(action='purge').".to_string()),
+                input_schema: tools::memory_unified::purge_schema(),
+                meta: Some(serde_json::json!({ "anthropic/requiresUserInteraction": true })),
+            },
             ToolDescription {
                 name: "codebase".to_string(),
                 title: Some("Codebase".to_string()),
@@ -832,6 +852,14 @@ description: Some("Memory with hindsight. After a failure is recorded, reach bac
             "memory" => {
                 tools::memory_unified::execute(&self.storage, &self.cognitive, request.arguments)
                     .await
+            }
+            "purge" => {
+                tools::memory_unified::execute_purge_tool(
+                    &self.storage,
+                    &self.cognitive,
+                    request.arguments,
+                )
+                .await
             }
             "codebase" => {
                 tools::codebase_unified::execute(
@@ -1935,13 +1963,15 @@ description: Some("Memory with hindsight. After a failure is recorded, reach bac
             }
 
             // -- memory: get/delete/promote/demote --
-            "memory" | "promote_memory" | "demote_memory" | "delete_knowledge"
+            "memory" | "purge" | "promote_memory" | "demote_memory" | "delete_knowledge"
             | "get_memory_state" => {
                 let action = args
                     .as_ref()
                     .and_then(|a| a.get("action"))
                     .and_then(|a| a.as_str())
-                    .unwrap_or(if tool_name == "promote_memory" {
+                    .unwrap_or(if tool_name == "purge" {
+                        "purge"
+                    } else if tool_name == "promote_memory" {
                         "promote"
                     } else if tool_name == "demote_memory" {
                         "demote"
@@ -2987,7 +3017,7 @@ mod tests {
         // dispatchable as hidden back-compat aliases but drop off the advertised list.
         assert_eq!(
             tools.len(),
-            14,
+            15,
             "Expected exactly 14 tools after v2.3 receipt replay integration \
              (12 consolidated: dedup + memory_status + graph + maintain + recall; \
              session_context renamed) plus `receipt` and the flagship `backfill`"
@@ -3036,7 +3066,17 @@ mod tests {
             read_only,
             ["memory_status", "recall", "receipt", "session_start"]
         );
-        assert_eq!(destructive, ["dedup", "intention", "maintain", "memory"]);
+        assert_eq!(
+            destructive,
+            ["dedup", "intention", "maintain", "memory", "purge"]
+        );
+        // The one irreversible call asks the user first, and only it does.
+        let interactive: Vec<&str> = tools
+            .iter()
+            .filter(|t| t["_meta"]["anthropic/requiresUserInteraction"] == true)
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(interactive, ["purge"]);
         assert_eq!(
             open_world,
             ["source_sync"],

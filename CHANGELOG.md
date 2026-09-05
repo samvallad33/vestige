@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `purge` is its own tool
+
+- The one irreversible call used to sit inside `memory`, which is mostly reads,
+  so a client could not treat it differently. `purge` is now advertised on its
+  own with `destructiveHint: true` and `_meta["anthropic/requiresUserInteraction"]`,
+  which Claude Code honours with a prompt on every call, even under bypass
+  permissions. It runs the same code path as `memory(action='purge')`: the same
+  pre-execution review gate, the same content-free tombstone. `memory(action='purge')`
+  keeps working for one release; the unit test pins that `purge` is the only
+  tool with the interaction flag.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with
