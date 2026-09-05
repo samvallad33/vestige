@@ -399,6 +399,33 @@ enum Commands {
         json: bool,
     },
 
+    /// Project the durable subset of a scope (decisions, patterns, rule-tagged facts)
+    /// into a fenced region of a client rule file such as CLAUDE.md or MEMORY.md, one
+    /// memory id per line. Prints the diff; writes only with --write, and only the fence.
+    Project {
+        /// Target file (created if missing; only the fenced region is ever replaced)
+        #[arg(long, value_name = "FILE", default_value = "CLAUDE.md")]
+        out: PathBuf,
+        /// 'claude-md' (grouped section) or 'memory-md' (one line per memory)
+        #[arg(long, default_value = "claude-md")]
+        format: String,
+        /// Project namespace to project
+        #[arg(long, default_value = "user")]
+        scope: String,
+        /// Leave out memories below this retention
+        #[arg(long, default_value = "0.3")]
+        min_retention: f64,
+        /// At most this many memories
+        #[arg(long, default_value = "60")]
+        max_items: usize,
+        /// Apply the change instead of printing the diff
+        #[arg(long)]
+        write: bool,
+        /// Output raw JSON instead of the diff
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Start standalone HTTP MCP server (no stdio, for remote access)
     Serve {
         /// HTTP transport port
@@ -506,6 +533,15 @@ fn main() -> anyhow::Result<()> {
             json,
         } => run_recall(query, depth, embedding_from, json),
         Commands::Compose { limit, tags, json } => run_compose(limit, tags, json),
+        Commands::Project {
+            out,
+            format,
+            scope,
+            min_retention,
+            max_items,
+            write,
+            json,
+        } => run_project(out, format, scope, min_retention, max_items, write, json),
         Commands::Serve {
             port,
             dashboard,
@@ -3808,6 +3844,95 @@ fn run_recall(
 }
 
 /// Compose: surface never-composed memory pairs + the testable question they imply.
+fn run_project(
+    out: PathBuf,
+    format: String,
+    scope: String,
+    min_retention: f64,
+    max_items: usize,
+    write: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    use vestige_core::projection::{self, ProjectionFormat, ProjectionOptions};
+
+    let format = ProjectionFormat::parse(&format)
+        .ok_or_else(|| anyhow::anyhow!("unknown format '{format}'; use claude-md or memory-md"))?;
+    let storage = open_storage()?;
+    let projection = projection::project(
+        &storage,
+        &ProjectionOptions {
+            scope: scope.clone(),
+            format,
+            min_retention: min_retention.clamp(0.0, 1.0),
+            max_items: max_items.clamp(1, 500),
+        },
+    )?;
+    let existing = if out.exists() {
+        std::fs::read_to_string(&out)?
+    } else {
+        String::new()
+    };
+    let new_text = projection::splice(&existing, &projection.region);
+    let diff = projection::line_diff(&existing, &new_text);
+    let (added, removed) = projection::diff_summary(&diff);
+
+    if write && (added > 0 || removed > 0) {
+        let tmp = out.with_extension("vestige-projection.tmp");
+        std::fs::write(&tmp, &new_text)?;
+        std::fs::rename(&tmp, &out)?;
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "path": out.display().to_string(),
+                "format": format.label(),
+                "scope": scope,
+                "itemCount": projection.items.len(),
+                "items": projection.items.iter().map(|i| serde_json::json!({
+                    "id": i.id, "nodeType": i.node_type, "tags": i.tags,
+                })).collect::<Vec<_>>(),
+                "added": added,
+                "removed": removed,
+                "written": write && (added > 0 || removed > 0),
+            }))?
+        );
+        return Ok(());
+    }
+
+    if added == 0 && removed == 0 {
+        println!(
+            "{} already holds this projection ({} memories from scope {}); nothing to change.",
+            out.display(),
+            projection.items.len(),
+            scope
+        );
+        return Ok(());
+    }
+    if write {
+        println!(
+            "Wrote {} memories from scope {} into the fenced region of {} (+{} -{} lines). Everything outside the fence is untouched.",
+            projection.items.len(),
+            scope,
+            out.display(),
+            added,
+            removed
+        );
+    } else {
+        println!(
+            "Projection of {} memories from scope {} for {} (+{} -{} lines). Re-run with --write to apply; only the fenced region changes.\n",
+            projection.items.len(),
+            scope,
+            out.display(),
+            added,
+            removed
+        );
+        print!("{}", projection::unified(&diff, 400));
+    }
+    Ok(())
+}
+
 fn run_compose(limit: i32, tags: Option<String>, json: bool) -> anyhow::Result<()> {
     let storage = open_storage()?;
 

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Markdown projection
+
+- `project` (MCP tool and `vestige project`) renders the durable subset of a
+  scope, decisions, patterns and facts tagged `rule`, `preference` or
+  `convention`, currently valid and above a retention floor, into a fenced
+  region of a client rule file (`claude-md` for CLAUDE.md or AGENTS.md,
+  `memory-md` for an index). Every line ends with the memory id it came from.
+  Preview is the default and shows a line diff; `write` needs `confirm=true`,
+  replaces only the fence, keeps the rest of the file byte for byte, refuses a
+  path outside `root`, and is a no-op when the store has not changed. This is
+  the first half of the roadmap's Markdown and rules projection; re-import of
+  edits comes separately. `docs/PROJECTION.md` describes it.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with

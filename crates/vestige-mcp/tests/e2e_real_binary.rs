@@ -1336,6 +1336,75 @@ fn tag_prefix_filtering_is_case_insensitive_on_the_keyword_path() {
     server.shutdown();
 }
 
+/// Projection over stdio: the durable subset lands in a fenced region, the
+/// human's text around it survives byte for byte, a second write is a no-op,
+/// and a path that escapes the root is refused.
+#[test]
+fn project_previews_then_writes_a_fenced_region_and_keeps_the_rest() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let decision = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "content": "Release from an integration branch, never from a feature branch", "node_type": "decision", "forceCreate": true }),
+    )["nodeId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pattern = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "content": "Touch edited files before running cargo so fingerprints refresh", "node_type": "pattern", "forceCreate": true }),
+    )["nodeId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ingest_keyword_only("The office kitchen has a new kettle", &["office"]);
+
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("CLAUDE.md");
+    std::fs::write(&target, "# Mine\n\nKeep me.\n").unwrap();
+
+    let preview = server.call_tool_ok(
+        "project",
+        json!({ "action": "preview", "format": "claude-md", "path": "CLAUDE.md", "root": root.path() }),
+    );
+    assert_eq!(preview["itemCount"], json!(2), "{preview}");
+    let region = preview["region"].as_str().unwrap();
+    assert!(region.contains(&decision) && region.contains(&pattern), "{region}");
+    assert_eq!(preview["target"]["exists"], json!(true));
+    assert!(preview["target"]["added"].as_u64().unwrap() > 0);
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "# Mine\n\nKeep me.\n");
+
+    let refused = server.call_tool(
+        "project",
+        json!({ "action": "write", "path": "CLAUDE.md", "root": root.path() }),
+    );
+    assert!(refused["error"].as_str().is_some_and(|e| e.contains("confirm")), "{refused}");
+
+    let written = server.call_tool_ok(
+        "project",
+        json!({ "action": "write", "path": "CLAUDE.md", "root": root.path(), "confirm": true }),
+    );
+    assert_eq!(written["written"], json!(true), "{written}");
+    let file = std::fs::read_to_string(&target).unwrap();
+    assert!(file.starts_with("# Mine\n\nKeep me.\n"), "{file}");
+    assert!(file.contains("<!-- vestige:projection:begin") && file.contains(&decision));
+
+    let again = server.call_tool_ok(
+        "project",
+        json!({ "action": "write", "path": "CLAUDE.md", "root": root.path(), "confirm": true }),
+    );
+    assert_eq!(again["written"], json!(false), "{again}");
+
+    let escape = server.call_tool(
+        "project",
+        json!({ "action": "write", "path": "../escape.md", "root": root.path(), "confirm": true }),
+    );
+    assert!(escape["error"].as_str().is_some_and(|e| e.contains("outside")), "{escape}");
+    server.shutdown();
+}
+
 /// The memory that IS an identifier must outrank the memory that merely cites it.
 ///
 /// Raw BM25 magnitude is unbounded while the literal-match bonus is capped, so

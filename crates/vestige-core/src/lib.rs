@@ -110,6 +110,7 @@ pub mod advanced;
 
 /// Codebase memory - Vestige's killer differentiator for AI code understanding
 pub mod codebase;
+pub mod projection;
 
 /// Neuroscience-inspired memory mechanisms
 ///
