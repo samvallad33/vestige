@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Linux arm64 release asset
+
+- `vestige-mcp-aarch64-unknown-linux-gnu.tar.gz` joins the release (#240):
+  Raspberry Pi 5, Graviton and Ampere hosts no longer build from source. Built
+  on GitHub's arm64 runner inside the same Ubuntu 22.04 container as the x86_64
+  asset, so the glibc 2.35 floor holds; the same glibc check and the same
+  smoke on Ubuntu 22.04 and Debian 12 arm64 images gate it, in CI on every pull
+  request and in the release workflow. ort-sys ships an ONNX Runtime prebuilt
+  for the target, so embeddings work unchanged. `npm install -g
+  vestige-mcp-server` on arm64 Linux now downloads it.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with

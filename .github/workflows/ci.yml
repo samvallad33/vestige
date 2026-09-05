@@ -438,3 +438,101 @@ jobs:
             -v "$PWD/scripts:/opt/scripts:ro" \
             debian:bookworm \
             bash -lc 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libstdc++6 >/dev/null && bash /opt/scripts/smoke-vestige-mcp.sh /opt/vestige/vestige-mcp'
+
+  # aarch64 Linux (Raspberry Pi 5, Graviton, Ampere) on GitHub's arm64 runner,
+  # inside the same Ubuntu 22.04 container so the glibc 2.35 floor holds. ort-sys
+  # ships an ONNX Runtime prebuilt for aarch64-unknown-linux-gnu, so the default
+  # feature set builds unchanged. Same glibc check and the same smoke on Ubuntu
+  # 22.04 and Debian 12 arm64 images as the x86_64 job.
+  release-build-linux-arm64:
+    name: Release Build (aarch64-unknown-linux-gnu, glibc 2.35)
+    runs-on: ubuntu-24.04-arm
+    container: ubuntu:22.04
+    if: |
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'pull_request'
+    needs: [test]
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install build dependencies
+        run: bash -lc "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev"
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Add target to the pinned toolchain
+        run: rustup target add aarch64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: linux-gnu-arm64-glibc235-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release --target aarch64-unknown-linux-gnu -p vestige-mcp
+
+      - name: Package
+        run: |
+          cd target/aarch64-unknown-linux-gnu/release
+          tar czf ../../../vestige-mcp-aarch64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore
+
+      - name: Check glibc ceiling
+        run: ./scripts/check-linux-glibc.sh target/aarch64-unknown-linux-gnu/release/vestige-mcp
+
+      - name: Exec vestige-mcp on Ubuntu 22.04
+        run: ./scripts/smoke-vestige-mcp.sh target/aarch64-unknown-linux-gnu/release/vestige-mcp
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-mcp-aarch64-unknown-linux-gnu
+          path: vestige-mcp-aarch64-unknown-linux-gnu.tar.gz
+
+  linux-compat-smoke-arm64:
+    name: Linux arm64 compat smoke (Ubuntu 22.04 / Debian 12)
+    runs-on: ubuntu-24.04-arm
+    needs: [release-build-linux-arm64]
+    if: |
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download linux-gnu artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vestige-mcp-aarch64-unknown-linux-gnu
+          path: dist
+
+      - name: Extract
+        run: tar -xzf dist/vestige-mcp-aarch64-unknown-linux-gnu.tar.gz -C dist
+
+      - name: Check glibc ceiling
+        run: ./scripts/check-linux-glibc.sh dist/vestige-mcp
+
+      - name: Exec vestige-mcp on Ubuntu 22.04
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/dist:/opt/vestige:ro" \
+            -v "$PWD/scripts:/opt/scripts:ro" \
+            ubuntu:22.04 \
+            bash -lc 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libstdc++6 >/dev/null && bash /opt/scripts/smoke-vestige-mcp.sh /opt/vestige/vestige-mcp'
+
+      - name: Exec vestige-mcp on Debian 12 bookworm
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/dist:/opt/vestige:ro" \
+            -v "$PWD/scripts:/opt/scripts:ro" \
+            debian:bookworm \
+            bash -lc 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libstdc++6 >/dev/null && bash /opt/scripts/smoke-vestige-mcp.sh /opt/vestige/vestige-mcp'
