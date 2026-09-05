@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Benchmarks
+
+- MemoryArena preregistration (#242). `docs/benchmarks/MEMORYARENA-PREREGISTRATION.md`
+  fixes the protocol before any run: the two formal-reasoning families, five
+  arms that all run every time (a no-memory floor, upstream's BM25 and
+  embedding RAG, upstream's long-context baseline, Vestige), Progress Score as
+  the primary metric, and a paired exact sign test against BM25 as the only
+  decision rule. `benchmarks/memoryarena/` ships the adapter that presents a
+  live `vestige-mcp` to upstream's memory interface (one shared server, one
+  scope per task, an embedding-readiness guard so a keyword-only fallback can
+  never be measured by accident, a JSONL sidecar with byte counts for the
+  blob-size confound), an installer that patches a pinned MemoryArena clone,
+  the run configs, a smoke test against the real binary, and the analysis
+  script. No number exists yet; the run is the next step.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with
