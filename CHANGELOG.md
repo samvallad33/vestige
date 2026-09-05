@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Windows job runs the dashboard check, test and build before the MSVC compile,
   the same steps as release.yml, so the next such break shows up on the pull
   request instead of on the release.
+- The Android CI job reuses a cached `cargo-ndk` instead of failing on
+  `cargo install` when the cargo cache is warm.
 
 ## [2.8.0] - 2026-09-05 — "Strong memories stay whole"
 

@@ -180,8 +180,10 @@ jobs:
             target/
           key: ${{ runner.os }}-aarch64-linux-android-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      # ~/.cargo/bin is in the cache, so a warm cache already holds cargo-ndk
+      # and `cargo install` refuses to overwrite it (exit 101). Reuse it.
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
+        run: command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
 
       # openssl-src (git2's vendored OpenSSL) configures Android through the
       # NDK's clang wrappers, which it looks for on PATH under ANDROID_NDK_ROOT.
