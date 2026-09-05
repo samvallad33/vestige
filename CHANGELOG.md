@@ -23,6 +23,11 @@ on), so those got regression tests and a checkpoint hook rather than rewrites.
   build never sees. Each item is now gated to match its callers, and a new CI
   job (`no-embeddings-build`) runs clippy with warnings as errors plus the core
   and server test suites in that configuration, so it cannot rot again.
+- CI cross-compiles that profile for `aarch64-linux-android` with cargo-ndk
+  (`android-build`, API 24, static C++ runtime) and fails if the binary links
+  anything beyond bionic's libc, libm, libdl, and liblog. The artifact it
+  uploads is the binary a Termux user runs, so a phone can test a pull request
+  before a release exists.
 - `codebase-git` feature, on by default. libgit2 (with OpenSSL and libssh2) is
   now optional; a build without it keeps the whole `codebase` tool and answers
   git-history questions with "git history is not available in this build"
