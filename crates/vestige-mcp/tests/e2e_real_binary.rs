@@ -91,6 +91,10 @@ struct Server {
     stdout: Receiver<String>,
     stderr: Arc<Mutex<Vec<String>>>,
     next_id: u64,
+    /// Server-initiated notifications (`notifications/message` and friends)
+    /// seen while waiting for responses. A real MCP client must tolerate them
+    /// between any two lines; the harness stashes them here for assertions.
+    notifications: Vec<Value>,
 }
 
 impl Server {
@@ -157,6 +161,7 @@ impl Server {
             stdout,
             stderr,
             next_id: 0,
+            notifications: Vec::new(),
         }
     }
 
@@ -193,7 +198,26 @@ impl Server {
     }
 
     /// Read one line of output, failing the test rather than blocking forever.
+    /// Is this line a server-initiated notification (a method, no id)?
+    fn is_server_notification(line: &str) -> Option<Value> {
+        let value: Value = serde_json::from_str(line).ok()?;
+        (value.get("id").is_none() && value.get("method").is_some()).then_some(value)
+    }
+
+    /// Next response line. Server notifications are stashed, not returned:
+    /// the protocol allows them between any two lines once the handshake is
+    /// done, and a client reading "the next line" must skip them.
     fn read_line(&mut self) -> String {
+        loop {
+            let line = self.read_any_line();
+            match Self::is_server_notification(&line) {
+                Some(notification) => self.notifications.push(notification),
+                None => return line,
+            }
+        }
+    }
+
+    fn read_any_line(&mut self) -> String {
         match self.stdout.recv_timeout(RPC_TIMEOUT) {
             Ok(line) => line,
             Err(RecvTimeoutError::Timeout) => panic!(
@@ -210,8 +234,46 @@ impl Server {
     /// Assert that the server sends nothing at all within `window`. Used to
     /// prove that notifications and blank lines produce no response.
     fn expect_silence(&mut self, window: Duration) {
-        if let Ok(unexpected) = self.stdout.recv_timeout(window) {
-            panic!("expected no response, got: {unexpected}");
+        let deadline = Instant::now() + window;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return;
+            }
+            match self.stdout.recv_timeout(remaining) {
+                Ok(line) => match Self::is_server_notification(&line) {
+                    // Logging from the warm-up tasks is not a response.
+                    Some(notification) => self.notifications.push(notification),
+                    None => panic!("expected no response, got: {line}"),
+                },
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// Wait until a `notifications/message` from `logger` has arrived, reading
+    /// and stashing lines until then.
+    fn wait_for_log_notification(&mut self, logger: &str, window: Duration) -> Value {
+        let deadline = Instant::now() + window;
+        loop {
+            if let Some(found) = self.notifications.iter().find(|n| {
+                n["method"] == json!("notifications/message") && n["params"]["logger"] == json!(logger)
+            }) {
+                return found.clone();
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "no notifications/message from {logger} within {window:?}; saw {:?}",
+                self.notifications
+            );
+            if let Ok(line) = self.stdout.recv_timeout(remaining) {
+                if let Some(notification) = Self::is_server_notification(&line) {
+                    self.notifications.push(notification);
+                } else {
+                    panic!("unexpected response while waiting for a notification: {line}");
+                }
+            }
         }
     }
 
@@ -640,6 +702,40 @@ fn uninitialized_requests_are_refused_but_discover_is_exempt() {
     server.handshake();
     assert!(server.result("tools/list", None)["tools"].is_array());
 
+    server.shutdown();
+}
+
+/// The first minute of a fresh install used to be silent: the model download
+/// printed to stderr, which stdio clients hide. The server now announces its
+/// warm-up as MCP logging, after the handshake and never before the initialize
+/// response (that ordering is what every other test in this file proves by
+/// reading responses line by line).
+#[test]
+fn warm_up_is_announced_as_mcp_logging_after_the_handshake() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    let init = server.handshake();
+    assert!(
+        init["capabilities"]["logging"].is_object(),
+        "logging capability must be declared: {init}"
+    );
+    assert!(
+        server.notifications.is_empty(),
+        "nothing may precede the initialize response: {:?}",
+        server.notifications
+    );
+
+    let note = server.wait_for_log_notification("vestige.embeddings", Duration::from_secs(20));
+    let event = note["params"]["data"]["event"].as_str().unwrap_or("");
+    assert!(
+        matches!(event, "model_loading" | "model_download_started" | "embedding_runtime_ready" | "embedding_runtime_unavailable"),
+        "unexpected warm-up event: {note}"
+    );
+    assert_eq!(note["params"]["level"].as_str().map(|l| l == "info" || l == "warning"), Some(true));
+
+    // Ordinary traffic keeps working with notifications interleaved.
+    let list = server.result("tools/list", None);
+    assert!(!list["tools"].as_array().unwrap().is_empty());
     server.shutdown();
 }
 

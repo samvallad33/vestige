@@ -75,6 +75,11 @@ pub struct ServerCapabilities {
     pub resources: Option<HashMap<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompts: Option<HashMap<String, Value>>,
+    /// Declared so the server may send `notifications/message` (the MCP
+    /// logging channel) for out-of-band events such as a first-run model
+    /// download. Empty object per the spec.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logging: Option<HashMap<String, Value>>,
 }
 
 // ============================================================================

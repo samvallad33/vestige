@@ -236,6 +236,9 @@ impl McpServer {
             "resources/read" => self.handle_resources_read(request.params).await,
             "server/discover" => self.handle_server_discover(),
             "ping" => Ok(serde_json::json!({})),
+            // The server only emits info and warning messages about its own
+            // startup (model downloads), so any requested level is accepted.
+            "logging/setLevel" => Ok(serde_json::json!({})),
             method => {
                 warn!("Unknown method: {}", method);
                 Err(JsonRpcError::method_not_found())
@@ -284,6 +287,7 @@ impl McpServer {
             "capabilities": {
                 "tools": { "listChanged": false },
                 "resources": { "listChanged": false },
+                "logging": {},
             },
             "instructions": build_instructions(),
             "ttlMs": DISCOVER_TTL_MS,
@@ -353,11 +357,19 @@ impl McpServer {
                     map
                 }),
                 prompts: None,
+                logging: Some(HashMap::new()),
             },
             instructions: Some(build_instructions()),
         };
 
         serde_json::to_value(result).map_err(|e| JsonRpcError::internal_error(&e.to_string()))
+    }
+
+    /// Whether the client has completed the `initialize` handshake. The stdio
+    /// transport holds server-initiated notifications until then, so nothing
+    /// precedes the initialize response on the wire.
+    pub fn is_initialized(&self) -> bool {
+        self.initialized
     }
 
     /// Handle tools/list request
@@ -2967,6 +2979,27 @@ mod tests {
     // ========================================================================
     // TOOLS/LIST TESTS
     // ========================================================================
+
+    #[tokio::test]
+    async fn logging_capability_is_declared_and_set_level_is_accepted() {
+        let (mut server, _dir) = test_server().await;
+        let init = server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await
+            .unwrap();
+        let caps = init.result.unwrap()["capabilities"].clone();
+        assert!(caps["logging"].is_object(), "{caps}");
+        let set = server
+            .handle_request(make_request(
+                "logging/setLevel",
+                Some(serde_json::json!({ "level": "info" })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(set.result.unwrap(), serde_json::json!({}));
+        let discover = server.handle_request(make_request("server/discover", None)).await.unwrap();
+        assert!(discover.result.unwrap()["capabilities"]["logging"].is_object());
+    }
 
     #[tokio::test]
     async fn test_tools_list_returns_all_tools() {

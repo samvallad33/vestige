@@ -924,6 +924,9 @@ pub async fn execute(
                 _ => "Memory processed successfully"
             }
         });
+        if !has_embedding && let Some(warming) = super::warming::embedding_warming(storage) {
+            response["warming"] = warming;
+        }
         attach_failure_hooks(&mut response, failure_hooks);
         Ok(response)
     }

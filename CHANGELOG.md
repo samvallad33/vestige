@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — First run says what it is doing
+
+- A fresh install downloads about 130 MB of embedding model and about 150 MB
+  of reranker before the first answer, with progress only on stderr, which
+  stdio clients hide; the first minute read as a hang. The server now declares
+  the MCP `logging` capability and sends `notifications/message` from the
+  warm-up tasks: `model_download_started` (with the size) or `model_loading`,
+  `embedding_runtime_ready` or `embedding_runtime_unavailable`, and the same
+  for the reranker. `logging/setLevel` is accepted. Until the runtime is
+  ready, `recall` responses and vector-less `smart_ingest` responses carry a
+  `warming` block that names the effect (keyword-only retrieval, saves without
+  a vector until back-filled) and where to check readiness, so the agent can
+  tell the user instead of guessing. fastembed exposes no download progress
+  callback, so there is no byte-level progress; the notifications bracket the
+  download honestly.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with
