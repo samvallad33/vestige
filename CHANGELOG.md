@@ -5,6 +5,20 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — CI
+
+- The Observatory privacy test built file paths from `import.meta.url` with
+  `.pathname`, which on Windows yields `/D:/...` and then `D:\D:\...` after
+  `join()`. It failed the v2.8.0 Windows release build, the first time the
+  dashboard suite had run on Windows. It now uses `fileURLToPath`, and the CI
+  Windows job runs the dashboard check, test and build before the MSVC compile,
+  the same steps as release.yml, so the next such break shows up on the pull
+  request instead of on the release.
+- The Android CI job reuses a cached `cargo-ndk` instead of failing on
+  `cargo install` when the cargo cache is warm.
+
 ## [2.8.0] - 2026-09-05 — "Strong memories stay whole"
 
 The release the Sep 4 deep audit asked for. The ingest gate stops merging new
