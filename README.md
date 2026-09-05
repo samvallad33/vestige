@@ -140,7 +140,7 @@ Everything above is free forever and never metered. **Pro ($19/month)** is manag
 
 | | |
 |---|---|
-| Engine | Rust 2024, ~96k lines, single 25MB binary, 1,961 tests, clippy clean at `-D warnings` |
+| Engine | Rust 2024, ~96k lines, single 25MB binary, 1,990+ tests, clippy clean at `-D warnings` |
 | Retrieval | Nomic Embed v1.5 (Matryoshka 768d→256d) + USearch HNSW + SQLite FTS5, optional Qwen3 reranker |
 | Storage | SQLite, optional SQLCipher encryption ([docs/STORAGE.md](docs/STORAGE.md)) |
 | Offline | One 130MB model download on first run, then no network, ever |

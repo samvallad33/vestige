@@ -3,11 +3,12 @@
 > Public adoption roadmap for making Vestige easier to start, easier to trust,
 > and easier to configure.
 
-Last updated: June 7, 2026
+Last updated: September 4, 2026
 
-Vestige already has the core primitives for durable local memory: `search`,
-`session_context`, `smart_ingest`, `memory`, `intention`, `codebase`,
-`deep_reference`, suppression, portable storage, and the dashboard. The next
+Vestige already has the core primitives for durable local memory: `recall`
+(lookup, reason and contradictions modes), `session_start`, `smart_ingest`,
+`memory`, `intention`, `codebase`, suppression, portable storage, and the
+dashboard. The next
 product step is reducing first-user confusion so more people can get value from
 those primitives without inventing their own fragile memory vocabulary.
 
@@ -30,7 +31,7 @@ This roadmap turns early community feedback into a staged plan.
 
 | Area | Current State | Next Documentation Fix |
 |------|---------------|------------------------|
-| Session startup | `session_context` combines memories, intentions, status, predictions, and codebase context. | Update all agent setup templates to make `session_context` the default startup call. |
+| Session startup | `session_start` combines memories, intentions, status, predictions, and codebase context. | Update all agent setup templates to make `session_start` the default startup call. |
 | Batch memory saves | `smart_ingest` batch mode defaults to `batchMergePolicy="force_create"` so caller-separated items stay separate. | Document when to use batch force-create vs smart merge. |
 | Device migration | `portable-export`, `portable-import`, and `sync` preserve exact Vestige storage state. | Separate device migration from first-time document import so users do not confuse them. |
 | Supersede semantics | Supersede demotes the old memory and creates a new one; it does not purge the old memory. | Add plain-language vocabulary for create, update, supersede, suppress, demote, and purge. |
@@ -45,7 +46,7 @@ Target: make the first 30 minutes with Vestige hard to mess up.
 | Atomic memory guide | Clear examples for one fact, one preference, one decision, one bug fix, one source note, and one code pattern per memory. |
 | Default tag vocabulary | Recommended tags for source quality, confidence, project, type, urgency, and lifecycle without overloading words like `verified`. |
 | Smart vs force-create guide | Agents know when to use `forceCreate`, `batchMergePolicy="force_create"`, or normal PE gating. |
-| Updated agent templates | Claude, Codex, Cursor, VS Code, Xcode, OpenCode, JetBrains, and Windsurf templates start with `session_context` and use the same memory vocabulary. |
+| Updated agent templates | Claude, Codex, Cursor, VS Code, Xcode, OpenCode, JetBrains, and Windsurf templates start with `session_start` and use the same memory vocabulary. |
 
 Planned docs:
 
@@ -106,7 +107,7 @@ reminder.
 |------|---------|
 | Goal primitive | Non-fading, manually pivoted goals that survive normal memory decay. |
 | Milestone tracking | Goals can have milestones, status, evidence, and blockers. |
-| Goal-aware session context | `session_context` can include active goals when relevant. |
+| Goal-aware session context | `session_start` can include active goals when relevant. |
 | Manual pivot semantics | Agents can update goals only when the user explicitly pivots, completes, or cancels them. |
 | Dashboard surface | Users can inspect active, completed, paused, and cancelled goals. |
 

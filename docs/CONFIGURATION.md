@@ -163,7 +163,7 @@ scores and timestamps are included:
 
 Resolved per call, highest to lowest:
 
-1. **Explicit MCP parameter** (e.g. `detail_level` / `limit` on a `search`
+1. **Explicit MCP parameter** (e.g. `detail_level` / `limit` on a `recall`
    call) — always wins.
 2. **`vestige.toml`** — the `[defaults]` keys and the selected profile.
 3. **Built-in default** — the `default` profile, identical to pre-v2.1.26
@@ -171,7 +171,7 @@ Resolved per call, highest to lowest:
 
 ### Affected tools
 
-`search`, `memory_timeline`, `codebase` (`get_context`), and `session_context`
+`recall`, `memory_status` (`timeline` view), `codebase` (`get_context`), and `session_start`
 resolve their default detail level and result limit through this config. Each of
 these tools also echoes the active `profile` in its response so you can confirm
 what was applied. Tools that take no `detail_level`/`limit` are unaffected.
