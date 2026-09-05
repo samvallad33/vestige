@@ -973,16 +973,41 @@ pub async fn execute(
 
 /// A kill switch read the way the other Vestige gates are: unset, empty or
 /// anything unrecognised means ON; only `0`, `false`, `off`, `no` turn it off.
+/// An on-by-default lever: unset means on, and only an explicit
+/// `0`/`false`/`off`/`no` turns it off.
 fn env_flag_enabled(name: &str) -> bool {
-    match std::env::var(name) {
-        Ok(value) => {
+    flag_enabled_from(std::env::var(name).ok().as_deref())
+}
+
+/// An opt-in lever: unset means off, and only an explicit
+/// `1`/`true`/`on`/`yes` turns it on. Typos stay off.
+fn env_flag_opt_in(name: &str) -> bool {
+    flag_opt_in_from(std::env::var(name).ok().as_deref())
+}
+
+fn flag_enabled_from(value: Option<&str>) -> bool {
+    match value {
+        Some(value) => {
             let value = value.trim();
             !(value.eq_ignore_ascii_case("false")
                 || value.eq_ignore_ascii_case("off")
                 || value.eq_ignore_ascii_case("no")
                 || value == "0")
         }
-        Err(_) => true,
+        None => true,
+    }
+}
+
+fn flag_opt_in_from(value: Option<&str>) -> bool {
+    match value {
+        Some(value) => {
+            let value = value.trim();
+            value == "1"
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("on")
+                || value.eq_ignore_ascii_case("yes")
+        }
+        None => false,
     }
 }
 
@@ -996,8 +1021,11 @@ fn env_flag_enabled(name: &str) -> bool {
 ///    pass alone was the weaker schedule. Honours `VESTIGE_BACKFILL_AUTOFIRE`.
 /// 2. Post-retrieval failure feedback: the memories retrieved in the last
 ///    thirty minutes of receipts lose accessibility by their reactivation
-///    strength (Heinbockel et al., eLife 2025). Honours
-///    `VESTIGE_FAILURE_FEEDBACK`.
+///    strength (Heinbockel et al., eLife 2025). Opt-in through
+///    `VESTIGE_FAILURE_FEEDBACK=1` for now: it demotes memories on its own,
+///    so it becomes the default only once real-store data shows the
+///    demotions land on the right ones. Every delta is ledgered and
+///    reversible either way.
 ///
 /// Neither hook can fail the ingest; problems are logged and the memory is
 /// already saved. Returns the hook results for the response, or None when the
@@ -1012,7 +1040,7 @@ async fn run_failure_hooks(
         return None;
     }
     let mut hooks = serde_json::Map::new();
-    if env_flag_enabled("VESTIGE_FAILURE_FEEDBACK") {
+    if env_flag_opt_in("VESTIGE_FAILURE_FEEDBACK") {
         match storage.apply_failure_feedback(node_id, chrono::Duration::minutes(30)) {
             Ok(report) => {
                 hooks.insert(
@@ -1652,6 +1680,27 @@ fn dominant_importance_event(snapshot: &SynapticSignalSnapshot) -> (&'static str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failure_hook_levers_parse_as_documented() {
+        use super::{flag_enabled_from, flag_opt_in_from};
+        // On-by-default lever (live backfill): unset is on, only explicit off words turn it off.
+        assert!(flag_enabled_from(None));
+        for off in ["0", "false", "OFF", "no", " off "] {
+            assert!(!flag_enabled_from(Some(off)), "{off:?} must disable");
+        }
+        for on in ["1", "true", "banana", ""] {
+            assert!(flag_enabled_from(Some(on)), "{on:?} must stay on");
+        }
+        // Opt-in lever (failure feedback): unset is off, only explicit on words turn it on.
+        assert!(!flag_opt_in_from(None));
+        for on in ["1", "true", "ON", "yes", " on "] {
+            assert!(flag_opt_in_from(Some(on)), "{on:?} must enable");
+        }
+        for off in ["0", "false", "banana", ""] {
+            assert!(!flag_opt_in_from(Some(off)), "{off:?} must stay off");
+        }
+    }
+
     use super::*;
     use crate::cognitive::CognitiveEngine;
     use tempfile::TempDir;

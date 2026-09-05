@@ -5,40 +5,25 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.8.0] - 2026-09-05 — "Strong memories stay whole"
 
-Hardening pass driven by Aaron Garcia's (@aaronukgarcia) independent audit of
-v2.7.0, verified finding by finding against `main` before anything changed.
-Confirmed items are fixed below; the audit's migration-idempotence and WAL
-starvation findings did not reproduce (every migration already runs inside one
-IMMEDIATE transaction with its own version bump, and `wal_autocheckpoint` is
-on), so those got regression tests and a checkpoint hook rather than rewrites.
+The release the Sep 4 deep audit asked for. The ingest gate stops merging new
+notes into strong memories (the "weld" class behind two incidents this month),
+failures push back on what was just retrieved, and every MCP tool now carries
+honest behaviour hints on a leaner surface. Around that: the Memory PR
+quarantine decides by subject instead of by word, usearch 2.26 and Rust 1.98.1
+land with Windows and Android compiled in CI for the first time, libgit2's four
+CVEs are closed, and the hardening pass from Aaron Garcia's independent audit
+of v2.7.0 ships in full.
 
-### Added — Android (Termux) build profile
+### Security
 
-- The no-embeddings configuration (`--no-default-features --features
-  connectors,cloud-sync`) is now a first-class build (#145). It is the
-  configuration Termux users build from source, and the first time it was
-  checked it carried eight dead-code warnings behind `cfg` gates the default
-  build never sees. Each item is now gated to match its callers, and a new CI
-  job (`no-embeddings-build`) runs clippy with warnings as errors plus the core
-  and server test suites in that configuration, so it cannot rot again.
-- CI cross-compiles that profile for `aarch64-linux-android` with cargo-ndk
-  (`android-build`, API 24, static C++ runtime) and fails if the binary links
-  anything beyond bionic's libc, libm, libdl, and liblog. The artifact it
-  uploads is the binary a Termux user runs, so a phone can test a pull request
-  before a release exists.
-- `codebase-git` feature, on by default. libgit2 (with OpenSSL and libssh2) is
-  now optional; a build without it keeps the whole `codebase` tool and answers
-  git-history questions with "git history is not available in this build"
-  instead of failing to compile. The git data types moved to a shared module so
-  both variants expose the same API.
-- Honest status in builds without an embedding runtime: `vestige-cli health`
-  says "not compiled into this build" instead of "Not Ready", `memory_status`
-  and the dashboard report `embeddingBackend`, and `smart_ingest` responses
-  carry `"dedup": "unavailable in this build"` when the prediction-error gate
-  is compiled out.
-- `docs/INSTALL-TERMUX.md`: the from-source recipe for Android.
+- libgit2 1.9.7 (`libgit2-sys` 0.18.3+1.9.2 to 0.18.8+1.9.7). libgit2 1.9.5
+  fixed CVE-2026-53584 (submodule path escape), CVE-2026-53585 (unbounded
+  allocation from a delta size header), CVE-2026-53586 (authentication callback
+  host confusion) and CVE-2026-53587; 1.9.7 followed. Vestige builds `git2`
+  with vendored OpenSSL, so the fix ships inside every release binary.
+
 ### Fixed — The ingest gate now honours memory strength
 
 - `smart_ingest` computed whether the closest existing memory was strong
@@ -63,7 +48,10 @@ on), so those got regression tests and a checkpoint hook rather than rewrites.
   is written to the new `failure_feedback` ledger (migration V33) and
   `revert_failure_feedback` undoes it exactly. This is the first mechanism by
   which a wrong memory leaves the top of recall without anyone demoting it by
-  hand. Kill switch: `VESTIGE_FAILURE_FEEDBACK=0`.
+  hand. Opt-in for this release: set
+  `VESTIGE_FAILURE_FEEDBACK=1`. It demotes memories on its own, so it becomes
+  the default only once real-store data shows the demotions land on the right
+  ones.
 - Retroactive Salience Backfill now also runs live, through the same pipeline
   and receipts as the `backfill` tool, the moment a failure is ingested. The
   paper it is ported from (Zaki et al., Nature 2025) found offline
@@ -103,20 +91,31 @@ on), so those got regression tests and a checkpoint hook rather than rewrites.
   held for review and their authors had to come back for them. Five tests
   cover the branches, including a fake token fixture checked against the
   secret scanner. `docs/CONFIGURATION.md` states the rule.
-### Fixed — Test isolation
+### Added — Android (Termux) build profile
 
-- `cargo test -p vestige-core --lib vector` no longer fails three `peer_*`
-  tests on every run. `with_vector_search_disabled` set
-  `VESTIGE_DISABLE_VECTOR_SEARCH` in the process environment, so every other
-  test thread building a `Storage` in that window silently got no vector index;
-  the full suite passed only by scheduling luck. Both env-gated test helpers
-  (vector search and `VESTIGE_AUTO_CONSOLIDATE_MERGE`) now pin a thread-local
-  override that the gates read in test builds, `ENV_LOCK` is gone, and two
-  tests assert that a sibling thread never sees the override.
-- The vector-search gate and its "why is it off" report now parse the
-  variable the same way. `VESTIGE_DISABLE_VECTOR_SEARCH=0` leaves the index on
-  and is reported as on; before, any value made the report say disabled while
-  the index stayed on.
+- The no-embeddings configuration (`--no-default-features --features
+  connectors,cloud-sync`) is now a first-class build (#145). It is the
+  configuration Termux users build from source, and the first time it was
+  checked it carried eight dead-code warnings behind `cfg` gates the default
+  build never sees. Each item is now gated to match its callers, and a new CI
+  job (`no-embeddings-build`) runs clippy with warnings as errors plus the core
+  and server test suites in that configuration, so it cannot rot again.
+- CI cross-compiles that profile for `aarch64-linux-android` with cargo-ndk
+  (`android-build`, API 24, static C++ runtime) and fails if the binary links
+  anything beyond bionic's libc, libm, libdl, and liblog. The artifact it
+  uploads is the binary a Termux user runs, so a phone can test a pull request
+  before a release exists.
+- `codebase-git` feature, on by default. libgit2 (with OpenSSL and libssh2) is
+  now optional; a build without it keeps the whole `codebase` tool and answers
+  git-history questions with "git history is not available in this build"
+  instead of failing to compile. The git data types moved to a shared module so
+  both variants expose the same API.
+- Honest status in builds without an embedding runtime: `vestige-cli health`
+  says "not compiled into this build" instead of "Not Ready", `memory_status`
+  and the dashboard report `embeddingBackend`, and `smart_ingest` responses
+  carry `"dedup": "unavailable in this build"` when the prediction-error gate
+  is compiled out.
+- `docs/INSTALL-TERMUX.md`: the from-source recipe for Android.
 ### Changed — Dependencies
 
 - usearch `=2.23.0` is unpinned to `2.26`. The MSVC compile break that forced
@@ -143,6 +142,27 @@ on), so those got regression tests and a checkpoint hook rather than rewrites.
   2.0.0-rc.11) and fastembed 5.13.2 are deliberately held back: `cargo update`
   moves them to rc.13 and 5.17 together, which changes the runtime that gets
   downloaded at build time and is its own upgrade (#214).
+
+### Fixed — Test isolation
+
+- `cargo test -p vestige-core --lib vector` no longer fails three `peer_*`
+  tests on every run. `with_vector_search_disabled` set
+  `VESTIGE_DISABLE_VECTOR_SEARCH` in the process environment, so every other
+  test thread building a `Storage` in that window silently got no vector index;
+  the full suite passed only by scheduling luck. Both env-gated test helpers
+  (vector search and `VESTIGE_AUTO_CONSOLIDATE_MERGE`) now pin a thread-local
+  override that the gates read in test builds, `ENV_LOCK` is gone, and two
+  tests assert that a sibling thread never sees the override.
+- The vector-search gate and its "why is it off" report now parse the
+  variable the same way. `VESTIGE_DISABLE_VECTOR_SEARCH=0` leaves the index on
+  and is reported as on; before, any value made the report say disabled while
+  the index stayed on.
+The remaining sections are the hardening pass driven by Aaron Garcia's
+(@aaronukgarcia) independent audit of v2.7.0, verified finding by finding against `main` before anything changed.
+Confirmed items are fixed below; the audit's migration-idempotence and WAL
+starvation findings did not reproduce (every migration already runs inside one
+IMMEDIATE transaction with its own version bump, and `wal_autocheckpoint` is
+on), so those got regression tests and a checkpoint hook rather than rewrites.
 
 ### Fixed — Vector index
 

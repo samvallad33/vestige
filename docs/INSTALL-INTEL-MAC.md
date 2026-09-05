@@ -6,7 +6,7 @@ x86_64 macOS prebuilts after ONNX Runtime v1.23.0, so we use the
 `ort-dynamic` feature to runtime-link against the version you install locally.
 This keeps Vestige working on Intel Mac without waiting for a dead upstream.
 
-As of Vestige 2.7.1 this is still the Intel Mac path. Homebrew ONNX Runtime
+As of Vestige 2.8.0 this is still the Intel Mac path. Homebrew ONNX Runtime
 remains required; there is no pure-Rust Intel backend in the current release.
 
 ## Prerequisite
