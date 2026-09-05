@@ -22,6 +22,7 @@ import {
 	previewContent,
 	formatDate,
 	safeTags,
+	mergePlanSummary,
 } from '../duplicates-helpers';
 
 // ---------------------------------------------------------------------------
@@ -361,5 +362,31 @@ describe('safeTags', () => {
 
 	it('honors default limit = 4', () => {
 		expect(safeTags(['a', 'b', 'c', 'd', 'e', 'f'])).toEqual(['a', 'b', 'c', 'd']);
+	});
+});
+
+describe('mergePlanSummary', () => {
+	it('names the survivor, the absorbed count and the matcher verdict', () => {
+		const text = mergePlanSummary({
+			survivorId: 'abcdef1234567890',
+			memberIds: ['abcdef1234567890', 'x', 'y'],
+			classification: 'possible',
+			confidence: '0.812',
+			diff: { invalidatedIds: ['x', 'y'] }
+		});
+		expect(text).toBe(
+			'Keeps abcdef12, folds 2 memories into it. Matcher: possible at 81%. Reversible with dedup undo.'
+		);
+	});
+
+	it('falls back to member count and says unknown for an unparsable confidence', () => {
+		const text = mergePlanSummary({
+			survivorId: 'abcdef1234567890',
+			memberIds: ['abcdef1234567890', 'x'],
+			classification: 'match',
+			confidence: 'n/a'
+		});
+		expect(text).toContain('folds 1 memory into it');
+		expect(text).toContain('at unknown');
 	});
 });

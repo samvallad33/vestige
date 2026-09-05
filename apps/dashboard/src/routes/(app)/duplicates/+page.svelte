@@ -95,10 +95,13 @@
 		}
 	}
 
-	// NOTE: merge intentionally has NO handler. The old mergeCluster console.logged
-	// and optimistically dismissed — a fake success claiming destructive work
-	// happened. DuplicateCluster now renders a visibly-disabled "Merge unavailable"
-	// control until POST /api/duplicates/merge ships.
+	// Merge is plan-then-apply against the dedup tool through the API. After a
+	// successful apply the cluster is dropped and detection reruns, so what the
+	// page shows is what the store holds; nothing is dismissed optimistically.
+	function onMerged(key: string) {
+		dismissCluster(key);
+		detect();
+	}
 
 	const visibleClusters = $derived(
 		clusters
@@ -159,16 +162,20 @@
 	<PageHeader
 		icon="duplicates"
 		title="Memory Hygiene: Duplicate Detection"
-		subtitle="Cosine-similarity clustering over embeddings. Oversized similarity components are quarantined for review because they chain through pairwise similarity and are not safe to merge. Dismissed clusters are hidden for this session only."
+		subtitle="Cosine-similarity clustering over embeddings. Merge previews a reversible plan and applies it only on your say-so; dedup undo reverses it. Oversized similarity components are quarantined for review because they chain through pairwise similarity and are not safe to merge. Dismissed clusters are hidden for this session only."
 		accent="synapse"
 	>
-		<span
-			class="ping-host flex h-2 w-2 items-center justify-center text-synapse-glow"
-			aria-hidden="true"
-		>
-			<span class="breathe h-2 w-2 rounded-full bg-synapse-glow"></span>
-		</span>
-		<span class="text-xs text-dim">Live</span>
+		<!-- The badge reports the last fetch, not a hope: Live after a successful
+		     detection, Refreshing while one runs, Offline when the API failed. -->
+		{#if !error}
+			<span
+				class="ping-host flex h-2 w-2 items-center justify-center text-synapse-glow"
+				aria-hidden="true"
+			>
+				<span class="breathe h-2 w-2 rounded-full bg-synapse-glow"></span>
+			</span>
+		{/if}
+		<span class="text-xs text-dim">{error ? 'Offline' : loading ? 'Refreshing' : 'Live'}</span>
 	</PageHeader>
 
 	<!-- Controls panel -->
@@ -341,6 +348,9 @@
 							suggestedAction={c.suggestedAction}
 							oversized={c.memories.length > OVERSIZED_MEMBERS}
 							onDismiss={() => dismissCluster(key)}
+							onPlan={(ids) => api.duplicatesPlan(ids)}
+							onApply={(planId) => api.duplicatesApply(planId)}
+							onMerged={() => onMerged(key)}
 						/>
 					</div>
 				</div>

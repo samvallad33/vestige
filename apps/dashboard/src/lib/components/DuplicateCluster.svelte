@@ -17,7 +17,9 @@
 		previewContent,
 		formatDate,
 		safeTags,
+		mergePlanSummary,
 	} from './duplicates-helpers';
+	import type { DuplicateMergePlan, DuplicateMergeResult } from '$types';
 
 	interface ClusterMemory {
 		id: string;
@@ -38,9 +40,59 @@
 		 */
 		oversized?: boolean;
 		onDismiss?: () => void;
+		/** Preview a reversible merge of these member ids. Nothing is written. */
+		onPlan?: (memberIds: string[]) => Promise<DuplicateMergePlan>;
+		/** Execute a previewed plan; returns the operation id `dedup undo` reverses. */
+		onApply?: (planId: string) => Promise<DuplicateMergeResult>;
+		/** Called after a successful apply so the page can drop the cluster and refetch. */
+		onMerged?: (result: DuplicateMergeResult) => void;
+	}
+	let {
+		similarity,
+		memories,
+		suggestedAction,
+		oversized = false,
+		onDismiss,
+		onPlan,
+		onApply,
+		onMerged,
+	}: Props = $props();
+
+	// Merge is a two-step flow: plan (read-only preview) then apply (explicit).
+	// Every state here is visible in the UI; there is no optimistic path.
+	let plan: DuplicateMergePlan | null = $state(null);
+	let planning = $state(false);
+	let applying = $state(false);
+	let mergeError: string | null = $state(null);
+	let merged: DuplicateMergeResult | null = $state(null);
+	const canMerge = $derived(!oversized && !!onPlan && !!onApply && !merged);
+
+	async function previewMerge() {
+		if (!onPlan || planning) return;
+		planning = true;
+		mergeError = null;
+		try {
+			plan = await onPlan(memories.map((m) => m.id));
+		} catch (e) {
+			mergeError = e instanceof Error ? e.message : 'Could not plan the merge';
+		} finally {
+			planning = false;
+		}
 	}
 
-	let { similarity, memories, suggestedAction, oversized = false, onDismiss }: Props = $props();
+	async function applyMerge() {
+		if (!onApply || !plan || applying) return;
+		applying = true;
+		mergeError = null;
+		try {
+			merged = await onApply(plan.planId);
+			onMerged?.(merged);
+		} catch (e) {
+			mergeError = e instanceof Error ? e.message : 'Could not apply the merge';
+		} finally {
+			applying = false;
+		}
+	}
 
 	let expanded = $state(false);
 
@@ -191,22 +243,69 @@
 			{/if}
 		</div>
 
-		<!-- Actions — native <button> elements, fully keyboard-accessible.
-		     Merge is NOT wired to a backend yet; the old button console.logged and
-		     optimistically dismissed the cluster — a fake success. Until the merge
-		     endpoint ships, the control is visibly disabled (never lies). -->
+		<!-- Merge preview. Rendered only after the backend returned a plan, so
+		     every number here came from the dedup tool, not from this component. -->
+		{#if plan && !merged}
+			<div class="rounded-xl border border-synapse/25 bg-synapse/5 p-3 text-xs">
+				<div class="font-mono text-[11px] uppercase tracking-[0.18em] text-synapse-glow">
+					Merge preview · nothing written yet
+				</div>
+				<div class="mt-1 text-text">{mergePlanSummary(plan)}</div>
+				<div class="mt-1 text-muted">{plan.explanation}</div>
+				<div class="mt-2 max-h-24 overflow-hidden text-muted">
+					Result: {previewContent(plan.diff.resultContent, 240)}
+				</div>
+				<div class="mt-3 flex flex-wrap items-center gap-2">
+					<button
+						type="button"
+						onclick={applyMerge}
+						disabled={applying}
+						class="rounded-lg bg-synapse/25 px-3 py-1.5 text-xs font-medium text-synapse-glow transition hover:bg-synapse/35 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60"
+					>
+						{applying ? 'Applying…' : 'Apply merge'}
+					</button>
+					<button
+						type="button"
+						onclick={() => (plan = null)}
+						disabled={applying}
+						class="rounded-lg bg-white/[0.04] px-3 py-1.5 text-xs text-dim transition hover:bg-white/[0.08] hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60"
+					>
+						Cancel
+					</button>
+				</div>
+			</div>
+		{/if}
+		{#if merged}
+			<div class="rounded-xl border border-consolidated/25 bg-consolidated/5 p-3 text-xs text-text">
+				Merged into {merged.survivorId.slice(0, 8)}. Reversible: run dedup undo with
+				operation id <span class="font-mono">{merged.operationId}</span>.
+			</div>
+		{/if}
+		{#if mergeError}
+			<div class="rounded-xl border border-decay/25 bg-decay/5 p-3 text-xs text-decay" role="alert">
+				{mergeError}
+			</div>
+		{/if}
+
+		<!-- Actions: native <button> elements, fully keyboard-accessible. Merge
+		     is a plan-then-apply flow against POST /api/duplicates/plan and
+		     /api/duplicates/apply; oversized components stay unmergeable because
+		     they chain through pairwise similarity. -->
 		<div class="flex flex-wrap items-center gap-2 pt-1">
 			<button
 				type="button"
-				disabled
-				aria-disabled="true"
-				aria-label="Merge is not available yet"
-				class="cursor-not-allowed rounded-lg bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-muted/60"
+				onclick={previewMerge}
+				disabled={!canMerge || planning || !!plan}
+				aria-disabled={!canMerge}
+				aria-label={oversized ? 'Merge is not safe for an oversized component' : 'Preview a reversible merge'}
+				class={canMerge
+					? 'rounded-lg bg-synapse/20 px-3 py-1.5 text-xs font-medium text-synapse-glow transition hover:bg-synapse/30 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-synapse/60'
+					: 'cursor-not-allowed rounded-lg bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-muted/60'}
 				title={oversized
-					? 'Oversized similarity component — not safe to merge'
-					: 'Merge backend not shipped yet — no destructive action is taken from this screen'}
+					? 'Oversized similarity component: members chain through pairwise similarity, so a merge could fold unrelated memories together'
+					: 'Preview first; nothing is written until you apply'}
 			>
-				Merge unavailable
+				{oversized ? 'Merge unsafe here' : planning ? 'Planning…' : 'Preview merge'}
 			</button>
 			<button
 				type="button"
