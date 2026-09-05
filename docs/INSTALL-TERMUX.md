@@ -68,7 +68,7 @@ Then connect an MCP client with the usual config:
 | --- | --- | --- |
 | `connectors` | on | GitHub Issues and Redmine connectors; the HTTP client is rustls, no OpenSSL |
 | `cloud-sync` | on | Vestige Pro sync client, same HTTP client |
-| `embeddings`, `vector-search` | off | ONNX Runtime is not bundled for Android in this build |
+| `embeddings`, `vector-search` | off | this build leaves them out on purpose; the pinned `ort-sys` does ship an `aarch64-linux-android` ONNX Runtime prebuilt (NDK-built), and whether it links in a native Termux build is untested, so the embeddings build is the next step rather than part of this one |
 | `codebase-git` | off | libgit2 needs OpenSSL and libssh2 |
 
 ## Data location
@@ -81,9 +81,11 @@ resolves through `$HOME` (`~/.local/share/vestige/`). Override with
 
 1. A prebuilt `aarch64-linux-android` asset in each release, and
    `npm install -g vestige-mcp-server` working on Termux.
-2. Semantic search on the phone: Termux ships ONNX Runtime as a package
-   (`pkg install onnxruntime`), and Vestige already knows how to load a system
-   `libonnxruntime` through `ORT_DYLIB_PATH` on Intel Macs. The Termux build
-   will pick it up automatically.
+2. Semantic search on the phone, by whichever of two routes builds first:
+   the pinned `ort-sys` already lists an `aarch64-linux-android` ONNX Runtime
+   prebuilt, so the default `ort-download` feature may link as is; failing
+   that, Termux ships ONNX Runtime as a package (`pkg install onnxruntime`)
+   and Vestige already knows how to load a system `libonnxruntime` through
+   `ORT_DYLIB_PATH` on Intel Macs. Neither has been tested on a phone yet.
 
 Follow or help on [issue #145](https://github.com/samvallad33/vestige/issues/145).
