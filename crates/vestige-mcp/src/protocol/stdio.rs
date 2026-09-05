@@ -76,25 +76,27 @@ impl StdioTransport {
         let stdin = tokio::io::stdin();
         let stdout = tokio::io::stdout();
 
-        let mut reader = BufReader::new(stdin);
+        // `Lines::next_line` is cancel safe (tokio docs); `read_line` is not.
+        // The select! below drops the pending read whenever a notification
+        // wins the race, and a cancelled `read_line` loses the bytes it had
+        // already pulled off stdin: the client's request vanishes and the
+        // client waits forever. `next_line` keeps its partial line across
+        // polls, so a notification can interleave at any moment.
+        let mut lines = BufReader::new(stdin).lines();
         let mut stdout = stdout;
         let mut consecutive_errors: u32 = 0;
-        let mut line_buf = String::new();
-
         loop {
-            line_buf.clear();
-
             tokio::select! {
-                result = reader.read_line(&mut line_buf) => {
+                result = lines.next_line() => {
                     match result {
-                        Ok(0) => {
+                        Ok(None) => {
                             // Clean EOF — stdin closed
                             info!("stdin closed (EOF), shutting down");
                             break;
                         }
-                        Ok(_) => {
+                        Ok(Some(line)) => {
                             consecutive_errors = 0;
-                            let line = line_buf.trim();
+                            let line = line.trim();
 
                             if line.is_empty() {
                                 continue;
