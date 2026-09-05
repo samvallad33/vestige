@@ -750,6 +750,18 @@ fn warn_skipped_row<T>(operation: &'static str) -> impl FnMut(rusqlite::Result<T
     }
 }
 
+/// What one post-retrieval failure feedback pass did. See
+/// [`SqliteMemoryStore::apply_failure_feedback`].
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailureFeedbackReport {
+    pub failure_id: String,
+    pub window_minutes: i64,
+    pub receipts_considered: usize,
+    pub memories_demoted: usize,
+    pub total_delta: f64,
+}
+
 /// Begin a READ snapshot on the reader connection.
 ///
 /// A DEFERRED transaction on a connection that only reads gives several
@@ -2376,8 +2388,33 @@ impl SqliteMemoryStore {
                     let id = node.id.clone();
                     node = self.get_node(&id)?.ok_or(StorageError::NotFound(id))?;
                 }
+                // A protected strong memory keeps its content and gets a link
+                // instead of an append, so the relation survives without the
+                // strong record being rewritten (Yang, Duncan and Barense 2026).
+                if matches!(reason, crate::advanced::prediction_error::CreateReason::ProtectedStrongMemory) {
+                    let link_type = crate::memory::EdgeType::Semantic.to_string();
+                    for related in &related_memory_ids {
+                        let conn = ConnectionRecord {
+                            source_id: node.id.clone(),
+                            target_id: related.clone(),
+                            strength: (1.0 - prediction_error as f64).clamp(0.0, 1.0),
+                            link_type: link_type.clone(),
+                            created_at: Utc::now(),
+                            last_activated: Utc::now(),
+                            activation_count: 0,
+                        };
+                        if let Err(error) = self.save_connection(&conn) {
+                            tracing::warn!(%error, related, "could not link the new memory to the protected strong memory");
+                        }
+                    }
+                }
                 let mut reason = if related_memory_ids.is_empty() {
                     format!("Created new memory: {:?}", reason)
+                } else if matches!(reason, crate::advanced::prediction_error::CreateReason::ProtectedStrongMemory) {
+                    format!(
+                        "Created new memory linked to a strong existing memory kept intact: {:?}. Prediction error updates weak memories, not strong ones",
+                        related_memory_ids
+                    )
                 } else {
                     format!(
                         "Created new memory: {:?}. Semantically similar (not linked): {:?}",
@@ -4710,6 +4747,195 @@ impl SqliteMemoryStore {
 
         self.get_node(id)?
             .ok_or_else(|| StorageError::NotFound(id.to_string()))
+    }
+
+    // ========================================================================
+    // Post-retrieval failure feedback (Heinbockel, Leicht, Wagner, Schwabe 2025)
+    // ========================================================================
+
+    /// Lower the accessibility of the memories retrieved shortly before a
+    /// failure landed, in proportion to how strongly each was reactivated.
+    ///
+    /// Heinbockel et al. (eLife 2025, PMID 39878439): noradrenergic arousal
+    /// after a memory was cued impaired its later recall, scaled by how strongly
+    /// the memory had been reactivated during cueing. The software reading: the
+    /// failure is the arousal event, the receipts already say which memories
+    /// informed the decisions just before it and in what order, and rank in a
+    /// receipt is the reactivation strength (weight 1/(rank+1)). A retrieval is
+    /// therefore not a monotone positive signal; this is the opposite-sign term
+    /// the FSRS review update lacks, and the first mechanism by which a wrong
+    /// memory leaves the top of recall without anyone demoting it by hand.
+    ///
+    /// Bounded: at most `FAILURE_FEEDBACK_PENALTY` (0.10) of retrieval strength
+    /// per memory per failure, never below the 0.05 floor, never touching
+    /// stability or content. Scoped: only memories in the failure's scope.
+    /// Idempotent per (failure, memory). Recorded in `failure_feedback` and
+    /// reversible with [`Self::revert_failure_feedback`]. Retrieval strength
+    /// recovers on the next successful access, exactly as after `demote`.
+    pub fn apply_failure_feedback(
+        &self,
+        failure_id: &str,
+        window: Duration,
+    ) -> Result<FailureFeedbackReport> {
+        const FAILURE_FEEDBACK_PENALTY: f64 = 0.10;
+        const MAX_RECEIPTS: i64 = 25;
+
+        let (failure_created_at, failure_scope): (String, String) = {
+            let reader = self
+                .reader
+                .lock()
+                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+            reader
+                .query_row(
+                    "SELECT created_at, COALESCE(scope, 'user') FROM knowledge_nodes WHERE id = ?1",
+                    params![failure_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .ok_or_else(|| StorageError::NotFound(failure_id.to_string()))?
+        };
+        let until = DateTime::parse_from_rfc3339(&failure_created_at)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+        let since = until - window;
+
+        // Receipts in the window, newest first. The payload is the serialized
+        // Receipt; `retrieved` is best-first, which is the rank we need.
+        let receipts: Vec<(String, String)> = {
+            let reader = self
+                .reader
+                .lock()
+                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+            let mut stmt = reader.prepare(
+                "SELECT receipt_id, payload FROM memory_receipts
+                 WHERE created_at >= ?1 AND created_at <= ?2
+                 ORDER BY created_at DESC LIMIT ?3",
+            )?;
+            let rows = stmt.query_map(
+                params![since.to_rfc3339(), until.to_rfc3339(), MAX_RECEIPTS],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?;
+            rows.filter_map(warn_skipped_row("apply_failure_feedback")).collect()
+        };
+
+        // memory_id -> (weight, receipt_id, rank); the strongest reactivation wins.
+        let mut weights: HashMap<String, (f64, String, usize)> = HashMap::new();
+        for (receipt_id, payload) in &receipts {
+            let Ok(receipt) = serde_json::from_str::<crate::trace::Receipt>(payload)
+            else {
+                continue;
+            };
+            for (rank, memory_id) in receipt.retrieved.iter().enumerate() {
+                if memory_id == failure_id {
+                    continue;
+                }
+                let weight = 1.0 / (rank as f64 + 1.0);
+                let stronger = weights
+                    .get(memory_id)
+                    .is_none_or(|(existing, _, _)| weight > *existing);
+                if stronger {
+                    weights.insert(memory_id.clone(), (weight, receipt_id.clone(), rank));
+                }
+            }
+        }
+
+        let mut report = FailureFeedbackReport {
+            failure_id: failure_id.to_string(),
+            window_minutes: window.num_minutes(),
+            receipts_considered: receipts.len(),
+            memories_demoted: 0,
+            total_delta: 0.0,
+        };
+        if weights.is_empty() {
+            return Ok(report);
+        }
+
+        let mut demoted_ids = Vec::new();
+        {
+            let writer = self
+                .writer
+                .lock()
+                .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+            let tx = Self::begin_write_transaction(&writer, "apply_failure_feedback")?;
+            let now = Utc::now().to_rfc3339();
+            for (memory_id, (weight, receipt_id, rank)) in weights {
+                let already: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM failure_feedback WHERE failure_id = ?1 AND memory_id = ?2",
+                    params![failure_id, &memory_id],
+                    |row| row.get(0),
+                )?;
+                if already > 0 {
+                    continue;
+                }
+                // Same scope only, and the memory must still exist.
+                let scope: Option<String> = tx
+                    .query_row(
+                        "SELECT COALESCE(scope, 'user') FROM knowledge_nodes WHERE id = ?1",
+                        params![&memory_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if scope.as_deref() != Some(failure_scope.as_str()) {
+                    continue;
+                }
+                let delta = FAILURE_FEEDBACK_PENALTY * weight;
+                tx.execute(
+                    "UPDATE knowledge_nodes
+                     SET retrieval_strength = MAX(0.05, retrieval_strength - ?1)
+                     WHERE id = ?2",
+                    params![delta, &memory_id],
+                )?;
+                tx.execute(
+                    "INSERT INTO failure_feedback
+                        (failure_id, memory_id, receipt_id, rank, delta, applied_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![failure_id, &memory_id, receipt_id, rank as i64, delta, now],
+                )?;
+                report.memories_demoted += 1;
+                report.total_delta += delta;
+                demoted_ids.push(memory_id);
+            }
+            tx.commit()?;
+        }
+        for memory_id in demoted_ids {
+            let _ = self.log_access(&memory_id, "failure_feedback");
+        }
+        Ok(report)
+    }
+
+    /// Undo every accessibility delta applied for `failure_id` that has not
+    /// been reverted yet. Returns how many memories were restored.
+    pub fn revert_failure_feedback(&self, failure_id: &str) -> Result<usize> {
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx = Self::begin_write_transaction(&writer, "revert_failure_feedback")?;
+        let rows: Vec<(i64, String, f64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT id, memory_id, delta FROM failure_feedback
+                 WHERE failure_id = ?1 AND reverted_at IS NULL",
+            )?;
+            let mapped = stmt.query_map(params![failure_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?;
+            mapped.filter_map(warn_skipped_row("revert_failure_feedback")).collect()
+        };
+        let now = Utc::now().to_rfc3339();
+        for (row_id, memory_id, delta) in &rows {
+            tx.execute(
+                "UPDATE knowledge_nodes
+                 SET retrieval_strength = MIN(1.0, retrieval_strength + ?1)
+                 WHERE id = ?2",
+                params![delta, memory_id],
+            )?;
+            tx.execute(
+                "UPDATE failure_feedback SET reverted_at = ?1 WHERE id = ?2",
+                params![now, row_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(rows.len())
     }
 
     // ========================================================================
@@ -16908,6 +17134,130 @@ mod tests {
             )
             .unwrap();
         assert_eq!(remaining, 0, "purge must cascade to every profile vector");
+    }
+
+    // =========================================================================
+    // Post-retrieval failure feedback (Heinbockel 2025)
+    // =========================================================================
+
+    fn set_retrieval_strength(storage: &Storage, id: &str, value: f64) {
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET retrieval_strength = ?1 WHERE id = ?2",
+                params![value, id],
+            )
+            .unwrap();
+    }
+
+    fn retrieval_strength(storage: &Storage, id: &str) -> f64 {
+        storage
+            .reader
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT retrieval_strength FROM knowledge_nodes WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn save_test_receipt(storage: &Storage, retrieved: Vec<String>) -> String {
+        let trust: Vec<f64> = retrieved.iter().map(|_| 0.9).collect();
+        let receipt = crate::trace::Receipt::build(
+            Utc::now(),
+            "test",
+            retrieved,
+            Vec::new(),
+            Vec::new(),
+            &trust,
+            Vec::new(),
+        );
+        let id = receipt.receipt_id.clone();
+        storage
+            .save_receipt(&receipt, None, Some("recall"), Some("what broke"))
+            .unwrap();
+        id
+    }
+
+    /// A failure right after a retrieval lowers the retrieved memories'
+    /// accessibility by rank (best-first is the strongest reactivation), once
+    /// per (failure, memory), and the ledger can undo it exactly.
+    #[test]
+    fn failure_feedback_demotes_recently_retrieved_memories_by_rank() {
+        let storage = create_test_storage();
+        let first = ingest_tagged_in_scope(&storage, "user", "redis url points at the old cluster", &["ops"]);
+        let second = ingest_tagged_in_scope(&storage, "user", "worker pool reads a cached secrets file", &["ops"]);
+        set_retrieval_strength(&storage, &first.id, 0.90);
+        set_retrieval_strength(&storage, &second.id, 0.90);
+        save_test_receipt(&storage, vec![first.id.clone(), second.id.clone()]);
+
+        let failure = ingest_tagged_in_scope(
+            &storage,
+            "user",
+            "Payments API crashed with 500s: queue backed up for 36 hours",
+            &["incident"],
+        );
+
+        let report = storage
+            .apply_failure_feedback(&failure.id, Duration::minutes(30))
+            .unwrap();
+        assert_eq!(report.receipts_considered, 1);
+        assert_eq!(report.memories_demoted, 2);
+        let after_first = retrieval_strength(&storage, &first.id);
+        let after_second = retrieval_strength(&storage, &second.id);
+        assert!((after_first - 0.80).abs() < 1e-6, "rank 0 loses the full penalty: {after_first}");
+        assert!((after_second - 0.85).abs() < 1e-6, "rank 1 loses half: {after_second}");
+        assert!(
+            retrieval_strength(&storage, &failure.id) > 0.0,
+            "the failure itself is never demoted"
+        );
+
+        // Idempotent per (failure, memory).
+        let again = storage
+            .apply_failure_feedback(&failure.id, Duration::minutes(30))
+            .unwrap();
+        assert_eq!(again.memories_demoted, 0);
+        assert!((retrieval_strength(&storage, &first.id) - 0.80).abs() < 1e-6);
+
+        // Reversible, exactly.
+        assert_eq!(storage.revert_failure_feedback(&failure.id).unwrap(), 2);
+        assert!((retrieval_strength(&storage, &first.id) - 0.90).abs() < 1e-6);
+        assert!((retrieval_strength(&storage, &second.id) - 0.90).abs() < 1e-6);
+        assert_eq!(
+            storage.revert_failure_feedback(&failure.id).unwrap(),
+            0,
+            "a second revert finds nothing left to undo"
+        );
+    }
+
+    /// Only memories in the failure's scope are touched, and a receipt outside
+    /// the window is ignored.
+    #[test]
+    fn failure_feedback_respects_scope_and_window() {
+        let storage = create_test_storage();
+        let elsewhere = ingest_tagged_in_scope(&storage, "other-project", "unrelated project note", &["x"]);
+        let here = ingest_tagged_in_scope(&storage, "user", "same-scope note", &["x"]);
+        set_retrieval_strength(&storage, &elsewhere.id, 0.90);
+        set_retrieval_strength(&storage, &here.id, 0.90);
+        save_test_receipt(&storage, vec![elsewhere.id.clone(), here.id.clone()]);
+
+        let failure = ingest_tagged_in_scope(&storage, "user", "Build failed: linker error", &["incident"]);
+        let report = storage
+            .apply_failure_feedback(&failure.id, Duration::minutes(30))
+            .unwrap();
+        assert_eq!(report.memories_demoted, 1, "only the same-scope memory is demoted");
+        assert!((retrieval_strength(&storage, &elsewhere.id) - 0.90).abs() < 1e-6);
+        assert!(retrieval_strength(&storage, &here.id) < 0.90);
+
+        // A zero-length window sees no receipts.
+        let none = storage
+            .apply_failure_feedback(&failure.id, Duration::zero())
+            .unwrap();
+        assert_eq!(none.receipts_considered, 0);
     }
 
     fn ingest_tagged_in_scope(

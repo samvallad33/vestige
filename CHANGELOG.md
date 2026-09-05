@@ -14,6 +14,39 @@ starvation findings did not reproduce (every migration already runs inside one
 IMMEDIATE transaction with its own version bump, and `wal_autocheckpoint` is
 on), so those got regression tests and a checkpoint hook rather than rewrites.
 
+### Fixed — The ingest gate now honours memory strength
+
+- `smart_ingest` computed whether the closest existing memory was strong
+  (retrieval strength above 0.85) and never read it, so a confirmed,
+  high-strength record could be appended to by any similar note, the same
+  way a weak one could. That is the "weld" class behind the Sep 2 and Sep 4
+  incidents. Yang, Duncan and Barense (2026) found prediction-error updating
+  intrudes new material into weak memories only, never strong ones, with
+  memory age irrelevant. The gate now stores a similar note as its own memory
+  and links it to the strong one instead of merging into it
+  (`CreateReason::ProtectedStrongMemory`, on by default through
+  `PredictionErrorConfig::protect_strong_memories`). Near-identical content
+  still reinforces, because reinforcing never touches content.
+
+### Added — Failures push back on what was just retrieved
+
+- Post-retrieval failure feedback (Heinbockel, Leicht, Wagner and Schwabe,
+  eLife 2025). When a memory that reads as a failure is ingested, the memories
+  retrieved in the previous thirty minutes of receipts lose retrieval strength
+  in proportion to their rank in those receipts, at most 0.10 each, never
+  below the floor, same scope only, once per failure and memory. Every delta
+  is written to the new `failure_feedback` ledger (migration V33) and
+  `revert_failure_feedback` undoes it exactly. This is the first mechanism by
+  which a wrong memory leaves the top of recall without anyone demoting it by
+  hand. Kill switch: `VESTIGE_FAILURE_FEEDBACK=0`.
+- Retroactive Salience Backfill now also runs live, through the same pipeline
+  and receipts as the `backfill` tool, the moment a failure is ingested. The
+  paper it is ported from (Zaki et al., Nature 2025) found offline
+  co-reactivation linking stronger during wake than sleep, so leaving it to the
+  consolidation pass alone was the weaker schedule. Same kill switch as the
+  consolidation auto-fire, `VESTIGE_BACKFILL_AUTOFIRE=0`. Results of both hooks
+  are returned under `failureHooks` in the ingest response.
+
 ### Fixed — Vector index
 
 - A long-lived MCP server process now sees exactly the vectors its sibling

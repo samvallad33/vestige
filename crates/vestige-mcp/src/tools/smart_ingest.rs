@@ -855,6 +855,10 @@ pub async fn execute(
     }
 
     // Use smart ingest with prediction error gating
+    // Tags are consulted after `input` is consumed by the ingest below, by the
+    // failure hooks (backfill and failure feedback).
+    let hook_tags: Vec<String> = input.tags.clone();
+
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     {
         let result = storage
@@ -886,7 +890,8 @@ pub async fn execute(
             importance_snapshot.clone(),
         );
 
-        Ok(serde_json::json!({
+        let failure_hooks = run_failure_hooks(storage, &node_id, &node_content, &hook_tags).await;
+        let mut response = serde_json::json!({
             "success": true,
             "decision": result.decision,
             "nodeId": node_id,
@@ -917,7 +922,9 @@ pub async fn execute(
                 "add_context" => "Added new content as context to existing memory",
                 _ => "Memory processed successfully"
             }
-        }))
+        });
+        attach_failure_hooks(&mut response, failure_hooks);
+        Ok(response)
     }
 
     #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
@@ -939,7 +946,8 @@ pub async fn execute(
             importance_snapshot,
         );
 
-        Ok(serde_json::json!({
+        let failure_hooks = run_failure_hooks(storage, &node_id, &node_content, &hook_tags).await;
+        let mut response = serde_json::json!({
             "success": true,
             "decision": "create",
             "nodeId": node_id,
@@ -954,7 +962,100 @@ pub async fn execute(
             "tagSuggestions": tag_suggestions.suggestions,
             "tagSuggestionStatus": tag_suggestions.status,
             "acceptedTagSuggestions": accepted_tag_suggestions,
-        }))
+        });
+        attach_failure_hooks(&mut response, failure_hooks);
+        Ok(response)
+    }
+}
+
+/// A kill switch read the way the other Vestige gates are: unset, empty or
+/// anything unrecognised means ON; only `0`, `false`, `off`, `no` turn it off.
+fn env_flag_enabled(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(value) => {
+            let value = value.trim();
+            !(value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("no")
+                || value == "0")
+        }
+        Err(_) => true,
+    }
+}
+
+/// Post-ingest hooks that fire only when the new memory reads as a failure
+/// (crash, regression, outage, the same detector `backfill` uses).
+///
+/// 1. Retroactive Salience Backfill runs LIVE through the same pipeline as the
+///    `backfill` tool, receipts included. Zaki et al. (Nature 2025), the paper
+///    the mechanism is ported from, found offline co-reactivation linking is
+///    stronger during wake than sleep, so deferring it to the consolidation
+///    pass alone was the weaker schedule. Honours `VESTIGE_BACKFILL_AUTOFIRE`.
+/// 2. Post-retrieval failure feedback: the memories retrieved in the last
+///    thirty minutes of receipts lose accessibility by their reactivation
+///    strength (Heinbockel et al., eLife 2025). Honours
+///    `VESTIGE_FAILURE_FEEDBACK`.
+///
+/// Neither hook can fail the ingest; problems are logged and the memory is
+/// already saved. Returns the hook results for the response, or None when the
+/// memory is not a failure.
+async fn run_failure_hooks(
+    storage: &Arc<Storage>,
+    node_id: &str,
+    content: &str,
+    tags: &[String],
+) -> Option<Value> {
+    if !vestige_core::advanced::retroactive_backfill::looks_like_failure(content, tags) {
+        return None;
+    }
+    let mut hooks = serde_json::Map::new();
+    if env_flag_enabled("VESTIGE_FAILURE_FEEDBACK") {
+        match storage.apply_failure_feedback(node_id, chrono::Duration::minutes(30)) {
+            Ok(report) => {
+                hooks.insert(
+                    "failureFeedback".to_string(),
+                    serde_json::to_value(report).unwrap_or(Value::Null),
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, node_id, "post-retrieval failure feedback skipped");
+            }
+        }
+    }
+    if env_flag_enabled("VESTIGE_BACKFILL_AUTOFIRE") {
+        match super::backfill::execute(storage, Some(serde_json::json!({ "failure_id": node_id })))
+            .await
+        {
+            Ok(result) => {
+                let promoted = result
+                    .get("promoted")
+                    .and_then(Value::as_array)
+                    .map(|causes| causes.iter().filter(|c| c.get("promoted") == Some(&Value::Bool(true))).count())
+                    .unwrap_or(0);
+                hooks.insert(
+                    "backfill".to_string(),
+                    serde_json::json!({
+                        "triggered": result.get("triggered").cloned().unwrap_or(Value::Bool(false)),
+                        "causesPromoted": promoted,
+                        "receiptId": result.get("receipt_id").cloned().unwrap_or(Value::Null),
+                    }),
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, node_id, "live backfill skipped");
+            }
+        }
+    }
+    if hooks.is_empty() {
+        None
+    } else {
+        Some(Value::Object(hooks))
+    }
+}
+
+fn attach_failure_hooks(response: &mut Value, hooks: Option<Value>) {
+    if let (Some(object), Some(hooks)) = (response.as_object_mut(), hooks) {
+        object.insert("failureHooks".to_string(), hooks);
     }
 }
 
