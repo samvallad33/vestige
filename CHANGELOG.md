@@ -19,6 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Android CI job reuses a cached `cargo-ndk` instead of failing on
   `cargo install` when the cargo cache is warm.
 
+### Changed — Storage layout
+
+- `crates/vestige-core/src/storage/sqlite.rs` (23,233 lines, one file holding
+  15.8 percent of the workspace's Rust) is now the directory
+  `crates/vestige-core/src/storage/sqlite/`: `mod.rs` (types, constants, the
+  `SqliteMemoryStore` struct, the write-transaction helper), `admin.rs`,
+  `embeddings.rs`, `search.rs`, `ingest.rs`, `lifecycle.rs`, `merge.rs`,
+  `purge.rs`, `sync.rs`, `records.rs`, `connectors.rs`, `store_trait.rs`, and
+  `tests/` split by the same domains with the shared fixtures in
+  `tests/mod.rs` and the write-transaction policy lint in `tests/lint.rs`. Code
+  moved as text, with `pub(super)` added only where a sibling module calls a
+  previously private method; every file is under 3,000 lines. No behaviour
+  change: the public paths under `storage::sqlite` are unchanged, the
+  vestige-core unit suite still runs 807 tests (710 in the no-embeddings
+  build), and the policy lint now scans every file under `storage/sqlite/`
+  and fails if one is missing from its list (#211).
+
 ## [2.8.0] - 2026-09-05 — "Strong memories stay whole"
 
 The release the Sep 4 deep audit asked for. The ingest gate stops merging new
