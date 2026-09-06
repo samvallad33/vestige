@@ -25,47 +25,47 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["remember_pattern", "remember_decision", "get_context", "verify"],
-                "description": "'remember_pattern' stores a code pattern, 'remember_decision' an architectural decision, 'get_context' returns both with a current-or-stale mark, 'verify' re-checks every anchored code memory against the working tree"
+                "description": "'remember_pattern', 'remember_decision', 'get_context' (both, marked current or stale), 'verify' (re-check anchored memories against the tree)"
             },
             // remember_pattern fields
             "name": {
                 "type": "string",
-                "description": "Name/title for the pattern (required for remember_pattern)"
+                "description": "Pattern name (remember_pattern)."
             },
             "description": {
                 "type": "string",
-                "description": "Detailed description of the pattern (required for remember_pattern)"
+                "description": "Pattern description (remember_pattern)."
             },
             // remember_decision fields
             "decision": {
                 "type": "string",
-                "description": "The architectural or design decision made (required for remember_decision)"
+                "description": "The decision made (remember_decision)."
             },
             "rationale": {
                 "type": "string",
-                "description": "Why this decision was made (required for remember_decision)"
+                "description": "Why it was made (remember_decision)."
             },
             "alternatives": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Alternatives that were considered (optional for remember_decision)"
+                "description": "Alternatives considered (optional)."
             },
             // Shared fields
             "files": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Files this pattern or decision touches: a path ('src/state.py'), path plus symbol ('src/state.py#load_config'), or path plus lines ('src/state.py:552-580'). Anything beyond a plain path is content-hashed so the memory can report when the code changed."
+                "description": "Files touched: 'src/a.py', 'src/a.py#symbol', or 'src/a.py:10-20'. Anything beyond a bare path is content-hashed so staleness is detectable."
             },
             "anchors": {
                 "type": "array",
-                "description": "Structured form of 'files' for callers that know the symbol. Each anchor is content-hashed at save time so staleness is detectable.",
+                "description": "Structured form of 'files'; each anchor is content-hashed at save time.",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "path": { "type": "string", "description": "Repository-relative path to the anchored file" },
-                        "symbol": { "type": "string", "description": "Function/type/class this memory is about. Strongly preferred over a line number: line numbers rot within a week." },
+                        "path": { "type": "string", "description": "Repository-relative file path." },
+                        "symbol": { "type": "string", "description": "Function, type or class this is about. Prefer over line numbers, which rot." },
                         "symbolKind": { "type": "string", "description": "Optional display kind, e.g. 'fn', 'class'" },
-                        "startLine": { "type": "integer", "description": "1-based start line, when the exact span is known" },
+                        "startLine": { "type": "integer", "description": "1-based start line, when known." },
                         "endLine": { "type": "integer", "description": "1-based inclusive end line" }
                     },
                     "required": ["path"]
@@ -73,21 +73,21 @@ pub fn schema() -> Value {
             },
             "repoPath": {
                 "type": "string",
-                "description": "Repository root used to resolve anchor paths (default: the server's working directory)"
+                "description": "Repository root for anchor paths (default: server working directory)."
             },
             "verify": {
                 "type": "boolean",
-                "description": "Check returned code memories against the current source and flag the ones that no longer match (default: true)",
+                "description": "Re-check returned code memories against the source and flag stale ones (default true).",
                 "default": true
             },
             "codebase": {
                 "type": "string",
-                "description": "Codebase/project identifier (e.g., 'vestige-tauri')"
+                "description": "Codebase or project identifier."
             },
             // get_context fields
             "limit": {
                 "type": "integer",
-                "description": "Maximum items per category (default: 10, for get_context)",
+                "description": "Max items per category (default 10, get_context).",
                 "default": 10
             }
         },

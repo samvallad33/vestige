@@ -25,7 +25,7 @@ use vestige_core::neuroscience::active_forgetting::{ActiveForgettingSystem, DEFA
 pub fn schema() -> Value {
     json!({
         "type": "object",
-        "description": "Top-down suppression (Anderson 2025 SIF, Davis Rac1): the memory persists but is inhibited from retrieval and decays faster. Each call compounds. A background worker spreads accelerated decay to co-activated neighbours over 72 hours. Reversible within 24 hours via reverse=true.",
+        "description": "Top-down suppression (Anderson 2025, Davis Rac1): the memory persists but is inhibited and decays faster; each call compounds; neighbours decay over 72 hours. Reversible within 24 hours via reverse=true.",
         "properties": {
             "id": {
                 "type": "string",
@@ -33,12 +33,12 @@ pub fn schema() -> Value {
             },
             "reason": {
                 "type": "string",
-                "description": "Optional free-form note explaining why this memory is being suppressed. Logged for audit."
+                "description": "Optional note on why; logged."
             },
             "reverse": {
                 "type": "boolean",
                 "default": false,
-                "description": "If true, reverse a previous suppression. Only works within the 24-hour labile window."
+                "description": "Reverse a previous suppression (within the 24-hour window)."
             }
         },
         "required": ["id"]

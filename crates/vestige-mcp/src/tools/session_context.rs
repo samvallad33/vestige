@@ -27,7 +27,7 @@ pub fn schema() -> Value {
             },
             "token_budget": {
                 "type": "integer",
-                "description": "Max tokens for response (default: 1000). Server truncates content to fit budget. With 1M context models, budgets up to 100K are practical.",
+                "description": "Max response tokens (default 1000); content is truncated to fit.",
                 "default": 1000,
                 "minimum": 100,
                 "maximum": 100000
