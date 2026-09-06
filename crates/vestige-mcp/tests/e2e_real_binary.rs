@@ -1263,6 +1263,31 @@ fn a_clean_restart_preserves_every_memory() {
 // 3. Retrieval correctness (embedding-independent paths)
 // ============================================================================
 
+/// A save costs the agent context on every call, so the create response has a
+/// byte ceiling and must not carry a tag-status block that says nothing.
+#[test]
+fn smart_ingest_create_response_is_lean() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let value = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "content": "A plain engineering note about the deploy cache", "tags": ["deploy"], "forceCreate": true }),
+    );
+    assert_eq!(value["success"], json!(true), "{value}");
+    let bytes = serde_json::to_string(&value).unwrap().len();
+    assert!(bytes <= 1_900, "create response is {bytes} bytes: {value}");
+    assert!(
+        value.get("tagSuggestionStatus").is_none(),
+        "a create with nothing to report about tags must not carry the status block: {value}"
+    );
+    for key in ["similarity", "supersededId", "previousContent", "mergePreview", "mergedFrom"] {
+        assert!(value.get(key).is_none(), "{key} is null on a create and must be absent: {value}");
+    }
+    server.shutdown();
+}
+
 /// A capitalised tag must be findable by a lower-case prefix, and vice versa.
 ///
 /// A silent zero here is the worst failure shape a memory system has: the

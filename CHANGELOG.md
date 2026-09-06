@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — smart_ingest responses are proportional
+
+- An update decision echoed the full merged memory twice, as `previousContent`
+  and `mergePreview`, about 13 KB for one save on a real store, and every
+  response carried a 311-byte `tagSuggestionStatus` that said nothing.
+  `mergePreview` is now a 240-character preview plus `mergedContentLength`
+  (the full text is the memory stored under `nodeId`). `previousContent`
+  stays whole on purpose: a merge replaces the old text and nothing else
+  keeps a copy, so the response is the only way to recover it.
+  `tagSuggestionStatus` ships only when it reports something (a status other
+  than complete, a truncation, an ignored tag, a suggestion) or on a
+  `previewTagSuggestions` preflight, whose contract includes it. Empty
+  suggestion lists, an empty `validity` block and null decision fields are
+  dropped. Batch results get the same treatment per item. An e2e test caps a
+  create response at 1,900 bytes.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with

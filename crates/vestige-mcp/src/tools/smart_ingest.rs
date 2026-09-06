@@ -660,7 +660,120 @@ fn apply_accepted_tag_suggestions(
     Ok(rewritten)
 }
 
+/// Longest `mergePreview` shipped in a response. The full merged text is the
+/// memory now stored under `nodeId`, one `memory(action='get')` away.
+const MERGE_PREVIEW_CHARS: usize = 240;
+
 pub async fn execute(
+    storage: &Arc<Storage>,
+    cognitive: &Arc<Mutex<CognitiveEngine>>,
+    args: Option<Value>,
+) -> Result<Value, String> {
+    let mut value = execute_verbose(storage, cognitive, args).await?;
+    lean_response(&mut value);
+    if let Some(results) = value.get_mut("results").and_then(Value::as_array_mut) {
+        for item in results {
+            lean_response(item);
+        }
+    }
+    Ok(value)
+}
+
+/// Trim one ingest response object to what the caller can act on.
+///
+/// On the real store an update decision echoed the full merged memory twice
+/// (`previousContent` and `mergePreview`), about 13 KB for one save, and every
+/// response carried a 311-byte tag-status block that said nothing. The rules:
+///
+/// - `mergePreview` is the content now stored under `nodeId`, so it becomes a
+///   240-character preview plus `mergedContentLength`; `memory(action='get')`
+///   has the rest.
+/// - `previousContent` stays whole. A merge replaces the old text and nothing
+///   else keeps a copy, so this field is the only way to recover it.
+/// - `tagSuggestionStatus` ships only when it has something to say (a status
+///   other than complete, a truncation, an ignored tag, or a suggestion), or
+///   when the response is a `previewTagSuggestions` preflight, whose contract
+///   in docs/MEMORY_HYGIENE.md includes it.
+/// - Empty suggestion lists, an empty `validity` block and null decision
+///   fields are dropped; absent and null read the same to every caller.
+fn lean_response(value: &mut Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "similarity",
+        "predictionError",
+        "supersededId",
+        "mergedFrom",
+        "mergePreview",
+        "previousContent",
+        "autoClosedUntil",
+    ] {
+        if obj.get(key).is_some_and(Value::is_null) {
+            obj.remove(key);
+        }
+    }
+    if let Some(preview) = obj.get("mergePreview").and_then(Value::as_str) {
+        let total = preview.chars().count();
+        if total > MERGE_PREVIEW_CHARS {
+            let short: String = preview.chars().take(MERGE_PREVIEW_CHARS).collect();
+            obj.insert("mergePreview".to_string(), Value::String(short));
+            obj.insert("mergePreviewTruncated".to_string(), Value::Bool(true));
+        }
+        obj.insert("mergedContentLength".to_string(), Value::from(total));
+    }
+    if obj
+        .get("tagSuggestions")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        obj.remove("tagSuggestions");
+    }
+    if obj
+        .get("acceptedTagSuggestions")
+        .and_then(Value::as_object)
+        .is_some_and(|m| m.is_empty())
+    {
+        obj.remove("acceptedTagSuggestions");
+    }
+    let is_preflight = obj.contains_key("wouldWrite");
+    let has_suggestions = obj.contains_key("tagSuggestions");
+    if !is_preflight
+        && !has_suggestions
+        && obj
+            .get("tagSuggestionStatus")
+            .is_some_and(tag_status_reports_nothing)
+    {
+        obj.remove("tagSuggestionStatus");
+    }
+    if obj.get("validity").is_some_and(validity_is_empty) {
+        obj.remove("validity");
+    }
+}
+
+fn tag_status_reports_nothing(status: &Value) -> bool {
+    status["status"] == "complete"
+        && status["requestedTagsTruncated"] == false
+        && [
+            "ignoredOverlongInputTags",
+            "ignoredOverlongVocabularyTags",
+            "ignoredSecretShapedVocabularyTags",
+        ]
+        .iter()
+        .all(|key| status[*key].as_u64() == Some(0))
+}
+
+fn validity_is_empty(validity: &Value) -> bool {
+    validity["source"] == "none"
+        && validity["inferredPhrase"].is_null()
+        && validity["validFrom"].is_null()
+        && validity["validUntil"].is_null()
+        && validity["ambiguousPhrases"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+}
+
+async fn execute_verbose(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: Option<Value>,
@@ -1680,6 +1793,92 @@ fn dominant_importance_event(snapshot: &SynapticSignalSnapshot) -> (&'static str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lean_response_drops_what_says_nothing_and_keeps_what_matters() {
+        let mut create = serde_json::json!({
+            "success": true, "decision": "create", "nodeId": "n1", "scope": "user",
+            "similarity": null, "predictionError": 1.0, "supersededId": null,
+            "previousContent": null, "mergedFrom": null, "mergePreview": null,
+            "autoClosedUntil": null,
+            "tagSuggestions": [], "acceptedTagSuggestions": {},
+            "tagSuggestionStatus": {
+                "status": "complete", "scope": "user", "vocabularyScanned": true,
+                "vocabularyCount": 12, "maximumVocabulary": 10000,
+                "requestedTagsTruncated": false, "ignoredOverlongInputTags": 0,
+                "ignoredOverlongVocabularyTags": 0, "ignoredSecretShapedVocabularyTags": 0,
+                "unicodeNormalization": "NFKC plus Unicode lowercase"
+            },
+            "validity": { "validFrom": null, "validUntil": null, "source": "none",
+                          "inferredPhrase": null, "ambiguousPhrases": [] }
+        });
+        super::lean_response(&mut create);
+        for gone in [
+            "similarity", "supersededId", "previousContent", "mergedFrom", "mergePreview",
+            "autoClosedUntil", "tagSuggestions", "acceptedTagSuggestions",
+            "tagSuggestionStatus", "validity",
+        ] {
+            assert!(create.get(gone).is_none(), "{gone} should be dropped: {create}");
+        }
+        assert_eq!(create["predictionError"], 1.0);
+        assert_eq!(create["nodeId"], "n1");
+    }
+
+    #[test]
+    fn lean_response_previews_the_merge_but_keeps_the_replaced_text_whole() {
+        let previous = "x".repeat(3_000);
+        let merged = "y".repeat(3_000);
+        let mut update = serde_json::json!({
+            "decision": "update", "nodeId": "n1",
+            "previousContent": previous, "mergePreview": merged,
+        });
+        super::lean_response(&mut update);
+        assert_eq!(update["previousContent"].as_str().unwrap().len(), 3_000);
+        assert_eq!(update["mergePreview"].as_str().unwrap().chars().count(), 240);
+        assert_eq!(update["mergePreviewTruncated"], true);
+        assert_eq!(update["mergedContentLength"], 3_000);
+    }
+
+    #[test]
+    fn lean_response_keeps_a_tag_status_that_reports_something_and_every_preflight() {
+        let mut truncated = serde_json::json!({
+            "decision": "create",
+            "tagSuggestionStatus": {
+                "status": "complete", "requestedTagsTruncated": true,
+                "ignoredOverlongInputTags": 0, "ignoredOverlongVocabularyTags": 0,
+                "ignoredSecretShapedVocabularyTags": 0
+            }
+        });
+        super::lean_response(&mut truncated);
+        assert!(truncated.get("tagSuggestionStatus").is_some());
+
+        let mut unavailable = serde_json::json!({
+            "decision": "create",
+            "tagSuggestionStatus": { "status": "unavailable", "requestedTagsTruncated": false,
+                "ignoredOverlongInputTags": 0, "ignoredOverlongVocabularyTags": 0,
+                "ignoredSecretShapedVocabularyTags": 0 }
+        });
+        super::lean_response(&mut unavailable);
+        assert!(unavailable.get("tagSuggestionStatus").is_some());
+
+        let mut preflight = serde_json::json!({
+            "wouldWrite": false, "tagSuggestions": [],
+            "tagSuggestionStatus": { "status": "complete", "requestedTagsTruncated": false,
+                "ignoredOverlongInputTags": 0, "ignoredOverlongVocabularyTags": 0,
+                "ignoredSecretShapedVocabularyTags": 0 }
+        });
+        super::lean_response(&mut preflight);
+        assert!(preflight.get("tagSuggestionStatus").is_some(), "{preflight}");
+
+        let mut inferred = serde_json::json!({
+            "decision": "create",
+            "validity": { "validFrom": "2026-09-01T00:00:00Z", "validUntil": null,
+                          "source": "inferred", "inferredPhrase": "as of 2026-09-01",
+                          "ambiguousPhrases": [] }
+        });
+        super::lean_response(&mut inferred);
+        assert!(inferred.get("validity").is_some());
+    }
+
     #[test]
     fn failure_hook_levers_parse_as_documented() {
         use super::{flag_enabled_from, flag_opt_in_from};
