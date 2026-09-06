@@ -1,0 +1,3 @@
+# Live Vestige databases and sidecar logs created by local runs.
+*datadir-*/
+__pycache__/

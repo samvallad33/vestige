@@ -1,0 +1,43 @@
+{
+  "task_name": "phys",
+  "description": "MemoryArena physics formal reasoning with Vestige as the memory layer (preregistered run, see docs/benchmarks/MEMORYARENA-PREREGISTRATION.md)",
+  "agent": {
+    "model_name": "gpt-5-mini",
+    "temperature": 0.0,
+    "max_tokens": 8192,
+    "backend": "openai",
+    "base_url": "<OPENAI_BASE_URL>"
+  },
+  "memory": {
+    "session_wise_memory": true,
+    "judge_result_in_memory": false,
+    "memory_system_name": "vestige",
+    "base_url": "http://0.0.0.0:8000",
+    "timeout": 300
+  },
+  "env": {
+    "env_name": "phys",
+    "base_url": "http://0.0.0.0:8001",
+    "timeout": 300,
+    "env_config": {
+      "model_name": "gpt-5-mini",
+      "temperature": 1.0,
+      "max_tokens": 4096,
+      "backend": "openai",
+      "base_url": "<OPENAI_BASE_URL>",
+      "max_steps": 10
+    }
+  },
+  "task_specific": {
+    "max_steps": 10,
+    "auto_eval_after_run": true,
+    "dataset": {
+      "hf_dataset": "ZexueHe/memoryarena",
+      "hf_config": "formal_reasoning_phys",
+      "hf_split": "test"
+    }
+  },
+  "output": {
+    "json_output_dir": "./results/json/phys"
+  }
+}
