@@ -262,104 +262,151 @@ fn assess_relation(
 
 /// Generate a natural language reasoning chain from structured evidence.
 /// The AI reads this and validates/extends it — System 1 prepares, System 2 refines.
-fn generate_reasoning_chain(
-    query: &str,
-    intent: &QueryIntent,
-    primary: &ScoredMemory,
-    relations: &[(String, f64, RelationAssessment)], // (preview, trust, relation)
+/// Everything the reasoning text is allowed to say. Each sentence in
+/// [`evidence_report`] is conditioned on one of these values, so the text can
+/// never claim more than the structured response carries. There is no model
+/// behind it: the server assembles the sentences from the numbers, and the
+/// last line says so.
+struct ReasoningBasis<'a> {
+    query: &'a str,
+    intent: &'a QueryIntent,
+    primary: &'a ScoredMemory,
+    relations: &'a [(String, f64, RelationAssessment)],
+    memories_analyzed: usize,
+    activation_expanded: usize,
+    contradiction_pairs: usize,
+    claim_conflicts: usize,
+    evidence_counted: usize,
+    base_confidence: f64,
+    agreement_boost: f64,
+    contradiction_penalty: f64,
     confidence: f64,
-) -> String {
-    let mut chain = String::new();
+    span: Option<(chrono::DateTime<Utc>, chrono::DateTime<Utc>)>,
+}
 
-    // Intent-specific opening
-    match intent {
-        QueryIntent::FactCheck => {
-            chain.push_str(&format!("FACT CHECK: \"{}\"\n\n", query));
-        }
-        QueryIntent::Timeline => {
-            chain.push_str(&format!("TIMELINE: \"{}\"\n\n", query));
-        }
-        QueryIntent::RootCause => {
-            chain.push_str(&format!("ROOT CAUSE ANALYSIS: \"{}\"\n\n", query));
-        }
-        QueryIntent::Comparison => {
-            chain.push_str(&format!("COMPARISON: \"{}\"\n\n", query));
-        }
-        QueryIntent::Synthesis => {
-            chain.push_str(&format!("SYNTHESIS: \"{}\"\n\n", query));
-        }
-    }
+fn pct(value: f64) -> String {
+    format!("{:.0}%", value * 100.0)
+}
 
-    // Primary finding
-    chain.push_str(&format!(
-        "PRIMARY FINDING (trust {:.0}%, {}): {}\n",
-        primary.trust * 100.0,
-        primary.updated_at.format("%b %d, %Y"),
-        primary.content.chars().take(300).collect::<String>(),
+/// The reasoning text for `recall mode='reason'`, assembled from computed
+/// values only. The old version was a fixed template that printed "NO
+/// CONTRADICTIONS DETECTED. Evidence is consistent." whenever no relation had
+/// been assessed, which is a different claim from "consistent"; and an
+/// "OVERALL CONFIDENCE" with no statement of where the number came from.
+fn evidence_report(b: &ReasoningBasis<'_>) -> String {
+    let mut out = String::new();
+    let label = match b.intent {
+        QueryIntent::FactCheck => "FACT CHECK",
+        QueryIntent::Timeline => "TIMELINE",
+        QueryIntent::RootCause => "ROOT CAUSE",
+        QueryIntent::Comparison => "COMPARISON",
+        QueryIntent::Synthesis => "SYNTHESIS",
+    };
+    out.push_str(&format!(
+        "{label} (intent read from the query wording): \"{}\"\n\n",
+        b.query
     ));
 
-    // Superseded memories — with reasoning arrows
-    let superseded: Vec<_> = relations
-        .iter()
-        .filter(|(_, _, r)| matches!(r.relation, Relation::Supersedes))
-        .collect();
-    for (preview, trust, rel) in &superseded {
-        chain.push_str(&format!(
-            "  SUPERSEDES (trust {:.0}%): \"{}\"\n    -> {}\n",
-            trust * 100.0,
-            preview.chars().take(100).collect::<String>(),
-            rel.reasoning,
+    out.push_str(&format!("Evidence: {} memories scored", b.memories_analyzed));
+    if b.activation_expanded > 0 {
+        out.push_str(&format!(
+            ", {} of them reached through spreading activation",
+            b.activation_expanded
         ));
     }
+    out.push_str(".\n");
+    out.push_str(&format!(
+        "Primary (highest composite score): trust {}, updated {}: {}\n",
+        pct(b.primary.trust),
+        b.primary.updated_at.format("%b %d, %Y"),
+        b.primary.content.chars().take(300).collect::<String>(),
+    ));
 
-    // Supporting evidence
-    let supporting: Vec<_> = relations
+    let supports: Vec<_> = b
+        .relations
         .iter()
-        .filter(|(_, _, r)| matches!(r.relation, Relation::Supports))
+        .filter(|(_, _, a)| matches!(a.relation, Relation::Supports))
         .collect();
-    if !supporting.is_empty() {
-        chain.push_str(&format!(
-            "SUPPORTED BY {} MEMOR{}:\n",
-            supporting.len(),
-            if supporting.len() == 1 { "Y" } else { "IES" },
+    let supersedes: Vec<_> = b
+        .relations
+        .iter()
+        .filter(|(_, _, a)| matches!(a.relation, Relation::Supersedes))
+        .collect();
+    let contradicts: Vec<_> = b
+        .relations
+        .iter()
+        .filter(|(_, _, a)| matches!(a.relation, Relation::Contradicts))
+        .collect();
+    let unrelated = b.relations.len() - supports.len() - supersedes.len() - contradicts.len();
+
+    if b.relations.is_empty() {
+        out.push_str(
+            "Relations assessed against the primary: none. No other memory was close enough \
+             in topic to compare, so agreement and disagreement are both unmeasured here.\n",
+        );
+    } else {
+        out.push_str(&format!(
+            "Relations assessed against the primary: {} ({} support, {} supersede, {} contradict, {} unrelated by topic).\n",
+            b.relations.len(),
+            supports.len(),
+            supersedes.len(),
+            contradicts.len(),
+            unrelated,
         ));
-        for (preview, trust, _) in supporting.iter().take(5) {
-            chain.push_str(&format!(
-                "  + (trust {:.0}%): \"{}\"\n",
-                trust * 100.0,
+        let line = |kind: &str, preview: &str, trust: f64, a: &RelationAssessment| {
+            format!(
+                "  {kind} (trust {}): \"{}\" [{}]\n",
+                pct(trust),
                 preview.chars().take(100).collect::<String>(),
-            ));
+                a.reasoning,
+            )
+        };
+        for (preview, trust, a) in &supersedes {
+            out.push_str(&line("supersedes", preview, *trust, a));
+        }
+        for (preview, trust, a) in supports.iter().take(5) {
+            out.push_str(&line("supports", preview, *trust, a));
+        }
+        for (preview, trust, a) in contradicts.iter().take(3) {
+            out.push_str(&line("contradicts", preview, *trust, a));
         }
     }
 
-    // Contradicting evidence
-    let contradicting: Vec<_> = relations
-        .iter()
-        .filter(|(_, _, r)| matches!(r.relation, Relation::Contradicts))
-        .collect();
-    if !contradicting.is_empty() {
-        chain.push_str(&format!(
-            "CONTRADICTING EVIDENCE ({}):\n",
-            contradicting.len()
+    if b.contradiction_pairs == 0 && b.claim_conflicts == 0 {
+        out.push_str(&format!(
+            "Contradiction pairs found among the {} analyzed memories: 0.\n",
+            b.memories_analyzed
         ));
-        for (preview, trust, rel) in contradicting.iter().take(3) {
-            chain.push_str(&format!(
-                "  ! (trust {:.0}%): \"{}\"\n    -> {}\n",
-                trust * 100.0,
-                preview.chars().take(100).collect::<String>(),
-                rel.reasoning,
-            ));
-        }
+    } else {
+        out.push_str(&format!(
+            "Contradiction pairs found among the {} analyzed memories: {}. Stored memories that conflict with the query's own claim: {}.\n",
+            b.memories_analyzed, b.contradiction_pairs, b.claim_conflicts,
+        ));
     }
 
-    // If no relations found, still provide useful output
-    if superseded.is_empty() && supporting.is_empty() && contradicting.is_empty() {
-        chain.push_str("NO CONTRADICTIONS DETECTED. Evidence is consistent.\n");
+    // Mirrors the formula at the call site: composite of the primary, plus 3
+    // points per evidence memory capped at 20, minus 10 per contradiction pair
+    // and 20 per claim conflict, clamped. The same numbers ship as
+    // `confidenceBreakdown`.
+    out.push_str(&format!(
+        "Confidence {} = primary composite {} + agreement {} ({} evidence memories, 3 points each, capped at 20) - contradiction penalty {} ({} pairs x 10 + {} claim conflicts x 20), clamped to 0..100.\n",
+        pct(b.confidence),
+        pct(b.base_confidence),
+        pct(b.agreement_boost),
+        b.evidence_counted,
+        pct(b.contradiction_penalty),
+        b.contradiction_pairs,
+        b.claim_conflicts,
+    ));
+    if let Some((oldest, newest)) = b.span {
+        out.push_str(&format!(
+            "Dated evidence spans {} to {}.\n",
+            oldest.format("%b %d, %Y"),
+            newest.format("%b %d, %Y")
+        ));
     }
-
-    chain.push_str(&format!("OVERALL CONFIDENCE: {:.0}%\n", confidence * 100.0));
-
-    chain
+    out.push_str("Assembled by the server from the values above. No model wrote this text.\n");
+    out
 }
 
 // ============================================================================
@@ -916,7 +963,7 @@ pub async fn execute(
     } else if let Some(rec) = recommended {
         if contradictions.is_empty() {
             format!(
-                "High confidence ({:.0}%). Recommended memory (trust {:.0}%, {}) is the most reliable source.",
+                "High confidence ({:.0}%). Recommended memory (trust {:.0}%, {}) has the highest composite score; see confidenceBreakdown for how the number was built.",
                 confidence * 100.0,
                 rec.trust * 100.0,
                 rec.updated_at.format("%b %d, %Y")
@@ -936,19 +983,50 @@ pub async fn execute(
     let ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
     let _ = storage.record_batch_retrieval(&ids);
 
-    // Generate reasoning chain (the key differentiator — no LLM needed)
+    // The reasoning text is assembled from the values computed above and
+    // nothing else; `confidenceBreakdown` carries the same numbers as data.
+    let span = scored
+        .iter()
+        .map(|s| s.updated_at)
+        .min()
+        .zip(scored.iter().map(|s| s.updated_at).max());
     let reasoning_chain = if let Some(rec) = recommended {
-        generate_reasoning_chain(&args.query, &intent, rec, &pair_relations, confidence)
+        evidence_report(&ReasoningBasis {
+            query: &args.query,
+            intent: &intent,
+            primary: rec,
+            relations: &pair_relations,
+            memories_analyzed: scored.len(),
+            activation_expanded,
+            contradiction_pairs: contradictions.len(),
+            claim_conflicts: claim_conflicts.len(),
+            evidence_counted: evidence.len(),
+            base_confidence,
+            agreement_boost,
+            contradiction_penalty,
+            confidence,
+            span,
+        })
     } else {
-        "No strong evidence found for reasoning.".to_string()
+        "No memory scored high enough to serve as a primary, so there is nothing to reason from."
+            .to_string()
     };
+    let round2 = |v: f64| (v * 100.0).round() / 100.0;
 
     // Build response
     let mut response = serde_json::json!({
         "query": args.query,
         "intent": format!("{:?}", intent),
         "status": status,
-        "confidence": (confidence * 100.0).round() / 100.0,
+        "confidence": round2(confidence),
+        "confidenceBreakdown": {
+            "base": round2(base_confidence),
+            "agreementBoost": round2(agreement_boost),
+            "contradictionPenalty": round2(contradiction_penalty),
+            "evidenceCounted": evidence.len(),
+            "contradictionPairs": contradictions.len(),
+            "claimConflicts": claim_conflicts.len(),
+        },
         "reasoning": reasoning_chain,
         "guidance": guidance,
         "memoriesAnalyzed": scored.len(),
@@ -1150,6 +1228,100 @@ fn preview_text(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{query_coverage, topic_overlap};
+
+    fn scored(id: &str, content: &str, trust: f64) -> super::ScoredMemory {
+        let when = chrono::DateTime::parse_from_rfc3339("2026-09-01T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        super::ScoredMemory {
+            id: id.to_string(),
+            content: content.to_string(),
+            tags: vec![],
+            trust,
+            updated_at: when,
+            created_at: when,
+            retention: 0.9,
+            combined_score: 0.8,
+            valid_until: None,
+            currently_valid: true,
+        }
+    }
+
+    fn basis<'a>(
+        primary: &'a super::ScoredMemory,
+        relations: &'a [(String, f64, super::RelationAssessment)],
+        contradiction_pairs: usize,
+    ) -> super::ReasoningBasis<'a> {
+        super::ReasoningBasis {
+            query: "why did the deploy fail",
+            intent: &super::QueryIntent::RootCause,
+            primary,
+            relations,
+            memories_analyzed: 7,
+            activation_expanded: 2,
+            contradiction_pairs,
+            claim_conflicts: 0,
+            evidence_counted: 3,
+            base_confidence: 0.69,
+            agreement_boost: 0.09,
+            contradiction_penalty: contradiction_pairs as f64 * 0.1,
+            confidence: (0.69 + 0.09 - contradiction_pairs as f64 * 0.1).clamp(0.0, 1.0),
+            span: Some((primary.updated_at, primary.updated_at)),
+        }
+    }
+
+    /// Two different evidence sets must produce different text. The old
+    /// template said the same thing whatever the evidence was.
+    #[test]
+    fn evidence_report_changes_with_the_evidence() {
+        let primary = scored("p", "The deploy failed because the cache key was stale", 0.69);
+        let none: Vec<(String, f64, super::RelationAssessment)> = vec![];
+        let conflicting = vec![(
+            "The deploy failed because of a network partition".to_string(),
+            0.55,
+            super::RelationAssessment {
+                relation: super::Relation::Contradicts,
+                confidence: 0.6,
+                reasoning: "Same topic, opposite claims".to_string(),
+            },
+        )];
+        let quiet = super::evidence_report(&basis(&primary, &none, 0));
+        let loud = super::evidence_report(&basis(&primary, &conflicting, 1));
+        assert_ne!(quiet, loud);
+        assert!(loud.contains("1 contradict"), "{loud}");
+        assert!(loud.contains("Contradiction pairs found among the 7 analyzed memories: 1."), "{loud}");
+        assert!(loud.contains("Same topic, opposite claims"), "{loud}");
+    }
+
+    /// No assessed relation means "unmeasured", never "consistent".
+    #[test]
+    fn evidence_report_never_claims_consistency_without_comparisons() {
+        let primary = scored("p", "The deploy failed because the cache key was stale", 0.69);
+        let none: Vec<(String, f64, super::RelationAssessment)> = vec![];
+        let text = super::evidence_report(&basis(&primary, &none, 0));
+        assert!(text.contains("none. No other memory was close enough"), "{text}");
+        assert!(!text.to_lowercase().contains("consistent"), "{text}");
+        assert!(text.contains("No model wrote this text"), "{text}");
+    }
+
+    /// Every number in the text is one of the breakdown values.
+    #[test]
+    fn evidence_report_numbers_match_the_breakdown() {
+        let primary = scored("p", "The deploy failed because the cache key was stale", 0.69);
+        let none: Vec<(String, f64, super::RelationAssessment)> = vec![];
+        let text = super::evidence_report(&basis(&primary, &none, 0));
+        for needle in [
+            "Confidence 78%",
+            "primary composite 69%",
+            "agreement 9%",
+            "3 evidence memories",
+            "penalty 0%",
+            "7 memories scored",
+            "2 of them reached through spreading activation",
+        ] {
+            assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+        }
+    }
 
     /// The AIMO3 shape: two memories asserting OPPOSITE DIRECTIONS about the same
     /// subject, with no negation word in either. The negation scan structurally

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Reason mode says only what it measured
+
+- `recall mode='reason'` used to end its `reasoning` text with "NO
+  CONTRADICTIONS DETECTED. Evidence is consistent." whenever no relation had
+  been assessed, and an "OVERALL CONFIDENCE" with no statement of where the
+  number came from. The text is now assembled sentence by sentence from the
+  values in the same response: memories scored, how many spreading activation
+  reached, the relations assessed against the primary with their counts, the
+  contradiction pairs found, the confidence arithmetic (primary composite, plus
+  3 points per evidence memory capped at 20, minus 10 per contradiction pair
+  and 20 per claim conflict), the dated span of the evidence, and a closing
+  line that says the server assembled it and no model wrote it. When nothing
+  was close enough to compare, it says agreement and disagreement are
+  unmeasured instead of calling the evidence consistent. The same numbers
+  ship as `confidenceBreakdown`, and the tool descriptions say how the text
+  is produced. Three tests pin that different evidence yields different text
+  and that every number in the text is one of the breakdown values.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with
