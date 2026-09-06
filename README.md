@@ -121,7 +121,7 @@ Every mechanism is a cited result, implemented in Rust, running locally. Full wr
 | Memory Dreaming | Sleep-like replay and synthesis | Sleep consolidation research |
 | Active Forgetting | Reversible top-down suppression, cascading to neighbors | Anderson 2025, Davis 2020 |
 
-## The 14 tools
+## The tools
 
 Your agent calls these; you rarely do.
 
@@ -131,6 +131,7 @@ Your agent calls these; you rarely do.
 | `smart_ingest` | Store a fact, gated for novelty and contradiction |
 | `backfill` | Reach backward from a failure to its candidate cause |
 | `receipt` | Inspect retrieval receipts and evidence replay ([guide](docs/DECISION_RECEIPTS.md)) |
+| `project` | Project durable decisions, patterns and rules into CLAUDE.md or MEMORY.md, one memory id per line ([guide](docs/PROJECTION.md)) |
 | `memory` · `graph` · `intention` | Inspect, promote, explore, track goals |
 | `maintain` · `dedup` · `suppress` | Consolidation, merge, reversible forgetting |
 | `memory_status` · `codebase` · `source_sync` · `session_start` | Health, code index, connectors, session priming |

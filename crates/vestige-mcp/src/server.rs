@@ -432,6 +432,24 @@ description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision'
                 input_schema: tools::codebase_unified::schema(),
                 ..Default::default()
             },
+            // ================================================================
+            // PROJECT: the durable subset of a scope rendered into the rule
+            // files other clients already read. Preview by default; write
+            // replaces only the fenced region and needs confirm=true.
+            // ================================================================
+            ToolDescription {
+                name: "project".to_string(),
+                title: Some("Project".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: false,
+                    idempotent_hint: true,
+                    open_world_hint: false,
+                }),
+                description: Some("Project the durable subset of a scope (decisions, patterns, rule-tagged facts) into a fenced region of CLAUDE.md or MEMORY.md, a memory id on every line. 'preview' (default) shows the diff; 'write' needs confirm=true and replaces only the fence, never the rest of the file.".to_string()),
+                input_schema: tools::project::schema(),
+                ..Default::default()
+            },
             ToolDescription {
                 name: "intention".to_string(),
                 title: Some("Intention".to_string()),
@@ -833,6 +851,7 @@ description: Some("Memory with hindsight. After a failure is recorded, reach bac
                 tools::memory_unified::execute(&self.storage, &self.cognitive, request.arguments)
                     .await
             }
+            "project" => tools::project::execute(&self.storage, request.arguments).await,
             "codebase" => {
                 tools::codebase_unified::execute(
                     &self.storage,
@@ -2987,10 +3006,10 @@ mod tests {
         // dispatchable as hidden back-compat aliases but drop off the advertised list.
         assert_eq!(
             tools.len(),
-            14,
+            15,
             "Expected exactly 14 tools after v2.3 receipt replay integration \
              (12 consolidated: dedup + memory_status + graph + maintain + recall; \
-             session_context renamed) plus `receipt` and the flagship `backfill`"
+             session_context renamed) plus `receipt`, the flagship `backfill` and `project`"
         );
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
