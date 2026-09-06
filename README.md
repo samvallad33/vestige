@@ -9,7 +9,20 @@ Vestige remembers your decisions, catches contradictions before they cost you, a
 [![Binary](https://img.shields.io/badge/binary-25MB_single_file-informational)](https://github.com/samvallad33/vestige/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6)](LICENSE)
 
-[Install](#install) · [Why not RAG](#why-not-just-rag) · [Benchmark](#the-receipts-silent-rotation) · [Science](#the-science) · [Tools](#the-14-tools) · [Dashboard](#the-dashboard) · [Pro](#vestige-pro) · [Docs](#go-deeper)
+[Consulting](#-consulting--core-infrastructure-advisory) · [Install](#install) · [Why not RAG](#why-not-just-rag) · [Benchmark](#the-receipts-silent-rotation) · [Science](#the-science) · [Tools](#the-14-tools) · [Dashboard](#the-dashboard) · [Pro](#vestige-pro) · [Docs](#go-deeper)
+
+## 💼 Consulting & Core Infrastructure Advisory
+
+Autonomous agents are currently bleeding enterprise budgets via prompt bloat and context window amnesia.
+
+I take on a limited number of technical advisory retainers and consulting projects for AI developer tool startups, multi-agent frameworks, and enterprise engineering teams looking to optimize their context economics.
+
+### Core Specializations:
+* **Context Optimization & Filtering:** Implementing local Prediction Error Gating to strip out redundant tool runtime noise and drop token overhead by 40%–60%.
+* **Causal Agent Memory Design:** Structuring local SQLite graph architectures using Retroactive Salience Backfilling to eliminate agent amnesia during heavy, multi-file code execution.
+* **Air-Gapped AI Governance:** Designing zero-knowledge, high-performance Rust memory scaffolding that runs entirely on local metal to protect proprietary enterprise IP.
+
+For architectural reviews, integration advisory, or founding infrastructure roles, reach out directly at: **sam@vestige.sh**
 
 ---
 
