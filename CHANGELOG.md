@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Dashboard toolchain
+
+- Vite 6.4 to 8.2, `@sveltejs/vite-plugin-svelte` 5 to 7, `@sveltejs/kit` 2.53
+  to 2.70, Vitest 4 to 5, Svelte 5.57, svelte-check 4.7, TypeScript 5.9 to 6.0,
+  Tailwind 4.3, Playwright 1.63, plus `@types/node` for the Vite config. Kit
+  2.70 accepts Vite 8 and TypeScript 6 but not 7, and the Svelte plugin 7
+  requires Vite 8, so the set moves together. Check, tests and build are green
+  with no source change; the WebGPU graph and Memory Cinema are untouched.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with
