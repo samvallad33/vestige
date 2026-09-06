@@ -12,6 +12,10 @@ An inferred start that conflicts with an explicit `validUntil` is **not** applie
 
 ## Similar-tag preflight
 
+For duplicate-memory scans and merge safeguards, see
+[Sparse-Hash Dedup Shield](SPARSE_HASH_DEDUP.md). Similarity scans are read-only;
+non-identical text requires explicit merge review.
+
 Similar-tag nudges are scoped, bounded, deterministic, and never auto-applied. They recognize casing, punctuation, small edit-distance, and safe namespaced/non-namespaced suffix variants such as `prixsix`, `prix-six`, and `codebase:prix-six`.
 
 To decide before storing a new variant:

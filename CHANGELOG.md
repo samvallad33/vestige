@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Sparse-Hash Dedup Shield
+
+- Large dedup scans filter candidates through deterministic sparse projection
+  hashes before exact cosine scoring, with an exhaustive fallback and no
+  2,000-embedding cutoff. Non-identical memories require explicit merge review.
+- Incoming non-identical text above the reinforcement similarity threshold is
+  stored separately. Opt-in background dedup now merges only exact text copies
+  and records reversible operations instead of deleting absorbed memories.
+- Unconfirmed plan application checks the current policy and member state;
+  legacy plans require review. See [Sparse-Hash Dedup](docs/SPARSE_HASH_DEDUP.md)
+  for the approximation tradeoff, evidence and rollback behavior.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with

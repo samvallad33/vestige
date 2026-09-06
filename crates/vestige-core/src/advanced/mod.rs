@@ -28,6 +28,7 @@ pub mod merge_supersede;
 pub mod prediction_error;
 pub mod reconsolidation;
 pub mod retroactive_backfill;
+pub mod sparse_hash;
 pub mod speculative;
 
 // Re-exports for convenient access

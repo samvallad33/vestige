@@ -2697,9 +2697,17 @@ impl SqliteMemoryStore {
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-        let active_profile_id = Self::active_profile_id_from_conn(&reader)?
+        Self::node_embedding_from_connection(&reader, node_id)
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn node_embedding_from_connection(
+        connection: &Connection,
+        node_id: &str,
+    ) -> Result<Option<Vec<f32>>> {
+        let active_profile_id = Self::active_profile_id_from_conn(connection)?
             .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.to_string());
-        let mut stmt = reader.prepare(
+        let mut stmt = connection.prepare(
             "SELECT embedding FROM embedding_profile_vectors
              WHERE profile_id = ?1 AND node_id = ?2",
         )?;
@@ -2713,7 +2721,7 @@ impl SqliteMemoryStore {
         // non-legacy profile is strictly isolated from it.
         let embedding_row =
             if embedding_row.is_none() && active_profile_id == LEGACY_EMBEDDING_PROFILE_ID {
-                reader
+                connection
                     .query_row(
                         "SELECT embedding FROM node_embeddings WHERE node_id = ?1",
                         params![node_id],
@@ -8427,230 +8435,82 @@ impl SqliteMemoryStore {
         std::env::var("VESTIGE_AUTO_CONSOLIDATE_MERGE").ok()
     }
 
-    /// Auto-deduplicate similar memories during consolidation (episodic → semantic merge)
-    ///
-    /// Finds clusters with cosine similarity >= 0.85, keeps the strongest node,
-    /// appends unique content from weaker nodes, and deletes duplicates.
-    /// Honors the `VESTIGE_AUTO_CONSOLIDATE_MERGE` opt-out (unset → on) and
-    /// never merges away or deletes protected (pinned) nodes (#142).
+    /// Opt-in consolidation of byte-identical memories within one scope/type.
+    /// Hashing nominates pairs; cosine confirms them. Non-identical text stays
+    /// separate, and accepted duplicates use the existing reversible plan log.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn auto_dedup_consolidation(&self) -> Result<i64> {
-        // OPT-IN (v2.6.0, reversing the #142 opt-out): this pass concat-merges
-        // near-duplicate memories and HARD-DELETES the weaker ones with no
-        // reflog. Unattended destruction of user memories is opt-IN, never a
-        // default: set VESTIGE_AUTO_CONSOLIDATE_MERGE=1 (or true/on/yes) to
-        // enable it. Unset or any other/malformed value fails CLOSED — the
-        // safe direction for a destructive gate (#142's opt-out parsed the
-        // same input as fail-OPEN, so a typo destroyed data). The `dedup` MCP
-        // tool remains the on-demand, previewable, reversible path and is
-        // unaffected by this gate. Gate here (not the caller) so it stays
-        // with the pin filter and self-protects against a future second
-        // caller.
-        let auto_merge = Self::auto_consolidate_merge_value()
-            .map(|v| {
-                let v = v.trim();
-                v.eq_ignore_ascii_case("true")
-                    || v.eq_ignore_ascii_case("on")
-                    || v.eq_ignore_ascii_case("yes")
-                    || v == "1"
-            })
-            .unwrap_or(false);
-        if !auto_merge {
+        use crate::advanced::sparse_hash::{SparseHashIndex, same_memory_text};
+        let enabled = Self::auto_consolidate_merge_value().is_some_and(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on" | "yes"
+            )
+        });
+        if !enabled {
             return Ok(0);
         }
-
-        let all_embeddings = self.get_all_embeddings()?;
-        let n = all_embeddings.len();
-
-        if !(2..=2000).contains(&n) {
-            return Ok(0);
-        }
-
-        // Protected (pinned) memories must never be touched by this unattended,
-        // no-audit pass — mirroring the interactive contract that a protected
-        // node may only survive a merge, never be absorbed (see `plan_merge`).
-        // Fetch the set ONCE here, before the per-cluster reader lock is taken:
-        // both `protected_node_ids()` and `is_protected()` take their OWN reader
-        // lock, so calling either inside the lock window below would self-deadlock
-        // the non-reentrant Mutex. Skipping protected ids at BOTH the outer
-        // (anchor) and inner (member) loops guarantees a protected node is never
-        // an anchor and never a cluster member — so it can never be the keeper nor
-        // land in weak_ids, and is thus never merged into and never deleted. Fails
-        // SAFE via `?`: on a poisoned lock the caller's unwrap_or(0) skips the
-        // merge this cycle rather than risk absorbing a pin. #142
+        let scopes = self.dedup_active_scopes()?;
         let protected = self.protected_node_ids()?;
-
-        // Scope map, fetched ONCE alongside `protected` and for the same reason:
-        // the per-cluster reader lock below is non-reentrant, so this cannot be
-        // looked up inside the loop. This pass merges content and then HARD
-        // DELETES the weak nodes, unattended and with no audit row. Without a
-        // scope guard it will happily fuse two different projects' near-identical
-        // notes -- e.g. the same convention worded alike but naming different
-        // credentials -- and destroy one of them. Memories only ever cluster with
-        // memories in their OWN scope.
-        let scopes: std::collections::HashMap<String, String> = {
-            let reader = self
-                .reader
-                .lock()
-                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-            let mut stmt = reader.prepare(
-                "SELECT id, COALESCE(NULLIF(TRIM(scope), ''), 'user') FROM knowledge_nodes",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?;
-            let mut m = std::collections::HashMap::new();
-            for r in rows {
-                let (id, sc) = r?;
-                m.insert(id, sc);
+        let mut embeddings = self.get_all_embeddings()?;
+        embeddings.retain(|(id, _)| scopes.contains_key(id) && !protected.contains(id));
+        embeddings.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut nodes = std::collections::HashMap::new();
+        for (id, _) in &embeddings {
+            // Explicit end dates can distinguish otherwise identical facts.
+            // Keep finite windows for review instead of aborting the pass when
+            // duplicate-only apply declines them.
+            if let Some(node) = self.get_node(id)?
+                && node.valid_until.is_none()
+            {
+                nodes.insert(id.clone(), node);
             }
-            m
-        };
-        let scope_of = |id: &str| -> &str { scopes.get(id).map(String::as_str).unwrap_or("user") };
-
-        const SIMILARITY_THRESHOLD: f32 = 0.85;
-        let mut merged_count = 0i64;
-        let mut consumed: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-        for i in 0..n {
-            if consumed.contains(&all_embeddings[i].0) || protected.contains(&all_embeddings[i].0) {
+        }
+        let vectors: Vec<_> = embeddings.iter().map(|(_, v)| v.as_slice()).collect();
+        let index = SparseHashIndex::new(&vectors, 0.85);
+        let mut consumed = std::collections::HashSet::new();
+        let mut merged = 0;
+        for i in 0..embeddings.len() {
+            let anchor = &embeddings[i].0;
+            if consumed.contains(anchor) {
                 continue;
             }
-
-            let mut cluster: Vec<(usize, f32)> = Vec::new();
-
-            let anchor_scope = scope_of(&all_embeddings[i].0);
-            for j in (i + 1)..n {
-                if consumed.contains(&all_embeddings[j].0)
-                    || protected.contains(&all_embeddings[j].0)
+            let Some(a) = nodes.get(anchor) else {
+                continue;
+            };
+            let mut members = vec![anchor.clone()];
+            for j in index.candidates(i) {
+                let id = &embeddings[j].0;
+                let Some(b) = nodes.get(id) else {
+                    continue;
+                };
+                if consumed.contains(id)
+                    || scopes.get(anchor) != scopes.get(id)
+                    || a.node_type != b.node_type
+                    || !same_memory_text(&a.content, &b.content)
                 {
                     continue;
                 }
-                // Never cluster across project scopes: the merge below deletes.
-                if scope_of(&all_embeddings[j].0) != anchor_scope {
-                    continue;
-                }
-                let sim = crate::embeddings::cosine_similarity(
-                    &all_embeddings[i].1,
-                    &all_embeddings[j].1,
-                );
-                if sim >= SIMILARITY_THRESHOLD {
-                    cluster.push((j, sim));
+                if crate::cosine_similarity(&embeddings[i].1, &embeddings[j].1) >= 0.85 {
+                    members.push(id.clone());
+                    // Bound each transaction and undo payload; remaining
+                    // duplicates can form a later cluster or consolidation.
+                    if members.len() == 64 {
+                        break;
+                    }
                 }
             }
-
-            if cluster.is_empty() {
+            if members.len() < 2 {
                 continue;
             }
-
-            // Find the strongest node (highest retention_strength)
-            let anchor_id = &all_embeddings[i].0;
-            let reader = self
-                .reader
-                .lock()
-                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-            let anchor_retention: f64 = reader
-                .query_row(
-                    "SELECT retention_strength FROM knowledge_nodes WHERE id = ?1",
-                    params![anchor_id],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0.0);
-
-            let mut best_idx = i;
-            let mut best_retention = anchor_retention;
-
-            for &(j, _) in &cluster {
-                let dup_id = &all_embeddings[j].0;
-                let dup_retention: f64 = reader
-                    .query_row(
-                        "SELECT retention_strength FROM knowledge_nodes WHERE id = ?1",
-                        params![dup_id],
-                        |row| row.get(0),
-                    )
-                    .unwrap_or(0.0);
-                if dup_retention > best_retention {
-                    best_retention = dup_retention;
-                    best_idx = j;
-                }
-            }
-
-            let best_id = all_embeddings[best_idx].0.clone();
-
-            // Get keeper's content
-            let keeper_content: String = reader
-                .query_row(
-                    "SELECT content FROM knowledge_nodes WHERE id = ?1",
-                    params![best_id],
-                    |row| row.get(0),
-                )
-                .unwrap_or_default();
-
-            // Collect weak node IDs (all nodes in cluster except the keeper)
-            let mut weak_ids: Vec<String> = Vec::new();
-            if best_idx != i {
-                weak_ids.push(anchor_id.clone());
-            }
-            for &(j, _) in &cluster {
-                if j != best_idx {
-                    weak_ids.push(all_embeddings[j].0.clone());
-                }
-            }
-
-            // Merge unique content from weak nodes
-            let mut merged_content = keeper_content.clone();
-            for weak_id in &weak_ids {
-                let weak_content: String = reader
-                    .query_row(
-                        "SELECT content FROM knowledge_nodes WHERE id = ?1",
-                        params![weak_id],
-                        |row| row.get(0),
-                    )
-                    .unwrap_or_default();
-
-                let weak_trimmed = weak_content.trim();
-                if !merged_content.contains(weak_trimmed) && weak_trimmed.len() > 20 {
-                    merged_content.push_str("\n\n[MERGED] ");
-                    merged_content.push_str(weak_trimmed);
-                }
-            }
-
-            // Drop reader before taking writer locks in update/delete
-            drop(reader);
-
-            // Update keeper with merged content. The update result is the
-            // gate for the deletions below: if the keeper never absorbed the
-            // weak nodes' content, deleting them destroys it. The previous
-            // `let _ =` discarded exactly that failure and deleted anyway.
-            let content_preserved = if merged_content != keeper_content {
-                self.update_node_content(&best_id, &merged_content).is_ok()
-            } else {
-                true
-            };
-
-            if content_preserved {
-                // Delete weak nodes — their content verifiably lives on in
-                // the keeper (or was already contained in it).
-                for weak_id in &weak_ids {
-                    let _ = self.delete_node(weak_id);
-                    consumed.insert(weak_id.clone());
-                    merged_count += 1;
-                }
-            } else {
-                tracing::warn!(
-                    keeper = %best_id,
-                    weak = weak_ids.len(),
-                    "auto-dedup: keeper content update failed; weak nodes kept (nothing deleted)"
-                );
-                for weak_id in &weak_ids {
-                    consumed.insert(weak_id.clone());
-                }
-            }
-
-            consumed.insert(best_id);
+            let plan = self.plan_merge(&members, None, self.get_merge_policy()?)?;
+            // The explicit background opt-in authorizes exact duplicates only.
+            // Recheck text, scope, type and protection under the write lock.
+            self.apply_plan_checked(&plan.id, true, true)?;
+            merged += (members.len() - 1) as i64;
+            consumed.extend(members);
         }
-
-        Ok(merged_count)
+        Ok(merged)
     }
 
     /// Restore the last meaningful interaction for memories whose most recent
@@ -12472,8 +12332,14 @@ impl SqliteMemoryStore {
             .reader
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        Self::merge_policy_from_connection(&reader)
+    }
+
+    fn merge_policy_from_connection(
+        connection: &Connection,
+    ) -> Result<crate::advanced::MergePolicy> {
         let read_key = |key: &str| -> Option<f64> {
-            reader
+            connection
                 .query_row(
                     "SELECT value FROM fsrs_config WHERE key = ?1",
                     params![key],
@@ -12551,9 +12417,22 @@ impl SqliteMemoryStore {
         limit: usize,
         tag_filter: &[String],
     ) -> Result<Vec<crate::advanced::MergeCandidate>> {
+        self.merge_candidates_with_scan_mode(policy, limit, tag_filter, false)
+    }
+
+    /// Same candidate scan with an explicit exhaustive fallback for recall audits.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    pub fn merge_candidates_with_scan_mode(
+        &self,
+        policy: crate::advanced::MergePolicy,
+        limit: usize,
+        tag_filter: &[String],
+        exhaustive: bool,
+    ) -> Result<Vec<crate::advanced::MergeCandidate>> {
         use crate::advanced::{MatchClass, MergeCandidate, score_pair};
 
         let all_embeddings = self.get_all_embeddings()?;
+        let scopes = self.dedup_active_scopes()?;
         if all_embeddings.is_empty() {
             return Ok(vec![]);
         }
@@ -12581,7 +12460,9 @@ impl SqliteMemoryStore {
         // Candidate embeddings, filtered by tag and excluding superseded.
         let items: Vec<(String, Vec<f32>)> = all_embeddings
             .into_iter()
-            .filter(|(id, _)| !superseded.contains(id))
+            .filter(|(id, _)| {
+                !superseded.contains(id) && scopes.contains_key(id) && node_map.contains_key(id)
+            })
             .filter(|(id, _)| {
                 if tag_filter.is_empty() {
                     return true;
@@ -12594,11 +12475,14 @@ impl SqliteMemoryStore {
             .collect();
 
         let n = items.len();
-        if n > 2000 {
-            return Err(StorageError::Init(format!(
-                "Too many memories to scan ({n} with embeddings). Filter by tags to reduce scope."
-            )));
-        }
+        // Even perfect lexical/tag overlap contributes at most 0.30.
+        let minimum_cosine = if exhaustive {
+            0.0
+        } else {
+            ((policy.possible_threshold - 0.30) / 0.70).max(0.0)
+        };
+        let vectors: Vec<_> = items.iter().map(|(_, v)| v.as_slice()).collect();
+        let index = crate::advanced::sparse_hash::SparseHashIndex::new(&vectors, minimum_cosine);
 
         // Union-find clustering over pairs above the possible threshold.
         let mut parent: Vec<usize> = (0..n).collect();
@@ -12616,15 +12500,22 @@ impl SqliteMemoryStore {
             root
         }
 
-        // Best pair score per resulting cluster member, for the explanation.
-        let mut pair_score: std::collections::HashMap<
-            (usize, usize),
-            crate::advanced::MatchSignals,
-        > = std::collections::HashMap::new();
+        // Per-component summaries avoid retaining O(n^2) pair records when
+        // a large store contains thousands of identical embeddings.
+        let mut weakest: Vec<Option<crate::advanced::MatchSignals>> = vec![None; n];
+        let mut edge_counts = vec![0usize; n];
+        let mut review = vec![false; n];
 
         for i in 0..n {
-            for j in (i + 1)..n {
+            for j in index.candidates(i) {
+                if scopes.get(&items[i].0) != scopes.get(&items[j].0) {
+                    continue;
+                }
                 let sim = crate::cosine_similarity(&items[i].1, &items[j].1);
+                if !sim.is_finite() || 0.70 * sim.clamp(0.0, 1.0) + 0.30 < policy.possible_threshold
+                {
+                    continue;
+                }
                 let (a_node, b_node) = (node_map.get(&items[i].0), node_map.get(&items[j].0));
                 let signals = score_pair(
                     sim,
@@ -12637,9 +12528,25 @@ impl SqliteMemoryStore {
                     let ri = find(&mut parent, i);
                     let rj = find(&mut parent, j);
                     if ri != rj {
-                        parent[ri] = rj;
+                        parent[rj] = ri;
+                        edge_counts[ri] += edge_counts[rj];
+                        review[ri] |= review[rj];
+                        if let Some(other) = weakest[rj].take()
+                            && weakest[ri]
+                                .as_ref()
+                                .is_none_or(|s| other.combined_score < s.combined_score)
+                        {
+                            weakest[ri] = Some(other);
+                        }
                     }
-                    pair_score.insert((i, j), signals);
+                    edge_counts[ri] += 1;
+                    review[ri] |= signals.requires_review;
+                    if weakest[ri]
+                        .as_ref()
+                        .is_none_or(|s| signals.combined_score < s.combined_score)
+                    {
+                        weakest[ri] = Some(signals);
+                    }
                 }
             }
         }
@@ -12653,34 +12560,18 @@ impl SqliteMemoryStore {
         }
 
         let mut out: Vec<MergeCandidate> = Vec::new();
-        for members in clusters.into_values() {
+        for (root, members) in clusters {
             if members.len() < 2 {
                 continue;
             }
-            // Cluster confidence = weakest recorded pair (the loosest link).
-            let mut min_score = 1.0f32;
-            let mut best_signals: Option<crate::advanced::MatchSignals> = None;
-            for a in 0..members.len() {
-                for b in (a + 1)..members.len() {
-                    let key = (members[a].min(members[b]), members[a].max(members[b]));
-                    if let Some(sig) = pair_score.get(&key) {
-                        if sig.combined_score < min_score {
-                            min_score = sig.combined_score;
-                        }
-                        if best_signals
-                            .as_ref()
-                            .map(|s| sig.combined_score > s.combined_score)
-                            .unwrap_or(true)
-                        {
-                            best_signals = Some(sig.clone());
-                        }
-                    }
-                }
-            }
-            let signals = match best_signals {
-                Some(s) => s,
-                None => continue,
+            let Some(mut signals) = weakest[root].take() else {
+                continue;
             };
+            // A--B and B--C are insufficient evidence for A--C. An incomplete
+            // component is review-only, including edges skipped by hashing.
+            signals.requires_review =
+                review[root] || edge_counts[root] < members.len() * (members.len() - 1) / 2;
+            let min_score = signals.combined_score;
 
             // Survivor = highest retention member.
             let mut member_ids: Vec<String> =
@@ -12688,7 +12579,7 @@ impl SqliteMemoryStore {
             member_ids.sort_by(|a, b| {
                 let ra = node_map.get(a).map(|n| n.retention_strength).unwrap_or(0.0);
                 let rb = node_map.get(b).map(|n| n.retention_strength).unwrap_or(0.0);
-                rb.partial_cmp(&ra).unwrap_or(std::cmp::Ordering::Equal)
+                rb.total_cmp(&ra).then_with(|| a.cmp(b))
             });
             let survivor_id = member_ids[0].clone();
             let has_protected_member = member_ids.iter().any(|id| protected.contains(id));
@@ -12702,7 +12593,7 @@ impl SqliteMemoryStore {
                 })
                 .collect();
 
-            let classification = match policy.classify(min_score) {
+            let classification = match policy.classify_signals(&signals) {
                 MatchClass::NonMatch => continue,
                 c => c,
             };
@@ -12720,11 +12611,31 @@ impl SqliteMemoryStore {
 
         out.sort_by(|a, b| {
             b.confidence
-                .partial_cmp(&a.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&a.confidence)
+                .then_with(|| a.survivor_id.cmp(&b.survivor_id))
         });
         out.truncate(limit);
         Ok(out)
+    }
+
+    /// Current, active memory scopes for deduplication. Missing or historical
+    /// nodes must not be offered merely because an old embedding still exists.
+    pub fn dedup_active_scopes(&self) -> Result<std::collections::HashMap<String, String>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let mut stmt = reader.prepare(
+            "SELECT id, COALESCE(NULLIF(TRIM(scope), ''), 'user') FROM knowledge_nodes
+             WHERE superseded_by IS NULL
+               AND (valid_until IS NULL OR julianday(valid_until) > julianday('now'))
+               AND (valid_from IS NULL OR julianday(valid_from) <= julianday('now'))",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<std::result::Result<_, _>>()
+            .map_err(Into::into)
     }
 
     /// IDs of nodes that have been bitemporally superseded (kept, but invalid).
@@ -12853,6 +12764,7 @@ impl SqliteMemoryStore {
             &survivor_node.content,
             &survivor_node.content,
         );
+        let mut requires_review = false;
         for node in nodes.iter().filter(|n| n.id != survivor) {
             let sim = self.pair_similarity(&survivor, &node.id)?;
             let sig = score_pair(
@@ -12862,12 +12774,14 @@ impl SqliteMemoryStore {
                 &survivor_node.content,
                 &node.content,
             );
+            requires_review |= sig.requires_review;
             if sig.combined_score < min_score {
                 min_score = sig.combined_score;
                 best_signals = sig;
             }
         }
-        let classification = policy.classify(min_score);
+        best_signals.requires_review |= requires_review;
+        let classification = policy.classify_signals(&best_signals);
 
         let plan = crate::advanced::MergePlan {
             id: uuid::Uuid::new_v4().to_string(),
@@ -12923,7 +12837,7 @@ impl SqliteMemoryStore {
 
         let sim = self.pair_similarity(old_id, new_id)?;
         let signals = score_pair(sim, &old.tags, &new.tags, &old.content, &new.content);
-        let classification = policy.classify(signals.combined_score);
+        let classification = policy.classify_signals(&signals);
 
         let plan = crate::advanced::MergePlan {
             id: uuid::Uuid::new_v4().to_string(),
@@ -13542,6 +13456,16 @@ impl SqliteMemoryStore {
         plan_id: &str,
         confirm: bool,
     ) -> Result<crate::advanced::MergeOperation> {
+        self.apply_plan_checked(plan_id, confirm, false)
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn apply_plan_checked(
+        &self,
+        plan_id: &str,
+        confirm: bool,
+        duplicate_only: bool,
+    ) -> Result<crate::advanced::MergeOperation> {
         use crate::advanced::{MatchClass, PlanKind};
 
         let plan = self
@@ -13561,7 +13485,9 @@ impl SqliteMemoryStore {
         }
 
         // Confirmation gate: only auto-applyable Match plans may skip confirm.
-        let needs_confirm = !(plan.classification == MatchClass::Match);
+        let needs_confirm = plan.classification != MatchClass::Match
+            || plan.signals.requires_review
+            || !self.get_merge_policy()?.auto_apply;
         if needs_confirm && !confirm {
             return Err(StorageError::Init(format!(
                 "plan {plan_id} is classified '{}' (confidence {:.3}) and requires confirm=true to apply",
@@ -13623,6 +13549,89 @@ impl SqliteMemoryStore {
                     return Err(StorageError::Init(format!("plan {plan_id} was cancelled")));
                 }
                 _ => {}
+            }
+
+            if !confirm || duplicate_only {
+                if !confirm {
+                    let current_policy = Self::merge_policy_from_connection(&tx)?;
+                    if !current_policy.auto_apply
+                        || current_policy.classify_signals(&plan.signals) != MatchClass::Match
+                    {
+                        return Err(StorageError::Init(
+                            "current merge policy requires confirm=true; review the plan again"
+                                .into(),
+                        ));
+                    }
+                }
+                let mut baseline: Option<(String, String, String)> = None;
+                let mut member_tags = Vec::new();
+                for id in &plan.member_ids {
+                    let (content, scope, node_type, protected, superseded, valid_until, started, tags) = tx.query_row(
+                        "SELECT content, COALESCE(NULLIF(TRIM(scope), ''), 'user'), node_type,
+                                protected, superseded_by, valid_until,
+                                COALESCE(valid_from IS NULL OR julianday(valid_from) <= julianday(?2), 0),
+                                COALESCE(tags, '[]') FROM knowledge_nodes WHERE id = ?1",
+                        params![id, now.to_rfc3339()], |r| Ok((
+                            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
+                            r.get::<_, bool>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?,
+                            r.get::<_, bool>(6)?, r.get::<_, String>(7)?,
+                        )),
+                    )?;
+                    let current = (content, scope, node_type);
+                    if protected
+                        || superseded.is_some()
+                        || valid_until.is_some()
+                        || !started
+                        || current.0.trim().is_empty()
+                        || baseline.as_ref().is_some_and(|first| first != &current)
+                        || current.0 != plan.result_content
+                    {
+                        return Err(StorageError::Init(
+                            "memory changed or differs; review the plan and use confirm=true"
+                                .into(),
+                        ));
+                    }
+                    baseline = Some(current);
+                    let tags: Vec<String> = serde_json::from_str(&tags).map_err(|error| {
+                        StorageError::Init(format!("invalid current tags: {error}"))
+                    })?;
+                    let vector = Self::node_embedding_from_connection(&tx, id)?;
+                    member_tags.push((id != &plan.survivor_id, tags, vector));
+                }
+                // Match the survivor-first ordering used by plan_merge. A
+                // concurrent tag edit must not be overwritten by a stale plan.
+                member_tags.sort_by_key(|(absorbed, _, _)| *absorbed);
+                if !confirm {
+                    let current_policy = Self::merge_policy_from_connection(&tx)?;
+                    if let Some((_, anchor_tags, anchor_vector)) = member_tags.first() {
+                        for (_, tags, vector) in member_tags.iter().skip(1) {
+                            let similarity = match (anchor_vector, vector) {
+                                (Some(a), Some(b)) => crate::cosine_similarity(a, b),
+                                _ => 0.0,
+                            };
+                            let signals = crate::advanced::score_pair(
+                                similarity,
+                                anchor_tags,
+                                tags,
+                                &plan.result_content,
+                                &plan.result_content,
+                            );
+                            if current_policy.classify_signals(&signals) != MatchClass::Match {
+                                return Err(StorageError::Init(
+                                    "current memory signals require confirm=true; generate a new plan".into(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                let tags: Vec<_> = member_tags.into_iter().map(|(_, tags, _)| tags).collect();
+                if plan.kind == PlanKind::Merge
+                    && crate::advanced::compose_merged_tags(&tags) != plan.result_tags
+                {
+                    return Err(StorageError::Init(
+                        "memory tags changed since preview; generate a new merge plan".into(),
+                    ));
+                }
             }
 
             // Snapshot everything we need to undo, BEFORE mutating, and from
@@ -21783,7 +21792,7 @@ mod tests {
                 );
                 let dup = seed_node(
                     &storage,
-                    "Rate limiting uses a token-bucket algorithm per client API key, refilled steadily",
+                    "Rate limiting uses a token bucket per client API key",
                     &["api"],
                     axis_vector(21, 0.01),
                 );
@@ -21791,16 +21800,15 @@ mod tests {
                 set_retention(&storage, &dup, 0.3);
 
                 let merged = storage.auto_dedup_consolidation().unwrap();
-                assert_eq!(merged, 1, "opted in ({value:?}): weak node folds into keeper");
-                assert!(storage.get_node(&dup).unwrap().is_none());
-                assert!(
-                    storage
-                        .get_node(&keeper)
-                        .unwrap()
-                        .unwrap()
-                        .content
-                        .contains("[MERGED]"),
-                    "keeper carries the folded-in [MERGED] block"
+                assert_eq!(
+                    merged, 1,
+                    "opted in ({value:?}): weak node folds into keeper"
+                );
+                assert!(storage.superseded_node_ids().unwrap().contains(&dup));
+                assert!(storage.get_node(&dup).unwrap().is_some());
+                assert_eq!(
+                    storage.get_node(&keeper).unwrap().unwrap().content,
+                    "Rate limiting uses a token bucket per client API key"
                 );
             });
         }
@@ -21891,7 +21899,7 @@ mod tests {
             );
             let member = seed_node(
                 &storage,
-                "Deploys require a green CI run and at least one approving review",
+                "Deploys are gated on a green CI pipeline plus one reviewer approval",
                 &["ci"],
                 axis_vector(27, 0.015),
             );
@@ -21904,7 +21912,7 @@ mod tests {
             let merged = storage.auto_dedup_consolidation().unwrap();
             assert_eq!(
                 merged, 1,
-                "the two unprotected near-dups merge among themselves"
+                "the two unprotected exact duplicates merge among themselves"
             );
 
             // Protected node byte-for-byte untouched and still protected.
@@ -21912,10 +21920,11 @@ mod tests {
             assert_eq!(p.content, pinned_content, "protected keeper not absorbed");
             assert!(!p.content.contains("[MERGED]"));
             assert!(storage.is_protected(&pinned).unwrap());
-            // Unprotected pair merged: `member` gone, `keeper` carries [MERGED].
-            assert!(storage.get_node(&member).unwrap().is_none());
+            // Exact duplicate is invalidated reversibly; keeper text is unchanged.
+            assert!(storage.superseded_node_ids().unwrap().contains(&member));
+            assert!(storage.get_node(&member).unwrap().is_some());
             let keeper_node = storage.get_node(&keeper).unwrap().unwrap();
-            assert!(keeper_node.content.contains("[MERGED]"));
+            assert!(!keeper_node.content.contains("[MERGED]"));
         });
     }
 
@@ -21943,7 +21952,7 @@ mod tests {
             );
             let member = seed_node(
                 &storage,
-                "Feature flags are off by default in production deployments",
+                "Feature flags default to off in the production environment",
                 &["flags"],
                 axis_vector(29, 0.015),
             );
@@ -21956,7 +21965,7 @@ mod tests {
             let pinned_content = storage.get_node(&pinned).unwrap().unwrap().content;
 
             let merged = storage.auto_dedup_consolidation().unwrap();
-            assert_eq!(merged, 1, "only the two unprotected near-dups merge");
+            assert_eq!(merged, 1, "only the two unprotected exact duplicates merge");
 
             // Invariant 1: the protected node still exists, byte-identical.
             let p = storage.get_node(&pinned).unwrap();
@@ -21975,8 +21984,9 @@ mod tests {
                 "keeper must not absorb the protected node's content"
             );
             // The legitimate unprotected pair still merged (member folded in).
-            assert!(storage.get_node(&member).unwrap().is_none());
-            assert!(keeper_node.content.contains("[MERGED]"));
+            assert!(storage.superseded_node_ids().unwrap().contains(&member));
+            assert!(storage.get_node(&member).unwrap().is_some());
+            assert!(!keeper_node.content.contains("[MERGED]"));
         });
     }
 
@@ -22064,7 +22074,7 @@ mod tests {
             );
             let member = seed_node(
                 &storage,
-                "All API timestamps are returned as ISO-8601 in the UTC timezone",
+                "The API returns ISO 8601 timestamps in UTC by convention",
                 &["api"],
                 axis_vector(35, 0.015),
             );
@@ -22075,10 +22085,14 @@ mod tests {
             let pinned_content = storage.get_node(&pinned).unwrap().unwrap().content;
 
             let merged = storage.auto_dedup_consolidation().unwrap();
-            assert_eq!(merged, 1, "the two unprotected near-dups still merge");
-            assert!(storage.get_node(&member).unwrap().is_none());
+            assert_eq!(
+                merged, 1,
+                "the two unprotected exact duplicates still merge"
+            );
+            assert!(storage.superseded_node_ids().unwrap().contains(&member));
+            assert!(storage.get_node(&member).unwrap().is_some());
             let keeper_node = storage.get_node(&keeper).unwrap().unwrap();
-            assert!(keeper_node.content.contains("[MERGED]"));
+            assert!(!keeper_node.content.contains("[MERGED]"));
             // Protected node untouched.
             assert_eq!(
                 storage.get_node(&pinned).unwrap().unwrap().content,
@@ -22086,6 +22100,466 @@ mod tests {
             );
             assert!(storage.is_protected(&pinned).unwrap());
         });
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn sparse_hash_shield_changed_fact_requires_review_and_is_reversible() {
+        let storage = create_test_storage();
+        let policy = MergePolicy::new(0.86, 0.72, true);
+        storage.set_merge_policy(policy).unwrap();
+        let a = seed_node(
+            &storage,
+            "Production request timeout is 30 seconds",
+            &["api"],
+            axis_vector(43, 0.0),
+        );
+        let mut vector = axis_vector(43, 0.0);
+        vector[43] = 0.92;
+        vector[44] = (1.0f32 - 0.92 * 0.92).sqrt();
+        let b = seed_node(
+            &storage,
+            "Production request timeout is 300 seconds",
+            &["api"],
+            vector,
+        );
+        let plan = storage
+            .plan_merge(&[a.clone(), b.clone()], Some(&a), policy)
+            .unwrap();
+        assert!(plan.confidence >= policy.match_threshold);
+        assert_eq!(plan.classification, MatchClass::Possible);
+        assert!(plan.signals.requires_review);
+        assert!(storage.apply_plan(&plan.id, false).is_err());
+        assert!(storage.superseded_node_ids().unwrap().is_empty());
+        let supersede = storage.plan_supersede(&a, &b, policy).unwrap();
+        assert_eq!(supersede.classification, MatchClass::Possible);
+        assert!(storage.apply_plan(&supersede.id, false).is_err());
+        let operation = storage.apply_plan(&plan.id, true).unwrap();
+        storage.merge_undo(&operation.id).unwrap();
+        assert_eq!(
+            storage.get_node(&a).unwrap().unwrap().content,
+            "Production request timeout is 30 seconds"
+        );
+        assert_eq!(
+            storage.get_node(&b).unwrap().unwrap().content,
+            "Production request timeout is 300 seconds"
+        );
+        assert!(storage.superseded_node_ids().unwrap().is_empty());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn sparse_hash_shield_exact_plan_obeys_policy_and_revalidates_current_text() {
+        let storage = create_test_storage();
+        let a = seed_node(
+            &storage,
+            "Timeout is 30 seconds",
+            &["api"],
+            axis_vector(45, 0.0),
+        );
+        let b = seed_node(
+            &storage,
+            "Timeout is 30 seconds",
+            &["api"],
+            axis_vector(45, 0.0),
+        );
+        let plan = storage
+            .plan_merge(&[a.clone(), b.clone()], Some(&a), MergePolicy::default())
+            .unwrap();
+        assert_eq!(plan.classification, MatchClass::Match);
+        assert!(
+            storage.apply_plan(&plan.id, false).is_err(),
+            "auto_apply is off"
+        );
+        storage
+            .set_merge_policy(MergePolicy::new(0.86, 0.72, true))
+            .unwrap();
+        storage
+            .update_node_content(&b, "Timeout is 300 seconds")
+            .unwrap();
+        assert!(
+            storage.apply_plan(&plan.id, false).is_err(),
+            "changed since preview"
+        );
+        assert!(storage.superseded_node_ids().unwrap().is_empty());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn sparse_hash_shield_background_preserves_different_text_and_undoes_exact_duplicates() {
+        with_auto_merge_env(Some("1"), || {
+            let storage = create_test_storage();
+            let a = seed_node(
+                &storage,
+                "Timeout is 30 seconds",
+                &["api"],
+                axis_vector(47, 0.0),
+            );
+            let b = seed_node(
+                &storage,
+                "Timeout is 300 seconds",
+                &["api"],
+                axis_vector(47, 0.0),
+            );
+            assert_eq!(storage.auto_dedup_consolidation().unwrap(), 0);
+            assert!(storage.get_node(&a).unwrap().is_some());
+            assert!(storage.get_node(&b).unwrap().is_some());
+            let duplicate = seed_node(
+                &storage,
+                "Timeout is 30 seconds",
+                &["api"],
+                axis_vector(47, 0.0),
+            );
+            set_retention(&storage, &a, 0.9);
+            set_retention(&storage, &duplicate, 0.1);
+            assert_eq!(storage.auto_dedup_consolidation().unwrap(), 1);
+            assert!(
+                storage.get_node(&duplicate).unwrap().is_some(),
+                "audit copy survives"
+            );
+            assert!(storage.superseded_node_ids().unwrap().contains(&duplicate));
+            assert_eq!(
+                storage.auto_dedup_consolidation().unwrap(),
+                0,
+                "historical duplicate excluded"
+            );
+            let id: String = storage
+                .reader
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT id FROM merge_operations WHERE status='applied'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            storage.merge_undo(&id).unwrap();
+            assert!(storage.superseded_node_ids().unwrap().is_empty());
+        });
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn sparse_hash_shield_scan_above_old_limit_and_tag_filter_liveness() {
+        let storage = create_test_storage();
+        let a = seed_node(
+            &storage,
+            "Exact duplicate survives large scans",
+            &["needle"],
+            axis_vector(50, 0.0),
+        );
+        let b = seed_node(
+            &storage,
+            "Exact duplicate survives large scans",
+            &["needle"],
+            axis_vector(50, 0.0),
+        );
+        // Vectors are valid but point away from the needle. No model/network
+        // needed: the fixture exercises the real database candidate path.
+        let mut state = 0x12345678u32;
+        for i in 0..2001 {
+            let vector = (0..EMBEDDING_DIMENSIONS)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 17;
+                    state ^= state << 5;
+                    (state as f64 / u32::MAX as f64 * 2.0 - 1.0) as f32
+                })
+                .collect();
+            seed_node(
+                &storage,
+                &format!("Unrelated fixture {i}"),
+                &["background"],
+                vector,
+            );
+        }
+        let candidates = storage
+            .merge_candidates(MergePolicy::default(), 20, &[])
+            .unwrap();
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.member_ids.contains(&a) && c.member_ids.contains(&b))
+        );
+        let filtered = storage
+            .merge_candidates(MergePolicy::default(), 20, &["needle".into()])
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].member_ids.len(), 2);
+        assert_eq!(filtered[0].classification, MatchClass::Match);
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn sparse_hash_shield_legacy_plans_fail_closed() {
+        let storage = create_test_storage();
+        let policy = MergePolicy::new(0.86, 0.72, true);
+        storage.set_merge_policy(policy).unwrap();
+        let a = seed_node(&storage, "same fact", &["a"], axis_vector(48, 0.0));
+        let b = seed_node(&storage, "same fact", &["a"], axis_vector(48, 0.0));
+        let plan = storage.plan_merge(&[a, b], None, policy).unwrap();
+        let mut legacy = serde_json::to_value(&plan).unwrap();
+        legacy["signals"]
+            .as_object_mut()
+            .unwrap()
+            .remove("requires_review");
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE merge_plans SET payload=?1 WHERE id=?2",
+                params![legacy.to_string(), plan.id],
+            )
+            .unwrap();
+        assert!(
+            storage
+                .get_plan(&plan.id)
+                .unwrap()
+                .unwrap()
+                .signals
+                .requires_review
+        );
+        assert!(storage.apply_plan(&plan.id, false).is_err());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn sparse_hash_shield_rechecks_tightened_policy_at_apply() {
+        let storage = create_test_storage();
+        let policy = MergePolicy::new(0.86, 0.72, true);
+        storage.set_merge_policy(policy).unwrap();
+        let a = seed_node(
+            &storage,
+            "Same fact",
+            &["shared", "left"],
+            axis_vector(48, 0.0),
+        );
+        let b = seed_node(
+            &storage,
+            "Same fact",
+            &["shared", "right"],
+            axis_vector(48, 0.0),
+        );
+        let plan = storage.plan_merge(&[a, b], None, policy).unwrap();
+        assert_eq!(plan.classification, MatchClass::Match);
+        assert!(plan.confidence < 0.99);
+        storage
+            .set_merge_policy(MergePolicy::new(0.99, 0.72, true))
+            .unwrap();
+        assert!(storage.apply_plan(&plan.id, false).is_err());
+        assert!(storage.superseded_node_ids().unwrap().is_empty());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn sparse_hash_shield_rechecks_signals_even_when_tag_union_is_unchanged() {
+        let storage = create_test_storage();
+        let policy = MergePolicy::new(0.86, 0.72, true);
+        storage.set_merge_policy(policy).unwrap();
+        let a = seed_node(&storage, "Same fact", &["shared"], axis_vector(48, 0.0));
+        let b = seed_node(&storage, "Same fact", &["shared"], axis_vector(48, 0.0));
+        let plan = storage
+            .plan_merge(&[a.clone(), b.clone()], Some(&a), policy)
+            .unwrap();
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET tags='[]' WHERE id=?1",
+                params![b],
+            )
+            .unwrap();
+        assert_eq!(plan.result_tags, vec!["shared"]);
+        assert!(storage.apply_plan(&plan.id, false).is_err());
+        assert!(storage.superseded_node_ids().unwrap().is_empty());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn sparse_hash_shield_apply_uses_the_active_embedding_profile() {
+        let storage = create_test_storage();
+        let policy = MergePolicy::new(0.86, 0.72, true);
+        storage.set_merge_policy(policy).unwrap();
+        let a = seed_node(&storage, "Same fact", &["shared"], axis_vector(48, 0.0));
+        let b = seed_node(&storage, "Same fact", &["shared"], axis_vector(49, 0.0));
+        let manifest = ready_profile_manifest(BuiltinEmbeddingProfile::QwenBalanced1024);
+        let profile = manifest.profile.profile_id.clone();
+        storage.save_embedding_profile_manifest(&manifest).unwrap();
+        let mut vector = vec![0.0; 1024];
+        vector[0] = 1.0;
+        for id in [&a, &b] {
+            storage
+                .put_embedding_profile_vector(&EmbeddingProfileVector {
+                    profile_id: profile.to_string(),
+                    node_id: id.clone(),
+                    embedding: Embedding::new(vector.clone()).to_bytes(),
+                    dimensions: 1024,
+                    model: "fixture".into(),
+                    created_at: Utc::now(),
+                })
+                .unwrap();
+        }
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE embedding_profile_state SET active_profile_id=?1 WHERE singleton=1",
+                params![profile.to_string()],
+            )
+            .unwrap();
+        let plan = storage
+            .plan_merge(&[a.clone(), b.clone()], Some(&a), policy)
+            .unwrap();
+        assert_eq!(plan.classification, MatchClass::Match);
+        storage.apply_plan(&plan.id, false).unwrap();
+        assert!(storage.superseded_node_ids().unwrap().contains(&b));
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn sparse_hash_shield_rechecks_future_start_and_changed_tags() {
+        let storage = create_test_storage();
+        let policy = MergePolicy::new(0.86, 0.72, true);
+        storage.set_merge_policy(policy).unwrap();
+        let a = seed_node(&storage, "Same fact", &["old"], axis_vector(48, 0.0));
+        let b = seed_node(&storage, "Same fact", &["old"], axis_vector(48, 0.0));
+        let plan = storage
+            .plan_merge(&[a.clone(), b.clone()], Some(&a), policy)
+            .unwrap();
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET valid_from=?1 WHERE id=?2",
+                params![(Utc::now() + Duration::days(1)).to_rfc3339(), b],
+            )
+            .unwrap();
+        assert!(storage.apply_plan(&plan.id, false).is_err());
+        assert!(storage.apply_plan_checked(&plan.id, true, true).is_err());
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET valid_from=NULL WHERE id=?1",
+                params![b],
+            )
+            .unwrap();
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET tags='[\"new\"]' WHERE id=?1",
+                params![a],
+            )
+            .unwrap();
+        assert!(storage.apply_plan(&plan.id, false).is_err());
+        assert!(storage.apply_plan_checked(&plan.id, true, true).is_err());
+        assert_eq!(storage.get_node(&a).unwrap().unwrap().tags, vec!["new"]);
+        assert!(storage.superseded_node_ids().unwrap().is_empty());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn sparse_hash_shield_background_skips_finite_windows_without_starvation() {
+        with_auto_merge_env(Some("1"), || {
+            let storage = create_test_storage();
+            let finite_a = seed_node(&storage, "Finite fact", &["a"], axis_vector(48, 0.0));
+            let finite_b = seed_node(&storage, "Finite fact", &["a"], axis_vector(48, 0.0));
+            storage
+                .writer
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE knowledge_nodes SET valid_until=?1 WHERE id IN (?2, ?3)",
+                    params![
+                        (Utc::now() + Duration::days(1)).to_rfc3339(),
+                        finite_a,
+                        finite_b
+                    ],
+                )
+                .unwrap();
+            seed_node(&storage, "Open-ended fact", &["b"], axis_vector(49, 0.0));
+            seed_node(&storage, "Open-ended fact", &["b"], axis_vector(49, 0.0));
+            assert_eq!(storage.auto_dedup_consolidation().unwrap(), 1);
+            let superseded = storage.superseded_node_ids().unwrap();
+            assert!(!superseded.contains(&finite_a));
+            assert!(!superseded.contains(&finite_b));
+            let pending: i64 = storage
+                .reader
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM merge_plans WHERE status='pending'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(pending, 0);
+        });
+    }
+
+    #[test]
+    fn sparse_hash_shield_active_scope_snapshot_honors_finite_windows() {
+        let storage = create_test_storage();
+        let now = Utc::now();
+        let active = storage
+            .ingest(IngestInput {
+                content: "Currently valid finite window".into(),
+                valid_until: Some(now + Duration::days(1)),
+                ..Default::default()
+            })
+            .unwrap();
+        let expired = storage
+            .ingest(IngestInput {
+                content: "Expired window".into(),
+                valid_until: Some(now - Duration::days(1)),
+                ..Default::default()
+            })
+            .unwrap();
+        let future = storage
+            .ingest(IngestInput {
+                content: "Future window".into(),
+                valid_from: Some(now + Duration::days(1)),
+                ..Default::default()
+            })
+            .unwrap();
+        let scopes = storage.dedup_active_scopes().unwrap();
+        assert!(scopes.contains_key(&active.id));
+        assert!(!scopes.contains_key(&expired.id));
+        assert!(!scopes.contains_key(&future.id));
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn sparse_hash_shield_never_clusters_across_scopes() {
+        let storage = create_test_storage();
+        let a = seed_node(&storage, "same fact", &["a"], axis_vector(49, 0.0));
+        let b = seed_node(&storage, "same fact", &["a"], axis_vector(49, 0.0));
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET scope='project:b' WHERE id=?1",
+                params![b],
+            )
+            .unwrap();
+        assert!(
+            storage
+                .merge_candidates(MergePolicy::default(), 20, &[])
+                .unwrap()
+                .is_empty()
+        );
+        let policy = MergePolicy::new(0.86, 0.72, true);
+        storage.set_merge_policy(policy).unwrap();
+        let plan = storage.plan_merge(&[a, b], None, policy).unwrap();
+        assert!(storage.apply_plan(&plan.id, false).is_err());
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
@@ -22820,8 +23294,8 @@ mod tests {
             })
             .unwrap();
 
-        // Near-identical content whose only validity is a prose-inferred
-        // "as of" date must reinforce WITHOUT touching the target's window.
+        // The added as-of text must survive in a separate memory. Its
+        // inferred validity still cannot rewrite the existing node's window.
         let result = storage
             .smart_ingest(IngestInput {
                 content: "alpha deployment policy is retries with backoff, as of last review"
@@ -22831,8 +23305,12 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(result.decision, "reinforce");
-        assert_eq!(result.node.id, target.id);
+        assert_eq!(result.decision, "create");
+        assert_ne!(result.node.id, target.id);
+        assert!(
+            result.node.valid_from.is_some(),
+            "new claim retains its inferred date"
+        );
 
         let node = storage.get_node(&target.id).unwrap().unwrap();
         assert_eq!(
@@ -22882,8 +23360,12 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(result.decision, "reinforce");
-        assert_eq!(result.node.id, target.id);
+        assert_eq!(result.decision, "create");
+        assert_ne!(result.node.id, target.id);
+        assert!(
+            result.node.valid_from.is_some(),
+            "new claim retains its inferred date"
+        );
 
         let node = storage.get_node(&target.id).unwrap().unwrap();
         assert_eq!(

@@ -196,7 +196,14 @@ fn merge_candidates(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value
 
         let policy = storage.get_merge_policy().map_err(|e| e.to_string())?;
         let candidates = storage
-            .merge_candidates(policy, limit, &tags)
+            .merge_candidates_with_scan_mode(
+                policy,
+                limit,
+                &tags,
+                a.get("exhaustive")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            )
             .map_err(|e| e.to_string())?;
 
         let out: Vec<Value> = candidates
@@ -213,7 +220,8 @@ fn merge_candidates(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value
                         "embeddingSimilarity": format!("{:.3}", c.signals.embedding_similarity),
                         "tagOverlap": format!("{:.3}", c.signals.tag_overlap),
                         "tokenOverlap": format!("{:.3}", c.signals.token_overlap),
-                        "combinedScore": format!("{:.3}", c.signals.combined_score)
+                        "combinedScore": format!("{:.3}", c.signals.combined_score),
+                        "requiresReview": c.signals.requires_review
                     },
                     "nextStep": if c.has_protected_member {
                         "A member is protected — unprotect it or pick it as survivor before plan_merge."
@@ -233,7 +241,8 @@ fn merge_candidates(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value
                 "possibleThreshold": policy.possible_threshold,
                 "autoApply": policy.auto_apply
             },
-            "note": "Nothing was changed. These are review candidates only."
+            "scanMode": if a.get("exhaustive").and_then(Value::as_bool).unwrap_or(false) { "exhaustive" } else { "adaptive" },
+            "note": "Nothing was changed. Non-identical text requires review. Large adaptive scans use approximate hashing and can miss near duplicates; exhaustive=true checks all valid same-scope pairs."
         }))
     }
     #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
@@ -308,8 +317,9 @@ fn plan_supersede(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, 
 
 #[cfg(all(feature = "embeddings", feature = "vector-search"))]
 fn plan_to_json(plan: &vestige_core::MergePlan, policy: &vestige_core::MergePolicy) -> Value {
-    let requires_confirm =
-        plan.classification != vestige_core::MatchClass::Match || !policy.auto_apply;
+    let requires_confirm = plan.classification != vestige_core::MatchClass::Match
+        || plan.signals.requires_review
+        || !policy.auto_apply;
     json!({
         "planId": plan.id,
         "kind": plan.kind.as_str(),
@@ -327,7 +337,8 @@ fn plan_to_json(plan: &vestige_core::MergePlan, policy: &vestige_core::MergePoli
             "embeddingSimilarity": format!("{:.3}", plan.signals.embedding_similarity),
             "tagOverlap": format!("{:.3}", plan.signals.tag_overlap),
             "tokenOverlap": format!("{:.3}", plan.signals.token_overlap),
-            "combinedScore": format!("{:.3}", plan.signals.combined_score)
+            "combinedScore": format!("{:.3}", plan.signals.combined_score),
+            "requiresReview": plan.signals.requires_review
         },
         "explanation": plan.explanation,
         "requiresConfirm": requires_confirm,

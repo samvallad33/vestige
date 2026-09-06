@@ -13,6 +13,8 @@ use std::sync::Arc;
 
 use vestige_core::Storage;
 #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+use vestige_core::advanced::sparse_hash::{SparseHashIndex, same_memory_text};
+#[cfg(all(feature = "embeddings", feature = "vector-search"))]
 use vestige_core::cosine_similarity;
 
 /// Input schema for find_duplicates tool
@@ -26,6 +28,11 @@ pub fn schema() -> Value {
                 "default": 0.80,
                 "minimum": 0.5,
                 "maximum": 1.0
+            },
+            "exhaustive": {
+                "type": "boolean",
+                "description": "Compare every valid same-scope pair instead of approximate hashing (slower).",
+                "default": false
             },
             "limit": {
                 "type": "integer",
@@ -49,6 +56,7 @@ pub fn schema() -> Value {
 struct DedupArgs {
     #[serde(alias = "similarity_threshold")]
     similarity_threshold: Option<f64>,
+    exhaustive: Option<bool>,
     limit: Option<usize>,
     tags: Option<Vec<String>>,
 }
@@ -102,12 +110,16 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             }
             None => DedupArgs {
                 similarity_threshold: None,
+                exhaustive: None,
                 limit: None,
                 tags: None,
             },
         };
         let threshold = args.similarity_threshold.unwrap_or(0.80) as f32;
-        let limit = args.limit.unwrap_or(20);
+        if !threshold.is_finite() || !(0.5..=1.0).contains(&threshold) {
+            return Err("similarity_threshold must be between 0.5 and 1.0".into());
+        }
+        let limit = args.limit.unwrap_or(20).clamp(1, 100);
         let tag_filter = args.tags.unwrap_or_default();
 
         // Load all embeddings
@@ -143,11 +155,15 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         let node_map: HashMap<String, &vestige_core::KnowledgeNode> =
             all_nodes.iter().map(|n| (n.id.clone(), n)).collect();
 
-        // Filter by tags if specified
+        let scopes = storage.dedup_active_scopes().map_err(|e| e.to_string())?;
+        // Filter by tags and current scope/lifecycle metadata.
         let filtered_embeddings: Vec<(usize, &String, &Vec<f32>)> = all_embeddings
             .iter()
             .enumerate()
             .filter(|(_, (id, _))| {
+                if !scopes.contains_key(id) || !node_map.contains_key(id) {
+                    return false;
+                }
                 if tag_filter.is_empty() {
                     return true;
                 }
@@ -162,24 +178,32 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
 
         let n = filtered_embeddings.len();
 
-        if n > 2000 {
-            return Ok(serde_json::json!({
-                "warning": format!("Too many memories to scan ({} with embeddings). Filter by tags to reduce scope.", n),
-                "totalMemories": all_nodes.len(),
-                "totalWithEmbeddings": n
-            }));
-        }
+        let vectors: Vec<_> = filtered_embeddings
+            .iter()
+            .map(|(_, _, v)| v.as_slice())
+            .collect();
+        let index = SparseHashIndex::new(
+            &vectors,
+            if args.exhaustive.unwrap_or(false) {
+                0.0
+            } else {
+                threshold
+            },
+        );
+        let mut pairs_checked = 0usize;
 
-        // O(n^2) pairwise similarity + union-find clustering
+        // Hash candidates still require exact cosine confirmation.
         let mut uf = UnionFind::new(n);
-        let mut similarities: Vec<(usize, usize, f32)> = Vec::new();
 
         for i in 0..n {
-            for j in (i + 1)..n {
+            for j in index.candidates(i) {
+                if scopes.get(filtered_embeddings[i].1) != scopes.get(filtered_embeddings[j].1) {
+                    continue;
+                }
+                pairs_checked += 1;
                 let sim = cosine_similarity(filtered_embeddings[i].2, filtered_embeddings[j].2);
                 if sim >= threshold {
                     uf.union(i, j);
-                    similarities.push((i, j, sim));
                 }
             }
         }
@@ -194,15 +218,8 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         // Only keep clusters with >1 member, sorted by size descending
         let mut clusters: Vec<Vec<usize>> =
             cluster_map.into_values().filter(|c| c.len() > 1).collect();
-        clusters.sort_by_key(|b| std::cmp::Reverse(b.len()));
+        clusters.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a[0].cmp(&b[0])));
         clusters.truncate(limit);
-
-        // Build similarity lookup for formatting
-        let mut sim_lookup: HashMap<(usize, usize), f32> = HashMap::new();
-        for &(i, j, sim) in &similarities {
-            sim_lookup.insert((i, j), sim);
-            sim_lookup.insert((j, i), sim);
-        }
 
         // Format output
         let cluster_results: Vec<Value> = clusters
@@ -229,10 +246,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
                         let sim_to_anchor = if idx == anchor {
                             1.0
                         } else {
-                            sim_lookup
-                                .get(&(anchor, idx))
-                                .copied()
-                                .unwrap_or(0.0)
+                            cosine_similarity(filtered_embeddings[anchor].2, filtered_embeddings[idx].2)
                         };
 
                         serde_json::json!({
@@ -250,7 +264,14 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
                     "clusterId": ci,
                     "size": members.len(),
                     "members": member_results,
-                    "suggestedAction": if members.len() > 3 { "review" } else { "merge" }
+                    "suggestedAction": if members.iter().all(|&idx| {
+                        same_memory_text(&node_map[filtered_embeddings[anchor].1].content,
+                                         &node_map[filtered_embeddings[idx].1].content)
+                    }) { "merge" } else { "review" },
+                    "requiresReview": members.iter().any(|&idx| {
+                        !same_memory_text(&node_map[filtered_embeddings[anchor].1].content,
+                                          &node_map[filtered_embeddings[idx].1].content)
+                    })
                 })
             })
             .collect();
@@ -261,7 +282,11 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             "totalMemories": all_nodes.len(),
             "totalWithEmbeddings": n,
             "threshold": threshold,
-            "pairsChecked": n * (n - 1) / 2
+            "pairsChecked": pairs_checked,
+            "possiblePairs": n.saturating_mul(n.saturating_sub(1)) / 2,
+            "candidateFilter": if index.is_approximate() { "sparse_random_projection" } else { "exhaustive" },
+            "approximate": index.is_approximate(),
+            "note": "Similarity candidates are not proof of equivalent facts. Non-identical text requires review; approximate scans can miss near duplicates."
         }))
     }
 
@@ -300,6 +325,10 @@ pub fn unified_schema() -> Value {
                 "enum": ["scan", "plan_merge", "plan_supersede", "apply", "undo", "tag_rename", "tag_merge", "protect", "policy"],
                 "default": "scan",
                 "description": "What to do. 'scan' (default): surface duplicate clusters (cosine) AND merge candidates (Fellegi-Sunter), read-only. 'plan_merge'/'plan_supersede': preview a reversible memory plan. 'apply': execute a plan_id. 'undo': reverse a prior memory or tag operation (omit operation_id to list the mixed reflog plus tagOperations). 'tag_rename'/'tag_merge': exact, scoped, preview-token-gated tag maintenance. 'protect': pin a memory. 'policy': get/set Fellegi-Sunter thresholds."
+            },
+            "exhaustive": {
+                "type": "boolean", "default": false,
+                "description": "[scan] Check every valid same-scope pair in both scans; slower, but avoids approximate-filter misses."
             },
             "similarity_threshold": {
                 "type": "number",
@@ -520,6 +549,104 @@ fn execute_tag_mutation(
 mod tests {
     use super::*;
     use vestige_core::IngestInput;
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[tokio::test]
+    async fn sparse_hash_shield_scan_reports_review_exhaustive_and_empty_tag_results() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("shield.db");
+        let storage = Arc::new(Storage::new(Some(path.clone())).unwrap());
+        let connection = rusqlite::Connection::open(path).unwrap();
+        let seed = |content: &str, vector: Vec<f32>, tag: &str| {
+            let node = storage
+                .ingest(IngestInput {
+                    content: content.into(),
+                    node_type: "fact".into(),
+                    tags: vec![tag.into()],
+                    ..Default::default()
+                })
+                .unwrap();
+            let bytes = vestige_core::Embedding::new(vector).to_bytes();
+            connection.execute(
+                "INSERT INTO node_embeddings (node_id, embedding, dimensions, model, created_at) VALUES (?1, ?2, 2, 'fixture', ?3)",
+                rusqlite::params![node.id, bytes, chrono::Utc::now().to_rfc3339()],
+            ).unwrap();
+            node.id
+        };
+        let a = seed(
+            "Production request timeout is 30 seconds",
+            vec![1.0, 0.0],
+            "shield",
+        );
+        let b = seed(
+            "Production request timeout is 300 seconds",
+            vec![0.92, (1.0f32 - 0.92 * 0.92).sqrt()],
+            "shield",
+        );
+        for i in 0..129 {
+            seed(
+                &format!("Background fixture {i}"),
+                vec![0.0, 1.0],
+                "background",
+            );
+        }
+        let scan = execute_unified(&storage, Some(serde_json::json!({"action":"scan"})))
+            .await
+            .unwrap();
+        assert_eq!(scan["duplicateClusters"]["approximate"], true);
+        assert_eq!(scan["duplicateClusters"]["totalWithEmbeddings"], 131);
+        assert!(
+            scan["duplicateClusters"]["clusters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| {
+                    c["requiresReview"] == true
+                        && c["suggestedAction"] == "review"
+                        && c["members"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|m| m["id"] == a)
+                })
+        );
+        let exhaustive = execute_unified(
+            &storage,
+            Some(serde_json::json!({"action":"scan", "exhaustive":true})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(exhaustive["duplicateClusters"]["approximate"], false);
+        assert_eq!(exhaustive["mergeCandidates"]["scanMode"], "exhaustive");
+        let empty = execute_unified(
+            &storage,
+            Some(serde_json::json!({"action":"scan", "tags":["absent"]})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(empty["duplicateClusters"]["pairsChecked"], 0);
+        assert!(
+            empty["duplicateClusters"]["clusters"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let plan = execute_unified(
+            &storage,
+            Some(serde_json::json!({"action":"plan_merge", "member_ids":[a,b]})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(plan["classification"], "possible");
+        assert_eq!(plan["signals"]["requiresReview"], true);
+        let refused = execute_unified(
+            &storage,
+            Some(serde_json::json!({"action":"apply", "plan_id":plan["planId"]})),
+        )
+        .await;
+        assert!(refused.is_err());
+        assert!(storage.superseded_node_ids().unwrap().is_empty());
+    }
 
     #[test]
     fn test_schema() {

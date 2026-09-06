@@ -419,7 +419,21 @@ impl PredictionErrorGate {
             if best.similarity >= self.config.near_identical_threshold
                 && !best.appears_contradictory
             {
-                // Nearly identical - reinforce existing
+                // A similar embedding cannot prove the incoming fact was
+                // already stored. Reinforcement would discard its new text.
+                let identical = candidates
+                    .iter()
+                    .find(|c| c.id == best.memory_id)
+                    .is_some_and(|c| super::sparse_hash::same_memory_text(new_content, &c.content));
+                if !identical {
+                    self.stats.creates += 1;
+                    return GateDecision::Create {
+                        reason: CreateReason::DifferentDomain,
+                        prediction_error: best.prediction_error,
+                        related_memory_ids: vec![best.memory_id.clone()],
+                    };
+                }
+                // Byte-identical text - reinforce existing.
                 self.stats.updates += 1;
                 return GateDecision::Update {
                     target_id: best.memory_id.clone(),
@@ -815,6 +829,7 @@ mod tests {
         // Create candidate with identical embedding
         let mut candidate = make_candidate("mem-1", 1.0);
         candidate.embedding = embedding.clone();
+        candidate.content = "Same content".into();
 
         let decision = gate.evaluate("Same content", &embedding, &[candidate]);
 
@@ -822,6 +837,23 @@ mod tests {
         if let GateDecision::Update { update_type, .. } = decision {
             assert_eq!(update_type, UpdateType::Reinforce);
         }
+    }
+
+    #[test]
+    fn sparse_hash_shield_preserves_changed_fact_above_92_percent() {
+        let mut gate = PredictionErrorGate::new();
+        let mut existing = make_candidate("timeout", 1.0);
+        existing.content = "Production request timeout is 30 seconds".into();
+        let embedding = vector_with_cosine(&existing.embedding, 0.93);
+        let result = gate.evaluate(
+            "Production request timeout is 300 seconds",
+            &embedding,
+            &[existing],
+        );
+        assert!(
+            matches!(result, GateDecision::Create { .. }),
+            "got {result:?}"
+        );
     }
 
     #[test]
@@ -1004,6 +1036,7 @@ mod tests {
         // Update (identical)
         let mut candidate = make_candidate("mem-1", 1.0);
         candidate.embedding = embedding.clone();
+        candidate.content = "Content".into();
         gate.evaluate("Content", &embedding, &[candidate.clone()]);
 
         let stats = gate.stats();

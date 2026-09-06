@@ -129,6 +129,14 @@ impl MergePolicy {
             MatchClass::NonMatch
         }
     }
+
+    /// Similarity nominates a pair; it cannot establish equivalent facts.
+    pub fn classify_signals(&self, signals: &MatchSignals) -> MatchClass {
+        match self.classify(signals.combined_score) {
+            MatchClass::Match if signals.requires_review => MatchClass::Possible,
+            class => class,
+        }
+    }
 }
 
 // ============================================================================
@@ -147,6 +155,14 @@ pub struct MatchSignals {
     pub token_overlap: f32,
     /// Combined weighted score that was classified.
     pub combined_score: f32,
+    /// Text differs or equivalence has not been established. Legacy plans
+    /// without this field require review as well.
+    #[serde(default = "review_required")]
+    pub requires_review: bool,
+}
+
+fn review_required() -> bool {
+    true
 }
 
 /// Compute the combined match score and its signal breakdown for a pair.
@@ -168,6 +184,7 @@ pub fn score_pair(
         tag_overlap,
         token_overlap,
         combined_score,
+        requires_review: !super::sparse_hash::same_memory_text(a_content, b_content),
     }
 }
 
@@ -207,12 +224,12 @@ pub struct MergeCandidate {
     pub previews: Vec<String>,
     /// Suggested survivor id (kept after a merge).
     pub survivor_id: String,
-    /// Combined match score for the cluster (min pairwise within the cluster —
-    /// the weakest link, so a cluster is only as confident as its loosest pair).
+    /// Lowest scored candidate edge. An incomplete cluster is always review-only;
+    /// an unscored edge is never treated as evidence of an automatic match.
     pub confidence: f32,
     /// Three-way classification under the active policy.
     pub classification: MatchClass,
-    /// Signals for the survivor↔closest-member pair (the explanation).
+    /// Weakest scored edge, plus the cluster-wide review requirement.
     pub signals: MatchSignals,
     /// True if any member is protected (pinned) — blocks auto-merge.
     pub has_protected_member: bool,
@@ -317,24 +334,20 @@ pub fn compose_merged_content(members: &[(String, String)]) -> String {
     if members.is_empty() {
         return String::new();
     }
-    // Dedup on EXACT normalized content, not substring containment. The old
-    // `out.contains(c)` test silently dropped a distinct member whose text merely
-    // appeared as a substring of the accumulated output (e.g. "cat" inside
-    // "cathedral"), losing its content and provenance.
-    let norm = |s: &str| s.trim().to_lowercase();
-    let first = members[0].1.trim().to_string();
+    // Preserve byte distinctions: case, indentation and punctuation can
+    // change the meaning of code, paths and instructions.
+    let first = members[0].1.clone();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    seen.insert(norm(&first));
+    seen.insert(first.clone());
     let mut out = first;
     for (id, content) in &members[1..] {
-        let c = content.trim();
-        if c.is_empty() || !seen.insert(norm(c)) {
-            continue; // empty or an exact (normalized) duplicate already present
+        if content.trim().is_empty() || !seen.insert(content.clone()) {
+            continue;
         }
         out.push_str("\n\n[merged from ");
         out.push_str(id);
         out.push_str("]\n");
-        out.push_str(c);
+        out.push_str(content);
     }
     out
 }
@@ -439,6 +452,21 @@ mod tests {
         assert!(merged.contains("Extra detail."));
         // duplicate content not appended twice
         assert_eq!(merged.matches("Keep this.").count(), 1);
+    }
+
+    #[test]
+    fn compose_merged_content_preserves_case_and_indentation() {
+        let members = vec![
+            ("a".into(), "  use /Prod/config\n".into()),
+            ("b".into(), "  use /prod/config\n".into()),
+        ];
+        let merged = compose_merged_content(&members);
+        assert!(merged.starts_with("  use /Prod/config\n"));
+        assert!(merged.ends_with("  use /prod/config\n"));
+        assert_eq!(
+            compose_merged_content(&[members[0].clone(), members[0].clone()]),
+            members[0].1
+        );
     }
 
     #[test]
