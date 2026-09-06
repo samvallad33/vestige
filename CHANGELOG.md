@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Linux arm64 release asset
+
+- `vestige-mcp-aarch64-unknown-linux-gnu.tar.gz` joins the release (#240):
+  Raspberry Pi 5, Graviton and Ampere hosts no longer build from source. Built
+  on GitHub's arm64 runner inside the same Ubuntu 22.04 container as the x86_64
+  asset, so the glibc 2.35 floor holds; the same glibc check and the same
+  smoke on Ubuntu 22.04 and Debian 12 arm64 images gate it, in CI on every pull
+  request and in the release workflow. ort-sys ships an ONNX Runtime prebuilt
+  for the target, so embeddings work unchanged. `npm install -g
+  vestige-mcp-server` on arm64 Linux now downloads it.
+- The aarch64 ONNX Runtime archive imports `__isoc23_strtol`, `__isoc23_strtoll`
+  and `__isoc23_strtoull` (glibc 2.38) and `__cxa_call_terminate` (GCC 13
+  libstdc++), none of which the Ubuntu 22.04 release container has, so the
+  first arm64 build failed at link time. The x86_64 archive imports neither,
+  which is why the x86_64 job never saw it. `crates/vestige-mcp/src/glibc_compat.rs`
+  now defines the four symbols in each binary root, forwarding the C23 string
+  parsers to the classic glibc entry points and terminating on
+  `__cxa_call_terminate` the way libsupc++ does; the linker resolves the
+  archive against them and no `GLIBC_2.38` or `CXXABI_1.3.15` version need is
+  emitted. Unit tests cover the forwarding, the `endptr` contract and that the
+  terminate shim dies from SIGABRT.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with
