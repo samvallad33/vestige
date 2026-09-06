@@ -228,6 +228,14 @@ fn build_router_inner(state: AppState, port: u16) -> (Router, AppState) {
         // contradictions, cross-project patterns, per-memory audit
         // ============================================================
         .route("/api/duplicates", get(handlers::list_duplicates))
+        .route(
+            "/api/duplicates/plan",
+            post(handlers::plan_duplicates_merge),
+        )
+        .route(
+            "/api/duplicates/apply",
+            post(handlers::apply_duplicates_merge),
+        )
         .route("/api/contradictions", get(handlers::list_contradictions))
         .route(
             "/api/patterns/cross-project",

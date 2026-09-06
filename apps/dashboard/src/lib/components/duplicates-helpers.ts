@@ -147,3 +147,25 @@ export function safeTags(tags: string[] | null | undefined, limit: number = 4): 
 	if (!Array.isArray(tags)) return [];
 	return tags.slice(0, limit);
 }
+
+export interface MergePlanLike {
+	survivorId: string;
+	memberIds: string[];
+	classification: string;
+	confidence: string | number;
+	diff?: { invalidatedIds?: string[] };
+}
+
+/**
+ * One line a person can read before pressing Apply: who survives, how many
+ * memories fold into it, and how sure the matcher was. Pure, so the preview
+ * panel and its test share it.
+ */
+export function mergePlanSummary(plan: MergePlanLike): string {
+	const absorbed = plan.diff?.invalidatedIds?.length ?? Math.max(0, plan.memberIds.length - 1);
+	const confidence =
+		typeof plan.confidence === 'number' ? plan.confidence : Number.parseFloat(plan.confidence);
+	const pct = Number.isFinite(confidence) ? `${Math.round(confidence * 100)}%` : 'unknown';
+	const noun = absorbed === 1 ? 'memory' : 'memories';
+	return `Keeps ${plan.survivorId.slice(0, 8)}, folds ${absorbed} ${noun} into it. Matcher: ${plan.classification} at ${pct}. Reversible with dedup undo.`;
+}

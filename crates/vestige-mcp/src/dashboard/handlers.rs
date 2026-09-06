@@ -3003,6 +3003,73 @@ pub fn read_review_mode(state: &AppState) -> vestige_core::ReviewMode {
 // ============================================================================
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicatesPlanBody {
+    pub member_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicatesApplyBody {
+    pub plan_id: String,
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+/// Map a `dedup` tool error onto an HTTP status with the message kept, so the
+/// dashboard can show the same words the MCP caller would see.
+fn dedup_tool_error(message: String) -> (StatusCode, Json<Value>) {
+    let lower = message.to_ascii_lowercase();
+    let status = if lower.contains("not found") {
+        StatusCode::NOT_FOUND
+    } else if lower.contains("not enabled") || lower.contains("not compiled") {
+        StatusCode::NOT_IMPLEMENTED
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    (status, Json(serde_json::json!({ "error": message })))
+}
+
+/// POST /api/duplicates/plan: preview a reversible merge of a cluster.
+///
+/// Delegates to the `dedup` tool's `plan_merge`, so the dashboard and the MCP
+/// surface produce the same plan ids, classification and undo reflog. Nothing
+/// is written; the response says so in `note`.
+pub async fn plan_duplicates_merge(
+    State(state): State<AppState>,
+    Json(body): Json<DuplicatesPlanBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if body.member_ids.len() < 2 {
+        return Err(dedup_tool_error(
+            "memberIds must contain at least two memory ids".to_string(),
+        ));
+    }
+    let args = serde_json::json!({ "action": "plan_merge", "member_ids": body.member_ids });
+    crate::tools::dedup::execute_unified(&state.storage, Some(args))
+        .await
+        .map(Json)
+        .map_err(dedup_tool_error)
+}
+
+/// POST /api/duplicates/apply: execute a previewed plan. The tool enforces
+/// the confirm rule (anything below a `match` needs `confirm: true`); this
+/// handler forwards the flag and the operation id that `dedup undo` reverses.
+pub async fn apply_duplicates_merge(
+    State(state): State<AppState>,
+    Json(body): Json<DuplicatesApplyBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let args = serde_json::json!({
+        "action": "apply",
+        "plan_id": body.plan_id,
+        "confirm": body.confirm,
+    });
+    crate::tools::dedup::execute_unified(&state.storage, Some(args))
+        .await
+        .map(Json)
+        .map_err(dedup_tool_error)
+}
+
+#[derive(Debug, Deserialize)]
 pub struct DuplicatesParams {
     pub threshold: Option<f64>,
     pub limit: Option<usize>,
@@ -4010,6 +4077,79 @@ mod tests {
         .unwrap();
 
         assert_eq!(body["threshold"], 0.99);
+    }
+
+    #[tokio::test]
+    async fn duplicates_plan_rejects_fewer_than_two_ids() {
+        let (_dir, storage) = seed_storage();
+        let state = AppState::new(storage, None);
+        let (status, Json(body)) = plan_duplicates_merge(
+            State(state),
+            Json(DuplicatesPlanBody {
+                member_ids: vec!["only-one".to_string()],
+            }),
+        )
+        .await
+        .expect_err("one id must be rejected");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].as_str().unwrap().contains("two"), "{body}");
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[tokio::test]
+    async fn duplicates_plan_then_apply_merges_through_the_reversible_reflog() {
+        let (_dir, storage) = seed_storage();
+        let a = ingest(&storage, "Rotate the payments cache key on every deploy");
+        let b = ingest(&storage, "Rotate the payments cache key on each deploy");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(plan) = plan_duplicates_merge(
+            State(state.clone()),
+            Json(DuplicatesPlanBody {
+                member_ids: vec![a.clone(), b.clone()],
+            }),
+        )
+        .await
+        .unwrap_or_else(|(status, Json(body))| panic!("plan failed: {status} {body}"));
+        let plan_id = plan["planId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("plan carried no planId: {plan}"))
+            .to_string();
+        assert_eq!(plan["memberIds"].as_array().unwrap().len(), 2, "{plan}");
+        assert!(plan["note"].as_str().unwrap().contains("Nothing was changed"));
+
+        let Json(applied) = apply_duplicates_merge(
+            State(state),
+            Json(DuplicatesApplyBody {
+                plan_id: plan_id.clone(),
+                confirm: true,
+            }),
+        )
+        .await
+        .unwrap_or_else(|(status, Json(body))| panic!("apply failed: {status} {body}"));
+        let operation_id = applied["operationId"].as_str().expect("operationId");
+        assert_eq!(applied["reversible"], true, "{applied}");
+        let affected: Vec<&str> = applied["affectedIds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(affected.contains(&a.as_str()) && affected.contains(&b.as_str()), "{applied}");
+
+        // The reflog the dashboard's undo path reads knows the operation.
+        let log = crate::tools::dedup::execute_unified(
+            &storage,
+            Some(serde_json::json!({ "action": "undo" })),
+        )
+            .await
+            .unwrap();
+        let listed = log["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|op| op["operationId"] == operation_id);
+        assert!(listed, "{log}");
     }
 
     #[tokio::test]

@@ -7,6 +7,8 @@ import type {
 	TimelineResponse,
 	GraphResponse,
 	DuplicatesResponse,
+	DuplicateMergePlan,
+	DuplicateMergeResult,
 	ContradictionsResponse,
 	CrossProjectPatternsResponse,
 	MemoryAuditResponse,
@@ -44,7 +46,19 @@ async function fetcher<T>(path: string, options?: RequestInit): Promise<T> {
 		headers: { 'Content-Type': 'application/json' },
 		...options
 	});
-	if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
+	if (!res.ok) {
+		// Handlers that reject with a JSON `error` carry the same words the MCP
+		// caller would see; surface them instead of a bare status line.
+		const detail = await res
+			.json()
+			.then((body: unknown) =>
+				body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string'
+					? (body as { error: string }).error
+					: null
+			)
+			.catch(() => null);
+		throw new Error(detail ?? `API ${res.status}: ${res.statusText}`);
+	}
 	return res.json();
 }
 
@@ -140,6 +154,18 @@ export const api = {
 	// cross-project pattern transfer, per-memory audit trail.
 	duplicates: (threshold = 0.8, limit = 20) =>
 		fetcher<DuplicatesResponse>(`/duplicates?threshold=${threshold}&limit=${limit}`),
+	// Two-step merge: plan previews (nothing written), apply executes with the
+	// explicit confirm the dedup tool requires below a `match` classification.
+	duplicatesPlan: (memberIds: string[]) =>
+		fetcher<DuplicateMergePlan>('/duplicates/plan', {
+			method: 'POST',
+			body: JSON.stringify({ memberIds })
+		}),
+	duplicatesApply: (planId: string) =>
+		fetcher<DuplicateMergeResult>('/duplicates/apply', {
+			method: 'POST',
+			body: JSON.stringify({ planId, confirm: true })
+		}),
 
 	contradictions: (params?: { topic?: string; min_trust?: number; limit?: number }) => {
 		const qs = params

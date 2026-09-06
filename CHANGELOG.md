@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — The duplicates page can merge
+
+- `POST /api/duplicates/plan` and `POST /api/duplicates/apply` expose the
+  `dedup` tool's plan-then-apply flow to the dashboard, with the same plan ids,
+  classification and undo reflog the MCP surface uses. The Duplicates page's
+  merge control, disabled since the fake-success button was removed, now
+  previews the plan (survivor, absorbed count, matcher verdict, result text),
+  applies it on an explicit click, and shows the operation id that
+  `dedup undo` reverses. Oversized similarity components stay unmergeable.
+  The Live badge now reports the last fetch: Live, Refreshing, or Offline.
+  API errors surface the handler's message instead of a bare status line.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with

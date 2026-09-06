@@ -408,6 +408,36 @@ export interface DuplicatesResponse {
 	clusters: DuplicateClusterGroup[];
 }
 
+// POST /api/duplicates/plan: the dedup tool's plan_merge shape, verbatim.
+export interface DuplicateMergePlan {
+	planId: string;
+	kind: string;
+	survivorId: string;
+	memberIds: string[];
+	diff: {
+		resultContent: string;
+		resultTags: string[];
+		resultSource: string | null;
+		invalidatedIds: string[];
+	};
+	confidence: string;
+	classification: string;
+	explanation: string;
+	requiresConfirm: boolean;
+	note: string;
+}
+
+// POST /api/duplicates/apply: the dedup tool's apply shape, verbatim.
+export interface DuplicateMergeResult {
+	operationId: string;
+	opType: string;
+	status: string;
+	survivorId: string;
+	affectedIds: string[];
+	reversible: boolean;
+	note: string;
+}
+
 // Contradiction pairs — GET /api/contradictions. Field names mirror the
 // Contradiction interface in $components/ContradictionArcs.svelte; a = older
 // memory, b = newer. Sorted by similarity desc.
