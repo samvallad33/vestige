@@ -73,6 +73,42 @@ pub fn schema() -> Value {
     })
 }
 
+/// Input schema for the standalone `purge` tool: the fields of
+/// `memory(action='purge')` without the action, so a client can gate the one
+/// irreversible call without gating the reads that share `memory`.
+pub fn purge_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string", "description": "Memory id to purge." },
+            "confirm": {
+                "type": "boolean",
+                "default": false,
+                "description": "Must be true. Removes canonical content and embeddings for good; legacy audit and sync rows keep opaque markers, so this is not verified unlearning."
+            },
+            "reason": { "type": "string", "description": "Why (optional, logged)." }
+        },
+        "required": ["id", "confirm"]
+    })
+}
+
+/// `purge` as its own tool: the same code path as `memory(action='purge')`,
+/// including the review gate and the content-free tombstone.
+pub async fn execute_purge_tool(
+    storage: &Arc<Storage>,
+    cognitive: &Arc<Mutex<CognitiveEngine>>,
+    args: Option<Value>,
+) -> Result<Value, String> {
+    let mut args = args.unwrap_or_else(|| serde_json::json!({}));
+    match args.as_object_mut() {
+        Some(object) => {
+            object.insert("action".to_string(), serde_json::json!("purge"));
+        }
+        None => return Err("Invalid arguments: expected an object".to_string()),
+    }
+    execute(storage, cognitive, Some(args)).await
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MemoryArgs {

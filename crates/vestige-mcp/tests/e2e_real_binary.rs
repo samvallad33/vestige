@@ -1607,6 +1607,48 @@ fn approved_purge_removes_content_and_leaves_a_content_free_tombstone() {
     assert_store_is_healthy(dir.path());
 }
 
+/// `purge` as its own tool: the one irreversible call carries its own
+/// annotations and `requiresUserInteraction`, so a client can gate it without
+/// gating the reads that share the `memory` tool. Same code path, same gate,
+/// same content-free tombstone.
+#[test]
+fn standalone_purge_tool_needs_confirm_and_takes_the_same_path() {
+    let dir = data_dir();
+    disable_review_gate(dir.path());
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let subject = server.ingest_keyword_only(
+        "Purge target: the badge number for the Oslo contractor",
+        &["hr"],
+    );
+    let refused = server.call_tool("purge", json!({ "id": &subject }));
+    assert!(
+        refused["error"].as_str().is_some_and(|e| e.contains("confirm")),
+        "purge without confirm must refuse and say so: {refused}"
+    );
+    assert!(server.memory_found(&subject), "a refused purge must change nothing");
+
+    let purged = server.call_tool_ok(
+        "purge",
+        json!({ "id": &subject, "confirm": true, "reason": "contractor offboarded" }),
+    );
+    assert_eq!(purged["action"], json!("purge"));
+    assert_eq!(purged["success"], json!(true), "{purged}");
+    assert!(!server.memory_found(&subject), "purged memory is still readable");
+
+    let list = server.result("tools/list", None);
+    let purge = list["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == json!("purge"))
+        .expect("purge is advertised");
+    assert_eq!(purge["_meta"]["anthropic/requiresUserInteraction"], json!(true));
+    assert_eq!(purge["annotations"]["destructiveHint"], json!(true));
+    server.shutdown();
+}
+
 /// Suppression must persist and compound across a restart.
 ///
 /// Active forgetting is not deletion: the memory stays, inhibited. Catches the
