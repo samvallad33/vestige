@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "vestige",
   "display_name": "Vestige",
-  "version": "2.7.1",
+  "version": "2.8.0",
   "description": "AI memory system built on 130 years of cognitive science. Reaches backward through time to find a failure's root cause (Retroactive Salience Backfill), FSRS-6 spaced repetition, synaptic tagging, and local-first storage.",
   "author": {
     "name": "Sam Valladares",

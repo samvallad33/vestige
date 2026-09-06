@@ -1,13 +1,13 @@
 {
   "identifier": "samvallad33-vestige",
   "name": "Vestige",
-  "version": "2.7.1",
+  "version": "2.8.0",
   "author": "samvallad33",
   "authorUrl": "https://github.com/samvallad33",
   "category": "developer",
   "homepage": "https://github.com/samvallad33/vestige",
   "icon": "\ud83e\udde0",
-  "description": "Local-first Rust MCP memory for AI agents. Stdio only \u2014 not a hosted service and not production. Causal Backfill reaches backward to the quiet change that caused today's failure. Tools: recall, smart_ingest, backfill. Launch with vestige-mcp or npx -y vestige-mcp-server. GUI clients should use the absolute path from `which vestige-mcp`. Linux on Ubuntu 22.04 / Debian 12: wait for v2.4.0 (glibc). Your data stays on disk.",
+  "description": "Local-first Rust MCP memory for AI agents. Stdio only \u2014 not a hosted service and not production. Causal Backfill reaches backward to the quiet change that caused today's failure. Tools: recall, smart_ingest, backfill. Launch with vestige-mcp or npx -y vestige-mcp-server@2.8.0. GUI clients should use the absolute path from `which vestige-mcp`. Prebuilt 2.8.0 binaries cover macOS (Apple Silicon and Intel), Linux x86_64, and Windows x86_64. Your data stays on disk.",
   "tags": [
     "memory",
     "local-first",
