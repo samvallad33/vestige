@@ -421,6 +421,9 @@ pub async fn execute(
             response["tokenBudgetLimit"] = serde_json::json!(args.token_budget.unwrap());
         }
 
+        if let Some(warming) = super::warming::embedding_warming(storage) {
+            response["warming"] = warming;
+        }
         return Ok(response);
     }
 
@@ -1166,6 +1169,9 @@ pub async fn execute(
         response["tokensUsed"] = serde_json::json!(used);
     }
 
+    if let Some(warming) = super::warming::embedding_warming(storage) {
+        response["warming"] = warming;
+    }
     Ok(response)
 }
 

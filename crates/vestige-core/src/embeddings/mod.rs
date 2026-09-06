@@ -29,6 +29,7 @@ pub use crate::embedding::{
 
 #[cfg(feature = "vector-search")]
 pub(crate) use local::get_cache_dir;
+pub use local::{cache_populated, embedding_model_cached};
 pub use local::{
     BATCH_SIZE, EMBEDDING_DIMENSIONS, Embedding, EmbeddingError, EmbeddingService, MAX_TEXT_LENGTH,
     cosine_similarity, dot_product, euclidean_distance, matryoshka_truncate,

@@ -4,7 +4,9 @@
 //! v1.9.2: Async tokio I/O with error resilience.
 
 use std::io;
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use super::types::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
@@ -13,38 +15,88 @@ use crate::server::McpServer;
 /// Maximum consecutive I/O errors before giving up
 const MAX_CONSECUTIVE_ERRORS: u32 = 5;
 
+/// Handle that background work (a first-run model download, a reranker load)
+/// uses to push server-initiated `notifications/message` lines onto stdout
+/// between responses. Clients that render MCP logging show them; others
+/// ignore them. Sending never blocks and never fails the sender.
+#[derive(Clone)]
+pub struct Notifier {
+    tx: mpsc::UnboundedSender<Value>,
+}
+
+impl Notifier {
+    /// Queue one logging notification. `level` is an MCP log level
+    /// (`info`, `warning`, ...), `logger` names the subsystem.
+    pub fn log(&self, level: &str, logger: &str, data: Value) {
+        let _ = self.tx.send(Self::message(level, logger, data));
+    }
+
+    /// The wire shape of a logging notification, kept pure for tests.
+    pub fn message(level: &str, logger: &str, data: Value) -> Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": { "level": level, "logger": logger, "data": data }
+        })
+    }
+}
+
+/// Resolve the next queued notification, or wait forever when the transport
+/// has no notification channel (or the channel closed and was dropped).
+async fn next_notification(rx: &mut Option<mpsc::UnboundedReceiver<Value>>) -> Option<Value> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
 /// stdio Transport for MCP server
-pub struct StdioTransport;
+pub struct StdioTransport {
+    notifications: Option<mpsc::UnboundedReceiver<Value>>,
+}
 
 impl StdioTransport {
     pub fn new() -> Self {
-        Self
+        Self { notifications: None }
+    }
+
+    /// A transport plus the [`Notifier`] that feeds it.
+    pub fn with_notifications() -> (Self, Notifier) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            Self {
+                notifications: Some(rx),
+            },
+            Notifier { tx },
+        )
     }
 
     /// Run the MCP server over stdio with error resilience.
-    pub async fn run(self, mut server: McpServer) -> Result<(), io::Error> {
+    pub async fn run(mut self, mut server: McpServer) -> Result<(), io::Error> {
         let stdin = tokio::io::stdin();
         let stdout = tokio::io::stdout();
 
-        let mut reader = BufReader::new(stdin);
+        // `Lines::next_line` is cancel safe (tokio docs); `read_line` is not.
+        // The select! below drops the pending read whenever a notification
+        // wins the race, and a cancelled `read_line` loses the bytes it had
+        // already pulled off stdin: the client's request vanishes and the
+        // client waits forever. `next_line` keeps its partial line across
+        // polls, so a notification can interleave at any moment.
+        let mut lines = BufReader::new(stdin).lines();
         let mut stdout = stdout;
         let mut consecutive_errors: u32 = 0;
-        let mut line_buf = String::new();
-
         loop {
-            line_buf.clear();
-
             tokio::select! {
-                result = reader.read_line(&mut line_buf) => {
+                result = lines.next_line() => {
                     match result {
-                        Ok(0) => {
+                        Ok(None) => {
                             // Clean EOF — stdin closed
                             info!("stdin closed (EOF), shutting down");
                             break;
                         }
-                        Ok(_) => {
+                        Ok(Some(line)) => {
                             consecutive_errors = 0;
-                            let line = line_buf.trim();
+                            let line = line.trim();
 
                             if line.is_empty() {
                                 continue;
@@ -111,6 +163,24 @@ impl StdioTransport {
                         }
                     }
                 }
+                // Held until the handshake completes: a logging line before the
+                // initialize response would desync a client that reads the next
+                // line as its answer. The channel buffers meanwhile.
+                notification = next_notification(&mut self.notifications), if server.is_initialized() => {
+                    match notification {
+                        Some(notification) => match serde_json::to_string(&notification) {
+                            Ok(json) => {
+                                let out = format!("{}\n", json);
+                                stdout.write_all(out.as_bytes()).await?;
+                                stdout.flush().await?;
+                            }
+                            Err(e) => warn!("Failed to serialize notification: {}", e),
+                        },
+                        // Every sender is gone: park the branch instead of
+                        // spinning on a closed channel.
+                        None => self.notifications = None,
+                    }
+                }
             }
         }
 
@@ -121,5 +191,40 @@ impl StdioTransport {
 impl Default for StdioTransport {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Notifier;
+
+    #[test]
+    fn logging_notification_has_the_mcp_wire_shape() {
+        let message = Notifier::message(
+            "info",
+            "vestige.embeddings",
+            serde_json::json!({ "event": "model_download_started" }),
+        );
+        assert_eq!(message["jsonrpc"], "2.0");
+        assert_eq!(message["method"], "notifications/message");
+        assert_eq!(message["params"]["level"], "info");
+        assert_eq!(message["params"]["logger"], "vestige.embeddings");
+        assert_eq!(message["params"]["data"]["event"], "model_download_started");
+        assert!(message.get("id").is_none(), "notifications carry no id");
+    }
+
+    #[tokio::test]
+    async fn queued_notifications_are_delivered_in_order() {
+        let (mut transport, notifier) = super::StdioTransport::with_notifications();
+        notifier.log("info", "t", serde_json::json!({ "n": 1 }));
+        notifier.log("info", "t", serde_json::json!({ "n": 2 }));
+        let first = super::next_notification(&mut transport.notifications)
+            .await
+            .unwrap();
+        let second = super::next_notification(&mut transport.notifications)
+            .await
+            .unwrap();
+        assert_eq!(first["params"]["data"]["n"], 1);
+        assert_eq!(second["params"]["data"]["n"], 2);
     }
 }

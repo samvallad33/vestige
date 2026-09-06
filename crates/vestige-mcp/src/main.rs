@@ -44,7 +44,7 @@ use tracing_subscriber::EnvFilter;
 // Use vestige-core for the cognitive science engine
 use vestige_core::Storage;
 
-use protocol::stdio::StdioTransport;
+use protocol::stdio::{Notifier, StdioTransport};
 use server::McpServer;
 
 const DATA_DIR_ENV: &str = "VESTIGE_DATA_DIR";
@@ -317,15 +317,46 @@ async fn main() {
     // finish their stdio handshake before a first-run model download. Optional
     // profiles reject this compatibility path: their artifact verification,
     // evaluation, migration, and activation remain explicit local operations.
+    // The stdio transport and the notifier that lets background work tell the
+    // client what it is doing. Created before the warm-up tasks so a first-run
+    // model download can announce itself as MCP logging instead of dying on
+    // stderr, which stdio clients hide.
+    let (transport, notifier) = StdioTransport::with_notifications();
+    // In builds without an embedding runtime nothing warms up, so the notifier
+    // has no sender beyond this scope; dropping it parks the channel.
+    let _notifier: Notifier = notifier.clone();
+
     #[cfg(feature = "embeddings")]
     {
         let storage_clone = Arc::clone(&storage);
+        let notifier = notifier.clone();
         tokio::task::spawn_blocking(move || {
+            let first_run = !vestige_core::embeddings::embedding_model_cached();
+            notifier.log(
+                "info",
+                "vestige.embeddings",
+                serde_json::json!({
+                    "event": if first_run { "model_download_started" } else { "model_loading" },
+                    "model": "nomic-ai/nomic-embed-text-v1.5",
+                    "approxBytes": if first_run { Some(130_000_000u64) } else { None },
+                    "effect": "recall answers by keyword and smart_ingest stores without a vector until the runtime is ready; those responses carry a `warming` block meanwhile",
+                }),
+            );
             if let Err(error) = storage_clone.init_embeddings() {
                 tracing::debug!(%error, "No legacy Nomic embedding runtime started");
+                notifier.log(
+                    "warning",
+                    "vestige.embeddings",
+                    serde_json::json!({ "event": "embedding_runtime_unavailable", "error": error.to_string() }),
+                );
                 return;
             }
             info!("Legacy Nomic embedding service initialized successfully");
+            notifier.log(
+                "info",
+                "vestige.embeddings",
+                serde_json::json!({ "event": "embedding_runtime_ready" }),
+            );
 
             #[cfg(feature = "vector-search")]
             match storage_clone.generate_embeddings(None, false) {
@@ -574,9 +605,18 @@ async fn main() {
     #[cfg(all(feature = "vector-search", feature = "embeddings"))]
     {
         let cog_clone = Arc::clone(&cognitive);
+        let notifier = notifier.clone();
         tokio::spawn(async move {
             // Small delay so we don't block the stdio handshake
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            notifier.log(
+                "info",
+                "vestige.reranker",
+                serde_json::json!({
+                    "event": "reranker_loading",
+                    "note": "a first run downloads about 150 MB; recall ranks by BM25 until it is ready",
+                }),
+            );
             // The model load is synchronous and downloads ~150MB on a fresh
             // install. Doing it under the CognitiveEngine mutex stalled every
             // tool that shares that lock (explore, predict, session_context,
@@ -592,9 +632,18 @@ async fn main() {
                 Ok(Some(model)) => {
                     let mut cog = cog_clone.lock().await;
                     cog.reranker.install_cross_encoder(model);
+                    notifier.log(
+                        "info",
+                        "vestige.reranker",
+                        serde_json::json!({ "event": "reranker_ready" }),
+                    );
                 }
                 // `None` already logged its reason; BM25 fallback stands.
-                Ok(None) => {}
+                Ok(None) => notifier.log(
+                    "warning",
+                    "vestige.reranker",
+                    serde_json::json!({ "event": "reranker_unavailable", "effect": "BM25 ranking stands" }),
+                ),
                 Err(e) => warn!("Cross-encoder load task failed: {e}"),
             }
         });
@@ -602,9 +651,6 @@ async fn main() {
 
     // Create MCP server with shared event channel for dashboard broadcasts
     let server = McpServer::new_with_events(storage, cognitive, event_tx);
-
-    // Create stdio transport
-    let transport = StdioTransport::new();
 
     info!("Starting MCP server on stdio...");
 
