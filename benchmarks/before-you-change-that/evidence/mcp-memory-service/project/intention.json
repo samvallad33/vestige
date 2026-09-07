@@ -1,0 +1,6 @@
+{
+  "text": "When editing src/ledger/reconcile.rs, preserve the reconciliation REVERSAL_HORIZON across schema rollover, keep the checkpoint watermark behind unresolved reversals, and prove through file reload that delayed reversals produce neither duplicate nor missing ledger effects.",
+  "context": {
+    "file_pattern": "src/ledger/reconcile.rs"
+  }
+}

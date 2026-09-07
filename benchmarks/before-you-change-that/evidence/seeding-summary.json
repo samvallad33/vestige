@@ -1,0 +1,95 @@
+{
+  "status": "SEEDED_AND_READBACK_VERIFIED",
+  "arms": [
+    {
+      "arm": "vestige",
+      "records": 22,
+      "status": "SEEDED_AND_READBACK_VERIFIED",
+      "count": 22,
+      "seeding_sha256": "fd1311eceaec1e67ad2576b4b6d2865996f2244a5a85da3a29adfa3e9bfc4fef"
+    },
+    {
+      "arm": "mcp-memory-service",
+      "records": 22,
+      "status": "SEEDED_AND_READBACK_VERIFIED",
+      "count": 22,
+      "seeding_sha256": "01af49c59c24de2cb615d053a3dacbfaee9eea6947adadca6570a9b8d5e4f5bd"
+    }
+  ],
+  "records": 22,
+  "scope": "hardened-demo",
+  "order": [
+    "schema-v2-archive",
+    "performance-runbook-decoy",
+    "performance-runbook-validation",
+    "batch-size-proposal-expired",
+    "export-owner-contract",
+    "schema-v3-rollover",
+    "wire-v2-transition",
+    "owner-alias-migration",
+    "epoch7-approved",
+    "checkpoint-watermark-design",
+    "cedar-batch-owner",
+    "duplicate-event-invariant",
+    "tombstone-append-invariant",
+    "obligation-reconcile-path",
+    "horizon-boundary-test",
+    "crash-reload-proof-history",
+    "fork-generation8-proposal",
+    "fork-generation8-rejected",
+    "route-manifest-separation",
+    "export-regression",
+    "public-regression",
+    "incident-current"
+  ],
+  "seeded_content_sha256": "6f2c62176cd825b16a8383a86db3c4e0cdb07e9738b8526672d093e3aabdfec5",
+  "round_delay_seconds": 1.05,
+  "review_phase_modes": {
+    "corpus_import": "fast",
+    "model_phase": "risk_gated",
+    "policy": "All original fixture sources use the same import mode; no selective content acceptance."
+  },
+  "intention": {
+    "intention_id": "46716d35-c7d1-4d3b-9319-f45845ecdef2",
+    "archive_id": "obligation-reconcile-path",
+    "text_sha256": "b8bb38a11e40bb989182524c69657df7fbeb33e7a92344adf984dcc44b9f5717",
+    "text_utf8_bytes": 272,
+    "file_pattern": "src/ledger/reconcile.rs",
+    "unrelated_probe": {
+      "context": {
+        "file": "src/export/snapshot.rs"
+      },
+      "triggered_fixture_intention": false,
+      "pending_fixture_intention": true
+    },
+    "model_target_probe_reserved": {
+      "context": {
+        "file": "src/ledger/reconcile.rs"
+      },
+      "performed_during_setup": false
+    },
+    "stored_after_setup": {
+      "id": "46716d35-c7d1-4d3b-9319-f45845ecdef2",
+      "content": "When editing src/ledger/reconcile.rs, preserve the reconciliation REVERSAL_HORIZON across schema rollover, keep the checkpoint watermark behind unresolved reversals, and prove through file reload that delayed reversals produce neither duplicate nor missing ledger effects.",
+      "trigger_type": "context",
+      "trigger_data": {
+        "type": "context",
+        "at": null,
+        "inMinutes": null,
+        "codebase": null,
+        "filePattern": "src/ledger/reconcile.rs",
+        "topic": null,
+        "condition": null
+      },
+      "status": "active",
+      "reminder_count": 0,
+      "fulfilled_at": null
+    }
+  },
+  "backfill_setup_audit": {
+    "status": "NOT_REQUESTED",
+    "reason": "Context-intention scenario does not require Backfill and no candidate edges were primed."
+  },
+  "native_separation": "Vestige forceCreate:true; MCP Memory Service uses a unique conversation_id for every original record; exact original contents equal.",
+  "boundary": "Seeding, exact readback and a nonmatching intention probe only. The target context check remains unperformed for the model; no application result is implied."
+}

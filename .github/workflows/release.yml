@@ -17,6 +17,8 @@ env:
 
 jobs:
   build:
+    # Benchmark evidence releases must not build or publish product binaries.
+    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') }}
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -190,6 +192,7 @@ jobs:
   # ships no musl prebuilts, so embeddings would not work. The ubuntu-22.04
   # runner label begins deprecation in 2026; a container keeps this floor.
   build-linux:
+    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') }}
     name: Build x86_64-unknown-linux-gnu (glibc 2.35)
     runs-on: ubuntu-latest
     container: ubuntu:22.04
@@ -310,6 +313,7 @@ jobs:
           path: vestige-mcp-x86_64-unknown-linux-gnu.tar.gz
 
   publish-linux:
+    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') }}
     name: Smoke + publish x86_64-unknown-linux-gnu
     runs-on: ubuntu-latest
     needs: [build-linux]

@@ -1,0 +1,43 @@
+{
+  "schema": "vestige.public-package-verification.v1",
+  "source_run": "context-intention-1ux5s5ji",
+  "model_rerun": false,
+  "recorded_archive_files_verified": 896,
+  "compact_evidence_files": 96,
+  "full_evidence_files": 643,
+  "retrieval_signatures_verified": 3,
+  "modified_payloads_rejected": 3,
+  "python_tests_passed": 17,
+  "dependency": {
+    "cryptography": "50.0.1",
+    "pip_check": "PASS"
+  },
+  "application_recheck": {
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "historical_compiler": "rustc 1.95.0 (59807616e 2026-04-14)",
+    "arms": [
+      {
+        "arm": "control",
+        "score": 21,
+        "total": 21,
+        "recorded_evidence_unchanged": true,
+        "application_files_unchanged_by_adaptation": true
+      },
+      {
+        "arm": "mcp-memory-service",
+        "score": 21,
+        "total": 21,
+        "recorded_evidence_unchanged": true,
+        "application_files_unchanged_by_adaptation": true
+      },
+      {
+        "arm": "vestige",
+        "score": 21,
+        "total": 21,
+        "recorded_evidence_unchanged": true,
+        "application_files_unchanged_by_adaptation": true
+      }
+    ]
+  },
+  "boundary": "Current package verification and application-only recheck. Retained model outcomes are in RUN-STATUS.json. File hashes establish agreement with the public manifest. The original Memory Service model session remains interrupted."
+}

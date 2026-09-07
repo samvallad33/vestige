@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "cause": "The active RECONCILE route selected CEDAR generation 7, an ordered batch policy whose MAX_SEEN checkpoint advanced to reversal sequence 104. On durable reload, the checkpoint guard therefore rejected the delayed charge at sequence 100 and left its reversal pending. CYPRESS generation 7 is the approved reconciliation owner: it preserves LEDGER_SCHEMA_V3, REVERSAL_LINK_V2, and REVERSAL_HORIZON 4 while PIN_PENDING holds the watermark at 99 until target sequence 100 is accepted and resolved.",
+  "evidence_ids": [
+    "schema-v3-rollover",
+    "wire-v2-transition",
+    "owner-alias-migration",
+    "epoch7-approved",
+    "obligation-reconcile-path",
+    "incident-current",
+    "public-regression",
+    "checkpoint-watermark-design",
+    "cedar-batch-owner",
+    "route-manifest-separation",
+    "duplicate-event-invariant",
+    "crash-reload-proof-history",
+    "tombstone-append-invariant",
+    "horizon-boundary-test",
+    "export-owner-contract",
+    "export-regression",
+    "performance-runbook-decoy",
+    "performance-runbook-validation",
+    "batch-size-proposal-expired",
+    "fork-generation8-proposal",
+    "fork-generation8-rejected"
+  ],
+  "causal_path": [
+    {
+      "from": "schema-v3-rollover",
+      "to": "wire-v2-transition",
+      "relation": "encoded_by"
+    },
+    {
+      "from": "wire-v2-transition",
+      "to": "owner-alias-migration",
+      "relation": "assigned_owner_by"
+    },
+    {
+      "from": "owner-alias-migration",
+      "to": "epoch7-approved",
+      "relation": "promoted_as"
+    },
+    {
+      "from": "epoch7-approved",
+      "to": "obligation-reconcile-path",
+      "relation": "guarded_by"
+    },
+    {
+      "from": "obligation-reconcile-path",
+      "to": "incident-current",
+      "relation": "applies_when_path_edited"
+    },
+    {
+      "from": "incident-current",
+      "to": "public-regression",
+      "relation": "reproduced_by"
+    }
+  ],
+  "rejected_hypotheses": [
+    {
+      "hypothesis": "Treat tombstone pressure by deleting P/T ledger facts or raising diagnostic.batch_size to 128.",
+      "evidence_ids": [
+        "performance-runbook-decoy",
+        "performance-runbook-validation",
+        "batch-size-proposal-expired",
+        "tombstone-append-invariant"
+      ],
+      "reason": "That procedure was limited to disposable analytics summaries, never opened ledger state or exercised delayed reversals, and expired without approval. Diagnostic batching cannot move the checkpoint, while deleting P/T facts violates the append-only durability invariant."
+    },
+    {
+      "hypothesis": "Move reconciliation to the newer FALCON generation 8 fork.",
+      "evidence_ids": [
+        "fork-generation8-proposal",
+        "fork-generation8-rejected"
+      ],
+      "reason": "The V4/V3 fork lacked crash/reload proof and migration approval, was explicitly rejected, and has no production reconciliation ownership."
+    },
+    {
+      "hypothesis": "Increase REVERSAL_HORIZON or weaken the checkpoint guard.",
+      "evidence_ids": [
+        "horizon-boundary-test",
+        "epoch7-approved",
+        "cedar-batch-owner",
+        "route-manifest-separation"
+      ],
+      "reason": "Sequence 104 targeting 100 is already the inclusive horizon-4 boundary. The defect is selection of the ordered MAX_SEEN owner; equal horizon values do not transfer route ownership, and weakening the guard would compromise replay safety."
+    },
+    {
+      "hypothesis": "Change the LARCH export owner or export byte grammar as part of reconciliation repair.",
+      "evidence_ids": [
+        "export-owner-contract",
+        "export-regression",
+        "incident-current"
+      ],
+      "reason": "LARCH generation 3 exclusively owns the deterministic export path, and that path already succeeded during the incident. Its horizon field is read-only metadata rather than reconciliation authority."
+    }
+  ],
+  "changed_files": [
+    "runtime.conf"
+  ]
+}

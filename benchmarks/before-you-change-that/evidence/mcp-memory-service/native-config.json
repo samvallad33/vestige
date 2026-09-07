@@ -1,0 +1,35 @@
+{
+  "arm": "mcp-memory-service",
+  "command": [
+    "@recorded-shared-harness@/runtime/python/bin/python",
+    "@recorded-shared-harness@/start_memory_service.py"
+  ],
+  "environment": {
+    "PATH": "@recorded-home@/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:@recorded-home@/.nvm/versions/node/v24.12.0/bin:@recorded-agent-runtime@/tmp/arg0/codex-arg0RgHUvY:@recorded-agent-dependencies@/codex-primary-runtime/dependencies/bin/override:@recorded-agent-runtime@/bin:@recorded-home@/bin:@recorded-home@/.local/bin:@recorded-home@/.cargo/bin:@recorded-home@/.foundry/bin:@recorded-agent-dependencies@/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "TMPDIR": "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/",
+    "PYTHONUNBUFFERED": "1",
+    "TOKENIZERS_PARALLELISM": "false",
+    "HF_HOME": "@recorded-shared-harness@/runtime/huggingface",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "MCP_MEMORY_BASE_DIR": "@recorded-run@/mcp-memory-service/server/data",
+    "MCP_MEMORY_STORAGE_BACKEND": "sqlite_vec",
+    "MCP_MEMORY_SQLITE_PATH": "@recorded-run@/mcp-memory-service/server/data/memory.db",
+    "MCP_MEMORY_BACKUPS_PATH": "@recorded-run@/mcp-memory-service/server/backups",
+    "MCP_MEMORY_USE_ONNX": "true",
+    "MCP_MDNS_ENABLED": "false",
+    "MCP_HTTP_ENABLED": "false",
+    "MCP_QUALITY_BOOST_ENABLED": "false",
+    "MCP_MEMORY_ONNX_ALLOW_DOWNLOAD": "0",
+    "COMPARISON_ONNX_CACHE": "@recorded-shared-harness@/runtime/onnx/all-MiniLM-L6-v2"
+  },
+  "directory": "@recorded-run@/mcp-memory-service/server",
+  "allowed_tools": [
+    "memory_health",
+    "memory_list",
+    "memory_search"
+  ],
+  "scope": "hardened-demo"
+}

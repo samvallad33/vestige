@@ -1,0 +1,147 @@
+{
+  "attested_by_recall_receipts": false,
+  "boundary": "The final application SHA-256 and evaluator result are independent post-retrieval observations. The Recall receipts do not sign, attest, or prove the final patch.",
+  "evaluation": {
+    "adapter_exits": {
+      "custom": 0,
+      "delayed": 0,
+      "direct": 0,
+      "negative": 0,
+      "pending": 0,
+      "reload": 0,
+      "shuffled": 0
+    },
+    "all_pass": true,
+    "changed_application_files": [
+      "runtime.conf"
+    ],
+    "checks": [
+      {
+        "detail": "regular application files and exact workspace shape",
+        "name": "application_files_are_regular",
+        "pass": true
+      },
+      {
+        "detail": "all protected bytes and modes match",
+        "name": "protected_files_intact",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "decision_schema_valid",
+        "pass": true
+      },
+      {
+        "detail": "all citations must resolve to original fixture records",
+        "name": "decision_ids_valid",
+        "pass": true
+      },
+      {
+        "detail": "coverage uses IDs for schema, wire, owner, epoch, obligation, and observation",
+        "name": "decision_causal_coverage",
+        "pass": true
+      },
+      {
+        "detail": "requires exact archived triples, ordered roles and endpoints, connectivity, and citations for every path node",
+        "name": "decision_connected_edges_supported",
+        "pass": true
+      },
+      {
+        "detail": "requires structured rejection of the exact-word runbook and newer fork",
+        "name": "decision_rejections_supported",
+        "pass": true
+      },
+      {
+        "detail": "declared=['runtime.conf']; observed=['runtime.conf']",
+        "name": "decision_changed_files_match",
+        "pass": true
+      },
+      {
+        "detail": "rustc=@recorded-home@/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc; sandbox=/usr/bin/sandbox-exec; exit=0; static_tree_exact=True",
+        "name": "rust_compiles",
+        "pass": true
+      },
+      {
+        "detail": "generic adapter emitted primitive rows; expected comparisons stayed in Python",
+        "name": "adapter_protocol_complete",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "pending_reversal_pins_checkpoint",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "delayed_charge_resolves_exactly_once",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "journal_is_append_only_with_resolution_tombstone",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "stale_marker_reload_and_duplicate_suppression",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "direct_reversal_and_retry_are_exact",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "horizon_and_schema_rejections_preserve_journal",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "shuffled_events_preserve_all_ledger_effects",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "unrelated_export_behavior_is_unchanged",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "alternate_policy_drives_behavior_without_hardcoding",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "real_state_files_and_atomic_cleanup",
+        "pass": true
+      },
+      {
+        "detail": "",
+        "name": "approved_reconciliation_owner_is_exact",
+        "pass": true
+      }
+    ],
+    "compile_exit": 0,
+    "oracle_boundary": "generic primitive adapter; Python owns expected rows and durable-byte comparisons",
+    "recovery_claim": "separate process reload after a pre-existing marker; no claim of arbitrary crash atomicity",
+    "rustc": "@recorded-home@/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc",
+    "rustc_version": "rustc 1.95.0 (59807616e 2026-04-14)",
+    "score": 21,
+    "total": 21
+  },
+  "independent_final_hashes": {
+    "runtime.conf": "966b000c13dc1abcc93251fb41c6781241aa3fec9459f8755c939cee13c5157b",
+    "src/ledger/reconcile.rs": "7ab69c44e241f05e9d1b986b3dba1fe8ea4d205e2b19a9bb89b170d953affe54"
+  },
+  "matches_reported": true,
+  "reported_application_hashes": {
+    "runtime.conf": "966b000c13dc1abcc93251fb41c6781241aa3fec9459f8755c939cee13c5157b",
+    "src/ledger/reconcile.rs": "7ab69c44e241f05e9d1b986b3dba1fe8ea4d205e2b19a9bb89b170d953affe54"
+  },
+  "reported_vestige_hashes": {
+    "runtime.conf": "966b000c13dc1abcc93251fb41c6781241aa3fec9459f8755c939cee13c5157b",
+    "src/ledger/reconcile.rs": "7ab69c44e241f05e9d1b986b3dba1fe8ea4d205e2b19a9bb89b170d953affe54"
+  },
+  "signed_by_recall_receipts": false
+}

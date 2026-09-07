@@ -1,0 +1,145 @@
+{
+  "before": {
+    "row_counts": {
+      "composition_events": 0,
+      "intentions": 1,
+      "knowledge_nodes": 22,
+      "memory_access_log": 34,
+      "memory_connections": 0,
+      "memory_prs": 0,
+      "memory_receipts": 22
+    },
+    "original_content_sha256": {
+      "0548e2a9-c72b-4578-aa57-85b8fee689e0": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+      "406e484a-6199-4dc4-8e0b-26268f26785d": "da70976ec95095fdf4252a2328e7b9855ecca7638961c2d816ee11baa3d0a458",
+      "6370e75e-7b7f-46c2-aa4b-f730bfcc63df": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+      "abc3e404-fcb6-43e1-8494-97515dd77786": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+      "5885d218-4ff9-44ca-bb31-cff5daef07e1": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+      "8736bfcb-905e-4359-9f71-ee3aad7a13bc": "a908d34d1483a248ab14858379224a5700824d8cdcf6ba6918619eab82682326",
+      "71017ec3-f986-46a1-8fbb-883b565f67c3": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+      "cba12455-ff87-40e4-9854-b4a986a277f8": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+      "220ee1d4-2934-4853-9663-dddacf576697": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+      "8aa15a5d-27a9-4fcb-928e-924e3b911b3c": "5e974e27696bc8445fafa0c1425f3a142f57792d303fa06d1d7f3f1271e66055",
+      "477f1013-c72f-4a14-9b95-c89f851feeb1": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+      "711ee6d8-c7d9-41ac-b309-91718bead8e2": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+      "caabf6a6-8cfd-484c-91b1-36982cce8bcc": "06d6f0c4306a38d1d2741fd0dec94e4288dd06eba8b4bbe9b4f2beb7afff65bd",
+      "8a0217f0-b1a7-41c0-9d87-4b303aed54ef": "325c96601e82d9484c2710d26e4da8a318b02923b8a9e9fb589ad4a34aa1c900",
+      "d7f75090-a432-4ae4-8a0a-eb438165d4c9": "cc93b7484085b9e35174e3c4e4a31c3347c13b2f88ee13f678837a498cbcd760",
+      "ab0eab48-c9ca-4637-8f99-cd95f5179212": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+      "476b0820-2e4f-4511-96e5-e542557f41cb": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+      "0cbb80a6-977a-4bf8-bd0c-9885f383272c": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+      "0a689b66-41e4-49b2-ab7f-a7d105ff132a": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+      "b909337e-6947-40e0-8aa2-06246b21b061": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+      "c627e32a-7834-4644-9312-c9b3a27577c0": "1e7af549288d6a9a52e6355283c552394cd775af13fc979f536d7e22c4de4848",
+      "7b8a4099-d9c5-43a1-8998-f5972bcea9ed": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf"
+    },
+    "intentions": {
+      "46716d35-c7d1-4d3b-9319-f45845ecdef2": {
+        "content_sha256": "b8bb38a11e40bb989182524c69657df7fbeb33e7a92344adf984dcc44b9f5717",
+        "trigger_type": "context",
+        "trigger_data_sha256": "193926c54236b47fb7b9d8f9869309a4b09c925f833bb165dc7751927a7ad301",
+        "status": "active",
+        "reminder_count": 0,
+        "fulfilled_at": null
+      }
+    }
+  },
+  "after_model_before_coordinator": {
+    "row_counts": {
+      "composition_events": 0,
+      "intentions": 1,
+      "knowledge_nodes": 22,
+      "memory_access_log": 64,
+      "memory_connections": 0,
+      "memory_prs": 0,
+      "memory_receipts": 25
+    },
+    "original_content_sha256": {
+      "0548e2a9-c72b-4578-aa57-85b8fee689e0": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+      "406e484a-6199-4dc4-8e0b-26268f26785d": "da70976ec95095fdf4252a2328e7b9855ecca7638961c2d816ee11baa3d0a458",
+      "6370e75e-7b7f-46c2-aa4b-f730bfcc63df": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+      "abc3e404-fcb6-43e1-8494-97515dd77786": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+      "5885d218-4ff9-44ca-bb31-cff5daef07e1": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+      "8736bfcb-905e-4359-9f71-ee3aad7a13bc": "a908d34d1483a248ab14858379224a5700824d8cdcf6ba6918619eab82682326",
+      "71017ec3-f986-46a1-8fbb-883b565f67c3": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+      "cba12455-ff87-40e4-9854-b4a986a277f8": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+      "220ee1d4-2934-4853-9663-dddacf576697": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+      "8aa15a5d-27a9-4fcb-928e-924e3b911b3c": "5e974e27696bc8445fafa0c1425f3a142f57792d303fa06d1d7f3f1271e66055",
+      "477f1013-c72f-4a14-9b95-c89f851feeb1": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+      "711ee6d8-c7d9-41ac-b309-91718bead8e2": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+      "caabf6a6-8cfd-484c-91b1-36982cce8bcc": "06d6f0c4306a38d1d2741fd0dec94e4288dd06eba8b4bbe9b4f2beb7afff65bd",
+      "8a0217f0-b1a7-41c0-9d87-4b303aed54ef": "325c96601e82d9484c2710d26e4da8a318b02923b8a9e9fb589ad4a34aa1c900",
+      "d7f75090-a432-4ae4-8a0a-eb438165d4c9": "cc93b7484085b9e35174e3c4e4a31c3347c13b2f88ee13f678837a498cbcd760",
+      "ab0eab48-c9ca-4637-8f99-cd95f5179212": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+      "476b0820-2e4f-4511-96e5-e542557f41cb": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+      "0cbb80a6-977a-4bf8-bd0c-9885f383272c": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+      "0a689b66-41e4-49b2-ab7f-a7d105ff132a": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+      "b909337e-6947-40e0-8aa2-06246b21b061": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+      "c627e32a-7834-4644-9312-c9b3a27577c0": "1e7af549288d6a9a52e6355283c552394cd775af13fc979f536d7e22c4de4848",
+      "7b8a4099-d9c5-43a1-8998-f5972bcea9ed": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf"
+    },
+    "intentions": {
+      "46716d35-c7d1-4d3b-9319-f45845ecdef2": {
+        "content_sha256": "b8bb38a11e40bb989182524c69657df7fbeb33e7a92344adf984dcc44b9f5717",
+        "trigger_type": "context",
+        "trigger_data_sha256": "193926c54236b47fb7b9d8f9869309a4b09c925f833bb165dc7751927a7ad301",
+        "status": "active",
+        "reminder_count": 0,
+        "fulfilled_at": null
+      }
+    }
+  },
+  "after": {
+    "row_counts": {
+      "composition_events": 0,
+      "intentions": 1,
+      "knowledge_nodes": 22,
+      "memory_access_log": 64,
+      "memory_connections": 0,
+      "memory_prs": 0,
+      "memory_receipts": 25
+    },
+    "original_content_sha256": {
+      "0548e2a9-c72b-4578-aa57-85b8fee689e0": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+      "406e484a-6199-4dc4-8e0b-26268f26785d": "da70976ec95095fdf4252a2328e7b9855ecca7638961c2d816ee11baa3d0a458",
+      "6370e75e-7b7f-46c2-aa4b-f730bfcc63df": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+      "abc3e404-fcb6-43e1-8494-97515dd77786": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+      "5885d218-4ff9-44ca-bb31-cff5daef07e1": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+      "8736bfcb-905e-4359-9f71-ee3aad7a13bc": "a908d34d1483a248ab14858379224a5700824d8cdcf6ba6918619eab82682326",
+      "71017ec3-f986-46a1-8fbb-883b565f67c3": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+      "cba12455-ff87-40e4-9854-b4a986a277f8": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+      "220ee1d4-2934-4853-9663-dddacf576697": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+      "8aa15a5d-27a9-4fcb-928e-924e3b911b3c": "5e974e27696bc8445fafa0c1425f3a142f57792d303fa06d1d7f3f1271e66055",
+      "477f1013-c72f-4a14-9b95-c89f851feeb1": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+      "711ee6d8-c7d9-41ac-b309-91718bead8e2": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+      "caabf6a6-8cfd-484c-91b1-36982cce8bcc": "06d6f0c4306a38d1d2741fd0dec94e4288dd06eba8b4bbe9b4f2beb7afff65bd",
+      "8a0217f0-b1a7-41c0-9d87-4b303aed54ef": "325c96601e82d9484c2710d26e4da8a318b02923b8a9e9fb589ad4a34aa1c900",
+      "d7f75090-a432-4ae4-8a0a-eb438165d4c9": "cc93b7484085b9e35174e3c4e4a31c3347c13b2f88ee13f678837a498cbcd760",
+      "ab0eab48-c9ca-4637-8f99-cd95f5179212": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+      "476b0820-2e4f-4511-96e5-e542557f41cb": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+      "0cbb80a6-977a-4bf8-bd0c-9885f383272c": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+      "0a689b66-41e4-49b2-ab7f-a7d105ff132a": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+      "b909337e-6947-40e0-8aa2-06246b21b061": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+      "c627e32a-7834-4644-9312-c9b3a27577c0": "1e7af549288d6a9a52e6355283c552394cd775af13fc979f536d7e22c4de4848",
+      "7b8a4099-d9c5-43a1-8998-f5972bcea9ed": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf"
+    },
+    "intentions": {
+      "46716d35-c7d1-4d3b-9319-f45845ecdef2": {
+        "content_sha256": "b8bb38a11e40bb989182524c69657df7fbeb33e7a92344adf984dcc44b9f5717",
+        "trigger_type": "context",
+        "trigger_data_sha256": "193926c54236b47fb7b9d8f9869309a4b09c925f833bb165dc7751927a7ad301",
+        "status": "fulfilled",
+        "reminder_count": 0,
+        "fulfilled_at": "2026-09-07T03:49:10.334132+00:00"
+      }
+    }
+  },
+  "original_memory_content_unchanged": true,
+  "fixture_intention_identity_unchanged": true,
+  "fixture_intention_status_transition": {
+    "before": "active",
+    "after_model_before_coordinator": "active",
+    "after": "fulfilled"
+  },
+  "boundary": "Retrieval usage, compositions, receipts and the one disposable fixture intention lifecycle may change. Original memory bodies and intention content/trigger identity are checked separately."
+}
