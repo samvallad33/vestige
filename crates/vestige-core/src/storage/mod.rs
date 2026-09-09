@@ -7,6 +7,8 @@ mod attestation_store;
 mod cloud_crypto;
 #[cfg(feature = "cloud-sync")]
 mod cloud_sync;
+mod intention_claim;
+mod intention_graph_store;
 mod memory_store;
 mod migrations;
 mod portable;

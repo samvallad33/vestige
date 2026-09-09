@@ -169,6 +169,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Post-retrieval failure feedback ledger: every accessibility delta applied because a failure followed a retrieval, so it can be audited and reverted",
         up: MIGRATION_V33_UP,
     },
+    Migration {
+        version: 34,
+        description: "Versioned intention graphs and atomic deterministic command journal",
+        up: MIGRATION_V34_UP,
+    },
 ];
 
 /// A database migration
@@ -2439,6 +2444,26 @@ CREATE INDEX IF NOT EXISTS idx_failure_feedback_failure ON failure_feedback(fail
 CREATE INDEX IF NOT EXISTS idx_failure_feedback_memory ON failure_feedback(memory_id);
 
 UPDATE schema_version SET version = 33, applied_at = datetime('now');
+"#;
+
+/// Each scope is an independent local intention graph. The snapshot and journal
+/// commit together under an IMMEDIATE transaction. No external action is run.
+const MIGRATION_V34_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS intention_graph_state (
+    scope TEXT PRIMARY KEY,
+    state_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS intention_graph_journal (
+    scope TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    command_json TEXT NOT NULL,
+    evaluated_at TEXT NOT NULL,
+    output_digest TEXT NOT NULL,
+    state_digest TEXT NOT NULL,
+    PRIMARY KEY(scope, seq)
+);
+UPDATE schema_version SET version = 34, applied_at = datetime('now');
 "#;
 
 #[cfg(test)]

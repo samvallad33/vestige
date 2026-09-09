@@ -96,3 +96,6 @@ pub mod memory_states;
 pub mod review;
 #[allow(dead_code)]
 pub mod tagging;
+
+/// Evidence-aware intention command adapter.
+pub mod intention_graph;

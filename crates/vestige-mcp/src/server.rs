@@ -441,8 +441,8 @@ description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision'
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Intentions. Actions: 'set', 'check' (find triggered), 'update' (complete, snooze, cancel), 'list'.".to_string()),
-                input_schema: tools::intention_unified::schema(),
+description: Some("Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph' evaluates evidence-aware plans, premises, attention, completion and replay through a nested command.".to_string()),
+                input_schema: tools::intention_graph::schema(),
                 ..Default::default()
             },
             // ================================================================
@@ -843,7 +843,7 @@ description: Some("Memory with hindsight. After a failure is recorded, reach bac
                 .await
             }
             "intention" => {
-                tools::intention_unified::execute(&self.storage, &self.cognitive, request.arguments)
+                tools::intention_graph::execute(&self.storage, &self.cognitive, request.arguments)
                     .await
             }
 
