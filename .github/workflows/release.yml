@@ -96,7 +96,9 @@ jobs:
             'package.json',
             'apps/dashboard/package.json',
             'packages/vestige-init/package.json',
-            'packages/vestige-mcp-npm/package.json'
+            'packages/vestige-mcp-npm/package.json',
+            'packages/vestige-mcpb/manifest.json',
+            'lhm.plugin.json'
           ];
           for (const file of packageFiles) {
             const actual = require(`./${file}`).version;
@@ -242,7 +244,9 @@ jobs:
             'package.json',
             'apps/dashboard/package.json',
             'packages/vestige-init/package.json',
-            'packages/vestige-mcp-npm/package.json'
+            'packages/vestige-mcp-npm/package.json',
+            'packages/vestige-mcpb/manifest.json',
+            'lhm.plugin.json'
           ];
           for (const file of packageFiles) {
             const actual = require(`./${file}`).version;
@@ -417,7 +421,9 @@ jobs:
             'package.json',
             'apps/dashboard/package.json',
             'packages/vestige-init/package.json',
-            'packages/vestige-mcp-npm/package.json'
+            'packages/vestige-mcp-npm/package.json',
+            'packages/vestige-mcpb/manifest.json',
+            'lhm.plugin.json'
           ];
           for (const file of packageFiles) {
             const actual = require(`./${file}`).version;
