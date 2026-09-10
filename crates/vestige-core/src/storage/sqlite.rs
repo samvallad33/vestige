@@ -3048,10 +3048,10 @@ impl SqliteMemoryStore {
         self.persist_node_embedding(
             node_id,
             &embedding_bytes,
-            embedding_dimensions,
             &model_name,
             &vector,
             active.profile_id.as_str() == LEGACY_EMBEDDING_PROFILE_ID,
+            (content, active.profile_id.as_str()),
         )
     }
 
@@ -3066,12 +3066,20 @@ impl SqliteMemoryStore {
         &self,
         node_id: &str,
         embedding_bytes: &[u8],
-        embedding_dimensions: usize,
         model_name: &str,
         vector: &[f32],
         mirror_to_legacy_table: bool,
+        expected: (&str, &str),
     ) -> Result<()> {
         let now = Utc::now();
+        let embedding_dimensions = vector.len();
+        if embedding_bytes.len() != embedding_dimensions * 4
+            || vector.iter().any(|value| !value.is_finite())
+        {
+            return Err(StorageError::InvalidEmbeddingProfile(
+                "invalid vector encoding".into(),
+            ));
+        }
 
         // One transaction for the three rows, with the journal head read inside
         // it. We hold the write lock, so no peer can commit between our INSERT
@@ -3082,6 +3090,18 @@ impl SqliteMemoryStore {
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
             let tx = Self::begin_write_transaction(&writer, "persist_node_embedding")?;
+            let current_content: String = tx.query_row(
+                "SELECT content FROM knowledge_nodes WHERE id=?1",
+                params![node_id],
+                |row| row.get(0),
+            )?;
+            let current_profile = Self::active_profile_id_from_conn(&tx)?
+                .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.into());
+            if current_content != expected.0 || current_profile != expected.1 {
+                return Err(StorageError::Init(
+                    "embedding source content or active profile changed; retry regeneration".into(),
+                ));
+            }
             if mirror_to_legacy_table {
                 tx.execute(
                     "INSERT OR REPLACE INTO node_embeddings (node_id, embedding, dimensions, model, created_at)
@@ -3129,9 +3149,14 @@ impl SqliteMemoryStore {
             let mut index = index
                 .lock()
                 .map_err(|_| StorageError::Init("Vector index lock poisoned".to_string()))?;
-            index
-                .add(node_id, vector)
-                .map_err(|e| StorageError::Init(format!("Vector index add failed: {}", e)))?;
+            let reader = self
+                .reader
+                .lock()
+                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+            if Self::active_profile_id_from_conn(&reader)?.as_deref()==Some(expected.1)
+                && reader.query_row("SELECT EXISTS(SELECT 1 FROM knowledge_nodes WHERE id=?1 AND content=?2 AND has_embedding=1)",params![node_id,expected.0],|row|row.get::<_,bool>(0))? {
+                index.add(node_id, vector).map_err(|e|StorageError::Init(format!("Vector index add failed: {e}")))?;
+            }
         }
 
         // Our own write bumps the reader's data_version exactly like a peer's
@@ -3157,6 +3182,7 @@ impl SqliteMemoryStore {
         node_id: &str,
         vector: &[f32],
         model_name: Option<&str>,
+        source_content: &str,
     ) -> crate::storage::memory_store::MemoryStoreResult<()> {
         use crate::storage::memory_store::MemoryStoreError;
         let active = self
@@ -3192,10 +3218,10 @@ impl SqliteMemoryStore {
         self.persist_node_embedding(
             node_id,
             &bytes,
-            vector.len(),
             &model,
             vector,
             active.profile_id.as_str() == LEGACY_EMBEDDING_PROFILE_ID,
+            (source_content, active.profile_id.as_str()),
         )
         .map_err(|e| MemoryStoreError::Backend(e.to_string()))
     }
@@ -5099,6 +5125,32 @@ impl SqliteMemoryStore {
                         .into(),
                 ));
             }
+            let cascades = tx
+                .prepare(
+                    "SELECT neighbor_id,before_state,after_state FROM suppression_cascade_effects
+                WHERE operation_sequence=?1 AND reverted_at IS NULL ORDER BY neighbor_id",
+                )?
+                .query_map(params![sequence], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for (neighbor, _, expected) in &cascades {
+                if Self::suppression_state_on(&tx, neighbor)? != *expected {
+                    return Err(StorageError::Init("suppression cascade reversal conflicts with later neighbor state; no changes applied".into()));
+                }
+            }
+            for (neighbor, previous, _) in &cascades {
+                tx.execute("UPDATE knowledge_nodes SET suppression_count=json_extract(?1,'$[0]'),
+                    suppressed_at=json_extract(?1,'$[1]'),retrieval_strength=json_extract(?1,'$[2]'),
+                    retention_strength=json_extract(?1,'$[3]'),stability=json_extract(?1,'$[4]') WHERE id=?2",
+                    params![previous,neighbor])?;
+            }
+            tx.execute("UPDATE suppression_cascade_effects SET reverted_at=?1 WHERE operation_sequence=?2 AND reverted_at IS NULL",
+                params![Utc::now().to_rfc3339(),sequence])?;
             tx.execute("UPDATE knowledge_nodes SET
                 suppression_count = json_extract(?1, '$[0]'), suppressed_at = json_extract(?1, '$[1]'),
                 retrieval_strength = json_extract(?1, '$[2]'), retention_strength = json_extract(?1, '$[3]'),
@@ -5249,45 +5301,51 @@ impl SqliteMemoryStore {
     /// Induced Cellular Plasticity in Mushroom Body Output Neurons.
     /// *Front Cell Neurosci*. PMC7477079
     pub fn apply_rac1_cascade(&self, seed_id: &str) -> Result<usize> {
-        use crate::neuroscience::active_forgetting::ActiveForgettingSystem;
-        let sys = ActiveForgettingSystem::new();
-
+        let sys = crate::neuroscience::active_forgetting::ActiveForgettingSystem::new();
         let edges = self.get_connections_for_memory(seed_id)?;
-        if edges.is_empty() {
-            return Ok(0);
-        }
-
         let writer = self
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-
-        let mut affected = 0usize;
+        let tx = Self::begin_write_transaction(&writer, "apply_rac1_cascade")?;
+        let operation:Option<i64>=tx.query_row("SELECT o.sequence FROM suppression_operations o JOIN knowledge_nodes n ON n.id=o.node_id
+            WHERE o.node_id=?1 AND o.reverted_at IS NULL AND n.suppression_count>0
+            ORDER BY o.sequence DESC LIMIT 1",params![seed_id],|r|r.get(0)).optional()?;
+        let Some(operation) = operation else {
+            return Ok(0);
+        };
+        let scope: String = tx.query_row(
+            "SELECT COALESCE(NULLIF(trim(scope),''),'user') FROM knowledge_nodes WHERE id=?1",
+            params![seed_id],
+            |r| r.get(0),
+        )?;
+        let mut affected = 0;
         for edge in edges.iter().take(100) {
-            let neighbor_id = if edge.source_id == seed_id {
+            let neighbor = if edge.source_id == seed_id {
                 &edge.target_id
             } else {
                 &edge.source_id
             };
-
-            // Never cascade back into the suppressed seed
-            if neighbor_id == seed_id {
+            if neighbor == seed_id {
                 continue;
             }
-
-            let stability_factor = sys.cascade_stability_factor(edge.strength);
-            let retrieval_decrement = sys.cascade_retrieval_decrement(edge.strength);
-
-            let rows = writer.execute(
-                "UPDATE knowledge_nodes SET
-                    stability = MAX(0.1, stability * ?1),
-                    retrieval_strength = MAX(0.05, retrieval_strength - ?2)
-                 WHERE id = ?3 AND COALESCE(suppression_count, 0) = 0",
-                params![stability_factor, retrieval_decrement, neighbor_id],
-            )?;
-            affected += rows;
+            let eligible:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM knowledge_nodes WHERE id=?1
+                AND COALESCE(suppression_count,0)=0 AND COALESCE(protected,0)=0
+                AND COALESCE(NULLIF(trim(scope),''),'user')=?2)
+                AND NOT EXISTS(SELECT 1 FROM suppression_cascade_effects WHERE operation_sequence=?3 AND neighbor_id=?1)",
+                params![neighbor,scope,operation],|r|r.get(0))?;
+            if !eligible {
+                continue;
+            }
+            let before = Self::suppression_state_on(&tx, neighbor)?;
+            tx.execute("UPDATE knowledge_nodes SET stability=MAX(0.1,stability*?1),retrieval_strength=MAX(0.05,retrieval_strength-?2) WHERE id=?3",
+                params![sys.cascade_stability_factor(edge.strength),sys.cascade_retrieval_decrement(edge.strength),neighbor])?;
+            let after = Self::suppression_state_on(&tx, neighbor)?;
+            tx.execute("INSERT INTO suppression_cascade_effects(operation_sequence,neighbor_id,before_state,after_state) VALUES(?1,?2,?3,?4)",
+                params![operation,neighbor,before,after])?;
+            affected += 1;
         }
-
+        tx.commit()?;
         Ok(affected)
     }
 
@@ -14788,7 +14846,7 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         if let Some(vector) = &record.embedding {
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
             {
-                self.index_supplied_embedding(&id_str, vector, supplied_model.as_deref())?;
+                self.index_supplied_embedding(&id_str, vector, supplied_model.as_deref(), &record.content)?;
             }
             #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
             {
@@ -21429,7 +21487,22 @@ mod tests {
     fn persist_test_vector(storage: &Storage, node_id: &str, vector: &[f32]) {
         let bytes = Embedding::new(vector.to_vec()).to_bytes();
         storage
-            .persist_node_embedding(node_id, &bytes, vector.len(), "test-model", vector, true)
+            .persist_node_embedding(
+                node_id,
+                &bytes,
+                "test-model",
+                vector,
+                true,
+                (
+                    &storage.get_node(node_id).unwrap().unwrap().content,
+                    storage
+                        .active_embedding_profile()
+                        .unwrap()
+                        .unwrap()
+                        .profile_id
+                        .as_str(),
+                ),
+            )
             .unwrap();
     }
 
@@ -21587,9 +21660,29 @@ mod tests {
         let dir = tempdir().unwrap();
         let ours = create_test_storage_at(&dir, "shared.db");
         let peer = create_test_storage_at(&dir, "shared.db");
+        // A fixture-local optional profile has no attached runtime, regardless
+        // of whether another test has initialized the process-global model.
+        let manifest = ready_profile_manifest(BuiltinEmbeddingProfile::QwenBalanced1024);
+        let profile = manifest.profile.profile_id.clone();
+        peer.save_embedding_profile_manifest(&manifest).unwrap();
+        peer.writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE embedding_profile_state SET active_profile_id = ?1 WHERE singleton = 1",
+                params![profile.as_str()],
+            )
+            .unwrap();
+        peer.load_embeddings_into_index().unwrap();
+        ours.load_embeddings_into_index().unwrap();
+        let vector = |axis: usize| {
+            let mut values = vec![0.0; 1024];
+            values[axis] = 1.0;
+            values
+        };
         assert!(!peer.active_embedding_runtime_ready().unwrap());
         let id = ingest_plain(&peer, "original content on the fourth axis");
-        persist_test_vector(&peer, &id, &axis_vector(4, 0.01));
+        persist_test_vector(&peer, &id, &vector(4));
         ours.refresh_vector_index_if_stale();
         assert!(index_contains(&ours, &id));
         peer.update_node_content(&id, "edited content awaiting regeneration")
@@ -21601,23 +21694,16 @@ mod tests {
         assert!(ours.get_node_embedding(&id).unwrap().is_none());
         ours.refresh_vector_index_if_stale();
         assert!(!index_contains(&ours, &id));
-        ours.reconcile_vector_index(ours.vector_index.as_ref().unwrap(), LEGACY_EMBEDDING_PROFILE_ID);
+        ours.reconcile_vector_index(ours.vector_index.as_ref().unwrap(), profile.as_str());
         assert!(!index_contains(&ours, &id));
-        let profile = EmbeddingProfileId::new(LEGACY_EMBEDDING_PROFILE_ID).unwrap();
         assert!(
-            peer.embedding_regeneration_candidates(
-                &profile,
-                EMBEDDING_DIMENSIONS,
-                "test-model",
-                None,
-                false
-            )
-            .unwrap()
-            .iter()
-            .any(|(candidate, _, _)| candidate == &id)
+            peer.embedding_regeneration_candidates(&profile, 1024, "test-model", None, false)
+                .unwrap()
+                .iter()
+                .any(|(candidate, _, _)| candidate == &id)
         );
         // Complete the same persistence funnel used by regeneration, without loading a model.
-        persist_test_vector(&peer, &id, &axis_vector(5, 0.01));
+        persist_test_vector(&peer, &id, &vector(5));
         ours.refresh_vector_index_if_stale();
         assert!(index_contains(&ours, &id));
         assert!(ours.get_node_embedding(&id).unwrap().is_some());
@@ -23326,6 +23412,18 @@ mod tests {
                     .id,
             );
         }
+        // Ingest may have used a model initialized by another test. Explicitly
+        // seed pending work; preview must not mutate it.
+        {
+            let writer = storage.writer.lock().unwrap();
+            let tx = writer.unchecked_transaction().unwrap();
+            tx.execute("DELETE FROM embedding_profile_vectors", [])
+                .unwrap();
+            tx.execute("DELETE FROM node_embeddings", []).unwrap();
+            tx.execute("UPDATE knowledge_nodes SET has_embedding = 0", [])
+                .unwrap();
+            tx.commit().unwrap();
+        }
         ids.sort();
         let first = storage.maintain_embedding_batch(2, None, true).unwrap();
         assert_eq!(first["selected"], 2);
@@ -23357,6 +23455,119 @@ mod tests {
                 .maintain_embedding_batch(1, Some("invalid"), true)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn suppression_cascade_is_idempotent_and_reverses_with_seed() {
+        let store = create_test_storage();
+        let seed = store
+            .ingest(IngestInput {
+                content: "cascade seed".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let neighbor = store
+            .ingest(IngestInput {
+                content: "cascade neighbor".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .save_connection(&ConnectionRecord {
+                source_id: seed.id.clone(),
+                target_id: neighbor.id.clone(),
+                strength: 1.0,
+                link_type: "semantic".into(),
+                created_at: Utc::now(),
+                last_activated: Utc::now(),
+                activation_count: 1,
+            })
+            .unwrap();
+        let before =
+            SqliteMemoryStore::suppression_state_on(&store.reader.lock().unwrap(), &neighbor.id)
+                .unwrap();
+        store.suppress_memory(&seed.id).unwrap();
+        assert_eq!(store.apply_rac1_cascade(&seed.id).unwrap(), 1);
+        assert_eq!(store.apply_rac1_cascade(&seed.id).unwrap(), 0);
+        store.reverse_suppression(&seed.id, 24).unwrap();
+        assert_eq!(
+            SqliteMemoryStore::suppression_state_on(&store.reader.lock().unwrap(), &neighbor.id)
+                .unwrap(),
+            before
+        );
+        assert_eq!(store.apply_rac1_cascade(&seed.id).unwrap(), 0);
+        store.suppress_memory(&seed.id).unwrap();
+        assert_eq!(store.apply_rac1_cascade(&seed.id).unwrap(), 1);
+        store
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET stability=99 WHERE id=?1",
+                params![neighbor.id],
+            )
+            .unwrap();
+        assert!(
+            store
+                .reverse_suppression(&seed.id, 24)
+                .unwrap_err()
+                .to_string()
+                .contains("neighbor")
+        );
+        assert_eq!(
+            store.get_node(&seed.id).unwrap().unwrap().suppression_count,
+            1
+        );
+        assert_eq!(
+            store.get_node(&neighbor.id).unwrap().unwrap().stability,
+            99.0
+        );
+    }
+
+    #[cfg(all(feature="embeddings",feature="vector-search"))]
+    #[test]
+    fn embedding_write_rejects_stale_source_and_profile() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "current content".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let original = storage.get_node_embedding(&node.id).unwrap();
+        let original_flag = storage.get_node(&node.id).unwrap().unwrap().has_embedding;
+        let vector = axis_vector(0, 0.0);
+        let bytes = Embedding::new(vector.clone()).to_bytes();
+        let profile = storage.active_embedding_profile().unwrap().unwrap();
+        assert!(
+            storage
+                .persist_node_embedding(
+                    &node.id,
+                    &bytes,
+                    "test-model",
+                    &vector,
+                    true,
+                    ("stale content", profile.profile_id.as_str())
+                )
+                .is_err()
+        );
+        assert!(
+            storage
+                .persist_node_embedding(
+                    &node.id,
+                    &bytes,
+                    "test-model",
+                    &vector,
+                    true,
+                    (&node.content, "stale-profile")
+                )
+                .is_err()
+        );
+        assert_eq!(storage.get_node_embedding(&node.id).unwrap(), original);
+        assert_eq!(storage.get_node(&node.id).unwrap().unwrap().has_embedding, original_flag);
     }
 
     #[test]

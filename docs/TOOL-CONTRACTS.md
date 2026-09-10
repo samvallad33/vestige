@@ -82,19 +82,19 @@ this patch does not establish multi-tenant authorization across every API.
   for other processes. The tool reports `embeddingStatus` as `available` or `pending` instead
   of promising that regeneration succeeded. Direct and bulk vector readers exclude
   dirty nodes, and regeneration includes dirty nodes even when an old vector has
-  the same model and dimensions. This does not claim transactional
-  correctness of concurrent model inference against a changing content revision.
+  the same model and dimensions. Embedding persistence compares the original content and active profile inside
+  its write transaction and rejects a stale computation before storing it.
   Tests cover the persistence/index path with supplied vectors; they do not load a model.
 - **Maintenance:** The advertised per-action schemas come from their actual
   handlers. Portable export, `since`, confined export filenames, restore merge
   options, GC age filters, dream controls and scoring context are discoverable.
   Unsupported action fields are rejected. Export supports `since`; it does not
   support `start`/`end`. Advertised snake_case GC and scoring arguments are
-  honored. Maintenance is store-wide; it does not accept a project `scope`.
+  honored. Lifecycle, embeddings, logs and GC are store-wide; dream accepts an explicit namespace `scope`.
 - **Suppression:** Default review mode can hold the operation for review.
-  Explicit fast-mode suppression still compounds, and reversal retains the
-  existing 24-hour, arithmetic behavior. An exact per-operation undo ledger is
-  not part of this change.
+  Explicit fast-mode suppression still compounds. New operations have an exact
+  per-operation journal, a 24-hour reversal window and atomic conflict checks
+  for local state and journaled neighbor effects, as detailed below.
 
 ## Deterministic intentions
 
@@ -175,7 +175,8 @@ checks the source-aware context slice. Unit tests cover mode-specific behavior
 and transaction invariants; a client/model adoption benchmark is still needed
 to measure whether agents select tools more effectively.
 
-No database migration is introduced by this tool-contract change. Backfill's
+This candidate adds schema 34 (local suppression journal) and schema 35
+(journaled cascade effects). Backfill's
 new preview default, stricter argument validation, namespace defaults and
 corrected annotations are compatibility changes. Update callers that relied on
 implicit promotion, cross-project reasoning, or silently ignored arguments.
@@ -203,14 +204,21 @@ the latest active snapshot, including values clipped at the penalty floor. It
 requires an unexpired snapshot and unchanged local suppression state. Stacked
 reversals restore each earlier timestamp, so a new suppression cannot extend the
 reversal window of an old one. Concurrent or later state changes fail without
-partial restoration. The response identifies `reversalScope` and reports
-`cascadeReversed: false`.
+partial restoration. The response identifies `reversalScope: "local_state_and_journaled_cascades"`
+and `journaledCascadeReversal: "atomic"`.
 
-Schema 34 adds a local suppression journal with cascading deletion. Legacy and
-portable-imported suppressions without journal snapshots require explicit review;
-the tool does not invent their prior strengths. Snapshots do not reverse neighbor
-cascades, replay invalidations, or other external effects. Before installing this
-candidate, retain a paired database backup for rollback to an older binary.
+Schema 34 adds the local suppression journal. Schema 35 binds each neighbor
+penalty to that suppression operation, recording its before and after state in
+the same transaction. Repeated sweeps apply each operation/neighbor effect at
+most once. Cascades exclude protected or suppressed neighbors and other scopes.
+Reversal checks every journaled neighbor before restoring the seed and neighbors
+atomically. A later neighbor change rejects the whole reversal.
+
+Legacy and portable-imported suppressions without journal snapshots require
+explicit review; the tool does not invent their prior strengths. Unrecorded
+historical cascades and external effects cannot be reconstructed; the response
+reports `unrecordedEffectsReversed: false`. Both journals cascade on memory purge.
+Before installation, retain a paired database backup for rollback to an older binary.
 
 ### Bounded restore
 
@@ -233,5 +241,35 @@ elapsed time, `hasMore`, and `nextCursor`. Work runs off the async executor thre
 Committed embedding rows are the checkpoint. Resume with `after=nextCursor`, then
 start a new sweep without `after` to discover earlier inserts or retry failures.
 The cursor is a live scan position, not a snapshot or a hard inference deadline.
-Suppressed memories are excluded from selection. These controls require the
-embedding phase; the default full consolidation behavior remains separate.
+Suppressed memories are excluded from selection. Embedding batches cap at 100 rows. The default full consolidation behavior
+remains separate and retains its compatibility contract.
+
+
+### Lifecycle, logs, GC and dream pages
+
+`maintain(action="consolidate", phase="lifecycle", batchSize=100, budgetMs=1000)`
+previews a transactional ID page. Apply with `dry_run=false`. It updates decay,
+emotional promotion and activation, preserving protected/suppressed rows. Limits
+are 1–1000 rows and a cooperative 1–10000 ms processing budget; waiting for a lock
+or completing an SQL operation can exceed that time. Access-history input caps
+at 500 events per memory. `phase="logs"` trims bounded old-log batches and uses
+`hasMore` rather than a cursor; it rejects `after` and `budgetMs`.
+
+GC uses bounded transactional pages with eligibility rechecked before deletion.
+Protected records survive and a page failure rolls back the whole page, including
+purge side effects. Its UUID cursor is a live scan position. After a sweep, start
+again without a cursor to reconsider earlier inserts or state changes.
+
+Dream selects one scoped UUID page, excludes suppressed or currently invalid
+memories, and caps the input to fit `max_pairs` (default 1225). `memory_count`
+accepts 5–500; `max_pairs` accepts 10–124750. Resume using `nextCursor` while
+`hasMore` is true. Discovery compares pairs within each page; it does not cover
+cross-page pairs. Only processed waking tags at or before the operation's start
+are cleared, preserving unprocessed tags and newer tags. Pair/row limits do not
+establish a hard inference deadline or dollar cap. Default full consolidation
+(`phase="all"`) and background paths retain existing behavior.
+
+The installable `integrations/python` runtime owns the transcript and selected
+catalog and implements explicit retained-packet acknowledgment. It refreshes
+packets after compaction and serializes OpenAI Responses/Anthropic Messages
+requests. It does not install itself into another agent or invoke a model.

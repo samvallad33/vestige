@@ -8,6 +8,7 @@ mod cloud_crypto;
 #[cfg(feature = "cloud-sync")]
 mod cloud_sync;
 mod memory_store;
+mod maintenance_batches;
 mod migrations;
 mod portable;
 pub mod receipt_attestation;

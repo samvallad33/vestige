@@ -174,6 +174,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Suppression snapshots: atomic exact local reversal with conflict detection",
         up: MIGRATION_V34_UP,
     },
+    Migration {
+        version: 35,
+        description: "Journal idempotent suppression cascades for atomic conflict-aware reversal",
+        up: MIGRATION_V35_UP,
+    },
 ];
 
 /// A database migration
@@ -2458,6 +2463,18 @@ CREATE TABLE IF NOT EXISTS suppression_operations (
 CREATE INDEX IF NOT EXISTS idx_suppression_operations_active
     ON suppression_operations(node_id, sequence DESC) WHERE reverted_at IS NULL;
 UPDATE schema_version SET version = 34, applied_at = datetime('now');
+"#;
+
+const MIGRATION_V35_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS suppression_cascade_effects (
+    operation_sequence INTEGER NOT NULL REFERENCES suppression_operations(sequence) ON DELETE CASCADE,
+    neighbor_id TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+    before_state TEXT NOT NULL,
+    after_state TEXT NOT NULL,
+    reverted_at TEXT,
+    PRIMARY KEY(operation_sequence, neighbor_id)
+);
+UPDATE schema_version SET version = 35, applied_at = datetime('now');
 "#;
 
 #[cfg(test)]

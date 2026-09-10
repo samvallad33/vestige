@@ -773,7 +773,8 @@ fn tools_list_is_deterministic_across_restarts_and_carries_cache_hints() {
         assert!(ann["idempotentHint"].is_boolean(), "{name}: {ann}");
         assert!(ann["openWorldHint"].is_boolean(), "{name}: {ann}");
     }
-    assert_eq!(recall["annotations"]["readOnlyHint"], json!(true));
+    // Reason mode records composition evidence; hints describe the whole tool.
+    assert_eq!(recall["annotations"]["readOnlyHint"], json!(false));
     let memory = a["tools"]
         .as_array()
         .unwrap()

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Disposable stdio MCP contracts for discovery and evidence-aware tools.
 
-No real memory, credentials, connector requests, or embedding models are used.
+No real memory, credentials, connector requests or model agents are used.
+The server may initialize its locally configured embedding runtime.
 --output stores a synthetic request/response transcript and coverage inventory.
 """
 import argparse
@@ -86,6 +87,11 @@ def run(binary, output):
             tool("maintain", {"action":"consolidate", "batchSize":2}, error=True)
             tool("maintain", {"action":"consolidate", "phase":"embeddings", "batchSize":101}, error=True)
             passed("embedding maintenance previews bounded pages and rejects misplaced controls")
+            for phase in ("lifecycle", "logs"):
+                page = tool("maintain", {"action":"consolidate", "phase":phase, "batchSize":2})
+                assert page["dryRun"] is True and page["hasMore"] is False
+            tool("maintain", {"action":"consolidate", "phase":"logs", "after":"invalid"}, error=True)
+            passed("lifecycle/log maintenance previews and invalid-control rejection")
             assert annotations["receipt"]["readOnlyHint"] is False
             assert annotations["receipt"]["idempotentHint"] is True
             cause = tool("smart_ingest", {"content": "Set FIXTURE_TIMEOUT to two seconds in fixture service.",
@@ -132,7 +138,9 @@ def run(binary, output):
             first = tool("suppress", {"id": cause})
             second = tool("suppress", {"id": cause})
             assert second["suppressionCount"] == first["suppressionCount"] + 1
-            tool("suppress", {"id": cause, "reverse": True})
+            reversed_state = tool("suppress", {"id": cause, "reverse": True})
+            assert reversed_state["reversalScope"] == "local_state_and_journaled_cascades"
+            assert reversed_state["unrecordedEffectsReversed"] is False
             tool("suppress", {"id": cause, "reverse": True})
             mode_path.unlink()
             passed("default suppression review gate and explicit fixture fast-mode compounding/reversal")
@@ -166,9 +174,12 @@ def run(binary, output):
             with sqlite3.connect(db) as conn:
                 conn.execute("UPDATE knowledge_nodes SET has_embedding=1 WHERE id=?", (cause,))
             edited = tool("memory", {"action":"edit", "id":cause, "content":"Reviewed FIXTURE_TIMEOUT fixture setting is two seconds."})
-            assert edited["embeddingStatus"] == "pending"
+            assert edited["embeddingStatus"] in ("pending", "available")
             with sqlite3.connect(db) as conn:
-                assert conn.execute("SELECT has_embedding FROM knowledge_nodes WHERE id=?", (cause,)).fetchone() == (0,)
+                state = conn.execute("SELECT has_embedding FROM knowledge_nodes WHERE id=?", (cause,)).fetchone()[0]
+                assert state == int(edited["embeddingStatus"] == "available")
+                if state:
+                    assert conn.execute("SELECT COUNT(*) FROM embedding_profile_vectors WHERE node_id=?", (cause,)).fetchone()[0] > 0
             passed("edit invalidates embedding state without falsely promising regeneration")
             for budget in (100, 101, 250, 1000, 2500):
                 reason = tool("recall", {"mode":"reason", "query":"FIXTURE_TIMEOUT", "token_budget":budget, "min_similarity":0})

@@ -39,11 +39,12 @@ pub fn consolidate_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "phase": {"type": "string", "enum": ["all", "embeddings"], "default": "all"},
-            "batchSize": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10,
-                "description": "Embedding phase only: maximum selected memories per call."},
-            "after": {"type": "string", "description": "Embedding phase only: nextCursor from the previous page. Omit after a sweep to retry failures and discover earlier inserts."},
-            "dry_run": {"type": "boolean", "default": true, "description": "Embedding phase only: preview the selected page without inference or mutation."}
+            "budgetMs": {"type":"integer", "minimum":1,"maximum":10000,"default":1000},
+            "phase": {"type": "string", "enum": ["all", "embeddings", "lifecycle", "logs"], "default": "all"},
+            "batchSize": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 10,
+                "description": "Bounded phases: selected memories or log rows per call; embeddings accepts at most 100."},
+            "after": {"type": "string", "description": "Embeddings or lifecycle phase: nextCursor from the previous page. Omit after a sweep to retry failures and discover earlier inserts."},
+            "dry_run": {"type": "boolean", "default": true, "description": "Bounded phases: preview the selected batch without inference or mutation."}
         }
     })
 }
@@ -86,6 +87,9 @@ pub fn gc_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
+            "batchSize":{"type":"integer","minimum":1,"maximum":1000,"default":100},
+            "after":{"type":"string","description":"Live scan cursor from previous page; omit after completing a sweep."},
+            "budgetMs":{"type":"integer","minimum":1,"maximum":10000,"default":1000},
             "min_retention": {
                 "type": "number",
                 "description": "Delete memories with retention below this threshold (default: 0.1)",
@@ -381,6 +385,7 @@ pub async fn execute_consolidate(
     struct Args {
         phase: Option<String>,
         batch_size: Option<usize>,
+        budget_ms: Option<u64>,
         after: Option<String>,
         #[serde(alias = "dry_run")]
         dry_run: Option<bool>,
@@ -389,6 +394,9 @@ pub async fn execute_consolidate(
         .map_err(|error| error.to_string())?;
     match parsed.phase.as_deref().unwrap_or("all") {
         "embeddings" => {
+            if parsed.budget_ms.is_some() {
+                return Err("embedding inference supports a row bound, not budgetMs".into());
+            }
             let storage = Arc::clone(storage);
             return tokio::task::spawn_blocking(move || {
                 storage.maintain_embedding_batch(
@@ -401,12 +409,43 @@ pub async fn execute_consolidate(
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string());
         }
+        "lifecycle" | "logs" => {
+            let storage = Arc::clone(storage);
+            return tokio::task::spawn_blocking(move || {
+                if parsed.phase.as_deref() == Some("logs") {
+                    if parsed.after.is_some() || parsed.budget_ms.is_some() {
+                        return Err(vestige_core::storage::StorageError::Init(
+                            "logs uses repeatable row batches; after and budgetMs are unsupported"
+                                .into(),
+                        ));
+                    }
+                    storage.maintain_log_batch(
+                        parsed.batch_size.unwrap_or(100),
+                        parsed.dry_run.unwrap_or(true),
+                    )
+                } else {
+                    storage.maintain_lifecycle_batch(
+                        parsed.batch_size.unwrap_or(100),
+                        parsed.after.as_deref(),
+                        parsed.budget_ms.unwrap_or(1000),
+                        parsed.dry_run.unwrap_or(true),
+                    )
+                }
+            })
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string());
+        }
         "all" => {
-            if parsed.batch_size.is_some() || parsed.after.is_some() || parsed.dry_run.is_some() {
-                return Err("batchSize, after and dry_run require phase='embeddings'".into());
+            if parsed.batch_size.is_some()
+                || parsed.after.is_some()
+                || parsed.dry_run.is_some()
+                || parsed.budget_ms.is_some()
+            {
+                return Err("batchSize, after and dry_run require a bounded phase".into());
             }
         }
-        _ => return Err("phase must be all or embeddings".into()),
+        _ => return Err("phase must be all, embeddings, lifecycle or logs".into()),
     }
     let result = storage.run_consolidation().map_err(|e| e.to_string())?;
 
@@ -654,6 +693,9 @@ pub async fn execute_export(storage: &Arc<Storage>, args: Option<Value>) -> Resu
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GcArgs {
+    batch_size: Option<usize>,
+    after: Option<String>,
+    budget_ms: Option<u64>,
     #[serde(alias = "min_retention")]
     min_retention: Option<f64>,
     #[serde(alias = "max_age_days")]
@@ -664,116 +706,22 @@ struct GcArgs {
 
 /// Garbage collection tool
 pub async fn execute_gc(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
-    let args: GcArgs = match args {
-        Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid arguments: {}", e))?,
-        None => GcArgs {
-            min_retention: None,
-            max_age_days: None,
-            dry_run: None,
-        },
-    };
-
-    let min_retention = args.min_retention.unwrap_or(0.1).clamp(0.0, 1.0);
-    let max_age_days = args.max_age_days;
-    let dry_run = args.dry_run.unwrap_or(true); // Default to dry_run for safety
-
-    let now = Utc::now();
-
-    // Fetch all nodes (capped at 100K to prevent OOM)
-    let mut all_nodes = Vec::new();
-    let page_size = 500;
-    let max_nodes = 100_000;
-    let mut offset = 0;
-    loop {
-        let batch = storage
-            .get_all_nodes(page_size, offset)
-            .map_err(|e| e.to_string())?;
-        let batch_len = batch.len();
-        all_nodes.extend(batch);
-        if batch_len < page_size as usize || all_nodes.len() >= max_nodes {
-            break;
-        }
-        offset += page_size;
-    }
-
-    // Find candidates
-    let candidates: Vec<&vestige_core::KnowledgeNode> = all_nodes
-        .iter()
-        .filter(|node| {
-            if node.retention_strength >= min_retention {
-                return false;
-            }
-            if let Some(max_days) = max_age_days {
-                let age_days = (now - node.created_at).num_days();
-                if age_days < 0 || (age_days as u64) < max_days {
-                    return false;
-                }
-            }
-            true
-        })
-        .collect();
-
-    let candidate_count = candidates.len();
-
-    // Build sample for display
-    let sample: Vec<Value> = candidates
-        .iter()
-        .take(10)
-        .map(|node| {
-            let age_days = (now - node.created_at).num_days();
-            let content_preview: String = {
-                let preview: String = node.content.chars().take(60).collect();
-                if preview.len() < node.content.len() {
-                    format!("{}...", preview)
-                } else {
-                    preview
-                }
-            };
-            serde_json::json!({
-                "id": &node.id[..8.min(node.id.len())],
-                "retention": node.retention_strength,
-                "ageDays": age_days,
-                "contentPreview": content_preview,
-            })
-        })
-        .collect();
-
-    if dry_run {
-        return Ok(serde_json::json!({
-            "tool": "gc",
-            "dryRun": true,
-            "minRetention": min_retention,
-            "maxAgeDays": max_age_days,
-            "candidateCount": candidate_count,
-            "totalMemories": all_nodes.len(),
-            "sample": sample,
-            "message": format!("{} memories would be deleted. Set dry_run=false to delete.", candidate_count),
-        }));
-    }
-
-    // Perform actual deletion
-    let mut deleted = 0usize;
-    let mut errors = 0usize;
-    let ids: Vec<String> = candidates.iter().map(|n| n.id.clone()).collect();
-
-    for id in &ids {
-        match storage.delete_node(id) {
-            Ok(true) => deleted += 1,
-            Ok(false) => errors += 1,
-            Err(_) => errors += 1,
-        }
-    }
-
-    Ok(serde_json::json!({
-        "tool": "gc",
-        "dryRun": false,
-        "minRetention": min_retention,
-        "maxAgeDays": max_age_days,
-        "deleted": deleted,
-        "errors": errors,
-        "totalBefore": all_nodes.len(),
-        "totalAfter": all_nodes.len() - deleted,
-    }))
+    let args: GcArgs = serde_json::from_value(args.unwrap_or_else(|| serde_json::json!({})))
+        .map_err(|e| e.to_string())?;
+    let storage = Arc::clone(storage);
+    tokio::task::spawn_blocking(move || {
+        storage.maintain_gc_batch(
+            args.batch_size.unwrap_or(100),
+            args.after.as_deref(),
+            args.budget_ms.unwrap_or(1000),
+            args.dry_run.unwrap_or(true),
+            args.min_retention.unwrap_or(0.1),
+            args.max_age_days,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 // ============================================================================
