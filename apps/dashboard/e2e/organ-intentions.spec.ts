@@ -1,31 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// ORGAN: /intentions — Standing-Intention MSDF Field
-//
-// A RouteStage + TextLayerPass organ: each active/all intention is rendered as a
-// line of MSDF text in a cursor-reactive 3D field. Ship-a-working-product proof
-// for THIS organ. Asserts the 5-point contract:
-//   1. REACHABLE   — the route mounts a WebGPU canvas.
-//   2. REAL DATA   — the live /api/intentions returns real standing intentions
-//                    (Sam's actual focus records), and the field renders a bright,
-//                    high-variance text surface driven by that data (not a mock or
-//                    black frame, no fake "Live" over mock). The organ consumes
-//                    /api/intentions ONLY (verified in +page.svelte: api.intentions).
-//   3. ALIVE       — the MSDF field animates. Its idle motion is a small per-glyph
-//                    wobble (amplitude ~0.006 NDC, scaled by (1-depth)*pulse in
-//                    msdf-text.wgsl), so the coarse strided-hash isAnimating() can
-//                    alias to false-negatives; this organ needs a sensitive
-//                    full-pixel diff across varied delays to prove life honestly.
-//   4. CRASH-FREE  — a grid of clicks across the field plus a hover must survive
-//                    with no pageerror/WebGPU error. A row click toggles the filter
-//                    (active↔all) and re-fetches, repopulating the field — a real
-//                    state change the pick pipeline must survive. The CPU pickAt
-//                    mirrors the shader's aspect transform (x/=max(aspect,1),
-//                    y*=min(aspect,1)); the idle wobble is sub-AABB so picks land.
-//   5. HONEST EMPTY— the page's own empty/error branches render a calm MSDF status
-//                    line ("EMPTY <FILTER> INTENTION FIELD" / "ERROR - ..."), never
-//                    a fake "Live" badge over mock data (verified by reasoning about
-//                    +page.svelte buildTextItems + zero DOM chrome leak).
-// ─────────────────────────────────────────────────────────────────────────────
+// Browser acceptance against real records in an owned disposable store.
 import { test, expect, type Page } from '@playwright/test';
 import { captureErrors, expectNoErrors, gotoRoute, sampleCanvas } from './helpers/dashboard';
 
@@ -155,10 +128,10 @@ test('intentions organ: reachable, renders the real intention field', async ({ p
 	expect(lit.maxL, `intention text is brightly rendered (maxL=${lit.maxL})`).toBeGreaterThan(40);
 	expect(lit.litCount, `intention glyph pixels are present (litCount=${lit.litCount})`).toBeGreaterThan(20);
 
-	// point 6: immersive organ — only the canvas layer, no leaked DOM control panel.
+	// The current route combines a WebGPU backdrop and a legible DOM reading surface.
 	await expect(canvas).toBeVisible();
-	const strayPanels = await page.locator('aside, nav, [role="navigation"], .sidebar').count();
-	expect(strayPanels, 'no DOM chrome/sidebar leaks over the immersive canvas').toBe(0);
+	await expect(page.getByRole('heading', { name: 'Intentions', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: /Review browser-fixture timeout before release/ })).toBeVisible();
 
 	expectNoErrors(errors);
 });
@@ -222,8 +195,8 @@ test('intentions organ: honest render — real data only, no fake Live/mock surf
 
 	// No DOM "Live" badge / mock chrome leaking over the immersive canvas — the only
 	// status this organ can show is an in-canvas MSDF line driven by the real fetch.
-	const liveBadges = await page.getByText(/\bLive\b/i).count();
-	expect(liveBadges, 'no DOM "Live" badge over the immersive field').toBe(0);
+	await expect(page.getByText('No active intentions', { exact: true })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: /Review browser-fixture timeout before release/ })).toBeVisible();
 
 	// With the real brain up, the active-filter fetch resolves to real records, so
 	// the field renders lit MSDF text (not stuck on loading/error/empty, and not a

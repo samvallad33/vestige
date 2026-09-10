@@ -1,16 +1,9 @@
 //! # Retroactive Salience Backfill — MCP tool
 //!
-//! Memory with hindsight. When a salient FAILURE memory exists (a bug/crash/
-//! regression — the "aversive event"), this reaches BACKWARD across history and
-//! promotes the quiet earlier memory that caused it: the root cause a vector
-//! search structurally cannot surface because it is not *similar* to the
-//! failure, only causally upstream.
-//!
-//! Faithful port of Zaki/Cai et al. (2024) Nature 637:145-155. The core logic
-//! lives in `vestige_core::advanced::retroactive_backfill`; this tool wires it
-//! to real storage: builds candidates from `KnowledgeNode`s (entities drawn from
-//! tags and content), runs the backward reach, and PROMOTES the surfaced cause
-//! so it stops decaying and resurfaces next time.
+//! Propose earlier memories related to a recorded failure through shared
+//! entities and chronology. These are investigation candidates, not proven
+//! causes. The default preview does not persist edges or reinforce memories.
+//! Explicit promote=true records candidate edges and reinforces eligible nodes.
 
 use chrono::Utc;
 use serde::Deserialize;
@@ -27,13 +20,14 @@ pub fn schema() -> Value {
     json!({
         "type": "object",
         "properties": {
+            "scope": {"type": "string", "default": "user", "description": "Exact project namespace for failure and candidates. Defaults to user; cross-project inference is not performed."},
             "failure_id": {
                 "type": "string",
-                "description": "ID of the failure/'aversive event' memory to backfill from. If omitted, the most recent memory that looks like a failure is used."
+                "description": "Failure memory to backfill from. Omitted: the most recent failure-like memory."
             },
             "manual": {
                 "type": "boolean",
-                "description": "Force the backfill even if the event isn't auto-detected as salient (manual override). Default false.",
+                "description": "Force the backfill when the event is not auto-detected as salient. Default false.",
                 "default": false
             },
             "lookback_days": {
@@ -45,8 +39,8 @@ pub fn schema() -> Value {
             },
             "promote": {
                 "type": "boolean",
-                "description": "Whether to actually promote (boost) the surfaced cause(s) in storage. Default true. Set false for a dry-run preview.",
-                "default": true
+                "description": "Explicitly reinforce candidates and record candidate edges after review. Default false: preview only, with no graph or strength mutation. Promotion does not verify causality.",
+                "default": false
             },
             "scan_limit": {
                 "type": "integer",
@@ -62,6 +56,7 @@ pub fn schema() -> Value {
 #[derive(Deserialize, Default)]
 struct Args {
     failure_id: Option<String>,
+    scope: Option<String>,
     #[serde(default)]
     manual: bool,
     lookback_days: Option<i64>,
@@ -99,19 +94,32 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     // scan_limit=-1 (SQLite treats a negative LIMIT as unbounded => full-table
     // fetch = DoS) or values above the 5000 cap. Clamp rather than trust.
     let lookback = args.lookback_days.unwrap_or(30).clamp(1, 365);
-    let promote = args.promote.unwrap_or(true);
+    let promote = args.promote.unwrap_or(false);
     let scan_limit = args.scan_limit.unwrap_or(500).clamp(10, 5000);
 
-    // 1. Resolve the failure event.
+    let scope = args.scope.as_deref().unwrap_or("user").trim();
+    if scope.is_empty() {
+        return Err("scope must not be empty".into());
+    }
+
+    // 1. Resolve the failure event within the requested namespace.
     let failure_node = match &args.failure_id {
-        Some(id) => storage
-            .get_node(id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("failure memory '{id}' not found"))?,
+        Some(id) => {
+            if !storage
+                .node_is_in_scope(id, scope)
+                .map_err(|e| e.to_string())?
+            {
+                return Err("failure memory not found in requested scope".into());
+            }
+            storage
+                .get_node(id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "failure memory not found in requested scope".to_string())?
+        }
         None => {
             // most recent memory that looks like a failure
             let recent = storage
-                .get_all_nodes(scan_limit, 0)
+                .get_all_nodes_in_scope(scope, scan_limit, 0)
                 .map_err(|e| e.to_string())?;
             recent.into_iter().find(looks_like_failure).ok_or_else(|| {
                 "no failure-like memory found to backfill from; pass failure_id or manual=true"
@@ -142,11 +150,13 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
 
     // 2. Build candidate causes from all OTHER memories (older than the failure).
     let all = storage
-        .get_all_nodes(scan_limit, 0)
+        .get_all_nodes_in_scope(scope, scan_limit, 0)
         .map_err(|e| e.to_string())?;
+    let superseded = storage.superseded_node_ids().map_err(|e| e.to_string())?;
     let mut candidates: Vec<BackfillCandidate> = Vec::new();
     for node in &all {
-        if node.id == failure_node.id {
+        if node.id == failure_node.id || node.suppression_count > 0 || superseded.contains(&node.id)
+        {
             continue;
         }
         let age = (failure_node.created_at - node.created_at).num_seconds() as f64 / 86_400.0;
@@ -195,12 +205,8 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             .find(|c| c.id == cause.memory_id)
             .map(|c| c.content.chars().take(140).collect::<String>())
             .unwrap_or_default();
-        // A Backfill result is explicit-entity evidence, not an omniscient
-        // causal oracle. Always persist that evidence edge before saving the
-        // receipt — including dry-run previews. `promote=false` means no FSRS
-        // mutation, not "hide the evidence from the graph". The distinct link
-        // type prevents any consumer from presenting this as a proven causal
-        // relationship.
+        // Preview never records a relationship. Explicit promotion preserves
+        // the weaker candidate edge type; it does not create a causal fact.
         let link_type = "backfill_candidate".to_string();
         let already_linked = storage
             .get_connections_for_memory(&cause.memory_id)
@@ -213,18 +219,27 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             })
             .unwrap_or(false);
         let candidate_edge_persisted = already_linked
-            || storage
-                .save_connection(&ConnectionRecord {
-                    source_id: cause.memory_id.clone(),
-                    target_id: failure_node.id.clone(),
-                    strength: cause.score.clamp(0.0, 1.0),
-                    link_type,
-                    created_at: Utc::now(),
-                    last_activated: Utc::now(),
-                    activation_count: 0,
-                })
-                .is_ok();
-        let did_promote = if promote && candidate_edge_persisted {
+            || (promote
+                && storage
+                    .save_connection(&ConnectionRecord {
+                        source_id: cause.memory_id.clone(),
+                        target_id: failure_node.id.clone(),
+                        strength: cause.score.clamp(0.0, 1.0),
+                        link_type,
+                        created_at: Utc::now(),
+                        last_activated: Utc::now(),
+                        activation_count: 0,
+                    })
+                    .is_ok());
+        let now = Utc::now();
+        let eligible_for_promotion = all
+            .iter()
+            .find(|node| node.id == cause.memory_id)
+            .is_some_and(|node| {
+                node.valid_from.is_none_or(|date| date <= now)
+                    && node.valid_until.is_none_or(|date| date > now)
+            });
+        let did_promote = if promote && candidate_edge_persisted && eligible_for_promotion {
             // promote_memory_backfill boosts retrieval strength + reps (the
             // FSRS knob) with a bounded stability multiply.
             storage.promote_memory_backfill(&cause.memory_id).is_ok()
@@ -239,8 +254,11 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             "similarity_rank": cause.similarity_rank,
             "backfill_score": (cause.score * 100.0).round() / 100.0,
             "promoted": did_promote,
+            "eligible_for_promotion": eligible_for_promotion,
             "candidate_edge_persisted": candidate_edge_persisted,
             "reason": cause.reason,
+            "evidence_status": "hypothesis",
+            "causality_verified": false,
         }));
     }
 
@@ -248,8 +266,14 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         "tool": "backfill",
         "triggered": true,
         "lookback_days": lookback,
+        "scope": scope,
+        "preview": !promote,
+        "evidence_status": "hypothesis",
+        "causality_verified": false,
+        "scan_limit": scan_limit,
+        "scan_limit_reached": all.len() == scan_limit as usize,
         "headline": format!(
-            "Reached back across history from the failure and surfaced {} causal memor{} that semantic search would have missed.",
+            "Found {} earlier candidate memor{} linked by shared entities; investigate before attributing cause.",
             result.causes.len(),
             if result.causes.len() == 1 { "y" } else { "ies" }
         ),
@@ -261,13 +285,13 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         "scanned": result.scanned,
         // Explicit direct evidence edge from the highest-ranked candidate to
         // the failure — not a topology inferred by the renderer.
-        "path_ids": promoted.first()
+        "path_ids": promoted.iter().find(|candidate| candidate["candidate_edge_persisted"] == true)
             .and_then(|cause| cause.get("memory_id"))
             .and_then(|id| id.as_str())
             .map(|id| vec![id.to_string(), failure.id.clone()])
             .unwrap_or_default(),
         "causes": promoted,
-        "note": "Causes are ranked by causal join (shared entities, backward in time), NOT semantic similarity. A high similarity_rank means a vector search would NOT have surfaced this — that is the point.",
+        "note": "The legacy causes field contains candidates ranked by shared entities and chronology. Scores are ranking heuristics, not probabilities of causation. Similarity rank compares scanned candidates only; no counterfactual search result is proven. Preview does not write graph edges or reinforce memory.",
     }))
 }
 
@@ -281,6 +305,52 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let storage = Storage::new(Some(dir.path().join("test.db"))).unwrap();
         (Arc::new(storage), dir)
+    }
+
+    #[tokio::test]
+    async fn backfill_scopes_before_limit_and_checks_explicit_failure() {
+        let (storage, _dir) = test_storage().await;
+        let own = storage
+            .ingest(IngestInput {
+                content: "Failure in FIXTURE_SERVICE".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut foreign_id = String::new();
+        for _ in 0..15 {
+            foreign_id = storage
+                .ingest_in_scope(
+                    IngestInput {
+                        content: "Failure in FOREIGN_SERVICE".into(),
+                        ..Default::default()
+                    },
+                    "other-project",
+                )
+                .unwrap()
+                .id;
+        }
+        let out = execute(&storage, Some(json!({"scan_limit": 10})))
+            .await
+            .unwrap();
+        assert_eq!(out["failure"]["id"], own.id);
+        assert_eq!(out["scope"], "user");
+        assert!(
+            execute(&storage, Some(json!({"failure_id": foreign_id})))
+                .await
+                .is_err()
+        );
+        let out = execute(
+            &storage,
+            Some(json!({"failure_id": foreign_id, "scope": "other-project"})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["scope"], "other-project");
+        assert!(
+            execute(&storage, Some(json!({"scope": " "})))
+                .await
+                .is_err()
+        );
     }
 
     /// LIVE end-to-end: plant a quiet env-var cause, a semantic distractor, and a
@@ -338,6 +408,28 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
+
+        // Default discovery is a true preview, including graph state.
+        let before = storage.get_node(&cause.id).unwrap().unwrap();
+        for _ in 0..2 {
+            let preview = execute(&storage, Some(json!({"failure_id": failure.id})))
+                .await
+                .unwrap();
+            assert_eq!(preview["preview"], true);
+            assert_eq!(preview["causality_verified"], false);
+            assert_eq!(preview["causes"][0]["promoted"], false);
+            assert_eq!(preview["causes"][0]["candidate_edge_persisted"], false);
+            assert_eq!(preview["path_ids"], json!([]));
+        }
+        let after = storage.get_node(&cause.id).unwrap().unwrap();
+        assert_eq!(before.reps, after.reps);
+        assert_eq!(before.stability, after.stability);
+        assert!(
+            storage
+                .get_connections_for_memory(&cause.id)
+                .unwrap()
+                .is_empty()
+        );
 
         // Run the backfill tool against the real store (auto-finds the failure).
         let out = execute(&storage, Some(json!({ "promote": true, "manual": false })))

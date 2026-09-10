@@ -25,8 +25,22 @@
 	let prs: MemoryPr[] = $state([]);
 	let total = $state(0);
 	let pendingCount = $state(0);
-	let mode = $state<ReviewMode>('risk_gated');
+	let mode = $state<ReviewMode>('fast');
 	let loading = $state(true);
+	let savingMode = $state(false);
+	let modeError: string | null = $state(null);
+	async function changeMode(next: ReviewMode) {
+		savingMode = true;
+		modeError = null;
+		try {
+			const result = await api.memoryPrs.setMode(next);
+			mode = result.mode;
+		} catch (err) {
+			modeError = err instanceof Error ? err.message : "Could not save memory settings";
+		} finally {
+			savingMode = false;
+		}
+	}
 	let error: string | null = $state(null);
 
 	// The DOM row the user last selected + the "why" the agent returned for it.
@@ -80,7 +94,7 @@
 	const totalSignals = $derived(prs.reduce((sum, pr) => sum + pr.signals.length, 0));
 
 	const modeLabel = $derived(
-		mode === 'fast' ? 'Fast (auto-apply)' : mode === 'paranoid' ? 'Paranoid' : 'Risk-gated'
+		mode === 'fast' ? 'Automatic' : mode === 'paranoid' ? 'Paranoid' : 'Risk-gated'
 	);
 
 	// --- Explicit, labeled mutations the client + backend both support. Each maps
@@ -335,13 +349,13 @@
 <!-- DOM-hybrid overlay (contradictions pattern): RouteStage renders the WebGPU
      field behind; this reads on top. Container is pointer-events-none so empty
      gaps still reach the field, every interactive child is pointer-events-auto. -->
-<div class="relative z-10 min-h-full p-6 space-y-6 pointer-events-none">
+<div class="relative z-10 min-h-full p-6 pl-20 space-y-6 pointer-events-none">
 	<!-- (1) IDENTITY -->
 	<div class="pointer-events-auto">
 		<PageHeader
 			icon="memorypr"
 			title="Memory Pull Requests"
-			subtitle="Proposed changes to your memory (supersede / merge / forget) awaiting your review before they touch the graph."
+			subtitle="Memory saves automatically by default. Review is optional and can be turned off at any time."
 			accent="warning"
 		>
 			<span
@@ -355,6 +369,20 @@
 			</span>
 		</PageHeader>
 	</div>
+
+	{#if !loading && !error}
+		<div class="glass-panel pointer-events-auto rounded-2xl p-4 space-y-3">
+			<div class="text-sm text-bright">Memory writes: {modeLabel}</div>
+			<div class="flex flex-wrap gap-2" role="group" aria-label="Memory write mode">
+				{#each [{ value: 'fast', label: 'Automatic (default)' }, { value: 'risk_gated', label: 'Review risky changes' }, { value: 'paranoid', label: 'Review every change' }] as choice}
+					<button type="button" class={`rounded-lg border px-3 py-2 text-sm text-bright disabled:opacity-50 ${mode === choice.value ? "border-recall/50 bg-recall/15" : "border-white/20"}`} aria-pressed={mode === choice.value} disabled={savingMode} onclick={() => void changeMode(choice.value as ReviewMode)}>{choice.label}</button>
+				{/each}
+			</div>
+			<p class="text-xs text-muted">{mode === 'fast' ? 'New memories apply immediately. No approval steps or waiting.' : 'Review is enabled by your settings. Choose Automatic to apply future memory writes immediately.'}</p>
+			{#if mode === 'fast' && pendingCount > 0}<p class="text-xs text-muted">Previously held changes remain below. Switching modes does not apply historical proposals.</p>{/if}
+			{#if modeError}<p role="alert" class="text-xs text-decay">{modeError}</p>{/if}
+		</div>
+	{/if}
 
 	{#if error}
 		<!-- (5) STATE GUIDANCE — error -->
@@ -394,12 +422,10 @@
 				<Icon name="sparkle" size={26} draw />
 			</div>
 			<div class="text-sm font-medium text-bright">
-				No memory PRs — nothing is proposing to change your memory.
+				{mode === 'fast' ? 'Memory is automatic. Nothing to approve.' : 'No memory changes are waiting for review.'}
 			</div>
 			<div class="max-w-md text-xs text-muted">
-				When an agent wants to supersede, merge, or forget one of your memories, the change is
-				held here as a pull request first. Keep working with your agent; risky brain-changes will
-				queue here for your approval instead of applying silently.
+				{mode === 'fast' ? 'Keep working with your agent. Memory writes apply immediately and their receipts remain available in Runs.' : 'Only changes held by your selected review mode appear here. You can return to Automatic at any time.'}
 			</div>
 		</div>
 	{:else}
@@ -429,7 +455,7 @@
 				<div class="text-xs text-dim mt-1">risk signals flagged</div>
 			</div>
 			<div use:reveal={{ delay: 180, y: 12 }} class="p-4 glass rounded-xl lift">
-				<div class="text-2xl text-bright font-bold tabular-nums capitalize">{modeLabel}</div>
+				<div class="text-lg text-bright font-bold tabular-nums capitalize">{modeLabel}</div>
 				<div class="text-xs text-dim mt-1">review gate mode</div>
 			</div>
 		</div>
@@ -443,7 +469,7 @@
 				<span class="text-dim">
 					A <span class="text-text font-medium">Memory PR</span> is a proposed brain-change your
 					agent wants to make — supersede an outdated fact, merge duplicates, or forget something —
-					held here for review instead of applied silently.
+					held under an optional review mode. Automatic mode applies future writes immediately.
 				</span>
 				<span class="ml-auto flex flex-wrap items-center gap-3 tabular-nums">
 					<span><span class="text-memory font-medium">{supersedeCount}</span> supersede</span>

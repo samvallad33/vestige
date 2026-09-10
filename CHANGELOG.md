@@ -5,7 +5,276 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.0] - 2026-09-10
+
+Vestige v3 brings the open-source developer upgrade together: current code
+context, expandable recall, automatic memory writes, durable intentions,
+Markdown projection, reversible duplicate management, startup feedback,
+progressive tool discovery, Linux ARM release support and reusable benchmarks.
+
+
+
+- Memory writes now apply automatically by default, with receipts and no Memory
+  PR approval wait. Existing opt-in review settings remain configurable in the
+  dashboard. Mode changes preserve historical proposals; purge still requires
+  explicit confirmation. Invalid settings requests are rejected.
+
+
+### Fixed — Dashboard replay evidence
+
+- Dashboard deep-reference calls now preserve the supplied run identity and
+  persist the returned evidence through the shared trace and receipt recorder.
+  Black Box and exact-receipt links resolve to stored evidence. Empty retrieval
+  records a trace without inventing a receipt; receipt persistence failures return
+  an error. Invalid run identities are rejected before tracing.
+- Witness excludes reasoning prose from memory hydration and evidence shards;
+  memory IDs in request paths are URL-encoded. Ordered memory paths remain
+  inspectable without inventing edges across prose gaps.
+
+### Added — v3 regression qualification
+
+- Storage regressions cover concurrent cascade writers, interrupted journal and
+  lifecycle writes, restart/migration replay, purge interaction, and paginated GC.
+- Runtime and evaluation tests cover retained-context ownership, long revision
+  sequences, failed/timed-out drivers, tampered frozen inputs and invalid charges.
+- An isolated browser runner creates and verifies synthetic memories, topology,
+  intentions, traces and pending Memory PRs. Browser contracts cover explicit
+  selection/actions and persisted replay evidence in the current dashboard.
+- CI qualifies the installed Python runtime and real MCP stdio contracts. See
+  `docs/V3-VALIDATION.md` for commands and optional dependency boundaries.
+
+### Added — v3 efficiency evaluation and runtime candidate
+
+- Installable Python runtime for explicit transcript ownership, progressive native
+  tool selection, retained recall packets and refresh after compaction. It
+  serializes OpenAI Responses and Anthropic Messages requests; the caller owns
+  provider execution. POSIX MCP transport bounds reads and writes and cleans up
+  its owned child on failure.
+- Frozen developer evaluation with six development task families, deterministic
+  isolated trial order, caller-trusted driver execution, independently executed
+  frozen evaluators and whole driver-task timing. Exact usage accounting rejects
+  duplicate provider response IDs across arms and retains missing usage/failures.
+- Request-charge reconciliation and hashed company reports with task timing,
+  declared sample-policy screening and explicit break-even projections. Synthetic
+  fixtures qualify the machinery, not product savings; live held-out cost and
+  quality measurements remain required.
+- Bounded lifecycle, access-log and garbage-collection batches alongside embedding
+  repair pages. Lifecycle/GC time budgets are cooperative. Scoped dream pages
+  bound pair discovery and preserve newer/unprocessed waking tags. Default full
+  consolidation retains its compatibility behavior.
+
+### Fixed — Journaled lifecycle consistency
+
+- Suppression journal schema 34 records exact local before/after state. Schema 35
+  journals neighbor effects so repeated cascade sweeps do not compound the same
+  operation. Reversal restores local and recorded neighbor state atomically,
+  rejecting later changes. Unrecorded historical effects cannot be reconstructed.
+- Merge/supersede previews reject stale state and merge undo rejects conflicts.
+  Legacy restore stages bounded input before a transactional import, leaving
+  embeddings pending. Retain a pre-upgrade database backup for schema rollback.
+- Embedding persistence rejects computations made against changed content or an
+  outdated active profile before storing them. Peer-index invalidation and
+  runtime-independent regression fixtures cover the edit/persistence path.
+
+### Added — Discoverable tool contracts
+
+- Lookup can emit stable evidence packets with `context_packet=true`; explicit
+  acknowledgment of a packet still retained in model context avoids resending
+  unchanged cards. Changed content/boundaries refresh the packet. Incomplete
+  packets cannot be acknowledged. A Python host integration example is included.
+- Lookup budgets now include the response envelope and reserve receipt metadata,
+  omit whole evidence cards, and keep known dissent groups indivisible.
+
+- `memory_status(view="tools")` derives the installed tool/action inventory from
+  `tools/list`; selecting a tool returns its complete schema. Both server prompt
+  modes advertise discovery. Public agent instructions use canonical tool names.
+- Backfill previews are non-mutating by default and namespace-filtered before
+  scan limits; explicit promotion remains available. Graph `never_composed`
+  gains a default user namespace and explicit cross-scope selection. Both label
+  candidates as hypotheses instead of causal or worldwide-novel findings.
+- Recall reason and contradictions honor explicit namespaces. Reasoning validates
+  supported filters, labels confidence as heuristic, and budgets whole evidence
+  groups including final server metadata.
+- Intention checks honor caller-supplied time, snooze boundaries, combined context
+  constraints and explicit event keys. Invalid dates/durations/statuses fail;
+  parsed absolute time triggers retain their timestamp.
+
+### Fixed — Tool behavior and review boundaries
+
+- Merge apply checks current auto-apply policy and affected project namespaces
+  inside its write transaction. Strong similarity alone cannot bypass review.
+- Maintenance schemas derive from their handlers; previously hidden export,
+  restore, GC, dream and scoring controls are discoverable. Unsupported action
+  fields fail explicitly; advertised snake_case GC/scoring fields are honored.
+- Ambiguous single-plus-batch ingestion is rejected. Batch outcomes explicitly
+  report partial/no-change results and non-atomic behavior.
+- Memory edits invalidate embedding state with the content write and report
+  pending/available status. Dirty vectors are excluded from direct/bulk reads and
+  selected for regeneration even when model and dimensions match. Automatic
+  Backfill hooks preserve ingest scope and preview without promotion; composition
+  candidates exclude inactive memories. Recall/receipt effects and suppression retry hints
+  now reflect durable composition/replay and compounding behavior.
+- See `docs/TOOL-CONTRACTS.md` for compatibility and remaining boundaries.
+
+### Added — Code context evidence
+
+- `session_start` and `codebase.get_context` share current, scoped code-memory
+  selection and live anchor evidence. Startup includes actionable summaries,
+  stable memory IDs, coverage and explicit recheck/unavailable states.
+- Context reads require an explicit `repoPath` to verify source; similarly named
+  codebases no longer match through a tag prefix. `scope` is available on codebase
+  writes/reads and session startup. Partial anchor matches do not imply complete
+  verification, and storage failures remain visible.
+- `codebase.reanchor` atomically replaces explicitly reviewed source anchors for
+  an existing memory ID without changing its content or strength.
+- V2 anchors preserve significant whitespace. Legacy hashes stay stored with an
+  unverifiable verdict. See `docs/CODE-CONTEXT-EVIDENCE.md` for compatibility and
+  rollback details before deploying a binary that writes the new format.
+- Startup accounts for its complete serialized response using a labeled byte-based
+  token estimate, keeps code summaries with their evidence, and evaluates due time
+  intentions even when no context object is provided.
+
+### Fixed — Reason mode says only what it measured
+
+- `recall mode='reason'` used to end its `reasoning` text with "NO
+  CONTRADICTIONS DETECTED. Evidence is consistent." whenever no relation had
+  been assessed, and an "OVERALL CONFIDENCE" with no statement of where the
+  number came from. The text is now assembled sentence by sentence from the
+  values in the same response: memories scored, how many spreading activation
+  reached, the relations assessed against the primary with their counts, the
+  contradiction pairs found, the confidence arithmetic (primary composite, plus
+  3 points per evidence memory capped at 20, minus 10 per contradiction pair
+  and 20 per claim conflict), the dated span of the evidence, and a closing
+  line that says the server assembled it and no model wrote it. When nothing
+  was close enough to compare, it says agreement and disagreement are
+  unmeasured instead of calling the evidence consistent. The same numbers
+  ship as `confidenceBreakdown`, and the tool descriptions say how the text
+  is produced. Three tests pin that different evidence yields different text
+  and that every number in the text is one of the breakdown values.
+
+### Changed — smart_ingest responses are proportional
+
+- An update decision echoed the full merged memory twice, as `previousContent`
+  and `mergePreview`, about 13 KB for one save on a real store, and every
+  response carried a 311-byte `tagSuggestionStatus` that said nothing.
+  `mergePreview` is now a 240-character preview plus `mergedContentLength`
+  (the full text is the memory stored under `nodeId`). `previousContent`
+  stays whole on purpose: a merge replaces the old text and nothing else
+  keeps a copy, so the response is the only way to recover it.
+  `tagSuggestionStatus` ships only when it reports something (a status other
+  than complete, a truncation, an ignored tag, a suggestion) or on a
+  `previewTagSuggestions` preflight, whose contract includes it. Empty
+  suggestion lists, an empty `validity` block and null decision fields are
+  dropped. Batch results get the same treatment per item. An e2e test caps a
+  create response at 1,900 bytes.
+
+### Changed — tools/list is 18 percent smaller
+
+- 126 schema and tool descriptions were rewritten to say the same thing in
+  fewer words, and the batch item schema of `smart_ingest` no longer repeats
+  the descriptions of the single-mode fields it mirrors. Measured on the built
+  binary: 35,019 bytes to 28,731 (38,474 before 2.8.0). The e2e suite now pins
+  a 30,000 byte ceiling so the payload cannot creep back unnoticed. The 20 KB
+  target in #212 needs fewer parameters, not shorter prose; the issue stays
+  open with the numbers.
+
+### Added — The duplicates page can merge
+
+- `POST /api/duplicates/plan` and `POST /api/duplicates/apply` expose the
+  `dedup` tool's plan-then-apply flow to the dashboard, with the same plan ids,
+  classification and undo reflog the MCP surface uses. The Duplicates page's
+  merge control, disabled since the fake-success button was removed, now
+  previews the plan (survivor, absorbed count, matcher verdict, result text),
+  applies it on an explicit click, and shows the operation id that
+  `dedup undo` reverses. Oversized similarity components stay unmergeable.
+  The Live badge now reports the last fetch: Live, Refreshing, or Offline.
+  API errors surface the handler's message instead of a bare status line.
+
+### Added — First run says what it is doing
+
+- A fresh install downloads about 130 MB of embedding model and about 150 MB
+  of reranker before the first answer, with progress only on stderr, which
+  stdio clients hide; the first minute read as a hang. The server now declares
+  the MCP `logging` capability and sends `notifications/message` from the
+  warm-up tasks: `model_download_started` (with the size) or `model_loading`,
+  `embedding_runtime_ready` or `embedding_runtime_unavailable`, and the same
+  for the reranker. `logging/setLevel` is accepted. Until the runtime is
+  ready, `recall` responses and vector-less `smart_ingest` responses carry a
+  `warming` block that names the effect (keyword-only retrieval, saves without
+  a vector until back-filled) and where to check readiness, so the agent can
+  tell the user instead of guessing. fastembed exposes no download progress
+  callback, so there is no byte-level progress; the notifications bracket the
+  download honestly.
+
+### Added — Markdown projection
+
+- `project` (MCP tool and `vestige project`) renders the durable subset of a
+  scope, decisions, patterns and facts tagged `rule`, `preference` or
+  `convention`, currently valid and above a retention floor, into a fenced
+  region of a client rule file (`claude-md` for CLAUDE.md or AGENTS.md,
+  `memory-md` for an index). Every line ends with the memory id it came from.
+  Preview is the default and shows a line diff; `write` needs `confirm=true`,
+  replaces only the fence, keeps the rest of the file byte for byte, refuses a
+  path outside `root`, and is a no-op when the store has not changed. This is
+  the first half of the roadmap's Markdown and rules projection; re-import of
+  edits comes separately. `docs/PROJECTION.md` describes it.
+
+### Added — Every tool is driven over stdio in the e2e suite
+
+- The real-binary suite exercised four of the fourteen tools. It now drives
+  all fourteen: a happy path and an error path for `session_start`,
+  `memory_status` (every view), `dedup`, `graph`, `intention`, `maintain`,
+  `codebase`, `backfill`, `receipt` and `source_sync` (error paths only, since
+  it has no offline happy path), each with a payload ceiling so a response
+  cannot quietly bloat, plus missing-subject error paths for `smart_ingest` and
+  `suppress`. A guard test reads the suite and fails when an advertised tool
+  has fewer than two calls in it.
+
+### Changed — Dashboard toolchain
+
+- Vite 6.4 to 8.2, `@sveltejs/vite-plugin-svelte` 5 to 7, `@sveltejs/kit` 2.53
+  to 2.70, Vitest 4 to 5, Svelte 5.57, svelte-check 4.7, TypeScript 5.9 to 6.0,
+  Tailwind 4.3, Playwright 1.63, plus `@types/node` for the Vite config. Kit
+  2.70 accepts Vite 8 and TypeScript 6 but not 7, and the Svelte plugin 7
+  requires Vite 8, so the set moves together. Check, tests and build are green
+  with no source change; the WebGPU graph and Memory Cinema are untouched.
+
+### Added — Linux arm64 release asset
+
+- `vestige-mcp-aarch64-unknown-linux-gnu.tar.gz` joins the release (#240):
+  Raspberry Pi 5, Graviton and Ampere hosts no longer build from source. Built
+  on GitHub's arm64 runner inside the same Ubuntu 22.04 container as the x86_64
+  asset, so the glibc 2.35 floor holds; the same glibc check and the same
+  smoke on Ubuntu 22.04 and Debian 12 arm64 images gate it, in CI on every pull
+  request and in the release workflow. ort-sys ships an ONNX Runtime prebuilt
+  for the target, so embeddings work unchanged. `npm install -g
+  vestige-mcp-server` on arm64 Linux now downloads it.
+- The aarch64 ONNX Runtime archive imports `__isoc23_strtol`, `__isoc23_strtoll`
+  and `__isoc23_strtoull` (glibc 2.38) and `__cxa_call_terminate` (GCC 13
+  libstdc++), none of which the Ubuntu 22.04 release container has, so the
+  first arm64 build failed at link time. The x86_64 archive imports neither,
+  which is why the x86_64 job never saw it. `crates/vestige-mcp/src/glibc_compat.rs`
+  now defines the four symbols in each binary root, forwarding the C23 string
+  parsers to the classic glibc entry points and terminating on
+  `__cxa_call_terminate` the way libsupc++ does; the linker resolves the
+  archive against them and no `GLIBC_2.38` or `CXXABI_1.3.15` version need is
+  emitted. Unit tests cover the forwarding, the `endptr` contract and that the
+  terminate shim dies from SIGABRT.
+
+### Added — Benchmarks
+
+- MemoryArena preregistration (#242). `docs/benchmarks/MEMORYARENA-PREREGISTRATION.md`
+  fixes the protocol before any run: the two formal-reasoning families, five
+  arms that all run every time (a no-memory floor, upstream's BM25 and
+  embedding RAG, upstream's long-context baseline, Vestige), Progress Score as
+  the primary metric, and a paired exact sign test against BM25 as the only
+  decision rule. `benchmarks/memoryarena/` ships the adapter that presents a
+  live `vestige-mcp` to upstream's memory interface (one shared server, one
+  scope per task, an embedding-readiness guard so a keyword-only fallback can
+  never be measured by accident, a JSONL sidecar with byte counts for the
+  blob-size confound), an installer that patches a pinned MemoryArena clone,
+  the run configs, a smoke test against the real binary, and the analysis
+  script. No number exists yet; the run is the next step.
 
 ### Fixed — CI
 

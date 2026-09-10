@@ -1,3 +1,12 @@
+// Supplies the `__isoc23_*` and `__cxa_call_terminate` symbols that the
+// statically linked ONNX Runtime archive imports from glibc >= 2.38 and
+// libstdc++ >= GCC 13. Compiled into each binary root rather than into the
+// library so the definitions are always part of the final link instead of
+// being subject to archive member selection. See the module docs.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[path = "../glibc_compat.rs"]
+mod glibc_compat;
+
 use std::path::PathBuf;
 use vestige_core::{IngestInput, Storage};
 

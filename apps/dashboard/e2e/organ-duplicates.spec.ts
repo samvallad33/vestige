@@ -85,7 +85,7 @@ test.describe('Organ: /duplicates — synaptic fusion field', () => {
 
 		// (2 cont.) the DOM results pill must reflect REAL data, not a mock —
 		// the visible cluster count comes straight from the fetched clusters.
-		const pill = page.getByRole('status').filter({ hasText: /cluster/ });
+		const pill = page.getByRole('status').filter({ hasText: /^\s*\d+\s+cluster/ });
 		await expect(pill).toContainText(/\d+\s+cluster/, { timeout: 10_000 });
 
 		// (1/2) the WebGPU fusion field renders non-black, driven by that data
@@ -191,7 +191,7 @@ test.describe('Organ: /duplicates — synaptic fusion field', () => {
 			// HONEST NON-EMPTY: the DOM count must MATCH the real payload exactly,
 			// proving the organ consumes real data (not a mock) even at the tight
 			// band. The pill text is "N cluster(s), M potential duplicate(s)".
-			const pill = page.getByRole('status').filter({ hasText: /cluster/ });
+			const pill = page.getByRole('status').filter({ hasText: /^\s*\d+\s+cluster/ });
 			await expect(pill).toContainText(
 				new RegExp(`\\b${renderable.length}\\s+cluster`),
 				{ timeout: 10_000 }

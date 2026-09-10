@@ -245,6 +245,10 @@ impl PlanKind {
 /// Persisted to `merge_plans`; consumed by `apply_plan` via its `id`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergePlan {
+    /// Snapshot fingerprints captured before planning. Legacy plans must be
+    /// regenerated; confirmation cannot authorize applying stale source state.
+    #[serde(default)]
+    pub expected_state: std::collections::BTreeMap<String, String>,
     /// Plan id (UUID).
     pub id: String,
     /// merge | supersede.

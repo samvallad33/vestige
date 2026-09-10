@@ -45,11 +45,8 @@
 //! by default and use [`Server::ingest_keyword_only`], which documents that
 //! choice at the call site.
 //!
-//! # Known product defect documented here
-//!
-//! [`correction_must_not_be_swallowed_by_the_ingest_gate`] is `#[ignore]`d
-//! because it FAILS against the current build. See its doc comment; the defect
-//! was not fixed here on purpose.
+//! The correction-ingest regression also requires the real model. Its ignore
+//! marker selects the optional runtime suite; it is not an expected failure.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -91,6 +88,10 @@ struct Server {
     stdout: Receiver<String>,
     stderr: Arc<Mutex<Vec<String>>>,
     next_id: u64,
+    /// Server-initiated notifications (`notifications/message` and friends)
+    /// seen while waiting for responses. A real MCP client must tolerate them
+    /// between any two lines; the harness stashes them here for assertions.
+    notifications: Vec<Value>,
 }
 
 impl Server {
@@ -157,6 +158,7 @@ impl Server {
             stdout,
             stderr,
             next_id: 0,
+            notifications: Vec::new(),
         }
     }
 
@@ -193,7 +195,26 @@ impl Server {
     }
 
     /// Read one line of output, failing the test rather than blocking forever.
+    /// Is this line a server-initiated notification (a method, no id)?
+    fn is_server_notification(line: &str) -> Option<Value> {
+        let value: Value = serde_json::from_str(line).ok()?;
+        (value.get("id").is_none() && value.get("method").is_some()).then_some(value)
+    }
+
+    /// Next response line. Server notifications are stashed, not returned:
+    /// the protocol allows them between any two lines once the handshake is
+    /// done, and a client reading "the next line" must skip them.
     fn read_line(&mut self) -> String {
+        loop {
+            let line = self.read_any_line();
+            match Self::is_server_notification(&line) {
+                Some(notification) => self.notifications.push(notification),
+                None => return line,
+            }
+        }
+    }
+
+    fn read_any_line(&mut self) -> String {
         match self.stdout.recv_timeout(RPC_TIMEOUT) {
             Ok(line) => line,
             Err(RecvTimeoutError::Timeout) => panic!(
@@ -210,8 +231,47 @@ impl Server {
     /// Assert that the server sends nothing at all within `window`. Used to
     /// prove that notifications and blank lines produce no response.
     fn expect_silence(&mut self, window: Duration) {
-        if let Ok(unexpected) = self.stdout.recv_timeout(window) {
-            panic!("expected no response, got: {unexpected}");
+        let deadline = Instant::now() + window;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return;
+            }
+            match self.stdout.recv_timeout(remaining) {
+                Ok(line) => match Self::is_server_notification(&line) {
+                    // Logging from the warm-up tasks is not a response.
+                    Some(notification) => self.notifications.push(notification),
+                    None => panic!("expected no response, got: {line}"),
+                },
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// Wait until a `notifications/message` from `logger` has arrived, reading
+    /// and stashing lines until then.
+    fn wait_for_log_notification(&mut self, logger: &str, window: Duration) -> Value {
+        let deadline = Instant::now() + window;
+        loop {
+            if let Some(found) = self.notifications.iter().find(|n| {
+                n["method"] == json!("notifications/message")
+                    && n["params"]["logger"] == json!(logger)
+            }) {
+                return found.clone();
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "no notifications/message from {logger} within {window:?}; saw {:?}",
+                self.notifications
+            );
+            if let Ok(line) = self.stdout.recv_timeout(remaining) {
+                if let Some(notification) = Self::is_server_notification(&line) {
+                    self.notifications.push(notification);
+                } else {
+                    panic!("unexpected response while waiting for a notification: {line}");
+                }
+            }
         }
     }
 
@@ -529,10 +589,10 @@ fn assert_store_is_healthy(dir: &Path) {
 
 /// Put the review gate into `fast` mode.
 ///
-/// In the default `risk_gated` mode a destructive or suppressive mutation is
+/// In the opt-in `risk_gated` mode a destructive or suppressive mutation is
 /// intercepted and turned into a pending Memory PR rather than applied, so a
 /// test that wants to observe the mutation itself has to opt out of review
-/// first. See [`purge_with_confirm_is_review_gated_by_default`], which pins the
+/// first. See [`purge_with_confirm_is_review_gated_when_opted_in`], which pins the
 /// default behaviour.
 fn disable_review_gate(dir: &Path) {
     std::fs::write(dir.join("review_mode.json"), r#"{"mode":"fast"}"#)
@@ -640,6 +700,51 @@ fn uninitialized_requests_are_refused_but_discover_is_exempt() {
     server.handshake();
     assert!(server.result("tools/list", None)["tools"].is_array());
 
+    server.shutdown();
+}
+
+/// The first minute of a fresh install used to be silent: the model download
+/// printed to stderr, which stdio clients hide. The server now announces its
+/// warm-up as MCP logging, after the handshake and never before the initialize
+/// response (that ordering is what every other test in this file proves by
+/// reading responses line by line).
+#[test]
+fn warm_up_is_announced_as_mcp_logging_after_the_handshake() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    let init = server.handshake();
+    assert!(
+        init["capabilities"]["logging"].is_object(),
+        "logging capability must be declared: {init}"
+    );
+    assert!(
+        server.notifications.is_empty(),
+        "nothing may precede the initialize response: {:?}",
+        server.notifications
+    );
+
+    let note = server.wait_for_log_notification("vestige.embeddings", Duration::from_secs(20));
+    let event = note["params"]["data"]["event"].as_str().unwrap_or("");
+    assert!(
+        matches!(
+            event,
+            "model_loading"
+                | "model_download_started"
+                | "embedding_runtime_ready"
+                | "embedding_runtime_unavailable"
+        ),
+        "unexpected warm-up event: {note}"
+    );
+    assert_eq!(
+        note["params"]["level"]
+            .as_str()
+            .map(|l| l == "info" || l == "warning"),
+        Some(true)
+    );
+
+    // Ordinary traffic keeps working with notifications interleaved.
+    let list = server.result("tools/list", None);
+    assert!(!list["tools"].as_array().unwrap().is_empty());
     server.shutdown();
 }
 
@@ -762,6 +867,30 @@ fn tools_list_is_deterministic_across_restarts_and_carries_cache_hints() {
         "recall lost its result-size annotation: {recall}"
     );
 
+    // The expanded v3 catalog includes projection, the intention graph and
+    // complete maintenance actions. Its integrated baseline is 52,988 bytes.
+    // Preserve a bounded full catalog and separately bound the common subset
+    // used by clients with v3 progressive discovery.
+    let bytes = serde_json::to_string(&a).unwrap().len();
+    assert!(
+        bytes <= 55_000,
+        "tools/list is {bytes} bytes, over the 55,000 byte v3 ceiling; a schema or description grew"
+    );
+
+    let common: Vec<_> = a["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|tool| {
+            ["recall", "smart_ingest", "memory"].contains(&tool["name"].as_str().unwrap())
+        })
+        .collect();
+    assert_eq!(common.len(), 3);
+    assert!(
+        serde_json::to_vec(&common).unwrap().len() <= 13_000,
+        "common progressive tool subset exceeded its 13KB budget"
+    );
+
     // Behaviour hints reach the client in MCP's camelCase shape, and the two
     // hints a client acts on (read-only, destructive) are set for every tool.
     for tool in a["tools"].as_array().unwrap() {
@@ -773,7 +902,8 @@ fn tools_list_is_deterministic_across_restarts_and_carries_cache_hints() {
         assert!(ann["idempotentHint"].is_boolean(), "{name}: {ann}");
         assert!(ann["openWorldHint"].is_boolean(), "{name}: {ann}");
     }
-    assert_eq!(recall["annotations"]["readOnlyHint"], json!(true));
+    // Reason mode records composition evidence; hints describe the whole tool.
+    assert_eq!(recall["annotations"]["readOnlyHint"], json!(false));
     let memory = a["tools"]
         .as_array()
         .unwrap()
@@ -1263,6 +1393,40 @@ fn a_clean_restart_preserves_every_memory() {
 // 3. Retrieval correctness (embedding-independent paths)
 // ============================================================================
 
+/// A save costs the agent context on every call, so the create response has a
+/// byte ceiling and must not carry a tag-status block that says nothing.
+#[test]
+fn smart_ingest_create_response_is_lean() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let value = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "content": "A plain engineering note about the deploy cache", "tags": ["deploy"], "forceCreate": true }),
+    );
+    assert_eq!(value["success"], json!(true), "{value}");
+    let bytes = serde_json::to_string(&value).unwrap().len();
+    assert!(bytes <= 1_900, "create response is {bytes} bytes: {value}");
+    assert!(
+        value.get("tagSuggestionStatus").is_none(),
+        "a create with nothing to report about tags must not carry the status block: {value}"
+    );
+    for key in [
+        "similarity",
+        "supersededId",
+        "previousContent",
+        "mergePreview",
+        "mergedFrom",
+    ] {
+        assert!(
+            value.get(key).is_none(),
+            "{key} is null on a create and must be absent: {value}"
+        );
+    }
+    server.shutdown();
+}
+
 /// A capitalised tag must be findable by a lower-case prefix, and vice versa.
 ///
 /// A silent zero here is the worst failure shape a memory system has: the
@@ -1333,6 +1497,91 @@ fn tag_prefix_filtering_is_case_insensitive_on_the_keyword_path() {
         "a prefix matching nothing must return nothing: {none:?}"
     );
 
+    server.shutdown();
+}
+
+/// Projection over stdio: the durable subset lands in a fenced region, the
+/// human's text around it survives byte for byte, a second write is a no-op,
+/// and a path that escapes the root is refused.
+#[test]
+fn project_previews_then_writes_a_fenced_region_and_keeps_the_rest() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let decision = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "content": "Release from an integration branch, never from a feature branch", "node_type": "decision", "forceCreate": true }),
+    )["nodeId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pattern = server.call_tool_ok(
+        "smart_ingest",
+        json!({ "content": "Touch edited files before running cargo so fingerprints refresh", "node_type": "pattern", "forceCreate": true }),
+    )["nodeId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ingest_keyword_only("The office kitchen has a new kettle", &["office"]);
+
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("CLAUDE.md");
+    std::fs::write(&target, "# Mine\n\nKeep me.\n").unwrap();
+
+    let preview = server.call_tool_ok(
+        "project",
+        json!({ "action": "preview", "format": "claude-md", "path": "CLAUDE.md", "root": root.path() }),
+    );
+    assert_eq!(preview["itemCount"], json!(2), "{preview}");
+    let region = preview["region"].as_str().unwrap();
+    assert!(
+        region.contains(&decision) && region.contains(&pattern),
+        "{region}"
+    );
+    assert_eq!(preview["target"]["exists"], json!(true));
+    assert!(preview["target"]["added"].as_u64().unwrap() > 0);
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "# Mine\n\nKeep me.\n"
+    );
+
+    let refused = server.call_tool(
+        "project",
+        json!({ "action": "write", "path": "CLAUDE.md", "root": root.path() }),
+    );
+    assert!(
+        refused["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("confirm")),
+        "{refused}"
+    );
+
+    let written = server.call_tool_ok(
+        "project",
+        json!({ "action": "write", "path": "CLAUDE.md", "root": root.path(), "confirm": true }),
+    );
+    assert_eq!(written["written"], json!(true), "{written}");
+    let file = std::fs::read_to_string(&target).unwrap();
+    assert!(file.starts_with("# Mine\n\nKeep me.\n"), "{file}");
+    assert!(file.contains("<!-- vestige:projection:begin") && file.contains(&decision));
+
+    let again = server.call_tool_ok(
+        "project",
+        json!({ "action": "write", "path": "CLAUDE.md", "root": root.path(), "confirm": true }),
+    );
+    assert_eq!(again["written"], json!(false), "{again}");
+
+    let escape = server.call_tool(
+        "project",
+        json!({ "action": "write", "path": "../escape.md", "root": root.path(), "confirm": true }),
+    );
+    assert!(
+        escape["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("outside")),
+        "{escape}"
+    );
     server.shutdown();
 }
 
@@ -1440,7 +1689,48 @@ fn unicode_and_typographic_content_stays_findable_by_keyword() {
 // 4. Deletion, suppression and the review gate
 // ============================================================================
 
-/// In the default review mode a confirmed purge is held for review, not applied.
+/// A fresh installation stores sensitive context without an approval queue and
+/// keeps that context retrievable after the server restarts.
+#[test]
+fn default_memory_writes_are_immediate_and_survive_restart() {
+    let dir = data_dir();
+    assert!(!dir.path().join("review_mode.json").exists());
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    let write = server.call_tool_ok("smart_ingest", json!({
+        "content": "User preference: the ORCHID billing security workflow requires weekly checks.",
+        "tags": ["preference", "security"], "forceCreate": true
+    }));
+    assert_eq!(write["success"], true);
+    assert!(write.get("memoryPrNotice").is_none());
+    let id = write["nodeId"].as_str().unwrap().to_string();
+    assert!(
+        server
+            .recall_ids(json!({"query": "ORCHID", "mode": "lookup"}))
+            .contains(&id)
+    );
+    drop(server);
+    let mut restarted = Server::spawn(dir.path());
+    restarted.handshake();
+    assert!(
+        restarted
+            .recall_ids(json!({"query": "ORCHID", "mode": "lookup"}))
+            .contains(&id)
+    );
+    let unconfirmed = restarted.call_tool("memory", json!({"action": "purge", "id": id}));
+    assert!(
+        unconfirmed["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("confirm=true"))
+    );
+    assert!(
+        restarted
+            .recall_ids(json!({"query": "ORCHID", "mode": "lookup"}))
+            .contains(&id)
+    );
+}
+
+/// In the opt-in review mode a confirmed purge is held for review, not applied.
 ///
 /// This is load-bearing and surprising: `memory(action='purge', confirm=true)`
 /// answers `purge_pending_review`, the memory stays fully retrievable, and
@@ -1448,8 +1738,13 @@ fn unicode_and_typographic_content_stays_findable_by_keyword() {
 /// `confirm=true` as "erased" would be wrong. Catches a regression in either
 /// direction: silently erasing without review, or dropping the review record.
 #[test]
-fn purge_with_confirm_is_review_gated_by_default() {
+fn purge_with_confirm_is_review_gated_when_opted_in() {
     let dir = data_dir();
+    std::fs::write(
+        dir.path().join("review_mode.json"),
+        r#"{"mode":"risk_gated"}"#,
+    )
+    .unwrap();
     let mut server = Server::spawn(dir.path());
     server.handshake();
 
@@ -1473,7 +1768,7 @@ fn purge_with_confirm_is_review_gated_by_default() {
     assert_eq!(
         gated["action"],
         json!("purge_pending_review"),
-        "default review mode must hold a destructive mutation: {gated}"
+        "opt-in review mode must hold a destructive mutation: {gated}"
     );
     assert_eq!(gated["success"], json!(false));
     assert_eq!(gated["pendingReview"], json!(true));
@@ -2224,4 +2519,510 @@ fn corrupt_fts_rebuild_preserves_embeddings() {
 
     reopened.shutdown();
     assert_store_is_healthy(dir.path());
+}
+
+// ============================================================================
+// 6. Every advertised tool, against the real binary
+// ============================================================================
+//
+// Until this section existed the suite exercised four of the fourteen tools
+// (memory, smart_ingest, recall, suppress). A tool that is advertised but never
+// driven over stdio can break its wire shape, its argument validation or its
+// error text without any test noticing. Each tool below gets a happy path and
+// an error path, with a payload ceiling so a response cannot quietly bloat.
+// The last test reads this file and fails when an advertised tool has fewer
+// than two calls in it.
+
+fn payload_bytes(value: &Value) -> usize {
+    serde_json::to_string(value)
+        .map(|s| s.len())
+        .unwrap_or(usize::MAX)
+}
+
+fn assert_keys(value: &Value, keys: &[&str], context: &str) {
+    for key in keys {
+        assert!(
+            value.get(*key).is_some(),
+            "{context}: response is missing `{key}`: {value}"
+        );
+    }
+}
+
+fn assert_under(value: &Value, ceiling: usize, context: &str) {
+    let bytes = payload_bytes(value);
+    assert!(
+        bytes <= ceiling,
+        "{context}: {bytes} bytes exceeds the {ceiling} byte ceiling; the response grew: {value}"
+    );
+}
+
+fn assert_error_mentions(value: &Value, needle: &str, context: &str) {
+    let error = value["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{context}: expected an error, got {value}"));
+    assert!(
+        error.to_lowercase().contains(&needle.to_lowercase()),
+        "{context}: error {error:?} does not mention {needle:?}"
+    );
+}
+
+#[test]
+fn session_start_returns_a_budgeted_context_and_rejects_a_bad_budget() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only(
+        "The user prefers tabs over spaces in Rust files",
+        &["preference"],
+    );
+
+    let value = server.call_tool_ok(
+        "session_start",
+        json!({ "queries": ["user preferences"], "token_budget": 800 }),
+    );
+    assert_keys(
+        &value,
+        &[
+            "context",
+            "profile",
+            "tokenBudget",
+            "tokensUsed",
+            "automationTriggers",
+        ],
+        "session_start",
+    );
+    assert_eq!(value["tokenBudget"], json!(800));
+    assert_under(&value, 6_000, "session_start");
+
+    let bad = server.call_tool("session_start", json!({ "token_budget": "eight hundred" }));
+    assert_error_mentions(&bad, "invalid", "session_start with a string budget");
+    server.shutdown();
+}
+
+#[test]
+fn memory_status_every_view_has_its_shape_and_an_unknown_view_errors() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only("A memory so the store is not empty", &["e2e"]);
+
+    let health = server.call_tool_ok("memory_status", json!({ "view": "health" }));
+    assert_keys(
+        &health,
+        &[
+            "embeddingsCompiledIn",
+            "embeddingReady",
+            "cognitiveHealth",
+            "averageRetention",
+        ],
+        "memory_status health",
+    );
+    assert_under(&health, 8_000, "memory_status health");
+
+    let stats = server.call_tool_ok("memory_status", json!({ "view": "stats" }));
+    assert_keys(
+        &stats,
+        &["counts", "lifecycle", "retentionDistribution", "population"],
+        "stats",
+    );
+    assert_under(&stats, 24_000, "memory_status stats");
+
+    let timeline = server.call_tool_ok("memory_status", json!({ "view": "timeline" }));
+    assert_keys(
+        &timeline,
+        &["days", "timeline", "totalMemories"],
+        "timeline",
+    );
+    assert_eq!(timeline["totalMemories"], json!(1));
+    assert_under(&timeline, 4_000, "memory_status timeline");
+
+    let changelog = server.call_tool_ok("memory_status", json!({ "view": "changelog" }));
+    assert_keys(&changelog, &["events", "totalEvents"], "changelog");
+    assert_under(&changelog, 4_000, "memory_status changelog");
+
+    let retention = server.call_tool_ok("memory_status", json!({ "view": "retention" }));
+    assert_keys(
+        &retention,
+        &["avgRetention", "distribution", "trend", "totalMemories"],
+        "retention",
+    );
+    assert_under(&retention, 3_000, "memory_status retention");
+
+    let bad = server.call_tool("memory_status", json!({ "view": "weather" }));
+    assert!(bad.get("error").is_some(), "unknown view must error: {bad}");
+    server.shutdown();
+}
+
+#[test]
+fn dedup_scan_policy_and_undo_answer_and_apply_needs_a_plan() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only("Rotate the payments cache key every deploy", &["ops"]);
+    server.ingest_keyword_only("Rotate the payments cache key on every deploy", &["ops"]);
+
+    let scan = server.call_tool_ok("dedup", json!({ "action": "scan" }));
+    assert_keys(
+        &scan,
+        &["duplicateClusters", "mergeCandidates", "nextStep"],
+        "dedup scan",
+    );
+    assert_under(&scan, 8_000, "dedup scan");
+
+    let policy = server.call_tool_ok("dedup", json!({ "action": "policy" }));
+    assert_keys(
+        &policy,
+        &["matchThreshold", "possibleThreshold", "autoApply"],
+        "dedup policy",
+    );
+    assert_under(&policy, 2_000, "dedup policy");
+
+    let undo = server.call_tool_ok("dedup", json!({ "action": "undo" }));
+    assert_keys(
+        &undo,
+        &["operations", "tagOperations", "totalOperations"],
+        "dedup undo",
+    );
+    assert_under(&undo, 4_000, "dedup undo");
+
+    let bad = server.call_tool("dedup", json!({ "action": "apply" }));
+    assert!(
+        bad.get("error").is_some(),
+        "apply without plan_id must error: {bad}"
+    );
+    server.shutdown();
+}
+
+#[test]
+fn graph_recent_predict_and_memory_graph_answer_and_chain_needs_endpoints() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only(
+        "The deploy pipeline caches build artifacts by branch",
+        &["deploy"],
+    );
+
+    let recent = server.call_tool_ok("graph", json!({ "action": "recent" }));
+    assert_keys(&recent, &["events"], "graph recent");
+    assert_under(&recent, 4_000, "graph recent");
+
+    let predict = server.call_tool_ok(
+        "graph",
+        json!({ "action": "predict", "context": { "current_topics": ["deploy"] } }),
+    );
+    assert_keys(&predict, &["predictions", "suggestions"], "graph predict");
+    assert_under(&predict, 4_000, "graph predict");
+
+    let subgraph = server.call_tool_ok(
+        "graph",
+        json!({ "action": "memory_graph", "query": "deploy" }),
+    );
+    assert_keys(
+        &subgraph,
+        &["nodes", "edges", "nodeCount", "edgeCount"],
+        "graph memory_graph",
+    );
+    assert_under(&subgraph, 8_000, "graph memory_graph");
+
+    let bad = server.call_tool("graph", json!({ "action": "chain" }));
+    assert!(
+        bad.get("error").is_some(),
+        "chain without from/to must error: {bad}"
+    );
+    server.shutdown();
+}
+
+#[test]
+fn intention_set_list_check_update_round_trip_and_a_bad_trigger_errors() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let set = server.call_tool_ok(
+        "intention",
+        json!({
+            "action": "set",
+            "description": "rotate the payments cache key before the next deploy",
+            "trigger": { "type": "context", "topic": "deploy" }
+        }),
+    );
+    assert!(set.get("error").is_none(), "{set}");
+    assert_under(&set, 3_000, "intention set");
+
+    let list = server.call_tool_ok("intention", json!({ "action": "list" }));
+    assert_keys(&list, &["intentions", "total"], "intention list");
+    assert_eq!(list["total"], json!(1), "{list}");
+    let id = list["intentions"][0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("intention list carries no id: {list}"))
+        .to_string();
+
+    let check = server.call_tool_ok(
+        "intention",
+        json!({ "action": "check", "context": { "topics": ["deploy"] } }),
+    );
+    assert!(check.get("error").is_none(), "{check}");
+    assert_under(&check, 3_000, "intention check");
+
+    let done = server.call_tool_ok(
+        "intention",
+        json!({ "action": "update", "id": id, "status": "complete" }),
+    );
+    assert!(done.get("error").is_none(), "{done}");
+
+    let bad = server.call_tool(
+        "intention",
+        json!({ "action": "set", "description": "x", "trigger": "deploy" }),
+    );
+    assert_error_mentions(&bad, "invalid", "intention set with a string trigger");
+    server.shutdown();
+}
+
+#[test]
+fn maintain_scores_importance_dry_runs_gc_consolidates_and_restore_needs_a_path() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only("A memory for the maintenance pass to touch", &["e2e"]);
+
+    let score = server.call_tool_ok(
+        "maintain",
+        json!({ "action": "importance_score", "content": "the cache key rotation broke production" }),
+    );
+    assert_keys(
+        &score,
+        &["composite", "channels", "dominantSignal"],
+        "maintain importance_score",
+    );
+    assert_under(&score, 6_000, "maintain importance_score");
+
+    let gc = server.call_tool_ok("maintain", json!({ "action": "gc" }));
+    assert_keys(
+        &gc,
+        &[
+            "dryRun",
+            "candidateCount",
+            "processed",
+            "hasMore",
+            "nextCursor",
+            "atomic",
+        ],
+        "maintain gc",
+    );
+    assert_eq!(
+        gc["dryRun"],
+        json!(true),
+        "gc must default to a dry run: {gc}"
+    );
+    assert_eq!(gc["atomic"], json!(true));
+    assert!(gc["processed"].as_u64().unwrap() <= 100);
+    assert_under(&gc, 3_000, "maintain gc");
+
+    let consolidate = server.call_tool_ok("maintain", json!({ "action": "consolidate" }));
+    assert_keys(
+        &consolidate,
+        &["nodesProcessed", "decayApplied", "durationMs"],
+        "maintain consolidate",
+    );
+    assert_under(&consolidate, 3_000, "maintain consolidate");
+
+    let bad = server.call_tool("maintain", json!({ "action": "restore" }));
+    assert!(
+        bad.get("error").is_some(),
+        "restore without a path must error: {bad}"
+    );
+    server.shutdown();
+}
+
+#[test]
+fn codebase_remembers_a_decision_returns_context_verifies_and_needs_its_fields() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let remembered = server.call_tool_ok(
+        "codebase",
+        json!({
+            "action": "remember_decision",
+            "codebase": "e2e-probe",
+            "decision": "Use content-hashed cache keys for build artifacts",
+            "rationale": "stale keys shipped a broken build",
+            "files": ["src/cache.rs"]
+        }),
+    );
+    assert!(remembered.get("error").is_none(), "{remembered}");
+    assert_under(&remembered, 4_000, "codebase remember_decision");
+
+    let context = server.call_tool_ok(
+        "codebase",
+        json!({ "action": "get_context", "codebase": "e2e-probe" }),
+    );
+    assert_keys(
+        &context,
+        &["decisions", "patterns", "staleMemories"],
+        "codebase get_context",
+    );
+    // `decisions` is `{ count, items }`; the anchor to src/cache.rs is reported
+    // missing because that file does not exist here, which is the honest answer.
+    assert_eq!(
+        context["decisions"]["count"],
+        json!(1),
+        "the decision must come back in context: {context}"
+    );
+    assert_under(&context, 6_000, "codebase get_context");
+
+    let verify = server.call_tool_ok(
+        "codebase",
+        json!({ "action": "verify", "codebase": "e2e-probe" }),
+    );
+    assert_keys(
+        &verify,
+        &["checked", "fresh", "stale", "unverifiable"],
+        "codebase verify",
+    );
+    assert_under(&verify, 6_000, "codebase verify");
+
+    let bad = server.call_tool("codebase", json!({ "action": "remember_decision" }));
+    assert_error_mentions(&bad, "decision", "remember_decision without a decision");
+    server.shutdown();
+}
+
+#[test]
+fn backfill_dry_run_surfaces_an_upstream_cause_and_an_empty_store_errors() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let empty = server.call_tool("backfill", json!({ "promote": false }));
+    assert_error_mentions(&empty, "no failure", "backfill on an empty store");
+
+    server.ingest_keyword_only(
+        "Switched PAYMENTS_REDIS_URL to the new cluster during the maintenance window",
+        &["ops"],
+    );
+    server.ingest_keyword_only(
+        "The payments service crashed on startup: connection refused to PAYMENTS_REDIS_URL",
+        &["incident"],
+    );
+    let dry = server.call_tool_ok("backfill", json!({ "promote": false }));
+    assert!(dry.get("error").is_none(), "{dry}");
+    assert!(
+        dry.as_object().is_some_and(|o| !o.is_empty()),
+        "backfill must return a structured report: {dry}"
+    );
+    assert_under(&dry, 8_000, "backfill dry run");
+    server.shutdown();
+}
+
+#[test]
+fn receipt_get_returns_the_receipt_a_recall_produced_and_an_unknown_id_errors() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only("Receipts record what a retrieval used", &["e2e"]);
+
+    let recall = server.call_tool_ok(
+        "recall",
+        json!({ "query": "receipts record", "concrete": true }),
+    );
+    let receipt_id = recall["receiptId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recall carried no receiptId: {recall}"))
+        .to_string();
+
+    let receipt = server.call_tool_ok(
+        "receipt",
+        json!({ "action": "get", "receipt_id": receipt_id }),
+    );
+    assert!(receipt.get("error").is_none(), "{receipt}");
+    assert!(
+        serde_json::to_string(&receipt)
+            .unwrap()
+            .contains(&receipt_id),
+        "the receipt response must reference its own id: {receipt}"
+    );
+    assert_under(&receipt, 8_000, "receipt get");
+
+    let bad = server.call_tool(
+        "receipt",
+        json!({ "action": "get", "receipt_id": "r_does_not_exist" }),
+    );
+    assert_error_mentions(&bad, "not found", "receipt get with an unknown id");
+    server.shutdown();
+}
+
+/// `source_sync` reaches an external system, so it has no offline happy path.
+/// Both of its tests are error paths by design; the connector itself is
+/// covered by the unit tests in `vestige-core`.
+#[test]
+fn source_sync_rejects_an_unknown_source_and_a_missing_repo_without_touching_the_network() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let unknown = server.call_tool("source_sync", json!({ "source": "gitlab", "repo": "a/b" }));
+    assert!(
+        unknown.get("error").is_some(),
+        "unknown source must error: {unknown}"
+    );
+
+    let missing = server.call_tool("source_sync", json!({ "source": "github" }));
+    assert!(
+        missing.get("error").is_some(),
+        "github without repo must error: {missing}"
+    );
+    server.shutdown();
+}
+
+#[test]
+fn smart_ingest_and_suppress_reject_calls_without_their_subject() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+
+    let no_content = server.call_tool("smart_ingest", json!({ "tags": ["orphan"] }));
+    assert!(
+        no_content.get("error").is_some(),
+        "smart_ingest without content must error: {no_content}"
+    );
+
+    let no_id = server.call_tool("suppress", json!({ "reason": "no subject" }));
+    assert!(
+        no_id.get("error").is_some(),
+        "suppress without id must error: {no_id}"
+    );
+    server.shutdown();
+}
+
+/// The guard: every tool the server advertises has at least two calls in this
+/// file. Adding a tool without driving it over stdio fails here, not in a
+/// user's client.
+#[test]
+fn every_advertised_tool_is_called_at_least_twice_in_this_suite() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    let list = server.result("tools/list", None);
+    server.shutdown();
+
+    // rustfmt wraps long calls onto several lines, so count on a copy with the
+    // whitespace removed.
+    let source: String = include_str!("e2e_real_binary.rs")
+        .split_whitespace()
+        .collect();
+    let mut thin = Vec::new();
+    for tool in list["tools"].as_array().expect("tools array") {
+        let name = tool["name"].as_str().expect("tool name");
+        let calls = source.matches(&format!("call_tool(\"{name}\"")).count()
+            + source.matches(&format!("call_tool_ok(\"{name}\"")).count()
+            + source.matches(&format!("\"name\":\"{name}\"")).count();
+        if calls < 2 {
+            thin.push(format!("{name} ({calls})"));
+        }
+    }
+    assert!(
+        thin.is_empty(),
+        "advertised tools with fewer than two e2e calls: {thin:?}"
+    );
 }

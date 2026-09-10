@@ -1485,6 +1485,11 @@ mod tests {
                 .evaluation
                 .is_some()
         );
+        // Reproduce a clean host without legacy model artifacts even when the
+        // developer machine has a cached legacy embedding runtime.
+        let connection = rusqlite::Connection::open(temp.path().join("store.sqlite")).unwrap();
+        connection.execute("UPDATE knowledge_nodes SET has_embedding = 0", []).unwrap();
+        drop(connection);
         storage
             .activate_embedding_profile(&profile.profile_id)
             .unwrap();
@@ -1502,5 +1507,116 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn attached_runtime_vectors_carry_the_profile_model_id_and_do_not_churn() {
+        // Regression (kmsu S131, 2026-09-08). The attached-runtime write path
+        // labelled every vector with the PROFILE id, while the migration
+        // writer, `get_stats`, and the regeneration-candidate query all use the
+        // profile's MODEL id. Every vector the long-running server wrote was
+        // therefore reported as "mismatched" and re-embedded on every
+        // consolidation pass (269 of 10,596 live vectors re-stamped per pass).
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::new(Some(temp.path().join("store.sqlite"))).unwrap();
+        storage
+            .ingest(IngestInput {
+                content: "memory migrated before the runtime attached".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let source = EmbeddingProfileId::new("nomic-v1.5-legacy-raw-256").unwrap();
+        for node in storage.get_all_nodes(10, 0).unwrap() {
+            storage
+                .put_embedding_profile_vector(&EmbeddingProfileVector {
+                    profile_id: source.to_string(),
+                    node_id: node.id,
+                    embedding: f32_bytes(&vec![0.25; 256]),
+                    dimensions: 256,
+                    model: "nomic-ai/nomic-embed-text-v1.5".to_string(),
+                    created_at: Utc::now(),
+                })
+                .unwrap();
+        }
+        let artifact_path = temp.path().join("runner.bin");
+        fs::write(&artifact_path, b"local test artifact").unwrap();
+        let artifact = ModelArtifactHash::sha256("runner.bin", sha256_hex(b"local test artifact"));
+        let profile = profile(artifact.clone());
+        // The fixture separates all three candidate labels: the profile id
+        // ("test-local-profile-2d"), the runtime's own name ("test-local-runner"),
+        // and the profile's model id ("test/local"). Only the last one is the
+        // label the readers compare against.
+        assert_ne!(profile.model_id, profile.profile_id.to_string());
+        assert_ne!(profile.model_id, TinyEmbedder.model_name());
+        let artifacts = vec![VerifiedLocalArtifact::from_root(artifact, temp.path()).unwrap()];
+        let lifecycle = EmbeddingProfileLifecycle::new(&storage);
+        lifecycle
+            .install_verified(
+                profile.clone(),
+                &artifacts,
+                EmbeddingRuntimeMetadata {
+                    backend: EmbeddingRuntimeBackend::FastembedCandle,
+                    device: crate::embedding::EmbeddingDevice::Cpu,
+                    runtime_version: "test".to_string(),
+                    initialized_at: Utc::now(),
+                    local_only: true,
+                },
+                Arc::new(TinyEmbedder),
+            )
+            .unwrap();
+        let evaluation = EmbeddingEvaluationSummary {
+            evaluation_id: Uuid::new_v4(),
+            compared_against: source.clone(),
+            completed_at: Utc::now(),
+            corpus_size: 0,
+            recall_at_5: None,
+            recall_at_10: None,
+            ndcg_at_10: None,
+            exact_match_preservation: None,
+            false_positive_rate: None,
+            p50_query_latency_ms: None,
+            p95_query_latency_ms: None,
+            ingestion_throughput_per_second: None,
+            report_hash: "1".repeat(64),
+        };
+        let ready = lifecycle
+            .registry
+            .record_evaluation(&profile.profile_id, evaluation)
+            .unwrap();
+        storage.save_embedding_profile_manifest(&ready).unwrap();
+        lifecycle
+            .migrate_registered(&profile.profile_id, &source, None, None)
+            .unwrap();
+        storage
+            .activate_embedding_profile(&profile.profile_id)
+            .unwrap();
+        lifecycle
+            .attach_registered_active_profile(&profile.profile_id)
+            .unwrap();
+
+        // The live server's only write path: an ingest through the attached runtime.
+        let written = storage
+            .ingest(IngestInput {
+                content: "memory written through the attached runtime".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let stored = storage
+            .embedding_profile_vector(&profile.profile_id, &written.id)
+            .unwrap()
+            .expect("the ingest wrote a vector for the active profile");
+        assert_eq!(
+            stored.model, profile.model_id,
+            "attached-runtime vectors must carry the profile's model id, the label \
+             the migration writer stores and every reader compares against"
+        );
+
+        let stats = storage.get_stats().unwrap();
+        assert_eq!(stats.nodes_with_mismatched_embeddings, 0);
+        assert_eq!(stats.nodes_with_active_embeddings, 2);
+
+        // No churn: a consolidation-style pass finds nothing to regenerate.
+        let again = storage.generate_embeddings(None, false).unwrap();
+        assert_eq!((again.successful, again.skipped, again.failed), (0, 0, 0));
     }
 }

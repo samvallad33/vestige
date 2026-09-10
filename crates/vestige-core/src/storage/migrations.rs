@@ -169,6 +169,21 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Post-retrieval failure feedback ledger: every accessibility delta applied because a failure followed a retrieval, so it can be audited and reverted",
         up: MIGRATION_V33_UP,
     },
+    Migration {
+        version: 34,
+        description: "Suppression snapshots: atomic exact local reversal with conflict detection",
+        up: MIGRATION_V34_UP,
+    },
+    Migration {
+        version: 35,
+        description: "Journal idempotent suppression cascades for atomic conflict-aware reversal",
+        up: MIGRATION_V35_UP,
+    },
+    Migration {
+        version: 36,
+        description: "Versioned intention graphs and atomic deterministic command journal",
+        up: MIGRATION_V36_UP,
+    },
 ];
 
 /// A database migration
@@ -2441,6 +2456,50 @@ CREATE INDEX IF NOT EXISTS idx_failure_feedback_memory ON failure_feedback(memor
 UPDATE schema_version SET version = 33, applied_at = datetime('now');
 "#;
 
+const MIGRATION_V34_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS suppression_operations (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    before_state TEXT NOT NULL,
+    after_state TEXT NOT NULL,
+    reverted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_suppression_operations_active
+    ON suppression_operations(node_id, sequence DESC) WHERE reverted_at IS NULL;
+UPDATE schema_version SET version = 34, applied_at = datetime('now');
+"#;
+
+const MIGRATION_V35_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS suppression_cascade_effects (
+    operation_sequence INTEGER NOT NULL REFERENCES suppression_operations(sequence) ON DELETE CASCADE,
+    neighbor_id TEXT NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
+    before_state TEXT NOT NULL,
+    after_state TEXT NOT NULL,
+    reverted_at TEXT,
+    PRIMARY KEY(operation_sequence, neighbor_id)
+);
+UPDATE schema_version SET version = 35, applied_at = datetime('now');
+"#;
+
+const MIGRATION_V36_UP: &str = r#"
+CREATE TABLE IF NOT EXISTS intention_graph_state (
+    scope TEXT PRIMARY KEY,
+    state_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS intention_graph_journal (
+    scope TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    command_json TEXT NOT NULL,
+    evaluated_at TEXT NOT NULL,
+    output_digest TEXT NOT NULL,
+    state_digest TEXT NOT NULL,
+    PRIMARY KEY(scope, seq)
+);
+UPDATE schema_version SET version = 36, applied_at = datetime('now');
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2640,6 +2699,34 @@ UPDATE schema_version SET version = 99;\n";
             );
         }
         assert!(exercised >= 5, "expected the ADD COLUMN migrations to be exercised, got {exercised}");
+    }
+
+    #[test]
+    fn v3_intentions_upgrade_preserves_suppression_schema() {
+        for version in [33, 34, 35] {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            apply_migrations_through(&conn, version);
+            apply_migrations(&conn).unwrap();
+            assert_eq!(
+                get_current_version(&conn).unwrap(),
+                MIGRATIONS.last().unwrap().version
+            );
+            for table in [
+                "suppression_operations",
+                "suppression_cascade_effects",
+                "intention_graph_state",
+                "intention_graph_journal",
+            ] {
+                let count: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                        [table],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(count, 1, "upgrade from {version}: missing {table}");
+            }
+        }
     }
 
     #[test]

@@ -90,6 +90,8 @@ pub mod embedding;
 pub mod fsrs;
 pub mod fts;
 pub mod memory;
+/// Evidence-aware future intentions with deterministic local evaluation.
+pub mod intention_graph;
 pub mod security;
 pub mod storage;
 
@@ -110,6 +112,7 @@ pub mod advanced;
 
 /// Codebase memory - Vestige's killer differentiator for AI code understanding
 pub mod codebase;
+pub mod projection;
 
 /// Neuroscience-inspired memory mechanisms
 ///

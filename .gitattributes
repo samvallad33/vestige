@@ -1,0 +1,3 @@
+# Generated assets can contain significant whitespace inside minified literals.
+# Preserve build output byte-for-byte; review and lint the source instead.
+apps/dashboard/build/** -whitespace linguist-generated=true

@@ -18,6 +18,18 @@ checkout, and where it is weak.
 > all. Everything below is built so a stranger can re-run it and get the same
 > answer, or catch us being wrong.
 
+## Recorded agent comparison: Before You Change That
+
+[`Before You Change That`](../benchmarks/before-you-change-that/README.md) is a
+frozen public evidence package for a 22-record synthetic ledger repair. It
+records Vestige delivering the exact saved constraint when
+`src/ledger/reconcile.rs` became relevant, followed by a repair that passed
+21/21 application checks. Control and Vestige completed naturally; the MCP
+Memory Service arm was interrupted at the original 900-second cutoff even
+though its recorded final application also passes 21/21. Treat it as one
+inspectable observation, not a causal win or product ranking. Its verifier and
+application recheck do not rerun a model or provider.
+
 ---
 
 ## MemConflict
@@ -346,6 +358,36 @@ python3 benchmarks/memconflict/longmemeval.py --questions 5
 The same four arms run here as in MemConflict. Default is 5 of 500 questions;
 each question carries a ~50-session haystack, so full runs are expensive and
 bounded by ingest throughput.
+
+---
+
+## MemoryArena, preregistered, not yet run
+
+**Paper:** [MemoryArena: Benchmarking Agent Memory in Interdependent
+Multi-Session Agentic Tasks](https://arxiv.org/abs/2602.16313)
+(arXiv:2602.16313)
+**Upstream code:** <https://github.com/ZexueHe/MemoryArena>, pinned at
+`6cd9de14b71915e39ac742a20dc33785e14b6aab`
+**Harness:** `benchmarks/memoryarena/`
+**Protocol:** [`benchmarks/MEMORYARENA-PREREGISTRATION.md`](benchmarks/MEMORYARENA-PREREGISTRATION.md)
+
+MemoryArena scores memory inside a Memory-Agent-Environment loop: later
+subtasks depend on what the agent learned earlier, so the metric is whether
+retrieval changed a decision, not whether a fact could be found. That is the
+question Vestige exists to answer, which makes it the first standard benchmark
+we fill in.
+
+**There is no Vestige number on MemoryArena.** What exists is the
+preregistration: two formal-reasoning families (40 and 20 tasks), five arms
+that all run every time (a no-memory floor, upstream's BM25 and embedding RAG,
+upstream's long-context baseline, Vestige), Progress Score as the primary
+metric, and one decision rule, a paired exact sign test against BM25 at alpha
+0.05, applied by an analysis script written before any data. The adapter that
+presents a live `vestige-mcp` to upstream's memory interface ships with a smoke
+test against the real binary (round trip, per-task isolation, real vectors,
+long LaTeX prompts). When a run happens, its transcripts, sidecar log and
+manifest are checked in under `benchmarks/memoryarena/results/` and a README
+row appears. Not before, and never next to the paper's own table.
 
 ---
 

@@ -1,0 +1,1 @@
+var e=new Set([`MemoryCreated`,`MemoryUpdated`,`MemoryDeleted`,`MemoryPromoted`,`MemoryDemoted`,`MemorySuppressed`,`MemoryUnsuppressed`,`ConsolidationCompleted`,`DreamCompleted`]),t=new Set([`BackfillFired`,`CausalReceipt`]);function n(t){return e.has(t.type)}function r(e){return t.has(e.type)}export{n,r as t};

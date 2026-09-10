@@ -29,7 +29,7 @@ const archStr = ARCH_MAP[ARCH];
 
 if (!platformStr || !archStr) {
   console.error(`Unsupported platform: ${PLATFORM}-${ARCH}`);
-  console.error('Supported release assets: macOS x64/arm64, Linux x64, Windows x64');
+  console.error('Supported release assets: macOS x64/arm64, Linux x64/arm64, Windows x64');
   process.exit(1);
 }
 
@@ -38,6 +38,7 @@ const SUPPORTED_TARGETS = new Set([
   'aarch64-apple-darwin',
   'x86_64-apple-darwin',
   'x86_64-unknown-linux-gnu',
+  'aarch64-unknown-linux-gnu',
   'x86_64-pc-windows-msvc',
 ]);
 if (!SUPPORTED_TARGETS.has(target)) {

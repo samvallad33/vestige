@@ -1,0 +1,47 @@
+name: v3 contracts
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  python-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install ./integrations/python
+      - run: python -m unittest discover -s integrations/python/tests -v
+      - run: python -m unittest discover -s examples/python/tests -v
+      - run: python -m unittest discover -s benchmarks/task-cost/tests -v
+      - run: python benchmarks/task-cost/developer_suite.py --self-test
+  real-stdio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cargo build -p vestige-mcp --bin vestige-mcp
+      - run: python -m pip install ./integrations/python
+      - run: python scripts/test-tool-frontier.py --output tool-frontier.json
+      - run: python scripts/test-context-evidence.py
+      - run: python scripts/test-runtime-integration.py --binary target/debug/vestige-mcp --output runtime-integration.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v3-stdio-evidence
+          path: |
+            tool-frontier.json
+            runtime-integration.json

@@ -25,7 +25,7 @@ use vestige_core::neuroscience::active_forgetting::{ActiveForgettingSystem, DEFA
 pub fn schema() -> Value {
     json!({
         "type": "object",
-        "description": "Top-down suppression (Anderson 2025 SIF, Davis Rac1): the memory persists but is inhibited from retrieval and decays faster. Each call compounds. A background worker spreads accelerated decay to co-activated neighbours over 72 hours. Reversible within 24 hours via reverse=true.",
+        "description": "Top-down suppression (Anderson 2025 SIF, Davis Rac1): the memory persists but is inhibited from retrieval and decays faster. Each call compounds. A background worker spreads accelerated decay to co-activated neighbours over 72 hours. Local state is reversible within 24 hours when its snapshot still matches. Journaled cascade effects are reversed atomically when neighbor state still matches.",
         "properties": {
             "id": {
                 "type": "string",
@@ -33,12 +33,12 @@ pub fn schema() -> Value {
             },
             "reason": {
                 "type": "string",
-                "description": "Optional free-form note explaining why this memory is being suppressed. Logged for audit."
+                "description": "Optional note on why; logged."
             },
             "reverse": {
                 "type": "boolean",
                 "default": false,
-                "description": "If true, reverse a previous suppression. Only works within the 24-hour labile window."
+                "description": "If true, reverse a previous suppression. Requires a matching snapshot within the 24-hour labile window; later state changes and legacy suppressions need review. Includes journaled neighbor cascades when their state still matches."
             }
         },
         "required": ["id"]
@@ -82,6 +82,9 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
                     "id": args.id,
                     "suppressionCount": node.suppression_count,
                     "stillSuppressed": still_suppressed,
+                    "reversalScope": "local_state_and_journaled_cascades",
+                    "journaledCascadeReversal": "atomic",
+                    "unrecordedEffectsReversed": false,
                     "retentionStrength": node.retention_strength,
                     "retrievalStrength": node.retrieval_strength,
                     "stability": node.stability,
@@ -91,7 +94,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
                             node.suppression_count
                         )
                     } else {
-                        "Suppression fully reversed. Memory is no longer inhibited.".to_string()
+                        "Local suppression reversed. Journaled cascade effects are reversed atomically when neighbor state still matches.".to_string()
                     },
                 }))
             }

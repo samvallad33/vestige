@@ -1,0 +1,1 @@
+import{J as e,S as t,j as n,k as r,mt as i}from"../chunks/Cmba2AGc.js";import"../chunks/xihTtKlq.js";var a=n(`<div class="relative h-[100dvh] w-full overflow-hidden"><!></div>`);function o(n,o){var s=a(),c=e(s);t(c,()=>o.children),i(s),r(n,s)}export{o as component};

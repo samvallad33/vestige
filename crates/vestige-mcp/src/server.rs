@@ -38,11 +38,10 @@ use vestige_core::{OutputConfig, Storage, VestigeConfig};
 /// Anything other than `full` falls back to minimal.
 fn build_instructions() -> String {
     let mode = std::env::var("VESTIGE_SYSTEM_PROMPT_MODE").unwrap_or_default();
-    if mode.eq_ignore_ascii_case("full") {
+    let mut instructions = if mode.eq_ignore_ascii_case("full") {
         "Vestige is your long-term cognitive memory AND reasoning engine, not a RAG database. \
          Every retrieval MUST be composed into a recommendation, never summarized.\
-         \n\nCOMPOSITION MANDATE: When you receive memories from search, deep_reference, \
-         cross_reference, or explore_connections, your response MUST follow this shape. \
+         \n\nCOMPOSITION MANDATE: When you receive memories from recall or graph, your response MUST follow this shape. \
          (a) Composing: [memory IDs], followed by a brief composition rationale \
          about how the memories relate, NOT a restatement of their contents). \
          (b) Never-composed detected: list combinations of retrieved memories that share \
@@ -51,7 +50,7 @@ fn build_instructions() -> String {
          If your draft begins 'Memory A says X. Memory B says Y.' STOP and rewrite.\
          \n\nBLOCKING PHRASE: If retrieved high-trust memories (retention > 0.7, reps > 0) \
          contradict what you were about to say, start your response with 'Vestige is blocking this:' \
-         and surface the contradiction verbatim before proceeding. FSRS trust overrides fresh guesses.\
+         and surface the contradiction before proceeding. FSRS scores reflect memory history, not truth; verify against current evidence.\
          \n\nFEEDBACK: If the user confirms a memory was helpful, call memory(action='promote'). \
          If they correct it, call memory(action='demote'). Do not ask permission, just act."
             .to_string()
@@ -61,7 +60,9 @@ fn build_instructions() -> String {
          On user feedback, call memory(action='promote') for helpful retrievals and \
          memory(action='demote') for wrong ones — do not ask permission, just act."
             .to_string()
-    }
+    };
+    instructions.push_str("\nDiscover all available actions with memory_status(view='tools'); pass tool='<name>' for its exact schema. Choose calls that serve the task; no tool-call quota is required.");
+    instructions
 }
 
 fn supported_protocol_versions() -> &'static [&'static str] {
@@ -126,11 +127,27 @@ fn trace_enabled() -> bool {
         .get_or_init(|| parse_trace_enabled(std::env::var("VESTIGE_TRACE").ok().as_deref()))
 }
 
+fn log_level_rank(level: &str) -> Option<usize> {
+    [
+        "debug",
+        "info",
+        "notice",
+        "warning",
+        "error",
+        "critical",
+        "alert",
+        "emergency",
+    ]
+    .iter()
+    .position(|item| *item == level)
+}
+
 /// MCP Server implementation
 pub struct McpServer {
     storage: Arc<Storage>,
     cognitive: Arc<Mutex<CognitiveEngine>>,
     initialized: bool,
+    logging_level: usize,
     /// Tool call counter for inline consolidation trigger (every 100 calls)
     tool_call_count: AtomicU64,
     /// Optional event broadcast channel for dashboard real-time updates.
@@ -157,6 +174,7 @@ impl McpServer {
             storage,
             cognitive,
             initialized: false,
+            logging_level: 1,
             tool_call_count: AtomicU64::new(0),
             event_tx: None,
             output_config,
@@ -174,6 +192,7 @@ impl McpServer {
             storage,
             cognitive,
             initialized: false,
+            logging_level: 1,
             tool_call_count: AtomicU64::new(0),
             event_tx: Some(event_tx),
             output_config,
@@ -236,6 +255,25 @@ impl McpServer {
             "resources/read" => self.handle_resources_read(request.params).await,
             "server/discover" => self.handle_server_discover(),
             "ping" => Ok(serde_json::json!({})),
+            // The server only emits info and warning messages about its own
+            // startup (model downloads), so any requested level is accepted.
+            "logging/setLevel" => {
+                match request
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("level"))
+                    .and_then(|v| v.as_str())
+                    .and_then(log_level_rank)
+                {
+                    Some(level) => {
+                        self.logging_level = level;
+                        Ok(serde_json::json!({}))
+                    }
+                    None => Err(JsonRpcError::invalid_params(
+                        "level must be debug, info, notice, warning, error, critical, alert, or emergency",
+                    )),
+                }
+            }
             method => {
                 warn!("Unknown method: {}", method);
                 Err(JsonRpcError::method_not_found())
@@ -284,6 +322,7 @@ impl McpServer {
             "capabilities": {
                 "tools": { "listChanged": false },
                 "resources": { "listChanged": false },
+                "logging": {},
             },
             "instructions": build_instructions(),
             "ttlMs": DISCOVER_TTL_MS,
@@ -353,11 +392,26 @@ impl McpServer {
                     map
                 }),
                 prompts: None,
+                logging: Some(HashMap::new()),
             },
             instructions: Some(build_instructions()),
         };
 
         serde_json::to_value(result).map_err(|e| JsonRpcError::internal_error(&e.to_string()))
+    }
+
+    /// Whether the client has completed the `initialize` handshake. The stdio
+    /// transport holds server-initiated notifications until then, so nothing
+    /// precedes the initialize response on the wire.
+    pub fn logging_allows(&self, notification: &serde_json::Value) -> bool {
+        notification["params"]["level"]
+            .as_str()
+            .and_then(log_level_rank)
+            .is_some_and(|level| level >= self.logging_level)
+    }
+
+    pub fn is_initialized(&self) -> bool {
+        self.initialized
     }
 
     /// Handle tools/list request
@@ -381,12 +435,12 @@ impl McpServer {
                 name: "recall".to_string(),
                 title: Some("Recall".to_string()),
                 annotations: Some(ToolAnnotations {
-                    read_only_hint: true,
+                    read_only_hint: false,
                     destructive_hint: false,
-                    idempotent_hint: true,
+                    idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid keyword and semantic search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradictions; needs 'query', use when accuracy matters. 'contradictions': disagreement pairs for a 'topic'. Reading never changes strength; promote what helped via memory.".to_string()),
+description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid keyword and semantic search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradictions; needs 'query', use when accuracy matters; its text is assembled from computed values, not written by a model. 'contradictions': disagreement pairs for a 'topic'. Reason mode records composition evidence; retrieval never changes strength; promote what helped via memory.".to_string()),
                 input_schema: tools::recall::schema(),
                 ..Default::default()
             },
@@ -394,12 +448,12 @@ description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid ke
                 name: "receipt".to_string(),
                 title: Some("Receipt".to_string()),
                 annotations: Some(ToolAnnotations {
-                    read_only_hint: true,
+                    read_only_hint: false,
                     destructive_hint: false,
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Inspect a persisted retrieval receipt ('get') or run a controlled ablation of its frozen evidence pack ('replay', which withholds named slots without rerunning search, calling a model, or claiming causality).".to_string()),
+description: Some("Inspect a persisted retrieval receipt ('get') or ablate its frozen evidence pack ('replay'): named slots withheld, no rerun, no model, no causal claim.".to_string()),
                 input_schema: tools::receipt::schema(),
                 ..Default::default()
             },
@@ -415,7 +469,7 @@ description: Some("Inspect a persisted retrieval receipt ('get') or run a contro
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Manage one memory. Actions: 'get', 'get_batch' (ids), 'state' (accessibility), 'promote' and 'demote' (adjust retrieval strength; demote never deletes), 'edit' (replace content, keep FSRS state), 'purge' (remove content and embeddings for good; confirm=true). 'delete' is an alias for purge.".to_string()),
+description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (keeps FSRS state), 'purge' (for good; confirm=true). 'delete' aliases purge.".to_string()),
                 input_schema: tools::memory_unified::schema(),
                 ..Default::default()
             },
@@ -424,12 +478,30 @@ description: Some("Manage one memory. Actions: 'get', 'get_batch' (ids), 'state'
                 title: Some("Codebase".to_string()),
                 annotations: Some(ToolAnnotations {
                     read_only_hint: false,
-                    destructive_hint: false,
+                    destructive_hint: true,
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions, each marked current or stale), 'verify' (re-check anchored code memories against the working tree).".to_string()),
+description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions, each marked current or stale), 'verify' (check a bounded set of anchors), 'reanchor' (replace reviewed source evidence for an existing memory).".to_string()),
                 input_schema: tools::codebase_unified::schema(),
+                ..Default::default()
+            },
+            // ================================================================
+            // PROJECT: the durable subset of a scope rendered into the rule
+            // files other clients already read. Preview by default; write
+            // replaces only the fenced region and needs confirm=true.
+            // ================================================================
+            ToolDescription {
+                name: "project".to_string(),
+                title: Some("Project".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: false,
+                    idempotent_hint: true,
+                    open_world_hint: false,
+                }),
+                description: Some("Project the durable subset of a scope (decisions, patterns, rule-tagged facts) into a fenced region of CLAUDE.md or MEMORY.md, a memory id on every line. 'preview' (default) shows the diff; 'write' needs confirm=true and replaces only the fence, never the rest of the file.".to_string()),
+                input_schema: tools::project::schema(),
                 ..Default::default()
             },
             ToolDescription {
@@ -441,8 +513,8 @@ description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision'
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Intentions. Actions: 'set', 'check' (find triggered), 'update' (complete, snooze, cancel), 'list'.".to_string()),
-                input_schema: tools::intention_unified::schema(),
+description: Some("Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph' evaluates evidence-aware plans, premises, attention, completion and replay through a nested command.".to_string()),
+                input_schema: tools::intention_graph::schema(),
                 ..Default::default()
             },
             // ================================================================
@@ -457,7 +529,7 @@ description: Some("Intentions. Actions: 'set', 'check' (find triggered), 'update
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Save to memory with Prediction Error Gating: 'content' is created, merged into a similar memory, or supersedes an outdated one. Batch mode: 'items' (max 20) for session-end saves, each through the full pipeline.".to_string()),
+description: Some("Save to memory through Prediction Error Gating: 'content' is created, merged into a similar memory, or supersedes an outdated one. Batch: 'items' (max 20).".to_string()),
                 input_schema: tools::smart_ingest::schema(),
                 ..Default::default()
             },
@@ -473,7 +545,7 @@ description: Some("Save to memory with Prediction Error Gating: 'content' is cre
                     idempotent_hint: true,
                     open_world_hint: true,
                 }),
-description: Some("Index an external system into local, searchable memories that cite the canonical record. source='github' (repo='owner/name', GITHUB_TOKEN env) or 'redmine' (project, REDMINE_URL and REDMINE_API_KEY env). Re-runs update changed items; reconcile=true tombstones items removed upstream.".to_string()),
+description: Some("Index an external system into local memories that cite the source. source='github' (repo, GITHUB_TOKEN) or 'redmine' (project, REDMINE_URL, REDMINE_API_KEY). Re-runs update; reconcile=true tombstones removals.".to_string()),
                 input_schema: tools::source_sync::schema(),
                 ..Default::default()
             },
@@ -492,7 +564,7 @@ description: Some("Index an external system into local, searchable memories that
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Store status. view 'health' (default: stats, decay preview, module health, warnings), 'retention' (average, distribution, trend), 'timeline' (memories by day), 'changelog' (state-change audit trail), 'stats' (hygiene counts by type, tag, age, retention, lifecycle).".to_string()),
+description: Some("Store status. view 'health' (default: stats, decay preview, module health, warnings), 'retention' (average, distribution, trend), 'timeline' (memories by day), 'changelog' (state-change audit trail), 'stats' (hygiene counts by type, tag, age, retention, lifecycle), 'tools' (all advertised tools and actions; pass tool for its full input schema).".to_string()),
                 input_schema: tools::memory_status::schema(),
                 ..Default::default()
             },
@@ -510,7 +582,7 @@ description: Some("Store status. view 'health' (default: stats, decay preview, m
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Lifecycle maintenance. Actions: 'consolidate' (decay and embedding cycle), 'dream' (replay memories into insights and connections), 'gc' (collect stale memories; dry_run=true by default), 'importance_score' (score 'content'), 'backup', 'export' (JSON or JSONL with filters), 'restore' (from 'path').".to_string()),
+description: Some("Lifecycle: 'consolidate', 'dream', 'gc' (dry_run default true), 'importance_score', 'backup', 'export', 'restore'.".to_string()),
                 input_schema: tools::maintain::schema(),
                 ..Default::default()
             },
@@ -529,7 +601,7 @@ description: Some("Lifecycle maintenance. Actions: 'consolidate' (decay and embe
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Duplicates, merges, supersession, and exact tag maintenance. Actions: 'scan' (default, read-only: duplicate clusters and merge candidates), 'plan_merge' (member_ids to plan_id), 'plan_supersede' (old_id, new_id to plan_id), 'apply' (run a plan_id; weak matches need confirm=true), 'undo' (reverse an operation_id, or omit to list the reflog), 'tag_rename' and 'tag_merge' (preview-token gated), 'protect' (pin against auto-merge), 'policy' (get or set match thresholds). Merged memories are invalidated, never deleted.".to_string()),
+description: Some("Duplicates, merges, supersession, and exact tag maintenance. Actions: 'scan' (default, read-only: duplicate clusters and merge candidates), 'plan_merge' (member_ids to plan_id), 'plan_supersede' (old_id, new_id to plan_id), 'apply' (run a plan_id; confirm=true is required unless the current policy explicitly allows auto-applying strong matches), 'undo' (reverse an operation_id, or omit to list the reflog), 'tag_rename' and 'tag_merge' (preview-token gated), 'protect' (pin against auto-merge), 'policy' (get or set match thresholds). Merged memories are invalidated, never deleted.".to_string()),
                 input_schema: tools::dedup::unified_schema(),
                 ..Default::default()
             },
@@ -552,7 +624,7 @@ description: Some("Duplicates, merges, supersession, and exact tag maintenance. 
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Memory graph. Actions: 'chain' (path from, to), 'associations' (spreading activation from 'from'), 'bridges' (connectors between from and to), 'predict' (what you will need next, from 'context'), 'memory_graph' (subgraph around center_id or query), 'recent', 'get', 'memory', 'neighbors', 'never_composed', 'bounty_mode' (composition topology), 'label' (record an outcome; the only write).".to_string()),
+description: Some("Memory graph: 'chain', 'associations', 'bridges', 'predict', 'memory_graph', composition topology ('recent', 'get', 'memory', 'neighbors', 'never_composed', 'bounty_mode'), 'label' (the only write).".to_string()),
                 input_schema: tools::graph_unified::schema(),
                 ..Default::default()
             },
@@ -572,7 +644,7 @@ description: Some("Memory graph. Actions: 'chain' (path from, to), 'associations
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Start-of-session context in one call: relevant memories, open intentions, store status, predictions, and codebase context under one token budget. Replaces separate recall, intention, memory_status, and codebase calls.".to_string()),
+description: Some("Start-of-session context in one call: relevant memories, open intentions, status, predictions, codebase context, under one token budget.".to_string()),
                 input_schema: tools::session_context::schema(),
                 ..Default::default()
             },
@@ -596,10 +668,10 @@ description: Some("Start-of-session context in one call: relevant memories, open
                 annotations: Some(ToolAnnotations {
                     read_only_hint: false,
                     destructive_hint: false,
-                    idempotent_hint: true,
+                    idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Inhibit a memory without deleting it (top-down suppression, Anderson 2025 and Davis Rac1): it drops out of retrieval and decays faster, each call compounds, and a background worker spreads accelerated decay to co-activated neighbours. reverse=true undoes it within 24 hours.".to_string()),
+description: Some("Inhibit a memory without deleting it: out of retrieval, faster decay, compounding per call, neighbours affected over 72 hours. reverse=true undoes it within 24 hours.".to_string()),
                 input_schema: tools::suppress::schema(),
                 ..Default::default()
             },
@@ -619,7 +691,7 @@ description: Some("Inhibit a memory without deleting it (top-down suppression, A
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Memory with hindsight. After a failure is recorded, reach backward in time and promote the quiet earlier memory that caused it (same file, env var, or service), which similarity search cannot surface because a root cause rarely resembles the bug. Backward-only by construction (Cai 2024). Pass failure_id (defaults to the latest failure), manual=true to force, promote=false for a dry run.".to_string()),
+description: Some("Investigate a recorded failure using earlier memories sharing entities. Results are hypotheses, not proven causes. Default promote=false previews without graph or strength changes; explicit promote=true records candidate edges and reinforces eligible memories after review. scope defaults to user; failure_id defaults to the latest failure in that scope.".to_string()),
                 input_schema: tools::backfill::schema(),
                 ..Default::default()
             },
@@ -833,6 +905,7 @@ description: Some("Memory with hindsight. After a failure is recorded, reach bac
                 tools::memory_unified::execute(&self.storage, &self.cognitive, request.arguments)
                     .await
             }
+            "project" => tools::project::execute(&self.storage, request.arguments).await,
             "codebase" => {
                 tools::codebase_unified::execute(
                     &self.storage,
@@ -843,7 +916,7 @@ description: Some("Memory with hindsight. After a failure is recorded, reach bac
                 .await
             }
             "intention" => {
-                tools::intention_unified::execute(&self.storage, &self.cognitive, request.arguments)
+                tools::intention_graph::execute(&self.storage, &self.cognitive, request.arguments)
                     .await
             }
 
@@ -947,6 +1020,17 @@ description: Some("Memory with hindsight. After a failure is recorded, reach bac
             // MEMORY STATUS — unified status/temporal tool (v2.2)
             // view = health (default) | retention | timeline | changelog
             // ================================================================
+            "memory_status"
+                if request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("view"))
+                    .and_then(|v| v.as_str())
+                    == Some("tools") =>
+            {
+                let catalog = self.handle_tools_list(None).await?;
+                tools::memory_status::tool_guide(&catalog, request.arguments.as_ref().unwrap())
+            }
             "memory_status" => {
                 tools::memory_status::execute(
                     &self.storage,
@@ -1583,6 +1667,27 @@ description: Some("Memory with hindsight. After a failure is recorded, reach bac
                             parts.join("; ")
                         )),
                     );
+                }
+            }
+            // Reason mode budgets complete evidence groups before recording
+            // the retrieval receipt. Account for the actual attached metadata
+            // here; a caller-supplied trace ID may be arbitrarily long, so omit
+            // that optional echo if necessary (the receipt keeps correlation).
+            if let Some(budget) = content.get("tokenBudgetLimit").and_then(|v| v.as_u64()) {
+                content["budgetUnit"] = serde_json::json!("utf8_bytes_div_4_ceiling");
+                for _ in 0..3 {
+                    let bytes = content.to_string().len();
+                    content["tokensUsed"] = serde_json::json!(bytes.div_ceil(4));
+                }
+                if content.to_string().len() > budget as usize * 4 {
+                    if let Some(object) = content.as_object_mut() {
+                        object.remove("runId");
+                        object.insert("runIdOmitted".into(), serde_json::json!(true));
+                    }
+                    for _ in 0..3 {
+                        let bytes = content.to_string().len();
+                        content["tokensUsed"] = serde_json::json!(bytes.div_ceil(4));
+                    }
                 }
             }
             // Emit after receipt attachment and gating so the dashboard sees the
@@ -2337,11 +2442,57 @@ mod tests {
         );
     }
 
+    /// A fresh store must accept sensitive context without an approval queue.
+    #[tokio::test]
+    async fn default_mode_keeps_sensitive_memory_available_without_approval() {
+        use vestige_core::MemoryPrStatus;
+
+        let (storage, _dir) = test_storage().await;
+        assert!(!storage.data_dir().join("review_mode.json").exists());
+
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "smart_ingest",
+                    "arguments": { "content": "User preference: use the security workflow before billing changes." }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none());
+
+        assert_eq!(
+            storage
+                .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+                .unwrap()
+                .len(),
+            0,
+            "Fast mode must never open a Memory PR"
+        );
+        let text = serde_json::to_string(&response.result).unwrap();
+        assert!(
+            !text.contains("memoryPrNotice"),
+            "Fast mode must not attach a gating notice: {text}"
+        );
+    }
+
     /// Deprecated aliases share the same destructive policy; otherwise an
     /// older MCP client could bypass the canonical `memory` pre-gate.
     #[tokio::test]
     async fn legacy_delete_knowledge_is_pre_gated_on_the_real_mcp_path() {
         let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"risk_gated"}"#,
+        )
+        .unwrap();
         let node = storage
             .ingest(vestige_core::IngestInput {
                 content: "Memory preserved through the legacy delete alias.".to_string(),
@@ -2403,6 +2554,11 @@ mod tests {
         use vestige_core::MemoryPrStatus;
 
         let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"risk_gated"}"#,
+        )
+        .unwrap();
         let node = storage
             .ingest(vestige_core::IngestInput {
                 content: "Memory that must survive pre-execution review.".to_string(),
@@ -2482,6 +2638,11 @@ mod tests {
         use vestige_core::MemoryPrStatus;
 
         let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"risk_gated"}"#,
+        )
+        .unwrap();
         let node = storage
             .ingest(vestige_core::IngestInput {
                 content: "Memory that must not be inhibited before review.".to_string(),
@@ -2641,38 +2802,33 @@ mod tests {
         );
     }
 
-    /// A corrupt or missing `review_mode.json` must never silently disable
-    /// gating: it falls back to the default RiskGated.
+    /// Defaults never create approval friction; explicit review settings survive restarts.
     #[tokio::test]
-    async fn review_mode_falls_back_to_risk_gated() {
+    async fn review_mode_defaults_to_automatic_and_preserves_explicit_settings() {
         let (storage, _dir) = test_storage().await;
         assert_eq!(
             crate::trace_recorder::read_review_mode(&storage),
-            vestige_core::ReviewMode::RiskGated,
-            "missing file defaults to RiskGated"
+            vestige_core::ReviewMode::Fast
         );
-
-        std::fs::write(
-            storage.data_dir().join("review_mode.json"),
-            "{ not valid json",
-        )
-        .unwrap();
-        assert_eq!(
-            crate::trace_recorder::read_review_mode(&storage),
-            vestige_core::ReviewMode::RiskGated,
-            "corrupt file defaults to RiskGated, never Fast"
-        );
-
-        std::fs::write(
-            storage.data_dir().join("review_mode.json"),
-            r#"{"mode":"fast"}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            crate::trace_recorder::read_review_mode(&storage),
+        for raw in ["{broken", r#"{}"#, r#"{"mode":5}"#, r#"{"mode":"typo"}"#] {
+            std::fs::write(storage.data_dir().join("review_mode.json"), raw).unwrap();
+            assert_eq!(
+                crate::trace_recorder::read_review_mode(&storage),
+                vestige_core::ReviewMode::Fast
+            );
+        }
+        for mode in [
             vestige_core::ReviewMode::Fast,
-            "a valid mode is honored"
-        );
+            vestige_core::ReviewMode::RiskGated,
+            vestige_core::ReviewMode::Paranoid,
+        ] {
+            std::fs::write(
+                storage.data_dir().join("review_mode.json"),
+                serde_json::json!({"mode": mode.as_str()}).to_string(),
+            )
+            .unwrap();
+            assert_eq!(crate::trace_recorder::read_review_mode(&storage), mode);
+        }
     }
 
     // ========================================================================
@@ -2969,6 +3125,105 @@ mod tests {
     // ========================================================================
 
     #[tokio::test]
+    async fn tool_guide_matches_live_catalog_and_rejects_hidden_names() {
+        let (mut server, _dir) = test_server().await;
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+        let catalog = server.handle_tools_list(None).await.unwrap();
+        let result = server
+            .handle_tools_call(Some(serde_json::json!({
+                "name": "memory_status", "arguments": {"view": "tools"}
+            })))
+            .await
+            .unwrap();
+        assert_ne!(result["isError"], true);
+        let guide = &result["structuredContent"];
+        assert_eq!(
+            guide["tools"].as_array().unwrap().len(),
+            catalog["tools"].as_array().unwrap().len()
+        );
+        for (entry, definition) in guide["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(catalog["tools"].as_array().unwrap())
+        {
+            assert_eq!(entry["name"], definition["name"]);
+            assert_eq!(entry["toolAnnotations"], definition["annotations"]);
+            assert!(entry.get("inputSchema").is_none());
+            for selector in ["action", "mode", "view"] {
+                if definition["inputSchema"]["properties"][selector]["enum"].is_array() {
+                    assert_eq!(
+                        entry["selectors"][selector]["values"],
+                        definition["inputSchema"]["properties"][selector]["enum"]
+                    );
+                }
+            }
+            let detail = server
+                .handle_tools_call(Some(serde_json::json!({
+                    "name": "memory_status", "arguments": {"view": "tools", "tool": entry["name"]}
+                })))
+                .await
+                .unwrap();
+            assert_ne!(detail["isError"], true);
+            assert_eq!(
+                detail["structuredContent"]["tools"][0]["inputSchema"],
+                definition["inputSchema"]
+            );
+        }
+        for invalid in [
+            serde_json::json!("search"),
+            serde_json::json!(""),
+            serde_json::json!(12),
+        ] {
+            let result = server
+                .handle_tools_call(Some(serde_json::json!({
+                    "name": "memory_status", "arguments": {"view": "tools", "tool": invalid}
+                })))
+                .await
+                .unwrap();
+            assert_eq!(result["isError"], true);
+        }
+    }
+
+    #[tokio::test]
+    async fn logging_capability_is_declared_and_set_level_is_accepted() {
+        let (mut server, _dir) = test_server().await;
+        let init = server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await
+            .unwrap();
+        let caps = init.result.unwrap()["capabilities"].clone();
+        assert!(caps["logging"].is_object(), "{caps}");
+        let set = server
+            .handle_request(make_request(
+                "logging/setLevel",
+                Some(serde_json::json!({ "level": "info" })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(set.result.unwrap(), serde_json::json!({}));
+        assert!(!server.logging_allows(&serde_json::json!({"params":{"level":"debug"}})));
+        assert!(server.logging_allows(&serde_json::json!({"params":{"level":"warning"}})));
+        let invalid = server
+            .handle_request(make_request(
+                "logging/setLevel",
+                Some(serde_json::json!({"level":"verbose"})),
+            ))
+            .await
+            .unwrap();
+        assert!(invalid.error.is_some());
+        assert_eq!(server.logging_level, 1);
+
+        let discover = server
+            .handle_request(make_request("server/discover", None))
+            .await
+            .unwrap();
+        assert!(discover.result.unwrap()["capabilities"]["logging"].is_object());
+    }
+
+    #[tokio::test]
     async fn test_tools_list_returns_all_tools() {
         let (mut server, _dir) = test_server().await;
 
@@ -2987,10 +3242,10 @@ mod tests {
         // dispatchable as hidden back-compat aliases but drop off the advertised list.
         assert_eq!(
             tools.len(),
-            14,
+            15,
             "Expected exactly 14 tools after v2.3 receipt replay integration \
              (12 consolidated: dedup + memory_status + graph + maintain + recall; \
-             session_context renamed) plus `receipt` and the flagship `backfill`"
+             session_context renamed) plus `receipt`, the flagship `backfill` and `project`"
         );
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -3032,11 +3287,13 @@ mod tests {
         }
         read_only.sort();
         destructive.sort();
+        assert_eq!(read_only, ["memory_status", "session_start"]);
+        // Reanchoring replaces existing evidence, so the mixed codebase tool
+        // must advertise its destructive action conservatively.
         assert_eq!(
-            read_only,
-            ["memory_status", "recall", "receipt", "session_start"]
+            destructive,
+            ["codebase", "dedup", "intention", "maintain", "memory"]
         );
-        assert_eq!(destructive, ["dedup", "intention", "maintain", "memory"]);
         assert_eq!(
             open_world,
             ["source_sync"],

@@ -75,20 +75,23 @@ These are read only by `vestige sync --cloud`. Leave them unset and Vestige stay
 
 ## Review Modes (Memory PR write gating)
 
-Vestige can hold risky memory writes for review instead of letting them land
-silently. Each held write is suppressed (excluded from normal retrieval) and
+Vestige applies memory writes automatically by default, without an approval
+step. Users who choose review can hold flagged writes. Each held write is suppressed (excluded from normal retrieval) and
 opens a **Memory PR** you decide in the dashboard (Memory PRs tab) or via
 `GET /api/memory-prs`.
 
 | Mode | Behavior |
 |------|----------|
-| `fast` | Never gate. Every write auto-commits. |
-| `risk_gated` | **Default.** Ordinary writes auto-commit; risky ones (contradicting high-trust memories, destructive ops, sensitive topics) open a Memory PR. A write counts as touching a sensitive topic when a tag names it, a credential-shaped value sits next to it, the write is short, the topic leads the text, or two distinct topics appear. One sensitive word buried in a long note is a mention, not a subject, and does not gate. |
-| `paranoid` | Gate every write. Nothing enters the brain without approval. |
+| `fast` | **Default (Automatic).** Every write auto-commits without approval. |
+| `risk_gated` | **Opt-in.** Ordinary writes auto-commit; risky ones (contradicting high-trust memories, destructive ops, sensitive topics) open a Memory PR. A write counts as touching a sensitive topic when a tag names it, a credential-shaped value sits next to it, the write is short, the topic leads the text, or two distinct topics appear. One sensitive word buried in a long note is a mention, not a subject, and does not gate. |
+| `paranoid` | **Opt-in.** Gate every write. Nothing enters the brain without approval. |
 
 The mode is stored in `<data_dir>/review_mode.json` and set from the dashboard
 (`POST /api/memory-prs/mode`). A missing or corrupt file falls back to
-`risk_gated` — a bad file can never silently disable gating.
+`fast`; malformed settings produce a warning. Invalid API mode names are rejected
+without changing the saved setting. Existing valid settings survive upgrades.
+Select **Automatic (default)** in Memory PRs to stop holding future writes; this
+does not apply historical pending proposals.
 
 When a normal risky write is gated, the tool response carries `memoryPrs` and a
 `memoryPrNotice` describing the quarantine. Confirmed purge/delete calls and
@@ -98,8 +101,8 @@ changing the memory. If the PR cannot be saved, the call fails closed.
 
 For a pending destructive PR, `forget` approves and executes the requested
 purge or suppression, `promote` keeps the memory unchanged, and `quarantine`
-keeps the row but suppresses it. `fast` remains the explicit direct-execution
-opt-out.
+keeps the row but suppresses it. `fast` is the default direct-execution mode. Purge still requires
+`confirm=true`; automatic memory writes do not remove that tool contract.
 
 > **Note:** `VESTIGE_TRACE=0` disables Black Box trace/receipt recording, but it
 > does not disable this pre-execution safety gate. Review mode, not tracing,

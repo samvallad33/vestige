@@ -39,17 +39,17 @@ pub fn schema() -> Value {
         "properties": {
             "content": {
                 "type": "string",
-                "description": "The content to remember. Will be compared against existing memories. (Single mode)"
+                "description": "What to remember; compared against existing memories (single mode)."
             },
             "node_type": {
                 "type": "string",
-                "description": "fact, concept, event, person, place, note, pattern, decision, or state. 'state' is a snapshot that rots (versions, progress, inventories): without validUntil it expires after VESTIGE_STATE_TTL_DAYS (default 30), then is downranked and marked currentlyValid=false, still auditable via validAt.",
+                "description": "fact, concept, event, person, place, note, pattern, decision, or state. 'state' snapshots expire after VESTIGE_STATE_TTL_DAYS (default 30) unless validUntil is set, then rank last with currentlyValid=false.",
                 "default": "fact"
             },
             "tags": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Tags for categorization. The response non-destructively suggests close existing tags in the same scope; suggestions are never auto-applied."
+                "description": "Tags. Close existing same-scope tags come back as suggestions, never auto-applied."
             },
             "source": {
                 "type": "string",
@@ -57,104 +57,97 @@ pub fn schema() -> Value {
             },
             "scope": {
                 "type": "string",
-                "description": "Project namespace for this memory. Defaults to 'user' for backward compatibility. Recall searches this namespace unless includeCrossScope=true."
+                "description": "Project namespace (default 'user'). Recall searches it unless includeCrossScope=true."
             },
             "validFrom": {
                 "type": "string",
-                "description": "When the fact becomes true (RFC3339 or YYYY-MM-DD). If omitted, one unambiguous 'as of YYYY-MM-DD' phrase in content is inferred and reported."
+                "description": "When the fact becomes true (RFC3339 or YYYY-MM-DD). Omitted: one unambiguous 'as of DATE' phrase is inferred."
             },
             "validUntil": {
                 "type": "string",
-                "description": "When this fact stops being true. Use RFC3339 or an exact YYYY-MM-DD date; must be after validFrom."
+                "description": "When the fact stops being true (RFC3339 or YYYY-MM-DD, after validFrom)."
             },
             "forceCreate": {
                 "type": "boolean",
-                "description": "Force creation of a new memory even if similar content exists",
+                "description": "Create even if similar content exists.",
                 "default": false
             },
             "allowSecrets": {
                 "type": "boolean",
-                "description": "Allow a detected credential to be stored for this single item. Dangerous: normally redact the value or store a secret-manager reference instead.",
+                "description": "Store a detected credential for this item. Dangerous; redact or store a reference instead.",
                 "default": false
             },
             "previewTagSuggestions": {
                 "type": "boolean",
-                "description": "Read-only preflight. Returns same-scope similar-tag suggestions and inferred validity without storing anything.",
+                "description": "Read-only preflight: tag suggestions and inferred validity, nothing stored.",
                 "default": false
             },
             "acceptedTagSuggestions": {
                 "type": "object",
                 "additionalProperties": { "type": "string" },
-                "description": "Accepted input-tag to existing-tag mappings from a preflight response, revalidated against current same-scope suggestions before ingest."
+                "description": "Accepted input-tag to existing-tag mappings from a preflight; revalidated before ingest."
             },
             "batchMergePolicy": {
                 "type": "string",
                 "enum": ["force_create", "smart"],
-                "description": "Batch only. 'force_create' (default) keeps caller-separated items separate; 'smart' allows Prediction Error Gating against existing memories.",
+                "description": "Batch only. 'force_create' (default) keeps items separate; 'smart' lets the gate merge.",
                 "default": "force_create"
             },
             "items": {
                 "type": "array",
-                "description": "Batch mode: up to 20 items to save, each force-created unless batchMergePolicy='smart'. Use at session end or before context compaction.",
+                "description": "Batch: up to 20 items with the same fields as single mode, each force-created unless batchMergePolicy='smart'. For session end or before compaction.",
                 "maxItems": 20,
                 "items": {
                     "type": "object",
                     "properties": {
                         "content": {
-                            "type": "string",
-                            "description": "The content to remember"
+                            "type": "string"
                         },
                         "tags": {
                             "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Tags for categorization. Similar existing same-scope tags are returned as non-mutating suggestions."
+                            "items": { "type": "string" }
                         },
                         "node_type": {
                             "type": "string",
-                            "description": "Type: fact, concept, event, person, place, note, pattern, decision",
                             "default": "fact"
                         },
                         "source": {
-                            "type": "string",
-                            "description": "Source reference"
+                            "type": "string"
                         },
                         "scope": {
-                            "type": "string",
-                            "description": "Project namespace for this item. Overrides the batch scope when supplied."
+                            "type": "string"
                         },
                         "validFrom": {
-                            "type": "string",
-                            "description": "When this item becomes true (RFC3339 or YYYY-MM-DD). If omitted, one unambiguous 'as of YYYY-MM-DD' phrase is inferred."
+                            "type": "string"
                         },
                         "validUntil": {
-                            "type": "string",
-                            "description": "When this item stops being true (RFC3339 or YYYY-MM-DD; after validFrom)."
+                            "type": "string"
                         },
                         "forceCreate": {
                             "type": "boolean",
-                            "description": "Force creation of this item even if similar content exists",
                             "default": false
                         },
                         "allowSecrets": {
                             "type": "boolean",
-                            "description": "Allow a detected credential for this item only. Defaults to false; do not use for ordinary session summaries.",
                             "default": false
                         },
                         "previewTagSuggestions": {
                             "type": "boolean",
-                            "description": "Read-only per-item tag/validity preflight; this item is not stored.",
                             "default": false
                         },
                         "acceptedTagSuggestions": {
                             "type": "object",
-                            "additionalProperties": { "type": "string" },
-                            "description": "Explicitly accepted tag mappings from a prior preflight."
+                            "additionalProperties": { "type": "string" }
                         }
                     },
                     "required": ["content"]
                 }
             }
-        }
+        },
+        "oneOf": [
+            {"required":["content"], "not":{"required":["items"]}},
+            {"required":["items"], "not":{"required":["content"]}}
+        ]
     })
 }
 
@@ -660,11 +653,130 @@ fn apply_accepted_tag_suggestions(
     Ok(rewritten)
 }
 
+/// Longest `mergePreview` shipped in a response. The full merged text is the
+/// memory now stored under `nodeId`, one `memory(action='get')` away.
+const MERGE_PREVIEW_CHARS: usize = 240;
+
 pub async fn execute(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: Option<Value>,
 ) -> Result<Value, String> {
+    let mut value = execute_verbose(storage, cognitive, args).await?;
+    lean_response(&mut value);
+    if let Some(results) = value.get_mut("results").and_then(Value::as_array_mut) {
+        for item in results {
+            lean_response(item);
+        }
+    }
+    Ok(value)
+}
+
+/// Trim one ingest response object to what the caller can act on.
+///
+/// On the real store an update decision echoed the full merged memory twice
+/// (`previousContent` and `mergePreview`), about 13 KB for one save, and every
+/// response carried a 311-byte tag-status block that said nothing. The rules:
+///
+/// - `mergePreview` is the content now stored under `nodeId`, so it becomes a
+///   240-character preview plus `mergedContentLength`; `memory(action='get')`
+///   has the rest.
+/// - `previousContent` stays whole. A merge replaces the old text and nothing
+///   else keeps a copy, so this field is the only way to recover it.
+/// - `tagSuggestionStatus` ships only when it has something to say (a status
+///   other than complete, a truncation, an ignored tag, or a suggestion), or
+///   when the response is a `previewTagSuggestions` preflight, whose contract
+///   in docs/MEMORY_HYGIENE.md includes it.
+/// - Empty suggestion lists, an empty `validity` block and null decision
+///   fields are dropped; absent and null read the same to every caller.
+fn lean_response(value: &mut Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "similarity",
+        "predictionError",
+        "supersededId",
+        "mergedFrom",
+        "mergePreview",
+        "previousContent",
+        "autoClosedUntil",
+    ] {
+        if obj.get(key).is_some_and(Value::is_null) {
+            obj.remove(key);
+        }
+    }
+    if let Some(preview) = obj.get("mergePreview").and_then(Value::as_str) {
+        let total = preview.chars().count();
+        if total > MERGE_PREVIEW_CHARS {
+            let short: String = preview.chars().take(MERGE_PREVIEW_CHARS).collect();
+            obj.insert("mergePreview".to_string(), Value::String(short));
+            obj.insert("mergePreviewTruncated".to_string(), Value::Bool(true));
+        }
+        obj.insert("mergedContentLength".to_string(), Value::from(total));
+    }
+    if obj
+        .get("tagSuggestions")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        obj.remove("tagSuggestions");
+    }
+    if obj
+        .get("acceptedTagSuggestions")
+        .and_then(Value::as_object)
+        .is_some_and(|m| m.is_empty())
+    {
+        obj.remove("acceptedTagSuggestions");
+    }
+    let is_preflight = obj.contains_key("wouldWrite");
+    let has_suggestions = obj.contains_key("tagSuggestions");
+    if !is_preflight
+        && !has_suggestions
+        && obj
+            .get("tagSuggestionStatus")
+            .is_some_and(tag_status_reports_nothing)
+    {
+        obj.remove("tagSuggestionStatus");
+    }
+    if obj.get("validity").is_some_and(validity_is_empty) {
+        obj.remove("validity");
+    }
+}
+
+fn tag_status_reports_nothing(status: &Value) -> bool {
+    status["status"] == "complete"
+        && status["requestedTagsTruncated"] == false
+        && [
+            "ignoredOverlongInputTags",
+            "ignoredOverlongVocabularyTags",
+            "ignoredSecretShapedVocabularyTags",
+        ]
+        .iter()
+        .all(|key| status[*key].as_u64() == Some(0))
+}
+
+fn validity_is_empty(validity: &Value) -> bool {
+    validity["source"] == "none"
+        && validity["inferredPhrase"].is_null()
+        && validity["validFrom"].is_null()
+        && validity["validUntil"].is_null()
+        && validity["ambiguousPhrases"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+}
+
+async fn execute_verbose(
+    storage: &Arc<Storage>,
+    cognitive: &Arc<Mutex<CognitiveEngine>>,
+    args: Option<Value>,
+) -> Result<Value, String> {
+    if args
+        .as_ref()
+        .is_some_and(|value| value.get("content").is_some() && value.get("items").is_some())
+    {
+        return Err("Provide either content or items, never both; no memories were stored".into());
+    }
     let args: SmartIngestArgs = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid arguments: {}", e))?,
         None => return Err("Missing arguments".to_string()),
@@ -816,6 +928,8 @@ pub async fn execute(
     // INGEST (storage lock)
     // ====================================================================
 
+    let hook_tags = input.tags.clone();
+
     // Check if force_create is enabled
     if args.force_create.unwrap_or(false) {
         let node = storage
@@ -837,7 +951,9 @@ pub async fn execute(
             importance_snapshot.clone(),
         );
 
-        return Ok(serde_json::json!({
+        let failure_hooks =
+            run_failure_hooks(storage, &node_id, &node_content, &hook_tags, &scope).await;
+        let mut response = serde_json::json!({
             "success": true,
             "decision": "create",
             "nodeId": node_id,
@@ -852,7 +968,9 @@ pub async fn execute(
             "tagSuggestions": tag_suggestions.suggestions,
             "tagSuggestionStatus": tag_suggestions.status,
             "acceptedTagSuggestions": accepted_tag_suggestions,
-        }));
+        });
+        attach_failure_hooks(&mut response, failure_hooks);
+        return Ok(response);
     }
 
     // Use smart ingest with prediction error gating
@@ -891,7 +1009,8 @@ pub async fn execute(
             importance_snapshot.clone(),
         );
 
-        let failure_hooks = run_failure_hooks(storage, &node_id, &node_content, &hook_tags).await;
+        let failure_hooks =
+            run_failure_hooks(storage, &node_id, &node_content, &hook_tags, &scope).await;
         let mut response = serde_json::json!({
             "success": true,
             "decision": result.decision,
@@ -924,6 +1043,9 @@ pub async fn execute(
                 _ => "Memory processed successfully"
             }
         });
+        if !has_embedding && let Some(warming) = super::warming::embedding_warming(storage) {
+            response["warming"] = warming;
+        }
         attach_failure_hooks(&mut response, failure_hooks);
         Ok(response)
     }
@@ -947,7 +1069,8 @@ pub async fn execute(
             importance_snapshot,
         );
 
-        let failure_hooks = run_failure_hooks(storage, &node_id, &node_content, &hook_tags).await;
+        let failure_hooks =
+            run_failure_hooks(storage, &node_id, &node_content, &hook_tags, &scope).await;
         let mut response = serde_json::json!({
             "success": true,
             "decision": "create",
@@ -1035,6 +1158,7 @@ async fn run_failure_hooks(
     node_id: &str,
     content: &str,
     tags: &[String],
+    scope: &str,
 ) -> Option<Value> {
     if !vestige_core::advanced::retroactive_backfill::looks_like_failure(content, tags) {
         return None;
@@ -1054,21 +1178,33 @@ async fn run_failure_hooks(
         }
     }
     if env_flag_enabled("VESTIGE_BACKFILL_AUTOFIRE") {
-        match super::backfill::execute(storage, Some(serde_json::json!({ "failure_id": node_id })))
-            .await
+        match super::backfill::execute(
+            storage,
+            Some(serde_json::json!({ "failure_id": node_id, "scope": scope, "promote": false })),
+        )
+        .await
         {
             Ok(result) => {
                 let promoted = result
-                    .get("promoted")
+                    .get("causes")
                     .and_then(Value::as_array)
-                    .map(|causes| causes.iter().filter(|c| c.get("promoted") == Some(&Value::Bool(true))).count())
+                    .map(|causes| {
+                        causes
+                            .iter()
+                            .filter(|c| c.get("promoted") == Some(&Value::Bool(true)))
+                            .count()
+                    })
                     .unwrap_or(0);
                 hooks.insert(
                     "backfill".to_string(),
                     serde_json::json!({
                         "triggered": result.get("triggered").cloned().unwrap_or(Value::Bool(false)),
                         "causesPromoted": promoted,
-                        "receiptId": result.get("receipt_id").cloned().unwrap_or(Value::Null),
+                        "candidatesFound": result.get("causes").and_then(Value::as_array).map_or(0, Vec::len),
+                        "preview": true,
+                        "scope": scope,
+                        "evidenceStatus": "hypothesis",
+                        "causalityVerified": false,
                     }),
                 );
             }
@@ -1440,6 +1576,10 @@ async fn execute_batch(
     Ok(serde_json::json!({
         "success": errors == 0,
         "mode": "batch",
+        "atomic": false,
+        "batchOutcome": if errors > 0 {
+            if created + updated > 0 { "partial" } else { "failed" }
+        } else if created + updated == 0 { "no_changes" } else { "applied" },
         "batchMergePolicy": batch_merge_policy,
         "summary": {
             "total": results.len(),
@@ -1680,6 +1820,108 @@ fn dominant_importance_event(snapshot: &SynapticSignalSnapshot) -> (&'static str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lean_response_drops_what_says_nothing_and_keeps_what_matters() {
+        let mut create = serde_json::json!({
+            "success": true, "decision": "create", "nodeId": "n1", "scope": "user",
+            "similarity": null, "predictionError": 1.0, "supersededId": null,
+            "previousContent": null, "mergedFrom": null, "mergePreview": null,
+            "autoClosedUntil": null,
+            "tagSuggestions": [], "acceptedTagSuggestions": {},
+            "tagSuggestionStatus": {
+                "status": "complete", "scope": "user", "vocabularyScanned": true,
+                "vocabularyCount": 12, "maximumVocabulary": 10000,
+                "requestedTagsTruncated": false, "ignoredOverlongInputTags": 0,
+                "ignoredOverlongVocabularyTags": 0, "ignoredSecretShapedVocabularyTags": 0,
+                "unicodeNormalization": "NFKC plus Unicode lowercase"
+            },
+            "validity": { "validFrom": null, "validUntil": null, "source": "none",
+                          "inferredPhrase": null, "ambiguousPhrases": [] }
+        });
+        super::lean_response(&mut create);
+        for gone in [
+            "similarity",
+            "supersededId",
+            "previousContent",
+            "mergedFrom",
+            "mergePreview",
+            "autoClosedUntil",
+            "tagSuggestions",
+            "acceptedTagSuggestions",
+            "tagSuggestionStatus",
+            "validity",
+        ] {
+            assert!(
+                create.get(gone).is_none(),
+                "{gone} should be dropped: {create}"
+            );
+        }
+        assert_eq!(create["predictionError"], 1.0);
+        assert_eq!(create["nodeId"], "n1");
+    }
+
+    #[test]
+    fn lean_response_previews_the_merge_but_keeps_the_replaced_text_whole() {
+        let previous = "x".repeat(3_000);
+        let merged = "y".repeat(3_000);
+        let mut update = serde_json::json!({
+            "decision": "update", "nodeId": "n1",
+            "previousContent": previous, "mergePreview": merged,
+        });
+        super::lean_response(&mut update);
+        assert_eq!(update["previousContent"].as_str().unwrap().len(), 3_000);
+        assert_eq!(
+            update["mergePreview"].as_str().unwrap().chars().count(),
+            240
+        );
+        assert_eq!(update["mergePreviewTruncated"], true);
+        assert_eq!(update["mergedContentLength"], 3_000);
+    }
+
+    #[test]
+    fn lean_response_keeps_a_tag_status_that_reports_something_and_every_preflight() {
+        let mut truncated = serde_json::json!({
+            "decision": "create",
+            "tagSuggestionStatus": {
+                "status": "complete", "requestedTagsTruncated": true,
+                "ignoredOverlongInputTags": 0, "ignoredOverlongVocabularyTags": 0,
+                "ignoredSecretShapedVocabularyTags": 0
+            }
+        });
+        super::lean_response(&mut truncated);
+        assert!(truncated.get("tagSuggestionStatus").is_some());
+
+        let mut unavailable = serde_json::json!({
+            "decision": "create",
+            "tagSuggestionStatus": { "status": "unavailable", "requestedTagsTruncated": false,
+                "ignoredOverlongInputTags": 0, "ignoredOverlongVocabularyTags": 0,
+                "ignoredSecretShapedVocabularyTags": 0 }
+        });
+        super::lean_response(&mut unavailable);
+        assert!(unavailable.get("tagSuggestionStatus").is_some());
+
+        let mut preflight = serde_json::json!({
+            "wouldWrite": false, "tagSuggestions": [],
+            "tagSuggestionStatus": { "status": "complete", "requestedTagsTruncated": false,
+                "ignoredOverlongInputTags": 0, "ignoredOverlongVocabularyTags": 0,
+                "ignoredSecretShapedVocabularyTags": 0 }
+        });
+        super::lean_response(&mut preflight);
+        assert!(
+            preflight.get("tagSuggestionStatus").is_some(),
+            "{preflight}"
+        );
+
+        let mut inferred = serde_json::json!({
+            "decision": "create",
+            "validity": { "validFrom": "2026-09-01T00:00:00Z", "validUntil": null,
+                          "source": "inferred", "inferredPhrase": "as of 2026-09-01",
+                          "ambiguousPhrases": [] }
+        });
+        super::lean_response(&mut inferred);
+        assert!(inferred.get("validity").is_some());
+    }
+
     #[test]
     fn failure_hook_levers_parse_as_documented() {
         use super::{flag_enabled_from, flag_opt_in_from};
@@ -3466,5 +3708,25 @@ mod tests {
         let result = execute(&storage, &test_cognitive(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("content"));
+    }
+    #[tokio::test]
+    async fn project_failure_hook_preserves_scope_and_previews() {
+        let (storage, _dir) = test_storage().await;
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "The deployment failed because the database connection timed out.",
+                "tags": ["failure"], "scope": "project-hook", "forceCreate": true
+            })),
+        )
+        .await
+        .unwrap();
+        let hook = &result["failureHooks"]["backfill"];
+        assert_eq!(hook["scope"], "project-hook");
+        assert_eq!(hook["preview"], true);
+        assert_eq!(hook["causesPromoted"], 0);
+        assert_eq!(hook["evidenceStatus"], "hypothesis");
+        assert!(hook.get("candidatesFound").is_some());
     }
 }

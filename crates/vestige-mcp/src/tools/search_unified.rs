@@ -15,7 +15,7 @@
 //!   7. Reconsolidation (mark labile)
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -31,6 +31,10 @@ pub fn schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
+            "context_packet": {"type":"boolean", "default":false,
+                "description":"[lookup only] Return stable evidence cards with a packet ID. Scores are omitted; cards are ordered by ID for client reuse. No provider cache or savings guarantee."},
+            "known_packet_id": {"type":"string", "pattern":"^[a-f0-9]{64}$",
+                "description":"[lookup only] Send only while the previous complete packet remains in the model context. Matching packets return notModified=true and no cards. Omit after context loss to refresh."},
             "query": {
                 "type": "string",
                 "description": "Search query"
@@ -44,110 +48,110 @@ pub fn schema() -> Value {
             },
             "min_retention": {
                 "type": "number",
-                "description": "Minimum retention strength (0.0-1.0, default: 0.0)",
+                "description": "Minimum retention strength, 0 to 1 (default 0).",
                 "default": 0.0,
                 "minimum": 0.0,
                 "maximum": 1.0
             },
             "min_similarity": {
                 "type": "number",
-                "description": "Minimum similarity threshold (0.0-1.0, default: 0.5)",
+                "description": "Minimum similarity, 0 to 1 (default 0.5).",
                 "default": 0.5,
                 "minimum": 0.0,
                 "maximum": 1.0
             },
             "detail_level": {
                 "type": "string",
-                "description": "'brief': id, type, tags, score. 'summary' (default): the 8-field response. 'full': every field, including FSRS state and timestamps.",
+                "description": "'brief': id, type, tags, score. 'summary' (default): 8 fields. 'full': everything, including FSRS state.",
                 "enum": ["brief", "summary", "full"],
                 "default": "summary"
             },
             "context_topics": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Optional topics for context-dependent retrieval boosting"
+                "description": "Topics that boost context-dependent retrieval."
             },
             "exclude_types": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Node types to exclude. Reflections are excluded by default so they do not pollute factual queries."
+                "description": "Node types to exclude (reflections are excluded by default)."
             },
             "include_types": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "If set, only return nodes of these types. Overrides exclude_types."
+                "description": "Only these node types; overrides exclude_types."
             },
             "token_budget": {
                 "type": "integer",
-                "description": "Max tokens for the response; content is truncated to fit. Fetch full content by id with memory(action='get').",
+                "description": "Max response tokens; content is truncated to fit. memory(action='get') has the full text.",
                 "minimum": 100,
                 "maximum": 100000
             },
             "retrieval_mode": {
                 "type": "string",
-                "description": "'precise': top results only, skips activation and competition. 'balanced' (default): the full cognitive pipeline. 'exhaustive': 5x overfetch, deep graph traversal, no competition.",
+                "description": "'precise': top hits, no activation or competition. 'balanced' (default): full pipeline. 'exhaustive': 5x overfetch, deep traversal.",
                 "enum": ["precise", "balanced", "exhaustive"],
                 "default": "balanced"
             },
             "concrete": {
                 "type": "boolean",
-                "description": "Literal search: no semantic expansion, reweighting, activation, or side effects. Auto-enabled for quoted strings, env vars, UUIDs, paths, and code identifiers.",
+                "description": "Literal search, no semantic expansion or side effects. Auto-on for quoted strings, env vars, UUIDs, paths, identifiers.",
                 "default": false
             },
             "rank_native_fusion": {
                 "type": "boolean",
-                "description": "Experimental: fuse the post-retrieval stages as ranked lists (weighted RRF) instead of score multipliers. Default off.",
+                "description": "Experimental: fuse post-retrieval stages by weighted RRF instead of multipliers.",
                 "default": false
             },
             "tag_prefix": {
                 "type": "string",
-                "description": "Keep only results with a tag starting with this prefix (case-insensitive), e.g. 'meeting:' matches 'meeting:standup'. Post-filter; raise 'limit' if it thins results heavily."
+                "description": "Only results with a tag starting with this prefix (case-insensitive). Post-filter; raise 'limit' if it thins results."
             },
             "scope": {
                 "type": "string",
-                "description": "Project namespace. Defaults to 'user', so project memories never bleed into an unscoped recall."
+                "description": "Project namespace (default 'user'); project memories never bleed into an unscoped recall."
             },
             "includeCrossScope": {
                 "type": "boolean",
-                "description": "Search across all project namespaces. Defaults to false; set only when cross-project retrieval is intentional.",
+                "description": "Search every project namespace. Only when cross-project retrieval is intended.",
                 "default": false
             },
             "validAt": {
                 "type": "string",
-                "description": "Only facts valid at this time: 'now', RFC3339, or YYYY-MM-DD. When omitted, expired and future facts stay auditable but are downranked."
+                "description": "Only facts valid at this time ('now', RFC3339, YYYY-MM-DD). Omitted: expired and future facts are downranked, not hidden."
             },
             "source_system": {
                 "type": "string",
-                "description": "Only memories ingested from this external system, e.g. 'github' or 'redmine'. Post-filter; raise 'limit' if it thins results heavily."
+                "description": "Only memories ingested from this external system ('github', 'redmine'). Post-filter."
             },
             "source_project": {
                 "type": "string",
-                "description": "Only memories from this source project or repo, exact match (GitHub 'owner/repo', Redmine project id)."
+                "description": "Only this source project or repo, exact match."
             },
             "source_id": {
                 "type": "string",
-                "description": "Only this source record id (issue number or ticket id). Pair with source_system."
+                "description": "Only this source record id; pair with source_system."
             },
             "source_type": {
                 "type": "string",
-                "description": "Investigation filter: source record type, e.g. 'issue', 'comment'."
+                "description": "Source record type, e.g. 'issue', 'comment'."
             },
             "source_author": {
                 "type": "string",
-                "description": "Investigation filter: the source author/reporter (not assignee)."
+                "description": "Source author or reporter (not assignee)."
             },
             "source_updated_after": {
                 "type": "string",
-                "description": "Investigation filter: only records whose source was updated at/after this RFC3339 timestamp (inclusive)."
+                "description": "Source updated at or after this RFC3339 time."
             },
             "source_updated_before": {
                 "type": "string",
-                "description": "Investigation filter: only records whose source was updated at/before this RFC3339 timestamp (inclusive)."
+                "description": "Source updated at or before this RFC3339 time."
             },
             "source_status": {
                 "type": "string",
                 "enum": ["any", "valid", "tombstoned"],
-                "description": "'any' (default), 'valid' (currently visible upstream), or 'tombstoned' (removed upstream, kept for audit).",
+                "description": "'any' (default), 'valid' (visible upstream), 'tombstoned' (removed upstream, kept for audit).",
                 "default": "any"
             }
         },
@@ -155,10 +159,14 @@ pub fn schema() -> Value {
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SearchArgs {
     query: String,
+    #[serde(alias = "context_packet")]
+    context_packet: Option<bool>,
+    #[serde(alias = "known_packet_id")]
+    known_packet_id: Option<String>,
     limit: Option<i32>,
     #[serde(alias = "min_retention")]
     min_retention: Option<f64>,
@@ -261,6 +269,27 @@ pub async fn execute(
     let args: SearchArgs = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid arguments: {}", e))?,
         None => return Err("Missing arguments".to_string()),
+    };
+
+    if let Some(known) = args.known_packet_id.as_deref()
+        && (args.context_packet != Some(true)
+            || known.len() != 64
+            || !known
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+    {
+        return Err(
+            "known_packet_id requires context_packet=true and a lowercase SHA-256 ID".into(),
+        );
+    }
+    let packet_boundary = if args.context_packet == Some(true) {
+        let mut boundary = serde_json::to_value(&args).map_err(|error| error.to_string())?;
+        boundary.as_object_mut().unwrap().remove("knownPacketId");
+        boundary["store"] = serde_json::json!(storage.db_path().to_string_lossy());
+        boundary["outputProfile"] = serde_json::json!(format!("{:?}", output_config));
+        boundary
+    } else {
+        Value::Null
     };
 
     if args.query.trim().is_empty() {
@@ -388,11 +417,6 @@ pub async fn execute(
 
         // Audit only memories that are actually present in the response, not
         // candidates removed by retention or token-budget filtering.
-        let shown_ids: Vec<&str> = formatted
-            .iter()
-            .filter_map(|result| result.get("id").and_then(|id| id.as_str()))
-            .collect();
-        let _ = storage.record_batch_retrieval(&shown_ids);
 
         let mut response = serde_json::json!({
             "query": args.query,
@@ -421,6 +445,17 @@ pub async fn execute(
             response["tokenBudgetLimit"] = serde_json::json!(args.token_budget.unwrap());
         }
 
+        if let Some(warming) = super::warming::embedding_warming(storage) {
+            response["warming"] = warming;
+        }
+        let response = super::lookup_packet::finish(
+            response,
+            args.token_budget,
+            args.context_packet == Some(true),
+            args.known_packet_id.as_deref(),
+            &packet_boundary,
+        );
+        record_shown(storage, &response);
         return Ok(response);
     }
 
@@ -1085,11 +1120,6 @@ pub async fn execute(
 
     // Audit only memories that are actually present in the response, not
     // internal candidates removed by a token budget.
-    let shown_ids: Vec<&str> = formatted
-        .iter()
-        .filter_map(|result| result.get("id").and_then(|id| id.as_str()))
-        .collect();
-    let _ = storage.record_batch_retrieval(&shown_ids);
 
     // Check learning mode via attention signal
     let learning_mode = cognitive
@@ -1166,7 +1196,28 @@ pub async fn execute(
         response["tokensUsed"] = serde_json::json!(used);
     }
 
+    if let Some(warming) = super::warming::embedding_warming(storage) {
+        response["warming"] = warming;
+    }
+    let response = super::lookup_packet::finish(
+        response,
+        args.token_budget,
+        args.context_packet == Some(true),
+        args.known_packet_id.as_deref(),
+        &packet_boundary,
+    );
+    record_shown(storage, &response);
     Ok(response)
+}
+
+fn record_shown(storage: &Storage, response: &Value) {
+    let ids: Vec<&str> = response["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|card| card["id"].as_str())
+        .collect();
+    let _ = storage.record_batch_retrieval(&ids);
 }
 
 fn is_literal_query(query: &str) -> bool {
@@ -1704,6 +1755,88 @@ mod tests {
         };
         let node = storage.ingest(input).unwrap();
         node.id
+    }
+
+    #[tokio::test]
+    async fn stable_packets_acknowledge_only_unchanged_retained_context() {
+        let (storage, _dir) = test_storage().await;
+        let id =
+            ingest_test_content(&storage, "PACKET_FIXTURE policy requires two reviewers").await;
+        let request = serde_json::json!({"query":"PACKET_FIXTURE", "concrete":true,
+            "context_packet":true, "token_budget":2000});
+        let first = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(request.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first["results"][0]["id"], id);
+        assert!(first["packetId"].as_str().is_some());
+        let mut acknowledged = request.clone();
+        acknowledged["known_packet_id"] = first["packetId"].clone();
+        let same = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(acknowledged.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(same["notModified"], true);
+        assert_eq!(same["results"], serde_json::json!([]));
+        storage
+            .update_node_content(&id, "PACKET_FIXTURE policy now requires three reviewers")
+            .unwrap();
+        let changed = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(acknowledged),
+        )
+        .await
+        .unwrap();
+        assert_eq!(changed["notModified"], false);
+        assert_ne!(first["packetId"], changed["packetId"]);
+        assert!(
+            changed["results"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("three")
+        );
+        let refreshed = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(request),
+        )
+        .await
+        .unwrap();
+        assert_eq!(refreshed["notModified"], false);
+        assert!(!refreshed["results"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn lookup_budget_includes_envelope_and_omits_whole_cards() {
+        let (storage, _dir) = test_storage().await;
+        ingest_test_content(&storage, &format!("BUDGET_FIXTURE {}", "🍃".repeat(500))).await;
+        for concrete in [true, false] {
+            for budget in [100, 101, 256, 1000] {
+                let result = execute(
+                    &storage,
+                    &test_cognitive(),
+                    &OutputConfig::default(),
+                    Some(
+                        serde_json::json!({"query":"BUDGET_FIXTURE", "concrete":concrete,
+                        "min_similarity":0, "token_budget":budget}),
+                    ),
+                )
+                .await
+                .unwrap();
+                assert!(result.to_string().len() + 256 <= budget * 4);
+            }
+        }
     }
 
     #[tokio::test]
@@ -2571,7 +2704,8 @@ mod tests {
         assert!(result.is_ok());
 
         let value = result.unwrap();
-        assert!(value["tokenBudget"].as_i64().unwrap() == 200);
+        assert_eq!(value["tokenBudgetLimit"], 200);
+        assert!(value.to_string().len() + 256 <= 800);
         assert!(value["tokensUsed"].is_number());
     }
 

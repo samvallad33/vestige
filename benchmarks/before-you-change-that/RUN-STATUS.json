@@ -1,0 +1,118 @@
+{
+  "schema": "vestige.before-you-change-that.run-status.v1",
+  "benchmark": "Before You Change That",
+  "demo": 4,
+  "evidence_kind": "public-recorded-agent-comparison",
+  "source_run": "context-intention-1ux5s5ji",
+  "recorded_start_utc": "2026-09-07T03:34:07.653202+00:00",
+  "scenario": {
+    "synthetic": true,
+    "domain": "ledger reversal and reconciliation",
+    "archive_records": 22,
+    "real_payment_or_deployment_effect": false
+  },
+  "frozen_execution": {
+    "model": "gpt-5.6-sol",
+    "reasoning": "ultra",
+    "same_prompt": true,
+    "same_initial_application": true,
+    "same_archive": true,
+    "isolated_workspaces": true,
+    "prompt_sha256": "2faf312bac8240cf93e012f9ea9cc5cd1d4ed0b4ff898e09ee4ce79a5e7f5091",
+    "model_input_sha256": "7c8b4d3052f04a2f545bd1aa8397330035aded1d394eb2b5c726071a38e23464"
+  },
+  "result": {
+    "all_recorded_application_checks_pass": true,
+    "checks_per_arm": 21,
+    "natural_model_completions": 2,
+    "three_way_natural_completion": false,
+    "causal_win_or_product_ranking_established": false,
+    "arms": [
+      {
+        "arm": "control",
+        "model_finished_naturally": true,
+        "interrupted_at_cutoff": false,
+        "elapsed_seconds": 560.100823958,
+        "application_score": 21,
+        "application_total": 21,
+        "usage": {
+          "input_tokens_including_cached": 1182794,
+          "cached_input_tokens": 1079808,
+          "output_tokens": 18739
+        }
+      },
+      {
+        "arm": "mcp-memory-service",
+        "model_finished_naturally": false,
+        "interrupted_at_cutoff": true,
+        "cutoff_seconds": 900,
+        "elapsed_seconds": 900.032839125,
+        "application_score": 21,
+        "application_total": 21,
+        "usage": null,
+        "usage_boundary": "Unavailable because the interrupted session emitted no final usage row."
+      },
+      {
+        "arm": "vestige",
+        "model_finished_naturally": true,
+        "interrupted_at_cutoff": false,
+        "elapsed_seconds": 581.4522005,
+        "application_score": 21,
+        "application_total": 21,
+        "usage": {
+          "input_tokens_including_cached": 1302101,
+          "cached_input_tokens": 1227648,
+          "output_tokens": 15208
+        }
+      }
+    ],
+    "usage_boundary": "Input counters include cached input. Retained counters are not billing figures."
+  },
+  "historical_aggregate_flags": {
+    "status": "COMPLETED",
+    "demo_ready": true,
+    "comparison_valid": true,
+    "interpretation": "These retained aggregate flags describe the post-run evidence package. They do not override the MCP Memory Service interruption or establish three-way natural completion."
+  },
+  "vestige_observations": {
+    "exact_context_intention_delivered": true,
+    "target_file": "src/ledger/reconcile.rs",
+    "delivered_status": "active",
+    "coordinator_fulfilled_only_after_application_pass": true,
+    "captured_signed_retrieval_envelopes": 3,
+    "signature_algorithm": "Ed25519",
+    "signature_boundary": "The signatures verify signed retrieval-payload integrity. They do not verify the intention lifecycle, application patch, causal influence, or application correctness."
+  },
+  "public_export": {
+    "privacy_aliases_applied": true,
+    "privacy_transformations": [
+      "workstation-role-and-agent-id-aliases",
+      "public-key-only-export",
+      "recorded-capture-timing-export"
+    ],
+    "compact_git_evidence_files": 96,
+    "complete_public_evidence_files": 643,
+    "public_derivatives_have_independent_hashes": true,
+    "original_seal_status": "retained historical evidence; does not validate transformed public bytes",
+    "release_tag_target": "benchmark-before-you-change-that-2026-09-06",
+    "public_video_count": 2,
+    "public_video_kind": "full-timeline event replay",
+    "public_videos_are_live_screen_recordings": false,
+    "original_screen_recordings": "preserved local archive"
+  },
+  "verification": {
+    "minimum_python": "3.11",
+    "signature_requirement": "cryptography==50.0.1",
+    "hashes_only_uses_standard_library": true,
+    "application_recheck_runs_model": false,
+    "application_recheck_requires_network": false,
+    "application_recheck_supported_platforms": [
+      "macOS"
+    ],
+    "linux_application_recheck_supported": false,
+    "application_recheck_rejects_symlinks_and_special_files": true,
+    "fresh_provider_rerun_supported": false,
+    "historical_harness_boundary": "Reference material, not a turnkey fresh-model environment."
+  },
+  "claim_boundary": "One retained synthetic scenario. The evidence separately records final application correctness, native intention delivery, post-evaluator coordinator fulfillment, and retrieval-payload signature integrity. It does not establish causality, a product ranking, universal superiority, or three-way natural model completion."
+}

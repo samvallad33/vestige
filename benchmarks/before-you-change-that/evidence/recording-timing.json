@@ -1,0 +1,18 @@
+{
+  "schema": "vestige.recorded-video-timing.v1",
+  "capture_context_utc": "2026-09-07T03:34:04.107Z",
+  "dispatch_utc": "2026-09-07T03:34:06.277Z",
+  "replay_lead_seconds": 2.17,
+  "pages": [
+    {
+      "view": "vestige-vs-mcp-memory-service",
+      "page_opened_utc": "2026-09-07T03:34:04.116Z"
+    },
+    {
+      "view": "vestige-vs-control",
+      "page_opened_utc": "2026-09-07T03:34:04.560Z"
+    }
+  ],
+  "source_capture_metadata_sha256": "6b6f72d1e8245f9b8621baec81c58ae8d586c94c1e7235944ce7c088a018ba17",
+  "boundary": "Derived recording timing only. Public videos replay retained events; they are not the original screen recordings."
+}

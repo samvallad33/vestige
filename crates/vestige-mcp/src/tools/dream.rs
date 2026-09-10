@@ -12,10 +12,13 @@ pub fn schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
         "properties": {
+            "scope":{"type":"string","default":"user"},
+            "after":{"type":"string","description":"ID cursor from previous dream page. Cross-page pairs are outside this page's analysis."},
+            "max_pairs":{"type":"integer","minimum":10,"maximum":124750,"default":1225,"description":"Upper bound for within-page memory pairs; reduces selected memory count."},
             "memory_count": {
                 "type": "integer",
-                "description": "Number of recent memories to dream about (default: 50)",
-                "default": 50
+                "description": "Maximum memories in a scoped ID page (default: 50)",
+                "default": 50, "minimum":5, "maximum":500
             },
             "min_similarity": {
                 "type": "number",
@@ -33,61 +36,44 @@ pub async fn execute(
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    let memory_count = args
-        .as_ref()
-        .and_then(|a| a.get("memory_count"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(50)
-        .min(500) as usize; // Cap at 500 to prevent O(N^2) hang
-    let min_similarity = args
-        .as_ref()
-        .and_then(|a| a.get("min_similarity"))
-        .and_then(|v| v.as_f64())
-        .map(|v| v.clamp(0.0, 1.0));
-
-    // v1.9.0: Waking SWR tagging — preferential replay of tagged memories (70/30 split)
-    let tagged_nodes = storage
-        .get_waking_tagged_memories(memory_count as i32)
-        .unwrap_or_default();
-    let tagged_count = tagged_nodes.len();
-
-    // Calculate how many tagged vs random to include
-    let tagged_target = (memory_count * 7 / 10).min(tagged_count); // 70% tagged
-    let _random_target = memory_count.saturating_sub(tagged_target); // 30% random (used for logging)
-
-    // Build the dream memory set: tagged memories first, then fill with random
-    let tagged_ids: std::collections::HashSet<String> = tagged_nodes
-        .iter()
-        .take(tagged_target)
-        .map(|n| n.id.clone())
-        .collect();
-
-    let random_nodes = storage
-        .get_all_nodes(memory_count as i32, 0)
-        .map_err(|e| format!("Failed to load memories: {}", e))?;
-
-    let mut all_nodes: Vec<_> = tagged_nodes.into_iter().take(tagged_target).collect();
-    for node in random_nodes {
-        if !tagged_ids.contains(&node.id) && all_nodes.len() < memory_count {
-            all_nodes.push(node);
-        }
+    #[derive(serde::Deserialize, Default)]
+    struct Args {
+        memory_count: Option<usize>,
+        min_similarity: Option<f64>,
+        max_pairs: Option<usize>,
+        after: Option<String>,
+        scope: Option<String>,
     }
-    // If still under capacity (e.g., all memories are tagged), fill from remaining tagged
-    if all_nodes.len() < memory_count {
-        let used_ids: std::collections::HashSet<String> =
-            all_nodes.iter().map(|n| n.id.clone()).collect();
-        let remaining_tagged = storage
-            .get_waking_tagged_memories(memory_count as i32)
-            .unwrap_or_default();
-        for node in remaining_tagged {
-            if !used_ids.contains(&node.id) && all_nodes.len() < memory_count {
-                all_nodes.push(node);
-            }
-        }
+    let parsed: Args = serde_json::from_value(args.unwrap_or_else(|| serde_json::json!({})))
+        .map_err(|e| e.to_string())?;
+    let dream_started_at = Utc::now();
+    let requested = parsed.memory_count.unwrap_or(50);
+    let max_pairs = parsed.max_pairs.unwrap_or(1225);
+    if !(5..=500).contains(&requested)
+        || !(10..=124750).contains(&max_pairs)
+        || parsed
+            .min_similarity
+            .is_some_and(|n| !n.is_finite() || !(0.0..=1.0).contains(&n))
+    {
+        return Err("invalid memory_count, max_pairs or min_similarity".into());
     }
-
+    let mut memory_count = requested;
+    while memory_count * (memory_count - 1) / 2 > max_pairs {
+        memory_count -= 1;
+    }
+    let scope = parsed.scope.unwrap_or_else(|| "user".into());
+    if scope.trim().is_empty() {
+        return Err("scope must not be empty".into());
+    }
+    let (mut all_nodes, has_more) = storage
+        .maintenance_memory_page(memory_count, parsed.after.as_deref(), &scope)
+        .map_err(|e| e.to_string())?;
+    let next_cursor = all_nodes.last().map(|n| n.id.clone());
+    all_nodes.retain(|n| n.suppression_count == 0 && n.is_currently_valid());
+    let min_similarity = parsed.min_similarity;
     if all_nodes.len() < 5 {
         return Ok(serde_json::json!({
+            "hasMore":has_more,"nextCursor":next_cursor,"scope":scope,"maxPairs":max_pairs,
             "status": "insufficient_memories",
             "message": format!("Need at least 5 memories to dream. Current count: {}", all_nodes.len()),
             "count": all_nodes.len()
@@ -240,12 +226,17 @@ pub async fn execute(
     }
 
     // v1.9.0: Clear waking tags after dream processes them
-    let tags_cleared = storage.clear_waking_tags().unwrap_or(0);
+    let page_ids: Vec<String> = all_nodes.iter().map(|node| node.id.clone()).collect();
+    let tags_cleared = storage
+        .clear_dream_page_tags(&page_ids, dream_started_at)
+        .map_err(|e| e.to_string())?;
 
     Ok(serde_json::json!({
+        "hasMore":has_more,"nextCursor":next_cursor,"scope":scope,"maxPairs":max_pairs,
         "status": "dreamed",
         "memoriesReplayed": dream_memories.len(),
-        "wakingTagsProcessed": tagged_target,
+        "selection":"scoped_id_page",
+        "wakingTagsProcessed": tags_cleared,
         "wakingTagsCleared": tags_cleared,
         "insights": insights.iter().map(|i| serde_json::json!({
             "insight_type": format!("{:?}", i.insight_type),

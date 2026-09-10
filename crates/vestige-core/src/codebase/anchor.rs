@@ -30,9 +30,9 @@
 //!
 //! 1. `file_path` - where to look.
 //! 2. `symbol` - what to look for. Survives line drift.
-//! 3. `content_hash` - a blake3 hash of the *normalized anchored span*.
-//!    Survives renames and relocation, and is the only layer that can tell
-//!    "same name, different code" from "still true".
+//! 3. `content_hash` - a versioned blake3 fingerprint of the anchored lines.
+//!    V2 preserves significant whitespace. A match establishes source-span
+//!    identity, not the truth of the attached natural-language claim.
 //!
 //! Line numbers are still recorded, but only as a reporting hint. They are
 //! never the identity: a span that moved but hashes identically is
@@ -65,7 +65,8 @@ use crate::storage::{Result as StorageResult, SqliteMemoryStore};
 /// Domain separator so an anchor hash can never collide with another blake3
 /// use in the codebase (embeddings, connector content hashes, security
 /// fingerprints).
-const ANCHOR_HASH_DOMAIN: &str = "vestige:code-anchor:v1\n";
+const ANCHOR_HASH_DOMAIN: &str = "vestige:code-anchor:v2\n";
+const ANCHOR_HASH_PREFIX: &str = "v2:";
 
 /// Hex characters kept from the blake3 digest. 32 hex chars = 128 bits, far
 /// beyond what a collision between two source spans would ever need, and short
@@ -276,9 +277,9 @@ pub struct CodeAnchor {
     pub start_line: Option<u32>,
     /// Capture-time last line of the anchored span (1-based, inclusive).
     pub end_line: Option<u32>,
-    /// Number of normalized lines the hash covers.
+    /// Number of lines the hash covers (v1 stripped blanks; v2 preserves them).
     pub span_lines: Option<u32>,
-    /// blake3 of the normalized span. `None` means unverifiable, not stale.
+    /// Versioned blake3 line-content fingerprint. `None` means unverifiable.
     pub content_hash: Option<String>,
     pub captured_at: DateTime<Utc>,
     pub last_verified_at: Option<DateTime<Utc>>,
@@ -319,26 +320,14 @@ impl AnchorVerification {
 // NORMALIZATION AND HASHING
 // ============================================================================
 
-/// Normalize source for hashing: drop blank lines, trim each remaining line,
-/// and keep its original 1-based line number.
-///
-/// Whitespace insensitivity is deliberate. Re-indenting a function (moving it
-/// into a new module, changing a nesting level, a formatter pass) does not
-/// change what the code says, and marking a correct memory stale for it would
-/// train users to ignore the warning - which would destroy the feature's only
-/// value. Any token change still changes the hash.
+/// Preserve all source lines, including indentation and blank lines. Without a
+/// language parser, whitespace can be program data or control flow. Line ending
+/// style and a final newline are not part of this line-content fingerprint.
 fn normalize(source: &str) -> Vec<(u32, &str)> {
     source
         .lines()
         .enumerate()
-        .filter_map(|(idx, line)| {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(((idx + 1) as u32, trimmed))
-            }
-        })
+        .map(|(i, line)| ((i + 1) as u32, line))
         .collect()
 }
 
@@ -350,7 +339,10 @@ fn hash_normalized(lines: &[&str]) -> String {
         hasher.update(line.as_bytes());
         hasher.update(b"\n");
     }
-    hasher.finalize().to_hex()[..ANCHOR_HASH_LEN].to_string()
+    format!(
+        "{ANCHOR_HASH_PREFIX}{}",
+        &hasher.finalize().to_hex()[..ANCHOR_HASH_LEN]
+    )
 }
 
 /// Hash the normalized form of an arbitrary source span. Public so a caller can
@@ -670,9 +662,38 @@ fn verdict(
 /// * A stored hash that still matches somewhere is fresh, wherever it moved to.
 /// * Only a stored hash that no longer matches anywhere can accuse the memory.
 pub fn verify_anchor(anchor: &CodeAnchor, repo_root: &Path) -> AnchorVerification {
+    if !repo_root.is_dir() {
+        return verdict(
+            anchor,
+            AnchorStatus::Unverifiable,
+            "Repository root is unavailable; no file absence can be inferred.",
+            None,
+        );
+    }
+    if let Some(hash) = &anchor.content_hash
+        && !hash.starts_with(ANCHOR_HASH_PREFIX)
+    {
+        return verdict(
+            anchor,
+            AnchorStatus::Unverifiable,
+            "Legacy or unknown anchor hash version; significant whitespace was not preserved. Re-anchor after reviewing the source.",
+            None,
+        );
+    }
     let path = resolve_path(repo_root, &anchor.file_path);
 
-    if !path.exists() {
+    let exists = match path.try_exists() {
+        Ok(exists) => exists,
+        Err(_) => {
+            return verdict(
+                anchor,
+                AnchorStatus::Unverifiable,
+                "Cannot determine whether the anchored path exists; source evidence is unavailable.",
+                None,
+            );
+        }
+    };
+    if !exists {
         return verdict(
             anchor,
             AnchorStatus::Missing,
@@ -735,7 +756,7 @@ pub fn verify_anchor(anchor: &CodeAnchor, repo_root: &Path) -> AnchorVerificatio
                 anchor,
                 AnchorStatus::Verified,
                 format!(
-                    "Anchored content at `{}`{} still matches byte for byte.",
+                    "Anchored content at `{}`{} still matches the v2 line-content fingerprint (not proof of the memory claim).",
                     anchor.file_path,
                     anchor
                         .symbol
@@ -757,7 +778,7 @@ pub fn verify_anchor(anchor: &CodeAnchor, repo_root: &Path) -> AnchorVerificatio
                         anchor,
                         AnchorStatus::Moved,
                         format!(
-                            "Anchored content is unchanged but moved from line {} to line {now_at} in `{}`. The memory is still accurate; only the coordinate shifted.",
+                            "Anchored content is unchanged but moved from line {} to line {now_at} in `{}`. Only the recorded source span matches; this does not prove the memory claim.",
                             anchor
                                 .start_line
                                 .map(|l| l.to_string())
@@ -882,6 +903,52 @@ impl SqliteMemoryStore {
         Ok(written)
     }
 
+    /// Replace reviewed source evidence atomically, preserving the memory itself.
+    /// Scope is rechecked under the writer transaction to avoid a read/write race.
+    pub fn replace_code_anchors(
+        &self,
+        node_id: &str,
+        scope: &str,
+        anchors: &[CodeAnchor],
+    ) -> StorageResult<usize> {
+        use crate::storage::StorageError;
+        if anchors.is_empty()
+            || anchors
+                .iter()
+                .any(|a| a.node_id != node_id || !a.is_verifiable())
+        {
+            return Err(StorageError::Init(
+                "Replacement requires complete verifiable anchors for this memory".into(),
+            ));
+        }
+        let conn = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        let tx =
+            rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM knowledge_nodes WHERE id=?1 AND scope=?2 AND node_type IN ('pattern','decision'))",
+            params![node_id, scope.trim()], |r| r.get(0))?;
+        if !exists {
+            return Err(StorageError::Init(
+                "Code memory not found in requested scope".into(),
+            ));
+        }
+        tx.execute(
+            "DELETE FROM code_memory_anchors WHERE node_id=?1",
+            params![node_id],
+        )?;
+        for anchor in anchors {
+            tx.execute(&format!("INSERT INTO code_memory_anchors ({ANCHOR_COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"),
+                params![anchor.id, anchor.node_id, anchor.file_path, anchor.symbol, anchor.symbol_kind,
+                    anchor.start_line.map(i64::from), anchor.end_line.map(i64::from), anchor.span_lines.map(i64::from),
+                    anchor.content_hash, anchor.captured_at.to_rfc3339(), Option::<String>::None, Option::<String>::None])?;
+        }
+        tx.commit()?;
+        Ok(anchors.len())
+    }
+
     /// Load every anchor recorded for one memory.
     pub fn code_anchors_for_node(&self, node_id: &str) -> StorageResult<Vec<CodeAnchor>> {
         let conn = self.reader.lock().unwrap();
@@ -986,10 +1053,10 @@ pub fn other() -> u8 {
     // --- normalization + hashing ------------------------------------------
 
     #[test]
-    fn reindenting_and_blank_lines_do_not_change_the_hash() {
+    fn significant_whitespace_changes_the_versioned_hash() {
         let a = "fn f() {\n    let x = 1;\n}\n";
         let b = "\n        fn f() {\n\n                let x = 1;\n        }\n\n";
-        assert_eq!(hash_span(a).unwrap().0, hash_span(b).unwrap().0);
+        assert_ne!(hash_span(a).unwrap().0, hash_span(b).unwrap().0);
     }
 
     #[test]
@@ -997,6 +1064,43 @@ pub fn other() -> u8 {
         let a = "fn f() {\n    let x = 1;\n}\n";
         let b = "fn f() {\n    let x = 2;\n}\n";
         assert_ne!(hash_span(a).unwrap().0, hash_span(b).unwrap().0);
+    }
+
+    #[test]
+    fn python_indentation_and_string_data_are_not_normalized_away() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(
+            dir.path(),
+            "x.py",
+            "def f(flag):\n    if flag:\n        return 1\n    return 2\n",
+        );
+        let a = capture_anchor("n", dir.path(), &AnchorDraft::new("x.py").with_symbol("f"));
+        assert!(a.content_hash.as_ref().unwrap().starts_with("v2:"));
+        write_file(
+            dir.path(),
+            "x.py",
+            "def f(flag):\n    if flag:\n        return 1\n        return 2\n",
+        );
+        assert!(verify_anchor(&a, dir.path()).is_stale());
+        assert_ne!(
+            hash_span("a = \"\"\"\n x\n\"\"\"").unwrap().0,
+            hash_span("a = \"\"\"\n  x\n\"\"\"").unwrap().0
+        );
+    }
+
+    #[test]
+    fn old_hashes_and_unavailable_roots_do_not_claim_freshness_or_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "x.rs", "fn f() {}\n");
+        let mut a = capture_anchor("n", dir.path(), &AnchorDraft::new("x.rs").with_symbol("f"));
+        assert_eq!(
+            verify_anchor(&a, &dir.path().join("absent")).status,
+            AnchorStatus::Unverifiable
+        );
+        a.content_hash = Some("0123456789abcdef0123456789abcdef".into());
+        let v = verify_anchor(&a, dir.path());
+        assert_eq!(v.status, AnchorStatus::Unverifiable);
+        assert!(v.detail.contains("Legacy"));
     }
 
     // --- symbol location ---------------------------------------------------
@@ -1273,6 +1377,58 @@ pub fn other() -> u8 {
             verify_anchor(&anchor, dir.path()).status,
             AnchorStatus::Moved
         );
+    }
+
+    #[test]
+    fn reanchor_failure_rolls_back_old_evidence_and_success_preserves_memory() {
+        let (store, dir) = store();
+        let node_id = ingest(&store, "A retained rule");
+        write_file(dir.path(), "x.rs", "fn f() {}\n");
+        let old = capture_anchor(
+            &node_id,
+            dir.path(),
+            &AnchorDraft::new("x.rs").with_symbol("f"),
+        );
+        store
+            .record_code_anchors(std::slice::from_ref(&old))
+            .unwrap();
+        let before = store.get_node(&node_id).unwrap().unwrap();
+        let replacement = capture_anchor(
+            &node_id,
+            dir.path(),
+            &AnchorDraft::new("x.rs").with_symbol("f"),
+        );
+        assert!(
+            store
+                .replace_code_anchors(&node_id, "other", std::slice::from_ref(&replacement))
+                .is_err()
+        );
+        // A duplicate primary key fails after the old rows were deleted and one
+        // replacement inserted. The transaction must restore the old row.
+        assert!(
+            store
+                .replace_code_anchors(
+                    &node_id,
+                    "user",
+                    &[replacement.clone(), replacement.clone()]
+                )
+                .is_err()
+        );
+        assert_eq!(store.code_anchors_for_node(&node_id).unwrap(), vec![old]);
+        assert_eq!(
+            store
+                .replace_code_anchors(&node_id, "user", std::slice::from_ref(&replacement))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store.code_anchors_for_node(&node_id).unwrap(),
+            vec![replacement]
+        );
+        let after = store.get_node(&node_id).unwrap().unwrap();
+        assert_eq!(before.content, after.content);
+        assert_eq!(before.reps, after.reps);
+        assert_eq!(before.updated_at, after.updated_at);
     }
 
     // --- persistence -------------------------------------------------------

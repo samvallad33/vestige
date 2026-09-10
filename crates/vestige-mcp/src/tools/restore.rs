@@ -6,8 +6,12 @@
 
 use serde::Deserialize;
 use serde_json::Value;
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
+
+const MAX_RESTORE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_LEGACY_MEMORIES: usize = 10_000;
 
 use vestige_core::{IngestInput, PortableArchive, PortableImportMode, Storage};
 
@@ -18,7 +22,7 @@ pub fn schema() -> Value {
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Path to the backup JSON file to restore from"
+                "description": "Path to a regular backup JSON file, at most 64 MiB. Legacy batches are limited to 10000 memories and applied atomically."
             },
             "allowAnyPath": {
                 "type": "boolean",
@@ -81,8 +85,18 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         ensure_restore_path_allowed(storage, path)?;
     }
 
-    // Read and parse backup
-    let backup_bytes = std::fs::read(path).map_err(|e| format!("Failed to read backup: {}", e))?;
+    // Enforce the bound while reading, including files that grow after metadata.
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed to read backup: {e}"))?;
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err("Restore requires a regular file".into());
+    }
+    let mut backup_bytes = Vec::new();
+    file.take(MAX_RESTORE_BYTES + 1)
+        .read_to_end(&mut backup_bytes)
+        .map_err(|e| format!("Failed to read backup: {e}"))?;
+    if backup_bytes.len() as u64 > MAX_RESTORE_BYTES {
+        return Err("Restore exceeds the 64 MiB input limit".into());
+    }
     if backup_bytes.starts_with(b"SQLite format 3\0") {
         return Err(
             "Restore expected JSON, but this file is a raw SQLite database backup. Use portable export/import for cross-device transfer, or replace the database file manually while Vestige is stopped."
@@ -147,6 +161,9 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         };
 
     let total = memories.len();
+    if total > MAX_LEGACY_MEMORIES {
+        return Err("Legacy restore exceeds the 10000-memory limit".into());
+    }
     if total == 0 {
         return Ok(serde_json::json!({
             "tool": "restore",
@@ -157,10 +174,15 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         }));
     }
 
-    let mut success_count = 0_usize;
-    let mut error_count = 0_usize;
+    // Validate and ingest outside the target, then reuse the transactional importer.
+    let staging_dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let staging = Storage::new(Some(staging_dir.path().join("restore.db")))
+        .map_err(|error| format!("Restore staging failed: {error}"))?;
 
     for memory in &memories {
+        if memory.content.trim().is_empty() {
+            return Err("Restore validation failed; target unchanged: empty memory content".into());
+        }
         let input = IngestInput {
             content: memory.content.clone(),
             node_type: memory
@@ -177,17 +199,42 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             source_envelope: None,
         };
 
-        match storage.ingest(input) {
-            Ok(_) => success_count += 1,
-            Err(_) => error_count += 1,
-        }
+        staging
+            .ingest(input)
+            .map_err(|error| format!("Restore validation failed; target unchanged: {error}"))?;
     }
 
+    let mut archive = staging
+        .export_portable_archive()
+        .map_err(|error| error.to_string())?;
+    // Legacy JSON carries memory content, not settings, vector profiles or audit journals.
+    archive
+        .tables
+        .retain(|table| table.name == "knowledge_nodes");
+    for table in &mut archive.tables {
+        if let Some(index) = table
+            .columns
+            .iter()
+            .position(|column| column == "has_embedding")
+        {
+            for row in &mut table.rows {
+                row[index] = vestige_core::storage::PortableValue::Integer(0);
+            }
+        }
+    }
+    storage
+        .import_portable_archive(&archive, PortableImportMode::Merge)
+        .map_err(|error| {
+            format!("Restore import reported an error; inspect target before retrying: {error}")
+        })?;
+    let success_count = total;
     Ok(serde_json::json!({
         "tool": "restore",
         "success": true,
+        "atomic": true,
+        "embeddingStatus": "pending",
         "restored": success_count,
-        "errors": error_count,
+        "errors": 0,
         "total": total,
         "message": format!("Restored {}/{} memories from backup.", success_count, total),
     }))
@@ -296,6 +343,43 @@ mod tests {
         let result = execute(&storage, Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("restricted"));
+    }
+
+    #[tokio::test]
+    async fn test_restore_validation_failure_leaves_target_unchanged() {
+        let (storage, dir) = test_storage().await;
+        let path = write_temp_file(
+            &dir,
+            "invalid-batch.json",
+            &serde_json::json!([
+                {"content": "valid first memory"}, {"content": ""}
+            ])
+            .to_string(),
+        );
+        let result = execute(
+            &storage,
+            Some(serde_json::json!({"path": path, "allowAnyPath": true})),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(storage.get_stats().unwrap().total_nodes, 0);
+    }
+
+    #[tokio::test]
+    async fn test_restore_rejects_oversized_input_without_writes() {
+        let (storage, dir) = test_storage().await;
+        let path = dir.path().join("large.json");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(MAX_RESTORE_BYTES + 1)
+            .unwrap();
+        let result = execute(
+            &storage,
+            Some(serde_json::json!({"path": path, "allowAnyPath": true})),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("64 MiB"));
+        assert_eq!(storage.get_stats().unwrap().total_nodes, 0);
     }
 
     #[tokio::test]

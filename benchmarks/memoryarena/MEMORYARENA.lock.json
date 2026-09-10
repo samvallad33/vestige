@@ -1,0 +1,29 @@
+{
+  "_comment": "Pinned upstream revisions for the MemoryArena run. Do not edit by hand; a run that does not match these pins is a different experiment and must say so.",
+  "name": "MemoryArena",
+  "paper": "arXiv:2602.16313",
+  "paper_url": "https://arxiv.org/abs/2602.16313",
+  "paper_title": "MemoryArena: Benchmarking Agent Memory in Interdependent Multi-Session Agentic Tasks",
+  "repo": "https://github.com/ZexueHe/MemoryArena",
+  "repo_revision": "6cd9de14b71915e39ac742a20dc33785e14b6aab",
+  "repo_revision_date": "2026-06-01",
+  "repo_license": "upstream repository declares no LICENSE file as of this revision; nothing from it is vendored here, the adapter is installed into a local clone at run time",
+  "dataset": "ZexueHe/memoryarena",
+  "dataset_url": "https://huggingface.co/datasets/ZexueHe/memoryarena",
+  "dataset_revision": "da1a37c8b19280e18627ca01cf368195a5e1d92e",
+  "dataset_license": "CC-BY-4.0",
+  "dataset_configs": {
+    "formal_reasoning_math": { "rows": 40, "subtasks_per_row": "2-16", "fields": ["id", "paper_name", "backgrounds", "questions", "answers"] },
+    "formal_reasoning_phys": { "rows": 20, "subtasks_per_row": "2-12", "fields": ["id", "paper_name", "backgrounds", "questions", "answers"] },
+    "bundled_shopping": { "rows": 150, "subtasks_per_row": 6, "status": "not in the preregistered run" },
+    "group_travel_planner": { "rows": 270, "subtasks_per_row": "5-9", "status": "not in the preregistered run" },
+    "progressive_search": { "rows": 221, "subtasks_per_row": "2-16", "status": "not in the preregistered run; the paper reports 256 tasks, the released config has 221 rows" }
+  },
+  "upstream_metrics": {
+    "SR": "overall_average_passrate: fraction of tasks whose every subtask the judge marked correct",
+    "PS": "avg_progress_score: mean over tasks of correct subtasks / total subtasks",
+    "passrate_at_min_k": "per-position pass rate up to the shortest task length, every task contributes",
+    "evaluator": "env/env_systems/formal_reasoning_env/eval.py at repo_revision"
+  },
+  "retrieved_utc": "2026-09-05"
+}

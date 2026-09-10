@@ -84,6 +84,9 @@ struct ComposedGraphArgs {
     memory_id: Option<String>,
     limit: Option<i32>,
     tags: Option<Vec<String>>,
+    scope: Option<String>,
+    #[serde(rename = "includeCrossScope")]
+    include_cross_scope: Option<bool>,
     outcome_type: Option<String>,
     notes: Option<String>,
     label_source: Option<String>,
@@ -98,6 +101,11 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         None => return Err("Missing arguments".to_string()),
     };
     let limit = args.limit.unwrap_or(10).clamp(1, 100);
+    if args.action != "never_composed"
+        && (args.scope.is_some() || args.include_cross_scope.is_some())
+    {
+        return Err("scope and includeCrossScope currently apply only to never_composed".into());
+    }
 
     match args.action.as_str() {
         "recent" => recent(storage, limit),
@@ -122,7 +130,22 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
                 .ok_or_else(|| "memory_id is required for neighbors".to_string())?;
             neighbors(storage, memory_id, limit)
         }
-        "never_composed" => never_composed(storage, limit, args.tags.as_deref()),
+        "never_composed" => {
+            let scope = args.scope.as_deref().unwrap_or("user").trim();
+            if scope.is_empty() {
+                return Err("scope must not be empty".into());
+            }
+            never_composed(
+                storage,
+                limit,
+                args.tags.as_deref(),
+                if args.include_cross_scope.unwrap_or(false) {
+                    None
+                } else {
+                    Some(scope)
+                },
+            )
+        }
         "bounty_mode" => bounty_mode(storage, limit, args.tags.as_deref()),
         "label" => label(storage, &args),
         other => Err(format!("Unknown composed_graph action: {}", other)),
@@ -180,13 +203,23 @@ fn neighbors(storage: &Storage, memory_id: &str, limit: i32) -> Result<Value, St
     }))
 }
 
-fn never_composed(storage: &Storage, limit: i32, tags: Option<&[String]>) -> Result<Value, String> {
+fn never_composed(
+    storage: &Storage,
+    limit: i32,
+    tags: Option<&[String]>,
+    scope: Option<&str>,
+) -> Result<Value, String> {
     let candidates = storage
-        .get_never_composed_candidates(limit, tags)
+        .get_never_composed_candidates_in_scope(limit, tags, scope)
         .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({
         "action": "never_composed",
         "candidates": candidates,
+        "scope": scope,
+        "includeCrossScope": scope.is_none(),
+        "evidenceStatus": "hypothesis",
+        "globalNoveltyVerified": false,
+        "claimBoundary": "Pairs have no recorded joint composition in this store. Tags, shared terms and scores are investigation signals, not proof of causality, correctness or worldwide novelty.",
     }))
 }
 

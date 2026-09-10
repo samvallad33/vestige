@@ -1,0 +1,1 @@
+A reversal arrived before its charge. After restart, reconciliation left the reversal pending, skipped the delayed charge, and reported tombstone pressure. Investigate, repair the local application, and verify that the unrelated export path still behaves correctly.

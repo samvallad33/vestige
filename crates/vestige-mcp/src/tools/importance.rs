@@ -42,6 +42,7 @@ pub fn schema() -> Value {
 #[serde(rename_all = "camelCase")]
 struct ImportanceArgs {
     content: String,
+    #[serde(alias = "context_topics")]
     context_topics: Option<Vec<String>>,
     project: Option<String>,
 }

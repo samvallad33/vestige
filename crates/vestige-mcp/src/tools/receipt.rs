@@ -26,17 +26,17 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["get", "replay"],
-                "description": "'get': one persisted receipt with its safe replay-capsule summary. 'replay': withhold named evidence slots from the frozen final context without rerunning retrieval."
+                "description": "'get': one receipt with its replay-capsule summary. 'replay': withhold named evidence slots from the frozen context without rerunning retrieval."
             },
             "receipt_id": {
                 "type": "string",
-                "description": "Source receipt id. For replay this must be a retrieval receipt that has a frozen replay capsule."
+                "description": "Receipt id; replay needs a retrieval receipt with a frozen capsule."
             },
             "withheld_slots": {
                 "type": "array",
                 "items": { "type": "string", "pattern": "^evidence_[1-9][0-9]*$" },
                 "uniqueItems": true,
-                "description": "[replay] Receipt-local slots to remove from the frozen final context. Search is never rerun and removed candidates are never backfilled."
+                "description": "[replay] Slots to remove from the frozen context; search is never rerun."
             }
         },
         "required": ["action", "receipt_id"],

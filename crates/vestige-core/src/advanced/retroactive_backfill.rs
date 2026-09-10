@@ -352,7 +352,7 @@ impl RetroactiveBackfill {
                 let rank = sim_rank(&c.id);
                 let reason = format!(
                     "Reached back {:.1}d to a quiet memory sharing {} entit{} ({}) with the failure; \
-                     it ranked {} on similarity, so semantic search would have missed it.",
+                     its similarity rank was {} among the scanned candidates. Shared entities support an association, not proof of cause.",
                     c.age_days_before_failure,
                     shared.len(),
                     if shared.len() == 1 { "y" } else { "ies" },

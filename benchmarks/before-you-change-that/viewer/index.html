@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Before You Change That · recorded-event replay</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23061017'/%3E%3Cpath d='M7 9h18v3H7zm0 6h13v3H7zm0 6h18v3H7z' fill='%237df3d0'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="hero">
+    <div>
+      <p class="eyebrow">DEMO 4 · BEFORE YOU CHANGE THAT</p>
+      <h1>The obligation arrives with the file.</h1>
+      <p class="boundary">Recorded-event replay · paths redacted · no new model run</p>
+    </div>
+    <div class="hero-state">
+      <strong id="view-name">Loading evidence…</strong>
+      <time id="clock">00:00</time>
+      <span id="event-progress">0 / 0 events</span>
+    </div>
+  </header>
+
+  <section class="task" aria-labelledby="task-title">
+    <div class="task-head">
+      <strong id="task-title">RECORDED TASK</strong>
+      <span id="archive-summary">Loading the sanitized evidence package</span>
+    </div>
+    <p id="task-text"></p>
+  </section>
+
+  <nav class="toolbar" aria-label="Replay controls">
+    <div class="comparison-switch" role="group" aria-label="Comparison">
+      <a id="compare-control" href="?compare=control#control">Control vs Vestige</a>
+      <a id="compare-memory" href="?compare=mcp-memory-service#mcp-memory-service">Memory Service vs Vestige</a>
+    </div>
+    <div class="transport">
+      <button id="play" type="button" aria-label="Play replay">Play</button>
+      <label>Speed
+        <select id="speed">
+          <option value="1">1×</option>
+          <option value="4">4×</option>
+          <option value="16">16×</option>
+          <option value="64">64×</option>
+        </select>
+      </label>
+      <label class="search-label">Filter events
+        <input id="search" type="search" placeholder="narration, tool, text…">
+      </label>
+      <button id="follow" type="button" aria-pressed="true">Follow on</button>
+    </div>
+  </nav>
+
+  <div class="scrubber-row">
+    <span>00:00</span>
+    <input id="scrubber" type="range" min="0" max="1" value="0" step="0.01" aria-label="Replay position">
+    <span id="duration">00:00</span>
+  </div>
+
+  <main id="lanes" aria-live="polite"></main>
+
+  <section id="end-card" class="end-card" hidden aria-label="Recorded result">
+    <p class="eyebrow">END OF RECORDED EVENTS</p>
+    <h2>All final application scores: 21 / 21</h2>
+    <div id="end-scores" class="end-grid"></div>
+    <p id="end-status"></p>
+    <div id="end-tokens" class="end-tokens" aria-label="Final recorded token counters"></div>
+    <p id="end-shipped">Reconciliation repair passed; unrelated export checks preserved.</p>
+    <p id="end-intention"></p>
+    <p class="end-boundary">Recorded evidence from one local disposable run. Timing does not establish a product ranking.</p>
+    <button id="inspect-end" type="button">Inspect the replay</button>
+  </section>
+
+  <footer>
+    <div>
+      <strong>Sanitized raw evidence</strong>
+      <a href="../evidence/manifest.json" download>manifest.json</a>
+      <a href="../evidence/recording-timing.json" download>recording-timing.json</a>
+      <a href="../evidence/result.json" download>result.json</a>
+      <a href="../evidence/control.jsonl" download>control.jsonl</a>
+      <a href="../evidence/mcp-memory-service.jsonl" download>mcp-memory-service.jsonl</a>
+      <a href="../evidence/vestige.jsonl" download>vestige.jsonl</a>
+    </div>
+    <span>Every event remains in original sequence with its recorded offset and complete sanitized JSON.</span>
+  </footer>
+
+  <template id="lane-template">
+    <section class="lane">
+      <header class="lane-head">
+        <div>
+          <p class="lane-kicker"></p>
+          <h2 class="lane-title"></h2>
+          <p class="lane-status"></p>
+        </div>
+        <strong class="lane-score"></strong>
+      </header>
+      <div class="usage" aria-label="Recorded token counters">
+        <span><small>INPUT</small><strong data-usage="input_tokens">—</strong></span>
+        <span><small>CACHED</small><strong data-usage="cached_input_tokens">—</strong></span>
+        <span><small>OUTPUT</small><strong data-usage="output_tokens">—</strong></span>
+      </div>
+      <div class="lane-now">
+        <span class="now-label">CURRENT RECORDED EVENT</span>
+        <article class="current-event"></article>
+      </div>
+      <div class="transcript" tabindex="0" aria-label="Complete event transcript"></div>
+      <div class="lane-footer"><span class="lane-count"></span><span>Original sequence · sanitized</span></div>
+    </section>
+  </template>
+
+  <template id="event-template">
+    <details class="event-card">
+      <summary>
+        <span class="event-seq"></span>
+        <strong class="event-type"></strong>
+        <time class="event-time"></time>
+        <span class="event-preview"></span>
+      </summary>
+      <pre class="event-body"></pre>
+      <details class="raw-details">
+        <summary>Complete sanitized event JSON</summary>
+        <pre class="event-raw"></pre>
+      </details>
+    </details>
+  </template>
+
+  <div id="error" class="error" hidden role="alert"></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,62 @@
+{
+  "schema": "vestige.benchmark-release-assets.v1",
+  "tag": "benchmark-before-you-change-that-2026-09-06",
+  "repository": "samvallad33/vestige",
+  "assets": [
+    {
+      "file": "before-you-change-that-control-vs-vestige-public-publish-end.jpg",
+      "bytes": 179723,
+      "sha256": "a82f1e8949aac817089f90497648786802ad2aeb3818eb83e8081f8ace51172f",
+      "url": "https://github.com/samvallad33/vestige/releases/download/benchmark-before-you-change-that-2026-09-06/before-you-change-that-control-vs-vestige-public-publish-end.jpg"
+    },
+    {
+      "file": "before-you-change-that-control-vs-vestige-public-publish-t0.jpg",
+      "bytes": 384128,
+      "sha256": "885cf84a316f0d1c56d596f8eed7863f915b647a02f7c4b29c094db392434689",
+      "url": "https://github.com/samvallad33/vestige/releases/download/benchmark-before-you-change-that-2026-09-06/before-you-change-that-control-vs-vestige-public-publish-t0.jpg"
+    },
+    {
+      "file": "before-you-change-that-control-vs-vestige-public-publish.mp4",
+      "bytes": 36908440,
+      "sha256": "8de08f69422556b98ffd91c65a5f4a06d1567905fa7c376bad91bb2c0ed8a35c",
+      "url": "https://github.com/samvallad33/vestige/releases/download/benchmark-before-you-change-that-2026-09-06/before-you-change-that-control-vs-vestige-public-publish.mp4"
+    },
+    {
+      "file": "before-you-change-that-evidence.tar.gz",
+      "bytes": 1091653,
+      "sha256": "12dad39521f85b3a8e3c3a16e75b58c286f8daab40b37eda6478e2c98b5ec5c4",
+      "url": "https://github.com/samvallad33/vestige/releases/download/benchmark-before-you-change-that-2026-09-06/before-you-change-that-evidence.tar.gz"
+    },
+    {
+      "file": "before-you-change-that-memory-service-vs-vestige-public-publish-end.jpg",
+      "bytes": 180463,
+      "sha256": "3a8d8689cebce8204a2df1bedd2e65aaddc9bf0a9927e83ad88f2a4c737c947d",
+      "url": "https://github.com/samvallad33/vestige/releases/download/benchmark-before-you-change-that-2026-09-06/before-you-change-that-memory-service-vs-vestige-public-publish-end.jpg"
+    },
+    {
+      "file": "before-you-change-that-memory-service-vs-vestige-public-publish-t0.jpg",
+      "bytes": 384798,
+      "sha256": "3e93dc525a77595a7b19d00b5886039db63243538907938e16156bceb5b7100f",
+      "url": "https://github.com/samvallad33/vestige/releases/download/benchmark-before-you-change-that-2026-09-06/before-you-change-that-memory-service-vs-vestige-public-publish-t0.jpg"
+    },
+    {
+      "file": "before-you-change-that-memory-service-vs-vestige-public-publish.mp4",
+      "bytes": 40522468,
+      "sha256": "bed9237e231de0679330f8974f5de0ca8fd1e01d28b6cb35f48aff69284f3a49",
+      "url": "https://github.com/samvallad33/vestige/releases/download/benchmark-before-you-change-that-2026-09-06/before-you-change-that-memory-service-vs-vestige-public-publish.mp4"
+    },
+    {
+      "file": "before-you-change-that-publication-receipt-public-publish.json",
+      "bytes": 3870,
+      "sha256": "1fa65434d6725b799ae872e152819984c1671c27830c824b9d96cbcba331f5b3",
+      "url": "https://github.com/samvallad33/vestige/releases/download/benchmark-before-you-change-that-2026-09-06/before-you-change-that-publication-receipt-public-publish.json"
+    },
+    {
+      "file": "before-you-change-that-video-manifest-public-publish.json",
+      "bytes": 2169,
+      "sha256": "72740ea79a07a5514cab171ce0709e4c6529100275eeb2b44747a77dfda2eee1",
+      "url": "https://github.com/samvallad33/vestige/releases/download/benchmark-before-you-change-that-2026-09-06/before-you-change-that-video-manifest-public-publish.json"
+    }
+  ],
+  "boundary": "Public derivatives of one retained synthetic run. Videos replay recorded events; no new model run."
+}

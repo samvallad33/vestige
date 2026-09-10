@@ -1,6 +1,6 @@
 import { defineConfig } from '@playwright/test';
 
-const PORT = 5199;
+const PORT = Number(process.env.VESTIGE_E2E_PORT ?? 5199);
 
 export default defineConfig({
 	testDir: './e2e',
@@ -25,7 +25,7 @@ export default defineConfig({
 	webServer: {
 		command: `npx vite dev --port ${PORT}`,
 		port: PORT,
-		reuseExistingServer: true,
+		reuseExistingServer: false,
 		timeout: 30_000,
 	},
 });

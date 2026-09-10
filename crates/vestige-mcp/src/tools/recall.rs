@@ -37,6 +37,12 @@ pub fn schema() -> Value {
     let mut schema = super::search_unified::schema();
 
     if let Some(obj) = schema.as_object_mut() {
+        obj.insert(
+            "description".to_string(),
+            serde_json::json!(
+                "Mode-specific retrieval. lookup supports the lookup schema. reason supports query, depth, limit, scope/includeCrossScope, retention/similarity/type/tag/validAt/source filters, and token_budget, while rejecting lookup-only controls. contradictions supports topic, since, min_trust, limit, and scope/includeCrossScope; it rejects token_budget and lookup/reason filters instead of silently ignoring them."
+            ),
+        );
         // Drop the global `query` requirement — contradictions uses `topic`.
         obj.remove("required");
 
@@ -47,7 +53,7 @@ pub fn schema() -> Value {
                     "type": "string",
                     "enum": ["lookup", "reason", "contradictions"],
                     "default": "lookup",
-                    "description": "'lookup' (default): fast hybrid search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradiction analysis; needs 'query'. 'contradictions': trust-weighted disagreement pairs for a 'topic', or recent memories."
+                    "description": "'lookup' (default): fast hybrid search. 'reason': scoped deep pass with heuristic ranking, spreading activation, supersession, and contradiction analysis; its text is assembled from computed values; needs 'query' and requires current-source verification for material claims. 'contradictions': trust-weighted disagreement pairs for a 'topic', or recent memories."
                 }),
             );
             // reason (deep_reference) extra field.
@@ -82,6 +88,62 @@ pub fn schema() -> Value {
                     "description": "[contradictions mode] Minimum trust for both sides of a contradiction (default 0.3)."
                 }),
             );
+
+            // These lookup-pipeline controls have no honest equivalent in the
+            // reason pipeline. Mark them mode-specific in the model-facing
+            // schema; runtime validation returns a precise error if supplied.
+            for field in [
+                "detail_level",
+                "context_topics",
+                "retrieval_mode",
+                "concrete",
+                "rank_native_fusion",
+            ] {
+                if let Some(property) = props.get_mut(field).and_then(Value::as_object_mut) {
+                    let prior = property
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    property.insert(
+                        "description".to_string(),
+                        serde_json::json!(format!(
+                            "[lookup mode only; reason returns an unsupported-field error] {prior}"
+                        )),
+                    );
+                }
+            }
+
+            for field in [
+                "query",
+                "min_retention",
+                "min_similarity",
+                "exclude_types",
+                "include_types",
+                "token_budget",
+                "tag_prefix",
+                "validAt",
+                "source_system",
+                "source_project",
+                "source_id",
+                "source_type",
+                "source_author",
+                "source_updated_after",
+                "source_updated_before",
+                "source_status",
+            ] {
+                if let Some(property) = props.get_mut(field).and_then(Value::as_object_mut) {
+                    let prior = property
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    property.insert(
+                        "description".to_string(),
+                        serde_json::json!(format!(
+                            "[lookup and reason modes; contradictions returns an unsupported-field error] {prior}"
+                        )),
+                    );
+                }
+            }
         }
     }
 
@@ -106,7 +168,22 @@ pub async fn execute(
 
     match mode {
         // Zero-overhead default: straight to hybrid search.
-        "lookup" => super::search_unified::execute(storage, cognitive, output_config, args).await,
+        "lookup" => {
+            if let Some(object) = args.as_ref().and_then(Value::as_object) {
+                let wrong_mode_fields: Vec<&str> =
+                    ["depth", "topic", "since", "min_trust", "minTrust"]
+                        .into_iter()
+                        .filter(|field| object.contains_key(*field))
+                        .collect();
+                if !wrong_mode_fields.is_empty() {
+                    return Err(format!(
+                        "Unsupported recall lookup-mode field(s): {}.",
+                        wrong_mode_fields.join(", ")
+                    ));
+                }
+            }
+            super::search_unified::execute(storage, cognitive, output_config, args).await
+        }
         // Deep reasoning (deep_reference / cross_reference share this handler).
         "reason" => super::cross_reference::execute(storage, cognitive, args).await,
         // Trust-weighted contradiction pairs (storage-only).

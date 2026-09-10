@@ -2316,6 +2316,8 @@ pub async fn list_intentions(
 pub struct DeepReferenceBody {
     pub query: String,
     pub depth: Option<i32>,
+    #[serde(alias = "runId", default)]
+    pub run_id: Option<String>,
 }
 
 /// Run the 8-stage deep_reference cognitive pipeline over HTTP.
@@ -2338,15 +2340,31 @@ pub async fn deep_reference_query(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    if body.run_id.as_ref().is_some_and(|id| {
+        id.trim().is_empty() || id.len() > 200 || id.chars().any(char::is_control)
+    }) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let args = serde_json::json!({
         "query": body.query.clone(),
         "depth": body.depth.unwrap_or(20).clamp(5, 50),
+        "run_id": body.run_id,
     });
 
+    let run_id = crate::trace_recorder::run_id_for(&Some(args.clone()));
+    crate::trace_recorder::record_call(
+        &state.storage,
+        Some(&state.event_tx),
+        &run_id,
+        "deep_reference",
+        &Some(args.clone()),
+    );
     let start = std::time::Instant::now();
-    let response = crate::tools::cross_reference::execute(&state.storage, cognitive, Some(args))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut response =
+        crate::tools::cross_reference::execute(&state.storage, cognitive, Some(args))
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     // Pull evidence IDs out for the WebSocket event so Graph3D can glide,
@@ -2443,6 +2461,47 @@ pub async fn deep_reference_query(
         timestamp: Utc::now(),
     });
 
+    crate::trace_recorder::record_result(
+        &state.storage,
+        Some(&state.event_tx),
+        &run_id,
+        "deep_reference",
+        &response,
+    );
+    let receipt = crate::trace_recorder::build_and_save_receipt(
+        &state.storage,
+        &run_id,
+        "deep_reference",
+        &response,
+    );
+    let receipt_id = receipt
+        .as_ref()
+        .and_then(|value| value.get("receipt_id"))
+        .and_then(Value::as_str);
+    if receipt.is_some() && receipt_id.is_none() {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    // The shared recorder is best-effort. Never advertise a receipt that failed
+    // to persist; callers must be able to open the exact identity we return.
+    if let Some(id) = receipt_id {
+        state
+            .storage
+            .get_receipt(id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    if state
+        .storage
+        .get_trace(&run_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_empty()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    if let Some(object) = response.as_object_mut() {
+        object.insert("runId".to_string(), serde_json::json!(run_id));
+        object.insert("receiptId".to_string(), serde_json::json!(receipt_id));
+    }
     Ok(Json(response))
 }
 
@@ -2969,7 +3028,8 @@ pub async fn set_review_mode(
     State(state): State<AppState>,
     Json(body): Json<ReviewModeBody>,
 ) -> Result<Json<Value>, StatusCode> {
-    let mode = vestige_core::ReviewMode::from_label(&body.mode);
+    let mode = vestige_core::ReviewMode::try_from_label(&body.mode)
+        .ok_or(StatusCode::BAD_REQUEST)?;
     let path = review_mode_path(&state);
     let payload = serde_json::json!({ "mode": mode.as_str() });
     // B7: atomic write (temp + rename) so a concurrent read can never see a
@@ -2984,7 +3044,7 @@ fn review_mode_path(state: &AppState) -> PathBuf {
     state.storage.data_dir().join("review_mode.json")
 }
 
-/// Read the persisted review mode, defaulting to RiskGated.
+/// Read the persisted review mode, defaulting to Fast.
 ///
 /// Delegates to [`crate::trace_recorder::read_review_mode`] so the dashboard and
 /// the MCP write path read the mode through exactly one implementation. If these
@@ -3001,6 +3061,73 @@ pub fn read_review_mode(state: &AppState) -> vestige_core::ReviewMode {
 // GET /api/patterns/cross-project — CrossProjectLearner hydrated on demand
 // GET /api/memories/{id}/audit   — per-memory audit trail (state transitions)
 // ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicatesPlanBody {
+    pub member_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicatesApplyBody {
+    pub plan_id: String,
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+/// Map a `dedup` tool error onto an HTTP status with the message kept, so the
+/// dashboard can show the same words the MCP caller would see.
+fn dedup_tool_error(message: String) -> (StatusCode, Json<Value>) {
+    let lower = message.to_ascii_lowercase();
+    let status = if lower.contains("not found") {
+        StatusCode::NOT_FOUND
+    } else if lower.contains("not enabled") || lower.contains("not compiled") {
+        StatusCode::NOT_IMPLEMENTED
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    (status, Json(serde_json::json!({ "error": message })))
+}
+
+/// POST /api/duplicates/plan: preview a reversible merge of a cluster.
+///
+/// Delegates to the `dedup` tool's `plan_merge`, so the dashboard and the MCP
+/// surface produce the same plan ids, classification and undo reflog. Nothing
+/// is written; the response says so in `note`.
+pub async fn plan_duplicates_merge(
+    State(state): State<AppState>,
+    Json(body): Json<DuplicatesPlanBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if body.member_ids.len() < 2 {
+        return Err(dedup_tool_error(
+            "memberIds must contain at least two memory ids".to_string(),
+        ));
+    }
+    let args = serde_json::json!({ "action": "plan_merge", "member_ids": body.member_ids });
+    crate::tools::dedup::execute_unified(&state.storage, Some(args))
+        .await
+        .map(Json)
+        .map_err(dedup_tool_error)
+}
+
+/// POST /api/duplicates/apply: execute a previewed plan. The tool enforces
+/// the confirm rule (anything below a `match` needs `confirm: true`); this
+/// handler forwards the flag and the operation id that `dedup undo` reverses.
+pub async fn apply_duplicates_merge(
+    State(state): State<AppState>,
+    Json(body): Json<DuplicatesApplyBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let args = serde_json::json!({
+        "action": "apply",
+        "plan_id": body.plan_id,
+        "confirm": body.confirm,
+    });
+    crate::tools::dedup::execute_unified(&state.storage, Some(args))
+        .await
+        .map(Json)
+        .map_err(dedup_tool_error)
+}
 
 #[derive(Debug, Deserialize)]
 pub struct DuplicatesParams {
@@ -3651,6 +3778,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn review_mode_changes_persist_without_applying_historical_proposals() {
+        let (_dir, storage) = seed_storage();
+        let node_id = ingest(&storage, "Historical proposal must stay under user control");
+        let pr_id = open_pending_mutation_pr(&storage, &node_id, "purge");
+        let state = AppState::new(storage.clone(), None);
+        for mode in ["paranoid", "fast"] {
+            let _ = set_review_mode(
+                State(state.clone()),
+                Json(ReviewModeBody { mode: mode.into() }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(read_review_mode(&state).as_str(), mode);
+        }
+        assert!(storage.get_node(&node_id).unwrap().is_some());
+        assert!(
+            storage
+                .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+                .unwrap()
+                .iter()
+                .any(|pr| pr.id == pr_id)
+        );
+        assert_eq!(
+            set_review_mode(
+                State(state.clone()),
+                Json(ReviewModeBody {
+                    mode: "fsat".into()
+                })
+            )
+            .await
+            .unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(read_review_mode(&state), vestige_core::ReviewMode::Fast);
+    }
+
+    #[tokio::test]
     async fn pending_purge_forget_approves_and_executes_mutation() {
         let (_dir, storage) = seed_storage();
         let node_id = ingest(&storage, "purge after explicit review");
@@ -4013,6 +4177,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicates_plan_rejects_fewer_than_two_ids() {
+        let (_dir, storage) = seed_storage();
+        let state = AppState::new(storage, None);
+        let (status, Json(body)) = plan_duplicates_merge(
+            State(state),
+            Json(DuplicatesPlanBody {
+                member_ids: vec!["only-one".to_string()],
+            }),
+        )
+        .await
+        .expect_err("one id must be rejected");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].as_str().unwrap().contains("two"), "{body}");
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[tokio::test]
+    async fn duplicates_plan_then_apply_merges_through_the_reversible_reflog() {
+        let (_dir, storage) = seed_storage();
+        let a = ingest(&storage, "Rotate the payments cache key on every deploy");
+        let b = ingest(&storage, "Rotate the payments cache key on each deploy");
+        let state = AppState::new(storage.clone(), None);
+
+        let Json(plan) = plan_duplicates_merge(
+            State(state.clone()),
+            Json(DuplicatesPlanBody {
+                member_ids: vec![a.clone(), b.clone()],
+            }),
+        )
+        .await
+        .unwrap_or_else(|(status, Json(body))| panic!("plan failed: {status} {body}"));
+        let plan_id = plan["planId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("plan carried no planId: {plan}"))
+            .to_string();
+        assert_eq!(plan["memberIds"].as_array().unwrap().len(), 2, "{plan}");
+        assert!(plan["note"].as_str().unwrap().contains("Nothing was changed"));
+
+        let Json(applied) = apply_duplicates_merge(
+            State(state),
+            Json(DuplicatesApplyBody {
+                plan_id: plan_id.clone(),
+                confirm: true,
+            }),
+        )
+        .await
+        .unwrap_or_else(|(status, Json(body))| panic!("apply failed: {status} {body}"));
+        let operation_id = applied["operationId"].as_str().expect("operationId");
+        assert_eq!(applied["reversible"], true, "{applied}");
+        let affected: Vec<&str> = applied["affectedIds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(affected.contains(&a.as_str()) && affected.contains(&b.as_str()), "{applied}");
+
+        // The reflog the dashboard's undo path reads knows the operation.
+        let log = crate::tools::dedup::execute_unified(
+            &storage,
+            Some(serde_json::json!({ "action": "undo" })),
+        )
+            .await
+            .unwrap();
+        let listed = log["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|op| op["operationId"] == operation_id);
+        assert!(listed, "{log}");
+    }
+
+    #[tokio::test]
     async fn contradictions_reports_pair_with_contract_fields() {
         let (_dir, storage) = seed_storage();
         let first = ingest(
@@ -4195,11 +4432,135 @@ mod tests {
         assert_eq!(err, StatusCode::NOT_FOUND);
     }
 
-    /// Full proof-spine acceptance: a dashboard preview creates one durable
-    /// Backfill receipt (typed evidence), persists the candidate evidence edge,
-    /// and broadcasts only the route embedded in that receipt.
     #[tokio::test]
-    async fn backfill_http_preview_persists_receipt_edge_and_exact_live_path() {
+    async fn deep_reference_http_records_exact_returned_evidence() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "Browser fixture timeout uses 25 milliseconds.");
+        let cognitive = Arc::new(tokio::sync::Mutex::new(
+            crate::cognitive::CognitiveEngine::new(),
+        ));
+        let state = AppState::new(storage.clone(), Some(cognitive));
+        let body: DeepReferenceBody = serde_json::from_value(serde_json::json!({
+            "query": "Browser fixture timeout", "runId": "http-replay-proof"
+        }))
+        .unwrap();
+        let Json(response) = deep_reference_query(State(state), Json(body))
+            .await
+            .unwrap();
+        assert_eq!(response["runId"], "http-replay-proof");
+        let evidence: Vec<String> = response["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect();
+        assert!(evidence.contains(&id));
+        let receipt = storage
+            .get_receipt(response["receiptId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(receipt.retrieved, evidence);
+        assert!(!storage.get_trace("http-replay-proof").unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deep_reference_http_does_not_advertise_a_failed_receipt_write() {
+        let (dir, storage) = seed_storage();
+        ingest(&storage, "Browser fixture timeout uses 25 milliseconds.");
+        let connection = rusqlite::Connection::open(dir.path().join("test.db")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_replay_receipt BEFORE INSERT ON memory_receipts
+             BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END;",
+            )
+            .unwrap();
+        let cognitive = Arc::new(tokio::sync::Mutex::new(
+            crate::cognitive::CognitiveEngine::new(),
+        ));
+        let state = AppState::new(storage.clone(), Some(cognitive));
+        let result = deep_reference_query(
+            State(state),
+            Json(DeepReferenceBody {
+                query: "Browser fixture timeout".to_string(),
+                depth: None,
+                run_id: Some("failed-receipt-run".to_string()),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(result, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            storage
+                .list_receipts_for_run("failed-receipt-run", 20)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn deep_reference_http_rejects_invalid_run_identity_before_tracing() {
+        let (_dir, storage) = seed_storage();
+        let cognitive = Arc::new(tokio::sync::Mutex::new(
+            crate::cognitive::CognitiveEngine::new(),
+        ));
+        let state = AppState::new(storage.clone(), Some(cognitive));
+        for run_id in [" ".to_string(), "bad\nrun".to_string(), "x".repeat(201)] {
+            let result = deep_reference_query(
+                State(state.clone()),
+                Json(DeepReferenceBody {
+                    query: "valid query".to_string(),
+                    depth: None,
+                    run_id: Some(run_id.clone()),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(result, StatusCode::BAD_REQUEST);
+            assert!(storage.get_trace(&run_id).unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn deep_reference_http_empty_evidence_never_invents_a_receipt() {
+        let (_dir, storage) = seed_storage();
+        let cognitive = Arc::new(tokio::sync::Mutex::new(
+            crate::cognitive::CognitiveEngine::new(),
+        ));
+        let state = AppState::new(storage.clone(), Some(cognitive));
+        let Json(response) = deep_reference_query(
+            State(state.clone()),
+            Json(DeepReferenceBody {
+                query: "no memories exist".to_string(),
+                depth: None,
+                run_id: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["status"], "no_memories");
+        assert!(response.get("evidence").is_none());
+        assert!(response["receiptId"].is_null());
+        let run = response["runId"].as_str().unwrap();
+        assert!(!storage.get_trace(run).unwrap().is_empty());
+        let result = deep_reference_query(
+            State(state),
+            Json(DeepReferenceBody {
+                query: "  ".to_string(),
+                depth: None,
+                run_id: Some("invalid-empty-query".to_string()),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(result, StatusCode::BAD_REQUEST);
+        assert!(storage.get_trace("invalid-empty-query").unwrap().is_empty());
+    }
+
+    /// Full proof-spine acceptance: a dashboard preview creates one durable
+    /// Backfill receipt (typed evidence) preserves preview candidates without
+    /// inventing a graph edge or broadcasting an unpersisted route.
+    #[tokio::test]
+    async fn backfill_http_preview_records_receipt_without_graph_mutation() {
         let (_dir, storage) = seed_storage();
         let cause = storage
             .ingest(IngestInput {
@@ -4246,7 +4607,7 @@ mod tests {
         );
         assert_eq!(
             response["receipt"]["evidence"]["predicate"]["path_ids"],
-            serde_json::json!([cause.id, failure.id])
+            serde_json::json!([])
         );
         assert_eq!(
             response["receipt"]["evidence"]["predicate"]["candidates"][0]["promoted"],
@@ -4259,10 +4620,10 @@ mod tests {
             .expect("receipt saved");
         assert_eq!(
             persisted.backfill_path_ids(),
-            Some([cause.id.clone(), failure.id.clone()].as_slice())
+            None
         );
         assert!(
-            storage
+            !storage
                 .get_connections_for_memory(&cause.id)
                 .unwrap()
                 .iter()
@@ -4271,20 +4632,12 @@ mod tests {
                         && edge.target_id == failure.id
                         && edge.link_type == "backfill_candidate"
                 }),
-            "preview still persists explicit evidence, without a promotion"
+            "preview records candidates in its receipt without persisting graph edges"
         );
-        let emitted = loop {
-            match events.recv().await.expect("dashboard event") {
-                VestigeEvent::BackfillFired {
-                    receipt_id: emitted_receipt,
-                    path_ids,
-                    ..
-                } => break (emitted_receipt, path_ids),
-                _ => continue,
-            }
-        };
-        assert_eq!(emitted.0, receipt_id);
-        assert_eq!(emitted.1, vec![cause.id, failure.id]);
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, VestigeEvent::BackfillFired { .. }),
+                "preview must not animate a route that was never persisted");
+        }
     }
 
     #[test]

@@ -48,23 +48,16 @@ test.describe('HERO JOURNEY — click-only, no goto() between organs', () => {
 		expectNoErrors(errors);
 	});
 
-	test('Receipt → centered Graph → auto-Cinema handoff carries cognitive context', async ({ page }) => {
+	test('Witness context keeps Cinema explicit and Escape returns to the evidence view', async ({ page }) => {
 		const errors = captureErrors(page);
-		// This handoff is a deep-link by design (a receipt "Open in Cinema" button
-		// builds it), so we verify the RESULT of that link: graph centers on the
-		// memory and auto-launches the protected Cinema. One initial load, then the
-		// journey is automatic (the Graph-owned one-shot bridge clicks Cinema).
-		await page.goto(`${BASE}/graph?memory=seed&focus=seed&receipt=r1&cinema=1`, {
-			waitUntil: 'networkidle'
-		});
-		// The Graph-owned bridge polls for .cinema-launch and clicks it once the
-		// graph has real nodes; Cinema then mounts its .cinema-overlay.
-		await expect(page.locator('.cinema-overlay')).toBeVisible({ timeout: 10000 });
-
-		// Escape closes Cinema (it owns the keyboard) — the shell must NOT have
-		// stolen it (the collision fix). After close, the overlay is gone.
+		await page.goto(`${BASE}/graph?run=v3-browser-fixture`, { waitUntil: 'networkidle' });
+		await expect(page.getByRole('heading', { name: 'What shaped the decision?' })).toBeVisible();
+		await expect(page.locator('.cinema-overlay')).toHaveCount(0);
+		await page.getByRole('button', { name: 'Start Memory Cinema — an AI-narrated flythrough of your memory' }).click();
+		await expect(page.locator('.cinema-overlay')).toBeVisible();
 		await page.keyboard.press('Escape');
-		await expect(page.locator('.cinema-overlay')).toHaveCount(0, { timeout: 4000 });
+		await expect(page.locator('.cinema-overlay')).toHaveCount(0);
+		await expect(page.getByRole('heading', { name: 'What shaped the decision?' })).toBeVisible();
 
 		expectNoErrors(errors);
 	});

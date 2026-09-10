@@ -1,0 +1,35 @@
+{
+  "arm": "vestige",
+  "command": [
+    "@recorded-runtime@/vestige-mcp",
+    "--no-http"
+  ],
+  "environment": {
+    "PATH": "@recorded-home@/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Library/Apple/usr/bin:@recorded-home@/.nvm/versions/node/v24.12.0/bin:@recorded-agent-runtime@/tmp/arg0/codex-arg0RgHUvY:@recorded-agent-dependencies@/codex-primary-runtime/dependencies/bin/override:@recorded-agent-runtime@/bin:@recorded-home@/bin:@recorded-home@/.local/bin:@recorded-home@/.cargo/bin:@recorded-home@/.foundry/bin:@recorded-agent-dependencies@/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "TMPDIR": "/var/folders/tg/9hll24px5v17ys2sl78r1vb80000gn/T/",
+    "PYTHONUNBUFFERED": "1",
+    "TOKENIZERS_PARALLELISM": "false",
+    "HF_HOME": "@recorded-shared-harness@/runtime/huggingface",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "FASTEMBED_CACHE_PATH": "@recorded-shared-harness@/runtime/fastembed",
+    "VESTIGE_DATA_DIR": "@recorded-run@/vestige/server/data",
+    "VESTIGE_HTTP_ENABLED": "0",
+    "VESTIGE_DASHBOARD_ENABLED": "false",
+    "VESTIGE_AUTOPILOT_ENABLED": "0",
+    "VESTIGE_AUTO_CONSOLIDATE_MERGE": "0",
+    "VESTIGE_RECEIPT_SIGNING_KEY_ID": "local-demo-key",
+    "VESTIGE_RECEIPT_SIGNING_SEED_PATH": "@recorded-run@/vestige/server/data/receipt-keys/local-demo-key.seed"
+  },
+  "directory": "@recorded-run@/vestige/server",
+  "allowed_tools": [
+    "intention",
+    "memory",
+    "memory_status",
+    "recall",
+    "receipt"
+  ],
+  "scope": "hardened-demo"
+}

@@ -1,0 +1,7 @@
+{
+  "claim_boundary": "Disposable local demonstration key; native verification proves artifact integrity, not truth or causality.",
+  "key_id": "local-demo-key",
+  "public_key_fingerprint": "f93d54980722c916989e5a7f5ad85b95a1aee979f2a5786172f5ff499f1a299d",
+  "seed_path": "@recorded-run@/vestige/server/data/receipt-keys/local-demo-key.seed",
+  "public_key_sha256": "831a3ff4c91cc02c02b2f532178f0411b55545ab439529f87902bf2bf2e0ee51"
+}

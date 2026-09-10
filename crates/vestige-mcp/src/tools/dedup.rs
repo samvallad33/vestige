@@ -299,44 +299,44 @@ pub fn unified_schema() -> Value {
                 "type": "string",
                 "enum": ["scan", "plan_merge", "plan_supersede", "apply", "undo", "tag_rename", "tag_merge", "protect", "policy"],
                 "default": "scan",
-                "description": "What to do. 'scan' (default): surface duplicate clusters (cosine) AND merge candidates (Fellegi-Sunter), read-only. 'plan_merge'/'plan_supersede': preview a reversible memory plan. 'apply': execute a plan_id. 'undo': reverse a prior memory or tag operation (omit operation_id to list the mixed reflog plus tagOperations). 'tag_rename'/'tag_merge': exact, scoped, preview-token-gated tag maintenance. 'protect': pin a memory. 'policy': get/set Fellegi-Sunter thresholds."
+                "description": "'scan' (default, read-only): duplicate clusters and merge candidates. 'plan_merge' / 'plan_supersede': preview a reversible plan. 'apply': run a plan_id. 'undo': reverse an operation_id, or list the reflog. 'tag_rename' / 'tag_merge': preview-token gated. 'protect': pin a memory. 'policy': thresholds."
             },
             "similarity_threshold": {
                 "type": "number",
-                "description": "[scan] Minimum cosine similarity for duplicate clusters (0.5-1.0, default 0.80).",
+                "description": "[scan] Minimum cosine similarity for clusters (0.5 to 1, default 0.80).",
                 "minimum": 0.5, "maximum": 1.0
             },
             "limit": {
                 "type": "integer",
-                "description": "[scan] Max clusters/candidates to return (default 20).",
+                "description": "[scan] Max clusters and candidates (default 20).",
                 "minimum": 1, "maximum": 100
             },
             "tags": {
                 "type": "array", "items": { "type": "string" },
-                "description": "[scan] Optional: only consider memories with these tags (ANY match)."
+                "description": "[scan] Only memories with any of these tags."
             },
             "member_ids": {
                 "type": "array", "items": { "type": "string" },
-                "description": "[plan_merge] IDs of memories to merge (>= 2). Survivor kept; rest bitemporally invalidated."
+                "description": "[plan_merge] Two or more memory ids; the survivor is kept, the rest invalidated."
             },
-            "survivor_id": { "type": "string", "description": "[plan_merge] Optional: which member to keep (defaults to highest-retention)." },
+            "survivor_id": { "type": "string", "description": "[plan_merge] Member to keep (default: highest retention)." },
             "old_id": { "type": "string", "description": "[plan_supersede] Memory being superseded (kept, marked invalid)." },
-            "new_id": { "type": "string", "description": "[plan_supersede] Memory that supersedes the old one." },
-            "plan_id": { "type": "string", "description": "[apply] ID of a plan produced by plan_merge/plan_supersede." },
-            "confirm": { "type": "boolean", "default": false, "description": "[apply/tag_*] Explicit mutation confirmation. Tag actions always preview when false and require the returned preview_token when true." },
-            "operation_id": { "type": "string", "description": "[undo] Operation to reverse. Omit to list recent merge/supersede operations plus a dedicated tagOperations array that cannot be buried by merge activity." },
+            "new_id": { "type": "string", "description": "[plan_supersede] Memory that supersedes it." },
+            "plan_id": { "type": "string", "description": "[apply] Plan id from plan_merge or plan_supersede." },
+            "confirm": { "type": "boolean", "default": false, "description": "[apply, tag_*] Explicit confirmation. Tag actions preview when false and need preview_token when true." },
+            "operation_id": { "type": "string", "description": "[undo] Operation to reverse. Omit to list recent operations plus tagOperations." },
             "source_tag": { "type": "string", "description": "[tag_rename] Exact source tag to rename." },
-            "source_tags": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 50, "description": "[tag_merge] Two or more exact source tags to merge." },
+            "source_tags": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 50, "description": "[tag_merge] Two or more exact source tags." },
             "target_tag": { "type": "string", "description": "[tag_rename/tag_merge] Exact destination tag." },
-            "scope": { "type": "string", "default": "user", "description": "[tag_rename/tag_merge] Project scope. Defaults to the isolated 'user' scope." },
-            "all_scopes": { "type": "boolean", "default": false, "description": "[tag_rename/tag_merge] Explicitly operate across every scope. Default false." },
-            "preview_token": { "type": "string", "description": "[tag_rename/tag_merge confirm=true] Token returned by the immediately preceding matching preview." },
-            "reason": { "type": "string", "minLength": 1, "maxLength": 1000, "description": "[tag_rename/tag_merge confirm=true] Required durable audit reason." },
+            "scope": { "type": "string", "default": "user", "description": "[tag_*] Project scope (default 'user')." },
+            "all_scopes": { "type": "boolean", "default": false, "description": "[tag_*] Operate across every scope. Default false." },
+            "preview_token": { "type": "string", "description": "[tag_* confirm=true] Token from the matching preview." },
+            "reason": { "type": "string", "minLength": 1, "maxLength": 1000, "description": "[tag_* confirm=true] Audit reason, required." },
             "id": { "type": "string", "description": "[protect] Memory id to protect/unprotect." },
             "protected": { "type": "boolean", "default": true, "description": "[protect] true to pin, false to unpin." },
             "match_threshold": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "[policy] Score >= this => 'match'." },
             "possible_threshold": { "type": "number", "minimum": 0.0, "maximum": 1.0, "description": "[policy] Score in [possible, match) => review." },
-            "auto_apply": { "type": "boolean", "description": "[policy] Allow 'match' plans to apply without confirm. Default false." }
+            "auto_apply": { "type": "boolean", "description": "[policy] Apply 'match' plans without confirm. Default false." }
         }
     })
 }

@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vestige-runtime"
+version = "3.0.0a1"
+description = "Explicit retained-context integration for caller-owned model runtimes"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vestige_runtime*"]

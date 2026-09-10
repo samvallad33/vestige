@@ -29,10 +29,9 @@
 //!   replays exactly as the agent experienced it.
 //! - **self-explaining** — every gated write carries the [`RiskSignal`]s that
 //!   explain *why* it needs review, in plain language.
-//! - **opt-in friction** — the default [`ReviewMode::RiskGated`] keeps ordinary
-//!   memory frictionless and only opens a PR when the agent tries to rewrite its
-//!   own brain. [`ReviewMode::Fast`] never gates; [`ReviewMode::Paranoid`] gates
-//!   every write.
+//! - **opt-in friction** — the default [`ReviewMode::Fast`] auto-applies memory writes.
+//!   [`ReviewMode::RiskGated`] and [`ReviewMode::Paranoid`] are explicit opt-ins
+//!   for users who want a review queue.
 //! - **DB-free** — this module is pure logic so it is unit-testable without a
 //!   database. Persistence (the `agent_traces`, `memory_receipts`, and
 //!   `memory_prs` tables) lives in [`crate::storage`].

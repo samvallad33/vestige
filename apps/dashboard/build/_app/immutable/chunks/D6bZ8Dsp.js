@@ -1,1 +1,0 @@
-const o=new Set(["MemoryCreated","MemoryUpdated","MemoryDeleted","MemoryPromoted","MemoryDemoted","MemorySuppressed","MemoryUnsuppressed","ConsolidationCompleted","DreamCompleted"]),r=new Set(["BackfillFired","CausalReceipt"]);function t(e){return o.has(e.type)}function s(e){return r.has(e.type)}export{s as i,t as s};

@@ -48,13 +48,18 @@ function traceSource(runId: string | null, index: number, event: TraceEvent): Pr
 	return { kind: 'trace', id: `${runId ?? 'none'}:${index}:${event.type}` };
 }
 
-function evidenceOrder(receipt: Receipt): string[] {
-	return [
-		...receipt.activation_path,
+/** Activation paths may hold reasoning prose or a joined path, not memory IDs. */
+export function witnessEvidenceIds(receipt: Receipt | null): string[] {
+	if (!receipt) return [];
+	const attributed = [
 		...receipt.retrieved,
 		...receipt.mutations.map((mutation) => mutation.id),
 		...receipt.suppressed.map((suppression) => suppression.id)
-	].filter((id, index, values) => Boolean(id) && values.indexOf(id) === index);
+	];
+	const attributedIds = new Set(attributed);
+	const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+	const pathIds = receipt.activation_path.filter((id) => attributedIds.has(id) || uuid.test(id));
+	return [...new Set([...pathIds, ...attributed].filter(Boolean))];
 }
 
 function roleFor(id: string, receipt: Receipt): WitnessRole {
@@ -121,7 +126,7 @@ export function buildWitnessScene(
 	}
 
 	const eventList = detail?.events ?? [];
-	const ids = evidenceOrder(receipt).slice(0, 64);
+	const ids = witnessEvidenceIds(receipt).slice(0, 64);
 	const shards = ids.map((id, order): WitnessShard => {
 		const memory = memoryById.get(id);
 		const role = roleFor(id, receipt);
