@@ -41,7 +41,7 @@ The cause never looks like the bug. That is the whole product.
 
 ## Install
 
-You need Node.js. No Docker, no signup, no compile step (prebuilt for macOS ARM + Intel, Linux x86_64, Windows x86_64).
+You need Node.js. No Docker, no signup, no compile step (prebuilt for macOS ARM + Intel, Linux x86_64 + arm64, Windows x86_64).
 
 Android (Termux) builds from source today; see [docs/INSTALL-TERMUX.md](docs/INSTALL-TERMUX.md).
 
