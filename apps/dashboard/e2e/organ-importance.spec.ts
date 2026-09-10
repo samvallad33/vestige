@@ -1,30 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// IMPORTANCE — the real-data ImportanceScore MSDF field (organ ownership spec).
-//
-// This organ renders the REAL brain's memories ranked by neuromodulatory
-// importance. It reads GET /api/memories?limit=36, then scores each record via
-// POST /api/importance {content} → { channels{novelty,arousal,reward,attention},
-// composite, recommendation }, sorts by composite, and lays each out as an MSDF
-// text row (TextLayerPass over the recall-path observatory scene):
-//   snippet | id8 | composite% | retention% | recommendation | strongestChannel
-// The cursor swells/leans nearby glyphs; clicking a row PROMOTES the memory.
-//
-// The organ contract proven here:
-//   1. REACHABLE — /dashboard/importance mounts a WebGPU canvas.
-//   2. RENDERS REAL DATA — the SAME real memories curl returns, scored by the
-//      real /api/importance endpoint, drive the field (non-black render). The
-//      importance payload is asserted to be a real ImportanceScore, not mock.
-//   3. ALIVE — the field animates at idle (per-glyph time wobble + reveal +
-//      recall-path scene), no interaction required.
-//   4. CRASH-FREE pick + hover — a hover sweep and a grid of clicks (each a real
-//      promote POST) never throw a page/WebGPU error. This is the exact path
-//      that used to crash: promote returns a PARTIAL payload ({id,promoted,
-//      retentionStrength}), and the page now MERGES it onto the full record
-//      instead of replacing it, so importanceLine() never reads undefined
-//      content on the next render.
-//   5. HONEST states — the empty/error/loading branches render a calm status
-//      line (EMPTY IMPORTANCE FIELD / ERROR - .. / LOADING ..), never fake data.
-// ─────────────────────────────────────────────────────────────────────────────
+// Browser acceptance against real records in an owned disposable store.
 import { test, expect } from '@playwright/test';
 import {
 	captureErrors,
@@ -121,95 +95,36 @@ test('importance field is ALIVE at idle (no interaction required)', async ({ pag
 	expectNoErrors(errors);
 });
 
-test('clicking + hovering the importance field never crashes (real promotes survive)', async ({
-	page
-}) => {
-	// This test screenshots the canvas many times (each pick + two samples + a
-	// hover scan). Under full-suite GPU load a single compositor screenshot can
-	// stall for seconds, so give the whole test generous headroom over the 60s
-	// default — the assertions themselves are fast, only the GPU readbacks are slow.
-	test.setTimeout(120_000);
+test('selection is non-mutating; explicit promotion preserves the scored memory', async ({ page }) => {
 	const errors = captureErrors(page);
-	const canvas = await gotoRoute(page, '/importance');
-	await page.waitForTimeout(5000);
-
-	const box = await canvas.boundingBox();
-	expect(box).not.toBeNull();
-	if (!box) return;
-
-	// Track real promotes: every landed pick must fire POST …/promote. We assert
-	// at least one lands so the crash-free proof genuinely exercises the promote →
-	// merge → re-render path (a pick grid that MISSES the rows proves nothing).
+	await gotoRoute(page, '/importance');
+	const rows = page.locator('div[role="button"]').filter({ has: page.getByRole('button', { name: 'Promote', exact: true }) });
+	await expect(rows.first()).toBeVisible();
+	const count = await rows.count();
+	const row = rows.first();
+	const snippet = await row.locator('.truncate').textContent();
 	const promotes: string[] = [];
-	page.on('request', (r) => {
+	page.on('request', r => {
 		if (r.method() === 'POST' && /\/promote$/.test(r.url())) promotes.push(r.url());
 	});
-
-	// The real scored rows occupy a band the live field lays out at roughly
-	// fx∈[0.25,0.55], fy∈[0.40,0.78] (anchor x=-0.9 divided by the ~1.78 aspect
-	// lands the left column near fx≈0.25 in landscape). Verified live via the
-	// cursor→crosshair hit probe. Hover + click inside that band.
-	const hoverPts = [
-		[0.28, 0.42],
-		[0.35, 0.5],
-		[0.42, 0.58],
-		[0.3, 0.66],
-		[0.4, 0.74]
-	];
-	for (const [fx, fy] of hoverPts) {
-		await page.mouse.move(box.x + box.width * fx, box.y + box.height * fy);
-		await page.waitForTimeout(120);
-	}
-
-	// Click grid ON the real rows. Each hit fires a real promote POST, which
-	// returns a PARTIAL payload ({id,promoted,retentionStrength}); the
-	// merge-not-replace fix means the next render reads full content and the field
-	// survives every pick (no WebGPU error, no black-out, no TypeError from
-	// undefined content). This is the exact path that used to crash.
-	const clickPts = [
-		[0.28, 0.42],
-		[0.34, 0.48],
-		[0.3, 0.54],
-		[0.4, 0.6],
-		[0.33, 0.66],
-		[0.29, 0.72],
-		[0.45, 0.5],
-		[0.5, 0.58],
-		[0.7, 0.4]
-	];
-	for (const [fx, fy] of clickPts) {
-		await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
-		await page.waitForTimeout(250);
-	}
-
-	// Prove picks actually LANDED (not a hollow miss): at least one real promote
-	// fired. This is what makes the crash-free assertion meaningful.
-	expect(promotes.length, 'at least one click must land on a real row and promote').toBeGreaterThan(
-		0
-	);
-
-	// Field still renders after all the picks (no crash, no black-out).
-	const after = await sampleCanvas(page);
-	expect(after.rendered, 'importance field still renders after clicks + hover').toBe(true);
-
-	// REGRESSION GUARD — the field must STAY the real scored list after a promote,
-	// not collapse to a single spurious ERROR line. The promote endpoint returns a
-	// PARTIAL payload; the old replace-outright code dropped memory.content, threw
-	// inside importanceLine(), got swallowed by the catch, and flipped the whole
-	// field to `ERROR - ...` on the first click (verified live). Proof: the row
-	// band is still hoverable (cursor → crosshair) after all the promotes fired.
-	let rowStillHits = false;
-	for (let yi = 8; yi <= 15 && !rowStillHits; yi++) {
-		await page.mouse.move(box.x + box.width * 0.32, box.y + box.height * (yi / 20));
-		const cur = await page.evaluate(
-			() => (document.querySelector('div.fixed.inset-0') as HTMLElement).style.cursor
-		);
-		if (cur === 'crosshair') rowStillHits = true;
-	}
-	expect(
-		rowStillHits,
-		'real rows must stay pickable after promotes (field did not collapse to ERROR)'
-	).toBe(true);
-
+	await row.focus();
+	await row.press('Enter');
+	await expect(page.getByRole('button', { name: 'Close', exact: true })).toBeVisible();
+	expect(promotes).toHaveLength(0);
+	const response = page.waitForResponse(r => /\/promote$/.test(r.url()) && r.request().method() === 'POST');
+	await row.getByRole('button', { name: 'Promote', exact: true }).click();
+	const result = await response;
+	expect(result.ok()).toBe(true);
+	const payload = await result.json();
+	expect(payload.promoted).toBe(true);
+	expect(payload.retentionStrength).toEqual(expect.any(Number));
+	expect(promotes).toHaveLength(1);
+	await expect(rows).toHaveCount(count);
+	await expect(row).toContainText(snippet!);
+	await expect(page.getByText("Couldn't score importance", { exact: true })).toHaveCount(0);
+	await page.getByRole('button', { name: 'Close', exact: true }).click();
+	await row.press('Enter');
+	await expect(page.getByRole('button', { name: 'Close', exact: true })).toBeVisible();
+	expect((await sampleCanvas(page)).rendered).toBe(true);
 	expectNoErrors(errors);
 });

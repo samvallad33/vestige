@@ -2316,6 +2316,8 @@ pub async fn list_intentions(
 pub struct DeepReferenceBody {
     pub query: String,
     pub depth: Option<i32>,
+    #[serde(alias = "runId", default)]
+    pub run_id: Option<String>,
 }
 
 /// Run the 8-stage deep_reference cognitive pipeline over HTTP.
@@ -2338,15 +2340,31 @@ pub async fn deep_reference_query(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    if body.run_id.as_ref().is_some_and(|id| {
+        id.trim().is_empty() || id.len() > 200 || id.chars().any(char::is_control)
+    }) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let args = serde_json::json!({
         "query": body.query.clone(),
         "depth": body.depth.unwrap_or(20).clamp(5, 50),
+        "run_id": body.run_id,
     });
 
+    let run_id = crate::trace_recorder::run_id_for(&Some(args.clone()));
+    crate::trace_recorder::record_call(
+        &state.storage,
+        Some(&state.event_tx),
+        &run_id,
+        "deep_reference",
+        &Some(args.clone()),
+    );
     let start = std::time::Instant::now();
-    let response = crate::tools::cross_reference::execute(&state.storage, cognitive, Some(args))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut response =
+        crate::tools::cross_reference::execute(&state.storage, cognitive, Some(args))
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     // Pull evidence IDs out for the WebSocket event so Graph3D can glide,
@@ -2443,6 +2461,47 @@ pub async fn deep_reference_query(
         timestamp: Utc::now(),
     });
 
+    crate::trace_recorder::record_result(
+        &state.storage,
+        Some(&state.event_tx),
+        &run_id,
+        "deep_reference",
+        &response,
+    );
+    let receipt = crate::trace_recorder::build_and_save_receipt(
+        &state.storage,
+        &run_id,
+        "deep_reference",
+        &response,
+    );
+    let receipt_id = receipt
+        .as_ref()
+        .and_then(|value| value.get("receipt_id"))
+        .and_then(Value::as_str);
+    if receipt.is_some() && receipt_id.is_none() {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    // The shared recorder is best-effort. Never advertise a receipt that failed
+    // to persist; callers must be able to open the exact identity we return.
+    if let Some(id) = receipt_id {
+        state
+            .storage
+            .get_receipt(id)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    if state
+        .storage
+        .get_trace(&run_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_empty()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    if let Some(object) = response.as_object_mut() {
+        object.insert("runId".to_string(), serde_json::json!(run_id));
+        object.insert("receiptId".to_string(), serde_json::json!(receipt_id));
+    }
     Ok(Json(response))
 }
 
@@ -4193,6 +4252,130 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn deep_reference_http_records_exact_returned_evidence() {
+        let (_dir, storage) = seed_storage();
+        let id = ingest(&storage, "Browser fixture timeout uses 25 milliseconds.");
+        let cognitive = Arc::new(tokio::sync::Mutex::new(
+            crate::cognitive::CognitiveEngine::new(),
+        ));
+        let state = AppState::new(storage.clone(), Some(cognitive));
+        let body: DeepReferenceBody = serde_json::from_value(serde_json::json!({
+            "query": "Browser fixture timeout", "runId": "http-replay-proof"
+        }))
+        .unwrap();
+        let Json(response) = deep_reference_query(State(state), Json(body))
+            .await
+            .unwrap();
+        assert_eq!(response["runId"], "http-replay-proof");
+        let evidence: Vec<String> = response["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect();
+        assert!(evidence.contains(&id));
+        let receipt = storage
+            .get_receipt(response["receiptId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(receipt.retrieved, evidence);
+        assert!(!storage.get_trace("http-replay-proof").unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deep_reference_http_does_not_advertise_a_failed_receipt_write() {
+        let (dir, storage) = seed_storage();
+        ingest(&storage, "Browser fixture timeout uses 25 milliseconds.");
+        let connection = rusqlite::Connection::open(dir.path().join("test.db")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_replay_receipt BEFORE INSERT ON memory_receipts
+             BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END;",
+            )
+            .unwrap();
+        let cognitive = Arc::new(tokio::sync::Mutex::new(
+            crate::cognitive::CognitiveEngine::new(),
+        ));
+        let state = AppState::new(storage.clone(), Some(cognitive));
+        let result = deep_reference_query(
+            State(state),
+            Json(DeepReferenceBody {
+                query: "Browser fixture timeout".to_string(),
+                depth: None,
+                run_id: Some("failed-receipt-run".to_string()),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(result, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            storage
+                .list_receipts_for_run("failed-receipt-run", 20)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn deep_reference_http_rejects_invalid_run_identity_before_tracing() {
+        let (_dir, storage) = seed_storage();
+        let cognitive = Arc::new(tokio::sync::Mutex::new(
+            crate::cognitive::CognitiveEngine::new(),
+        ));
+        let state = AppState::new(storage.clone(), Some(cognitive));
+        for run_id in [" ".to_string(), "bad\nrun".to_string(), "x".repeat(201)] {
+            let result = deep_reference_query(
+                State(state.clone()),
+                Json(DeepReferenceBody {
+                    query: "valid query".to_string(),
+                    depth: None,
+                    run_id: Some(run_id.clone()),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(result, StatusCode::BAD_REQUEST);
+            assert!(storage.get_trace(&run_id).unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn deep_reference_http_empty_evidence_never_invents_a_receipt() {
+        let (_dir, storage) = seed_storage();
+        let cognitive = Arc::new(tokio::sync::Mutex::new(
+            crate::cognitive::CognitiveEngine::new(),
+        ));
+        let state = AppState::new(storage.clone(), Some(cognitive));
+        let Json(response) = deep_reference_query(
+            State(state.clone()),
+            Json(DeepReferenceBody {
+                query: "no memories exist".to_string(),
+                depth: None,
+                run_id: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["status"], "no_memories");
+        assert!(response.get("evidence").is_none());
+        assert!(response["receiptId"].is_null());
+        let run = response["runId"].as_str().unwrap();
+        assert!(!storage.get_trace(run).unwrap().is_empty());
+        let result = deep_reference_query(
+            State(state),
+            Json(DeepReferenceBody {
+                query: "  ".to_string(),
+                depth: None,
+                run_id: Some("invalid-empty-query".to_string()),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(result, StatusCode::BAD_REQUEST);
+        assert!(storage.get_trace("invalid-empty-query").unwrap().is_empty());
     }
 
     /// Full proof-spine acceptance: a dashboard preview creates one durable

@@ -9,7 +9,7 @@
 	import RouteStage, { type RouteFramePass, type RoutePick } from '$lib/observatory/RouteStage.svelte';
 	import type { ObservatoryEngine } from '$lib/observatory/engine';
 	import { WitnessVolumePass } from '$lib/observatory/witness/witness-volume-pass';
-	import { buildWitnessScene, type WitnessShard } from '$lib/observatory/witness/witness-scene';
+	import { buildWitnessScene, witnessEvidenceIds, type WitnessShard } from '$lib/observatory/witness/witness-scene';
 	import type { RouteSceneModel } from '$lib/observatory/route-scene';
 	import { api, type Receipt, type TraceDetail, type TraceRunSummary } from '$lib/stores/api';
 	import type { GraphResponse, Memory } from '$types';
@@ -49,15 +49,6 @@
 		witnessVolume?.setSelected(shard.id);
 	}
 
-	function evidenceIds(receipt: Receipt | null): string[] {
-		if (!receipt) return [];
-		return [
-			...receipt.activation_path,
-			...receipt.retrieved,
-			...receipt.mutations.map((mutation) => mutation.id),
-			...receipt.suppressed.map((suppression) => suppression.id)
-		].filter((id, index, all) => Boolean(id) && all.indexOf(id) === index);
-	}
 
 	/**
 	 * Some local tool runs have retrieval trace rows before a durable receipt is
@@ -91,7 +82,7 @@
 	}
 
 	async function hydrateEvidence(receipt: Receipt | null) {
-		const missing = evidenceIds(receipt)
+		const missing = witnessEvidenceIds(receipt)
 			.slice(0, 64)
 			.filter((id) => !memoryById.has(id));
 		if (!missing.length) return;

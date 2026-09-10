@@ -1,23 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// ORGAN: /timeline — Bitemporal Growth Rings
-//
-// Ship-a-working-product proof for THIS organ. Asserts the 5-point contract:
-//   1. REACHABLE   — the route mounts a WebGPU canvas.
-//   2. REAL DATA   — the live /api/timeline returns real memories, and the field
-//                    renders a bright, high-variance surface driven by that data
-//                    (not a mock/black frame, no fake "Live" over mock).
-//   3. ALIVE       — the growth-rings field animates (orbital drift). Proven with
-//                    a full-pixel frame diff across varied delays: the coarse
-//                    strided-hash isAnimating() aliases against this field's
-//                    periodic, low-coverage motion and yields false negatives, so
-//                    this organ needs a sensitive detector to prove life honestly.
-//   4. CRASH-FREE  — a grid of clicks across the ROTATING field plus a hover must
-//                    survive with no pageerror/WebGPU error (the CPU pickAt orbit
-//                    mirror must track the animated cell positions).
-//   5. HONEST EMPTY— the page's own empty/error branches render a calm MSDF status
-//                    line, never a fake "Live" badge over mock data (verified by
-//                    reasoning about +page.svelte + confirming zero DOM chrome leak).
-// ─────────────────────────────────────────────────────────────────────────────
+// Browser acceptance against real records in an owned disposable store.
 import { test, expect, type Page } from '@playwright/test';
 import { captureErrors, expectNoErrors, gotoRoute, sampleCanvas } from './helpers/dashboard';
 
@@ -97,10 +78,9 @@ test('timeline organ: reachable, renders the real growth-rings field', async ({ 
 	expect(sample.avgLum, 'field is measurably lit').toBeGreaterThan(2);
 	expect(sample.variance, 'field has spatial structure (rings/cells), not a flat wash').toBeGreaterThan(20);
 
-	// point 6: immersive organ — only the canvas layer, no leaked DOM control panel.
+	// The current route combines a WebGPU backdrop and a legible DOM reading surface.
 	await expect(canvas).toBeVisible();
-	const strayPanels = await page.locator('aside, nav, [role="navigation"], .sidebar').count();
-	expect(strayPanels, 'no DOM chrome/sidebar leaks over the immersive canvas').toBe(0);
+	await expect(page.getByRole('heading', { name: 'Watch memory grow. Inspect every change.' })).toBeVisible();
 
 	expectNoErrors(errors);
 });

@@ -97,86 +97,19 @@ test('explore field is ALIVE at idle (no interaction required)', async ({ page }
 	expectNoErrors(errors);
 });
 
-test('hovering + off-row clicks never crash; a row click navigates (real picks survive)', async ({
-	page
-}) => {
+test('selecting a neighbor keeps the query; explicit Walk re-centers on that memory', async ({ page }) => {
 	const errors = captureErrors(page);
-	const canvas = await gotoRoute(page, '/explore?q=memory');
-	await page.waitForTimeout(3500);
-
-	const box = await canvas.boundingBox();
-	expect(box).not.toBeNull();
-	if (!box) return;
-
-	// Hover sweep — drives pointermove → pickAt + cursor-lens writes across the
-	// field (the parallax swell/lean path). Must not throw on any point.
-	const hoverPts = [
-		[0.2, 0.25],
-		[0.35, 0.4],
-		[0.3, 0.55],
-		[0.25, 0.7],
-		[0.4, 0.85],
-		[0.6, 0.5]
-	];
-	for (const [fx, fy] of hoverPts) {
-		await page.mouse.move(box.x + box.width * fx, box.y + box.height * fy);
-		await page.waitForTimeout(120);
-	}
-
-	// Off-row click grid — the rows anchor down the LEFT column (x=-0.88); the
-	// right half of the field has no pickable rows. Clicking there exercises
-	// pickAt returning null (no nav) and must survive every click with no error.
-	const offRowClicks = [
-		[0.7, 0.3],
-		[0.8, 0.5],
-		[0.75, 0.7],
-		[0.6, 0.85],
-		[0.9, 0.4]
-	];
-	for (const [fx, fy] of offRowClicks) {
-		await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
-		await page.waitForTimeout(150);
-	}
-
-	// Field still renders + still on the explore route after off-row picks.
-	const after = await sampleCanvas(page);
-	expect(after.rendered, 'explore field still renders after off-row clicks + hover').toBe(true);
-	expect(page.url(), 'off-row clicks must NOT navigate away').toContain('/explore');
-
-	expectNoErrors(errors);
-
-	// A targeted row click re-centers the neighborhood on the clicked thought — a
-	// SEMANTIC WALK IN PLACE (the /memories/{id} detail route doesn't exist and
-	// 404'd, so explore syncs the clicked memory's content into ?q= via
-	// replaceState instead). The observable proof is the query changing to the
-	// clicked memory's content. Rows anchor at logical NDC x=-0.88, which the
-	// pickAt aspect-divide pulls to fx≈0.26–0.32; the top row (ndcY≈0.72) sits at
-	// fy≈0.14. Click across that band to reliably land on a row.
-	const startQuery = new URL(page.url()).searchParams.get('q');
-	const rowClicks = [
-		[0.28, 0.14],
-		[0.3, 0.14],
-		[0.26, 0.16],
-		[0.32, 0.15],
-		[0.28, 0.18]
-	];
-	let walked = false;
-	for (const [fx, fy] of rowClicks) {
-		await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
-		await page.waitForTimeout(400);
-		const q = new URL(page.url()).searchParams.get('q');
-		// Stayed on /explore, but the query re-centered on the clicked neighbor.
-		if (page.url().includes('/explore') && q && q !== startQuery) {
-			walked = true;
-			break;
-		}
-	}
-	expect(
-		walked,
-		`a left-column row click should re-center the semantic walk (?q= changes; url=${page.url()})`
-	).toBe(true);
-
-	// The walk itself must be crash-free too.
+	await gotoRoute(page, '/explore?q=memory');
+	const row = page.getByRole('button', { name: /Vestige memory browser-fixture/ }).first();
+	await expect(row).toBeVisible();
+	await row.click();
+	expect(new URL(page.url()).searchParams.get('q')).toBe('memory');
+	const walk = page.getByRole('button', { name: 'Walk from this thought', exact: true });
+	await expect(walk).toBeVisible();
+	await walk.click();
+	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toMatch(/^Vestige memory browser-fixture/);
+	await expect(page.getByRole('heading', { name: 'Semantic Explorer', exact: true })).toBeVisible();
+	expect((await sampleCanvas(page)).rendered).toBe(true);
 	expectNoErrors(errors);
 });
 

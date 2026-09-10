@@ -136,12 +136,10 @@ test('patterns organ mounts a canvas and renders the REAL cross-project field', 
 			`the pattern rows must render in the left column (leftBright=${lum.leftBright})`
 		).toBeGreaterThan(500);
 	} else {
-		// Zero patterns → the memory-pool substrate must still fill the frame (the
-		// full-bleed living field), proving the organ is alive, not a black void.
-		expect(
-			sample.fillPct,
-			`empty-pattern substrate must still fill the field (fillPct=${sample.fillPct})`
-		).toBeGreaterThan(20);
+        // An empty pattern set must be stated explicitly; ambient brightness
+        // cannot stand in for evidence that any cross-project pattern exists.
+        await expect(page.getByText('No cross-project patterns standing today.', { exact: true })).toBeVisible();
+
 	}
 
 	expectNoErrors(errors);

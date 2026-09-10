@@ -155,7 +155,8 @@ test.describe('/observatory organ — real-data WebGPU cognitive field', () => {
 			await page.locator('.obs-ui nav').count(),
 			'the Observatory exposes one intentional evidence/moment control strip'
 		).toBe(1);
-		expect(await page.locator('aside, [data-app-sidebar], .os-dock').count()).toBe(0);
+		await expect(page.locator('.os-dock')).toHaveCount(1);
+		await expect(page.locator('.obs-ui aside, .obs-ui [data-app-sidebar]')).toHaveCount(0);
 
 		// ── 3. ALIVE ─────────────────────────────────────────────────────────────
 		const animated = await isAnimating(page, 900);

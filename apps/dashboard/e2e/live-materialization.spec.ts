@@ -1,10 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
-import { readFileSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
 
-const API = 'http://127.0.0.1:3927';
-const MCP = 'http://127.0.0.1:3928/mcp';
+const API = process.env.VESTIGE_API_TARGET ?? 'http://127.0.0.1:3931';
+const MCP = process.env.VESTIGE_E2E_MCP_URL;
 const GRAPH_URL = '/dashboard/graph';
 
 // ─────────────────────────────────────────────────
@@ -16,8 +13,8 @@ let authToken: string | null = null;
 
 function getAuthToken(): string {
 	if (authToken) return authToken;
-	const tokenPath = join(homedir(), 'Library', 'Application Support', 'com.vestige.core', 'auth_token');
-	authToken = readFileSync(tokenPath, 'utf-8').trim();
+	if (!MCP || !process.env.VESTIGE_E2E_AUTH_TOKEN) throw new Error('Run through scripts/run-dashboard-e2e.py with a disposable store');
+	authToken = process.env.VESTIGE_E2E_AUTH_TOKEN;
 	return authToken;
 }
 
@@ -27,7 +24,7 @@ async function initMcpSession(): Promise<string> {
 	const token = getAuthToken();
 
 	// Initialize
-	const initRes = await fetch(MCP, {
+	const initRes = await fetch(MCP!, {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
@@ -46,7 +43,7 @@ async function initMcpSession(): Promise<string> {
 	mcpSessionId = initRes.headers.get('mcp-session-id')!;
 
 	// Send initialized notification
-	await fetch(MCP, {
+	await fetch(MCP!, {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
@@ -66,7 +63,7 @@ async function mcpCall(toolName: string, args: Record<string, unknown>): Promise
 	const token = getAuthToken();
 	const id = mcpCallId++;
 
-	const res = await fetch(MCP, {
+	const res = await fetch(MCP!, {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',

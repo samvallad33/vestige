@@ -1,115 +1,75 @@
-import { test, expect, type Page } from '@playwright/test';
-import { BASE, captureErrors, expectNoErrors, gotoRoute, sampleCanvas, isAnimating } from './helpers/dashboard';
+import { test, expect } from '@playwright/test';
+import { captureErrors, expectNoErrors, gotoRoute, sampleCanvas } from './helpers/dashboard';
 
-// ─────────────────────────────────────────────────────────────────────────
-// ORGAN OWNER SPEC — /reasoning (Reasoning Theater, the deep_reference organ)
-//
-// The Reasoning Theater is a ZERO-DOM WebGPU organ: the ONLY DOM is a
-// visually-hidden (sr-only) ask input for keyboard + screen-reader access.
-// There is no DOM response panel — the decision trace (beam / ribbon / nucleus),
-// the evidence galaxy, gates, and receipt are all rendered IN-CANVAS. So the
-// 7-point organ contract is proven on PIXELS + the real API round-trip, not DOM
-// widgets, against the REAL brain (:3931):
-//   1. REACHABLE    — /dashboard/reasoning mounts its WebGPU canvas.
-//   5. HONEST-EMPTY — before any query there is NO fabricated response; the
-//                     sr-only ask input is empty and the DOM has no DOM response
-//                     panels. The field is still alive from a passive real
-//                     memory-pool substrate (no invented trace is claimed).
-//   2. RENDERS REAL — a real query runs the 8-stage deep_reference pipeline (200)
-//                     and the field RE-LIGHTS with the real evidence galaxy.
-//   3. ALIVE        — the field animates at rest.
-//   4. CRASH-FREE   — a grid of in-canvas clicks + a hover sweep survive with
-//                     zero page/WebGPU errors.
-// ─────────────────────────────────────────────────────────────────────────
-
-const REASONING = '/reasoning';
-const QUERY = 'How does FSRS-6 trust scoring work?';
-
-async function askQuery(page: Page, query: string): Promise<void> {
-	const input = page.locator('#reasoning-ask');
-	await input.waitFor({ state: 'attached', timeout: 15_000 });
-	await input.fill(query);
-	await expect(input).toHaveValue(query);
+test('reasoning displays only evidence returned by its real run and links its receipt', async ({ page }) => {
+	const errors = captureErrors(page);
+	await gotoRoute(page, '/reasoning');
+	const input = page.locator('#memory-question');
+	await expect(input).toBeVisible();
+	// onMount focuses this input: wait for hydration before typing into SSR markup.
+	await expect(input).toBeFocused();
+	await expect(input).toHaveValue('');
+	await expect(page.locator('.evidence-list article')).toHaveCount(0);
+	await expect(page.locator('.run-id')).toHaveCount(0);
+	const response = page.waitForResponse(r => /\/api\/deep[_-]reference/.test(r.url()) && r.request().method() === 'POST');
+	await input.fill('browser-fixture timeout milliseconds');
 	await input.press('Enter');
-}
+	const result = await response;
+	expect(result.ok()).toBe(true);
+	const payload = await result.json();
+	expect(Array.isArray(payload.evidence)).toBe(true);
+	expect(payload.evidence.length).toBeGreaterThan(0);
+	await expect(page.locator('.evidence-list article')).toHaveCount(payload.evidence.length);
+	for (const evidence of payload.evidence) {
+		await expect(page.locator('.evidence-list code').filter({ hasText: evidence.id })).toBeVisible();
+	}
+	const run = payload.runId ?? payload.run_id;
+	const receipt = payload.receiptId ?? payload.receipt_id;
+	expect(run).toEqual(expect.any(String));
+	expect(receipt).toEqual(expect.any(String));
+	await expect(page.locator('.run-id')).toContainText(run);
+	await expect(page.getByRole('link', { name: /Open this run in Black Box/ })).toHaveAttribute('href', new RegExp(encodeURIComponent(run)));
+	await expect(page.getByRole('link', { name: /Open exact receipt/ })).toHaveAttribute('href', new RegExp(encodeURIComponent(receipt)));
+	expect((await sampleCanvas(page)).rendered).toBe(true);
+	await page.getByRole('button', { name: 'New question', exact: true }).click();
+	await expect(input).toHaveValue('');
+	await expect(page.locator('.evidence-list article')).toHaveCount(0);
+	await expect(page.locator('.run-id')).toHaveCount(0);
+    const requestedIds: string[] = [];
+    page.on('request', request => {
+        const path = new URL(request.url()).pathname;
+        const match = path.match(/^\/api\/memories\/([^/]+)$/);
+        if (match) requestedIds.push(decodeURIComponent(match[1]));
+    });
+    await page.goto(`/dashboard/graph?run=${encodeURIComponent(run)}&receipt=${encodeURIComponent(receipt)}`);
+    await expect(page.locator('.receipt-seal code')).toHaveText(receipt);
+    await page.waitForLoadState('networkidle');
+    expect(requestedIds.length).toBeGreaterThan(0);
+    expect(requestedIds.every(id => /^[0-9a-f-]{36}$/i.test(id))).toBe(true);
+    expectNoErrors(errors);
+});
 
-test.describe('Organ /reasoning — Reasoning Theater (zero-DOM)', () => {
-	test('reachable, honest-empty, renders REAL data, alive, and survives click+hover', async ({
-		page
-	}) => {
-		const capture = captureErrors(page);
+test('reasoning failure offers retry without fabricating evidence or receipt links', async ({ page }) => {
+	await page.route('**/api/deep_reference', route => route.fulfill({ status: 503, json: { error: 'fixture unavailable' } }));
+	await gotoRoute(page, '/reasoning');
+	await expect(page.locator('#memory-question')).toBeFocused();
+	await page.locator('#memory-question').fill('browser fixture');
+	await page.getByRole('button', { name: 'Run replay', exact: true }).click();
+	await expect(page.getByRole('button', { name: 'Try again', exact: true })).toBeVisible();
+	await expect(page.locator('.evidence-list article, .receipt-seal, .run-id')).toHaveCount(0);
+	await expect(page.getByRole('link', { name: /Open exact receipt/ })).toHaveCount(0);
+});
 
-		// ── 1. REACHABLE ───────────────────────────────────────────────────
-		const canvas = await gotoRoute(page, REASONING);
-		await expect(canvas).toBeVisible();
-
-		// ── 5. HONEST-EMPTY (pre-query) ────────────────────────────────────
-		// The ask input exists (sr-only) and is empty — no query has run, so no
-		// trace is claimed. There are no DOM response panels to fake at all.
-		const input = page.locator('#reasoning-ask');
-		await expect(input).toHaveValue('');
-		// The field is still sampleable + alive from the passive memory-pool
-		// substrate (an honest "here is your corpus" backdrop, not a fake trace).
-		await page.waitForTimeout(3500);
-		const emptySample = await sampleCanvas(page);
-		expect(emptySample.ok, 'empty-state canvas should be sampleable').toBe(true);
-		expect(
-			emptySample.fillPct,
-			`the rest substrate should fill the field (fillPct=${emptySample.fillPct})`
-		).toBeGreaterThan(20);
-
-		// ── 2. RENDERS REAL DATA — run the real 8-stage pipeline ───────────
-		const respPromise = page.waitForResponse(
-			(r) => /\/api\/deep[_-]reference/.test(r.url()) && r.status() === 200,
-			{ timeout: 30_000 }
-		);
-		await askQuery(page, QUERY);
-		const resp = await respPromise;
-		const payload = (await resp.json()) as { evidence?: unknown[]; confidence?: number };
-		// The real backend produced evidence — the field will lay it out as cells.
-		expect(Array.isArray(payload.evidence), 'deep_reference returns an evidence array').toBe(true);
-
-		// The field re-lights with the real evidence galaxy.
-		await page.waitForTimeout(3500);
-		const lit = await sampleCanvas(page);
-		expect(lit.ok, 'organ canvas should be sampleable').toBe(true);
-		expect(
-			lit.rendered,
-			`evidence galaxy should render non-black (avgLum=${lit.avgLum}, variance=${lit.variance})`
-		).toBe(true);
-
-		// ── 3. ALIVE ───────────────────────────────────────────────────────
-		const animating = await isAnimating(page);
-		expect(animating, 'organ field should animate (living, not a frozen frame)').toBe(true);
-
-		// ── 4. CRASH-FREE in-canvas click grid + hover sweep ───────────────
-		const box = await canvas.boundingBox();
-		expect(box, 'canvas should have a bounding box').not.toBeNull();
-		if (box) {
-			const cols = 5;
-			const rows = 5;
-			for (let r = 0; r < rows; r++) {
-				for (let c = 0; c < cols; c++) {
-					const x = box.x + ((c + 0.5) / cols) * box.width;
-					const y = box.y + ((r + 0.5) / rows) * box.height;
-					await page.mouse.move(x, y);
-					await page.mouse.click(x, y);
-				}
-			}
-			for (let r = 0; r < 9; r++) {
-				await page.mouse.move(box.x + box.width * 0.5, box.y + (r / 8) * box.height);
-			}
-		}
-
-		const afterInteract = await sampleCanvas(page);
-		expect(
-			afterInteract.rendered,
-			`organ field should still render after clicks/hover (avgLum=${afterInteract.avgLum}, variance=${afterInteract.variance})`
-		).toBe(true);
-
-		await page.screenshot({ path: 'e2e/screenshots/organ-reasoning.png', fullPage: true });
-
-		// ── No real app / WebGPU-validation errors across the whole run ────
-		expectNoErrors(capture);
-	});
+test('reasoning empty result keeps trace identity but does not claim a receipt', async ({ page }) => {
+	await page.route('**/api/deep_reference', route => route.fulfill({ json: {
+		status: 'no_memories', evidence: [], runId: 'empty-fixture-run', receiptId: null,
+	} }));
+	await gotoRoute(page, '/reasoning');
+	await expect(page.locator('#memory-question')).toBeFocused();
+	await page.locator('#memory-question').fill('empty fixture');
+	await page.getByRole('button', { name: 'Run replay', exact: true }).click();
+	await expect(page.locator('.run-id')).toContainText('empty-fixture-run');
+	await expect(page.locator('.empty-evidence')).toBeVisible();
+	await expect(page.getByRole('link', { name: /Open exact receipt/ })).toHaveCount(0);
+	await expect(page.locator('.evidence-list article, .receipt-seal')).toHaveCount(0);
 });

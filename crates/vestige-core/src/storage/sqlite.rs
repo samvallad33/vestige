@@ -24359,3 +24359,7 @@ mod write_transaction_policy {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "v3_regression_tests.rs"]
+mod v3_regression_tests;

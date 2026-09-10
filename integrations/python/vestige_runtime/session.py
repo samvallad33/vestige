@@ -51,6 +51,12 @@ class DeveloperSession:
         }
 
     def execute_tool(self, call_id, name, arguments):
+        if (
+            not isinstance(call_id, str)
+            or not call_id
+            or not isinstance(arguments, dict)
+        ):
+            raise ValueError("nonempty tool call ID and object arguments required")
         if name not in self.selected:
             raise ValueError("tool is not discovered: " + name)
         if any(e.get("call_id") == call_id for e in self.events):

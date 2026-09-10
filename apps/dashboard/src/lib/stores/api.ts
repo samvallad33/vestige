@@ -55,7 +55,7 @@ export const api = {
 			const qs = params ? '?' + new URLSearchParams(params).toString() : '';
 			return fetcher<MemoryListResponse>(`/memories${qs}`);
 		},
-		get: (id: string) => fetcher<Memory>(`/memories/${id}`),
+		get: (id: string) => fetcher<Memory>(`/memories/${encodeURIComponent(id)}`),
 		delete: (id: string) => fetcher<{ deleted: boolean }>(`/memories/${id}`, { method: 'DELETE' }),
 		promote: (id: string) => fetcher<MemoryPromotion>(`/memories/${id}/promote`, { method: 'POST' }),
 		demote: (id: string) => fetcher<MemoryDemotion>(`/memories/${id}/demote`, { method: 'POST' }),

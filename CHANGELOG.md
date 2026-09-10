@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Dashboard replay evidence
+
+- Dashboard deep-reference calls now preserve the supplied run identity and
+  persist the returned evidence through the shared trace and receipt recorder.
+  Black Box and exact-receipt links resolve to stored evidence. Empty retrieval
+  records a trace without inventing a receipt; receipt persistence failures return
+  an error. Invalid run identities are rejected before tracing.
+- Witness excludes reasoning prose from memory hydration and evidence shards;
+  memory IDs in request paths are URL-encoded. Ordered memory paths remain
+  inspectable without inventing edges across prose gaps.
+
+### Added — v3 regression qualification
+
+- Storage regressions cover concurrent cascade writers, interrupted journal and
+  lifecycle writes, restart/migration replay, purge interaction, and paginated GC.
+- Runtime and evaluation tests cover retained-context ownership, long revision
+  sequences, failed/timed-out drivers, tampered frozen inputs and invalid charges.
+- An isolated browser runner creates and verifies synthetic memories, topology,
+  intentions, traces and pending Memory PRs. Browser contracts cover explicit
+  selection/actions and persisted replay evidence in the current dashboard.
+- CI qualifies the installed Python runtime and real MCP stdio contracts. See
+  `docs/V3-VALIDATION.md` for commands and optional dependency boundaries.
+
 ### Added — v3 efficiency evaluation and runtime candidate
 
 - Installable Python runtime for explicit transcript ownership, progressive native

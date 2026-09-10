@@ -52,3 +52,84 @@ class SessionTests(unittest.TestCase):
         session.add_user("x" * 2000)
         with self.assertRaises(ValueError):
             session.request("openai_responses", model="fixture")
+
+    def test_failed_mcp_call_and_false_unchanged_never_enter_transcript(self):
+        for response in (
+            {"isError": True},
+            {"notModified": True, "packetId": "a" * 64},
+        ):
+            session = DeveloperSession(CATALOG, lambda *_: response)
+            session.discover(["recall"])
+            with self.assertRaises(ValueError):
+                session.execute_tool("one", "recall", {"query": "x"})
+            self.assertEqual(session.events, [])
+            self.assertEqual(session.retained_packets(), set())
+
+    def test_caller_mutations_cannot_change_owned_catalog_arguments_or_evidence(self):
+        import copy
+
+        catalog = copy.deepcopy(CATALOG)
+        response = {
+            "packetId": "b" * 64,
+            "evidenceIncomplete": False,
+            "results": [{"content": "original"}],
+        }
+        session = DeveloperSession(catalog, lambda *_: response)
+        session.discover(["recall"])
+        args = {"query": "original", "tags": ["one"]}
+        result = session.execute_tool("one", "recall", args)
+        args["query"] = "changed"
+        response["results"][0]["content"] = "changed"
+        result["results"].clear()
+        catalog[0]["inputSchema"]["properties"]["injected"] = {}
+        body = session.request("openai_responses", model="fixture")
+        self.assertNotIn("changed", str(body))
+        self.assertNotIn("injected", str(body))
+        self.assertIn("original", str(body))
+
+    def test_hundred_step_retention_reset_and_revision_state_machine(self):
+        import hashlib
+
+        revision = 0
+        seen = []
+
+        def mcp(name, args):
+            seen.append(args)
+            content = f"{args['query']} revision {revision}"
+            packet = hashlib.sha256(content.encode()).hexdigest()
+            if args.get("known_packet_id") == packet:
+                return {"packetId": packet, "notModified": True}
+            return {
+                "packetId": packet,
+                "notModified": False,
+                "evidenceIncomplete": False,
+                "results": [{"content": content}],
+            }
+
+        session = DeveloperSession(CATALOG, mcp)
+        session.discover(["recall"])
+        for step in range(100):
+            reset = step % 7 == 0
+            if reset:
+                session.reset_context(summary="fixture continuation")
+            if step % 11 == 0:
+                revision += 1
+            args = {"query": f"topic-{step%3}"}
+            retained = session.retained_packets()
+            result = session.execute_tool(f"call-{step}", "recall", args)
+            if reset:
+                self.assertNotIn("known_packet_id", seen[-1])
+            if result["notModified"]:
+                self.assertIn(result["packetId"], retained)
+            for provider in ("openai_responses", "anthropic_messages"):
+                body = session.request(provider, model="fixture")
+                self.assertIn(f"topic-{step%3} revision {revision}", str(body))
+
+    def test_invalid_call_identity_rejected_before_transport(self):
+        calls = []
+        session = DeveloperSession(CATALOG, lambda *args: calls.append(args))
+        session.discover(["recall"])
+        for call_id, args in [("", {}), (None, {}), ("valid", [])]:
+            with self.assertRaises(ValueError):
+                session.execute_tool(call_id, "recall", args)
+        self.assertEqual(calls, [])

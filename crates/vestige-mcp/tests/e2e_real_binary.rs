@@ -45,11 +45,8 @@
 //! by default and use [`Server::ingest_keyword_only`], which documents that
 //! choice at the call site.
 //!
-//! # Known product defect documented here
-//!
-//! [`correction_must_not_be_swallowed_by_the_ingest_gate`] is `#[ignore]`d
-//! because it FAILS against the current build. See its doc comment; the defect
-//! was not fixed here on purpose.
+//! The correction-ingest regression also requires the real model. Its ignore
+//! marker selects the optional runtime suite; it is not an expected failure.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};

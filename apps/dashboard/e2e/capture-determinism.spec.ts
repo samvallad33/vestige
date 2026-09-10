@@ -144,7 +144,7 @@ test.describe('Capture determinism — ?frame=N shareable still', () => {
 		expect(
 			sameFrameDiff,
 			`same ?frame=${FROZEN} reload should be pixel-stable (mean channel diff ${sameFrameDiff.toFixed(2)})`
-		).toBeLessThan(3);
+		).toBeLessThan(0.5);
 
 		// (4) frame=300 must DIFFER from frame=120 — a different playhead paints a
 		// different field. This proves the freeze is a real function of N, not a
@@ -159,12 +159,13 @@ test.describe('Capture determinism — ?frame=N shareable still', () => {
 			`frame=${OTHER} should differ from frame=${FROZEN} (mean channel diff ${crossFrameDiff.toFixed(2)})`
 		).toBeGreaterThan(sameFrameDiff);
 
-		// Sanity: the cross-frame difference is meaningfully larger than the
-		// same-frame noise floor — not just barely over it.
+		// Compare signal to measured reload noise. Whole-frame brightness depends
+		// on corpus size; it is not an animation identity invariant. Require a
+		// fivefold separation plus a nonzero signal on the 0..255 channel scale.
 		expect(
 			crossFrameDiff,
 			`frame=${OTHER} vs frame=${FROZEN} difference too small to be a real frame change`
-		).toBeGreaterThan(2);
+		).toBeGreaterThan(Math.max(0.5, sameFrameDiff * 5));
 
 		expectNoErrors(errors);
 	});

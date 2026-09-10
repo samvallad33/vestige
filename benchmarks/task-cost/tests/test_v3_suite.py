@@ -171,3 +171,98 @@ class V3Tests(unittest.TestCase):
             with capture.measured_task(root, arm="native", case=case["id"], trial=0):
                 pass
         self.assertTrue(ledger.evaluate(root)["arms"]["native"]["accounting_complete"])
+
+    def trial_fixture(self, driver, timeout=1):
+        import zipfile
+
+        root = self.fixture()
+        contract = ledger.read_json(root / "contract.json")
+        (root / "driver.py").write_text(driver)
+        (root / "evaluator.py").write_text(
+            'raise AssertionError("must not score failed driver")\n'
+        )
+        with zipfile.ZipFile(root / "source.zip", "w") as archive:
+            archive.writestr("solution.py", "pass\n")
+
+        def artifact(name):
+            return {"path": name, "sha256": ledger.digest(root / name)}
+
+        contract.update(driver=artifact("driver.py"), task_timeout_seconds=timeout)
+        for case in contract["cases"]:
+            case.update(
+                source=artifact("source.zip"), evaluator=artifact("evaluator.py")
+            )
+        (root / "contract.json").write_text(json.dumps(contract))
+        (root / "contract.lock.json").unlink()
+        ledger.freeze(root)
+        (root / "events.jsonl").write_text("")
+        return root, trials.schedule(root)[0]
+
+    def test_failed_and_timed_out_drivers_record_terminal_state_without_scoring(self):
+        for program, expected in [
+            ("raise SystemExit(3)", "failure"),
+            ("import time; time.sleep(30)", "timeout"),
+        ]:
+            with self.subTest(expected=expected):
+                root, selection = self.trial_fixture(program)
+                result = trials.run_trial(
+                    root,
+                    selection,
+                    trusted=True,
+                    timeout_seconds=1,
+                    output_parent=root.parent,
+                )
+                self.assertEqual(result["status"], expected)
+                report = ledger.evaluate(root)
+                self.assertEqual(
+                    report["arms"][selection["arm"]]["outcome_counts"][expected], 1
+                )
+                self.assertEqual(
+                    report["task_spans"][0]["status"],
+                    "timeout" if expected == "timeout" else "failed",
+                )
+                self.assertEqual(list(root.glob("evaluation-*.json")), [])
+                self.assertFalse(
+                    report["arms"][selection["arm"]]["accounting_complete"]
+                )
+
+    def test_driver_and_timeout_tampering_rejected_before_execution(self):
+        root, selection = self.trial_fixture("raise SystemExit(0)")
+        before = set(root.parent.iterdir())
+        with self.assertRaises(ValueError):
+            trials.run_trial(
+                root,
+                selection,
+                trusted=True,
+                timeout_seconds=2,
+                output_parent=root.parent,
+            )
+        (root / "driver.py").write_text("raise SystemExit(9)")
+        with self.assertRaises(ValueError):
+            trials.run_trial(
+                root,
+                selection,
+                trusted=True,
+                timeout_seconds=1,
+                output_parent=root.parent,
+            )
+        self.assertEqual(set(root.parent.iterdir()), before)
+
+    def test_reconciliation_rejects_duplicate_and_nonfinite_charges(self):
+        root = self.fixture()
+        path = root / "bad-billing.json"
+        entry = {
+            "usage_format": "openai_responses",
+            "request_id": "fixture",
+            "usd": "0.1",
+        }
+        for charges in [
+            [entry, entry],
+            [dict(entry, usd="NaN")],
+            [dict(entry, usd="-1")],
+        ]:
+            path.write_text(
+                json.dumps({"currency": "USD", "source": "fixture", "charges": charges})
+            )
+            with self.assertRaises(ValueError):
+                reconcile.reconcile(root, path)
