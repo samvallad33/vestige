@@ -3025,7 +3025,17 @@ impl SqliteMemoryStore {
                     .iter()
                     .flat_map(|value| value.to_le_bytes())
                     .collect::<Vec<_>>();
-                (bytes, vector.len(), active.profile_id.to_string(), vector)
+                // Label the vector with the profile's MODEL id: it is what the
+                // migration writer stores and what `get_stats` and the
+                // regeneration-candidate query compare against. Stamping the
+                // PROFILE id here made every server-written vector count as
+                // "mismatched" and re-embedded it on every consolidation pass.
+                (
+                    bytes,
+                    vector.len(),
+                    manifest.profile.model_id.clone(),
+                    vector,
+                )
             } else {
                 let embedding = self
                     .embedding_service
