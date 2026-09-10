@@ -62,8 +62,9 @@ python3 benchmarks/task-cost/ledger.py report ./my-bundle --output ./report.json
 
 The recorder is single-writer and appends JSONL. It checks artifact references
 and duplicate event IDs; final report performs accounting validation. The raw
-request and response must be captured by the calling agent runtime. This tool
-does not yet instrument an SDK or prove every provider request was exported.
+request and response must be captured by the calling agent runtime. The capture
+seam below instruments an explicitly wrapped call; it does not automatically
+intercept other calls or prove every provider request was exported.
 
 Event types:
 
@@ -121,6 +122,39 @@ Keep raw request/response bundles private: they may contain repository content.
 Capture request bodies without authorization headers or credentials. A public
 derivative needs its own review and hashes. The example contains synthetic data
 only. No inference, network, subprocess execution, or cloud storage is involved.
+
+## SDK capture seam
+
+`capture.measured_call` accepts a caller-owned synchronous SDK method. It does
+not construct clients, discover credentials, or launch agents. For an existing
+OpenAI client, for example:
+
+```python
+from capture import measured_call
+
+response = measured_call(
+    bundle_directory,
+    {"id": "trial-0-request-1", "kind": "request", "arm": "native",
+     "case": "case-1", "trial": 0, "phase": "agent",
+     "format": "openai_responses", "price_id": "frozen-price-id"},
+    {"model": "exact-frozen-model", "input": task_prompt},
+    client.responses.create,
+)
+```
+
+Use `anthropic_messages` and `client.messages.create` for that response shape.
+Non-streaming request bodies only: streaming needs a separately verified final
+usage collector. Request bytes are captured before execution. SDK return values
+are preserved; `model_dump(mode="json")` objects and dictionaries are supported.
+Exceptions are reraised after recording unknown billing. Exception messages are
+omitted because they can contain credentials; explicit credential/header fields
+are rejected. Serialization failures also record unknown billing. This is not a
+general secret detector: never put credentials into prompt text.
+
+Tests use injected fake SDK calls, including failure and duplicate-call cases.
+A live SDK/provider run remains unqualified. As with any local recorder, process
+death or disk failure can leave incomplete capture; reconcile provider records
+before declaring a real run's overhead/export coverage complete.
 
 ## Next gate
 
