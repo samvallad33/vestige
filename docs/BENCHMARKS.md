@@ -18,6 +18,18 @@ checkout, and where it is weak.
 > all. Everything below is built so a stranger can re-run it and get the same
 > answer, or catch us being wrong.
 
+## Recorded agent comparison: Before You Change That
+
+[`Before You Change That`](../benchmarks/before-you-change-that/README.md) is a
+frozen public evidence package for a 22-record synthetic ledger repair. It
+records Vestige delivering the exact saved constraint when
+`src/ledger/reconcile.rs` became relevant, followed by a repair that passed
+21/21 application checks. Control and Vestige completed naturally; the MCP
+Memory Service arm was interrupted at the original 900-second cutoff even
+though its recorded final application also passes 21/21. Treat it as one
+inspectable observation, not a causal win or product ranking. Its verifier and
+application recheck do not rerun a model or provider.
+
 ---
 
 ## MemConflict

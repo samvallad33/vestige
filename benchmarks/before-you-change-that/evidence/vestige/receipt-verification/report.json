@@ -1,0 +1,1243 @@
+{
+  "application_hash_link": {
+    "attested_by_recall_receipts": false,
+    "boundary": "The final application SHA-256 and evaluator result are independent post-retrieval observations. The Recall receipts do not sign, attest, or prove the final patch.",
+    "evaluation": {
+      "adapter_exits": {
+        "custom": 0,
+        "delayed": 0,
+        "direct": 0,
+        "negative": 0,
+        "pending": 0,
+        "reload": 0,
+        "shuffled": 0
+      },
+      "all_pass": true,
+      "changed_application_files": [
+        "runtime.conf"
+      ],
+      "checks": [
+        {
+          "detail": "regular application files and exact workspace shape",
+          "name": "application_files_are_regular",
+          "pass": true
+        },
+        {
+          "detail": "all protected bytes and modes match",
+          "name": "protected_files_intact",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "decision_schema_valid",
+          "pass": true
+        },
+        {
+          "detail": "all citations must resolve to original fixture records",
+          "name": "decision_ids_valid",
+          "pass": true
+        },
+        {
+          "detail": "coverage uses IDs for schema, wire, owner, epoch, obligation, and observation",
+          "name": "decision_causal_coverage",
+          "pass": true
+        },
+        {
+          "detail": "requires exact archived triples, ordered roles and endpoints, connectivity, and citations for every path node",
+          "name": "decision_connected_edges_supported",
+          "pass": true
+        },
+        {
+          "detail": "requires structured rejection of the exact-word runbook and newer fork",
+          "name": "decision_rejections_supported",
+          "pass": true
+        },
+        {
+          "detail": "declared=['runtime.conf']; observed=['runtime.conf']",
+          "name": "decision_changed_files_match",
+          "pass": true
+        },
+        {
+          "detail": "rustc=@recorded-home@/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc; sandbox=/usr/bin/sandbox-exec; exit=0; static_tree_exact=True",
+          "name": "rust_compiles",
+          "pass": true
+        },
+        {
+          "detail": "generic adapter emitted primitive rows; expected comparisons stayed in Python",
+          "name": "adapter_protocol_complete",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "pending_reversal_pins_checkpoint",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "delayed_charge_resolves_exactly_once",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "journal_is_append_only_with_resolution_tombstone",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "stale_marker_reload_and_duplicate_suppression",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "direct_reversal_and_retry_are_exact",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "horizon_and_schema_rejections_preserve_journal",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "shuffled_events_preserve_all_ledger_effects",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "unrelated_export_behavior_is_unchanged",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "alternate_policy_drives_behavior_without_hardcoding",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "real_state_files_and_atomic_cleanup",
+          "pass": true
+        },
+        {
+          "detail": "",
+          "name": "approved_reconciliation_owner_is_exact",
+          "pass": true
+        }
+      ],
+      "compile_exit": 0,
+      "oracle_boundary": "generic primitive adapter; Python owns expected rows and durable-byte comparisons",
+      "recovery_claim": "separate process reload after a pre-existing marker; no claim of arbitrary crash atomicity",
+      "rustc": "@recorded-home@/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc",
+      "rustc_version": "rustc 1.95.0 (59807616e 2026-04-14)",
+      "score": 21,
+      "total": 21
+    },
+    "independent_final_hashes": {
+      "runtime.conf": "966b000c13dc1abcc93251fb41c6781241aa3fec9459f8755c939cee13c5157b",
+      "src/ledger/reconcile.rs": "7ab69c44e241f05e9d1b986b3dba1fe8ea4d205e2b19a9bb89b170d953affe54"
+    },
+    "matches_reported": true,
+    "reported_application_hashes": {
+      "runtime.conf": "966b000c13dc1abcc93251fb41c6781241aa3fec9459f8755c939cee13c5157b",
+      "src/ledger/reconcile.rs": "7ab69c44e241f05e9d1b986b3dba1fe8ea4d205e2b19a9bb89b170d953affe54"
+    },
+    "reported_vestige_hashes": {
+      "runtime.conf": "966b000c13dc1abcc93251fb41c6781241aa3fec9459f8755c939cee13c5157b",
+      "src/ledger/reconcile.rs": "7ab69c44e241f05e9d1b986b3dba1fe8ea4d205e2b19a9bb89b170d953affe54"
+    },
+    "signed_by_recall_receipts": false
+  },
+  "boundary": "Ed25519/DSSE verification observes the original envelope signature with the predeclared local public key. receiptBindingValid and signatureValid are separately labeled native server reports. No chain continuity or final-patch attestation is independently established. Signed selection commitments link to bodies only where signed_receipt_evidence reports a direct supported match; none of these checks establish truth, internal reasoning causation, trusted time, external key trust, completeness, or application correctness.",
+  "chain_continuity_independently_verified": false,
+  "expected_key_matched": true,
+  "fetch_error": null,
+  "fetched_receipt_count": 3,
+  "intention_lifecycle_signed_by_recall_receipts": false,
+  "native_reported_receipt_binding_valid": true,
+  "native_reported_signature_valid": true,
+  "original_signature_observed_valid": true,
+  "private_signing_seed_read_by_verifier": false,
+  "proof": [
+    {
+      "chain_continuity_independently_verified": false,
+      "declared_public_key_fingerprint": "f93d54980722c916989e5a7f5ad85b95a1aee979f2a5786172f5ff499f1a299d",
+      "expected_key_matched": true,
+      "key_id": "local-demo-key",
+      "native_receipt_id": "ratt_930e485f39e642b2a6909ad2d5db6729",
+      "native_reported_receipt_binding_valid": true,
+      "native_reported_retrieved_ids": [
+        "7b8a4099-d9c5-43a1-8998-f5972bcea9ed",
+        "c627e32a-7834-4644-9312-c9b3a27577c0",
+        "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+        "8a0217f0-b1a7-41c0-9d87-4b303aed54ef",
+        "8aa15a5d-27a9-4fcb-928e-924e3b911b3c",
+        "711ee6d8-c7d9-41ac-b309-91718bead8e2",
+        "8736bfcb-905e-4359-9f71-ee3aad7a13bc",
+        "caabf6a6-8cfd-484c-91b1-36982cce8bcc",
+        "6370e75e-7b7f-46c2-aa4b-f730bfcc63df",
+        "d7f75090-a432-4ae4-8a0a-eb438165d4c9"
+      ],
+      "native_reported_signature_valid": true,
+      "original_signature_observed_valid": true,
+      "payload_type": "application/vnd.vestige.receipt+json;version=1",
+      "public_key_sha256": "831a3ff4c91cc02c02b2f532178f0411b55545ab439529f87902bf2bf2e0ee51",
+      "receipt_id": "ratt_930e485f39e642b2a6909ad2d5db6729",
+      "receipt_id_matched": true,
+      "requested_receipt_id": "ratt_930e485f39e642b2a6909ad2d5db6729",
+      "signature_valid": true,
+      "signed_evidence": [
+        {
+          "commitment": "249369263f466481f9559e37760950681d2673bb3618b5d52a92f2581701a9d6",
+          "evidence_slot": "slot_c93d3d8bca8e4485b0be4d31aaa693a9",
+          "signed_entry": {
+            "commitment": "249369263f466481f9559e37760950681d2673bb3618b5d52a92f2581701a9d6",
+            "evidenceSlot": "slot_c93d3d8bca8e4485b0be4d31aaa693a9"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "f9b2237c49599cc4bf8b92b886b88278f2d85c07765933f4d2e9985f3b38a26c",
+          "evidence_slot": "slot_f1fe9fb665cd4bccafc63b1f250d4fed",
+          "signed_entry": {
+            "commitment": "f9b2237c49599cc4bf8b92b886b88278f2d85c07765933f4d2e9985f3b38a26c",
+            "evidenceSlot": "slot_f1fe9fb665cd4bccafc63b1f250d4fed"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "9858797de9e7911a6c86f7090576c832bca517a28bb75b28116dace3ceec3ed3",
+          "evidence_slot": "slot_64484172e57c4e9696bd194e397fa756",
+          "signed_entry": {
+            "commitment": "9858797de9e7911a6c86f7090576c832bca517a28bb75b28116dace3ceec3ed3",
+            "evidenceSlot": "slot_64484172e57c4e9696bd194e397fa756"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "0259da57273973928b5bab7a871435c7c56d96e4ebaa70fffdfed8bf03a405ce",
+          "evidence_slot": "slot_0ee90ba3194342599ecc02aa9ac4036d",
+          "signed_entry": {
+            "commitment": "0259da57273973928b5bab7a871435c7c56d96e4ebaa70fffdfed8bf03a405ce",
+            "evidenceSlot": "slot_0ee90ba3194342599ecc02aa9ac4036d"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "744ed840730c119897a393f53175899894aa37dc4667432202db0a3d841b66c3",
+          "evidence_slot": "slot_9409ee0cb94b48c59f2ebf47a3e26929",
+          "signed_entry": {
+            "commitment": "744ed840730c119897a393f53175899894aa37dc4667432202db0a3d841b66c3",
+            "evidenceSlot": "slot_9409ee0cb94b48c59f2ebf47a3e26929"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "ed696c5fc3246e8e035800e3391057e159506e28440e5f2a75cc91d5f0d714e1",
+          "evidence_slot": "slot_7204186a7ec14114915d054ab139f177",
+          "signed_entry": {
+            "commitment": "ed696c5fc3246e8e035800e3391057e159506e28440e5f2a75cc91d5f0d714e1",
+            "evidenceSlot": "slot_7204186a7ec14114915d054ab139f177"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "f22affe0ca5c29f4725d7ef9085e00805c14542786c96946ebec470b10e89d1a",
+          "evidence_slot": "slot_ae29d672d13d4879aab9da4ef7bb00e9",
+          "signed_entry": {
+            "commitment": "f22affe0ca5c29f4725d7ef9085e00805c14542786c96946ebec470b10e89d1a",
+            "evidenceSlot": "slot_ae29d672d13d4879aab9da4ef7bb00e9"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "c03d37be59f53b99a6eae2e4728965ab770f94cf2e99b9d82c73468364255967",
+          "evidence_slot": "slot_4e49ad597aa2419a8b6693a0ea56caba",
+          "signed_entry": {
+            "commitment": "c03d37be59f53b99a6eae2e4728965ab770f94cf2e99b9d82c73468364255967",
+            "evidenceSlot": "slot_4e49ad597aa2419a8b6693a0ea56caba"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "48eb6dfc95d56f15c0a1388c6a8fbed3b4ce18f037fbd581405b38666f5ed2d1",
+          "evidence_slot": "slot_b6fd5e5af1ee4e819aaaee67ef35544d",
+          "signed_entry": {
+            "commitment": "48eb6dfc95d56f15c0a1388c6a8fbed3b4ce18f037fbd581405b38666f5ed2d1",
+            "evidenceSlot": "slot_b6fd5e5af1ee4e819aaaee67ef35544d"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "22b13825f660865166bc71ea30c8606ee52dd2f895dc6d42f16104f6eecb1383",
+          "evidence_slot": "slot_74ee87f67c02486981a3e4edf42aa43c",
+          "signed_entry": {
+            "commitment": "22b13825f660865166bc71ea30c8606ee52dd2f895dc6d42f16104f6eecb1383",
+            "evidenceSlot": "slot_74ee87f67c02486981a3e4edf42aa43c"
+          },
+          "signed_ids": []
+        }
+      ],
+      "signed_evidence_commitments": [
+        "249369263f466481f9559e37760950681d2673bb3618b5d52a92f2581701a9d6",
+        "f9b2237c49599cc4bf8b92b886b88278f2d85c07765933f4d2e9985f3b38a26c",
+        "9858797de9e7911a6c86f7090576c832bca517a28bb75b28116dace3ceec3ed3",
+        "0259da57273973928b5bab7a871435c7c56d96e4ebaa70fffdfed8bf03a405ce",
+        "744ed840730c119897a393f53175899894aa37dc4667432202db0a3d841b66c3",
+        "ed696c5fc3246e8e035800e3391057e159506e28440e5f2a75cc91d5f0d714e1",
+        "f22affe0ca5c29f4725d7ef9085e00805c14542786c96946ebec470b10e89d1a",
+        "c03d37be59f53b99a6eae2e4728965ab770f94cf2e99b9d82c73468364255967",
+        "48eb6dfc95d56f15c0a1388c6a8fbed3b4ce18f037fbd581405b38666f5ed2d1",
+        "22b13825f660865166bc71ea30c8606ee52dd2f895dc6d42f16104f6eecb1383"
+      ],
+      "signed_evidence_ids": [],
+      "signed_payload": {
+        "chain": {
+          "chainId": "chain_13f2b13acd7847eeae9f8b20a9607042",
+          "previousEntryDigest": "0378828cb2580e8193d3de3ff1ffb9adb07e7502b371f03d296703a046e10444",
+          "sequence": "22"
+        },
+        "issuedAt": "2026-09-07T03:35:03.350693Z",
+        "operation": {
+          "kind": "retrieval_selection",
+          "opaqueRunId": "run_e511f772d45647a89eb69bbb294d45e7"
+        },
+        "predicate": {
+          "algorithmVersion": "mcp-retrieval-receipt-v1",
+          "claimBoundary": "decision_evidence_not_truth_or_causality",
+          "decisionDigest": "f456ef026aa053ccfc9b89058ac7896fbdc9944054eb56bea73795c1bb66107d",
+          "evidence": [
+            {
+              "commitment": "249369263f466481f9559e37760950681d2673bb3618b5d52a92f2581701a9d6",
+              "evidenceSlot": "slot_c93d3d8bca8e4485b0be4d31aaa693a9"
+            },
+            {
+              "commitment": "f9b2237c49599cc4bf8b92b886b88278f2d85c07765933f4d2e9985f3b38a26c",
+              "evidenceSlot": "slot_f1fe9fb665cd4bccafc63b1f250d4fed"
+            },
+            {
+              "commitment": "9858797de9e7911a6c86f7090576c832bca517a28bb75b28116dace3ceec3ed3",
+              "evidenceSlot": "slot_64484172e57c4e9696bd194e397fa756"
+            },
+            {
+              "commitment": "0259da57273973928b5bab7a871435c7c56d96e4ebaa70fffdfed8bf03a405ce",
+              "evidenceSlot": "slot_0ee90ba3194342599ecc02aa9ac4036d"
+            },
+            {
+              "commitment": "744ed840730c119897a393f53175899894aa37dc4667432202db0a3d841b66c3",
+              "evidenceSlot": "slot_9409ee0cb94b48c59f2ebf47a3e26929"
+            },
+            {
+              "commitment": "ed696c5fc3246e8e035800e3391057e159506e28440e5f2a75cc91d5f0d714e1",
+              "evidenceSlot": "slot_7204186a7ec14114915d054ab139f177"
+            },
+            {
+              "commitment": "f22affe0ca5c29f4725d7ef9085e00805c14542786c96946ebec470b10e89d1a",
+              "evidenceSlot": "slot_ae29d672d13d4879aab9da4ef7bb00e9"
+            },
+            {
+              "commitment": "c03d37be59f53b99a6eae2e4728965ab770f94cf2e99b9d82c73468364255967",
+              "evidenceSlot": "slot_4e49ad597aa2419a8b6693a0ea56caba"
+            },
+            {
+              "commitment": "48eb6dfc95d56f15c0a1388c6a8fbed3b4ce18f037fbd581405b38666f5ed2d1",
+              "evidenceSlot": "slot_b6fd5e5af1ee4e819aaaee67ef35544d"
+            },
+            {
+              "commitment": "22b13825f660865166bc71ea30c8606ee52dd2f895dc6d42f16104f6eecb1383",
+              "evidenceSlot": "slot_74ee87f67c02486981a3e4edf42aa43c"
+            }
+          ],
+          "kind": "retrieval_selection",
+          "projection": {
+            "kind": "retrieval_selection",
+            "mutation_count": 0,
+            "returned_count": 10,
+            "suppressed_count": 0,
+            "trust_floor_basis_points": 10000
+          },
+          "receiptBinding": {
+            "mutationCount": 0,
+            "retrievedCount": 10,
+            "suppressedCount": 0,
+            "typedEvidenceKind": null,
+            "visibleMemoryCount": 10
+          }
+        },
+        "producer": {
+          "build": "receipt-runtime-v1",
+          "name": "vestige-mcp",
+          "version": "2.8.0"
+        },
+        "receiptId": "ratt_930e485f39e642b2a6909ad2d5db6729",
+        "schema": "urn:vestige:receipt-attestation:v1",
+        "schemaVersion": 1,
+        "signatureAlgorithm": "ed25519"
+      },
+      "signed_payload_sha256": "4302584a933e1cb516cf79b1dae9253c6e7d6f6fece9538f8c5a855b5ce2244a",
+      "tamper_rejected": true
+    },
+    {
+      "chain_continuity_independently_verified": false,
+      "declared_public_key_fingerprint": "f93d54980722c916989e5a7f5ad85b95a1aee979f2a5786172f5ff499f1a299d",
+      "expected_key_matched": true,
+      "key_id": "local-demo-key",
+      "native_receipt_id": "ratt_89cdfdfad18645ba889fad4f9e5082ba",
+      "native_reported_receipt_binding_valid": true,
+      "native_reported_retrieved_ids": [
+        "71017ec3-f986-46a1-8fbb-883b565f67c3",
+        "cba12455-ff87-40e4-9854-b4a986a277f8",
+        "220ee1d4-2934-4853-9663-dddacf576697",
+        "b909337e-6947-40e0-8aa2-06246b21b061",
+        "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+        "8736bfcb-905e-4359-9f71-ee3aad7a13bc",
+        "477f1013-c72f-4a14-9b95-c89f851feeb1",
+        "476b0820-2e4f-4511-96e5-e542557f41cb",
+        "0a689b66-41e4-49b2-ab7f-a7d105ff132a",
+        "0cbb80a6-977a-4bf8-bd0c-9885f383272c"
+      ],
+      "native_reported_signature_valid": true,
+      "original_signature_observed_valid": true,
+      "payload_type": "application/vnd.vestige.receipt+json;version=1",
+      "public_key_sha256": "831a3ff4c91cc02c02b2f532178f0411b55545ab439529f87902bf2bf2e0ee51",
+      "receipt_id": "ratt_89cdfdfad18645ba889fad4f9e5082ba",
+      "receipt_id_matched": true,
+      "requested_receipt_id": "ratt_89cdfdfad18645ba889fad4f9e5082ba",
+      "signature_valid": true,
+      "signed_evidence": [
+        {
+          "commitment": "10c9fa93d0748b8d71e77a1b8360d966f6aa1c6ad03782d20012d3a6e366586a",
+          "evidence_slot": "slot_1f99eda128f54e2bb819e84a17dabadf",
+          "signed_entry": {
+            "commitment": "10c9fa93d0748b8d71e77a1b8360d966f6aa1c6ad03782d20012d3a6e366586a",
+            "evidenceSlot": "slot_1f99eda128f54e2bb819e84a17dabadf"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "8c5083d867111c244f5ab7585cb2be1d66f1fe2defd620e5b91c9653c99b4fe6",
+          "evidence_slot": "slot_a42cf6ba5a6f425c8a0d51697c1641a8",
+          "signed_entry": {
+            "commitment": "8c5083d867111c244f5ab7585cb2be1d66f1fe2defd620e5b91c9653c99b4fe6",
+            "evidenceSlot": "slot_a42cf6ba5a6f425c8a0d51697c1641a8"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "3d0bb02137651950e2857b04aa1affd538f3c7b968ef13c3c450f0160728bfba",
+          "evidence_slot": "slot_41156b731ddc4b2badb8aea52dc25098",
+          "signed_entry": {
+            "commitment": "3d0bb02137651950e2857b04aa1affd538f3c7b968ef13c3c450f0160728bfba",
+            "evidenceSlot": "slot_41156b731ddc4b2badb8aea52dc25098"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "f52e20a903ad5dabdc671182e8361dc4d254a9de807ef7ba77faa870630648b8",
+          "evidence_slot": "slot_b4386c23052244b495779fb0de508f15",
+          "signed_entry": {
+            "commitment": "f52e20a903ad5dabdc671182e8361dc4d254a9de807ef7ba77faa870630648b8",
+            "evidenceSlot": "slot_b4386c23052244b495779fb0de508f15"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "8151e84b9ab5bc1cfba6f9418e8e6888caf88a0f9d2f8d3e30909c8bc56ec5d7",
+          "evidence_slot": "slot_ab87f40ccf2342a8adc6fc10e01bef5e",
+          "signed_entry": {
+            "commitment": "8151e84b9ab5bc1cfba6f9418e8e6888caf88a0f9d2f8d3e30909c8bc56ec5d7",
+            "evidenceSlot": "slot_ab87f40ccf2342a8adc6fc10e01bef5e"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "fd93ee13aed61620edb6603540cf8087982c568f50ac830969a44a3dff1a0193",
+          "evidence_slot": "slot_b165954bfe664308a7adaa1fcc7f668c",
+          "signed_entry": {
+            "commitment": "fd93ee13aed61620edb6603540cf8087982c568f50ac830969a44a3dff1a0193",
+            "evidenceSlot": "slot_b165954bfe664308a7adaa1fcc7f668c"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "b53455836b8c7f416730b66a4a7ee93d837db8f77eb2eeba66608c46f88da0a7",
+          "evidence_slot": "slot_75d12e7f50674100bb588f38e0028130",
+          "signed_entry": {
+            "commitment": "b53455836b8c7f416730b66a4a7ee93d837db8f77eb2eeba66608c46f88da0a7",
+            "evidenceSlot": "slot_75d12e7f50674100bb588f38e0028130"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "e032b7c23a4da7f21732efd7a0c6cd3071aa5cb44c5e4561981b146c2e48c8af",
+          "evidence_slot": "slot_4c71090b5e014e2d8bbe670081141577",
+          "signed_entry": {
+            "commitment": "e032b7c23a4da7f21732efd7a0c6cd3071aa5cb44c5e4561981b146c2e48c8af",
+            "evidenceSlot": "slot_4c71090b5e014e2d8bbe670081141577"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "a78a7e1262637a3fa1ae0576a82df5cdf50c1f3abc5c5f85440dbe08747d4a4b",
+          "evidence_slot": "slot_e2f9b46c3c624472bb374fb50fde47de",
+          "signed_entry": {
+            "commitment": "a78a7e1262637a3fa1ae0576a82df5cdf50c1f3abc5c5f85440dbe08747d4a4b",
+            "evidenceSlot": "slot_e2f9b46c3c624472bb374fb50fde47de"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "833f22fd71b5f2a952490136d9d99a5638d4e543e55270e1a50e3348b1919e4b",
+          "evidence_slot": "slot_f6f82cc15def41be80f69e275cd2e108",
+          "signed_entry": {
+            "commitment": "833f22fd71b5f2a952490136d9d99a5638d4e543e55270e1a50e3348b1919e4b",
+            "evidenceSlot": "slot_f6f82cc15def41be80f69e275cd2e108"
+          },
+          "signed_ids": []
+        }
+      ],
+      "signed_evidence_commitments": [
+        "10c9fa93d0748b8d71e77a1b8360d966f6aa1c6ad03782d20012d3a6e366586a",
+        "8c5083d867111c244f5ab7585cb2be1d66f1fe2defd620e5b91c9653c99b4fe6",
+        "3d0bb02137651950e2857b04aa1affd538f3c7b968ef13c3c450f0160728bfba",
+        "f52e20a903ad5dabdc671182e8361dc4d254a9de807ef7ba77faa870630648b8",
+        "8151e84b9ab5bc1cfba6f9418e8e6888caf88a0f9d2f8d3e30909c8bc56ec5d7",
+        "fd93ee13aed61620edb6603540cf8087982c568f50ac830969a44a3dff1a0193",
+        "b53455836b8c7f416730b66a4a7ee93d837db8f77eb2eeba66608c46f88da0a7",
+        "e032b7c23a4da7f21732efd7a0c6cd3071aa5cb44c5e4561981b146c2e48c8af",
+        "a78a7e1262637a3fa1ae0576a82df5cdf50c1f3abc5c5f85440dbe08747d4a4b",
+        "833f22fd71b5f2a952490136d9d99a5638d4e543e55270e1a50e3348b1919e4b"
+      ],
+      "signed_evidence_ids": [],
+      "signed_payload": {
+        "chain": {
+          "chainId": "chain_13f2b13acd7847eeae9f8b20a9607042",
+          "previousEntryDigest": "67ed23cb7ccdbcf950a1d2adbf69813df75efdbc2bcc19c05acc9c5befb338b3",
+          "sequence": "23"
+        },
+        "issuedAt": "2026-09-07T03:36:32.161201Z",
+        "operation": {
+          "kind": "retrieval_selection",
+          "opaqueRunId": "run_a8c2149a68c94867a403edb3294e10f8"
+        },
+        "predicate": {
+          "algorithmVersion": "mcp-retrieval-receipt-v1",
+          "claimBoundary": "decision_evidence_not_truth_or_causality",
+          "decisionDigest": "f456ef026aa053ccfc9b89058ac7896fbdc9944054eb56bea73795c1bb66107d",
+          "evidence": [
+            {
+              "commitment": "10c9fa93d0748b8d71e77a1b8360d966f6aa1c6ad03782d20012d3a6e366586a",
+              "evidenceSlot": "slot_1f99eda128f54e2bb819e84a17dabadf"
+            },
+            {
+              "commitment": "8c5083d867111c244f5ab7585cb2be1d66f1fe2defd620e5b91c9653c99b4fe6",
+              "evidenceSlot": "slot_a42cf6ba5a6f425c8a0d51697c1641a8"
+            },
+            {
+              "commitment": "3d0bb02137651950e2857b04aa1affd538f3c7b968ef13c3c450f0160728bfba",
+              "evidenceSlot": "slot_41156b731ddc4b2badb8aea52dc25098"
+            },
+            {
+              "commitment": "f52e20a903ad5dabdc671182e8361dc4d254a9de807ef7ba77faa870630648b8",
+              "evidenceSlot": "slot_b4386c23052244b495779fb0de508f15"
+            },
+            {
+              "commitment": "8151e84b9ab5bc1cfba6f9418e8e6888caf88a0f9d2f8d3e30909c8bc56ec5d7",
+              "evidenceSlot": "slot_ab87f40ccf2342a8adc6fc10e01bef5e"
+            },
+            {
+              "commitment": "fd93ee13aed61620edb6603540cf8087982c568f50ac830969a44a3dff1a0193",
+              "evidenceSlot": "slot_b165954bfe664308a7adaa1fcc7f668c"
+            },
+            {
+              "commitment": "b53455836b8c7f416730b66a4a7ee93d837db8f77eb2eeba66608c46f88da0a7",
+              "evidenceSlot": "slot_75d12e7f50674100bb588f38e0028130"
+            },
+            {
+              "commitment": "e032b7c23a4da7f21732efd7a0c6cd3071aa5cb44c5e4561981b146c2e48c8af",
+              "evidenceSlot": "slot_4c71090b5e014e2d8bbe670081141577"
+            },
+            {
+              "commitment": "a78a7e1262637a3fa1ae0576a82df5cdf50c1f3abc5c5f85440dbe08747d4a4b",
+              "evidenceSlot": "slot_e2f9b46c3c624472bb374fb50fde47de"
+            },
+            {
+              "commitment": "833f22fd71b5f2a952490136d9d99a5638d4e543e55270e1a50e3348b1919e4b",
+              "evidenceSlot": "slot_f6f82cc15def41be80f69e275cd2e108"
+            }
+          ],
+          "kind": "retrieval_selection",
+          "projection": {
+            "kind": "retrieval_selection",
+            "mutation_count": 0,
+            "returned_count": 10,
+            "suppressed_count": 0,
+            "trust_floor_basis_points": 10000
+          },
+          "receiptBinding": {
+            "mutationCount": 0,
+            "retrievedCount": 10,
+            "suppressedCount": 0,
+            "typedEvidenceKind": null,
+            "visibleMemoryCount": 10
+          }
+        },
+        "producer": {
+          "build": "receipt-runtime-v1",
+          "name": "vestige-mcp",
+          "version": "2.8.0"
+        },
+        "receiptId": "ratt_89cdfdfad18645ba889fad4f9e5082ba",
+        "schema": "urn:vestige:receipt-attestation:v1",
+        "schemaVersion": 1,
+        "signatureAlgorithm": "ed25519"
+      },
+      "signed_payload_sha256": "ca0015df54a43595e5d4af89a150b18848341806ce38faaa39e8f6fe01ead548",
+      "tamper_rejected": true
+    },
+    {
+      "chain_continuity_independently_verified": false,
+      "declared_public_key_fingerprint": "f93d54980722c916989e5a7f5ad85b95a1aee979f2a5786172f5ff499f1a299d",
+      "expected_key_matched": true,
+      "key_id": "local-demo-key",
+      "native_receipt_id": "ratt_3b700b24bcbc48dc89f8ab55b26db4e2",
+      "native_reported_receipt_binding_valid": true,
+      "native_reported_retrieved_ids": [
+        "406e484a-6199-4dc4-8e0b-26268f26785d",
+        "6370e75e-7b7f-46c2-aa4b-f730bfcc63df",
+        "abc3e404-fcb6-43e1-8494-97515dd77786",
+        "caabf6a6-8cfd-484c-91b1-36982cce8bcc",
+        "477f1013-c72f-4a14-9b95-c89f851feeb1",
+        "7b8a4099-d9c5-43a1-8998-f5972bcea9ed",
+        "d7f75090-a432-4ae4-8a0a-eb438165d4c9",
+        "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+        "711ee6d8-c7d9-41ac-b309-91718bead8e2",
+        "ab0eab48-c9ca-4637-8f99-cd95f5179212"
+      ],
+      "native_reported_signature_valid": true,
+      "original_signature_observed_valid": true,
+      "payload_type": "application/vnd.vestige.receipt+json;version=1",
+      "public_key_sha256": "831a3ff4c91cc02c02b2f532178f0411b55545ab439529f87902bf2bf2e0ee51",
+      "receipt_id": "ratt_3b700b24bcbc48dc89f8ab55b26db4e2",
+      "receipt_id_matched": true,
+      "requested_receipt_id": "ratt_3b700b24bcbc48dc89f8ab55b26db4e2",
+      "signature_valid": true,
+      "signed_evidence": [
+        {
+          "commitment": "dca50e5ca7ea9ca08dec34ddf708c9edc6495374579974ad3fc988b78ce7ad11",
+          "evidence_slot": "slot_e653c512166340b78e522416c510aa9e",
+          "signed_entry": {
+            "commitment": "dca50e5ca7ea9ca08dec34ddf708c9edc6495374579974ad3fc988b78ce7ad11",
+            "evidenceSlot": "slot_e653c512166340b78e522416c510aa9e"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "dde1fd2966c1183ffa6b2aa43df2ec5712b66ebceb1db4f3bcbe66ac48d88201",
+          "evidence_slot": "slot_413e4630ceb44f749632b24bddf6f219",
+          "signed_entry": {
+            "commitment": "dde1fd2966c1183ffa6b2aa43df2ec5712b66ebceb1db4f3bcbe66ac48d88201",
+            "evidenceSlot": "slot_413e4630ceb44f749632b24bddf6f219"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "b1c7aafd47b2c7936a35f8afed1ddd34ff6e220e9448eba251a62f87127f01be",
+          "evidence_slot": "slot_6ef1c98af6094fe8966d70eb570529c3",
+          "signed_entry": {
+            "commitment": "b1c7aafd47b2c7936a35f8afed1ddd34ff6e220e9448eba251a62f87127f01be",
+            "evidenceSlot": "slot_6ef1c98af6094fe8966d70eb570529c3"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "14b99fd5e53056ac656c26c878559c0fee171d46f0c8d6a799fb37321aa732af",
+          "evidence_slot": "slot_3ffd37b3089f400a83e704694fb078ba",
+          "signed_entry": {
+            "commitment": "14b99fd5e53056ac656c26c878559c0fee171d46f0c8d6a799fb37321aa732af",
+            "evidenceSlot": "slot_3ffd37b3089f400a83e704694fb078ba"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "1d86653f1722fa7ba8715443c91cd557128e030c1cf419ed7d475da607426703",
+          "evidence_slot": "slot_ad482beb92e5441c83fe48f8fc037f4a",
+          "signed_entry": {
+            "commitment": "1d86653f1722fa7ba8715443c91cd557128e030c1cf419ed7d475da607426703",
+            "evidenceSlot": "slot_ad482beb92e5441c83fe48f8fc037f4a"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "821e42781f5799ea1049af4ad1b5da131adf1b0a6e2dd82e285c850b3fe1c999",
+          "evidence_slot": "slot_19ca288fc36f4f35b2c7b535cb701382",
+          "signed_entry": {
+            "commitment": "821e42781f5799ea1049af4ad1b5da131adf1b0a6e2dd82e285c850b3fe1c999",
+            "evidenceSlot": "slot_19ca288fc36f4f35b2c7b535cb701382"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "4ef1b4bd4af14283822a355d7cc7abd67f343f3d4978c6a6463ea3b887020115",
+          "evidence_slot": "slot_70ecc1dd122b47ac868cd3fc2a676407",
+          "signed_entry": {
+            "commitment": "4ef1b4bd4af14283822a355d7cc7abd67f343f3d4978c6a6463ea3b887020115",
+            "evidenceSlot": "slot_70ecc1dd122b47ac868cd3fc2a676407"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "41b2e45c308625e432be9015fc762d461098dac3626c12a20a0b473893e67317",
+          "evidence_slot": "slot_4f02368824e54b468f4678998f3bed37",
+          "signed_entry": {
+            "commitment": "41b2e45c308625e432be9015fc762d461098dac3626c12a20a0b473893e67317",
+            "evidenceSlot": "slot_4f02368824e54b468f4678998f3bed37"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "6fd581a10763b025978e7df1693b72a9b87d10b2758e1f50a21929dc685443be",
+          "evidence_slot": "slot_c31c9025454440ecb53d6f618dca8ae1",
+          "signed_entry": {
+            "commitment": "6fd581a10763b025978e7df1693b72a9b87d10b2758e1f50a21929dc685443be",
+            "evidenceSlot": "slot_c31c9025454440ecb53d6f618dca8ae1"
+          },
+          "signed_ids": []
+        },
+        {
+          "commitment": "7be990fecfa4529ee30cc137abd50907447ee87c374c797c340763944f2446b1",
+          "evidence_slot": "slot_ad999f8adc5041bb8a4d0fd7315eac82",
+          "signed_entry": {
+            "commitment": "7be990fecfa4529ee30cc137abd50907447ee87c374c797c340763944f2446b1",
+            "evidenceSlot": "slot_ad999f8adc5041bb8a4d0fd7315eac82"
+          },
+          "signed_ids": []
+        }
+      ],
+      "signed_evidence_commitments": [
+        "dca50e5ca7ea9ca08dec34ddf708c9edc6495374579974ad3fc988b78ce7ad11",
+        "dde1fd2966c1183ffa6b2aa43df2ec5712b66ebceb1db4f3bcbe66ac48d88201",
+        "b1c7aafd47b2c7936a35f8afed1ddd34ff6e220e9448eba251a62f87127f01be",
+        "14b99fd5e53056ac656c26c878559c0fee171d46f0c8d6a799fb37321aa732af",
+        "1d86653f1722fa7ba8715443c91cd557128e030c1cf419ed7d475da607426703",
+        "821e42781f5799ea1049af4ad1b5da131adf1b0a6e2dd82e285c850b3fe1c999",
+        "4ef1b4bd4af14283822a355d7cc7abd67f343f3d4978c6a6463ea3b887020115",
+        "41b2e45c308625e432be9015fc762d461098dac3626c12a20a0b473893e67317",
+        "6fd581a10763b025978e7df1693b72a9b87d10b2758e1f50a21929dc685443be",
+        "7be990fecfa4529ee30cc137abd50907447ee87c374c797c340763944f2446b1"
+      ],
+      "signed_evidence_ids": [],
+      "signed_payload": {
+        "chain": {
+          "chainId": "chain_13f2b13acd7847eeae9f8b20a9607042",
+          "previousEntryDigest": "af20535cd84550b07a551b83bf96c6305957147ff24771cf0d3745ac69a76f39",
+          "sequence": "24"
+        },
+        "issuedAt": "2026-09-07T03:36:40.048001Z",
+        "operation": {
+          "kind": "retrieval_selection",
+          "opaqueRunId": "run_d896e7915cf44ed598aeed6711af01ee"
+        },
+        "predicate": {
+          "algorithmVersion": "mcp-retrieval-receipt-v1",
+          "claimBoundary": "decision_evidence_not_truth_or_causality",
+          "decisionDigest": "f456ef026aa053ccfc9b89058ac7896fbdc9944054eb56bea73795c1bb66107d",
+          "evidence": [
+            {
+              "commitment": "dca50e5ca7ea9ca08dec34ddf708c9edc6495374579974ad3fc988b78ce7ad11",
+              "evidenceSlot": "slot_e653c512166340b78e522416c510aa9e"
+            },
+            {
+              "commitment": "dde1fd2966c1183ffa6b2aa43df2ec5712b66ebceb1db4f3bcbe66ac48d88201",
+              "evidenceSlot": "slot_413e4630ceb44f749632b24bddf6f219"
+            },
+            {
+              "commitment": "b1c7aafd47b2c7936a35f8afed1ddd34ff6e220e9448eba251a62f87127f01be",
+              "evidenceSlot": "slot_6ef1c98af6094fe8966d70eb570529c3"
+            },
+            {
+              "commitment": "14b99fd5e53056ac656c26c878559c0fee171d46f0c8d6a799fb37321aa732af",
+              "evidenceSlot": "slot_3ffd37b3089f400a83e704694fb078ba"
+            },
+            {
+              "commitment": "1d86653f1722fa7ba8715443c91cd557128e030c1cf419ed7d475da607426703",
+              "evidenceSlot": "slot_ad482beb92e5441c83fe48f8fc037f4a"
+            },
+            {
+              "commitment": "821e42781f5799ea1049af4ad1b5da131adf1b0a6e2dd82e285c850b3fe1c999",
+              "evidenceSlot": "slot_19ca288fc36f4f35b2c7b535cb701382"
+            },
+            {
+              "commitment": "4ef1b4bd4af14283822a355d7cc7abd67f343f3d4978c6a6463ea3b887020115",
+              "evidenceSlot": "slot_70ecc1dd122b47ac868cd3fc2a676407"
+            },
+            {
+              "commitment": "41b2e45c308625e432be9015fc762d461098dac3626c12a20a0b473893e67317",
+              "evidenceSlot": "slot_4f02368824e54b468f4678998f3bed37"
+            },
+            {
+              "commitment": "6fd581a10763b025978e7df1693b72a9b87d10b2758e1f50a21929dc685443be",
+              "evidenceSlot": "slot_c31c9025454440ecb53d6f618dca8ae1"
+            },
+            {
+              "commitment": "7be990fecfa4529ee30cc137abd50907447ee87c374c797c340763944f2446b1",
+              "evidenceSlot": "slot_ad999f8adc5041bb8a4d0fd7315eac82"
+            }
+          ],
+          "kind": "retrieval_selection",
+          "projection": {
+            "kind": "retrieval_selection",
+            "mutation_count": 0,
+            "returned_count": 10,
+            "suppressed_count": 0,
+            "trust_floor_basis_points": 10000
+          },
+          "receiptBinding": {
+            "mutationCount": 0,
+            "retrievedCount": 10,
+            "suppressedCount": 0,
+            "typedEvidenceKind": null,
+            "visibleMemoryCount": 10
+          }
+        },
+        "producer": {
+          "build": "receipt-runtime-v1",
+          "name": "vestige-mcp",
+          "version": "2.8.0"
+        },
+        "receiptId": "ratt_3b700b24bcbc48dc89f8ab55b26db4e2",
+        "schema": "urn:vestige:receipt-attestation:v1",
+        "schemaVersion": 1,
+        "signatureAlgorithm": "ed25519"
+      },
+      "signed_payload_sha256": "fbc892b6ba038cf14f6bd80060059c39da41e36861f64ba284ec7970d69d75f9",
+      "tamper_rejected": true
+    }
+  ],
+  "proof_performed": true,
+  "proof_process_exit": 0,
+  "receipt_ids": [
+    "ratt_930e485f39e642b2a6909ad2d5db6729",
+    "ratt_89cdfdfad18645ba889fad4f9e5082ba",
+    "ratt_3b700b24bcbc48dc89f8ab55b26db4e2"
+  ],
+  "receipt_ids_matched": true,
+  "signature_valid": true,
+  "signed_receipt_evidence": {
+    "boundary": "Independent matching covers only direct signed IDs or direct SHA-256 equality against frozen UTF-8 bodies and response UUID mappings. Native-reported retrieved IDs are listed separately and do not make an opaque signed commitment reversible.",
+    "exact_native_response_fixture_ids": [
+      "batch-size-proposal-expired",
+      "cedar-batch-owner",
+      "checkpoint-watermark-design",
+      "crash-reload-proof-history",
+      "duplicate-event-invariant",
+      "epoch7-approved",
+      "export-regression",
+      "fork-generation8-proposal",
+      "fork-generation8-rejected",
+      "horizon-boundary-test",
+      "incident-current",
+      "obligation-reconcile-path",
+      "owner-alias-migration",
+      "performance-runbook-decoy",
+      "performance-runbook-validation",
+      "public-regression",
+      "route-manifest-separation",
+      "schema-v2-archive",
+      "schema-v3-rollover",
+      "tombstone-append-invariant",
+      "wire-v2-transition"
+    ],
+    "native_id_to_fixture_id": {
+      "0548e2a9-c72b-4578-aa57-85b8fee689e0": "schema-v2-archive",
+      "0a689b66-41e4-49b2-ab7f-a7d105ff132a": "route-manifest-separation",
+      "0cbb80a6-977a-4bf8-bd0c-9885f383272c": "fork-generation8-rejected",
+      "220ee1d4-2934-4853-9663-dddacf576697": "epoch7-approved",
+      "406e484a-6199-4dc4-8e0b-26268f26785d": "performance-runbook-decoy",
+      "476b0820-2e4f-4511-96e5-e542557f41cb": "fork-generation8-proposal",
+      "477f1013-c72f-4a14-9b95-c89f851feeb1": "cedar-batch-owner",
+      "6370e75e-7b7f-46c2-aa4b-f730bfcc63df": "performance-runbook-validation",
+      "71017ec3-f986-46a1-8fbb-883b565f67c3": "wire-v2-transition",
+      "711ee6d8-c7d9-41ac-b309-91718bead8e2": "duplicate-event-invariant",
+      "7b8a4099-d9c5-43a1-8998-f5972bcea9ed": "incident-current",
+      "8736bfcb-905e-4359-9f71-ee3aad7a13bc": "schema-v3-rollover",
+      "8a0217f0-b1a7-41c0-9d87-4b303aed54ef": "obligation-reconcile-path",
+      "8aa15a5d-27a9-4fcb-928e-924e3b911b3c": "checkpoint-watermark-design",
+      "ab0eab48-c9ca-4637-8f99-cd95f5179212": "crash-reload-proof-history",
+      "abc3e404-fcb6-43e1-8494-97515dd77786": "batch-size-proposal-expired",
+      "b909337e-6947-40e0-8aa2-06246b21b061": "export-regression",
+      "c627e32a-7834-4644-9312-c9b3a27577c0": "public-regression",
+      "caabf6a6-8cfd-484c-91b1-36982cce8bcc": "tombstone-append-invariant",
+      "cba12455-ff87-40e4-9854-b4a986a277f8": "owner-alias-migration",
+      "d7f75090-a432-4ae4-8a0a-eb438165d4c9": "horizon-boundary-test"
+    },
+    "performed": true,
+    "reason": "The signed payload contains opaque selection commitments and slots, but no supported direct body hash or evidence ID that reconstructs their body linkage.",
+    "receipts": [
+      {
+        "native_reported_retrieved_fixture_ids": [
+          "checkpoint-watermark-design",
+          "duplicate-event-invariant",
+          "horizon-boundary-test",
+          "incident-current",
+          "obligation-reconcile-path",
+          "performance-runbook-validation",
+          "public-regression",
+          "schema-v2-archive",
+          "schema-v3-rollover",
+          "tombstone-append-invariant"
+        ],
+        "native_reported_retrieved_ids": [
+          "7b8a4099-d9c5-43a1-8998-f5972bcea9ed",
+          "c627e32a-7834-4644-9312-c9b3a27577c0",
+          "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+          "8a0217f0-b1a7-41c0-9d87-4b303aed54ef",
+          "8aa15a5d-27a9-4fcb-928e-924e3b911b3c",
+          "711ee6d8-c7d9-41ac-b309-91718bead8e2",
+          "8736bfcb-905e-4359-9f71-ee3aad7a13bc",
+          "caabf6a6-8cfd-484c-91b1-36982cce8bcc",
+          "6370e75e-7b7f-46c2-aa4b-f730bfcc63df",
+          "d7f75090-a432-4ae4-8a0a-eb438165d4c9"
+        ],
+        "original_signature_observed_valid": true,
+        "receipt_id": "ratt_930e485f39e642b2a6909ad2d5db6729",
+        "signed_evidence": [
+          {
+            "commitment": "249369263f466481f9559e37760950681d2673bb3618b5d52a92f2581701a9d6",
+            "evidence_slot": "slot_c93d3d8bca8e4485b0be4d31aaa693a9",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "f9b2237c49599cc4bf8b92b886b88278f2d85c07765933f4d2e9985f3b38a26c",
+            "evidence_slot": "slot_f1fe9fb665cd4bccafc63b1f250d4fed",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "9858797de9e7911a6c86f7090576c832bca517a28bb75b28116dace3ceec3ed3",
+            "evidence_slot": "slot_64484172e57c4e9696bd194e397fa756",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "0259da57273973928b5bab7a871435c7c56d96e4ebaa70fffdfed8bf03a405ce",
+            "evidence_slot": "slot_0ee90ba3194342599ecc02aa9ac4036d",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "744ed840730c119897a393f53175899894aa37dc4667432202db0a3d841b66c3",
+            "evidence_slot": "slot_9409ee0cb94b48c59f2ebf47a3e26929",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "ed696c5fc3246e8e035800e3391057e159506e28440e5f2a75cc91d5f0d714e1",
+            "evidence_slot": "slot_7204186a7ec14114915d054ab139f177",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "f22affe0ca5c29f4725d7ef9085e00805c14542786c96946ebec470b10e89d1a",
+            "evidence_slot": "slot_ae29d672d13d4879aab9da4ef7bb00e9",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "c03d37be59f53b99a6eae2e4728965ab770f94cf2e99b9d82c73468364255967",
+            "evidence_slot": "slot_4e49ad597aa2419a8b6693a0ea56caba",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "48eb6dfc95d56f15c0a1388c6a8fbed3b4ce18f037fbd581405b38666f5ed2d1",
+            "evidence_slot": "slot_b6fd5e5af1ee4e819aaaee67ef35544d",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "22b13825f660865166bc71ea30c8606ee52dd2f895dc6d42f16104f6eecb1383",
+            "evidence_slot": "slot_74ee87f67c02486981a3e4edf42aa43c",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          }
+        ],
+        "signed_selection_body_link_independently_established": false
+      },
+      {
+        "native_reported_retrieved_fixture_ids": [
+          "cedar-batch-owner",
+          "epoch7-approved",
+          "export-regression",
+          "fork-generation8-proposal",
+          "fork-generation8-rejected",
+          "owner-alias-migration",
+          "route-manifest-separation",
+          "schema-v2-archive",
+          "schema-v3-rollover",
+          "wire-v2-transition"
+        ],
+        "native_reported_retrieved_ids": [
+          "71017ec3-f986-46a1-8fbb-883b565f67c3",
+          "cba12455-ff87-40e4-9854-b4a986a277f8",
+          "220ee1d4-2934-4853-9663-dddacf576697",
+          "b909337e-6947-40e0-8aa2-06246b21b061",
+          "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+          "8736bfcb-905e-4359-9f71-ee3aad7a13bc",
+          "477f1013-c72f-4a14-9b95-c89f851feeb1",
+          "476b0820-2e4f-4511-96e5-e542557f41cb",
+          "0a689b66-41e4-49b2-ab7f-a7d105ff132a",
+          "0cbb80a6-977a-4bf8-bd0c-9885f383272c"
+        ],
+        "original_signature_observed_valid": true,
+        "receipt_id": "ratt_89cdfdfad18645ba889fad4f9e5082ba",
+        "signed_evidence": [
+          {
+            "commitment": "10c9fa93d0748b8d71e77a1b8360d966f6aa1c6ad03782d20012d3a6e366586a",
+            "evidence_slot": "slot_1f99eda128f54e2bb819e84a17dabadf",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "8c5083d867111c244f5ab7585cb2be1d66f1fe2defd620e5b91c9653c99b4fe6",
+            "evidence_slot": "slot_a42cf6ba5a6f425c8a0d51697c1641a8",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "3d0bb02137651950e2857b04aa1affd538f3c7b968ef13c3c450f0160728bfba",
+            "evidence_slot": "slot_41156b731ddc4b2badb8aea52dc25098",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "f52e20a903ad5dabdc671182e8361dc4d254a9de807ef7ba77faa870630648b8",
+            "evidence_slot": "slot_b4386c23052244b495779fb0de508f15",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "8151e84b9ab5bc1cfba6f9418e8e6888caf88a0f9d2f8d3e30909c8bc56ec5d7",
+            "evidence_slot": "slot_ab87f40ccf2342a8adc6fc10e01bef5e",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "fd93ee13aed61620edb6603540cf8087982c568f50ac830969a44a3dff1a0193",
+            "evidence_slot": "slot_b165954bfe664308a7adaa1fcc7f668c",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "b53455836b8c7f416730b66a4a7ee93d837db8f77eb2eeba66608c46f88da0a7",
+            "evidence_slot": "slot_75d12e7f50674100bb588f38e0028130",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "e032b7c23a4da7f21732efd7a0c6cd3071aa5cb44c5e4561981b146c2e48c8af",
+            "evidence_slot": "slot_4c71090b5e014e2d8bbe670081141577",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "a78a7e1262637a3fa1ae0576a82df5cdf50c1f3abc5c5f85440dbe08747d4a4b",
+            "evidence_slot": "slot_e2f9b46c3c624472bb374fb50fde47de",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "833f22fd71b5f2a952490136d9d99a5638d4e543e55270e1a50e3348b1919e4b",
+            "evidence_slot": "slot_f6f82cc15def41be80f69e275cd2e108",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          }
+        ],
+        "signed_selection_body_link_independently_established": false
+      },
+      {
+        "native_reported_retrieved_fixture_ids": [
+          "batch-size-proposal-expired",
+          "cedar-batch-owner",
+          "crash-reload-proof-history",
+          "duplicate-event-invariant",
+          "horizon-boundary-test",
+          "incident-current",
+          "performance-runbook-decoy",
+          "performance-runbook-validation",
+          "schema-v2-archive",
+          "tombstone-append-invariant"
+        ],
+        "native_reported_retrieved_ids": [
+          "406e484a-6199-4dc4-8e0b-26268f26785d",
+          "6370e75e-7b7f-46c2-aa4b-f730bfcc63df",
+          "abc3e404-fcb6-43e1-8494-97515dd77786",
+          "caabf6a6-8cfd-484c-91b1-36982cce8bcc",
+          "477f1013-c72f-4a14-9b95-c89f851feeb1",
+          "7b8a4099-d9c5-43a1-8998-f5972bcea9ed",
+          "d7f75090-a432-4ae4-8a0a-eb438165d4c9",
+          "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+          "711ee6d8-c7d9-41ac-b309-91718bead8e2",
+          "ab0eab48-c9ca-4637-8f99-cd95f5179212"
+        ],
+        "original_signature_observed_valid": true,
+        "receipt_id": "ratt_3b700b24bcbc48dc89f8ab55b26db4e2",
+        "signed_evidence": [
+          {
+            "commitment": "dca50e5ca7ea9ca08dec34ddf708c9edc6495374579974ad3fc988b78ce7ad11",
+            "evidence_slot": "slot_e653c512166340b78e522416c510aa9e",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "dde1fd2966c1183ffa6b2aa43df2ec5712b66ebceb1db4f3bcbe66ac48d88201",
+            "evidence_slot": "slot_413e4630ceb44f749632b24bddf6f219",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "b1c7aafd47b2c7936a35f8afed1ddd34ff6e220e9448eba251a62f87127f01be",
+            "evidence_slot": "slot_6ef1c98af6094fe8966d70eb570529c3",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "14b99fd5e53056ac656c26c878559c0fee171d46f0c8d6a799fb37321aa732af",
+            "evidence_slot": "slot_3ffd37b3089f400a83e704694fb078ba",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "1d86653f1722fa7ba8715443c91cd557128e030c1cf419ed7d475da607426703",
+            "evidence_slot": "slot_ad482beb92e5441c83fe48f8fc037f4a",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "821e42781f5799ea1049af4ad1b5da131adf1b0a6e2dd82e285c850b3fe1c999",
+            "evidence_slot": "slot_19ca288fc36f4f35b2c7b535cb701382",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "4ef1b4bd4af14283822a355d7cc7abd67f343f3d4978c6a6463ea3b887020115",
+            "evidence_slot": "slot_70ecc1dd122b47ac868cd3fc2a676407",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "41b2e45c308625e432be9015fc762d461098dac3626c12a20a0b473893e67317",
+            "evidence_slot": "slot_4f02368824e54b468f4678998f3bed37",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "6fd581a10763b025978e7df1693b72a9b87d10b2758e1f50a21929dc685443be",
+            "evidence_slot": "slot_c31c9025454440ecb53d6f618dca8ae1",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          },
+          {
+            "commitment": "7be990fecfa4529ee30cc137abd50907447ee87c374c797c340763944f2446b1",
+            "evidence_slot": "slot_ad999f8adc5041bb8a4d0fd7315eac82",
+            "independently_established": false,
+            "independently_matched_fixture_ids": [],
+            "match_basis": {},
+            "signed_content_sha256": [],
+            "signed_ids": []
+          }
+        ],
+        "signed_selection_body_link_independently_established": false
+      }
+    ],
+    "signed_selection_body_link_independently_established": false
+  },
+  "source": "Receipt IDs extracted only from successful native Recall response values.",
+  "tamper_rejected": true
+}

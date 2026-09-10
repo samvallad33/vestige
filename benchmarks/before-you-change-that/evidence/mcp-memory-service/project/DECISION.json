@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "cause": "route.RECONCILE selected CEDAR@7, whose MAX_SEEN checkpoint advanced to 104 when the reversal arrived first and caused the delayed charge at sequence 100 to fail the checkpoint gate. CYPRESS@7 is the approved owner with PIN_PENDING, but persisted checkpoint state also had to be rederived from the append-only journal before input gating so the corrected route could heal the existing incident and interrupted P+C resolutions.",
+  "evidence_ids": [
+    "incident-current",
+    "public-regression",
+    "schema-v3-rollover",
+    "wire-v2-transition",
+    "owner-alias-migration",
+    "epoch7-approved",
+    "obligation-reconcile-path",
+    "cedar-batch-owner",
+    "checkpoint-watermark-design",
+    "route-manifest-separation",
+    "duplicate-event-invariant",
+    "crash-reload-proof-history",
+    "tombstone-append-invariant",
+    "horizon-boundary-test",
+    "export-owner-contract",
+    "export-regression"
+  ],
+  "causal_path": [
+    {
+      "from": "schema-v3-rollover",
+      "to": "wire-v2-transition",
+      "relation": "encoded_by"
+    },
+    {
+      "from": "wire-v2-transition",
+      "to": "owner-alias-migration",
+      "relation": "assigned_owner_by"
+    },
+    {
+      "from": "owner-alias-migration",
+      "to": "epoch7-approved",
+      "relation": "promoted_as"
+    },
+    {
+      "from": "epoch7-approved",
+      "to": "obligation-reconcile-path",
+      "relation": "guarded_by"
+    },
+    {
+      "from": "obligation-reconcile-path",
+      "to": "incident-current",
+      "relation": "applies_when_path_edited"
+    },
+    {
+      "from": "incident-current",
+      "to": "public-regression",
+      "relation": "reproduced_by"
+    }
+  ],
+  "rejected_hypotheses": [
+    {
+      "hypothesis": "Keep CEDAR@7 because its generation, schema, wire format, and reversal horizon match the approved reconciliation profile.",
+      "evidence_ids": [
+        "cedar-batch-owner",
+        "checkpoint-watermark-design",
+        "epoch7-approved",
+        "route-manifest-separation"
+      ],
+      "reason": "CEDAR owns ordered batch replay and uses MAX_SEEN; equal numeric and format fields do not transfer RECONCILE ownership. CYPRESS owns reconciliation and uses PIN_PENDING for delayed targets."
+    },
+    {
+      "hypothesis": "Resolve tombstone pressure by deleting reconciliation tombstones and increasing diagnostic.batch_size to 128.",
+      "evidence_ids": [
+        "performance-runbook-decoy",
+        "performance-runbook-validation",
+        "batch-size-proposal-expired",
+        "tombstone-append-invariant"
+      ],
+      "reason": "That procedure was limited to disposable analytics output, never tested the ledger or delayed reversals, and expired without approval. Deleting P or T facts would violate the append-only durability invariant."
+    },
+    {
+      "hypothesis": "Adopt the newer FALCON generation 8 reconciliation fork.",
+      "evidence_ids": [
+        "fork-generation8-proposal",
+        "fork-generation8-rejected"
+      ],
+      "reason": "The fork lacked crash/reload proof, was explicitly rejected, and has no production reconciliation ownership."
+    },
+    {
+      "hypothesis": "Increase REVERSAL_HORIZON so sequence 104 can target sequence 100.",
+      "evidence_ids": [
+        "horizon-boundary-test",
+        "epoch7-approved"
+      ],
+      "reason": "The approved horizon is already 4, and the inclusive boundary explicitly permits 104 to target 100; checkpoint ownership, not horizon width, caused the rejection."
+    }
+  ],
+  "changed_files": [
+    "src/ledger/reconcile.rs",
+    "runtime.conf"
+  ]
+}

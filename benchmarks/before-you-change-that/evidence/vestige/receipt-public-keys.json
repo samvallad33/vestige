@@ -1,0 +1,10 @@
+{
+  "keys": [
+    {
+      "key_id": "local-demo-key",
+      "public_key_base64": "qBiadEZ1PdmN2u/xV2hOwsLEXSb4eN9pFaYmDwwQsWQ=",
+      "public_key_sha256": "831a3ff4c91cc02c02b2f532178f0411b55545ab439529f87902bf2bf2e0ee51"
+    }
+  ],
+  "trust_boundary": "Keys from the retained disposable demo store; not external identity certification."
+}

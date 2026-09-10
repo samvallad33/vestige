@@ -1,0 +1,3582 @@
+{
+  "arm": "mcp-memory-service",
+  "model_run": {
+    "exit_code": 0,
+    "timeout": true,
+    "elapsed_seconds": 900.032839125,
+    "events": 109,
+    "narration_messages": 40,
+    "stdout_closed": true,
+    "protected_files_unchanged": true,
+    "thread_ids": [
+      "recorded-agent-0b97957a5f51"
+    ],
+    "usage": [],
+    "synchronization": {
+      "ready_monotonic": 1.369105125,
+      "release_monotonic": 1.36910825,
+      "dispatch_monotonic": 1.369118208
+    }
+  },
+  "evaluation": {
+    "checks": [
+      {
+        "name": "application_files_are_regular",
+        "pass": true,
+        "detail": "regular application files and exact workspace shape"
+      },
+      {
+        "name": "protected_files_intact",
+        "pass": true,
+        "detail": "all protected bytes and modes match"
+      },
+      {
+        "name": "decision_schema_valid",
+        "pass": true,
+        "detail": ""
+      },
+      {
+        "name": "decision_ids_valid",
+        "pass": true,
+        "detail": "all citations must resolve to original fixture records"
+      },
+      {
+        "name": "decision_causal_coverage",
+        "pass": true,
+        "detail": "coverage uses IDs for schema, wire, owner, epoch, obligation, and observation"
+      },
+      {
+        "name": "decision_connected_edges_supported",
+        "pass": true,
+        "detail": "requires exact archived triples, ordered roles and endpoints, connectivity, and citations for every path node"
+      },
+      {
+        "name": "decision_rejections_supported",
+        "pass": true,
+        "detail": "requires structured rejection of the exact-word runbook and newer fork"
+      },
+      {
+        "name": "decision_changed_files_match",
+        "pass": true,
+        "detail": "declared=['runtime.conf', 'src/ledger/reconcile.rs']; observed=['runtime.conf', 'src/ledger/reconcile.rs']"
+      },
+      {
+        "name": "rust_compiles",
+        "pass": true,
+        "detail": "rustc=@recorded-home@/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc; sandbox=/usr/bin/sandbox-exec; exit=0; static_tree_exact=True"
+      },
+      {
+        "name": "adapter_protocol_complete",
+        "pass": true,
+        "detail": "generic adapter emitted primitive rows; expected comparisons stayed in Python"
+      },
+      {
+        "name": "pending_reversal_pins_checkpoint",
+        "pass": true,
+        "detail": ""
+      },
+      {
+        "name": "delayed_charge_resolves_exactly_once",
+        "pass": true,
+        "detail": ""
+      },
+      {
+        "name": "journal_is_append_only_with_resolution_tombstone",
+        "pass": true,
+        "detail": ""
+      },
+      {
+        "name": "stale_marker_reload_and_duplicate_suppression",
+        "pass": true,
+        "detail": ""
+      },
+      {
+        "name": "direct_reversal_and_retry_are_exact",
+        "pass": true,
+        "detail": ""
+      },
+      {
+        "name": "horizon_and_schema_rejections_preserve_journal",
+        "pass": true,
+        "detail": ""
+      },
+      {
+        "name": "shuffled_events_preserve_all_ledger_effects",
+        "pass": true,
+        "detail": ""
+      },
+      {
+        "name": "unrelated_export_behavior_is_unchanged",
+        "pass": true,
+        "detail": ""
+      },
+      {
+        "name": "alternate_policy_drives_behavior_without_hardcoding",
+        "pass": true,
+        "detail": ""
+      },
+      {
+        "name": "real_state_files_and_atomic_cleanup",
+        "pass": true,
+        "detail": ""
+      },
+      {
+        "name": "approved_reconciliation_owner_is_exact",
+        "pass": true,
+        "detail": ""
+      }
+    ],
+    "score": 21,
+    "total": 21,
+    "all_pass": true,
+    "rustc": "@recorded-home@/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc",
+    "rustc_version": "rustc 1.95.0 (59807616e 2026-04-14)",
+    "compile_exit": 0,
+    "adapter_exits": {
+      "pending": 0,
+      "delayed": 0,
+      "reload": 0,
+      "direct": 0,
+      "shuffled": 0,
+      "negative": 0,
+      "custom": 0
+    },
+    "changed_application_files": [
+      "src/ledger/reconcile.rs",
+      "runtime.conf"
+    ],
+    "oracle_boundary": "generic primitive adapter; Python owns expected rows and durable-byte comparisons",
+    "recovery_claim": "separate process reload after a pre-existing marker; no claim of arbitrary crash atomicity"
+  },
+  "decision": {
+    "schema_version": 1,
+    "cause": "route.RECONCILE selected CEDAR@7, whose MAX_SEEN checkpoint advanced to 104 when the reversal arrived first and caused the delayed charge at sequence 100 to fail the checkpoint gate. CYPRESS@7 is the approved owner with PIN_PENDING, but persisted checkpoint state also had to be rederived from the append-only journal before input gating so the corrected route could heal the existing incident and interrupted P+C resolutions.",
+    "evidence_ids": [
+      "incident-current",
+      "public-regression",
+      "schema-v3-rollover",
+      "wire-v2-transition",
+      "owner-alias-migration",
+      "epoch7-approved",
+      "obligation-reconcile-path",
+      "cedar-batch-owner",
+      "checkpoint-watermark-design",
+      "route-manifest-separation",
+      "duplicate-event-invariant",
+      "crash-reload-proof-history",
+      "tombstone-append-invariant",
+      "horizon-boundary-test",
+      "export-owner-contract",
+      "export-regression"
+    ],
+    "causal_path": [
+      {
+        "from": "schema-v3-rollover",
+        "to": "wire-v2-transition",
+        "relation": "encoded_by"
+      },
+      {
+        "from": "wire-v2-transition",
+        "to": "owner-alias-migration",
+        "relation": "assigned_owner_by"
+      },
+      {
+        "from": "owner-alias-migration",
+        "to": "epoch7-approved",
+        "relation": "promoted_as"
+      },
+      {
+        "from": "epoch7-approved",
+        "to": "obligation-reconcile-path",
+        "relation": "guarded_by"
+      },
+      {
+        "from": "obligation-reconcile-path",
+        "to": "incident-current",
+        "relation": "applies_when_path_edited"
+      },
+      {
+        "from": "incident-current",
+        "to": "public-regression",
+        "relation": "reproduced_by"
+      }
+    ],
+    "rejected_hypotheses": [
+      {
+        "hypothesis": "Keep CEDAR@7 because its generation, schema, wire format, and reversal horizon match the approved reconciliation profile.",
+        "evidence_ids": [
+          "cedar-batch-owner",
+          "checkpoint-watermark-design",
+          "epoch7-approved",
+          "route-manifest-separation"
+        ],
+        "reason": "CEDAR owns ordered batch replay and uses MAX_SEEN; equal numeric and format fields do not transfer RECONCILE ownership. CYPRESS owns reconciliation and uses PIN_PENDING for delayed targets."
+      },
+      {
+        "hypothesis": "Resolve tombstone pressure by deleting reconciliation tombstones and increasing diagnostic.batch_size to 128.",
+        "evidence_ids": [
+          "performance-runbook-decoy",
+          "performance-runbook-validation",
+          "batch-size-proposal-expired",
+          "tombstone-append-invariant"
+        ],
+        "reason": "That procedure was limited to disposable analytics output, never tested the ledger or delayed reversals, and expired without approval. Deleting P or T facts would violate the append-only durability invariant."
+      },
+      {
+        "hypothesis": "Adopt the newer FALCON generation 8 reconciliation fork.",
+        "evidence_ids": [
+          "fork-generation8-proposal",
+          "fork-generation8-rejected"
+        ],
+        "reason": "The fork lacked crash/reload proof, was explicitly rejected, and has no production reconciliation ownership."
+      },
+      {
+        "hypothesis": "Increase REVERSAL_HORIZON so sequence 104 can target sequence 100.",
+        "evidence_ids": [
+          "horizon-boundary-test",
+          "epoch7-approved"
+        ],
+        "reason": "The approved horizon is already 4, and the inclusive boundary explicitly permits 104 to target 100; checkpoint ownership, not horizon width, caused the rejection."
+      }
+    ],
+    "changed_files": [
+      "src/ledger/reconcile.rs",
+      "runtime.conf"
+    ]
+  },
+  "patch": [
+    {
+      "path": "src/ledger/reconcile.rs",
+      "before_sha256": "7ab69c44e241f05e9d1b986b3dba1fe8ea4d205e2b19a9bb89b170d953affe54",
+      "after_sha256": "1d16aec5f7f4f38a950587b67ace82973ab7e11f4fb8cec55fa9c681b38485d6",
+      "diff": "--- before/src/ledger/reconcile.rs\n+++ after/src/ledger/reconcile.rs\n@@ -187,8 +187,13 @@\n         let recovered_marker = marker.exists();\n         fs::write(&marker, b\"in-progress\\n\").map_err(|error| error.to_string())?;\n         let result = self.reconcile_inner(state_dir, event, binding, policy, recovered_marker);\n-        let _ = fs::remove_file(&marker);\n-        result\n+        match result {\n+            Ok(outcome) => {\n+                fs::remove_file(&marker).map_err(|error| error.to_string())?;\n+                Ok(outcome)\n+            }\n+            Err(error) => Err(error),\n+        }\n     }\n \n     fn reconcile_inner(\n@@ -200,6 +205,14 @@\n         recovered_marker: bool,\n     ) -> Result<ReconcileOutcome, String> {\n         let mut loaded = load_state(state_dir)?;\n+\n+        // The append-only journal is authoritative after a restart. Finish any\n+        // interrupted P -> C -> T resolution, then derive the active policy's\n+        // checkpoint before it is used to gate the next input event.\n+        recover_pending_resolutions(state_dir, &mut loaded)?;\n+        loaded.checkpoint = checkpoint_for(policy, &loaded)?;\n+        write_derived_state(state_dir, &loaded)?;\n+\n         if loaded.event_ids.contains(event.id) {\n             return Ok(outcome(ApplyState::Duplicate, binding, policy, &loaded, recovered_marker));\n         }\n@@ -267,8 +280,7 @@\n         append_lines(&state_dir.join(\"ledger.log\"), &lines)?;\n         loaded.journal_entries += lines.len();\n         loaded.checkpoint = checkpoint_for(policy, &loaded)?;\n-        atomic_write(&state_dir.join(\"checkpoint.state\"), format!(\"{}\\n\", loaded.checkpoint).as_bytes())?;\n-        atomic_write(&state_dir.join(\"balance.state\"), format!(\"{}\\n\", loaded.balance_cents).as_bytes())?;\n+        write_derived_state(state_dir, &loaded)?;\n         Ok(outcome(ApplyState::Applied, binding, policy, &loaded, recovered_marker))\n     }\n \n@@ -360,6 +372,49 @@\n     }\n }\n \n+fn recover_pending_resolutions(state_dir: &Path, loaded: &mut Loaded) -> Result<(), String> {\n+    let mut lines = Vec::new();\n+    let mut resolutions = Vec::new();\n+    let mut resolved_targets = loaded.reversed_targets.clone();\n+\n+    for pending in &loaded.pending {\n+        if resolved_targets.contains(&pending.target_id) {\n+            continue;\n+        }\n+        let Some((charge_sequence, amount_cents)) = loaded.charges.get(&pending.target_id).copied() else {\n+            continue;\n+        };\n+        if charge_sequence != pending.target_sequence {\n+            continue;\n+        }\n+\n+        lines.push(format!(\"T|{}|{}|{}\", pending.reversal_id,\n+                           pending.target_id, amount_cents));\n+        resolutions.push((pending.reversal_id.clone(), pending.target_id.clone(), amount_cents));\n+        resolved_targets.insert(pending.target_id.clone());\n+    }\n+\n+    if lines.is_empty() {\n+        return Ok(());\n+    }\n+\n+    append_lines(&state_dir.join(\"ledger.log\"), &lines)?;\n+    loaded.journal_entries += lines.len();\n+    for (reversal_id, target_id, amount_cents) in resolutions {\n+        loaded.reversed_targets.insert(target_id);\n+        loaded.pending.retain(|pending| pending.reversal_id != reversal_id);\n+        loaded.balance_cents -= amount_cents as i64;\n+    }\n+    Ok(())\n+}\n+\n+fn write_derived_state(state_dir: &Path, loaded: &Loaded) -> Result<(), String> {\n+    atomic_write(&state_dir.join(\"checkpoint.state\"),\n+                 format!(\"{}\\n\", loaded.checkpoint).as_bytes())?;\n+    atomic_write(&state_dir.join(\"balance.state\"),\n+                 format!(\"{}\\n\", loaded.balance_cents).as_bytes())\n+}\n+\n fn append_lines(path: &Path, lines: &[String]) -> Result<(), String> {\n     let mut file = OpenOptions::new().create(true).append(true).open(path)\n         .map_err(|error| error.to_string())?;\n"
+    },
+    {
+      "path": "runtime.conf",
+      "before_sha256": "d288f8c58dad57c6be714900022a21c1173d98365a999b3c0b48b7704ad54b4c",
+      "after_sha256": "966b000c13dc1abcc93251fb41c6781241aa3fec9459f8755c939cee13c5157b",
+      "diff": "--- before/runtime.conf\n+++ after/runtime.conf\n@@ -1,5 +1,5 @@\n # Synthetic reconciliation and export policy registry.\n-route.RECONCILE=CEDAR@7\n+route.RECONCILE=CYPRESS@7\n route.EXPORT_SNAPSHOT=LARCH@3\n route.RECONCILE_APPROVED=CYPRESS@7\n route.RECONCILE_FORK=FALCON@8\n"
+    }
+  ],
+  "application_hashes": {
+    "src/ledger/reconcile.rs": "1d16aec5f7f4f38a950587b67ace82973ab7e11f4fb8cec55fa9c681b38485d6",
+    "runtime.conf": "966b000c13dc1abcc93251fb41c6781241aa3fec9459f8755c939cee13c5157b"
+  },
+  "valid_execution": true,
+  "narration_message_minimum_met": true,
+  "shipped": "Local disposable application patch only. Nothing deployed.",
+  "wire_integrity_valid": true,
+  "native_evidence": {
+    "expected": [
+      {
+        "fixture_id": "batch-size-proposal-expired",
+        "content_utf8_bytes": 456,
+        "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793"
+      },
+      {
+        "fixture_id": "cedar-batch-owner",
+        "content_utf8_bytes": 489,
+        "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f"
+      },
+      {
+        "fixture_id": "checkpoint-watermark-design",
+        "content_utf8_bytes": 489,
+        "content_sha256": "5e974e27696bc8445fafa0c1425f3a142f57792d303fa06d1d7f3f1271e66055"
+      },
+      {
+        "fixture_id": "crash-reload-proof-history",
+        "content_utf8_bytes": 501,
+        "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d"
+      },
+      {
+        "fixture_id": "duplicate-event-invariant",
+        "content_utf8_bytes": 485,
+        "content_sha256": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d"
+      },
+      {
+        "fixture_id": "epoch7-approved",
+        "content_utf8_bytes": 601,
+        "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083"
+      },
+      {
+        "fixture_id": "export-owner-contract",
+        "content_utf8_bytes": 456,
+        "content_sha256": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2"
+      },
+      {
+        "fixture_id": "export-regression",
+        "content_utf8_bytes": 470,
+        "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5"
+      },
+      {
+        "fixture_id": "fork-generation8-proposal",
+        "content_utf8_bytes": 562,
+        "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb"
+      },
+      {
+        "fixture_id": "fork-generation8-rejected",
+        "content_utf8_bytes": 504,
+        "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc"
+      },
+      {
+        "fixture_id": "horizon-boundary-test",
+        "content_utf8_bytes": 430,
+        "content_sha256": "cc93b7484085b9e35174e3c4e4a31c3347c13b2f88ee13f678837a498cbcd760"
+      },
+      {
+        "fixture_id": "incident-current",
+        "content_utf8_bytes": 755,
+        "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf"
+      },
+      {
+        "fixture_id": "obligation-reconcile-path",
+        "content_utf8_bytes": 622,
+        "content_sha256": "325c96601e82d9484c2710d26e4da8a318b02923b8a9e9fb589ad4a34aa1c900"
+      },
+      {
+        "fixture_id": "owner-alias-migration",
+        "content_utf8_bytes": 589,
+        "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16"
+      },
+      {
+        "fixture_id": "performance-runbook-decoy",
+        "content_utf8_bytes": 677,
+        "content_sha256": "da70976ec95095fdf4252a2328e7b9855ecca7638961c2d816ee11baa3d0a458"
+      },
+      {
+        "fixture_id": "performance-runbook-validation",
+        "content_utf8_bytes": 535,
+        "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d"
+      },
+      {
+        "fixture_id": "public-regression",
+        "content_utf8_bytes": 474,
+        "content_sha256": "1e7af549288d6a9a52e6355283c552394cd775af13fc979f536d7e22c4de4848"
+      },
+      {
+        "fixture_id": "route-manifest-separation",
+        "content_utf8_bytes": 537,
+        "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201"
+      },
+      {
+        "fixture_id": "schema-v2-archive",
+        "content_utf8_bytes": 422,
+        "content_sha256": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d"
+      },
+      {
+        "fixture_id": "schema-v3-rollover",
+        "content_utf8_bytes": 543,
+        "content_sha256": "a908d34d1483a248ab14858379224a5700824d8cdcf6ba6918619eab82682326"
+      },
+      {
+        "fixture_id": "tombstone-append-invariant",
+        "content_utf8_bytes": 461,
+        "content_sha256": "06d6f0c4306a38d1d2741fd0dec94e4288dd06eba8b4bbe9b4f2beb7afff65bd"
+      },
+      {
+        "fixture_id": "wire-v2-transition",
+        "content_utf8_bytes": 548,
+        "content_sha256": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840"
+      }
+    ],
+    "returned": [
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "incident-current",
+        "native_record_id": null,
+        "resolved_fixture_id": "incident-current",
+        "content_matches_fixture_ids": [
+          "incident-current"
+        ],
+        "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf",
+        "content_utf8_bytes": 755,
+        "service_hash": "8b6dd43f90f15b4bd000df37d153febf019c8907b7f30cf488078e45a92db9a2",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "public-regression",
+        "native_record_id": null,
+        "resolved_fixture_id": "public-regression",
+        "content_matches_fixture_ids": [
+          "public-regression"
+        ],
+        "content_sha256": "1e7af549288d6a9a52e6355283c552394cd775af13fc979f536d7e22c4de4848",
+        "content_utf8_bytes": 474,
+        "service_hash": "93ff3178eade7495171b5e791fde763ef1fba8bdb97e68cf53ce3787c83f986c",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "export-regression",
+        "native_record_id": null,
+        "resolved_fixture_id": "export-regression",
+        "content_matches_fixture_ids": [
+          "export-regression"
+        ],
+        "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+        "content_utf8_bytes": 470,
+        "service_hash": "72b7f1e5d38541fad91c73e903172eab30f25bdf8ded01fa8dee12cdb5499276",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "route-manifest-separation",
+        "native_record_id": null,
+        "resolved_fixture_id": "route-manifest-separation",
+        "content_matches_fixture_ids": [
+          "route-manifest-separation"
+        ],
+        "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+        "content_utf8_bytes": 537,
+        "service_hash": "7c810a5a64bd07f376b4c8f2173788c152365f395ff930a5c7044aefc60f61d8",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "fork-generation8-rejected",
+        "native_record_id": null,
+        "resolved_fixture_id": "fork-generation8-rejected",
+        "content_matches_fixture_ids": [
+          "fork-generation8-rejected"
+        ],
+        "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+        "content_utf8_bytes": 504,
+        "service_hash": "abac91fd55e128acbe0a0de9968222ca94bffe81e02c264d61d0b1dca62127a3",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "fork-generation8-proposal",
+        "native_record_id": null,
+        "resolved_fixture_id": "fork-generation8-proposal",
+        "content_matches_fixture_ids": [
+          "fork-generation8-proposal"
+        ],
+        "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+        "content_utf8_bytes": 562,
+        "service_hash": "a6434daad5a41d0bbbd4128081816cb13e6924015e3d2d50068ea49e94ea757d",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "crash-reload-proof-history",
+        "native_record_id": null,
+        "resolved_fixture_id": "crash-reload-proof-history",
+        "content_matches_fixture_ids": [
+          "crash-reload-proof-history"
+        ],
+        "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+        "content_utf8_bytes": 501,
+        "service_hash": "56ec7b582deb60145871ec25ce74c1b4c12654688fe3bc2baa51103adcd1af93",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "horizon-boundary-test",
+        "native_record_id": null,
+        "resolved_fixture_id": "horizon-boundary-test",
+        "content_matches_fixture_ids": [
+          "horizon-boundary-test"
+        ],
+        "content_sha256": "cc93b7484085b9e35174e3c4e4a31c3347c13b2f88ee13f678837a498cbcd760",
+        "content_utf8_bytes": 430,
+        "service_hash": "bd5a7b9591cf633608c331beaf51bd6e7aa1335e070c57bfd2cd812498506fd6",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "obligation-reconcile-path",
+        "native_record_id": null,
+        "resolved_fixture_id": "obligation-reconcile-path",
+        "content_matches_fixture_ids": [
+          "obligation-reconcile-path"
+        ],
+        "content_sha256": "325c96601e82d9484c2710d26e4da8a318b02923b8a9e9fb589ad4a34aa1c900",
+        "content_utf8_bytes": 622,
+        "service_hash": "3ec2bc4147d7cc009cfd8075a1b272a76221cf9939419d8b7fd8347e72535a87",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "tombstone-append-invariant",
+        "native_record_id": null,
+        "resolved_fixture_id": "tombstone-append-invariant",
+        "content_matches_fixture_ids": [
+          "tombstone-append-invariant"
+        ],
+        "content_sha256": "06d6f0c4306a38d1d2741fd0dec94e4288dd06eba8b4bbe9b4f2beb7afff65bd",
+        "content_utf8_bytes": 461,
+        "service_hash": "11276809edcff291c03bd24a95c2b8c191e8992e258345dfaa0a37492320fbfd",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "duplicate-event-invariant",
+        "native_record_id": null,
+        "resolved_fixture_id": "duplicate-event-invariant",
+        "content_matches_fixture_ids": [
+          "duplicate-event-invariant"
+        ],
+        "content_sha256": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+        "content_utf8_bytes": 485,
+        "service_hash": "7c45417e5369032c3f6ab329cddad31762766c002ac64c22a4e25da39cfdde8e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "cedar-batch-owner",
+        "native_record_id": null,
+        "resolved_fixture_id": "cedar-batch-owner",
+        "content_matches_fixture_ids": [
+          "cedar-batch-owner"
+        ],
+        "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+        "content_utf8_bytes": 489,
+        "service_hash": "9b870749a5c9fb113d4975fcabef55dabb4dc33baebd3db648b81c1de6d70778",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "checkpoint-watermark-design",
+        "native_record_id": null,
+        "resolved_fixture_id": "checkpoint-watermark-design",
+        "content_matches_fixture_ids": [
+          "checkpoint-watermark-design"
+        ],
+        "content_sha256": "5e974e27696bc8445fafa0c1425f3a142f57792d303fa06d1d7f3f1271e66055",
+        "content_utf8_bytes": 489,
+        "service_hash": "ca6e6e1581ff773c73af4b51da23b69349c56ef6e7a6b4a34e76ffca70f3d06c",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "epoch7-approved",
+        "native_record_id": null,
+        "resolved_fixture_id": "epoch7-approved",
+        "content_matches_fixture_ids": [
+          "epoch7-approved"
+        ],
+        "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+        "content_utf8_bytes": 601,
+        "service_hash": "b6de61fde0a4b6ba051448cabeb67f4de646e3f44e6f610cac960e017f7e9b6c",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "owner-alias-migration",
+        "native_record_id": null,
+        "resolved_fixture_id": "owner-alias-migration",
+        "content_matches_fixture_ids": [
+          "owner-alias-migration"
+        ],
+        "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+        "content_utf8_bytes": 589,
+        "service_hash": "5337a45499f58e68b010a0c8d9e6598a47994394ea0e9907e06abc5232ae28a0",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "wire-v2-transition",
+        "native_record_id": null,
+        "resolved_fixture_id": "wire-v2-transition",
+        "content_matches_fixture_ids": [
+          "wire-v2-transition"
+        ],
+        "content_sha256": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+        "content_utf8_bytes": 548,
+        "service_hash": "a4ab2777ce389338e557c13924d893d2ca5305855d3bbc9e19e4e3ee672e5ad4",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "schema-v3-rollover",
+        "native_record_id": null,
+        "resolved_fixture_id": "schema-v3-rollover",
+        "content_matches_fixture_ids": [
+          "schema-v3-rollover"
+        ],
+        "content_sha256": "a908d34d1483a248ab14858379224a5700824d8cdcf6ba6918619eab82682326",
+        "content_utf8_bytes": 543,
+        "service_hash": "31bc998889b643b24fe1250b2b608c334245c74d4572a17e3dac3ae9b9676a7f",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "export-owner-contract",
+        "native_record_id": null,
+        "resolved_fixture_id": "export-owner-contract",
+        "content_matches_fixture_ids": [
+          "export-owner-contract"
+        ],
+        "content_sha256": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+        "content_utf8_bytes": 456,
+        "service_hash": "b2dd27efdc2b94359798f112107c5d834ec35ce6708ca1537354654e3b3d56b4",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "batch-size-proposal-expired",
+        "native_record_id": null,
+        "resolved_fixture_id": "batch-size-proposal-expired",
+        "content_matches_fixture_ids": [
+          "batch-size-proposal-expired"
+        ],
+        "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+        "content_utf8_bytes": 456,
+        "service_hash": "91edd3c02aef66266688585425fbc74e0036ad9500e821dd324e75ab18b80d70",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "performance-runbook-validation",
+        "native_record_id": null,
+        "resolved_fixture_id": "performance-runbook-validation",
+        "content_matches_fixture_ids": [
+          "performance-runbook-validation"
+        ],
+        "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+        "content_utf8_bytes": 535,
+        "service_hash": "75167ff37fc00c26ca715f69771beb4dac2afa878c929887c6477d55eef75e2e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "performance-runbook-decoy",
+        "native_record_id": null,
+        "resolved_fixture_id": "performance-runbook-decoy",
+        "content_matches_fixture_ids": [
+          "performance-runbook-decoy"
+        ],
+        "content_sha256": "da70976ec95095fdf4252a2328e7b9855ecca7638961c2d816ee11baa3d0a458",
+        "content_utf8_bytes": 677,
+        "service_hash": "7fe82f2e2dcf65af473e95e13a6ce48678341d37e21c0d5bd05beee3e62c1120",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 5,
+        "response_index": 8,
+        "reported_fixture_id": "schema-v2-archive",
+        "native_record_id": null,
+        "resolved_fixture_id": "schema-v2-archive",
+        "content_matches_fixture_ids": [
+          "schema-v2-archive"
+        ],
+        "content_sha256": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+        "content_utf8_bytes": 422,
+        "service_hash": "ad8d490a0f612c58d330708001d8b8f9ce15636a47c027f9a87d6b790481647e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 14,
+        "response_index": 18,
+        "reported_fixture_id": "epoch7-approved",
+        "native_record_id": null,
+        "resolved_fixture_id": "epoch7-approved",
+        "content_matches_fixture_ids": [
+          "epoch7-approved"
+        ],
+        "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+        "content_utf8_bytes": 601,
+        "service_hash": "b6de61fde0a4b6ba051448cabeb67f4de646e3f44e6f610cac960e017f7e9b6c",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 14,
+        "response_index": 18,
+        "reported_fixture_id": "owner-alias-migration",
+        "native_record_id": null,
+        "resolved_fixture_id": "owner-alias-migration",
+        "content_matches_fixture_ids": [
+          "owner-alias-migration"
+        ],
+        "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+        "content_utf8_bytes": 589,
+        "service_hash": "5337a45499f58e68b010a0c8d9e6598a47994394ea0e9907e06abc5232ae28a0",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 14,
+        "response_index": 18,
+        "reported_fixture_id": "fork-generation8-proposal",
+        "native_record_id": null,
+        "resolved_fixture_id": "fork-generation8-proposal",
+        "content_matches_fixture_ids": [
+          "fork-generation8-proposal"
+        ],
+        "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+        "content_utf8_bytes": 562,
+        "service_hash": "a6434daad5a41d0bbbd4128081816cb13e6924015e3d2d50068ea49e94ea757d",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 14,
+        "response_index": 18,
+        "reported_fixture_id": "fork-generation8-rejected",
+        "native_record_id": null,
+        "resolved_fixture_id": "fork-generation8-rejected",
+        "content_matches_fixture_ids": [
+          "fork-generation8-rejected"
+        ],
+        "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+        "content_utf8_bytes": 504,
+        "service_hash": "abac91fd55e128acbe0a0de9968222ca94bffe81e02c264d61d0b1dca62127a3",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 14,
+        "response_index": 18,
+        "reported_fixture_id": "wire-v2-transition",
+        "native_record_id": null,
+        "resolved_fixture_id": "wire-v2-transition",
+        "content_matches_fixture_ids": [
+          "wire-v2-transition"
+        ],
+        "content_sha256": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+        "content_utf8_bytes": 548,
+        "service_hash": "a4ab2777ce389338e557c13924d893d2ca5305855d3bbc9e19e4e3ee672e5ad4",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 14,
+        "response_index": 18,
+        "reported_fixture_id": "incident-current",
+        "native_record_id": null,
+        "resolved_fixture_id": "incident-current",
+        "content_matches_fixture_ids": [
+          "incident-current"
+        ],
+        "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf",
+        "content_utf8_bytes": 755,
+        "service_hash": "8b6dd43f90f15b4bd000df37d153febf019c8907b7f30cf488078e45a92db9a2",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 14,
+        "response_index": 18,
+        "reported_fixture_id": "batch-size-proposal-expired",
+        "native_record_id": null,
+        "resolved_fixture_id": "batch-size-proposal-expired",
+        "content_matches_fixture_ids": [
+          "batch-size-proposal-expired"
+        ],
+        "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+        "content_utf8_bytes": 456,
+        "service_hash": "91edd3c02aef66266688585425fbc74e0036ad9500e821dd324e75ab18b80d70",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 14,
+        "response_index": 18,
+        "reported_fixture_id": "cedar-batch-owner",
+        "native_record_id": null,
+        "resolved_fixture_id": "cedar-batch-owner",
+        "content_matches_fixture_ids": [
+          "cedar-batch-owner"
+        ],
+        "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+        "content_utf8_bytes": 489,
+        "service_hash": "9b870749a5c9fb113d4975fcabef55dabb4dc33baebd3db648b81c1de6d70778",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 14,
+        "response_index": 18,
+        "reported_fixture_id": "performance-runbook-validation",
+        "native_record_id": null,
+        "resolved_fixture_id": "performance-runbook-validation",
+        "content_matches_fixture_ids": [
+          "performance-runbook-validation"
+        ],
+        "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+        "content_utf8_bytes": 535,
+        "service_hash": "75167ff37fc00c26ca715f69771beb4dac2afa878c929887c6477d55eef75e2e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 14,
+        "response_index": 18,
+        "reported_fixture_id": "route-manifest-separation",
+        "native_record_id": null,
+        "resolved_fixture_id": "route-manifest-separation",
+        "content_matches_fixture_ids": [
+          "route-manifest-separation"
+        ],
+        "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+        "content_utf8_bytes": 537,
+        "service_hash": "7c810a5a64bd07f376b4c8f2173788c152365f395ff930a5c7044aefc60f61d8",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 13,
+        "response_index": 19,
+        "reported_fixture_id": "route-manifest-separation",
+        "native_record_id": null,
+        "resolved_fixture_id": "route-manifest-separation",
+        "content_matches_fixture_ids": [
+          "route-manifest-separation"
+        ],
+        "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+        "content_utf8_bytes": 537,
+        "service_hash": "7c810a5a64bd07f376b4c8f2173788c152365f395ff930a5c7044aefc60f61d8",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 13,
+        "response_index": 19,
+        "reported_fixture_id": "cedar-batch-owner",
+        "native_record_id": null,
+        "resolved_fixture_id": "cedar-batch-owner",
+        "content_matches_fixture_ids": [
+          "cedar-batch-owner"
+        ],
+        "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+        "content_utf8_bytes": 489,
+        "service_hash": "9b870749a5c9fb113d4975fcabef55dabb4dc33baebd3db648b81c1de6d70778",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 13,
+        "response_index": 19,
+        "reported_fixture_id": "owner-alias-migration",
+        "native_record_id": null,
+        "resolved_fixture_id": "owner-alias-migration",
+        "content_matches_fixture_ids": [
+          "owner-alias-migration"
+        ],
+        "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+        "content_utf8_bytes": 589,
+        "service_hash": "5337a45499f58e68b010a0c8d9e6598a47994394ea0e9907e06abc5232ae28a0",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 13,
+        "response_index": 19,
+        "reported_fixture_id": "export-regression",
+        "native_record_id": null,
+        "resolved_fixture_id": "export-regression",
+        "content_matches_fixture_ids": [
+          "export-regression"
+        ],
+        "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+        "content_utf8_bytes": 470,
+        "service_hash": "72b7f1e5d38541fad91c73e903172eab30f25bdf8ded01fa8dee12cdb5499276",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 13,
+        "response_index": 19,
+        "reported_fixture_id": "epoch7-approved",
+        "native_record_id": null,
+        "resolved_fixture_id": "epoch7-approved",
+        "content_matches_fixture_ids": [
+          "epoch7-approved"
+        ],
+        "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+        "content_utf8_bytes": 601,
+        "service_hash": "b6de61fde0a4b6ba051448cabeb67f4de646e3f44e6f610cac960e017f7e9b6c",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 13,
+        "response_index": 19,
+        "reported_fixture_id": "fork-generation8-proposal",
+        "native_record_id": null,
+        "resolved_fixture_id": "fork-generation8-proposal",
+        "content_matches_fixture_ids": [
+          "fork-generation8-proposal"
+        ],
+        "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+        "content_utf8_bytes": 562,
+        "service_hash": "a6434daad5a41d0bbbd4128081816cb13e6924015e3d2d50068ea49e94ea757d",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 13,
+        "response_index": 19,
+        "reported_fixture_id": "fork-generation8-rejected",
+        "native_record_id": null,
+        "resolved_fixture_id": "fork-generation8-rejected",
+        "content_matches_fixture_ids": [
+          "fork-generation8-rejected"
+        ],
+        "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+        "content_utf8_bytes": 504,
+        "service_hash": "abac91fd55e128acbe0a0de9968222ca94bffe81e02c264d61d0b1dca62127a3",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 13,
+        "response_index": 19,
+        "reported_fixture_id": "export-owner-contract",
+        "native_record_id": null,
+        "resolved_fixture_id": "export-owner-contract",
+        "content_matches_fixture_ids": [
+          "export-owner-contract"
+        ],
+        "content_sha256": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+        "content_utf8_bytes": 456,
+        "service_hash": "b2dd27efdc2b94359798f112107c5d834ec35ce6708ca1537354654e3b3d56b4",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 13,
+        "response_index": 19,
+        "reported_fixture_id": "crash-reload-proof-history",
+        "native_record_id": null,
+        "resolved_fixture_id": "crash-reload-proof-history",
+        "content_matches_fixture_ids": [
+          "crash-reload-proof-history"
+        ],
+        "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+        "content_utf8_bytes": 501,
+        "service_hash": "56ec7b582deb60145871ec25ce74c1b4c12654688fe3bc2baa51103adcd1af93",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 13,
+        "response_index": 19,
+        "reported_fixture_id": "wire-v2-transition",
+        "native_record_id": null,
+        "resolved_fixture_id": "wire-v2-transition",
+        "content_matches_fixture_ids": [
+          "wire-v2-transition"
+        ],
+        "content_sha256": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+        "content_utf8_bytes": 548,
+        "service_hash": "a4ab2777ce389338e557c13924d893d2ca5305855d3bbc9e19e4e3ee672e5ad4",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 15,
+        "response_index": 20,
+        "reported_fixture_id": "performance-runbook-decoy",
+        "native_record_id": null,
+        "resolved_fixture_id": "performance-runbook-decoy",
+        "content_matches_fixture_ids": [
+          "performance-runbook-decoy"
+        ],
+        "content_sha256": "da70976ec95095fdf4252a2328e7b9855ecca7638961c2d816ee11baa3d0a458",
+        "content_utf8_bytes": 677,
+        "service_hash": "7fe82f2e2dcf65af473e95e13a6ce48678341d37e21c0d5bd05beee3e62c1120",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 15,
+        "response_index": 20,
+        "reported_fixture_id": "performance-runbook-validation",
+        "native_record_id": null,
+        "resolved_fixture_id": "performance-runbook-validation",
+        "content_matches_fixture_ids": [
+          "performance-runbook-validation"
+        ],
+        "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+        "content_utf8_bytes": 535,
+        "service_hash": "75167ff37fc00c26ca715f69771beb4dac2afa878c929887c6477d55eef75e2e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 15,
+        "response_index": 20,
+        "reported_fixture_id": "batch-size-proposal-expired",
+        "native_record_id": null,
+        "resolved_fixture_id": "batch-size-proposal-expired",
+        "content_matches_fixture_ids": [
+          "batch-size-proposal-expired"
+        ],
+        "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+        "content_utf8_bytes": 456,
+        "service_hash": "91edd3c02aef66266688585425fbc74e0036ad9500e821dd324e75ab18b80d70",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 15,
+        "response_index": 20,
+        "reported_fixture_id": "tombstone-append-invariant",
+        "native_record_id": null,
+        "resolved_fixture_id": "tombstone-append-invariant",
+        "content_matches_fixture_ids": [
+          "tombstone-append-invariant"
+        ],
+        "content_sha256": "06d6f0c4306a38d1d2741fd0dec94e4288dd06eba8b4bbe9b4f2beb7afff65bd",
+        "content_utf8_bytes": 461,
+        "service_hash": "11276809edcff291c03bd24a95c2b8c191e8992e258345dfaa0a37492320fbfd",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 15,
+        "response_index": 20,
+        "reported_fixture_id": "incident-current",
+        "native_record_id": null,
+        "resolved_fixture_id": "incident-current",
+        "content_matches_fixture_ids": [
+          "incident-current"
+        ],
+        "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf",
+        "content_utf8_bytes": 755,
+        "service_hash": "8b6dd43f90f15b4bd000df37d153febf019c8907b7f30cf488078e45a92db9a2",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 15,
+        "response_index": 20,
+        "reported_fixture_id": "duplicate-event-invariant",
+        "native_record_id": null,
+        "resolved_fixture_id": "duplicate-event-invariant",
+        "content_matches_fixture_ids": [
+          "duplicate-event-invariant"
+        ],
+        "content_sha256": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+        "content_utf8_bytes": 485,
+        "service_hash": "7c45417e5369032c3f6ab329cddad31762766c002ac64c22a4e25da39cfdde8e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 15,
+        "response_index": 20,
+        "reported_fixture_id": "schema-v3-rollover",
+        "native_record_id": null,
+        "resolved_fixture_id": "schema-v3-rollover",
+        "content_matches_fixture_ids": [
+          "schema-v3-rollover"
+        ],
+        "content_sha256": "a908d34d1483a248ab14858379224a5700824d8cdcf6ba6918619eab82682326",
+        "content_utf8_bytes": 543,
+        "service_hash": "31bc998889b643b24fe1250b2b608c334245c74d4572a17e3dac3ae9b9676a7f",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 15,
+        "response_index": 20,
+        "reported_fixture_id": "cedar-batch-owner",
+        "native_record_id": null,
+        "resolved_fixture_id": "cedar-batch-owner",
+        "content_matches_fixture_ids": [
+          "cedar-batch-owner"
+        ],
+        "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+        "content_utf8_bytes": 489,
+        "service_hash": "9b870749a5c9fb113d4975fcabef55dabb4dc33baebd3db648b81c1de6d70778",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 15,
+        "response_index": 20,
+        "reported_fixture_id": "schema-v2-archive",
+        "native_record_id": null,
+        "resolved_fixture_id": "schema-v2-archive",
+        "content_matches_fixture_ids": [
+          "schema-v2-archive"
+        ],
+        "content_sha256": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+        "content_utf8_bytes": 422,
+        "service_hash": "ad8d490a0f612c58d330708001d8b8f9ce15636a47c027f9a87d6b790481647e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 15,
+        "response_index": 20,
+        "reported_fixture_id": "obligation-reconcile-path",
+        "native_record_id": null,
+        "resolved_fixture_id": "obligation-reconcile-path",
+        "content_matches_fixture_ids": [
+          "obligation-reconcile-path"
+        ],
+        "content_sha256": "325c96601e82d9484c2710d26e4da8a318b02923b8a9e9fb589ad4a34aa1c900",
+        "content_utf8_bytes": 622,
+        "service_hash": "3ec2bc4147d7cc009cfd8075a1b272a76221cf9939419d8b7fd8347e72535a87",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 16,
+        "response_index": 21,
+        "reported_fixture_id": "fork-generation8-rejected",
+        "native_record_id": null,
+        "resolved_fixture_id": "fork-generation8-rejected",
+        "content_matches_fixture_ids": [
+          "fork-generation8-rejected"
+        ],
+        "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+        "content_utf8_bytes": 504,
+        "service_hash": "abac91fd55e128acbe0a0de9968222ca94bffe81e02c264d61d0b1dca62127a3",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 16,
+        "response_index": 21,
+        "reported_fixture_id": "fork-generation8-proposal",
+        "native_record_id": null,
+        "resolved_fixture_id": "fork-generation8-proposal",
+        "content_matches_fixture_ids": [
+          "fork-generation8-proposal"
+        ],
+        "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+        "content_utf8_bytes": 562,
+        "service_hash": "a6434daad5a41d0bbbd4128081816cb13e6924015e3d2d50068ea49e94ea757d",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 16,
+        "response_index": 21,
+        "reported_fixture_id": "route-manifest-separation",
+        "native_record_id": null,
+        "resolved_fixture_id": "route-manifest-separation",
+        "content_matches_fixture_ids": [
+          "route-manifest-separation"
+        ],
+        "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+        "content_utf8_bytes": 537,
+        "service_hash": "7c810a5a64bd07f376b4c8f2173788c152365f395ff930a5c7044aefc60f61d8",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 16,
+        "response_index": 21,
+        "reported_fixture_id": "cedar-batch-owner",
+        "native_record_id": null,
+        "resolved_fixture_id": "cedar-batch-owner",
+        "content_matches_fixture_ids": [
+          "cedar-batch-owner"
+        ],
+        "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+        "content_utf8_bytes": 489,
+        "service_hash": "9b870749a5c9fb113d4975fcabef55dabb4dc33baebd3db648b81c1de6d70778",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 16,
+        "response_index": 21,
+        "reported_fixture_id": "crash-reload-proof-history",
+        "native_record_id": null,
+        "resolved_fixture_id": "crash-reload-proof-history",
+        "content_matches_fixture_ids": [
+          "crash-reload-proof-history"
+        ],
+        "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+        "content_utf8_bytes": 501,
+        "service_hash": "56ec7b582deb60145871ec25ce74c1b4c12654688fe3bc2baa51103adcd1af93",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 16,
+        "response_index": 21,
+        "reported_fixture_id": "epoch7-approved",
+        "native_record_id": null,
+        "resolved_fixture_id": "epoch7-approved",
+        "content_matches_fixture_ids": [
+          "epoch7-approved"
+        ],
+        "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+        "content_utf8_bytes": 601,
+        "service_hash": "b6de61fde0a4b6ba051448cabeb67f4de646e3f44e6f610cac960e017f7e9b6c",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 16,
+        "response_index": 21,
+        "reported_fixture_id": "batch-size-proposal-expired",
+        "native_record_id": null,
+        "resolved_fixture_id": "batch-size-proposal-expired",
+        "content_matches_fixture_ids": [
+          "batch-size-proposal-expired"
+        ],
+        "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+        "content_utf8_bytes": 456,
+        "service_hash": "91edd3c02aef66266688585425fbc74e0036ad9500e821dd324e75ab18b80d70",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 16,
+        "response_index": 21,
+        "reported_fixture_id": "duplicate-event-invariant",
+        "native_record_id": null,
+        "resolved_fixture_id": "duplicate-event-invariant",
+        "content_matches_fixture_ids": [
+          "duplicate-event-invariant"
+        ],
+        "content_sha256": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+        "content_utf8_bytes": 485,
+        "service_hash": "7c45417e5369032c3f6ab329cddad31762766c002ac64c22a4e25da39cfdde8e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 16,
+        "response_index": 21,
+        "reported_fixture_id": "performance-runbook-validation",
+        "native_record_id": null,
+        "resolved_fixture_id": "performance-runbook-validation",
+        "content_matches_fixture_ids": [
+          "performance-runbook-validation"
+        ],
+        "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+        "content_utf8_bytes": 535,
+        "service_hash": "75167ff37fc00c26ca715f69771beb4dac2afa878c929887c6477d55eef75e2e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 16,
+        "response_index": 21,
+        "reported_fixture_id": "export-regression",
+        "native_record_id": null,
+        "resolved_fixture_id": "export-regression",
+        "content_matches_fixture_ids": [
+          "export-regression"
+        ],
+        "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+        "content_utf8_bytes": 470,
+        "service_hash": "72b7f1e5d38541fad91c73e903172eab30f25bdf8ded01fa8dee12cdb5499276",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 17,
+        "response_index": 22,
+        "reported_fixture_id": "export-regression",
+        "native_record_id": null,
+        "resolved_fixture_id": "export-regression",
+        "content_matches_fixture_ids": [
+          "export-regression"
+        ],
+        "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+        "content_utf8_bytes": 470,
+        "service_hash": "72b7f1e5d38541fad91c73e903172eab30f25bdf8ded01fa8dee12cdb5499276",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 17,
+        "response_index": 22,
+        "reported_fixture_id": "export-owner-contract",
+        "native_record_id": null,
+        "resolved_fixture_id": "export-owner-contract",
+        "content_matches_fixture_ids": [
+          "export-owner-contract"
+        ],
+        "content_sha256": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+        "content_utf8_bytes": 456,
+        "service_hash": "b2dd27efdc2b94359798f112107c5d834ec35ce6708ca1537354654e3b3d56b4",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 17,
+        "response_index": 22,
+        "reported_fixture_id": "public-regression",
+        "native_record_id": null,
+        "resolved_fixture_id": "public-regression",
+        "content_matches_fixture_ids": [
+          "public-regression"
+        ],
+        "content_sha256": "1e7af549288d6a9a52e6355283c552394cd775af13fc979f536d7e22c4de4848",
+        "content_utf8_bytes": 474,
+        "service_hash": "93ff3178eade7495171b5e791fde763ef1fba8bdb97e68cf53ce3787c83f986c",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 17,
+        "response_index": 22,
+        "reported_fixture_id": "owner-alias-migration",
+        "native_record_id": null,
+        "resolved_fixture_id": "owner-alias-migration",
+        "content_matches_fixture_ids": [
+          "owner-alias-migration"
+        ],
+        "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+        "content_utf8_bytes": 589,
+        "service_hash": "5337a45499f58e68b010a0c8d9e6598a47994394ea0e9907e06abc5232ae28a0",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 17,
+        "response_index": 22,
+        "reported_fixture_id": "incident-current",
+        "native_record_id": null,
+        "resolved_fixture_id": "incident-current",
+        "content_matches_fixture_ids": [
+          "incident-current"
+        ],
+        "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf",
+        "content_utf8_bytes": 755,
+        "service_hash": "8b6dd43f90f15b4bd000df37d153febf019c8907b7f30cf488078e45a92db9a2",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 17,
+        "response_index": 22,
+        "reported_fixture_id": "cedar-batch-owner",
+        "native_record_id": null,
+        "resolved_fixture_id": "cedar-batch-owner",
+        "content_matches_fixture_ids": [
+          "cedar-batch-owner"
+        ],
+        "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+        "content_utf8_bytes": 489,
+        "service_hash": "9b870749a5c9fb113d4975fcabef55dabb4dc33baebd3db648b81c1de6d70778",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 17,
+        "response_index": 22,
+        "reported_fixture_id": "route-manifest-separation",
+        "native_record_id": null,
+        "resolved_fixture_id": "route-manifest-separation",
+        "content_matches_fixture_ids": [
+          "route-manifest-separation"
+        ],
+        "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+        "content_utf8_bytes": 537,
+        "service_hash": "7c810a5a64bd07f376b4c8f2173788c152365f395ff930a5c7044aefc60f61d8",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 17,
+        "response_index": 22,
+        "reported_fixture_id": "schema-v2-archive",
+        "native_record_id": null,
+        "resolved_fixture_id": "schema-v2-archive",
+        "content_matches_fixture_ids": [
+          "schema-v2-archive"
+        ],
+        "content_sha256": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+        "content_utf8_bytes": 422,
+        "service_hash": "ad8d490a0f612c58d330708001d8b8f9ce15636a47c027f9a87d6b790481647e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 17,
+        "response_index": 22,
+        "reported_fixture_id": "checkpoint-watermark-design",
+        "native_record_id": null,
+        "resolved_fixture_id": "checkpoint-watermark-design",
+        "content_matches_fixture_ids": [
+          "checkpoint-watermark-design"
+        ],
+        "content_sha256": "5e974e27696bc8445fafa0c1425f3a142f57792d303fa06d1d7f3f1271e66055",
+        "content_utf8_bytes": 489,
+        "service_hash": "ca6e6e1581ff773c73af4b51da23b69349c56ef6e7a6b4a34e76ffca70f3d06c",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_search",
+        "request_index": 17,
+        "response_index": 22,
+        "reported_fixture_id": "crash-reload-proof-history",
+        "native_record_id": null,
+        "resolved_fixture_id": "crash-reload-proof-history",
+        "content_matches_fixture_ids": [
+          "crash-reload-proof-history"
+        ],
+        "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+        "content_utf8_bytes": 501,
+        "service_hash": "56ec7b582deb60145871ec25ce74c1b4c12654688fe3bc2baa51103adcd1af93",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-v2"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "incident-current",
+        "native_record_id": null,
+        "resolved_fixture_id": "incident-current",
+        "content_matches_fixture_ids": [
+          "incident-current"
+        ],
+        "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf",
+        "content_utf8_bytes": 755,
+        "service_hash": "8b6dd43f90f15b4bd000df37d153febf019c8907b7f30cf488078e45a92db9a2",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "public-regression",
+        "native_record_id": null,
+        "resolved_fixture_id": "public-regression",
+        "content_matches_fixture_ids": [
+          "public-regression"
+        ],
+        "content_sha256": "1e7af549288d6a9a52e6355283c552394cd775af13fc979f536d7e22c4de4848",
+        "content_utf8_bytes": 474,
+        "service_hash": "93ff3178eade7495171b5e791fde763ef1fba8bdb97e68cf53ce3787c83f986c",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "export-regression",
+        "native_record_id": null,
+        "resolved_fixture_id": "export-regression",
+        "content_matches_fixture_ids": [
+          "export-regression"
+        ],
+        "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+        "content_utf8_bytes": 470,
+        "service_hash": "72b7f1e5d38541fad91c73e903172eab30f25bdf8ded01fa8dee12cdb5499276",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "route-manifest-separation",
+        "native_record_id": null,
+        "resolved_fixture_id": "route-manifest-separation",
+        "content_matches_fixture_ids": [
+          "route-manifest-separation"
+        ],
+        "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+        "content_utf8_bytes": 537,
+        "service_hash": "7c810a5a64bd07f376b4c8f2173788c152365f395ff930a5c7044aefc60f61d8",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "fork-generation8-rejected",
+        "native_record_id": null,
+        "resolved_fixture_id": "fork-generation8-rejected",
+        "content_matches_fixture_ids": [
+          "fork-generation8-rejected"
+        ],
+        "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+        "content_utf8_bytes": 504,
+        "service_hash": "abac91fd55e128acbe0a0de9968222ca94bffe81e02c264d61d0b1dca62127a3",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "fork-generation8-proposal",
+        "native_record_id": null,
+        "resolved_fixture_id": "fork-generation8-proposal",
+        "content_matches_fixture_ids": [
+          "fork-generation8-proposal"
+        ],
+        "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+        "content_utf8_bytes": 562,
+        "service_hash": "a6434daad5a41d0bbbd4128081816cb13e6924015e3d2d50068ea49e94ea757d",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "crash-reload-proof-history",
+        "native_record_id": null,
+        "resolved_fixture_id": "crash-reload-proof-history",
+        "content_matches_fixture_ids": [
+          "crash-reload-proof-history"
+        ],
+        "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+        "content_utf8_bytes": 501,
+        "service_hash": "56ec7b582deb60145871ec25ce74c1b4c12654688fe3bc2baa51103adcd1af93",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "horizon-boundary-test",
+        "native_record_id": null,
+        "resolved_fixture_id": "horizon-boundary-test",
+        "content_matches_fixture_ids": [
+          "horizon-boundary-test"
+        ],
+        "content_sha256": "cc93b7484085b9e35174e3c4e4a31c3347c13b2f88ee13f678837a498cbcd760",
+        "content_utf8_bytes": 430,
+        "service_hash": "bd5a7b9591cf633608c331beaf51bd6e7aa1335e070c57bfd2cd812498506fd6",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "obligation-reconcile-path",
+        "native_record_id": null,
+        "resolved_fixture_id": "obligation-reconcile-path",
+        "content_matches_fixture_ids": [
+          "obligation-reconcile-path"
+        ],
+        "content_sha256": "325c96601e82d9484c2710d26e4da8a318b02923b8a9e9fb589ad4a34aa1c900",
+        "content_utf8_bytes": 622,
+        "service_hash": "3ec2bc4147d7cc009cfd8075a1b272a76221cf9939419d8b7fd8347e72535a87",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "tombstone-append-invariant",
+        "native_record_id": null,
+        "resolved_fixture_id": "tombstone-append-invariant",
+        "content_matches_fixture_ids": [
+          "tombstone-append-invariant"
+        ],
+        "content_sha256": "06d6f0c4306a38d1d2741fd0dec94e4288dd06eba8b4bbe9b4f2beb7afff65bd",
+        "content_utf8_bytes": 461,
+        "service_hash": "11276809edcff291c03bd24a95c2b8c191e8992e258345dfaa0a37492320fbfd",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "duplicate-event-invariant",
+        "native_record_id": null,
+        "resolved_fixture_id": "duplicate-event-invariant",
+        "content_matches_fixture_ids": [
+          "duplicate-event-invariant"
+        ],
+        "content_sha256": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+        "content_utf8_bytes": 485,
+        "service_hash": "7c45417e5369032c3f6ab329cddad31762766c002ac64c22a4e25da39cfdde8e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "cedar-batch-owner",
+        "native_record_id": null,
+        "resolved_fixture_id": "cedar-batch-owner",
+        "content_matches_fixture_ids": [
+          "cedar-batch-owner"
+        ],
+        "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+        "content_utf8_bytes": 489,
+        "service_hash": "9b870749a5c9fb113d4975fcabef55dabb4dc33baebd3db648b81c1de6d70778",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "checkpoint-watermark-design",
+        "native_record_id": null,
+        "resolved_fixture_id": "checkpoint-watermark-design",
+        "content_matches_fixture_ids": [
+          "checkpoint-watermark-design"
+        ],
+        "content_sha256": "5e974e27696bc8445fafa0c1425f3a142f57792d303fa06d1d7f3f1271e66055",
+        "content_utf8_bytes": 489,
+        "service_hash": "ca6e6e1581ff773c73af4b51da23b69349c56ef6e7a6b4a34e76ffca70f3d06c",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "epoch7-approved",
+        "native_record_id": null,
+        "resolved_fixture_id": "epoch7-approved",
+        "content_matches_fixture_ids": [
+          "epoch7-approved"
+        ],
+        "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+        "content_utf8_bytes": 601,
+        "service_hash": "b6de61fde0a4b6ba051448cabeb67f4de646e3f44e6f610cac960e017f7e9b6c",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "owner-alias-migration",
+        "native_record_id": null,
+        "resolved_fixture_id": "owner-alias-migration",
+        "content_matches_fixture_ids": [
+          "owner-alias-migration"
+        ],
+        "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+        "content_utf8_bytes": 589,
+        "service_hash": "5337a45499f58e68b010a0c8d9e6598a47994394ea0e9907e06abc5232ae28a0",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "wire-v2-transition",
+        "native_record_id": null,
+        "resolved_fixture_id": "wire-v2-transition",
+        "content_matches_fixture_ids": [
+          "wire-v2-transition"
+        ],
+        "content_sha256": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+        "content_utf8_bytes": 548,
+        "service_hash": "a4ab2777ce389338e557c13924d893d2ca5305855d3bbc9e19e4e3ee672e5ad4",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "schema-v3-rollover",
+        "native_record_id": null,
+        "resolved_fixture_id": "schema-v3-rollover",
+        "content_matches_fixture_ids": [
+          "schema-v3-rollover"
+        ],
+        "content_sha256": "a908d34d1483a248ab14858379224a5700824d8cdcf6ba6918619eab82682326",
+        "content_utf8_bytes": 543,
+        "service_hash": "31bc998889b643b24fe1250b2b608c334245c74d4572a17e3dac3ae9b9676a7f",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "export-owner-contract",
+        "native_record_id": null,
+        "resolved_fixture_id": "export-owner-contract",
+        "content_matches_fixture_ids": [
+          "export-owner-contract"
+        ],
+        "content_sha256": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+        "content_utf8_bytes": 456,
+        "service_hash": "b2dd27efdc2b94359798f112107c5d834ec35ce6708ca1537354654e3b3d56b4",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "batch-size-proposal-expired",
+        "native_record_id": null,
+        "resolved_fixture_id": "batch-size-proposal-expired",
+        "content_matches_fixture_ids": [
+          "batch-size-proposal-expired"
+        ],
+        "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+        "content_utf8_bytes": 456,
+        "service_hash": "91edd3c02aef66266688585425fbc74e0036ad9500e821dd324e75ab18b80d70",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "performance-runbook-validation",
+        "native_record_id": null,
+        "resolved_fixture_id": "performance-runbook-validation",
+        "content_matches_fixture_ids": [
+          "performance-runbook-validation"
+        ],
+        "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+        "content_utf8_bytes": 535,
+        "service_hash": "75167ff37fc00c26ca715f69771beb4dac2afa878c929887c6477d55eef75e2e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "performance-runbook-decoy",
+        "native_record_id": null,
+        "resolved_fixture_id": "performance-runbook-decoy",
+        "content_matches_fixture_ids": [
+          "performance-runbook-decoy"
+        ],
+        "content_sha256": "da70976ec95095fdf4252a2328e7b9855ecca7638961c2d816ee11baa3d0a458",
+        "content_utf8_bytes": 677,
+        "service_hash": "7fe82f2e2dcf65af473e95e13a6ce48678341d37e21c0d5bd05beee3e62c1120",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      },
+      {
+        "tool": "memory_list",
+        "request_index": 23,
+        "response_index": 24,
+        "reported_fixture_id": "schema-v2-archive",
+        "native_record_id": null,
+        "resolved_fixture_id": "schema-v2-archive",
+        "content_matches_fixture_ids": [
+          "schema-v2-archive"
+        ],
+        "content_sha256": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+        "content_utf8_bytes": 422,
+        "service_hash": "ad8d490a0f612c58d330708001d8b8f9ce15636a47c027f9a87d6b790481647e",
+        "identity_conflict": false,
+        "format": "mcp-memory-service-json"
+      }
+    ],
+    "returned_fixture_ids": [
+      "batch-size-proposal-expired",
+      "cedar-batch-owner",
+      "checkpoint-watermark-design",
+      "crash-reload-proof-history",
+      "duplicate-event-invariant",
+      "epoch7-approved",
+      "export-owner-contract",
+      "export-regression",
+      "fork-generation8-proposal",
+      "fork-generation8-rejected",
+      "horizon-boundary-test",
+      "incident-current",
+      "obligation-reconcile-path",
+      "owner-alias-migration",
+      "performance-runbook-decoy",
+      "performance-runbook-validation",
+      "public-regression",
+      "route-manifest-separation",
+      "schema-v2-archive",
+      "schema-v3-rollover",
+      "tombstone-append-invariant",
+      "wire-v2-transition"
+    ],
+    "missing_fixture_ids": [],
+    "unexpected_records": [],
+    "all_expected_returned": true,
+    "all_returned_records_match_seed": true,
+    "boundary": "Compares exact UTF-8 response content with the frozen fixture mapping. Request arguments, queries, and agent prose are never counted as returned evidence."
+  },
+  "decision_native_link": {
+    "decision_present": true,
+    "native_response_fixture_ids": [
+      "batch-size-proposal-expired",
+      "cedar-batch-owner",
+      "checkpoint-watermark-design",
+      "crash-reload-proof-history",
+      "duplicate-event-invariant",
+      "epoch7-approved",
+      "export-owner-contract",
+      "export-regression",
+      "fork-generation8-proposal",
+      "fork-generation8-rejected",
+      "horizon-boundary-test",
+      "incident-current",
+      "obligation-reconcile-path",
+      "owner-alias-migration",
+      "performance-runbook-decoy",
+      "performance-runbook-validation",
+      "public-regression",
+      "route-manifest-separation",
+      "schema-v2-archive",
+      "schema-v3-rollover",
+      "tombstone-append-invariant",
+      "wire-v2-transition"
+    ],
+    "exact_body_fixture_ids": [
+      "batch-size-proposal-expired",
+      "cedar-batch-owner",
+      "checkpoint-watermark-design",
+      "crash-reload-proof-history",
+      "duplicate-event-invariant",
+      "epoch7-approved",
+      "export-owner-contract",
+      "export-regression",
+      "fork-generation8-proposal",
+      "fork-generation8-rejected",
+      "horizon-boundary-test",
+      "incident-current",
+      "obligation-reconcile-path",
+      "owner-alias-migration",
+      "performance-runbook-decoy",
+      "performance-runbook-validation",
+      "public-regression",
+      "route-manifest-separation",
+      "schema-v2-archive",
+      "schema-v3-rollover",
+      "tombstone-append-invariant",
+      "wire-v2-transition"
+    ],
+    "explicit_response_fixture_ids": [],
+    "categories": {
+      "accepted": {
+        "declared_ids": [
+          "cedar-batch-owner",
+          "checkpoint-watermark-design",
+          "crash-reload-proof-history",
+          "duplicate-event-invariant",
+          "epoch7-approved",
+          "export-owner-contract",
+          "export-regression",
+          "horizon-boundary-test",
+          "incident-current",
+          "obligation-reconcile-path",
+          "owner-alias-migration",
+          "public-regression",
+          "route-manifest-separation",
+          "schema-v3-rollover",
+          "tombstone-append-invariant",
+          "wire-v2-transition"
+        ],
+        "fixture_ids": [
+          "cedar-batch-owner",
+          "checkpoint-watermark-design",
+          "crash-reload-proof-history",
+          "duplicate-event-invariant",
+          "epoch7-approved",
+          "export-owner-contract",
+          "export-regression",
+          "horizon-boundary-test",
+          "incident-current",
+          "obligation-reconcile-path",
+          "owner-alias-migration",
+          "public-regression",
+          "route-manifest-separation",
+          "schema-v3-rollover",
+          "tombstone-append-invariant",
+          "wire-v2-transition"
+        ],
+        "non_fixture_ids": [],
+        "native_response_fixture_ids": [
+          "cedar-batch-owner",
+          "checkpoint-watermark-design",
+          "crash-reload-proof-history",
+          "duplicate-event-invariant",
+          "epoch7-approved",
+          "export-owner-contract",
+          "export-regression",
+          "horizon-boundary-test",
+          "incident-current",
+          "obligation-reconcile-path",
+          "owner-alias-migration",
+          "public-regression",
+          "route-manifest-separation",
+          "schema-v3-rollover",
+          "tombstone-append-invariant",
+          "wire-v2-transition"
+        ],
+        "missing_native_fixture_ids": []
+      },
+      "causal_path": {
+        "declared_ids": [
+          "epoch7-approved",
+          "incident-current",
+          "obligation-reconcile-path",
+          "owner-alias-migration",
+          "public-regression",
+          "schema-v3-rollover",
+          "wire-v2-transition"
+        ],
+        "fixture_ids": [
+          "epoch7-approved",
+          "incident-current",
+          "obligation-reconcile-path",
+          "owner-alias-migration",
+          "public-regression",
+          "schema-v3-rollover",
+          "wire-v2-transition"
+        ],
+        "non_fixture_ids": [],
+        "native_response_fixture_ids": [
+          "epoch7-approved",
+          "incident-current",
+          "obligation-reconcile-path",
+          "owner-alias-migration",
+          "public-regression",
+          "schema-v3-rollover",
+          "wire-v2-transition"
+        ],
+        "missing_native_fixture_ids": []
+      },
+      "rejected": {
+        "declared_ids": [
+          "batch-size-proposal-expired",
+          "cedar-batch-owner",
+          "checkpoint-watermark-design",
+          "epoch7-approved",
+          "fork-generation8-proposal",
+          "fork-generation8-rejected",
+          "horizon-boundary-test",
+          "performance-runbook-decoy",
+          "performance-runbook-validation",
+          "route-manifest-separation",
+          "tombstone-append-invariant"
+        ],
+        "fixture_ids": [
+          "batch-size-proposal-expired",
+          "cedar-batch-owner",
+          "checkpoint-watermark-design",
+          "epoch7-approved",
+          "fork-generation8-proposal",
+          "fork-generation8-rejected",
+          "horizon-boundary-test",
+          "performance-runbook-decoy",
+          "performance-runbook-validation",
+          "route-manifest-separation",
+          "tombstone-append-invariant"
+        ],
+        "non_fixture_ids": [],
+        "native_response_fixture_ids": [
+          "batch-size-proposal-expired",
+          "cedar-batch-owner",
+          "checkpoint-watermark-design",
+          "epoch7-approved",
+          "fork-generation8-proposal",
+          "fork-generation8-rejected",
+          "horizon-boundary-test",
+          "performance-runbook-decoy",
+          "performance-runbook-validation",
+          "route-manifest-separation",
+          "tombstone-append-invariant"
+        ],
+        "missing_native_fixture_ids": []
+      }
+    },
+    "per_tool_acquisition": [
+      {
+        "tool": "memory_health",
+        "transaction_count": 1,
+        "successful_response_count": 1,
+        "returned_record_count": 0,
+        "exact_body_fixture_ids": [],
+        "explicit_response_fixture_ids": [],
+        "acquired_fixture_ids": [],
+        "calls": [
+          {
+            "tool": "memory_health",
+            "success": true,
+            "request_index": 6,
+            "response_index": 7,
+            "returned_record_count": 0,
+            "exact_body_fixture_ids": [],
+            "explicit_response_fixture_ids": [],
+            "acquired_fixture_ids": [],
+            "body_rows": []
+          }
+        ]
+      },
+      {
+        "tool": "memory_list",
+        "transaction_count": 2,
+        "successful_response_count": 2,
+        "returned_record_count": 44,
+        "exact_body_fixture_ids": [
+          "batch-size-proposal-expired",
+          "cedar-batch-owner",
+          "checkpoint-watermark-design",
+          "crash-reload-proof-history",
+          "duplicate-event-invariant",
+          "epoch7-approved",
+          "export-owner-contract",
+          "export-regression",
+          "fork-generation8-proposal",
+          "fork-generation8-rejected",
+          "horizon-boundary-test",
+          "incident-current",
+          "obligation-reconcile-path",
+          "owner-alias-migration",
+          "performance-runbook-decoy",
+          "performance-runbook-validation",
+          "public-regression",
+          "route-manifest-separation",
+          "schema-v2-archive",
+          "schema-v3-rollover",
+          "tombstone-append-invariant",
+          "wire-v2-transition"
+        ],
+        "explicit_response_fixture_ids": [],
+        "acquired_fixture_ids": [
+          "batch-size-proposal-expired",
+          "cedar-batch-owner",
+          "checkpoint-watermark-design",
+          "crash-reload-proof-history",
+          "duplicate-event-invariant",
+          "epoch7-approved",
+          "export-owner-contract",
+          "export-regression",
+          "fork-generation8-proposal",
+          "fork-generation8-rejected",
+          "horizon-boundary-test",
+          "incident-current",
+          "obligation-reconcile-path",
+          "owner-alias-migration",
+          "performance-runbook-decoy",
+          "performance-runbook-validation",
+          "public-regression",
+          "route-manifest-separation",
+          "schema-v2-archive",
+          "schema-v3-rollover",
+          "tombstone-append-invariant",
+          "wire-v2-transition"
+        ],
+        "calls": [
+          {
+            "tool": "memory_list",
+            "success": true,
+            "request_index": 5,
+            "response_index": 8,
+            "returned_record_count": 22,
+            "exact_body_fixture_ids": [
+              "batch-size-proposal-expired",
+              "cedar-batch-owner",
+              "checkpoint-watermark-design",
+              "crash-reload-proof-history",
+              "duplicate-event-invariant",
+              "epoch7-approved",
+              "export-owner-contract",
+              "export-regression",
+              "fork-generation8-proposal",
+              "fork-generation8-rejected",
+              "horizon-boundary-test",
+              "incident-current",
+              "obligation-reconcile-path",
+              "owner-alias-migration",
+              "performance-runbook-decoy",
+              "performance-runbook-validation",
+              "public-regression",
+              "route-manifest-separation",
+              "schema-v2-archive",
+              "schema-v3-rollover",
+              "tombstone-append-invariant",
+              "wire-v2-transition"
+            ],
+            "explicit_response_fixture_ids": [],
+            "acquired_fixture_ids": [
+              "batch-size-proposal-expired",
+              "cedar-batch-owner",
+              "checkpoint-watermark-design",
+              "crash-reload-proof-history",
+              "duplicate-event-invariant",
+              "epoch7-approved",
+              "export-owner-contract",
+              "export-regression",
+              "fork-generation8-proposal",
+              "fork-generation8-rejected",
+              "horizon-boundary-test",
+              "incident-current",
+              "obligation-reconcile-path",
+              "owner-alias-migration",
+              "performance-runbook-decoy",
+              "performance-runbook-validation",
+              "public-regression",
+              "route-manifest-separation",
+              "schema-v2-archive",
+              "schema-v3-rollover",
+              "tombstone-append-invariant",
+              "wire-v2-transition"
+            ],
+            "body_rows": [
+              {
+                "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf",
+                "content_utf8_bytes": 755,
+                "reported_fixture_id": "incident-current",
+                "native_record_id": null,
+                "resolved_fixture_id": "incident-current",
+                "content_matches_fixture_ids": [
+                  "incident-current"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "1e7af549288d6a9a52e6355283c552394cd775af13fc979f536d7e22c4de4848",
+                "content_utf8_bytes": 474,
+                "reported_fixture_id": "public-regression",
+                "native_record_id": null,
+                "resolved_fixture_id": "public-regression",
+                "content_matches_fixture_ids": [
+                  "public-regression"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+                "content_utf8_bytes": 470,
+                "reported_fixture_id": "export-regression",
+                "native_record_id": null,
+                "resolved_fixture_id": "export-regression",
+                "content_matches_fixture_ids": [
+                  "export-regression"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+                "content_utf8_bytes": 537,
+                "reported_fixture_id": "route-manifest-separation",
+                "native_record_id": null,
+                "resolved_fixture_id": "route-manifest-separation",
+                "content_matches_fixture_ids": [
+                  "route-manifest-separation"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+                "content_utf8_bytes": 504,
+                "reported_fixture_id": "fork-generation8-rejected",
+                "native_record_id": null,
+                "resolved_fixture_id": "fork-generation8-rejected",
+                "content_matches_fixture_ids": [
+                  "fork-generation8-rejected"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+                "content_utf8_bytes": 562,
+                "reported_fixture_id": "fork-generation8-proposal",
+                "native_record_id": null,
+                "resolved_fixture_id": "fork-generation8-proposal",
+                "content_matches_fixture_ids": [
+                  "fork-generation8-proposal"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+                "content_utf8_bytes": 501,
+                "reported_fixture_id": "crash-reload-proof-history",
+                "native_record_id": null,
+                "resolved_fixture_id": "crash-reload-proof-history",
+                "content_matches_fixture_ids": [
+                  "crash-reload-proof-history"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "cc93b7484085b9e35174e3c4e4a31c3347c13b2f88ee13f678837a498cbcd760",
+                "content_utf8_bytes": 430,
+                "reported_fixture_id": "horizon-boundary-test",
+                "native_record_id": null,
+                "resolved_fixture_id": "horizon-boundary-test",
+                "content_matches_fixture_ids": [
+                  "horizon-boundary-test"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "325c96601e82d9484c2710d26e4da8a318b02923b8a9e9fb589ad4a34aa1c900",
+                "content_utf8_bytes": 622,
+                "reported_fixture_id": "obligation-reconcile-path",
+                "native_record_id": null,
+                "resolved_fixture_id": "obligation-reconcile-path",
+                "content_matches_fixture_ids": [
+                  "obligation-reconcile-path"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "06d6f0c4306a38d1d2741fd0dec94e4288dd06eba8b4bbe9b4f2beb7afff65bd",
+                "content_utf8_bytes": 461,
+                "reported_fixture_id": "tombstone-append-invariant",
+                "native_record_id": null,
+                "resolved_fixture_id": "tombstone-append-invariant",
+                "content_matches_fixture_ids": [
+                  "tombstone-append-invariant"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+                "content_utf8_bytes": 485,
+                "reported_fixture_id": "duplicate-event-invariant",
+                "native_record_id": null,
+                "resolved_fixture_id": "duplicate-event-invariant",
+                "content_matches_fixture_ids": [
+                  "duplicate-event-invariant"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+                "content_utf8_bytes": 489,
+                "reported_fixture_id": "cedar-batch-owner",
+                "native_record_id": null,
+                "resolved_fixture_id": "cedar-batch-owner",
+                "content_matches_fixture_ids": [
+                  "cedar-batch-owner"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "5e974e27696bc8445fafa0c1425f3a142f57792d303fa06d1d7f3f1271e66055",
+                "content_utf8_bytes": 489,
+                "reported_fixture_id": "checkpoint-watermark-design",
+                "native_record_id": null,
+                "resolved_fixture_id": "checkpoint-watermark-design",
+                "content_matches_fixture_ids": [
+                  "checkpoint-watermark-design"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+                "content_utf8_bytes": 601,
+                "reported_fixture_id": "epoch7-approved",
+                "native_record_id": null,
+                "resolved_fixture_id": "epoch7-approved",
+                "content_matches_fixture_ids": [
+                  "epoch7-approved"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+                "content_utf8_bytes": 589,
+                "reported_fixture_id": "owner-alias-migration",
+                "native_record_id": null,
+                "resolved_fixture_id": "owner-alias-migration",
+                "content_matches_fixture_ids": [
+                  "owner-alias-migration"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+                "content_utf8_bytes": 548,
+                "reported_fixture_id": "wire-v2-transition",
+                "native_record_id": null,
+                "resolved_fixture_id": "wire-v2-transition",
+                "content_matches_fixture_ids": [
+                  "wire-v2-transition"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "a908d34d1483a248ab14858379224a5700824d8cdcf6ba6918619eab82682326",
+                "content_utf8_bytes": 543,
+                "reported_fixture_id": "schema-v3-rollover",
+                "native_record_id": null,
+                "resolved_fixture_id": "schema-v3-rollover",
+                "content_matches_fixture_ids": [
+                  "schema-v3-rollover"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+                "content_utf8_bytes": 456,
+                "reported_fixture_id": "export-owner-contract",
+                "native_record_id": null,
+                "resolved_fixture_id": "export-owner-contract",
+                "content_matches_fixture_ids": [
+                  "export-owner-contract"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+                "content_utf8_bytes": 456,
+                "reported_fixture_id": "batch-size-proposal-expired",
+                "native_record_id": null,
+                "resolved_fixture_id": "batch-size-proposal-expired",
+                "content_matches_fixture_ids": [
+                  "batch-size-proposal-expired"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+                "content_utf8_bytes": 535,
+                "reported_fixture_id": "performance-runbook-validation",
+                "native_record_id": null,
+                "resolved_fixture_id": "performance-runbook-validation",
+                "content_matches_fixture_ids": [
+                  "performance-runbook-validation"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "da70976ec95095fdf4252a2328e7b9855ecca7638961c2d816ee11baa3d0a458",
+                "content_utf8_bytes": 677,
+                "reported_fixture_id": "performance-runbook-decoy",
+                "native_record_id": null,
+                "resolved_fixture_id": "performance-runbook-decoy",
+                "content_matches_fixture_ids": [
+                  "performance-runbook-decoy"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+                "content_utf8_bytes": 422,
+                "reported_fixture_id": "schema-v2-archive",
+                "native_record_id": null,
+                "resolved_fixture_id": "schema-v2-archive",
+                "content_matches_fixture_ids": [
+                  "schema-v2-archive"
+                ],
+                "format": "mcp-memory-service-json"
+              }
+            ]
+          },
+          {
+            "tool": "memory_list",
+            "success": true,
+            "request_index": 23,
+            "response_index": 24,
+            "returned_record_count": 22,
+            "exact_body_fixture_ids": [
+              "batch-size-proposal-expired",
+              "cedar-batch-owner",
+              "checkpoint-watermark-design",
+              "crash-reload-proof-history",
+              "duplicate-event-invariant",
+              "epoch7-approved",
+              "export-owner-contract",
+              "export-regression",
+              "fork-generation8-proposal",
+              "fork-generation8-rejected",
+              "horizon-boundary-test",
+              "incident-current",
+              "obligation-reconcile-path",
+              "owner-alias-migration",
+              "performance-runbook-decoy",
+              "performance-runbook-validation",
+              "public-regression",
+              "route-manifest-separation",
+              "schema-v2-archive",
+              "schema-v3-rollover",
+              "tombstone-append-invariant",
+              "wire-v2-transition"
+            ],
+            "explicit_response_fixture_ids": [],
+            "acquired_fixture_ids": [
+              "batch-size-proposal-expired",
+              "cedar-batch-owner",
+              "checkpoint-watermark-design",
+              "crash-reload-proof-history",
+              "duplicate-event-invariant",
+              "epoch7-approved",
+              "export-owner-contract",
+              "export-regression",
+              "fork-generation8-proposal",
+              "fork-generation8-rejected",
+              "horizon-boundary-test",
+              "incident-current",
+              "obligation-reconcile-path",
+              "owner-alias-migration",
+              "performance-runbook-decoy",
+              "performance-runbook-validation",
+              "public-regression",
+              "route-manifest-separation",
+              "schema-v2-archive",
+              "schema-v3-rollover",
+              "tombstone-append-invariant",
+              "wire-v2-transition"
+            ],
+            "body_rows": [
+              {
+                "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf",
+                "content_utf8_bytes": 755,
+                "reported_fixture_id": "incident-current",
+                "native_record_id": null,
+                "resolved_fixture_id": "incident-current",
+                "content_matches_fixture_ids": [
+                  "incident-current"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "1e7af549288d6a9a52e6355283c552394cd775af13fc979f536d7e22c4de4848",
+                "content_utf8_bytes": 474,
+                "reported_fixture_id": "public-regression",
+                "native_record_id": null,
+                "resolved_fixture_id": "public-regression",
+                "content_matches_fixture_ids": [
+                  "public-regression"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+                "content_utf8_bytes": 470,
+                "reported_fixture_id": "export-regression",
+                "native_record_id": null,
+                "resolved_fixture_id": "export-regression",
+                "content_matches_fixture_ids": [
+                  "export-regression"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+                "content_utf8_bytes": 537,
+                "reported_fixture_id": "route-manifest-separation",
+                "native_record_id": null,
+                "resolved_fixture_id": "route-manifest-separation",
+                "content_matches_fixture_ids": [
+                  "route-manifest-separation"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+                "content_utf8_bytes": 504,
+                "reported_fixture_id": "fork-generation8-rejected",
+                "native_record_id": null,
+                "resolved_fixture_id": "fork-generation8-rejected",
+                "content_matches_fixture_ids": [
+                  "fork-generation8-rejected"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+                "content_utf8_bytes": 562,
+                "reported_fixture_id": "fork-generation8-proposal",
+                "native_record_id": null,
+                "resolved_fixture_id": "fork-generation8-proposal",
+                "content_matches_fixture_ids": [
+                  "fork-generation8-proposal"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+                "content_utf8_bytes": 501,
+                "reported_fixture_id": "crash-reload-proof-history",
+                "native_record_id": null,
+                "resolved_fixture_id": "crash-reload-proof-history",
+                "content_matches_fixture_ids": [
+                  "crash-reload-proof-history"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "cc93b7484085b9e35174e3c4e4a31c3347c13b2f88ee13f678837a498cbcd760",
+                "content_utf8_bytes": 430,
+                "reported_fixture_id": "horizon-boundary-test",
+                "native_record_id": null,
+                "resolved_fixture_id": "horizon-boundary-test",
+                "content_matches_fixture_ids": [
+                  "horizon-boundary-test"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "325c96601e82d9484c2710d26e4da8a318b02923b8a9e9fb589ad4a34aa1c900",
+                "content_utf8_bytes": 622,
+                "reported_fixture_id": "obligation-reconcile-path",
+                "native_record_id": null,
+                "resolved_fixture_id": "obligation-reconcile-path",
+                "content_matches_fixture_ids": [
+                  "obligation-reconcile-path"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "06d6f0c4306a38d1d2741fd0dec94e4288dd06eba8b4bbe9b4f2beb7afff65bd",
+                "content_utf8_bytes": 461,
+                "reported_fixture_id": "tombstone-append-invariant",
+                "native_record_id": null,
+                "resolved_fixture_id": "tombstone-append-invariant",
+                "content_matches_fixture_ids": [
+                  "tombstone-append-invariant"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+                "content_utf8_bytes": 485,
+                "reported_fixture_id": "duplicate-event-invariant",
+                "native_record_id": null,
+                "resolved_fixture_id": "duplicate-event-invariant",
+                "content_matches_fixture_ids": [
+                  "duplicate-event-invariant"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+                "content_utf8_bytes": 489,
+                "reported_fixture_id": "cedar-batch-owner",
+                "native_record_id": null,
+                "resolved_fixture_id": "cedar-batch-owner",
+                "content_matches_fixture_ids": [
+                  "cedar-batch-owner"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "5e974e27696bc8445fafa0c1425f3a142f57792d303fa06d1d7f3f1271e66055",
+                "content_utf8_bytes": 489,
+                "reported_fixture_id": "checkpoint-watermark-design",
+                "native_record_id": null,
+                "resolved_fixture_id": "checkpoint-watermark-design",
+                "content_matches_fixture_ids": [
+                  "checkpoint-watermark-design"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+                "content_utf8_bytes": 601,
+                "reported_fixture_id": "epoch7-approved",
+                "native_record_id": null,
+                "resolved_fixture_id": "epoch7-approved",
+                "content_matches_fixture_ids": [
+                  "epoch7-approved"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+                "content_utf8_bytes": 589,
+                "reported_fixture_id": "owner-alias-migration",
+                "native_record_id": null,
+                "resolved_fixture_id": "owner-alias-migration",
+                "content_matches_fixture_ids": [
+                  "owner-alias-migration"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+                "content_utf8_bytes": 548,
+                "reported_fixture_id": "wire-v2-transition",
+                "native_record_id": null,
+                "resolved_fixture_id": "wire-v2-transition",
+                "content_matches_fixture_ids": [
+                  "wire-v2-transition"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "a908d34d1483a248ab14858379224a5700824d8cdcf6ba6918619eab82682326",
+                "content_utf8_bytes": 543,
+                "reported_fixture_id": "schema-v3-rollover",
+                "native_record_id": null,
+                "resolved_fixture_id": "schema-v3-rollover",
+                "content_matches_fixture_ids": [
+                  "schema-v3-rollover"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+                "content_utf8_bytes": 456,
+                "reported_fixture_id": "export-owner-contract",
+                "native_record_id": null,
+                "resolved_fixture_id": "export-owner-contract",
+                "content_matches_fixture_ids": [
+                  "export-owner-contract"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+                "content_utf8_bytes": 456,
+                "reported_fixture_id": "batch-size-proposal-expired",
+                "native_record_id": null,
+                "resolved_fixture_id": "batch-size-proposal-expired",
+                "content_matches_fixture_ids": [
+                  "batch-size-proposal-expired"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+                "content_utf8_bytes": 535,
+                "reported_fixture_id": "performance-runbook-validation",
+                "native_record_id": null,
+                "resolved_fixture_id": "performance-runbook-validation",
+                "content_matches_fixture_ids": [
+                  "performance-runbook-validation"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "da70976ec95095fdf4252a2328e7b9855ecca7638961c2d816ee11baa3d0a458",
+                "content_utf8_bytes": 677,
+                "reported_fixture_id": "performance-runbook-decoy",
+                "native_record_id": null,
+                "resolved_fixture_id": "performance-runbook-decoy",
+                "content_matches_fixture_ids": [
+                  "performance-runbook-decoy"
+                ],
+                "format": "mcp-memory-service-json"
+              },
+              {
+                "content_sha256": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+                "content_utf8_bytes": 422,
+                "reported_fixture_id": "schema-v2-archive",
+                "native_record_id": null,
+                "resolved_fixture_id": "schema-v2-archive",
+                "content_matches_fixture_ids": [
+                  "schema-v2-archive"
+                ],
+                "format": "mcp-memory-service-json"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "tool": "memory_search",
+        "transaction_count": 5,
+        "successful_response_count": 5,
+        "returned_record_count": 50,
+        "exact_body_fixture_ids": [
+          "batch-size-proposal-expired",
+          "cedar-batch-owner",
+          "checkpoint-watermark-design",
+          "crash-reload-proof-history",
+          "duplicate-event-invariant",
+          "epoch7-approved",
+          "export-owner-contract",
+          "export-regression",
+          "fork-generation8-proposal",
+          "fork-generation8-rejected",
+          "incident-current",
+          "obligation-reconcile-path",
+          "owner-alias-migration",
+          "performance-runbook-decoy",
+          "performance-runbook-validation",
+          "public-regression",
+          "route-manifest-separation",
+          "schema-v2-archive",
+          "schema-v3-rollover",
+          "tombstone-append-invariant",
+          "wire-v2-transition"
+        ],
+        "explicit_response_fixture_ids": [],
+        "acquired_fixture_ids": [
+          "batch-size-proposal-expired",
+          "cedar-batch-owner",
+          "checkpoint-watermark-design",
+          "crash-reload-proof-history",
+          "duplicate-event-invariant",
+          "epoch7-approved",
+          "export-owner-contract",
+          "export-regression",
+          "fork-generation8-proposal",
+          "fork-generation8-rejected",
+          "incident-current",
+          "obligation-reconcile-path",
+          "owner-alias-migration",
+          "performance-runbook-decoy",
+          "performance-runbook-validation",
+          "public-regression",
+          "route-manifest-separation",
+          "schema-v2-archive",
+          "schema-v3-rollover",
+          "tombstone-append-invariant",
+          "wire-v2-transition"
+        ],
+        "calls": [
+          {
+            "tool": "memory_search",
+            "success": true,
+            "request_index": 14,
+            "response_index": 18,
+            "returned_record_count": 10,
+            "exact_body_fixture_ids": [
+              "batch-size-proposal-expired",
+              "cedar-batch-owner",
+              "epoch7-approved",
+              "fork-generation8-proposal",
+              "fork-generation8-rejected",
+              "incident-current",
+              "owner-alias-migration",
+              "performance-runbook-validation",
+              "route-manifest-separation",
+              "wire-v2-transition"
+            ],
+            "explicit_response_fixture_ids": [],
+            "acquired_fixture_ids": [
+              "batch-size-proposal-expired",
+              "cedar-batch-owner",
+              "epoch7-approved",
+              "fork-generation8-proposal",
+              "fork-generation8-rejected",
+              "incident-current",
+              "owner-alias-migration",
+              "performance-runbook-validation",
+              "route-manifest-separation",
+              "wire-v2-transition"
+            ],
+            "body_rows": [
+              {
+                "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+                "content_utf8_bytes": 601,
+                "reported_fixture_id": "epoch7-approved",
+                "native_record_id": null,
+                "resolved_fixture_id": "epoch7-approved",
+                "content_matches_fixture_ids": [
+                  "epoch7-approved"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+                "content_utf8_bytes": 589,
+                "reported_fixture_id": "owner-alias-migration",
+                "native_record_id": null,
+                "resolved_fixture_id": "owner-alias-migration",
+                "content_matches_fixture_ids": [
+                  "owner-alias-migration"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+                "content_utf8_bytes": 562,
+                "reported_fixture_id": "fork-generation8-proposal",
+                "native_record_id": null,
+                "resolved_fixture_id": "fork-generation8-proposal",
+                "content_matches_fixture_ids": [
+                  "fork-generation8-proposal"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+                "content_utf8_bytes": 504,
+                "reported_fixture_id": "fork-generation8-rejected",
+                "native_record_id": null,
+                "resolved_fixture_id": "fork-generation8-rejected",
+                "content_matches_fixture_ids": [
+                  "fork-generation8-rejected"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+                "content_utf8_bytes": 548,
+                "reported_fixture_id": "wire-v2-transition",
+                "native_record_id": null,
+                "resolved_fixture_id": "wire-v2-transition",
+                "content_matches_fixture_ids": [
+                  "wire-v2-transition"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf",
+                "content_utf8_bytes": 755,
+                "reported_fixture_id": "incident-current",
+                "native_record_id": null,
+                "resolved_fixture_id": "incident-current",
+                "content_matches_fixture_ids": [
+                  "incident-current"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+                "content_utf8_bytes": 456,
+                "reported_fixture_id": "batch-size-proposal-expired",
+                "native_record_id": null,
+                "resolved_fixture_id": "batch-size-proposal-expired",
+                "content_matches_fixture_ids": [
+                  "batch-size-proposal-expired"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+                "content_utf8_bytes": 489,
+                "reported_fixture_id": "cedar-batch-owner",
+                "native_record_id": null,
+                "resolved_fixture_id": "cedar-batch-owner",
+                "content_matches_fixture_ids": [
+                  "cedar-batch-owner"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+                "content_utf8_bytes": 535,
+                "reported_fixture_id": "performance-runbook-validation",
+                "native_record_id": null,
+                "resolved_fixture_id": "performance-runbook-validation",
+                "content_matches_fixture_ids": [
+                  "performance-runbook-validation"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+                "content_utf8_bytes": 537,
+                "reported_fixture_id": "route-manifest-separation",
+                "native_record_id": null,
+                "resolved_fixture_id": "route-manifest-separation",
+                "content_matches_fixture_ids": [
+                  "route-manifest-separation"
+                ],
+                "format": "mcp-memory-service-v2"
+              }
+            ]
+          },
+          {
+            "tool": "memory_search",
+            "success": true,
+            "request_index": 13,
+            "response_index": 19,
+            "returned_record_count": 10,
+            "exact_body_fixture_ids": [
+              "cedar-batch-owner",
+              "crash-reload-proof-history",
+              "epoch7-approved",
+              "export-owner-contract",
+              "export-regression",
+              "fork-generation8-proposal",
+              "fork-generation8-rejected",
+              "owner-alias-migration",
+              "route-manifest-separation",
+              "wire-v2-transition"
+            ],
+            "explicit_response_fixture_ids": [],
+            "acquired_fixture_ids": [
+              "cedar-batch-owner",
+              "crash-reload-proof-history",
+              "epoch7-approved",
+              "export-owner-contract",
+              "export-regression",
+              "fork-generation8-proposal",
+              "fork-generation8-rejected",
+              "owner-alias-migration",
+              "route-manifest-separation",
+              "wire-v2-transition"
+            ],
+            "body_rows": [
+              {
+                "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+                "content_utf8_bytes": 537,
+                "reported_fixture_id": "route-manifest-separation",
+                "native_record_id": null,
+                "resolved_fixture_id": "route-manifest-separation",
+                "content_matches_fixture_ids": [
+                  "route-manifest-separation"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+                "content_utf8_bytes": 489,
+                "reported_fixture_id": "cedar-batch-owner",
+                "native_record_id": null,
+                "resolved_fixture_id": "cedar-batch-owner",
+                "content_matches_fixture_ids": [
+                  "cedar-batch-owner"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+                "content_utf8_bytes": 589,
+                "reported_fixture_id": "owner-alias-migration",
+                "native_record_id": null,
+                "resolved_fixture_id": "owner-alias-migration",
+                "content_matches_fixture_ids": [
+                  "owner-alias-migration"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+                "content_utf8_bytes": 470,
+                "reported_fixture_id": "export-regression",
+                "native_record_id": null,
+                "resolved_fixture_id": "export-regression",
+                "content_matches_fixture_ids": [
+                  "export-regression"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+                "content_utf8_bytes": 601,
+                "reported_fixture_id": "epoch7-approved",
+                "native_record_id": null,
+                "resolved_fixture_id": "epoch7-approved",
+                "content_matches_fixture_ids": [
+                  "epoch7-approved"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+                "content_utf8_bytes": 562,
+                "reported_fixture_id": "fork-generation8-proposal",
+                "native_record_id": null,
+                "resolved_fixture_id": "fork-generation8-proposal",
+                "content_matches_fixture_ids": [
+                  "fork-generation8-proposal"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+                "content_utf8_bytes": 504,
+                "reported_fixture_id": "fork-generation8-rejected",
+                "native_record_id": null,
+                "resolved_fixture_id": "fork-generation8-rejected",
+                "content_matches_fixture_ids": [
+                  "fork-generation8-rejected"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+                "content_utf8_bytes": 456,
+                "reported_fixture_id": "export-owner-contract",
+                "native_record_id": null,
+                "resolved_fixture_id": "export-owner-contract",
+                "content_matches_fixture_ids": [
+                  "export-owner-contract"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+                "content_utf8_bytes": 501,
+                "reported_fixture_id": "crash-reload-proof-history",
+                "native_record_id": null,
+                "resolved_fixture_id": "crash-reload-proof-history",
+                "content_matches_fixture_ids": [
+                  "crash-reload-proof-history"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+                "content_utf8_bytes": 548,
+                "reported_fixture_id": "wire-v2-transition",
+                "native_record_id": null,
+                "resolved_fixture_id": "wire-v2-transition",
+                "content_matches_fixture_ids": [
+                  "wire-v2-transition"
+                ],
+                "format": "mcp-memory-service-v2"
+              }
+            ]
+          },
+          {
+            "tool": "memory_search",
+            "success": true,
+            "request_index": 15,
+            "response_index": 20,
+            "returned_record_count": 10,
+            "exact_body_fixture_ids": [
+              "batch-size-proposal-expired",
+              "cedar-batch-owner",
+              "duplicate-event-invariant",
+              "incident-current",
+              "obligation-reconcile-path",
+              "performance-runbook-decoy",
+              "performance-runbook-validation",
+              "schema-v2-archive",
+              "schema-v3-rollover",
+              "tombstone-append-invariant"
+            ],
+            "explicit_response_fixture_ids": [],
+            "acquired_fixture_ids": [
+              "batch-size-proposal-expired",
+              "cedar-batch-owner",
+              "duplicate-event-invariant",
+              "incident-current",
+              "obligation-reconcile-path",
+              "performance-runbook-decoy",
+              "performance-runbook-validation",
+              "schema-v2-archive",
+              "schema-v3-rollover",
+              "tombstone-append-invariant"
+            ],
+            "body_rows": [
+              {
+                "content_sha256": "da70976ec95095fdf4252a2328e7b9855ecca7638961c2d816ee11baa3d0a458",
+                "content_utf8_bytes": 677,
+                "reported_fixture_id": "performance-runbook-decoy",
+                "native_record_id": null,
+                "resolved_fixture_id": "performance-runbook-decoy",
+                "content_matches_fixture_ids": [
+                  "performance-runbook-decoy"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+                "content_utf8_bytes": 535,
+                "reported_fixture_id": "performance-runbook-validation",
+                "native_record_id": null,
+                "resolved_fixture_id": "performance-runbook-validation",
+                "content_matches_fixture_ids": [
+                  "performance-runbook-validation"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+                "content_utf8_bytes": 456,
+                "reported_fixture_id": "batch-size-proposal-expired",
+                "native_record_id": null,
+                "resolved_fixture_id": "batch-size-proposal-expired",
+                "content_matches_fixture_ids": [
+                  "batch-size-proposal-expired"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "06d6f0c4306a38d1d2741fd0dec94e4288dd06eba8b4bbe9b4f2beb7afff65bd",
+                "content_utf8_bytes": 461,
+                "reported_fixture_id": "tombstone-append-invariant",
+                "native_record_id": null,
+                "resolved_fixture_id": "tombstone-append-invariant",
+                "content_matches_fixture_ids": [
+                  "tombstone-append-invariant"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf",
+                "content_utf8_bytes": 755,
+                "reported_fixture_id": "incident-current",
+                "native_record_id": null,
+                "resolved_fixture_id": "incident-current",
+                "content_matches_fixture_ids": [
+                  "incident-current"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+                "content_utf8_bytes": 485,
+                "reported_fixture_id": "duplicate-event-invariant",
+                "native_record_id": null,
+                "resolved_fixture_id": "duplicate-event-invariant",
+                "content_matches_fixture_ids": [
+                  "duplicate-event-invariant"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "a908d34d1483a248ab14858379224a5700824d8cdcf6ba6918619eab82682326",
+                "content_utf8_bytes": 543,
+                "reported_fixture_id": "schema-v3-rollover",
+                "native_record_id": null,
+                "resolved_fixture_id": "schema-v3-rollover",
+                "content_matches_fixture_ids": [
+                  "schema-v3-rollover"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+                "content_utf8_bytes": 489,
+                "reported_fixture_id": "cedar-batch-owner",
+                "native_record_id": null,
+                "resolved_fixture_id": "cedar-batch-owner",
+                "content_matches_fixture_ids": [
+                  "cedar-batch-owner"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+                "content_utf8_bytes": 422,
+                "reported_fixture_id": "schema-v2-archive",
+                "native_record_id": null,
+                "resolved_fixture_id": "schema-v2-archive",
+                "content_matches_fixture_ids": [
+                  "schema-v2-archive"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "325c96601e82d9484c2710d26e4da8a318b02923b8a9e9fb589ad4a34aa1c900",
+                "content_utf8_bytes": 622,
+                "reported_fixture_id": "obligation-reconcile-path",
+                "native_record_id": null,
+                "resolved_fixture_id": "obligation-reconcile-path",
+                "content_matches_fixture_ids": [
+                  "obligation-reconcile-path"
+                ],
+                "format": "mcp-memory-service-v2"
+              }
+            ]
+          },
+          {
+            "tool": "memory_search",
+            "success": true,
+            "request_index": 16,
+            "response_index": 21,
+            "returned_record_count": 10,
+            "exact_body_fixture_ids": [
+              "batch-size-proposal-expired",
+              "cedar-batch-owner",
+              "crash-reload-proof-history",
+              "duplicate-event-invariant",
+              "epoch7-approved",
+              "export-regression",
+              "fork-generation8-proposal",
+              "fork-generation8-rejected",
+              "performance-runbook-validation",
+              "route-manifest-separation"
+            ],
+            "explicit_response_fixture_ids": [],
+            "acquired_fixture_ids": [
+              "batch-size-proposal-expired",
+              "cedar-batch-owner",
+              "crash-reload-proof-history",
+              "duplicate-event-invariant",
+              "epoch7-approved",
+              "export-regression",
+              "fork-generation8-proposal",
+              "fork-generation8-rejected",
+              "performance-runbook-validation",
+              "route-manifest-separation"
+            ],
+            "body_rows": [
+              {
+                "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+                "content_utf8_bytes": 504,
+                "reported_fixture_id": "fork-generation8-rejected",
+                "native_record_id": null,
+                "resolved_fixture_id": "fork-generation8-rejected",
+                "content_matches_fixture_ids": [
+                  "fork-generation8-rejected"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+                "content_utf8_bytes": 562,
+                "reported_fixture_id": "fork-generation8-proposal",
+                "native_record_id": null,
+                "resolved_fixture_id": "fork-generation8-proposal",
+                "content_matches_fixture_ids": [
+                  "fork-generation8-proposal"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+                "content_utf8_bytes": 537,
+                "reported_fixture_id": "route-manifest-separation",
+                "native_record_id": null,
+                "resolved_fixture_id": "route-manifest-separation",
+                "content_matches_fixture_ids": [
+                  "route-manifest-separation"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+                "content_utf8_bytes": 489,
+                "reported_fixture_id": "cedar-batch-owner",
+                "native_record_id": null,
+                "resolved_fixture_id": "cedar-batch-owner",
+                "content_matches_fixture_ids": [
+                  "cedar-batch-owner"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+                "content_utf8_bytes": 501,
+                "reported_fixture_id": "crash-reload-proof-history",
+                "native_record_id": null,
+                "resolved_fixture_id": "crash-reload-proof-history",
+                "content_matches_fixture_ids": [
+                  "crash-reload-proof-history"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+                "content_utf8_bytes": 601,
+                "reported_fixture_id": "epoch7-approved",
+                "native_record_id": null,
+                "resolved_fixture_id": "epoch7-approved",
+                "content_matches_fixture_ids": [
+                  "epoch7-approved"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+                "content_utf8_bytes": 456,
+                "reported_fixture_id": "batch-size-proposal-expired",
+                "native_record_id": null,
+                "resolved_fixture_id": "batch-size-proposal-expired",
+                "content_matches_fixture_ids": [
+                  "batch-size-proposal-expired"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+                "content_utf8_bytes": 485,
+                "reported_fixture_id": "duplicate-event-invariant",
+                "native_record_id": null,
+                "resolved_fixture_id": "duplicate-event-invariant",
+                "content_matches_fixture_ids": [
+                  "duplicate-event-invariant"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+                "content_utf8_bytes": 535,
+                "reported_fixture_id": "performance-runbook-validation",
+                "native_record_id": null,
+                "resolved_fixture_id": "performance-runbook-validation",
+                "content_matches_fixture_ids": [
+                  "performance-runbook-validation"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+                "content_utf8_bytes": 470,
+                "reported_fixture_id": "export-regression",
+                "native_record_id": null,
+                "resolved_fixture_id": "export-regression",
+                "content_matches_fixture_ids": [
+                  "export-regression"
+                ],
+                "format": "mcp-memory-service-v2"
+              }
+            ]
+          },
+          {
+            "tool": "memory_search",
+            "success": true,
+            "request_index": 17,
+            "response_index": 22,
+            "returned_record_count": 10,
+            "exact_body_fixture_ids": [
+              "cedar-batch-owner",
+              "checkpoint-watermark-design",
+              "crash-reload-proof-history",
+              "export-owner-contract",
+              "export-regression",
+              "incident-current",
+              "owner-alias-migration",
+              "public-regression",
+              "route-manifest-separation",
+              "schema-v2-archive"
+            ],
+            "explicit_response_fixture_ids": [],
+            "acquired_fixture_ids": [
+              "cedar-batch-owner",
+              "checkpoint-watermark-design",
+              "crash-reload-proof-history",
+              "export-owner-contract",
+              "export-regression",
+              "incident-current",
+              "owner-alias-migration",
+              "public-regression",
+              "route-manifest-separation",
+              "schema-v2-archive"
+            ],
+            "body_rows": [
+              {
+                "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+                "content_utf8_bytes": 470,
+                "reported_fixture_id": "export-regression",
+                "native_record_id": null,
+                "resolved_fixture_id": "export-regression",
+                "content_matches_fixture_ids": [
+                  "export-regression"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+                "content_utf8_bytes": 456,
+                "reported_fixture_id": "export-owner-contract",
+                "native_record_id": null,
+                "resolved_fixture_id": "export-owner-contract",
+                "content_matches_fixture_ids": [
+                  "export-owner-contract"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "1e7af549288d6a9a52e6355283c552394cd775af13fc979f536d7e22c4de4848",
+                "content_utf8_bytes": 474,
+                "reported_fixture_id": "public-regression",
+                "native_record_id": null,
+                "resolved_fixture_id": "public-regression",
+                "content_matches_fixture_ids": [
+                  "public-regression"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+                "content_utf8_bytes": 589,
+                "reported_fixture_id": "owner-alias-migration",
+                "native_record_id": null,
+                "resolved_fixture_id": "owner-alias-migration",
+                "content_matches_fixture_ids": [
+                  "owner-alias-migration"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf",
+                "content_utf8_bytes": 755,
+                "reported_fixture_id": "incident-current",
+                "native_record_id": null,
+                "resolved_fixture_id": "incident-current",
+                "content_matches_fixture_ids": [
+                  "incident-current"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+                "content_utf8_bytes": 489,
+                "reported_fixture_id": "cedar-batch-owner",
+                "native_record_id": null,
+                "resolved_fixture_id": "cedar-batch-owner",
+                "content_matches_fixture_ids": [
+                  "cedar-batch-owner"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+                "content_utf8_bytes": 537,
+                "reported_fixture_id": "route-manifest-separation",
+                "native_record_id": null,
+                "resolved_fixture_id": "route-manifest-separation",
+                "content_matches_fixture_ids": [
+                  "route-manifest-separation"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+                "content_utf8_bytes": 422,
+                "reported_fixture_id": "schema-v2-archive",
+                "native_record_id": null,
+                "resolved_fixture_id": "schema-v2-archive",
+                "content_matches_fixture_ids": [
+                  "schema-v2-archive"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "5e974e27696bc8445fafa0c1425f3a142f57792d303fa06d1d7f3f1271e66055",
+                "content_utf8_bytes": 489,
+                "reported_fixture_id": "checkpoint-watermark-design",
+                "native_record_id": null,
+                "resolved_fixture_id": "checkpoint-watermark-design",
+                "content_matches_fixture_ids": [
+                  "checkpoint-watermark-design"
+                ],
+                "format": "mcp-memory-service-v2"
+              },
+              {
+                "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+                "content_utf8_bytes": 501,
+                "reported_fixture_id": "crash-reload-proof-history",
+                "native_record_id": null,
+                "resolved_fixture_id": "crash-reload-proof-history",
+                "content_matches_fixture_ids": [
+                  "crash-reload-proof-history"
+                ],
+                "format": "mcp-memory-service-v2"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "missing_native_coverage": {
+      "accepted_fixture_ids": [],
+      "causal_path_fixture_ids": [],
+      "rejected_fixture_ids": [],
+      "all_fixture_ids": []
+    },
+    "all_decision_fixture_ids_natively_observed": true,
+    "application_correctness": {
+      "assessed": false,
+      "value": null,
+      "reason": "This function measures native response coverage only."
+    },
+    "native_uuid_mapping": {
+      "native_id_to_fixture_id": {},
+      "fixture_id_to_native_ids": {},
+      "conflicting_native_ids": []
+    },
+    "boundary": "Fixture intersections come only from successful native response values: exact UTF-8 body matches or exact fixture-ID fields. Request arguments and prose substrings are excluded. Coverage does not establish internal reasoning causation or application correctness."
+  },
+  "native_evidence_valid": true,
+  "feature_observed": {
+    "native_reads": 7
+  }
+}

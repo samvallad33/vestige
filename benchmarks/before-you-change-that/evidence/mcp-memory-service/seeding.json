@@ -1,0 +1,2089 @@
+{
+  "arm": "mcp-memory-service",
+  "status": "SEEDED_AND_READBACK_VERIFIED",
+  "calls": [
+    {
+      "utc": "2026-09-07T03:31:00.917678+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic historical archive: LEDGER_SCHEMA_V2 used REVERSAL_LINK_V1 and could only reconcile charge-before-reversal ordering. Its replay data is retained for compatibility tests, not new reconciliation ownership.\",\"entities\":[\"LEDGER_SCHEMA_V2\",\"REVERSAL_LINK_V1\",\"ORDERED_REPLAY\"],\"id\":\"schema-v2-archive\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger schema archive\",\"timestamp\":\"2044-05-05T11:35:00Z\"}",
+        "conversation_id": "schema-v2-archive",
+        "metadata": {
+          "tags": [
+            "schema-v2-archive"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: ad8d490a0f612c58d330708001d8b8f9ce15636a47c027f9a87d6b790481647e)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:02.241631+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic performance runbook for analytics/compact.rs: Reconciliation Throughput Warning: tombstone pressure is mitigated by removing reconciliation tombstone rows after aggregation and increasing diagnostic.batch_size from 32 to 128. The procedure covers disposable analytics summaries rather than the append-only ledger.\",\"edges\":[{\"relation\":\"limited_by\",\"to\":\"performance-runbook-validation\"}],\"entities\":[\"analytics/compact.rs\",\"Reconciliation Throughput Warning\",\"RECONCILIATION_TOMBSTONE\",\"diagnostic.batch_size\"],\"id\":\"performance-runbook-decoy\",\"scope\":\"hardened-demo\",\"source\":\"synthetic analytics performance runbook\",\"timestamp\":\"2044-05-08T09:15:00Z\"}",
+        "conversation_id": "performance-runbook-decoy",
+        "metadata": {
+          "tags": [
+            "performance-runbook-decoy"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 7fe82f2e2dcf65af473e95e13a6ce48678341d37e21c0d5bd05beee3e62c1120)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:03.496112+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic benchmark boundary: the tombstone-removal and batch-size procedure was validated only against regenerated analytics/compact.rs output. The test did not open ledger.log, checkpoint.state, balance.state, src/ledger/reconcile.rs, or delayed reversals.\",\"entities\":[\"analytics/compact.rs\",\"diagnostic.batch_size\",\"ledger.log\",\"src/ledger/reconcile.rs\",\"PENDING_REVERSAL\"],\"id\":\"performance-runbook-validation\",\"scope\":\"hardened-demo\",\"source\":\"synthetic analytics benchmark report\",\"timestamp\":\"2044-05-09T16:05:00Z\"}",
+        "conversation_id": "performance-runbook-validation",
+        "metadata": {
+          "tags": [
+            "performance-runbook-validation"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 75167ff37fc00c26ca715f69771beb4dac2afa878c929887c6477d55eef75e2e)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:04.723473+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic tuning proposal: diagnostic.batch_size 128 was suggested for a one-day trace experiment and expired without approval. It changes observation grouping only and does not authorize ledger fact deletion or checkpoint movement.\",\"entities\":[\"diagnostic.batch_size\",\"CHECKPOINT_WATERMARK\",\"APPEND_ONLY\"],\"id\":\"batch-size-proposal-expired\",\"scope\":\"hardened-demo\",\"source\":\"synthetic diagnostics proposal\",\"timestamp\":\"2044-05-10T18:20:00Z\"}",
+        "conversation_id": "batch-size-proposal-expired",
+        "metadata": {
+          "tags": [
+            "batch-size-proposal-expired"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 91edd3c02aef66266688585425fbc74e0036ad9500e821dd324e75ab18b80d70)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:06.117530+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic ownership contract: LARCH_POLICY generation 3 exclusively owns EXPORT_SNAPSHOT and SUMMARY_TEXT_V1. Its numeric REVERSAL_HORIZON field is metadata for reading summaries, not authority over reconciliation checkpoints.\",\"entities\":[\"LARCH_POLICY\",\"EXPORT_SNAPSHOT\",\"SUMMARY_TEXT_V1\",\"REVERSAL_HORIZON\"],\"id\":\"export-owner-contract\",\"scope\":\"hardened-demo\",\"source\":\"synthetic export ownership record\",\"timestamp\":\"2044-05-12T09:50:00Z\"}",
+        "conversation_id": "export-owner-contract",
+        "metadata": {
+          "tags": [
+            "export-owner-contract"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: b2dd27efdc2b94359798f112107c5d834ec35ce6708ca1537354654e3b3d56b4)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:07.376430+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic accepted schema rollover: LEDGER_SCHEMA_V3 replaces LEDGER_SCHEMA_V2 for reconciliation. V3 adds the referenced charge sequence required to retain a reversal that arrives before its charge. Historical V2 replay remains separate.\",\"edges\":[{\"relation\":\"encoded_by\",\"to\":\"wire-v2-transition\"}],\"entities\":[\"LEDGER_SCHEMA_V3\",\"LEDGER_SCHEMA_V2\",\"PENDING_REVERSAL\",\"TARGET_SEQUENCE\",\"RECONCILE\"],\"id\":\"schema-v3-rollover\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger schema decision\",\"timestamp\":\"2044-05-14T11:00:00Z\"}",
+        "conversation_id": "schema-v3-rollover",
+        "metadata": {
+          "tags": [
+            "schema-v3-rollover"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 31bc998889b643b24fe1250b2b608c334245c74d4572a17e3dac3ae9b9676a7f)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:08.651013+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic wire-format approval: LEDGER_SCHEMA_V3 reconciliation records use REVERSAL_LINK_V2, which carries target_id and TARGET_SEQUENCE across process restarts. REVERSAL_LINK_V1 cannot reconstruct an out-of-order pending link.\",\"edges\":[{\"relation\":\"assigned_owner_by\",\"to\":\"owner-alias-migration\"}],\"entities\":[\"LEDGER_SCHEMA_V3\",\"REVERSAL_LINK_V2\",\"REVERSAL_LINK_V1\",\"TARGET_SEQUENCE\",\"PENDING_REVERSAL\"],\"id\":\"wire-v2-transition\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger wire registry\",\"timestamp\":\"2044-05-16T12:20:00Z\"}",
+        "conversation_id": "wire-v2-transition",
+        "metadata": {
+          "tags": [
+            "wire-v2-transition"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: a4ab2777ce389338e557c13924d893d2ca5305855d3bbc9e19e4e3ee672e5ad4)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:09.888602+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic ownership migration: the reconciliation owner formerly named WILLOW_POLICY was registered under the durable name CYPRESS_POLICY when REVERSAL_LINK_V2 became mandatory. CEDAR_POLICY remains the batch-replay owner and LARCH_POLICY remains the export owner.\",\"edges\":[{\"relation\":\"promoted_as\",\"to\":\"epoch7-approved\"}],\"entities\":[\"WILLOW_POLICY\",\"CYPRESS_POLICY\",\"CEDAR_POLICY\",\"LARCH_POLICY\",\"REVERSAL_LINK_V2\",\"POLICY_OWNER_ALIAS\"],\"id\":\"owner-alias-migration\",\"scope\":\"hardened-demo\",\"source\":\"synthetic policy registry migration\",\"timestamp\":\"2044-05-18T10:40:00Z\"}",
+        "conversation_id": "owner-alias-migration",
+        "metadata": {
+          "tags": [
+            "owner-alias-migration"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 5337a45499f58e68b010a0c8d9e6598a47994394ea0e9907e06abc5232ae28a0)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:11.189896+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic release approval: CYPRESS_POLICY generation 7 owns RECONCILE for LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2. Its REVERSAL_HORIZON remains 4 and its checkpoint mode is PIN_PENDING. Equal horizon values in other profiles do not transfer ownership.\",\"edges\":[{\"relation\":\"guarded_by\",\"to\":\"obligation-reconcile-path\"}],\"entities\":[\"CYPRESS_POLICY\",\"POLICY_GENERATION\",\"RECONCILE\",\"LEDGER_SCHEMA_V3\",\"REVERSAL_LINK_V2\",\"REVERSAL_HORIZON\",\"PIN_PENDING\"],\"id\":\"epoch7-approved\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation release approval\",\"timestamp\":\"2044-05-19T17:15:00Z\"}",
+        "conversation_id": "epoch7-approved",
+        "metadata": {
+          "tags": [
+            "epoch7-approved"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: b6de61fde0a4b6ba051448cabeb67f4de646e3f44e6f610cac960e017f7e9b6c)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:12.409772+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic checkpoint design: PIN_PENDING places CHECKPOINT_WATERMARK immediately before the oldest unresolved target sequence. MAX_SEEN is valid for ordered batch replay but can exclude a delayed target whose reversal was observed first.\",\"entities\":[\"PIN_PENDING\",\"MAX_SEEN\",\"CHECKPOINT_WATERMARK\",\"PENDING_REVERSAL\",\"TARGET_SEQUENCE\"],\"id\":\"checkpoint-watermark-design\",\"scope\":\"hardened-demo\",\"source\":\"synthetic checkpoint design review\",\"timestamp\":\"2044-05-20T14:30:00Z\"}",
+        "conversation_id": "checkpoint-watermark-design",
+        "metadata": {
+          "tags": [
+            "checkpoint-watermark-design"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: ca6e6e1581ff773c73af4b51da23b69349c56ef6e7a6b4a34e76ffca70f3d06c)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:13.633772+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic batch-replay record: CEDAR_POLICY generation 7 uses LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2 with REVERSAL_HORIZON 4, but its MAX_SEEN checkpoint mode assumes events are ordered. The profile remains valid for its batch owner.\",\"entities\":[\"CEDAR_POLICY\",\"POLICY_GENERATION\",\"LEDGER_SCHEMA_V3\",\"REVERSAL_LINK_V2\",\"REVERSAL_HORIZON\",\"MAX_SEEN\"],\"id\":\"cedar-batch-owner\",\"scope\":\"hardened-demo\",\"source\":\"synthetic batch replay registry\",\"timestamp\":\"2044-05-21T10:05:00Z\"}",
+        "conversation_id": "cedar-batch-owner",
+        "metadata": {
+          "tags": [
+            "cedar-batch-owner"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 9b870749a5c9fb113d4975fcabef55dabb4dc33baebd3db648b81c1de6d70778)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:14.868345+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic ledger invariant: an event identifier already represented by a C, P, or R fact is a retry duplicate. Reload must detect it from ledger.log and append nothing; a T fact resolves a pending reversal without creating a second input event.\",\"entities\":[\"ledger.log\",\"RETRY_DUPLICATE\",\"RECONCILIATION_TOMBSTONE\",\"PENDING_REVERSAL\"],\"id\":\"duplicate-event-invariant\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger correctness note\",\"timestamp\":\"2044-05-22T08:55:00Z\"}",
+        "conversation_id": "duplicate-event-invariant",
+        "metadata": {
+          "tags": [
+            "duplicate-event-invariant"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 7c45417e5369032c3f6ab329cddad31762766c002ac64c22a4e25da39cfdde8e)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:16.089739+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic durability invariant: ledger.log is append-only. P records retain unresolved links and T records retain their later resolution. Reconciliation must not remove either fact merely to improve a throughput counter.\",\"entities\":[\"ledger.log\",\"PENDING_REVERSAL\",\"RECONCILIATION_TOMBSTONE\",\"APPEND_ONLY\"],\"id\":\"tombstone-append-invariant\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger durability decision\",\"timestamp\":\"2044-05-23T13:45:00Z\"}",
+        "conversation_id": "tombstone-append-invariant",
+        "metadata": {
+          "tags": [
+            "tombstone-append-invariant"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 11276809edcff291c03bd24a95c2b8c191e8992e258345dfaa0a37492320fbfd)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:17.387955+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"When editing src/ledger/reconcile.rs, preserve the reconciliation REVERSAL_HORIZON across schema rollover, keep the checkpoint watermark behind unresolved reversals, and prove through file reload that delayed reversals produce neither duplicate nor missing ledger effects.\",\"edges\":[{\"relation\":\"applies_when_path_edited\",\"to\":\"incident-current\"}],\"entities\":[\"src/ledger/reconcile.rs\",\"REVERSAL_HORIZON\",\"CHECKPOINT_WATERMARK\",\"PENDING_REVERSAL\",\"FILE_RELOAD\"],\"id\":\"obligation-reconcile-path\",\"scope\":\"hardened-demo\",\"source\":\"synthetic prospective maintenance obligation\",\"timestamp\":\"2044-05-24T09:30:00Z\"}",
+        "conversation_id": "obligation-reconcile-path",
+        "metadata": {
+          "tags": [
+            "obligation-reconcile-path"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 3ec2bc4147d7cc009cfd8075a1b272a76221cf9939419d8b7fd8347e72535a87)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:18.746275+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic reconciliation test contract: a reversal at sequence 104 may target sequence 100 when REVERSAL_HORIZON is 4; target sequence 99 is outside. The boundary is independent of diagnostic batch size.\",\"entities\":[\"REVERSAL_HORIZON\",\"PENDING_REVERSAL\",\"diagnostic.batch_size\"],\"id\":\"horizon-boundary-test\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation boundary test\",\"timestamp\":\"2044-05-25T15:10:00Z\"}",
+        "conversation_id": "horizon-boundary-test",
+        "metadata": {
+          "tags": [
+            "horizon-boundary-test"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: bd5a7b9591cf633608c331beaf51bd6e7aa1335e070c57bfd2cd812498506fd6)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:20.084162+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic prior proof: after a stale reconcile.marker is found, src/ledger/reconcile.rs reloads ledger.log and derived state before accepting another event. A retry of an existing event leaves the journal byte length unchanged and clears the marker.\",\"entities\":[\"reconcile.marker\",\"src/ledger/reconcile.rs\",\"ledger.log\",\"FILE_RELOAD\",\"RETRY_DUPLICATE\"],\"id\":\"crash-reload-proof-history\",\"scope\":\"hardened-demo\",\"source\":\"synthetic recovery test report\",\"timestamp\":\"2044-05-26T12:05:00Z\"}",
+        "conversation_id": "crash-reload-proof-history",
+        "metadata": {
+          "tags": [
+            "crash-reload-proof-history"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 56ec7b582deb60145871ec25ce74c1b4c12654688fe3bc2baa51103adcd1af93)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:21.381470+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic newer proposal: FALCON_POLICY generation 8 would combine LEDGER_SCHEMA_V4_FORK, REVERSAL_LINK_V3, REVERSAL_HORIZON 4, and PIN_PENDING. The proposal is pending crash/reload proof and migration approval.\",\"edges\":[{\"relation\":\"reviewed_by\",\"to\":\"fork-generation8-rejected\"}],\"entities\":[\"FALCON_POLICY\",\"POLICY_GENERATION\",\"LEDGER_SCHEMA_V4_FORK\",\"REVERSAL_LINK_V3\",\"REVERSAL_HORIZON\",\"PIN_PENDING\"],\"id\":\"fork-generation8-proposal\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation fork proposal\",\"timestamp\":\"2044-05-28T10:00:00Z\"}",
+        "conversation_id": "fork-generation8-proposal",
+        "metadata": {
+          "tags": [
+            "fork-generation8-proposal"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: a6434daad5a41d0bbbd4128081816cb13e6924015e3d2d50068ea49e94ea757d)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:22.660470+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic review result: FALCON_POLICY generation 8, LEDGER_SCHEMA_V4_FORK, and REVERSAL_LINK_V3 were rejected because crash/reload compatibility was not demonstrated. RECONCILE_FORK remains an experiment and has no production ownership.\",\"entities\":[\"FALCON_POLICY\",\"LEDGER_SCHEMA_V4_FORK\",\"REVERSAL_LINK_V3\",\"RECONCILE_FORK\",\"POLICY_GENERATION\"],\"id\":\"fork-generation8-rejected\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation council minutes\",\"timestamp\":\"2044-05-29T15:25:00Z\"}",
+        "conversation_id": "fork-generation8-rejected",
+        "metadata": {
+          "tags": [
+            "fork-generation8-rejected"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: abac91fd55e128acbe0a0de9968222ca94bffe81e02c264d61d0b1dca62127a3)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:23.925365+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic packaging note: route bindings and policy definitions ship independently. A current route can remain valid while naming a profile owned by another workload; the loader rejects generation and scope mismatches but does not infer owner intent from equal REVERSAL_HORIZON values.\",\"entities\":[\"RECONCILE\",\"POLICY_OWNER_ALIAS\",\"POLICY_GENERATION\",\"REVERSAL_HORIZON\",\"runtime.conf\"],\"id\":\"route-manifest-separation\",\"scope\":\"hardened-demo\",\"source\":\"synthetic runtime packaging design\",\"timestamp\":\"2044-05-30T16:20:00Z\"}",
+        "conversation_id": "route-manifest-separation",
+        "metadata": {
+          "tags": [
+            "route-manifest-separation"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 7c810a5a64bd07f376b4c8f2173788c152365f395ff930a5c7044aefc60f61d8)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:25.157362+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic export regression: EXPORT_SNAPSHOT with LARCH_POLICY generation 3 reads the durable ledger and emits deterministic entry, balance, checkpoint, and pending counts. Reconciliation policy changes must not change the export owner or byte grammar.\",\"entities\":[\"EXPORT_SNAPSHOT\",\"LARCH_POLICY\",\"SUMMARY_TEXT_V1\",\"ledger-export\"],\"id\":\"export-regression\",\"scope\":\"hardened-demo\",\"source\":\"synthetic export test report\",\"timestamp\":\"2044-06-01T13:10:00Z\"}",
+        "conversation_id": "export-regression",
+        "metadata": {
+          "tags": [
+            "export-regression"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 72b7f1e5d38541fad91c73e903172eab30f25bdf8ded01fa8dee12cdb5499276)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:26.373197+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic local regression: public_checks.rs records a reversal before its charge, invokes reconciliation again from durable files, and checks the unrelated export. The delayed charge is currently rejected while export succeeds.\",\"entities\":[\"public_checks.rs\",\"src/ledger/reconcile.rs\",\"PENDING_REVERSAL\",\"FILE_RELOAD\",\"EXPORT_SNAPSHOT\"],\"id\":\"public-regression\",\"scope\":\"hardened-demo\",\"source\":\"synthetic local Rust runner\",\"timestamp\":\"2044-06-03T17:05:00Z\"}",
+        "conversation_id": "public-regression",
+        "metadata": {
+          "tags": [
+            "public-regression"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 93ff3178eade7495171b5e791fde763ef1fba8bdb97e68cf53ce3787c83f986c)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:27.631084+00:00",
+      "tool": "memory_store",
+      "arguments": {
+        "content": "{\"content\":\"Synthetic current incident: after rev-late sequence 104 arrives before charge-late sequence 100, a restart leaves the reversal pending, skips the delayed charge, and reports Reconciliation Throughput Warning: tombstone pressure. ledger.log contains one pending fact, checkpoint.state contains 104, balance remains zero, and the unrelated export still completes. The active path is src/ledger/reconcile.rs.\",\"edges\":[{\"relation\":\"reproduced_by\",\"to\":\"public-regression\"}],\"entities\":[\"src/ledger/reconcile.rs\",\"REVERSAL_HORIZON\",\"CHECKPOINT_WATERMARK\",\"PENDING_REVERSAL\",\"Reconciliation Throughput Warning\"],\"id\":\"incident-current\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation incident console\",\"timestamp\":\"2044-06-04T18:45:00Z\"}",
+        "conversation_id": "incident-current",
+        "metadata": {
+          "tags": [
+            "incident-current"
+          ],
+          "type": "reference"
+        }
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Memory stored successfully (hash: 8b6dd43f90f15b4bd000df37d153febf019c8907b7f30cf488078e45a92db9a2)"
+          }
+        ],
+        "isError": false
+      }
+    },
+    {
+      "utc": "2026-09-07T03:31:28.616734+00:00",
+      "tool": "memory_list",
+      "arguments": {
+        "page": 1,
+        "page_size": 100
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"memories\": [\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic current incident: after rev-late sequence 104 arrives before charge-late sequence 100, a restart leaves the reversal pending, skips the delayed charge, and reports Reconciliation Throughput Warning: tombstone pressure. ledger.log contains one pending fact, checkpoint.state contains 104, balance remains zero, and the unrelated export still completes. The active path is src/ledger/reconcile.rs.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"reproduced_by\\\",\\\"to\\\":\\\"public-regression\\\"}],\\\"entities\\\":[\\\"src/ledger/reconcile.rs\\\",\\\"REVERSAL_HORIZON\\\",\\\"CHECKPOINT_WATERMARK\\\",\\\"PENDING_REVERSAL\\\",\\\"Reconciliation Throughput Warning\\\"],\\\"id\\\":\\\"incident-current\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation incident console\\\",\\\"timestamp\\\":\\\"2044-06-04T18:45:00Z\\\"}\",\n      \"content_hash\": \"8b6dd43f90f15b4bd000df37d153febf019c8907b7f30cf488078e45a92db9a2\",\n      \"tags\": [\n        \"incident-current\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"incident-current\"\n      },\n      \"created_at\": 1788751887.596361,\n      \"updated_at\": 1788751887.596361,\n      \"created_at_iso\": \"2026-09-07T03:31:27.596361Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:27.596361Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic local regression: public_checks.rs records a reversal before its charge, invokes reconciliation again from durable files, and checks the unrelated export. The delayed charge is currently rejected while export succeeds.\\\",\\\"entities\\\":[\\\"public_checks.rs\\\",\\\"src/ledger/reconcile.rs\\\",\\\"PENDING_REVERSAL\\\",\\\"FILE_RELOAD\\\",\\\"EXPORT_SNAPSHOT\\\"],\\\"id\\\":\\\"public-regression\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic local Rust runner\\\",\\\"timestamp\\\":\\\"2044-06-03T17:05:00Z\\\"}\",\n      \"content_hash\": \"93ff3178eade7495171b5e791fde763ef1fba8bdb97e68cf53ce3787c83f986c\",\n      \"tags\": [\n        \"public-regression\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"public-regression\"\n      },\n      \"created_at\": 1788751886.340618,\n      \"updated_at\": 1788751886.340618,\n      \"created_at_iso\": \"2026-09-07T03:31:26.340618Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:26.340618Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic export regression: EXPORT_SNAPSHOT with LARCH_POLICY generation 3 reads the durable ledger and emits deterministic entry, balance, checkpoint, and pending counts. Reconciliation policy changes must not change the export owner or byte grammar.\\\",\\\"entities\\\":[\\\"EXPORT_SNAPSHOT\\\",\\\"LARCH_POLICY\\\",\\\"SUMMARY_TEXT_V1\\\",\\\"ledger-export\\\"],\\\"id\\\":\\\"export-regression\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic export test report\\\",\\\"timestamp\\\":\\\"2044-06-01T13:10:00Z\\\"}\",\n      \"content_hash\": \"72b7f1e5d38541fad91c73e903172eab30f25bdf8ded01fa8dee12cdb5499276\",\n      \"tags\": [\n        \"export-regression\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"export-regression\"\n      },\n      \"created_at\": 1788751885.122103,\n      \"updated_at\": 1788751885.122103,\n      \"created_at_iso\": \"2026-09-07T03:31:25.122103Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:25.122103Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic packaging note: route bindings and policy definitions ship independently. A current route can remain valid while naming a profile owned by another workload; the loader rejects generation and scope mismatches but does not infer owner intent from equal REVERSAL_HORIZON values.\\\",\\\"entities\\\":[\\\"RECONCILE\\\",\\\"POLICY_OWNER_ALIAS\\\",\\\"POLICY_GENERATION\\\",\\\"REVERSAL_HORIZON\\\",\\\"runtime.conf\\\"],\\\"id\\\":\\\"route-manifest-separation\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic runtime packaging design\\\",\\\"timestamp\\\":\\\"2044-05-30T16:20:00Z\\\"}\",\n      \"content_hash\": \"7c810a5a64bd07f376b4c8f2173788c152365f395ff930a5c7044aefc60f61d8\",\n      \"tags\": [\n        \"route-manifest-separation\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"route-manifest-separation\"\n      },\n      \"created_at\": 1788751883.877364,\n      \"updated_at\": 1788751883.877364,\n      \"created_at_iso\": \"2026-09-07T03:31:23.877364Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:23.877364Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic review result: FALCON_POLICY generation 8, LEDGER_SCHEMA_V4_FORK, and REVERSAL_LINK_V3 were rejected because crash/reload compatibility was not demonstrated. RECONCILE_FORK remains an experiment and has no production ownership.\\\",\\\"entities\\\":[\\\"FALCON_POLICY\\\",\\\"LEDGER_SCHEMA_V4_FORK\\\",\\\"REVERSAL_LINK_V3\\\",\\\"RECONCILE_FORK\\\",\\\"POLICY_GENERATION\\\"],\\\"id\\\":\\\"fork-generation8-rejected\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation council minutes\\\",\\\"timestamp\\\":\\\"2044-05-29T15:25:00Z\\\"}\",\n      \"content_hash\": \"abac91fd55e128acbe0a0de9968222ca94bffe81e02c264d61d0b1dca62127a3\",\n      \"tags\": [\n        \"fork-generation8-rejected\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"fork-generation8-rejected\"\n      },\n      \"created_at\": 1788751882.6028879,\n      \"updated_at\": 1788751882.6028879,\n      \"created_at_iso\": \"2026-09-07T03:31:22.602888Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:22.602888Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic newer proposal: FALCON_POLICY generation 8 would combine LEDGER_SCHEMA_V4_FORK, REVERSAL_LINK_V3, REVERSAL_HORIZON 4, and PIN_PENDING. The proposal is pending crash/reload proof and migration approval.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"reviewed_by\\\",\\\"to\\\":\\\"fork-generation8-rejected\\\"}],\\\"entities\\\":[\\\"FALCON_POLICY\\\",\\\"POLICY_GENERATION\\\",\\\"LEDGER_SCHEMA_V4_FORK\\\",\\\"REVERSAL_LINK_V3\\\",\\\"REVERSAL_HORIZON\\\",\\\"PIN_PENDING\\\"],\\\"id\\\":\\\"fork-generation8-proposal\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation fork proposal\\\",\\\"timestamp\\\":\\\"2044-05-28T10:00:00Z\\\"}\",\n      \"content_hash\": \"a6434daad5a41d0bbbd4128081816cb13e6924015e3d2d50068ea49e94ea757d\",\n      \"tags\": [\n        \"fork-generation8-proposal\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"fork-generation8-proposal\"\n      },\n      \"created_at\": 1788751881.324428,\n      \"updated_at\": 1788751881.324428,\n      \"created_at_iso\": \"2026-09-07T03:31:21.324428Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:21.324428Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic prior proof: after a stale reconcile.marker is found, src/ledger/reconcile.rs reloads ledger.log and derived state before accepting another event. A retry of an existing event leaves the journal byte length unchanged and clears the marker.\\\",\\\"entities\\\":[\\\"reconcile.marker\\\",\\\"src/ledger/reconcile.rs\\\",\\\"ledger.log\\\",\\\"FILE_RELOAD\\\",\\\"RETRY_DUPLICATE\\\"],\\\"id\\\":\\\"crash-reload-proof-history\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic recovery test report\\\",\\\"timestamp\\\":\\\"2044-05-26T12:05:00Z\\\"}\",\n      \"content_hash\": \"56ec7b582deb60145871ec25ce74c1b4c12654688fe3bc2baa51103adcd1af93\",\n      \"tags\": [\n        \"crash-reload-proof-history\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"crash-reload-proof-history\"\n      },\n      \"created_at\": 1788751880.008647,\n      \"updated_at\": 1788751880.008647,\n      \"created_at_iso\": \"2026-09-07T03:31:20.008647Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:20.008647Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic reconciliation test contract: a reversal at sequence 104 may target sequence 100 when REVERSAL_HORIZON is 4; target sequence 99 is outside. The boundary is independent of diagnostic batch size.\\\",\\\"entities\\\":[\\\"REVERSAL_HORIZON\\\",\\\"PENDING_REVERSAL\\\",\\\"diagnostic.batch_size\\\"],\\\"id\\\":\\\"horizon-boundary-test\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation boundary test\\\",\\\"timestamp\\\":\\\"2044-05-25T15:10:00Z\\\"}\",\n      \"content_hash\": \"bd5a7b9591cf633608c331beaf51bd6e7aa1335e070c57bfd2cd812498506fd6\",\n      \"tags\": [\n        \"horizon-boundary-test\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"horizon-boundary-test\"\n      },\n      \"created_at\": 1788751878.671395,\n      \"updated_at\": 1788751878.671395,\n      \"created_at_iso\": \"2026-09-07T03:31:18.671395Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:18.671395Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"When editing src/ledger/reconcile.rs, preserve the reconciliation REVERSAL_HORIZON across schema rollover, keep the checkpoint watermark behind unresolved reversals, and prove through file reload that delayed reversals produce neither duplicate nor missing ledger effects.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"applies_when_path_edited\\\",\\\"to\\\":\\\"incident-current\\\"}],\\\"entities\\\":[\\\"src/ledger/reconcile.rs\\\",\\\"REVERSAL_HORIZON\\\",\\\"CHECKPOINT_WATERMARK\\\",\\\"PENDING_REVERSAL\\\",\\\"FILE_RELOAD\\\"],\\\"id\\\":\\\"obligation-reconcile-path\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic prospective maintenance obligation\\\",\\\"timestamp\\\":\\\"2044-05-24T09:30:00Z\\\"}\",\n      \"content_hash\": \"3ec2bc4147d7cc009cfd8075a1b272a76221cf9939419d8b7fd8347e72535a87\",\n      \"tags\": [\n        \"obligation-reconcile-path\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"obligation-reconcile-path\"\n      },\n      \"created_at\": 1788751877.300597,\n      \"updated_at\": 1788751877.300597,\n      \"created_at_iso\": \"2026-09-07T03:31:17.300597Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:17.300597Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic durability invariant: ledger.log is append-only. P records retain unresolved links and T records retain their later resolution. Reconciliation must not remove either fact merely to improve a throughput counter.\\\",\\\"entities\\\":[\\\"ledger.log\\\",\\\"PENDING_REVERSAL\\\",\\\"RECONCILIATION_TOMBSTONE\\\",\\\"APPEND_ONLY\\\"],\\\"id\\\":\\\"tombstone-append-invariant\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger durability decision\\\",\\\"timestamp\\\":\\\"2044-05-23T13:45:00Z\\\"}\",\n      \"content_hash\": \"11276809edcff291c03bd24a95c2b8c191e8992e258345dfaa0a37492320fbfd\",\n      \"tags\": [\n        \"tombstone-append-invariant\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"tombstone-append-invariant\"\n      },\n      \"created_at\": 1788751876.05278,\n      \"updated_at\": 1788751876.05278,\n      \"created_at_iso\": \"2026-09-07T03:31:16.052780Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:16.052780Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic ledger invariant: an event identifier already represented by a C, P, or R fact is a retry duplicate. Reload must detect it from ledger.log and append nothing; a T fact resolves a pending reversal without creating a second input event.\\\",\\\"entities\\\":[\\\"ledger.log\\\",\\\"RETRY_DUPLICATE\\\",\\\"RECONCILIATION_TOMBSTONE\\\",\\\"PENDING_REVERSAL\\\"],\\\"id\\\":\\\"duplicate-event-invariant\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger correctness note\\\",\\\"timestamp\\\":\\\"2044-05-22T08:55:00Z\\\"}\",\n      \"content_hash\": \"7c45417e5369032c3f6ab329cddad31762766c002ac64c22a4e25da39cfdde8e\",\n      \"tags\": [\n        \"duplicate-event-invariant\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"duplicate-event-invariant\"\n      },\n      \"created_at\": 1788751874.83637,\n      \"updated_at\": 1788751874.83637,\n      \"created_at_iso\": \"2026-09-07T03:31:14.836370Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:14.836370Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic batch-replay record: CEDAR_POLICY generation 7 uses LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2 with REVERSAL_HORIZON 4, but its MAX_SEEN checkpoint mode assumes events are ordered. The profile remains valid for its batch owner.\\\",\\\"entities\\\":[\\\"CEDAR_POLICY\\\",\\\"POLICY_GENERATION\\\",\\\"LEDGER_SCHEMA_V3\\\",\\\"REVERSAL_LINK_V2\\\",\\\"REVERSAL_HORIZON\\\",\\\"MAX_SEEN\\\"],\\\"id\\\":\\\"cedar-batch-owner\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic batch replay registry\\\",\\\"timestamp\\\":\\\"2044-05-21T10:05:00Z\\\"}\",\n      \"content_hash\": \"9b870749a5c9fb113d4975fcabef55dabb4dc33baebd3db648b81c1de6d70778\",\n      \"tags\": [\n        \"cedar-batch-owner\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"cedar-batch-owner\"\n      },\n      \"created_at\": 1788751873.596617,\n      \"updated_at\": 1788751873.596617,\n      \"created_at_iso\": \"2026-09-07T03:31:13.596617Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:13.596617Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic checkpoint design: PIN_PENDING places CHECKPOINT_WATERMARK immediately before the oldest unresolved target sequence. MAX_SEEN is valid for ordered batch replay but can exclude a delayed target whose reversal was observed first.\\\",\\\"entities\\\":[\\\"PIN_PENDING\\\",\\\"MAX_SEEN\\\",\\\"CHECKPOINT_WATERMARK\\\",\\\"PENDING_REVERSAL\\\",\\\"TARGET_SEQUENCE\\\"],\\\"id\\\":\\\"checkpoint-watermark-design\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic checkpoint design review\\\",\\\"timestamp\\\":\\\"2044-05-20T14:30:00Z\\\"}\",\n      \"content_hash\": \"ca6e6e1581ff773c73af4b51da23b69349c56ef6e7a6b4a34e76ffca70f3d06c\",\n      \"tags\": [\n        \"checkpoint-watermark-design\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"checkpoint-watermark-design\"\n      },\n      \"created_at\": 1788751872.366085,\n      \"updated_at\": 1788751872.366085,\n      \"created_at_iso\": \"2026-09-07T03:31:12.366085Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:12.366085Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic release approval: CYPRESS_POLICY generation 7 owns RECONCILE for LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2. Its REVERSAL_HORIZON remains 4 and its checkpoint mode is PIN_PENDING. Equal horizon values in other profiles do not transfer ownership.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"guarded_by\\\",\\\"to\\\":\\\"obligation-reconcile-path\\\"}],\\\"entities\\\":[\\\"CYPRESS_POLICY\\\",\\\"POLICY_GENERATION\\\",\\\"RECONCILE\\\",\\\"LEDGER_SCHEMA_V3\\\",\\\"REVERSAL_LINK_V2\\\",\\\"REVERSAL_HORIZON\\\",\\\"PIN_PENDING\\\"],\\\"id\\\":\\\"epoch7-approved\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation release approval\\\",\\\"timestamp\\\":\\\"2044-05-19T17:15:00Z\\\"}\",\n      \"content_hash\": \"b6de61fde0a4b6ba051448cabeb67f4de646e3f44e6f610cac960e017f7e9b6c\",\n      \"tags\": [\n        \"epoch7-approved\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"epoch7-approved\"\n      },\n      \"created_at\": 1788751871.150941,\n      \"updated_at\": 1788751871.150941,\n      \"created_at_iso\": \"2026-09-07T03:31:11.150941Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:11.150941Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic ownership migration: the reconciliation owner formerly named WILLOW_POLICY was registered under the durable name CYPRESS_POLICY when REVERSAL_LINK_V2 became mandatory. CEDAR_POLICY remains the batch-replay owner and LARCH_POLICY remains the export owner.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"promoted_as\\\",\\\"to\\\":\\\"epoch7-approved\\\"}],\\\"entities\\\":[\\\"WILLOW_POLICY\\\",\\\"CYPRESS_POLICY\\\",\\\"CEDAR_POLICY\\\",\\\"LARCH_POLICY\\\",\\\"REVERSAL_LINK_V2\\\",\\\"POLICY_OWNER_ALIAS\\\"],\\\"id\\\":\\\"owner-alias-migration\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic policy registry migration\\\",\\\"timestamp\\\":\\\"2044-05-18T10:40:00Z\\\"}\",\n      \"content_hash\": \"5337a45499f58e68b010a0c8d9e6598a47994394ea0e9907e06abc5232ae28a0\",\n      \"tags\": [\n        \"owner-alias-migration\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"owner-alias-migration\"\n      },\n      \"created_at\": 1788751869.8555799,\n      \"updated_at\": 1788751869.8555799,\n      \"created_at_iso\": \"2026-09-07T03:31:09.855580Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:09.855580Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic wire-format approval: LEDGER_SCHEMA_V3 reconciliation records use REVERSAL_LINK_V2, which carries target_id and TARGET_SEQUENCE across process restarts. REVERSAL_LINK_V1 cannot reconstruct an out-of-order pending link.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"assigned_owner_by\\\",\\\"to\\\":\\\"owner-alias-migration\\\"}],\\\"entities\\\":[\\\"LEDGER_SCHEMA_V3\\\",\\\"REVERSAL_LINK_V2\\\",\\\"REVERSAL_LINK_V1\\\",\\\"TARGET_SEQUENCE\\\",\\\"PENDING_REVERSAL\\\"],\\\"id\\\":\\\"wire-v2-transition\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger wire registry\\\",\\\"timestamp\\\":\\\"2044-05-16T12:20:00Z\\\"}\",\n      \"content_hash\": \"a4ab2777ce389338e557c13924d893d2ca5305855d3bbc9e19e4e3ee672e5ad4\",\n      \"tags\": [\n        \"wire-v2-transition\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"wire-v2-transition\"\n      },\n      \"created_at\": 1788751868.6074328,\n      \"updated_at\": 1788751868.6074328,\n      \"created_at_iso\": \"2026-09-07T03:31:08.607433Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:08.607433Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic accepted schema rollover: LEDGER_SCHEMA_V3 replaces LEDGER_SCHEMA_V2 for reconciliation. V3 adds the referenced charge sequence required to retain a reversal that arrives before its charge. Historical V2 replay remains separate.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"encoded_by\\\",\\\"to\\\":\\\"wire-v2-transition\\\"}],\\\"entities\\\":[\\\"LEDGER_SCHEMA_V3\\\",\\\"LEDGER_SCHEMA_V2\\\",\\\"PENDING_REVERSAL\\\",\\\"TARGET_SEQUENCE\\\",\\\"RECONCILE\\\"],\\\"id\\\":\\\"schema-v3-rollover\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger schema decision\\\",\\\"timestamp\\\":\\\"2044-05-14T11:00:00Z\\\"}\",\n      \"content_hash\": \"31bc998889b643b24fe1250b2b608c334245c74d4572a17e3dac3ae9b9676a7f\",\n      \"tags\": [\n        \"schema-v3-rollover\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"schema-v3-rollover\"\n      },\n      \"created_at\": 1788751867.328914,\n      \"updated_at\": 1788751867.328914,\n      \"created_at_iso\": \"2026-09-07T03:31:07.328914Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:07.328914Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic ownership contract: LARCH_POLICY generation 3 exclusively owns EXPORT_SNAPSHOT and SUMMARY_TEXT_V1. Its numeric REVERSAL_HORIZON field is metadata for reading summaries, not authority over reconciliation checkpoints.\\\",\\\"entities\\\":[\\\"LARCH_POLICY\\\",\\\"EXPORT_SNAPSHOT\\\",\\\"SUMMARY_TEXT_V1\\\",\\\"REVERSAL_HORIZON\\\"],\\\"id\\\":\\\"export-owner-contract\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic export ownership record\\\",\\\"timestamp\\\":\\\"2044-05-12T09:50:00Z\\\"}\",\n      \"content_hash\": \"b2dd27efdc2b94359798f112107c5d834ec35ce6708ca1537354654e3b3d56b4\",\n      \"tags\": [\n        \"export-owner-contract\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"export-owner-contract\"\n      },\n      \"created_at\": 1788751866.083455,\n      \"updated_at\": 1788751866.083455,\n      \"created_at_iso\": \"2026-09-07T03:31:06.083455Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:06.083455Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic tuning proposal: diagnostic.batch_size 128 was suggested for a one-day trace experiment and expired without approval. It changes observation grouping only and does not authorize ledger fact deletion or checkpoint movement.\\\",\\\"entities\\\":[\\\"diagnostic.batch_size\\\",\\\"CHECKPOINT_WATERMARK\\\",\\\"APPEND_ONLY\\\"],\\\"id\\\":\\\"batch-size-proposal-expired\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic diagnostics proposal\\\",\\\"timestamp\\\":\\\"2044-05-10T18:20:00Z\\\"}\",\n      \"content_hash\": \"91edd3c02aef66266688585425fbc74e0036ad9500e821dd324e75ab18b80d70\",\n      \"tags\": [\n        \"batch-size-proposal-expired\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"batch-size-proposal-expired\"\n      },\n      \"created_at\": 1788751864.662237,\n      \"updated_at\": 1788751864.662237,\n      \"created_at_iso\": \"2026-09-07T03:31:04.662237Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:04.662237Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic benchmark boundary: the tombstone-removal and batch-size procedure was validated only against regenerated analytics/compact.rs output. The test did not open ledger.log, checkpoint.state, balance.state, src/ledger/reconcile.rs, or delayed reversals.\\\",\\\"entities\\\":[\\\"analytics/compact.rs\\\",\\\"diagnostic.batch_size\\\",\\\"ledger.log\\\",\\\"src/ledger/reconcile.rs\\\",\\\"PENDING_REVERSAL\\\"],\\\"id\\\":\\\"performance-runbook-validation\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic analytics benchmark report\\\",\\\"timestamp\\\":\\\"2044-05-09T16:05:00Z\\\"}\",\n      \"content_hash\": \"75167ff37fc00c26ca715f69771beb4dac2afa878c929887c6477d55eef75e2e\",\n      \"tags\": [\n        \"performance-runbook-validation\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"performance-runbook-validation\"\n      },\n      \"created_at\": 1788751863.441279,\n      \"updated_at\": 1788751863.441279,\n      \"created_at_iso\": \"2026-09-07T03:31:03.441279Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:03.441279Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic performance runbook for analytics/compact.rs: Reconciliation Throughput Warning: tombstone pressure is mitigated by removing reconciliation tombstone rows after aggregation and increasing diagnostic.batch_size from 32 to 128. The procedure covers disposable analytics summaries rather than the append-only ledger.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"limited_by\\\",\\\"to\\\":\\\"performance-runbook-validation\\\"}],\\\"entities\\\":[\\\"analytics/compact.rs\\\",\\\"Reconciliation Throughput Warning\\\",\\\"RECONCILIATION_TOMBSTONE\\\",\\\"diagnostic.batch_size\\\"],\\\"id\\\":\\\"performance-runbook-decoy\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic analytics performance runbook\\\",\\\"timestamp\\\":\\\"2044-05-08T09:15:00Z\\\"}\",\n      \"content_hash\": \"7fe82f2e2dcf65af473e95e13a6ce48678341d37e21c0d5bd05beee3e62c1120\",\n      \"tags\": [\n        \"performance-runbook-decoy\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"performance-runbook-decoy\"\n      },\n      \"created_at\": 1788751862.1801221,\n      \"updated_at\": 1788751862.1801221,\n      \"created_at_iso\": \"2026-09-07T03:31:02.180122Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:02.180122Z\"\n    },\n    {\n      \"content\": \"{\\\"content\\\":\\\"Synthetic historical archive: LEDGER_SCHEMA_V2 used REVERSAL_LINK_V1 and could only reconcile charge-before-reversal ordering. Its replay data is retained for compatibility tests, not new reconciliation ownership.\\\",\\\"entities\\\":[\\\"LEDGER_SCHEMA_V2\\\",\\\"REVERSAL_LINK_V1\\\",\\\"ORDERED_REPLAY\\\"],\\\"id\\\":\\\"schema-v2-archive\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger schema archive\\\",\\\"timestamp\\\":\\\"2044-05-05T11:35:00Z\\\"}\",\n      \"content_hash\": \"ad8d490a0f612c58d330708001d8b8f9ce15636a47c027f9a87d6b790481647e\",\n      \"tags\": [\n        \"schema-v2-archive\"\n      ],\n      \"memory_type\": \"reference\",\n      \"metadata\": {\n        \"conversation_id\": \"schema-v2-archive\"\n      },\n      \"created_at\": 1788751860.721506,\n      \"updated_at\": 1788751860.721506,\n      \"created_at_iso\": \"2026-09-07T03:31:00.721506Z\",\n      \"updated_at_iso\": \"2026-09-07T03:31:00.721506Z\"\n    }\n  ],\n  \"page\": 1,\n  \"page_size\": 100,\n  \"total\": 22,\n  \"total_pages\": 1,\n  \"has_more\": false\n}"
+          }
+        ],
+        "isError": false
+      }
+    }
+  ],
+  "records": {
+    "schema-v2-archive": {
+      "native_id": "ad8d490a0f612c58d330708001d8b8f9ce15636a47c027f9a87d6b790481647e",
+      "content_sha256": "f2ec9950f852be824cfead9d641861ac57850e71721389289ab24d4a106c521d",
+      "content_utf8_bytes": 422,
+      "order": 1,
+      "source_timestamp": "2044-05-05T11:35:00Z",
+      "write_utc": "2026-09-07T03:31:00.917942+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:00.721506Z"
+    },
+    "performance-runbook-decoy": {
+      "native_id": "7fe82f2e2dcf65af473e95e13a6ce48678341d37e21c0d5bd05beee3e62c1120",
+      "content_sha256": "da70976ec95095fdf4252a2328e7b9855ecca7638961c2d816ee11baa3d0a458",
+      "content_utf8_bytes": 677,
+      "order": 2,
+      "source_timestamp": "2044-05-08T09:15:00Z",
+      "write_utc": "2026-09-07T03:31:02.241696+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:02.180122Z"
+    },
+    "performance-runbook-validation": {
+      "native_id": "75167ff37fc00c26ca715f69771beb4dac2afa878c929887c6477d55eef75e2e",
+      "content_sha256": "b127b731bef20037a76f3f0521ba6d705e2c96cba43732c8f8f124e539a7251d",
+      "content_utf8_bytes": 535,
+      "order": 3,
+      "source_timestamp": "2044-05-09T16:05:00Z",
+      "write_utc": "2026-09-07T03:31:03.496164+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:03.441279Z"
+    },
+    "batch-size-proposal-expired": {
+      "native_id": "91edd3c02aef66266688585425fbc74e0036ad9500e821dd324e75ab18b80d70",
+      "content_sha256": "1d92ea0c94cb734dfd9110fb94d3424606b62f4764ced82213d1a3d78debf793",
+      "content_utf8_bytes": 456,
+      "order": 4,
+      "source_timestamp": "2044-05-10T18:20:00Z",
+      "write_utc": "2026-09-07T03:31:04.723530+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:04.662237Z"
+    },
+    "export-owner-contract": {
+      "native_id": "b2dd27efdc2b94359798f112107c5d834ec35ce6708ca1537354654e3b3d56b4",
+      "content_sha256": "6c4a71c5f72b9f9877cbe9726cb8c67b28f195e5db59f64ce43d791da47c30c2",
+      "content_utf8_bytes": 456,
+      "order": 5,
+      "source_timestamp": "2044-05-12T09:50:00Z",
+      "write_utc": "2026-09-07T03:31:06.117578+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:06.083455Z"
+    },
+    "schema-v3-rollover": {
+      "native_id": "31bc998889b643b24fe1250b2b608c334245c74d4572a17e3dac3ae9b9676a7f",
+      "content_sha256": "a908d34d1483a248ab14858379224a5700824d8cdcf6ba6918619eab82682326",
+      "content_utf8_bytes": 543,
+      "order": 6,
+      "source_timestamp": "2044-05-14T11:00:00Z",
+      "write_utc": "2026-09-07T03:31:07.376551+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:07.328914Z"
+    },
+    "wire-v2-transition": {
+      "native_id": "a4ab2777ce389338e557c13924d893d2ca5305855d3bbc9e19e4e3ee672e5ad4",
+      "content_sha256": "4cb981c5fbb3121a319aff2fc615c11209c29ae40f122e871db950b00b77c840",
+      "content_utf8_bytes": 548,
+      "order": 7,
+      "source_timestamp": "2044-05-16T12:20:00Z",
+      "write_utc": "2026-09-07T03:31:08.651065+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:08.607433Z"
+    },
+    "owner-alias-migration": {
+      "native_id": "5337a45499f58e68b010a0c8d9e6598a47994394ea0e9907e06abc5232ae28a0",
+      "content_sha256": "859d045f6b331277c798c1e60029374eaff28bca493f69e04d2de03a2b44cf16",
+      "content_utf8_bytes": 589,
+      "order": 8,
+      "source_timestamp": "2044-05-18T10:40:00Z",
+      "write_utc": "2026-09-07T03:31:09.888657+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:09.855580Z"
+    },
+    "epoch7-approved": {
+      "native_id": "b6de61fde0a4b6ba051448cabeb67f4de646e3f44e6f610cac960e017f7e9b6c",
+      "content_sha256": "24c2cb1413a66205eca62ef7eef2cd9fab235ea733468c16e55d77839d0f9083",
+      "content_utf8_bytes": 601,
+      "order": 9,
+      "source_timestamp": "2044-05-19T17:15:00Z",
+      "write_utc": "2026-09-07T03:31:11.189950+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:11.150941Z"
+    },
+    "checkpoint-watermark-design": {
+      "native_id": "ca6e6e1581ff773c73af4b51da23b69349c56ef6e7a6b4a34e76ffca70f3d06c",
+      "content_sha256": "5e974e27696bc8445fafa0c1425f3a142f57792d303fa06d1d7f3f1271e66055",
+      "content_utf8_bytes": 489,
+      "order": 10,
+      "source_timestamp": "2044-05-20T14:30:00Z",
+      "write_utc": "2026-09-07T03:31:12.409821+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:12.366085Z"
+    },
+    "cedar-batch-owner": {
+      "native_id": "9b870749a5c9fb113d4975fcabef55dabb4dc33baebd3db648b81c1de6d70778",
+      "content_sha256": "b1b516a704224023a2210298456d8b1dcc760d32e8644976fc1181dbf8403c7f",
+      "content_utf8_bytes": 489,
+      "order": 11,
+      "source_timestamp": "2044-05-21T10:05:00Z",
+      "write_utc": "2026-09-07T03:31:13.633824+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:13.596617Z"
+    },
+    "duplicate-event-invariant": {
+      "native_id": "7c45417e5369032c3f6ab329cddad31762766c002ac64c22a4e25da39cfdde8e",
+      "content_sha256": "640e35b758d41854b1e9c182c85293290bff204b9a0a22544433ecf279969b3d",
+      "content_utf8_bytes": 485,
+      "order": 12,
+      "source_timestamp": "2044-05-22T08:55:00Z",
+      "write_utc": "2026-09-07T03:31:14.868398+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:14.836370Z"
+    },
+    "tombstone-append-invariant": {
+      "native_id": "11276809edcff291c03bd24a95c2b8c191e8992e258345dfaa0a37492320fbfd",
+      "content_sha256": "06d6f0c4306a38d1d2741fd0dec94e4288dd06eba8b4bbe9b4f2beb7afff65bd",
+      "content_utf8_bytes": 461,
+      "order": 13,
+      "source_timestamp": "2044-05-23T13:45:00Z",
+      "write_utc": "2026-09-07T03:31:16.089813+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:16.052780Z"
+    },
+    "obligation-reconcile-path": {
+      "native_id": "3ec2bc4147d7cc009cfd8075a1b272a76221cf9939419d8b7fd8347e72535a87",
+      "content_sha256": "325c96601e82d9484c2710d26e4da8a318b02923b8a9e9fb589ad4a34aa1c900",
+      "content_utf8_bytes": 622,
+      "order": 14,
+      "source_timestamp": "2044-05-24T09:30:00Z",
+      "write_utc": "2026-09-07T03:31:17.388045+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:17.300597Z"
+    },
+    "horizon-boundary-test": {
+      "native_id": "bd5a7b9591cf633608c331beaf51bd6e7aa1335e070c57bfd2cd812498506fd6",
+      "content_sha256": "cc93b7484085b9e35174e3c4e4a31c3347c13b2f88ee13f678837a498cbcd760",
+      "content_utf8_bytes": 430,
+      "order": 15,
+      "source_timestamp": "2044-05-25T15:10:00Z",
+      "write_utc": "2026-09-07T03:31:18.746325+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:18.671395Z"
+    },
+    "crash-reload-proof-history": {
+      "native_id": "56ec7b582deb60145871ec25ce74c1b4c12654688fe3bc2baa51103adcd1af93",
+      "content_sha256": "8278d306bd82976ce63ddb69411c81e1f09d4384a270d426579efb1c6a7fd11d",
+      "content_utf8_bytes": 501,
+      "order": 16,
+      "source_timestamp": "2044-05-26T12:05:00Z",
+      "write_utc": "2026-09-07T03:31:20.084213+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:20.008647Z"
+    },
+    "fork-generation8-proposal": {
+      "native_id": "a6434daad5a41d0bbbd4128081816cb13e6924015e3d2d50068ea49e94ea757d",
+      "content_sha256": "7e73ac8f6676e45225b05d4e205697ac931ba9d042ac4b905d43793ba82978cb",
+      "content_utf8_bytes": 562,
+      "order": 17,
+      "source_timestamp": "2044-05-28T10:00:00Z",
+      "write_utc": "2026-09-07T03:31:21.381523+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:21.324428Z"
+    },
+    "fork-generation8-rejected": {
+      "native_id": "abac91fd55e128acbe0a0de9968222ca94bffe81e02c264d61d0b1dca62127a3",
+      "content_sha256": "c0d46a9ecb3d294ba0629d8b12d8077a8075a17bf09490c01d32f67845d019cc",
+      "content_utf8_bytes": 504,
+      "order": 18,
+      "source_timestamp": "2044-05-29T15:25:00Z",
+      "write_utc": "2026-09-07T03:31:22.660543+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:22.602888Z"
+    },
+    "route-manifest-separation": {
+      "native_id": "7c810a5a64bd07f376b4c8f2173788c152365f395ff930a5c7044aefc60f61d8",
+      "content_sha256": "adb0b8d41adbad32506d8e99bb5a9e02f43ec48ae302af3852858453e691d201",
+      "content_utf8_bytes": 537,
+      "order": 19,
+      "source_timestamp": "2044-05-30T16:20:00Z",
+      "write_utc": "2026-09-07T03:31:23.925417+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:23.877364Z"
+    },
+    "export-regression": {
+      "native_id": "72b7f1e5d38541fad91c73e903172eab30f25bdf8ded01fa8dee12cdb5499276",
+      "content_sha256": "3241f44c44f78562da622124f984ce479bbf1724cf5e5a1e53aa826b4685dec5",
+      "content_utf8_bytes": 470,
+      "order": 20,
+      "source_timestamp": "2044-06-01T13:10:00Z",
+      "write_utc": "2026-09-07T03:31:25.157416+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:25.122103Z"
+    },
+    "public-regression": {
+      "native_id": "93ff3178eade7495171b5e791fde763ef1fba8bdb97e68cf53ce3787c83f986c",
+      "content_sha256": "1e7af549288d6a9a52e6355283c552394cd775af13fc979f536d7e22c4de4848",
+      "content_utf8_bytes": 474,
+      "order": 21,
+      "source_timestamp": "2044-06-03T17:05:00Z",
+      "write_utc": "2026-09-07T03:31:26.373250+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:26.340618Z"
+    },
+    "incident-current": {
+      "native_id": "8b6dd43f90f15b4bd000df37d153febf019c8907b7f30cf488078e45a92db9a2",
+      "content_sha256": "9a226def520227c6fae8f6ff0dc1753cbea5de9e66ecefc734f313032a6176cf",
+      "content_utf8_bytes": 755,
+      "order": 22,
+      "source_timestamp": "2044-06-04T18:45:00Z",
+      "write_utc": "2026-09-07T03:31:27.631135+00:00",
+      "readback_verified": true,
+      "native_timestamp": "2026-09-07T03:31:27.596361Z"
+    }
+  },
+  "chronology": "Real insertion order follows source timestamp order; source timestamps remain fixture content.",
+  "initialize": {
+    "protocolVersion": "2025-11-25",
+    "capabilities": {
+      "experimental": {
+        "hardware_info": {
+          "architecture": "arm64",
+          "accelerator": "mps",
+          "memory_gb": 64.0,
+          "cpu_count": 10
+        }
+      },
+      "prompts": {
+        "listChanged": false
+      },
+      "resources": {
+        "subscribe": false,
+        "listChanged": false
+      },
+      "tools": {
+        "listChanged": false
+      }
+    },
+    "serverInfo": {
+      "name": "memory",
+      "version": "11.11.0"
+    }
+  },
+  "tools": {
+    "tools": [
+      {
+        "name": "memory_store",
+        "description": "Store new information with optional tags.\n\n                    Accepts two tag formats in metadata:\n                    - Array: [\"tag1\", \"tag2\"]\n                    - String: \"tag1,tag2\"\n\n                    Use `conversation_id` to bypass semantic deduplication when saving\n                    incremental memories from the same conversation.\n\n                   Examples:\n                    # Using array format:\n                    {\n                        \"content\": \"Memory content\",\n                        \"metadata\": {\n                            \"tags\": [\"important\", \"reference\"],\n                            \"type\": \"note\"\n                        }\n                    }\n\n                    # Using string format(preferred):\n                    {\n                        \"content\": \"Memory content\",\n                        \"metadata\": {\n                            \"tags\": \"important,reference\",\n                            \"type\": \"note\"\n                        }\n                    }\n\n                    # Using conversation_id to save incremental notes:\n                    {\n                        \"content\": \"User prefers dark mode\",\n                        \"conversation_id\": \"conv_abc123\",\n                        \"metadata\": {\n                            \"tags\": \"preference,ui\"\n                        }\n                    }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "string",
+              "description": "The memory content to store, such as a fact, note, or piece of information."
+            },
+            "conversation_id": {
+              "type": "string",
+              "description": "Optional conversation identifier. When provided, semantic deduplication is skipped, allowing multiple incremental memories from the same conversation to be stored even if their content is topically similar. Exact duplicate hashes are still rejected."
+            },
+            "metadata": {
+              "type": "object",
+              "description": "Optional metadata about the memory, including tags and type.",
+              "properties": {
+                "tags": {
+                  "oneOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Tags as an array of strings"
+                    },
+                    {
+                      "type": "string",
+                      "description": "Tags as comma-separated string"
+                    }
+                  ],
+                  "description": "Tags to categorize the memory. Accepts either an array of strings or a comma-separated string.",
+                  "examples": [
+                    "tag1,tag2,tag3",
+                    [
+                      "tag1",
+                      "tag2",
+                      "tag3"
+                    ]
+                  ]
+                },
+                "type": {
+                  "type": "string",
+                  "description": "Optional memory type. Validated against the built-in ontology. Common base types: observation, decision, learning, error, pattern, planning, ceremony, milestone, stakeholder, meeting, research, communication. Common subtypes: note, reference, code_edit, command, document, insight, gotcha, bug, action_item, finding. Unknown types are silently coerced to 'observation' and the response includes a warning. Register additional types via the MCP_CUSTOM_MEMORY_TYPES env var, e.g. '{\"foo\": [\"sub_a\", \"sub_b\"]}'. See docs/memory-ontology.md for the full taxonomy."
+                }
+              }
+            },
+            "store": {
+              "type": "string",
+              "description": "Target store partition (default: 'default'). Use 'docs' for documents, 'all' for cross-store search."
+            }
+          },
+          "required": [
+            "content"
+          ]
+        },
+        "annotations": {
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "memory_store_session",
+        "description": "Store a full conversation session as a single memory unit.\n\nUse this instead of memory_store when you want to preserve the full context\nof a multi-turn conversation. All turns are stored together, making session-level\nretrieval more reliable than storing individual turns separately.\n\nExample:\n{\n\"turns\": [\n    {\"role\": \"user\", \"content\": \"How do I configure Redis?\"},\n    {\"role\": \"assistant\", \"content\": \"Set REDIS_URL in your .env file...\"}\n],\n\"session_id\": \"optional-stable-id\",\n\"tags\": \"redis,configuration\"\n}",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "turns": {
+              "type": "array",
+              "description": "Ordered list of conversation turns.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "description": "Speaker role, e.g. 'user' or 'assistant'"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "Turn content"
+                  }
+                },
+                "required": [
+                  "role",
+                  "content"
+                ]
+              },
+              "minItems": 1
+            },
+            "session_id": {
+              "type": "string",
+              "description": "Optional stable identifier for this session. Auto-generated UUID if omitted."
+            },
+            "tags": {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "description": "Additional tags (comma-separated string or array). 'session:<id>' is always added automatically."
+            },
+            "metadata": {
+              "type": "object",
+              "description": "Optional extra metadata."
+            },
+            "store": {
+              "type": "string",
+              "description": "Target store partition (default: 'default'). Use 'docs' for documents, 'all' for cross-store search."
+            }
+          },
+          "required": [
+            "turns"
+          ]
+        },
+        "annotations": {
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "memory_search",
+        "description": "Search memories with flexible modes and filters. Primary tool for finding stored information.\n\nUSE THIS WHEN:\n- User asks \"what do you remember about X\", \"recall\", \"find memories\"\n- Looking for past decisions, preferences, context from previous sessions\n- Need semantic, exact, or time-based search\n- User references \"last time we discussed\", \"you should know\"\n\nMODES:\n- semantic (default): Finds conceptually similar content even if exact words differ\n- exact: Finds memories containing the exact query string\n- hybrid: Combines semantic similarity with quality scoring\n\nTIME FILTERS (can combine with other filters):\n- time_expr: Natural language like \"yesterday\", \"last week\", \"2 days ago\", \"last month\"\n- after/before: Explicit ISO dates (YYYY-MM-DD)\n\nQUALITY BOOST (for semantic/hybrid modes):\n- 0.0 = pure semantic ranking (default)\n- 0.3 = 30% quality weight, 70% semantic (recommended for important lookups)\n- 1.0 = pure quality ranking\n\nTAG FILTER:\n- Filter results to only memories with specific tags\n- Useful for categorical searches (\"find all 'reference' memories about databases\")\n\nDEBUG:\n- include_debug=true adds timing, embedding info, filter details\n\nExamples:\n{\"query\": \"python async patterns\"}\n{\"query\": \"API endpoint\", \"mode\": \"exact\"}\n{\"time_expr\": \"last week\", \"limit\": 20}\n{\"query\": \"database config\", \"time_expr\": \"yesterday\"}\n{\"query\": \"architecture decisions\", \"tags\": [\"important\"], \"quality_boost\": 0.3}\n{\"after\": \"2024-01-01\", \"before\": \"2024-06-30\", \"limit\": 50}\n{\"query\": \"error handling\", \"include_debug\": true}",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query (required for semantic/exact modes, optional for time-only searches)"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "semantic",
+                "exact",
+                "hybrid",
+                "ranked"
+              ],
+              "default": "semantic",
+              "description": "Search mode"
+            },
+            "time_expr": {
+              "type": "string",
+              "description": "Natural language time filter (e.g., 'last week', 'yesterday', '3 days ago')"
+            },
+            "after": {
+              "type": "string",
+              "description": "Return memories created after this date (ISO format: YYYY-MM-DD)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Return memories created before this date (ISO format: YYYY-MM-DD)"
+            },
+            "tags": {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Tags as an array of strings"
+                },
+                {
+                  "type": "string",
+                  "description": "Tags as comma-separated string"
+                }
+              ],
+              "description": "Filter to memories with any of these tags"
+            },
+            "tag_match": {
+              "type": "string",
+              "enum": [
+                "any",
+                "all"
+              ],
+              "default": "any",
+              "description": "Match ANY tag (OR, default) or ALL tags (AND)"
+            },
+            "quality_boost": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0,
+              "description": "Quality weight for reranking (0.0-1.0)"
+            },
+            "ranking_weights": {
+              "type": "object",
+              "description": "Custom weights for ranked mode (keys: semantic, time_decay, access_frequency, quality). Values are normalized to sum=1.0.",
+              "properties": {
+                "semantic": {
+                  "type": "number"
+                },
+                "time_decay": {
+                  "type": "number"
+                },
+                "access_frequency": {
+                  "type": "number"
+                },
+                "quality": {
+                  "type": "number"
+                }
+              }
+            },
+            "limit": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "maximum": 100,
+              "description": "Maximum results to return"
+            },
+            "include_debug": {
+              "type": "boolean",
+              "default": false,
+              "description": "Include debug information in response"
+            },
+            "max_response_chars": {
+              "type": "number",
+              "description": "Maximum response size in characters. Truncates at memory boundaries to prevent context overflow. Recommended: 30000-50000. Default: unlimited."
+            },
+            "include_superseded": {
+              "type": "boolean",
+              "default": false,
+              "description": "Include memories that have been superseded by newer contradicting memories. Default: false (superseded memories are hidden)."
+            },
+            "entity": {
+              "type": "string",
+              "description": "Filter by linked entity name. Returns only memories linked to this entity via entity extraction. Requires a populated entity graph: run memory_quality {\"action\": \"maintain\", \"dry_run\": false} first (the dry_run default of true stores nothing). Unavailable on the Cloudflare backend."
+            },
+            "fallback": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable cascading fallback when semantic results are sparse. When true and fewer than 3 results are found with scores below 0.4, automatically attempts BM25 keyword match and tag intersection. Each result includes match_method field. Default: false."
+            },
+            "include_beliefs": {
+              "type": "boolean",
+              "default": false,
+              "description": "Include derived beliefs alongside memories. Beliefs are confidence-scored knowledge derived from observations. Each belief result includes result_type='belief' and confidence score."
+            },
+            "store": {
+              "type": "string",
+              "description": "Target store partition (default: 'default'). Use 'docs' for documents, 'all' for cross-store search."
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true
+        }
+      },
+      {
+        "name": "memory_list",
+        "description": "List and browse memories with pagination and optional filters.\n\nUSE THIS WHEN:\n- User wants to browse all memories (\"show me my memories\", \"list everything\")\n- Need to paginate through large result sets\n- Filter by tag OR memory type for categorical browsing\n- User asks \"what do I have stored\", \"browse my memories\"\n\nUnlike memory_search (semantic search), this does categorical listing/filtering.\n\nPAGINATION:\n- page: 1-based page number (default: 1)\n- page_size: Results per page (default: 20, max: 100)\n\nFILTERS (combine with AND logic):\n- tags: Filter to memories with matching tags\n- tag_match: \"any\" (OR, default) or \"all\" (AND) — controls how multiple tags are matched\n- memory_type: Filter by type (note, reference, decision, etc.)\n- stale_days: Filter to memories not accessed in the last N days\n\nExamples:\n{}  // List first 20 memories\n{\"page\": 2, \"page_size\": 50}\n{\"tags\": [\"python\", \"reference\"]}\n{\"tags\": [\"python\", \"reference\"], \"tag_match\": \"all\"}\n{\"memory_type\": \"decision\", \"page_size\": 10}\n{\"tags\": [\"important\"], \"memory_type\": \"note\"}\n{\"stale_days\": 30}  // Memories not accessed in 30 days\n{\"stale_days\": 7, \"tags\": [\"archived\"]}  // Stale archived memories\n",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "page": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "description": "Page number (1-based)"
+            },
+            "page_size": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 100,
+              "description": "Results per page"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Filter by tags (returns memories with ANY of these tags by default, use tag_match to control)"
+            },
+            "tag_match": {
+              "type": "string",
+              "default": "any",
+              "enum": [
+                "any",
+                "all"
+              ],
+              "description": "Match ANY tag (OR, default) or ALL tags (AND)"
+            },
+            "memory_type": {
+              "type": "string",
+              "description": "Filter by memory type"
+            },
+            "stale_days": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Filter to memories not accessed in the last N days. Uses COALESCE(last_accessed, created_at) for memories never read. Currently supported on sqlite-vec backend only."
+            },
+            "store": {
+              "type": "string",
+              "description": "Target store partition (default: 'default'). Use 'docs' for documents, 'all' for cross-store search."
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true
+        }
+      },
+      {
+        "name": "memory_delete",
+        "description": "Delete memories with flexible filtering. Combine filters for precise targeting.\n\nUSE THIS WHEN:\n- User says \"delete\", \"remove\", \"forget\" specific memories\n- Need to clean up by tag, time range, or specific hash\n- Bulk deletion with safety preview (dry_run=true)\n\nFILTER COMBINATIONS (AND logic when multiple specified):\n- content_hash only: Delete single memory by hash\n- tags only: Delete memories with matching tags\n- before/after: Delete memories in time range\n- tags + time: Delete tagged memories within time range\n\nSAFETY FEATURES:\n- dry_run=true: Preview what will be deleted without deleting\n- Returns deleted_hashes for audit trail\n- No filters = error (prevents accidental mass deletion)\n\nExamples:\n{\"content_hash\": \"abc123def456\"}\n{\"tags\": [\"temporary\", \"draft\"], \"tag_match\": \"any\"}\n{\"tags\": [\"archived\", \"old\"], \"tag_match\": \"all\"}\n{\"before\": \"2024-01-01\"}\n{\"after\": \"2024-06-01\", \"before\": \"2024-12-31\"}\n{\"tags\": [\"cleanup\"], \"before\": \"2024-01-01\", \"dry_run\": true}",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "content_hash": {
+              "type": "string",
+              "description": "Specific memory hash to delete (ignores other filters if provided)"
+            },
+            "tags": {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Tags as an array of strings"
+                },
+                {
+                  "type": "string",
+                  "description": "Tags as comma-separated string"
+                }
+              ],
+              "description": "Filter by these tags"
+            },
+            "tag_match": {
+              "type": "string",
+              "enum": [
+                "any",
+                "all"
+              ],
+              "default": "any",
+              "description": "Match ANY tag or ALL tags"
+            },
+            "before": {
+              "type": "string",
+              "description": "Delete memories created before this date (ISO format: YYYY-MM-DD)"
+            },
+            "after": {
+              "type": "string",
+              "description": "Delete memories created after this date (ISO format: YYYY-MM-DD)"
+            },
+            "dry_run": {
+              "type": "boolean",
+              "default": false,
+              "description": "Preview deletions without executing"
+            },
+            "store": {
+              "type": "string",
+              "description": "Target store partition (default: 'default'). Use 'docs' for documents, 'all' for cross-store search."
+            }
+          }
+        },
+        "annotations": {
+          "destructiveHint": true
+        }
+      },
+      {
+        "name": "memory_cleanup",
+        "description": "Find and remove duplicate entries",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "destructiveHint": true
+        }
+      },
+      {
+        "name": "memory_health",
+        "description": "Check database health and get statistics",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true
+        }
+      },
+      {
+        "name": "memory_stats",
+        "description": "Get MCP server global cache statistics for performance monitoring.\n\n                    Returns detailed metrics about storage and memory service caching,\n                    including hit rates, initialization times, and cache sizes.\n\n                    This tool is useful for:\n                    - Monitoring cache effectiveness\n                    - Debugging performance issues\n                    - Verifying cache persistence across MCP tool calls\n\n                    Returns cache statistics including total calls, hit rate percentage,\n                    storage/service cache metrics, performance metrics, and backend info.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        },
+        "annotations": {
+          "readOnlyHint": true
+        }
+      },
+      {
+        "name": "memory_update",
+        "description": "Update memory metadata without recreating the entire memory entry.\n                    \n                    This provides efficient metadata updates while preserving the original\n                    memory content, embeddings, and optionally timestamps.\n                    \n                    Examples:\n                    # Add tags to a memory\n                    {\n                        \"content_hash\": \"abc123...\",\n                        \"updates\": {\n                            \"tags\": [\"important\", \"reference\", \"new-tag\"]\n                        }\n                    }\n                    \n                    # Update memory type and custom metadata\n                    {\n                        \"content_hash\": \"abc123...\",\n                        \"updates\": {\n                            \"memory_type\": \"reminder\",\n                            \"metadata\": {\n                                \"priority\": \"high\",\n                                \"due_date\": \"2024-01-15\"\n                            }\n                        }\n                    }\n                    \n                    # Update custom fields directly\n                    {\n                        \"content_hash\": \"abc123...\",\n                        \"updates\": {\n                            \"priority\": \"urgent\",\n                            \"status\": \"active\"\n                        }\n                    }",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "content_hash": {
+              "type": "string",
+              "description": "The content hash of the memory to update."
+            },
+            "updates": {
+              "type": "object",
+              "description": "Dictionary of metadata fields to update.",
+              "properties": {
+                "tags": {
+                  "oneOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Tags as an array of strings"
+                    },
+                    {
+                      "type": "string",
+                      "description": "Tags as comma-separated string"
+                    }
+                  ],
+                  "description": "Replace existing tags with this list. Accepts either an array of strings or a comma-separated string."
+                },
+                "memory_type": {
+                  "type": "string",
+                  "description": "Update the memory type (e.g., 'note', 'reminder', 'fact')."
+                },
+                "metadata": {
+                  "type": "object",
+                  "description": "Custom metadata fields to merge with existing metadata."
+                }
+              }
+            },
+            "preserve_timestamps": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether to preserve the original created_at timestamp (default: true)."
+            },
+            "versioned": {
+              "type": "boolean",
+              "default": false,
+              "description": "When true, creates a new version instead of overwriting. The old memory is marked as superseded. Requires content in updates to create the new version. Creates a new memory version and marks the old one as superseded. Supported backends: sqlite_vec. Unsupported backends return an error."
+            }
+          },
+          "required": [
+            "content_hash",
+            "updates"
+          ]
+        },
+        "annotations": {
+          "destructiveHint": true
+        }
+      },
+      {
+        "name": "memory_consolidate",
+        "description": "Memory consolidation management - run, monitor, and control memory optimization.\n\nUSE THIS WHEN:\n- User asks about memory optimization, cleanup, or consolidation\n- Need to check consolidation system health\n- Want to manually trigger or schedule consolidation\n- Need to pause/resume consolidation jobs\n\nACTIONS:\n- run: Execute consolidation for a time horizon (requires time_horizon)\n  Performs dream-inspired memory consolidation:\n  • Exponential decay scoring\n  • Creative association discovery\n  • Semantic clustering and compression\n  • Controlled forgetting with archival\n\n- status: Get consolidation system health and statistics\n\n- recommend: Get optimization recommendations for a time horizon (requires time_horizon)\n  Analyzes memory state and suggests whether consolidation is needed\n\n- scheduler: View all scheduled consolidation jobs\n  Shows next run times and execution statistics\n\n- pause: Pause consolidation (all or specific horizon)\n  Temporarily stops automatic consolidation jobs\n\n- resume: Resume paused consolidation\n  Re-enables previously paused consolidation jobs\n\n- merge: Combine multiple existing memories into one consolidated entry (requires content_hashes and merged_content)\n  Verifies all source memories exist, stores the merged content, deletes originals\n\nTIME HORIZONS:\n- daily: Consolidate last 24 hours\n- weekly: Consolidate last 7 days\n- monthly: Consolidate last 30 days\n- quarterly: Consolidate last 90 days\n- yearly: Consolidate last 365 days\n\nExamples:\n{\"action\": \"status\"}\n{\"action\": \"run\", \"time_horizon\": \"weekly\"}\n{\"action\": \"run\", \"time_horizon\": \"daily\", \"immediate\": true}\n{\"action\": \"recommend\", \"time_horizon\": \"monthly\"}\n{\"action\": \"scheduler\"}\n{\"action\": \"pause\"}\n{\"action\": \"pause\", \"time_horizon\": \"daily\"}\n{\"action\": \"resume\", \"time_horizon\": \"weekly\"}\n{\"action\": \"merge\", \"content_hashes\": [\"hash1\", \"hash2\"], \"merged_content\": \"Consolidated text\"}\n{\"action\": \"merge\", \"content_hashes\": [\"hash1\", \"hash2\"], \"merged_content\": \"text\", \"tags\": [\"important\"], \"memory_type\": \"note\"}",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "run",
+                "status",
+                "recommend",
+                "scheduler",
+                "pause",
+                "resume",
+                "merge"
+              ],
+              "description": "Consolidation action to perform"
+            },
+            "time_horizon": {
+              "type": "string",
+              "enum": [
+                "daily",
+                "weekly",
+                "monthly",
+                "quarterly",
+                "yearly"
+              ],
+              "description": "Time horizon (required for run/recommend, optional for pause/resume)"
+            },
+            "immediate": {
+              "type": "boolean",
+              "default": true,
+              "description": "For 'run' action: execute immediately vs schedule for later"
+            },
+            "content_hashes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Content hashes of the memories to merge (minimum 2)"
+            },
+            "merged_content": {
+              "type": "string",
+              "description": "The consolidated content that replaces the source memories"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Tags for the merged memory (default: union of source tags)"
+            },
+            "memory_type": {
+              "type": "string",
+              "description": "Memory type for the merged memory (default: inherited from first source)"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        },
+        "annotations": {
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "memory_ingest",
+        "description": "Ingest documents or directories into memory database.\n\nUSE THIS WHEN:\n- User wants to import a document (PDF, TXT, MD, JSON)\n- Need to batch import a directory of documents\n- Building knowledge base from existing files\n\nSUPPORTED FORMATS:\n- PDF files (.pdf)\n- Text files (.txt, .md, .markdown, .rst)\n- JSON files (.json)\n\nMODE:\n- file: Ingest single document (requires file_path)\n- directory: Batch ingest all documents in directory (requires directory_path)\n\nCHUNKING:\n- Documents are split into chunks for better retrieval\n- chunk_size: Target characters per chunk (default: 1000)\n- chunk_overlap: Overlap between chunks (default: 200)\n\nExamples:\n{\"file_path\": \"/path/to/document.pdf\"}\n{\"file_path\": \"/path/to/notes.md\", \"tags\": [\"documentation\"]}\n{\"directory_path\": \"/path/to/docs\", \"recursive\": true}\n{\"directory_path\": \"/path/to/project\", \"file_extensions\": [\"md\", \"txt\"], \"tags\": [\"project-docs\"]}\n",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file_path": {
+              "type": "string",
+              "description": "Path to single document (for file mode)"
+            },
+            "directory_path": {
+              "type": "string",
+              "description": "Path to directory (for directory mode)"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "description": "Tags to apply to all ingested memories"
+            },
+            "chunk_size": {
+              "type": "integer",
+              "default": 1000,
+              "description": "Target chunk size in characters"
+            },
+            "chunk_overlap": {
+              "type": "integer",
+              "default": 200,
+              "description": "Overlap between chunks"
+            },
+            "memory_type": {
+              "type": "string",
+              "default": "document",
+              "description": "Type label for created memories"
+            },
+            "recursive": {
+              "type": "boolean",
+              "default": true,
+              "description": "For directory mode: process subdirectories"
+            },
+            "file_extensions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [
+                "pdf",
+                "txt",
+                "md",
+                "json"
+              ],
+              "description": "For directory mode: file types to process"
+            },
+            "max_files": {
+              "type": "integer",
+              "default": 100,
+              "description": "For directory mode: maximum files to process"
+            },
+            "store": {
+              "type": "string",
+              "description": "Target store partition (default: 'default'). Use 'docs' for documents, 'all' for cross-store search."
+            }
+          }
+        },
+        "annotations": {
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "memory_harvest",
+        "description": "Extract learnings from Claude Code session transcripts.\n\nUSE THIS WHEN:\n- End of session — auto-capture decisions, bugs, conventions, learnings\n- User asks to \"harvest\" or \"extract learnings\" from sessions\n- Building knowledge base from past sessions\n\nMODES:\n- dry_run=true (DEFAULT): Preview candidates without storing\n- dry_run=false: Store candidates as tagged memories\n\nMEMORY TYPES EXTRACTED:\n- decision: Architectural choices, tool selections\n- bug: Issues encountered and root causes\n- convention: Patterns/rules established\n- learning: Insights, mistakes learned from\n- context: Session state for continuity\n\nLLM CLASSIFICATION (Phase 2):\n- use_llm=true: Validate candidates with Groq LLM (higher precision, ~$0.001/candidate)\n- Filters conversation fragments, deduplicates, refines content\n- Requires GROQ_API_KEY environment variable\n\nExamples:\n{\"sessions\": 1, \"dry_run\": true}\n{\"sessions\": 3, \"types\": [\"decision\", \"bug\"]}\n{\"session_ids\": [\"abc123\"], \"dry_run\": false}\n{\"min_confidence\": 0.7, \"sessions\": 1}\n{\"sessions\": 1, \"use_llm\": true, \"dry_run\": true}\n",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sessions": {
+              "type": "integer",
+              "default": 1,
+              "description": "Number of recent sessions to harvest"
+            },
+            "session_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Specific session IDs to harvest"
+            },
+            "types": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "decision",
+                  "bug",
+                  "convention",
+                  "learning",
+                  "context"
+                ]
+              },
+              "description": "Filter by memory types (default: all)"
+            },
+            "min_confidence": {
+              "type": "number",
+              "default": 0.6,
+              "description": "Minimum confidence threshold (0.0-1.0)"
+            },
+            "dry_run": {
+              "type": "boolean",
+              "default": true,
+              "description": "Preview candidates without storing (default: true)"
+            },
+            "project_path": {
+              "type": "string",
+              "description": "Override Claude Code project directory path"
+            },
+            "use_llm": {
+              "type": "boolean",
+              "default": false,
+              "description": "Use LLM to validate and refine candidates (requires GROQ_API_KEY)"
+            },
+            "auto_commit": {
+              "type": "boolean",
+              "default": false,
+              "description": "Bridge harvested candidates to commit_session_legacy (feeds bootstrap profile)"
+            },
+            "agent_id": {
+              "type": "string",
+              "description": "Agent ID for auto_commit attribution (default: MCP_AGENT_ID env or 'unknown')"
+            }
+          }
+        },
+        "annotations": {
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "memory_quality",
+        "description": "Memory quality management - rate, inspect, and analyze.\n\nACTIONS:\n- rate: Manually rate a memory's quality (thumbs up/down)\n- get: Get quality metrics for a specific memory\n- analyze: Analyze quality distribution across all memories\n- maintain: Run maintenance cycle (cleanup + conflicts + stale + quality)\n- maintain_status: Get stats from last maintenance run\n\nExamples:\n{\"action\": \"rate\", \"content_hash\": \"abc123\", \"rating\": 1, \"feedback\": \"Very useful\"}\n{\"action\": \"get\", \"content_hash\": \"abc123\"}\n{\"action\": \"analyze\"}\n{\"action\": \"analyze\", \"min_quality\": 0.5, \"max_quality\": 1.0}\n{\"action\": \"maintain\"}\n{\"action\": \"maintain\", \"dry_run\": false}\n{\"action\": \"maintain_status\"}\n",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "rate",
+                "get",
+                "analyze",
+                "maintain",
+                "maintain_status"
+              ],
+              "description": "Quality action to perform"
+            },
+            "content_hash": {
+              "type": "string",
+              "description": "Memory hash (required for rate/get)"
+            },
+            "rating": {
+              "type": "string",
+              "enum": [
+                "-1",
+                "0",
+                "1"
+              ],
+              "description": "For 'rate': '-1' (thumbs down), '0' (neutral), '1' (thumbs up)"
+            },
+            "feedback": {
+              "type": "string",
+              "description": "For 'rate': Optional feedback text"
+            },
+            "min_quality": {
+              "type": "number",
+              "default": 0.0,
+              "description": "For 'analyze': minimum quality threshold"
+            },
+            "max_quality": {
+              "type": "number",
+              "default": 1.0,
+              "description": "For 'analyze': maximum quality threshold"
+            },
+            "dry_run": {
+              "type": "boolean",
+              "default": true,
+              "description": "For 'maintain': preview mode — no modifications (default: true)"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        },
+        "annotations": {
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "memory_graph",
+        "description": "Memory association graph operations - explore connections between memories.\n\nACTIONS:\n- connected: Find memories connected via associations (BFS traversal)\n- path: Find shortest path between two memories\n- subgraph: Get graph structure around a memory for visualization\n- infer: Find transitive relationships (A→B→C implies A→C). Params: rel_type (string), max_hops (int, default 2)\n- suggest: Suggest potential relationships for a memory based on shared neighbors. Params: hash (string)\n\nExamples:\n{\"action\": \"connected\", \"hash\": \"abc123\", \"max_hops\": 2}\n{\"action\": \"path\", \"hash1\": \"abc123\", \"hash2\": \"def456\", \"max_depth\": 5}\n{\"action\": \"subgraph\", \"hash\": \"abc123\", \"radius\": 2}\n{\"action\": \"infer\", \"rel_type\": \"causes\", \"max_hops\": 2}\n{\"action\": \"suggest\", \"hash\": \"abc123\"}\n",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "connected",
+                "path",
+                "subgraph",
+                "infer",
+                "suggest"
+              ],
+              "description": "Graph operation to perform"
+            },
+            "hash": {
+              "type": "string",
+              "description": "Memory hash (for connected/subgraph)"
+            },
+            "hash1": {
+              "type": "string",
+              "description": "Start memory hash (for path)"
+            },
+            "hash2": {
+              "type": "string",
+              "description": "End memory hash (for path)"
+            },
+            "max_hops": {
+              "type": "integer",
+              "default": 2,
+              "description": "For 'connected': max traversal depth"
+            },
+            "max_depth": {
+              "type": "integer",
+              "default": 5,
+              "description": "For 'path': max path length"
+            },
+            "radius": {
+              "type": "integer",
+              "default": 2,
+              "description": "For 'subgraph': nodes to include"
+            },
+            "rel_type": {
+              "type": "string",
+              "description": "For 'infer': relationship type to traverse"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        },
+        "annotations": {
+          "readOnlyHint": true
+        }
+      },
+      {
+        "name": "memory_conflicts",
+        "description": "List unresolved memory conflicts (contradictory memories detected by similarity analysis)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "memory_resolve",
+        "description": "Resolve a memory conflict by choosing a winner",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "winner_hash": {
+              "type": "string",
+              "description": "Content hash of the correct memory"
+            },
+            "loser_hash": {
+              "type": "string",
+              "description": "Content hash of the incorrect memory"
+            }
+          },
+          "required": [
+            "winner_hash",
+            "loser_hash"
+          ]
+        },
+        "annotations": {
+          "destructiveHint": true
+        }
+      },
+      {
+        "name": "mistake_note_add",
+        "description": "Record a mistake pattern for error replay. Tracks what went wrong and the correct action. Auto-increments failure_count for repeated patterns.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "error_pattern": {
+              "type": "string",
+              "description": "The error pattern or message"
+            },
+            "context_signature": {
+              "type": "string",
+              "description": "Context where the error occurred (file, function, task type)"
+            },
+            "incorrect_action": {
+              "type": "string",
+              "description": "What was done incorrectly"
+            },
+            "correct_action": {
+              "type": "string",
+              "description": "What should have been done instead"
+            }
+          },
+          "required": [
+            "error_pattern",
+            "context_signature",
+            "incorrect_action",
+            "correct_action"
+          ]
+        },
+        "annotations": {
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "mistake_note_search",
+        "description": "Search mistake notes by semantic similarity. Use before starting a task to check for known pitfalls and past errors.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query (error message, context, or task description)"
+            },
+            "limit": {
+              "type": "integer",
+              "default": 5,
+              "description": "Max results (default: 5)"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        },
+        "annotations": {
+          "readOnlyHint": true
+        }
+      },
+      {
+        "name": "mistake_note_update",
+        "description": "Update fields of an existing mistake note. Can update failure_count, error_pattern, context_signature, incorrect_action, or correct_action. Content changes create a new hash (delete + re-store).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "content_hash": {
+              "type": "string",
+              "description": "Content hash of the mistake note to update"
+            },
+            "failure_count": {
+              "type": "integer",
+              "description": "New failure count"
+            },
+            "error_pattern": {
+              "type": "string",
+              "description": "Updated error pattern"
+            },
+            "context_signature": {
+              "type": "string",
+              "description": "Updated context"
+            },
+            "incorrect_action": {
+              "type": "string",
+              "description": "Updated incorrect action"
+            },
+            "correct_action": {
+              "type": "string",
+              "description": "Updated correct action"
+            }
+          },
+          "required": [
+            "content_hash"
+          ]
+        },
+        "annotations": {
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "mistake_note_delete",
+        "description": "Delete a mistake note by content hash. Only deletes memories with memory_type='mistake'.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "content_hash": {
+              "type": "string",
+              "description": "Content hash of the mistake note to delete"
+            }
+          },
+          "required": [
+            "content_hash"
+          ]
+        },
+        "annotations": {
+          "destructiveHint": true
+        }
+      },
+      {
+        "name": "get_quarantined_memories",
+        "description": "List memories that have been quarantined due to contradicting active beliefs. Use to review flagged memories.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "default": 50,
+              "description": "Maximum results to return"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true
+        }
+      },
+      {
+        "name": "unquarantine_memory",
+        "description": "Release a memory from quarantine. Use when a quarantined memory is valid (e.g., the contradicted belief was wrong).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "content_hash": {
+              "type": "string",
+              "description": "Content hash of the quarantined memory"
+            }
+          },
+          "required": [
+            "content_hash"
+          ]
+        },
+        "annotations": {
+          "readOnlyHint": false
+        }
+      },
+      {
+        "name": "commit_session_legacy",
+        "description": "Record end-of-session learnings from an ephemeral agent. Stores decisions, errors, corrections as structured observations.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "Unique session identifier"
+            },
+            "agent_id": {
+              "type": "string",
+              "description": "Agent identifier"
+            },
+            "task_summary": {
+              "type": "string",
+              "description": "Brief description of what was attempted"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "success",
+                "partial",
+                "failure"
+              ]
+            },
+            "decisions": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              },
+              "description": "Decisions made"
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              },
+              "description": "Errors encountered"
+            },
+            "user_corrections": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              },
+              "description": "User corrections"
+            },
+            "belief_updates": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              },
+              "description": "Belief updates"
+            }
+          },
+          "required": [
+            "session_id",
+            "agent_id",
+            "task_summary",
+            "outcome"
+          ]
+        },
+        "annotations": {
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "get_bootstrap_profile",
+        "description": "Generate a behavioral bootstrap profile for an ephemeral agent.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "agent_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "description": "Agent identifiers"
+            },
+            "project_id": {
+              "type": "string",
+              "description": "Optional project scope"
+            },
+            "task_summary": {
+              "type": "string",
+              "description": "Optional task context"
+            },
+            "max_tokens": {
+              "type": "integer",
+              "default": 2048,
+              "description": "Token budget"
+            },
+            "budget_tokens": {
+              "type": "integer",
+              "description": "Override token budget for this call (takes precedence over max_tokens)"
+            }
+          },
+          "required": [
+            "agent_ids"
+          ]
+        },
+        "annotations": {
+          "readOnlyHint": true
+        }
+      },
+      {
+        "name": "get_onboarding_guide",
+        "description": "Get integration guide for a specific client type. ",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "client_type": {
+              "type": "string",
+              "default": "generic",
+              "description": "Client type (generic, kiro, claude-code)"
+            }
+          }
+        },
+        "annotations": {
+          "readOnlyHint": true
+        }
+      },
+      {
+        "name": "memory_distill",
+        "description": "Extract insights from existing memories via LLM rewriter (batch mode). ",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "batch_size": {
+              "type": "integer",
+              "default": 20,
+              "description": "Max memories to process per run"
+            },
+            "dry_run": {
+              "type": "boolean",
+              "default": true,
+              "description": "Preview candidates without storing (default: true)"
+            },
+            "memory_types": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Memory types to process (default: observation, decision, reference, learning)"
+            }
+          }
+        },
+        "annotations": {
+          "destructiveHint": false
+        }
+      },
+      {
+        "name": "memory_explore",
+        "description": "Explore a knowledge map of entities, with query-scoped chunks per entity (LLM-free).\n\nREQUIRES A POPULATED ENTITY GRAPH — returns {\"entities\": [], \"count\": 0} otherwise, for\nevery query. Check with memory_graph {\"action\": \"list_entities\"}; populate with\nmemory_quality {\"action\": \"maintain\", \"dry_run\": false} (dry_run defaults to true and\nstores nothing). Unavailable on the Cloudflare backend.\nGuide: docs/guides/token-efficient-retrieval.md\n\nKNOWN LIMITATION: entity selection is not query-scoped — the first max_entities entities in\nthe graph are used, and your query only decides which chunks hang off them (#220).\n\nUSE THIS WHEN:\n- User wants a high-level overview (\"what do I know about X\", \"map out\", \"explore\")\n- Need entities + their relationships rather than raw memory chunks\n- Building a knowledge graph view or entity dashboard\n\nReturns a list of entities. Per entity:\n- entity_id: canonical slug (NFKD-normalized, hash fallback for non-Latin scripts)\n- name, entity_type\n- summary: extractive (LLM-free) summary from top chunks\n- relation_count: number of graph relationships\n- top_chunks: most relevant memory chunks for the entity\n\nRead-only. Composes with `store` for multi-store scoping.\n\nExamples:\n{\"query\": \"authentication design\"}\n{\"query\": \"python\", \"max_entities\": 5, \"chunks_per_entity\": 2}\n{\"query\": \"database\", \"tags\": [\"reference\"], \"min_score\": 0.3}\n",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query used to discover candidate entities"
+            },
+            "max_entities": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "maximum": 100,
+              "description": "Maximum number of entities to return"
+            },
+            "chunks_per_entity": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "maximum": 50,
+              "description": "Maximum top chunks to include per entity"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Restrict candidate retrieval to memories with any of these tags"
+            },
+            "min_score": {
+              "type": "number",
+              "default": 0.0,
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "Minimum relevance score for candidate chunks"
+            },
+            "scoring": {
+              "type": "string",
+              "enum": [
+                "composite"
+              ],
+              "description": "Opt-in ranking mode (#55). 'composite' re-ranks chunks by semantic relevance + graph proximity + entity centrality, adding composite_score and score_components fields. Omit for default relevance-only ranking."
+            },
+            "store": {
+              "type": "string",
+              "description": "Optional store/namespace to scope retrieval (composes with multi-store support)"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        },
+        "annotations": {
+          "readOnlyHint": true
+        }
+      },
+      {
+        "name": "memory_detail",
+        "description": "Get the full ranked detail for a single entity.\n\nUSE THIS WHEN:\n- User drills into one entity from a knowledge map (\"tell me more about X\")\n- Need the full ranked list of chunks for an entity plus its related entities\n\nReturns:\n- entity_id, name\n- chunks: ranked memory chunks (relevance now; composite_score + score_components once #55 lands)\n- related_entities: neighbouring entities (gated by include_related / max_hops)\n\nRead-only.\n\nExamples:\n{\"entity_id\": \"authentication-design\"}\n{\"entity_id\": \"python\", \"limit\": 20, \"include_related\": false}\n{\"entity_id\": \"database\", \"max_hops\": 2}\n",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "entity_id": {
+              "type": "string",
+              "description": "Canonical entity id (slug) returned by memory_explore"
+            },
+            "limit": {
+              "type": "integer",
+              "default": 50,
+              "minimum": 1,
+              "maximum": 200,
+              "description": "Maximum ranked chunks to return"
+            },
+            "include_related": {
+              "type": "boolean",
+              "default": true,
+              "description": "Include related entities discovered via graph traversal"
+            },
+            "max_hops": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1,
+              "maximum": 4,
+              "description": "Maximum hops for related-entity discovery"
+            },
+            "scoring": {
+              "type": "string",
+              "enum": [
+                "composite"
+              ],
+              "description": "Opt-in ranking mode (#55). 'composite' re-ranks chunks by relevance + graph proximity + entity centrality, adding composite_score and score_components fields. Omit for default relevance-only ranking."
+            },
+            "store": {
+              "type": "string",
+              "description": "Optional store/namespace to scope retrieval (composes with multi-store support)"
+            }
+          },
+          "required": [
+            "entity_id"
+          ]
+        },
+        "annotations": {
+          "readOnlyHint": true
+        }
+      }
+    ]
+  },
+  "empty_health": {
+    "mode": "native_embeddings",
+    "health": {
+      "version": "11.11.0",
+      "validation": {
+        "status": "healthy",
+        "message": "SQLite-vec database validation successful"
+      },
+      "statistics": {
+        "status": "healthy",
+        "backend": "sqlite-vec",
+        "total_memories": 0,
+        "has_embedding_tables": true,
+        "has_embedding_model": true,
+        "embedding_model": "all-MiniLM-L6-v2",
+        "database_size_bytes": 4096,
+        "database_size_mb": 0.0,
+        "orphaned_embeddings": 0,
+        "missing_embeddings": 0,
+        "rowid_collision_risk": false
+      },
+      "integrity": {
+        "enabled": true,
+        "running": true,
+        "interval_seconds": 1800,
+        "last_check_time": 1788751860.5470982,
+        "last_check_healthy": true,
+        "total_checks": 1,
+        "total_auto_repairs": 0,
+        "total_unrecoverable": 0
+      },
+      "performance": {
+        "storage": {},
+        "server": {
+          "average_query_time_ms": 0.0,
+          "total_queries": 0,
+          "storage_type": "SqliteVecMemoryStorage"
+        }
+      }
+    }
+  },
+  "after_health": {
+    "mode": "native_embeddings",
+    "health": {
+      "version": "11.11.0",
+      "validation": {
+        "status": "healthy",
+        "message": "SQLite-vec database validation successful"
+      },
+      "statistics": {
+        "status": "healthy",
+        "backend": "sqlite-vec",
+        "total_memories": 22,
+        "has_embedding_tables": true,
+        "has_embedding_model": true,
+        "embedding_model": "all-MiniLM-L6-v2",
+        "database_size_bytes": 4096,
+        "database_size_mb": 0.0,
+        "orphaned_embeddings": 0,
+        "missing_embeddings": 0,
+        "rowid_collision_risk": false
+      },
+      "integrity": {
+        "enabled": true,
+        "running": true,
+        "interval_seconds": 1800,
+        "last_check_time": 1788751860.5470982,
+        "last_check_healthy": true,
+        "total_checks": 1,
+        "total_auto_repairs": 0,
+        "total_unrecoverable": 0
+      },
+      "performance": {
+        "storage": {},
+        "server": {
+          "average_query_time_ms": 0.0,
+          "total_queries": 0,
+          "storage_type": "SqliteVecMemoryStorage"
+        }
+      }
+    }
+  },
+  "after_count": 22,
+  "native_exit_code": 0
+}

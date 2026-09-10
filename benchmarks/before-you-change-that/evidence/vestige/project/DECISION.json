@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "cause": "runtime.conf bound RECONCILE to CEDAR@7, the ordered-batch MAX_SEEN policy, instead of the approved CYPRESS@7 PIN_PENDING policy. The early reversal at sequence 104 therefore advanced checkpoint.state to 104; after durable reload, the delayed charge at sequence 100 was rejected by the checkpoint gate and its pending reversal remained unresolved. The independent EXPORT_SNAPSHOT route remained correctly bound to LARCH@3.",
+  "evidence_ids": [
+    "schema-v2-archive",
+    "performance-runbook-decoy",
+    "performance-runbook-validation",
+    "batch-size-proposal-expired",
+    "schema-v3-rollover",
+    "wire-v2-transition",
+    "owner-alias-migration",
+    "epoch7-approved",
+    "checkpoint-watermark-design",
+    "cedar-batch-owner",
+    "duplicate-event-invariant",
+    "tombstone-append-invariant",
+    "obligation-reconcile-path",
+    "horizon-boundary-test",
+    "crash-reload-proof-history",
+    "fork-generation8-proposal",
+    "fork-generation8-rejected",
+    "route-manifest-separation",
+    "export-regression",
+    "public-regression",
+    "incident-current"
+  ],
+  "causal_path": [
+    {
+      "from": "schema-v3-rollover",
+      "to": "wire-v2-transition",
+      "relation": "encoded_by"
+    },
+    {
+      "from": "wire-v2-transition",
+      "to": "owner-alias-migration",
+      "relation": "assigned_owner_by"
+    },
+    {
+      "from": "owner-alias-migration",
+      "to": "epoch7-approved",
+      "relation": "promoted_as"
+    },
+    {
+      "from": "epoch7-approved",
+      "to": "obligation-reconcile-path",
+      "relation": "guarded_by"
+    },
+    {
+      "from": "obligation-reconcile-path",
+      "to": "incident-current",
+      "relation": "applies_when_path_edited"
+    },
+    {
+      "from": "incident-current",
+      "to": "public-regression",
+      "relation": "reproduced_by"
+    }
+  ],
+  "rejected_hypotheses": [
+    {
+      "hypothesis": "Delete reconciliation tombstones and increase diagnostic.batch_size from 32 to 128.",
+      "evidence_ids": [
+        "performance-runbook-decoy",
+        "performance-runbook-validation",
+        "batch-size-proposal-expired",
+        "tombstone-append-invariant"
+      ],
+      "reason": "That procedure was scoped only to disposable analytics output, never exercised the ledger or delayed reversals, expired without approval, and conflicts with the append-only P/T fact invariant."
+    },
+    {
+      "hypothesis": "Move RECONCILE to the newer FALCON@8 schema and wire-format fork.",
+      "evidence_ids": [
+        "fork-generation8-proposal",
+        "fork-generation8-rejected"
+      ],
+      "reason": "FALCON@8 remained experimental and was explicitly rejected because crash/reload compatibility and migration approval were absent."
+    },
+    {
+      "hypothesis": "Keep CEDAR@7 because it shares schema V3, wire format V2, generation 7, and REVERSAL_HORIZON 4 with CYPRESS.",
+      "evidence_ids": [
+        "cedar-batch-owner",
+        "checkpoint-watermark-design",
+        "epoch7-approved",
+        "route-manifest-separation"
+      ],
+      "reason": "CEDAR owns ordered batch replay and uses MAX_SEEN; equal metadata does not transfer RECONCILE ownership. CYPRESS@7 is the approved owner and PIN_PENDING is required for out-of-order targets."
+    },
+    {
+      "hypothesis": "Revert reconciliation to LEDGER_SCHEMA_V2 and REVERSAL_LINK_V1.",
+      "evidence_ids": [
+        "schema-v2-archive",
+        "schema-v3-rollover",
+        "wire-v2-transition"
+      ],
+      "reason": "V2/V1 cannot reconstruct reversal-before-charge links across restart and is retained only for historical compatibility replay."
+    },
+    {
+      "hypothesis": "Change the export policy or output grammar along with reconciliation.",
+      "evidence_ids": [
+        "owner-alias-migration",
+        "export-regression"
+      ],
+      "reason": "LARCH@3 independently owns EXPORT_SNAPSHOT, and the deterministic SUMMARY_TEXT_V1 byte grammar is an unrelated contract that the repair must preserve."
+    }
+  ],
+  "changed_files": [
+    "runtime.conf"
+  ]
+}

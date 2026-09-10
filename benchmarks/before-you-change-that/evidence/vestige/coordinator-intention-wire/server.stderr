@@ -1,0 +1,15 @@
+2026-09-07T03:49:10.284056Z  INFO Vestige MCP Server v2.8.0 starting...
+2026-09-07T03:49:10.303587Z  INFO Storage initialized successfully
+2026-09-07T03:49:10.303767Z  INFO Using token file found "@recorded-home@/.cache/huggingface/token"
+2026-09-07T03:49:10.303816Z  INFO Hydrated cognitive modules from persisted connections count=0
+2026-09-07T03:49:10.303920Z  INFO Hydrated active synaptic tags from durable storage count=22
+2026-09-07T03:49:10.303931Z  INFO CognitiveEngine initialized and hydrated
+2026-09-07T03:49:10.304035Z  INFO Autopilot disabled via VESTIGE_AUTOPILOT_ENABLED — cognitive modules remain passive (v2.0.8 behavior)
+2026-09-07T03:49:10.304045Z  INFO Dashboard disabled by VESTIGE_DASHBOARD_ENABLED=false
+2026-09-07T03:49:10.304049Z  INFO HTTP MCP transport disabled; set VESTIGE_HTTP_ENABLED=1 or pass --http to enable
+2026-09-07T03:49:10.304084Z  INFO Starting MCP server on stdio...
+2026-09-07T03:49:10.304158Z  INFO Client requested supported protocol version 2025-11-25, using it
+2026-09-07T03:49:10.304166Z  INFO MCP session initialized with protocol version 2025-11-25
+2026-09-07T03:49:10.358576Z  INFO stdin closed (EOF), shutting down
+2026-09-07T03:49:10.358654Z  INFO Vestige MCP Server shutting down
+2026-09-07T03:49:10.734536Z  INFO Legacy Nomic embedding service initialized successfully

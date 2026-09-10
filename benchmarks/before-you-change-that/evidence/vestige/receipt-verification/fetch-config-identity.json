@@ -1,0 +1,29 @@
+{
+  "boundary": "Environment values are intentionally omitted; no secret contents are recorded.",
+  "command": [
+    "@recorded-runtime@/vestige-mcp",
+    "--no-http"
+  ],
+  "config_path": "@recorded-run@/vestige/native-config.json",
+  "config_sha256": "4e097094f87dd197ba620cd5476cb03b469ac0c40a98731ae910017e0a22837f",
+  "directory": "@recorded-run@/vestige/server",
+  "environment_keys": [
+    "FASTEMBED_CACHE_PATH",
+    "HF_HOME",
+    "HF_HUB_OFFLINE",
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "PYTHONUNBUFFERED",
+    "TMPDIR",
+    "TOKENIZERS_PARALLELISM",
+    "TRANSFORMERS_OFFLINE",
+    "VESTIGE_AUTOPILOT_ENABLED",
+    "VESTIGE_AUTO_CONSOLIDATE_MERGE",
+    "VESTIGE_DASHBOARD_ENABLED",
+    "VESTIGE_DATA_DIR",
+    "VESTIGE_HTTP_ENABLED",
+    "VESTIGE_RECEIPT_SIGNING_KEY_ID",
+    "VESTIGE_RECEIPT_SIGNING_SEED_PATH"
+  ]
+}

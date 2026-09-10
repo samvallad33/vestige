@@ -1,0 +1,766 @@
+[
+  {
+    "tool": "intention",
+    "arguments": {
+      "action": "check",
+      "context": {
+        "file": "src/ledger/reconcile.rs"
+      }
+    },
+    "success": true,
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"action\": \"check\",\n  \"checkedAt\": \"2026-09-07T03:34:42.719687+00:00\",\n  \"pending\": [],\n  \"triggered\": [\n    {\n      \"createdAt\": \"2026-09-07T03:31:28.627855+00:00\",\n      \"deadline\": null,\n      \"description\": \"When editing src/ledger/reconcile.rs, preserve the reconciliation REVERSAL_HORIZON across schema rollover, keep the checkpoint watermark behind unresolved reversals, and prove through file reload that delayed reversals produce neither duplicate nor missing ledger effects.\",\n      \"id\": \"46716d35-c7d1-4d3b-9319-f45845ecdef2\",\n      \"isOverdue\": false,\n      \"priority\": \"high\",\n      \"snoozedUntil\": null,\n      \"status\": \"active\"\n    }\n  ]\n}",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "action": "check",
+        "checkedAt": "2026-09-07T03:34:42.719687+00:00",
+        "pending": [],
+        "triggered": [
+          {
+            "createdAt": "2026-09-07T03:31:28.627855+00:00",
+            "deadline": null,
+            "description": "When editing src/ledger/reconcile.rs, preserve the reconciliation REVERSAL_HORIZON across schema rollover, keep the checkpoint watermark behind unresolved reversals, and prove through file reload that delayed reversals produce neither duplicate nor missing ledger effects.",
+            "id": "46716d35-c7d1-4d3b-9319-f45845ecdef2",
+            "isOverdue": false,
+            "priority": "high",
+            "snoozedUntil": null,
+            "status": "active"
+          }
+        ]
+      }
+    },
+    "request_index": 5,
+    "response_index": 6
+  },
+  {
+    "tool": "recall",
+    "arguments": {
+      "query": "reversal before charge restart skipped delayed charge tombstone pressure",
+      "scope": "hardened-demo",
+      "includeCrossScope": false,
+      "mode": "lookup"
+    },
+    "success": true,
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"competitionSuppressed\": 1,\n  \"contextReinstatement\": {\n    \"memoryId\": \"7b8a4099-d9c5-43a1-8998-f5972bcea9ed\",\n    \"relatedMemories\": [],\n    \"sessionHint\": null,\n    \"temporalHint\": \"This memory is from very recent (< 1 hour) (night on Mon)\",\n    \"topicalHint\": null\n  },\n  \"detailLevel\": \"summary\",\n  \"includeCrossScope\": false,\n  \"method\": \"hybrid+cognitive\",\n  \"profile\": \"default\",\n  \"query\": \"reversal before charge restart skipped delayed charge tombstone pressure\",\n  \"receipt\": {\n    \"activation_path\": [\n      \"7b8a4099-d9c5-43a1-8998-f5972bcea9ed -> c627e32a-7834-4644-9312-c9b3a27577c0 -> 0548e2a9-c72b-4578-aa57-85b8fee689e0 -> 8a0217f0-b1a7-41c0-9d87-4b303aed54ef -> 8aa15a5d-27a9-4fcb-928e-924e3b911b3c -> 711ee6d8-c7d9-41ac-b309-91718bead8e2 -> 8736bfcb-905e-4359-9f71-ee3aad7a13bc -> caabf6a6-8cfd-484c-91b1-36982cce8bcc -> 6370e75e-7b7f-46c2-aa4b-f730bfcc63df -> d7f75090-a432-4ae4-8a0a-eb438165d4c9\"\n    ],\n    \"decay_risk\": \"low\",\n    \"mutations\": [],\n    \"receipt_id\": \"ratt_930e485f39e642b2a6909ad2d5db6729\",\n    \"retrieved\": [\n      \"7b8a4099-d9c5-43a1-8998-f5972bcea9ed\",\n      \"c627e32a-7834-4644-9312-c9b3a27577c0\",\n      \"0548e2a9-c72b-4578-aa57-85b8fee689e0\",\n      \"8a0217f0-b1a7-41c0-9d87-4b303aed54ef\",\n      \"8aa15a5d-27a9-4fcb-928e-924e3b911b3c\",\n      \"711ee6d8-c7d9-41ac-b309-91718bead8e2\",\n      \"8736bfcb-905e-4359-9f71-ee3aad7a13bc\",\n      \"caabf6a6-8cfd-484c-91b1-36982cce8bcc\",\n      \"6370e75e-7b7f-46c2-aa4b-f730bfcc63df\",\n      \"d7f75090-a432-4ae4-8a0a-eb438165d4c9\"\n    ],\n    \"suppressed\": [],\n    \"trust_floor\": 1.0\n  },\n  \"receiptId\": \"ratt_930e485f39e642b2a6909ad2d5db6729\",\n  \"results\": [\n    {\n      \"combinedScore\": 1.0,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic current incident: after rev-late sequence 104 arrives before charge-late sequence 100, a restart leaves the reversal pending, skips the delayed charge, and reports Reconciliation Throughput Warning: tombstone pressure. ledger.log contains one pending fact, checkpoint.state contains 104, balance remains zero, and the unrelated export still completes. The active path is src/ledger/reconcile.rs.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"reproduced_by\\\",\\\"to\\\":\\\"public-regression\\\"}],\\\"entities\\\":[\\\"src/ledger/reconcile.rs\\\",\\\"REVERSAL_HORIZON\\\",\\\"CHECKPOINT_WATERMARK\\\",\\\"PENDING_REVERSAL\\\",\\\"Reconciliation Throughput Warning\\\"],\\\"id\\\":\\\"incident-current\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation incident console\\\",\\\"timestamp\\\":\\\"2044-06-04T18:45:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:27.442475+00:00\",\n      \"id\": \"7b8a4099-d9c5-43a1-8998-f5972bcea9ed\",\n      \"keywordScore\": 1.0,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.7334997057914734,\n      \"tags\": [\n        \"incident-current\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:27.442475+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.5537545680999756,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic local regression: public_checks.rs records a reversal before its charge, invokes reconciliation again from durable files, and checks the unrelated export. The delayed charge is currently rejected while export succeeds.\\\",\\\"entities\\\":[\\\"public_checks.rs\\\",\\\"src/ledger/reconcile.rs\\\",\\\"PENDING_REVERSAL\\\",\\\"FILE_RELOAD\\\",\\\"EXPORT_SNAPSHOT\\\"],\\\"id\\\":\\\"public-regression\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic local Rust runner\\\",\\\"timestamp\\\":\\\"2044-06-03T17:05:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:26.219694+00:00\",\n      \"id\": \"c627e32a-7834-4644-9312-c9b3a27577c0\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6436363458633423,\n      \"tags\": [\n        \"public-regression\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:26.219694+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.547118067741394,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic historical archive: LEDGER_SCHEMA_V2 used REVERSAL_LINK_V1 and could only reconcile charge-before-reversal ordering. Its replay data is retained for compatibility tests, not new reconciliation ownership.\\\",\\\"entities\\\":[\\\"LEDGER_SCHEMA_V2\\\",\\\"REVERSAL_LINK_V1\\\",\\\"ORDERED_REPLAY\\\"],\\\"id\\\":\\\"schema-v2-archive\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger schema archive\\\",\\\"timestamp\\\":\\\"2044-05-05T11:35:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:00.599970+00:00\",\n      \"id\": \"0548e2a9-c72b-4578-aa57-85b8fee689e0\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6433123350143433,\n      \"tags\": [\n        \"schema-v2-archive\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:00.599970+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.5408434271812439,\n      \"content\": \"{\\\"content\\\":\\\"When editing src/ledger/reconcile.rs, preserve the reconciliation REVERSAL_HORIZON across schema rollover, keep the checkpoint watermark behind unresolved reversals, and prove through file reload that delayed reversals produce neither duplicate nor missing ledger effects.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"applies_when_path_edited\\\",\\\"to\\\":\\\"incident-current\\\"}],\\\"entities\\\":[\\\"src/ledger/reconcile.rs\\\",\\\"REVERSAL_HORIZON\\\",\\\"CHECKPOINT_WATERMARK\\\",\\\"PENDING_REVERSAL\\\",\\\"FILE_RELOAD\\\"],\\\"id\\\":\\\"obligation-reconcile-path\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic prospective maintenance obligation\\\",\\\"timestamp\\\":\\\"2044-05-24T09:30:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:17.155672+00:00\",\n      \"id\": \"8a0217f0-b1a7-41c0-9d87-4b303aed54ef\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6394002437591553,\n      \"tags\": [\n        \"obligation-reconcile-path\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:17.155672+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.5287158489227295,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic checkpoint design: PIN_PENDING places CHECKPOINT_WATERMARK immediately before the oldest unresolved target sequence. MAX_SEEN is valid for ordered batch replay but can exclude a delayed target whose reversal was observed first.\\\",\\\"entities\\\":[\\\"PIN_PENDING\\\",\\\"MAX_SEEN\\\",\\\"CHECKPOINT_WATERMARK\\\",\\\"PENDING_REVERSAL\\\",\\\"TARGET_SEQUENCE\\\"],\\\"id\\\":\\\"checkpoint-watermark-design\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic checkpoint design review\\\",\\\"timestamp\\\":\\\"2044-05-20T14:30:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:12.254842+00:00\",\n      \"id\": \"8aa15a5d-27a9-4fcb-928e-924e3b911b3c\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6313841938972473,\n      \"tags\": [\n        \"checkpoint-watermark-design\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:12.254842+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.5229248404502869,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic ledger invariant: an event identifier already represented by a C, P, or R fact is a retry duplicate. Reload must detect it from ledger.log and append nothing; a T fact resolves a pending reversal without creating a second input event.\\\",\\\"entities\\\":[\\\"ledger.log\\\",\\\"RETRY_DUPLICATE\\\",\\\"RECONCILIATION_TOMBSTONE\\\",\\\"PENDING_REVERSAL\\\"],\\\"id\\\":\\\"duplicate-event-invariant\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger correctness note\\\",\\\"timestamp\\\":\\\"2044-05-22T08:55:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:14.699949+00:00\",\n      \"id\": \"711ee6d8-c7d9-41ac-b309-91718bead8e2\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6285324692726135,\n      \"tags\": [\n        \"duplicate-event-invariant\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:14.699949+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.5173015594482422,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic accepted schema rollover: LEDGER_SCHEMA_V3 replaces LEDGER_SCHEMA_V2 for reconciliation. V3 adds the referenced charge sequence required to retain a reversal that arrives before its charge. Historical V2 replay remains separate.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"encoded_by\\\",\\\"to\\\":\\\"wire-v2-transition\\\"}],\\\"entities\\\":[\\\"LEDGER_SCHEMA_V3\\\",\\\"LEDGER_SCHEMA_V2\\\",\\\"PENDING_REVERSAL\\\",\\\"TARGET_SEQUENCE\\\",\\\"RECONCILE\\\"],\\\"id\\\":\\\"schema-v3-rollover\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger schema decision\\\",\\\"timestamp\\\":\\\"2044-05-14T11:00:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:07.186327+00:00\",\n      \"id\": \"8736bfcb-905e-4359-9f71-ee3aad7a13bc\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6275809407234192,\n      \"tags\": [\n        \"schema-v3-rollover\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:07.186327+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.5118459463119507,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic durability invariant: ledger.log is append-only. P records retain unresolved links and T records retain their later resolution. Reconciliation must not remove either fact merely to improve a throughput counter.\\\",\\\"entities\\\":[\\\"ledger.log\\\",\\\"PENDING_REVERSAL\\\",\\\"RECONCILIATION_TOMBSTONE\\\",\\\"APPEND_ONLY\\\"],\\\"id\\\":\\\"tombstone-append-invariant\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger durability decision\\\",\\\"timestamp\\\":\\\"2044-05-23T13:45:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:15.935056+00:00\",\n      \"id\": \"caabf6a6-8cfd-484c-91b1-36982cce8bcc\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6222474575042725,\n      \"tags\": [\n        \"tombstone-append-invariant\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:15.935056+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.49150434136390686,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic benchmark boundary: the tombstone-removal and batch-size procedure was validated only against regenerated analytics/compact.rs output. The test did not open ledger.log, checkpoint.state, balance.state, src/ledger/reconcile.rs, or delayed reversals.\\\",\\\"entities\\\":[\\\"analytics/compact.rs\\\",\\\"diagnostic.batch_size\\\",\\\"ledger.log\\\",\\\"src/ledger/reconcile.rs\\\",\\\"PENDING_REVERSAL\\\"],\\\"id\\\":\\\"performance-runbook-validation\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic analytics benchmark report\\\",\\\"timestamp\\\":\\\"2044-05-09T16:05:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:03.305105+00:00\",\n      \"id\": \"6370e75e-7b7f-46c2-aa4b-f730bfcc63df\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.5971229672431946,\n      \"tags\": [\n        \"performance-runbook-validation\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:03.305105+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.47644519805908203,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic reconciliation test contract: a reversal at sequence 104 may target sequence 100 when REVERSAL_HORIZON is 4; target sequence 99 is outside. The boundary is independent of diagnostic batch size.\\\",\\\"entities\\\":[\\\"REVERSAL_HORIZON\\\",\\\"PENDING_REVERSAL\\\",\\\"diagnostic.batch_size\\\"],\\\"id\\\":\\\"horizon-boundary-test\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation boundary test\\\",\\\"timestamp\\\":\\\"2044-05-25T15:10:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:18.456638+00:00\",\n      \"id\": \"d7f75090-a432-4ae4-8a0a-eb438165d4c9\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6720088720321655,\n      \"tags\": [\n        \"horizon-boundary-test\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:18.456638+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    }\n  ],\n  \"retrievalMode\": \"balanced\",\n  \"runId\": \"run_86ce45044811471183a0f06054ecb51c\",\n  \"scope\": \"hardened-demo\",\n  \"total\": 10,\n  \"validAt\": null\n}",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "competitionSuppressed": 1,
+        "contextReinstatement": {
+          "memoryId": "7b8a4099-d9c5-43a1-8998-f5972bcea9ed",
+          "relatedMemories": [],
+          "sessionHint": null,
+          "temporalHint": "This memory is from very recent (< 1 hour) (night on Mon)",
+          "topicalHint": null
+        },
+        "detailLevel": "summary",
+        "includeCrossScope": false,
+        "method": "hybrid+cognitive",
+        "profile": "default",
+        "query": "reversal before charge restart skipped delayed charge tombstone pressure",
+        "receipt": {
+          "activation_path": [
+            "7b8a4099-d9c5-43a1-8998-f5972bcea9ed -> c627e32a-7834-4644-9312-c9b3a27577c0 -> 0548e2a9-c72b-4578-aa57-85b8fee689e0 -> 8a0217f0-b1a7-41c0-9d87-4b303aed54ef -> 8aa15a5d-27a9-4fcb-928e-924e3b911b3c -> 711ee6d8-c7d9-41ac-b309-91718bead8e2 -> 8736bfcb-905e-4359-9f71-ee3aad7a13bc -> caabf6a6-8cfd-484c-91b1-36982cce8bcc -> 6370e75e-7b7f-46c2-aa4b-f730bfcc63df -> d7f75090-a432-4ae4-8a0a-eb438165d4c9"
+          ],
+          "decay_risk": "low",
+          "mutations": [],
+          "receipt_id": "ratt_930e485f39e642b2a6909ad2d5db6729",
+          "retrieved": [
+            "7b8a4099-d9c5-43a1-8998-f5972bcea9ed",
+            "c627e32a-7834-4644-9312-c9b3a27577c0",
+            "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+            "8a0217f0-b1a7-41c0-9d87-4b303aed54ef",
+            "8aa15a5d-27a9-4fcb-928e-924e3b911b3c",
+            "711ee6d8-c7d9-41ac-b309-91718bead8e2",
+            "8736bfcb-905e-4359-9f71-ee3aad7a13bc",
+            "caabf6a6-8cfd-484c-91b1-36982cce8bcc",
+            "6370e75e-7b7f-46c2-aa4b-f730bfcc63df",
+            "d7f75090-a432-4ae4-8a0a-eb438165d4c9"
+          ],
+          "suppressed": [],
+          "trust_floor": 1.0
+        },
+        "receiptId": "ratt_930e485f39e642b2a6909ad2d5db6729",
+        "results": [
+          {
+            "combinedScore": 1.0,
+            "content": "{\"content\":\"Synthetic current incident: after rev-late sequence 104 arrives before charge-late sequence 100, a restart leaves the reversal pending, skips the delayed charge, and reports Reconciliation Throughput Warning: tombstone pressure. ledger.log contains one pending fact, checkpoint.state contains 104, balance remains zero, and the unrelated export still completes. The active path is src/ledger/reconcile.rs.\",\"edges\":[{\"relation\":\"reproduced_by\",\"to\":\"public-regression\"}],\"entities\":[\"src/ledger/reconcile.rs\",\"REVERSAL_HORIZON\",\"CHECKPOINT_WATERMARK\",\"PENDING_REVERSAL\",\"Reconciliation Throughput Warning\"],\"id\":\"incident-current\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation incident console\",\"timestamp\":\"2044-06-04T18:45:00Z\"}",
+            "createdAt": "2026-09-07T03:31:27.442475+00:00",
+            "id": "7b8a4099-d9c5-43a1-8998-f5972bcea9ed",
+            "keywordScore": 1.0,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.7334997057914734,
+            "tags": [
+              "incident-current"
+            ],
+            "updatedAt": "2026-09-07T03:31:27.442475+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.5537545680999756,
+            "content": "{\"content\":\"Synthetic local regression: public_checks.rs records a reversal before its charge, invokes reconciliation again from durable files, and checks the unrelated export. The delayed charge is currently rejected while export succeeds.\",\"entities\":[\"public_checks.rs\",\"src/ledger/reconcile.rs\",\"PENDING_REVERSAL\",\"FILE_RELOAD\",\"EXPORT_SNAPSHOT\"],\"id\":\"public-regression\",\"scope\":\"hardened-demo\",\"source\":\"synthetic local Rust runner\",\"timestamp\":\"2044-06-03T17:05:00Z\"}",
+            "createdAt": "2026-09-07T03:31:26.219694+00:00",
+            "id": "c627e32a-7834-4644-9312-c9b3a27577c0",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6436363458633423,
+            "tags": [
+              "public-regression"
+            ],
+            "updatedAt": "2026-09-07T03:31:26.219694+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.547118067741394,
+            "content": "{\"content\":\"Synthetic historical archive: LEDGER_SCHEMA_V2 used REVERSAL_LINK_V1 and could only reconcile charge-before-reversal ordering. Its replay data is retained for compatibility tests, not new reconciliation ownership.\",\"entities\":[\"LEDGER_SCHEMA_V2\",\"REVERSAL_LINK_V1\",\"ORDERED_REPLAY\"],\"id\":\"schema-v2-archive\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger schema archive\",\"timestamp\":\"2044-05-05T11:35:00Z\"}",
+            "createdAt": "2026-09-07T03:31:00.599970+00:00",
+            "id": "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6433123350143433,
+            "tags": [
+              "schema-v2-archive"
+            ],
+            "updatedAt": "2026-09-07T03:31:00.599970+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.5408434271812439,
+            "content": "{\"content\":\"When editing src/ledger/reconcile.rs, preserve the reconciliation REVERSAL_HORIZON across schema rollover, keep the checkpoint watermark behind unresolved reversals, and prove through file reload that delayed reversals produce neither duplicate nor missing ledger effects.\",\"edges\":[{\"relation\":\"applies_when_path_edited\",\"to\":\"incident-current\"}],\"entities\":[\"src/ledger/reconcile.rs\",\"REVERSAL_HORIZON\",\"CHECKPOINT_WATERMARK\",\"PENDING_REVERSAL\",\"FILE_RELOAD\"],\"id\":\"obligation-reconcile-path\",\"scope\":\"hardened-demo\",\"source\":\"synthetic prospective maintenance obligation\",\"timestamp\":\"2044-05-24T09:30:00Z\"}",
+            "createdAt": "2026-09-07T03:31:17.155672+00:00",
+            "id": "8a0217f0-b1a7-41c0-9d87-4b303aed54ef",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6394002437591553,
+            "tags": [
+              "obligation-reconcile-path"
+            ],
+            "updatedAt": "2026-09-07T03:31:17.155672+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.5287158489227295,
+            "content": "{\"content\":\"Synthetic checkpoint design: PIN_PENDING places CHECKPOINT_WATERMARK immediately before the oldest unresolved target sequence. MAX_SEEN is valid for ordered batch replay but can exclude a delayed target whose reversal was observed first.\",\"entities\":[\"PIN_PENDING\",\"MAX_SEEN\",\"CHECKPOINT_WATERMARK\",\"PENDING_REVERSAL\",\"TARGET_SEQUENCE\"],\"id\":\"checkpoint-watermark-design\",\"scope\":\"hardened-demo\",\"source\":\"synthetic checkpoint design review\",\"timestamp\":\"2044-05-20T14:30:00Z\"}",
+            "createdAt": "2026-09-07T03:31:12.254842+00:00",
+            "id": "8aa15a5d-27a9-4fcb-928e-924e3b911b3c",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6313841938972473,
+            "tags": [
+              "checkpoint-watermark-design"
+            ],
+            "updatedAt": "2026-09-07T03:31:12.254842+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.5229248404502869,
+            "content": "{\"content\":\"Synthetic ledger invariant: an event identifier already represented by a C, P, or R fact is a retry duplicate. Reload must detect it from ledger.log and append nothing; a T fact resolves a pending reversal without creating a second input event.\",\"entities\":[\"ledger.log\",\"RETRY_DUPLICATE\",\"RECONCILIATION_TOMBSTONE\",\"PENDING_REVERSAL\"],\"id\":\"duplicate-event-invariant\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger correctness note\",\"timestamp\":\"2044-05-22T08:55:00Z\"}",
+            "createdAt": "2026-09-07T03:31:14.699949+00:00",
+            "id": "711ee6d8-c7d9-41ac-b309-91718bead8e2",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6285324692726135,
+            "tags": [
+              "duplicate-event-invariant"
+            ],
+            "updatedAt": "2026-09-07T03:31:14.699949+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.5173015594482422,
+            "content": "{\"content\":\"Synthetic accepted schema rollover: LEDGER_SCHEMA_V3 replaces LEDGER_SCHEMA_V2 for reconciliation. V3 adds the referenced charge sequence required to retain a reversal that arrives before its charge. Historical V2 replay remains separate.\",\"edges\":[{\"relation\":\"encoded_by\",\"to\":\"wire-v2-transition\"}],\"entities\":[\"LEDGER_SCHEMA_V3\",\"LEDGER_SCHEMA_V2\",\"PENDING_REVERSAL\",\"TARGET_SEQUENCE\",\"RECONCILE\"],\"id\":\"schema-v3-rollover\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger schema decision\",\"timestamp\":\"2044-05-14T11:00:00Z\"}",
+            "createdAt": "2026-09-07T03:31:07.186327+00:00",
+            "id": "8736bfcb-905e-4359-9f71-ee3aad7a13bc",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6275809407234192,
+            "tags": [
+              "schema-v3-rollover"
+            ],
+            "updatedAt": "2026-09-07T03:31:07.186327+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.5118459463119507,
+            "content": "{\"content\":\"Synthetic durability invariant: ledger.log is append-only. P records retain unresolved links and T records retain their later resolution. Reconciliation must not remove either fact merely to improve a throughput counter.\",\"entities\":[\"ledger.log\",\"PENDING_REVERSAL\",\"RECONCILIATION_TOMBSTONE\",\"APPEND_ONLY\"],\"id\":\"tombstone-append-invariant\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger durability decision\",\"timestamp\":\"2044-05-23T13:45:00Z\"}",
+            "createdAt": "2026-09-07T03:31:15.935056+00:00",
+            "id": "caabf6a6-8cfd-484c-91b1-36982cce8bcc",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6222474575042725,
+            "tags": [
+              "tombstone-append-invariant"
+            ],
+            "updatedAt": "2026-09-07T03:31:15.935056+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.49150434136390686,
+            "content": "{\"content\":\"Synthetic benchmark boundary: the tombstone-removal and batch-size procedure was validated only against regenerated analytics/compact.rs output. The test did not open ledger.log, checkpoint.state, balance.state, src/ledger/reconcile.rs, or delayed reversals.\",\"entities\":[\"analytics/compact.rs\",\"diagnostic.batch_size\",\"ledger.log\",\"src/ledger/reconcile.rs\",\"PENDING_REVERSAL\"],\"id\":\"performance-runbook-validation\",\"scope\":\"hardened-demo\",\"source\":\"synthetic analytics benchmark report\",\"timestamp\":\"2044-05-09T16:05:00Z\"}",
+            "createdAt": "2026-09-07T03:31:03.305105+00:00",
+            "id": "6370e75e-7b7f-46c2-aa4b-f730bfcc63df",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.5971229672431946,
+            "tags": [
+              "performance-runbook-validation"
+            ],
+            "updatedAt": "2026-09-07T03:31:03.305105+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.47644519805908203,
+            "content": "{\"content\":\"Synthetic reconciliation test contract: a reversal at sequence 104 may target sequence 100 when REVERSAL_HORIZON is 4; target sequence 99 is outside. The boundary is independent of diagnostic batch size.\",\"entities\":[\"REVERSAL_HORIZON\",\"PENDING_REVERSAL\",\"diagnostic.batch_size\"],\"id\":\"horizon-boundary-test\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation boundary test\",\"timestamp\":\"2044-05-25T15:10:00Z\"}",
+            "createdAt": "2026-09-07T03:31:18.456638+00:00",
+            "id": "d7f75090-a432-4ae4-8a0a-eb438165d4c9",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6720088720321655,
+            "tags": [
+              "horizon-boundary-test"
+            ],
+            "updatedAt": "2026-09-07T03:31:18.456638+00:00",
+            "validFrom": null,
+            "validUntil": null
+          }
+        ],
+        "retrievalMode": "balanced",
+        "runId": "run_86ce45044811471183a0f06054ecb51c",
+        "scope": "hardened-demo",
+        "total": 10,
+        "validAt": null
+      }
+    },
+    "request_index": 7,
+    "response_index": 8
+  },
+  {
+    "tool": "recall",
+    "arguments": {
+      "query": "LEDGER_SCHEMA_V3 REVERSAL_LINK_V2 owner alias migration CYPRESS epoch7 approved route manifest separation LARCH export owner regression",
+      "scope": "hardened-demo",
+      "includeCrossScope": false,
+      "mode": "lookup"
+    },
+    "success": true,
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"competitionSuppressed\": 9,\n  \"contextReinstatement\": {\n    \"memoryId\": \"cba12455-ff87-40e4-9854-b4a986a277f8\",\n    \"relatedMemories\": [],\n    \"sessionHint\": null,\n    \"temporalHint\": \"This memory is from very recent (< 1 hour) (night on Mon)\",\n    \"topicalHint\": null\n  },\n  \"detailLevel\": \"summary\",\n  \"includeCrossScope\": false,\n  \"method\": \"hybrid+cognitive\",\n  \"profile\": \"default\",\n  \"query\": \"LEDGER_SCHEMA_V3 REVERSAL_LINK_V2 owner alias migration CYPRESS epoch7 approved route manifest separation LARCH export owner regression\",\n  \"receipt\": {\n    \"activation_path\": [\n      \"71017ec3-f986-46a1-8fbb-883b565f67c3 -> cba12455-ff87-40e4-9854-b4a986a277f8 -> 220ee1d4-2934-4853-9663-dddacf576697 -> b909337e-6947-40e0-8aa2-06246b21b061 -> 0548e2a9-c72b-4578-aa57-85b8fee689e0 -> 8736bfcb-905e-4359-9f71-ee3aad7a13bc -> 477f1013-c72f-4a14-9b95-c89f851feeb1 -> 476b0820-2e4f-4511-96e5-e542557f41cb -> 0a689b66-41e4-49b2-ab7f-a7d105ff132a -> 0cbb80a6-977a-4bf8-bd0c-9885f383272c\"\n    ],\n    \"decay_risk\": \"low\",\n    \"mutations\": [],\n    \"receipt_id\": \"ratt_89cdfdfad18645ba889fad4f9e5082ba\",\n    \"retrieved\": [\n      \"71017ec3-f986-46a1-8fbb-883b565f67c3\",\n      \"cba12455-ff87-40e4-9854-b4a986a277f8\",\n      \"220ee1d4-2934-4853-9663-dddacf576697\",\n      \"b909337e-6947-40e0-8aa2-06246b21b061\",\n      \"0548e2a9-c72b-4578-aa57-85b8fee689e0\",\n      \"8736bfcb-905e-4359-9f71-ee3aad7a13bc\",\n      \"477f1013-c72f-4a14-9b95-c89f851feeb1\",\n      \"476b0820-2e4f-4511-96e5-e542557f41cb\",\n      \"0a689b66-41e4-49b2-ab7f-a7d105ff132a\",\n      \"0cbb80a6-977a-4bf8-bd0c-9885f383272c\"\n    ],\n    \"suppressed\": [],\n    \"trust_floor\": 1.0\n  },\n  \"receiptId\": \"ratt_89cdfdfad18645ba889fad4f9e5082ba\",\n  \"results\": [\n    {\n      \"combinedScore\": 0.9941856861114502,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic wire-format approval: LEDGER_SCHEMA_V3 reconciliation records use REVERSAL_LINK_V2, which carries target_id and TARGET_SEQUENCE across process restarts. REVERSAL_LINK_V1 cannot reconstruct an out-of-order pending link.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"assigned_owner_by\\\",\\\"to\\\":\\\"owner-alias-migration\\\"}],\\\"entities\\\":[\\\"LEDGER_SCHEMA_V3\\\",\\\"REVERSAL_LINK_V2\\\",\\\"REVERSAL_LINK_V1\\\",\\\"TARGET_SEQUENCE\\\",\\\"PENDING_REVERSAL\\\"],\\\"id\\\":\\\"wire-v2-transition\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger wire registry\\\",\\\"timestamp\\\":\\\"2044-05-16T12:20:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:08.444992+00:00\",\n      \"id\": \"71017ec3-f986-46a1-8fbb-883b565f67c3\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.7916320562362671,\n      \"tags\": [\n        \"wire-v2-transition\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:08.444992+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.8161690831184387,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic ownership migration: the reconciliation owner formerly named WILLOW_POLICY was registered under the durable name CYPRESS_POLICY when REVERSAL_LINK_V2 became mandatory. CEDAR_POLICY remains the batch-replay owner and LARCH_POLICY remains the export owner.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"promoted_as\\\",\\\"to\\\":\\\"epoch7-approved\\\"}],\\\"entities\\\":[\\\"WILLOW_POLICY\\\",\\\"CYPRESS_POLICY\\\",\\\"CEDAR_POLICY\\\",\\\"LARCH_POLICY\\\",\\\"REVERSAL_LINK_V2\\\",\\\"POLICY_OWNER_ALIAS\\\"],\\\"id\\\":\\\"owner-alias-migration\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic policy registry migration\\\",\\\"timestamp\\\":\\\"2044-05-18T10:40:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:09.716704+00:00\",\n      \"id\": \"cba12455-ff87-40e4-9854-b4a986a277f8\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.7867194414138794,\n      \"tags\": [\n        \"owner-alias-migration\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:09.716704+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.788212239742279,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic release approval: CYPRESS_POLICY generation 7 owns RECONCILE for LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2. Its REVERSAL_HORIZON remains 4 and its checkpoint mode is PIN_PENDING. Equal horizon values in other profiles do not transfer ownership.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"guarded_by\\\",\\\"to\\\":\\\"obligation-reconcile-path\\\"}],\\\"entities\\\":[\\\"CYPRESS_POLICY\\\",\\\"POLICY_GENERATION\\\",\\\"RECONCILE\\\",\\\"LEDGER_SCHEMA_V3\\\",\\\"REVERSAL_LINK_V2\\\",\\\"REVERSAL_HORIZON\\\",\\\"PIN_PENDING\\\"],\\\"id\\\":\\\"epoch7-approved\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation release approval\\\",\\\"timestamp\\\":\\\"2044-05-19T17:15:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:10.953349+00:00\",\n      \"id\": \"220ee1d4-2934-4853-9663-dddacf576697\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.768426775932312,\n      \"tags\": [\n        \"epoch7-approved\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:10.953349+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.7611464262008667,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic export regression: EXPORT_SNAPSHOT with LARCH_POLICY generation 3 reads the durable ledger and emits deterministic entry, balance, checkpoint, and pending counts. Reconciliation policy changes must not change the export owner or byte grammar.\\\",\\\"entities\\\":[\\\"EXPORT_SNAPSHOT\\\",\\\"LARCH_POLICY\\\",\\\"SUMMARY_TEXT_V1\\\",\\\"ledger-export\\\"],\\\"id\\\":\\\"export-regression\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic export test report\\\",\\\"timestamp\\\":\\\"2044-06-01T13:10:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:24.988579+00:00\",\n      \"id\": \"b909337e-6947-40e0-8aa2-06246b21b061\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.7640244960784912,\n      \"tags\": [\n        \"export-regression\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:24.988579+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.7349162101745605,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic historical archive: LEDGER_SCHEMA_V2 used REVERSAL_LINK_V1 and could only reconcile charge-before-reversal ordering. Its replay data is retained for compatibility tests, not new reconciliation ownership.\\\",\\\"entities\\\":[\\\"LEDGER_SCHEMA_V2\\\",\\\"REVERSAL_LINK_V1\\\",\\\"ORDERED_REPLAY\\\"],\\\"id\\\":\\\"schema-v2-archive\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger schema archive\\\",\\\"timestamp\\\":\\\"2044-05-05T11:35:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:00.599970+00:00\",\n      \"id\": \"0548e2a9-c72b-4578-aa57-85b8fee689e0\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.7638490200042725,\n      \"tags\": [\n        \"schema-v2-archive\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:00.599970+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.7095012068748474,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic accepted schema rollover: LEDGER_SCHEMA_V3 replaces LEDGER_SCHEMA_V2 for reconciliation. V3 adds the referenced charge sequence required to retain a reversal that arrives before its charge. Historical V2 replay remains separate.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"encoded_by\\\",\\\"to\\\":\\\"wire-v2-transition\\\"}],\\\"entities\\\":[\\\"LEDGER_SCHEMA_V3\\\",\\\"LEDGER_SCHEMA_V2\\\",\\\"PENDING_REVERSAL\\\",\\\"TARGET_SEQUENCE\\\",\\\"RECONCILE\\\"],\\\"id\\\":\\\"schema-v3-rollover\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger schema decision\\\",\\\"timestamp\\\":\\\"2044-05-14T11:00:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:07.186327+00:00\",\n      \"id\": \"8736bfcb-905e-4359-9f71-ee3aad7a13bc\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.7565888166427612,\n      \"tags\": [\n        \"schema-v3-rollover\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:07.186327+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.6377375721931458,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic batch-replay record: CEDAR_POLICY generation 7 uses LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2 with REVERSAL_HORIZON 4, but its MAX_SEEN checkpoint mode assumes events are ordered. The profile remains valid for its batch owner.\\\",\\\"entities\\\":[\\\"CEDAR_POLICY\\\",\\\"POLICY_GENERATION\\\",\\\"LEDGER_SCHEMA_V3\\\",\\\"REVERSAL_LINK_V2\\\",\\\"REVERSAL_HORIZON\\\",\\\"MAX_SEEN\\\"],\\\"id\\\":\\\"cedar-batch-owner\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic batch replay registry\\\",\\\"timestamp\\\":\\\"2044-05-21T10:05:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:13.476011+00:00\",\n      \"id\": \"477f1013-c72f-4a14-9b95-c89f851feeb1\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6974577307701111,\n      \"tags\": [\n        \"cedar-batch-owner\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:13.476011+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.5513557195663452,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic newer proposal: FALCON_POLICY generation 8 would combine LEDGER_SCHEMA_V4_FORK, REVERSAL_LINK_V3, REVERSAL_HORIZON 4, and PIN_PENDING. The proposal is pending crash/reload proof and migration approval.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"reviewed_by\\\",\\\"to\\\":\\\"fork-generation8-rejected\\\"}],\\\"entities\\\":[\\\"FALCON_POLICY\\\",\\\"POLICY_GENERATION\\\",\\\"LEDGER_SCHEMA_V4_FORK\\\",\\\"REVERSAL_LINK_V3\\\",\\\"REVERSAL_HORIZON\\\",\\\"PIN_PENDING\\\"],\\\"id\\\":\\\"fork-generation8-proposal\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation fork proposal\\\",\\\"timestamp\\\":\\\"2044-05-28T10:00:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:21.152656+00:00\",\n      \"id\": \"476b0820-2e4f-4511-96e5-e542557f41cb\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6678294539451599,\n      \"tags\": [\n        \"fork-generation8-proposal\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:21.152656+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.5312396883964539,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic packaging note: route bindings and policy definitions ship independently. A current route can remain valid while naming a profile owned by another workload; the loader rejects generation and scope mismatches but does not infer owner intent from equal REVERSAL_HORIZON values.\\\",\\\"entities\\\":[\\\"RECONCILE\\\",\\\"POLICY_OWNER_ALIAS\\\",\\\"POLICY_GENERATION\\\",\\\"REVERSAL_HORIZON\\\",\\\"runtime.conf\\\"],\\\"id\\\":\\\"route-manifest-separation\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic runtime packaging design\\\",\\\"timestamp\\\":\\\"2044-05-30T16:20:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:23.727590+00:00\",\n      \"id\": \"0a689b66-41e4-49b2-ab7f-a7d105ff132a\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6633312106132507,\n      \"tags\": [\n        \"route-manifest-separation\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:23.727590+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.5116661190986633,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic review result: FALCON_POLICY generation 8, LEDGER_SCHEMA_V4_FORK, and REVERSAL_LINK_V3 were rejected because crash/reload compatibility was not demonstrated. RECONCILE_FORK remains an experiment and has no production ownership.\\\",\\\"entities\\\":[\\\"FALCON_POLICY\\\",\\\"LEDGER_SCHEMA_V4_FORK\\\",\\\"REVERSAL_LINK_V3\\\",\\\"RECONCILE_FORK\\\",\\\"POLICY_GENERATION\\\"],\\\"id\\\":\\\"fork-generation8-rejected\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation council minutes\\\",\\\"timestamp\\\":\\\"2044-05-29T15:25:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:22.451378+00:00\",\n      \"id\": \"0cbb80a6-977a-4bf8-bd0c-9885f383272c\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6532325744628906,\n      \"tags\": [\n        \"fork-generation8-rejected\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:22.451378+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    }\n  ],\n  \"retrievalMode\": \"balanced\",\n  \"runId\": \"run_ee3114b19e944142814364ccb47367ba\",\n  \"scope\": \"hardened-demo\",\n  \"total\": 10,\n  \"validAt\": null\n}",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "competitionSuppressed": 9,
+        "contextReinstatement": {
+          "memoryId": "cba12455-ff87-40e4-9854-b4a986a277f8",
+          "relatedMemories": [],
+          "sessionHint": null,
+          "temporalHint": "This memory is from very recent (< 1 hour) (night on Mon)",
+          "topicalHint": null
+        },
+        "detailLevel": "summary",
+        "includeCrossScope": false,
+        "method": "hybrid+cognitive",
+        "profile": "default",
+        "query": "LEDGER_SCHEMA_V3 REVERSAL_LINK_V2 owner alias migration CYPRESS epoch7 approved route manifest separation LARCH export owner regression",
+        "receipt": {
+          "activation_path": [
+            "71017ec3-f986-46a1-8fbb-883b565f67c3 -> cba12455-ff87-40e4-9854-b4a986a277f8 -> 220ee1d4-2934-4853-9663-dddacf576697 -> b909337e-6947-40e0-8aa2-06246b21b061 -> 0548e2a9-c72b-4578-aa57-85b8fee689e0 -> 8736bfcb-905e-4359-9f71-ee3aad7a13bc -> 477f1013-c72f-4a14-9b95-c89f851feeb1 -> 476b0820-2e4f-4511-96e5-e542557f41cb -> 0a689b66-41e4-49b2-ab7f-a7d105ff132a -> 0cbb80a6-977a-4bf8-bd0c-9885f383272c"
+          ],
+          "decay_risk": "low",
+          "mutations": [],
+          "receipt_id": "ratt_89cdfdfad18645ba889fad4f9e5082ba",
+          "retrieved": [
+            "71017ec3-f986-46a1-8fbb-883b565f67c3",
+            "cba12455-ff87-40e4-9854-b4a986a277f8",
+            "220ee1d4-2934-4853-9663-dddacf576697",
+            "b909337e-6947-40e0-8aa2-06246b21b061",
+            "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+            "8736bfcb-905e-4359-9f71-ee3aad7a13bc",
+            "477f1013-c72f-4a14-9b95-c89f851feeb1",
+            "476b0820-2e4f-4511-96e5-e542557f41cb",
+            "0a689b66-41e4-49b2-ab7f-a7d105ff132a",
+            "0cbb80a6-977a-4bf8-bd0c-9885f383272c"
+          ],
+          "suppressed": [],
+          "trust_floor": 1.0
+        },
+        "receiptId": "ratt_89cdfdfad18645ba889fad4f9e5082ba",
+        "results": [
+          {
+            "combinedScore": 0.9941856861114502,
+            "content": "{\"content\":\"Synthetic wire-format approval: LEDGER_SCHEMA_V3 reconciliation records use REVERSAL_LINK_V2, which carries target_id and TARGET_SEQUENCE across process restarts. REVERSAL_LINK_V1 cannot reconstruct an out-of-order pending link.\",\"edges\":[{\"relation\":\"assigned_owner_by\",\"to\":\"owner-alias-migration\"}],\"entities\":[\"LEDGER_SCHEMA_V3\",\"REVERSAL_LINK_V2\",\"REVERSAL_LINK_V1\",\"TARGET_SEQUENCE\",\"PENDING_REVERSAL\"],\"id\":\"wire-v2-transition\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger wire registry\",\"timestamp\":\"2044-05-16T12:20:00Z\"}",
+            "createdAt": "2026-09-07T03:31:08.444992+00:00",
+            "id": "71017ec3-f986-46a1-8fbb-883b565f67c3",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.7916320562362671,
+            "tags": [
+              "wire-v2-transition"
+            ],
+            "updatedAt": "2026-09-07T03:31:08.444992+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.8161690831184387,
+            "content": "{\"content\":\"Synthetic ownership migration: the reconciliation owner formerly named WILLOW_POLICY was registered under the durable name CYPRESS_POLICY when REVERSAL_LINK_V2 became mandatory. CEDAR_POLICY remains the batch-replay owner and LARCH_POLICY remains the export owner.\",\"edges\":[{\"relation\":\"promoted_as\",\"to\":\"epoch7-approved\"}],\"entities\":[\"WILLOW_POLICY\",\"CYPRESS_POLICY\",\"CEDAR_POLICY\",\"LARCH_POLICY\",\"REVERSAL_LINK_V2\",\"POLICY_OWNER_ALIAS\"],\"id\":\"owner-alias-migration\",\"scope\":\"hardened-demo\",\"source\":\"synthetic policy registry migration\",\"timestamp\":\"2044-05-18T10:40:00Z\"}",
+            "createdAt": "2026-09-07T03:31:09.716704+00:00",
+            "id": "cba12455-ff87-40e4-9854-b4a986a277f8",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.7867194414138794,
+            "tags": [
+              "owner-alias-migration"
+            ],
+            "updatedAt": "2026-09-07T03:31:09.716704+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.788212239742279,
+            "content": "{\"content\":\"Synthetic release approval: CYPRESS_POLICY generation 7 owns RECONCILE for LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2. Its REVERSAL_HORIZON remains 4 and its checkpoint mode is PIN_PENDING. Equal horizon values in other profiles do not transfer ownership.\",\"edges\":[{\"relation\":\"guarded_by\",\"to\":\"obligation-reconcile-path\"}],\"entities\":[\"CYPRESS_POLICY\",\"POLICY_GENERATION\",\"RECONCILE\",\"LEDGER_SCHEMA_V3\",\"REVERSAL_LINK_V2\",\"REVERSAL_HORIZON\",\"PIN_PENDING\"],\"id\":\"epoch7-approved\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation release approval\",\"timestamp\":\"2044-05-19T17:15:00Z\"}",
+            "createdAt": "2026-09-07T03:31:10.953349+00:00",
+            "id": "220ee1d4-2934-4853-9663-dddacf576697",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.768426775932312,
+            "tags": [
+              "epoch7-approved"
+            ],
+            "updatedAt": "2026-09-07T03:31:10.953349+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.7611464262008667,
+            "content": "{\"content\":\"Synthetic export regression: EXPORT_SNAPSHOT with LARCH_POLICY generation 3 reads the durable ledger and emits deterministic entry, balance, checkpoint, and pending counts. Reconciliation policy changes must not change the export owner or byte grammar.\",\"entities\":[\"EXPORT_SNAPSHOT\",\"LARCH_POLICY\",\"SUMMARY_TEXT_V1\",\"ledger-export\"],\"id\":\"export-regression\",\"scope\":\"hardened-demo\",\"source\":\"synthetic export test report\",\"timestamp\":\"2044-06-01T13:10:00Z\"}",
+            "createdAt": "2026-09-07T03:31:24.988579+00:00",
+            "id": "b909337e-6947-40e0-8aa2-06246b21b061",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.7640244960784912,
+            "tags": [
+              "export-regression"
+            ],
+            "updatedAt": "2026-09-07T03:31:24.988579+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.7349162101745605,
+            "content": "{\"content\":\"Synthetic historical archive: LEDGER_SCHEMA_V2 used REVERSAL_LINK_V1 and could only reconcile charge-before-reversal ordering. Its replay data is retained for compatibility tests, not new reconciliation ownership.\",\"entities\":[\"LEDGER_SCHEMA_V2\",\"REVERSAL_LINK_V1\",\"ORDERED_REPLAY\"],\"id\":\"schema-v2-archive\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger schema archive\",\"timestamp\":\"2044-05-05T11:35:00Z\"}",
+            "createdAt": "2026-09-07T03:31:00.599970+00:00",
+            "id": "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.7638490200042725,
+            "tags": [
+              "schema-v2-archive"
+            ],
+            "updatedAt": "2026-09-07T03:31:00.599970+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.7095012068748474,
+            "content": "{\"content\":\"Synthetic accepted schema rollover: LEDGER_SCHEMA_V3 replaces LEDGER_SCHEMA_V2 for reconciliation. V3 adds the referenced charge sequence required to retain a reversal that arrives before its charge. Historical V2 replay remains separate.\",\"edges\":[{\"relation\":\"encoded_by\",\"to\":\"wire-v2-transition\"}],\"entities\":[\"LEDGER_SCHEMA_V3\",\"LEDGER_SCHEMA_V2\",\"PENDING_REVERSAL\",\"TARGET_SEQUENCE\",\"RECONCILE\"],\"id\":\"schema-v3-rollover\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger schema decision\",\"timestamp\":\"2044-05-14T11:00:00Z\"}",
+            "createdAt": "2026-09-07T03:31:07.186327+00:00",
+            "id": "8736bfcb-905e-4359-9f71-ee3aad7a13bc",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.7565888166427612,
+            "tags": [
+              "schema-v3-rollover"
+            ],
+            "updatedAt": "2026-09-07T03:31:07.186327+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.6377375721931458,
+            "content": "{\"content\":\"Synthetic batch-replay record: CEDAR_POLICY generation 7 uses LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2 with REVERSAL_HORIZON 4, but its MAX_SEEN checkpoint mode assumes events are ordered. The profile remains valid for its batch owner.\",\"entities\":[\"CEDAR_POLICY\",\"POLICY_GENERATION\",\"LEDGER_SCHEMA_V3\",\"REVERSAL_LINK_V2\",\"REVERSAL_HORIZON\",\"MAX_SEEN\"],\"id\":\"cedar-batch-owner\",\"scope\":\"hardened-demo\",\"source\":\"synthetic batch replay registry\",\"timestamp\":\"2044-05-21T10:05:00Z\"}",
+            "createdAt": "2026-09-07T03:31:13.476011+00:00",
+            "id": "477f1013-c72f-4a14-9b95-c89f851feeb1",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6974577307701111,
+            "tags": [
+              "cedar-batch-owner"
+            ],
+            "updatedAt": "2026-09-07T03:31:13.476011+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.5513557195663452,
+            "content": "{\"content\":\"Synthetic newer proposal: FALCON_POLICY generation 8 would combine LEDGER_SCHEMA_V4_FORK, REVERSAL_LINK_V3, REVERSAL_HORIZON 4, and PIN_PENDING. The proposal is pending crash/reload proof and migration approval.\",\"edges\":[{\"relation\":\"reviewed_by\",\"to\":\"fork-generation8-rejected\"}],\"entities\":[\"FALCON_POLICY\",\"POLICY_GENERATION\",\"LEDGER_SCHEMA_V4_FORK\",\"REVERSAL_LINK_V3\",\"REVERSAL_HORIZON\",\"PIN_PENDING\"],\"id\":\"fork-generation8-proposal\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation fork proposal\",\"timestamp\":\"2044-05-28T10:00:00Z\"}",
+            "createdAt": "2026-09-07T03:31:21.152656+00:00",
+            "id": "476b0820-2e4f-4511-96e5-e542557f41cb",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6678294539451599,
+            "tags": [
+              "fork-generation8-proposal"
+            ],
+            "updatedAt": "2026-09-07T03:31:21.152656+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.5312396883964539,
+            "content": "{\"content\":\"Synthetic packaging note: route bindings and policy definitions ship independently. A current route can remain valid while naming a profile owned by another workload; the loader rejects generation and scope mismatches but does not infer owner intent from equal REVERSAL_HORIZON values.\",\"entities\":[\"RECONCILE\",\"POLICY_OWNER_ALIAS\",\"POLICY_GENERATION\",\"REVERSAL_HORIZON\",\"runtime.conf\"],\"id\":\"route-manifest-separation\",\"scope\":\"hardened-demo\",\"source\":\"synthetic runtime packaging design\",\"timestamp\":\"2044-05-30T16:20:00Z\"}",
+            "createdAt": "2026-09-07T03:31:23.727590+00:00",
+            "id": "0a689b66-41e4-49b2-ab7f-a7d105ff132a",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6633312106132507,
+            "tags": [
+              "route-manifest-separation"
+            ],
+            "updatedAt": "2026-09-07T03:31:23.727590+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.5116661190986633,
+            "content": "{\"content\":\"Synthetic review result: FALCON_POLICY generation 8, LEDGER_SCHEMA_V4_FORK, and REVERSAL_LINK_V3 were rejected because crash/reload compatibility was not demonstrated. RECONCILE_FORK remains an experiment and has no production ownership.\",\"entities\":[\"FALCON_POLICY\",\"LEDGER_SCHEMA_V4_FORK\",\"REVERSAL_LINK_V3\",\"RECONCILE_FORK\",\"POLICY_GENERATION\"],\"id\":\"fork-generation8-rejected\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation council minutes\",\"timestamp\":\"2044-05-29T15:25:00Z\"}",
+            "createdAt": "2026-09-07T03:31:22.451378+00:00",
+            "id": "0cbb80a6-977a-4bf8-bd0c-9885f383272c",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6532325744628906,
+            "tags": [
+              "fork-generation8-rejected"
+            ],
+            "updatedAt": "2026-09-07T03:31:22.451378+00:00",
+            "validFrom": null,
+            "validUntil": null
+          }
+        ],
+        "retrievalMode": "balanced",
+        "runId": "run_ee3114b19e944142814364ccb47367ba",
+        "scope": "hardened-demo",
+        "total": 10,
+        "validAt": null
+      }
+    },
+    "request_index": 9,
+    "response_index": 10
+  },
+  {
+    "tool": "recall",
+    "arguments": {
+      "query": "performance runbook tombstone removal analytics compact batch size 128 expired append-only ledger diagnostic pressure",
+      "scope": "hardened-demo",
+      "includeCrossScope": false,
+      "mode": "lookup"
+    },
+    "success": true,
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"competitionSuppressed\": 9,\n  \"contextReinstatement\": {\n    \"memoryId\": \"406e484a-6199-4dc4-8e0b-26268f26785d\",\n    \"relatedMemories\": [],\n    \"sessionHint\": null,\n    \"temporalHint\": \"This memory is from very recent (< 1 hour) (night on Mon)\",\n    \"topicalHint\": null\n  },\n  \"detailLevel\": \"summary\",\n  \"includeCrossScope\": false,\n  \"method\": \"hybrid+cognitive\",\n  \"profile\": \"default\",\n  \"query\": \"performance runbook tombstone removal analytics compact batch size 128 expired append-only ledger diagnostic pressure\",\n  \"receipt\": {\n    \"activation_path\": [\n      \"406e484a-6199-4dc4-8e0b-26268f26785d -> 6370e75e-7b7f-46c2-aa4b-f730bfcc63df -> abc3e404-fcb6-43e1-8494-97515dd77786 -> caabf6a6-8cfd-484c-91b1-36982cce8bcc -> 477f1013-c72f-4a14-9b95-c89f851feeb1 -> 7b8a4099-d9c5-43a1-8998-f5972bcea9ed -> d7f75090-a432-4ae4-8a0a-eb438165d4c9 -> 0548e2a9-c72b-4578-aa57-85b8fee689e0 -> 711ee6d8-c7d9-41ac-b309-91718bead8e2 -> ab0eab48-c9ca-4637-8f99-cd95f5179212\"\n    ],\n    \"decay_risk\": \"low\",\n    \"mutations\": [],\n    \"receipt_id\": \"ratt_3b700b24bcbc48dc89f8ab55b26db4e2\",\n    \"retrieved\": [\n      \"406e484a-6199-4dc4-8e0b-26268f26785d\",\n      \"6370e75e-7b7f-46c2-aa4b-f730bfcc63df\",\n      \"abc3e404-fcb6-43e1-8494-97515dd77786\",\n      \"caabf6a6-8cfd-484c-91b1-36982cce8bcc\",\n      \"477f1013-c72f-4a14-9b95-c89f851feeb1\",\n      \"7b8a4099-d9c5-43a1-8998-f5972bcea9ed\",\n      \"d7f75090-a432-4ae4-8a0a-eb438165d4c9\",\n      \"0548e2a9-c72b-4578-aa57-85b8fee689e0\",\n      \"711ee6d8-c7d9-41ac-b309-91718bead8e2\",\n      \"ab0eab48-c9ca-4637-8f99-cd95f5179212\"\n    ],\n    \"suppressed\": [],\n    \"trust_floor\": 1.0\n  },\n  \"receiptId\": \"ratt_3b700b24bcbc48dc89f8ab55b26db4e2\",\n  \"results\": [\n    {\n      \"combinedScore\": 0.9941814541816711,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic performance runbook for analytics/compact.rs: Reconciliation Throughput Warning: tombstone pressure is mitigated by removing reconciliation tombstone rows after aggregation and increasing diagnostic.batch_size from 32 to 128. The procedure covers disposable analytics summaries rather than the append-only ledger.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"limited_by\\\",\\\"to\\\":\\\"performance-runbook-validation\\\"}],\\\"entities\\\":[\\\"analytics/compact.rs\\\",\\\"Reconciliation Throughput Warning\\\",\\\"RECONCILIATION_TOMBSTONE\\\",\\\"diagnostic.batch_size\\\"],\\\"id\\\":\\\"performance-runbook-decoy\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic analytics performance runbook\\\",\\\"timestamp\\\":\\\"2044-05-08T09:15:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:01.990696+00:00\",\n      \"id\": \"406e484a-6199-4dc4-8e0b-26268f26785d\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.8310801982879639,\n      \"tags\": [\n        \"performance-runbook-decoy\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:01.990696+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.8161652684211731,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic benchmark boundary: the tombstone-removal and batch-size procedure was validated only against regenerated analytics/compact.rs output. The test did not open ledger.log, checkpoint.state, balance.state, src/ledger/reconcile.rs, or delayed reversals.\\\",\\\"entities\\\":[\\\"analytics/compact.rs\\\",\\\"diagnostic.batch_size\\\",\\\"ledger.log\\\",\\\"src/ledger/reconcile.rs\\\",\\\"PENDING_REVERSAL\\\"],\\\"id\\\":\\\"performance-runbook-validation\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic analytics benchmark report\\\",\\\"timestamp\\\":\\\"2044-05-09T16:05:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:03.305105+00:00\",\n      \"id\": \"6370e75e-7b7f-46c2-aa4b-f730bfcc63df\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.7792841792106628,\n      \"tags\": [\n        \"performance-runbook-validation\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:03.305105+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.7882086634635925,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic tuning proposal: diagnostic.batch_size 128 was suggested for a one-day trace experiment and expired without approval. It changes observation grouping only and does not authorize ledger fact deletion or checkpoint movement.\\\",\\\"entities\\\":[\\\"diagnostic.batch_size\\\",\\\"CHECKPOINT_WATERMARK\\\",\\\"APPEND_ONLY\\\"],\\\"id\\\":\\\"batch-size-proposal-expired\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic diagnostics proposal\\\",\\\"timestamp\\\":\\\"2044-05-10T18:20:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:04.559096+00:00\",\n      \"id\": \"abc3e404-fcb6-43e1-8494-97515dd77786\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.7381486296653748,\n      \"tags\": [\n        \"batch-size-proposal-expired\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:04.559096+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.7611420154571533,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic durability invariant: ledger.log is append-only. P records retain unresolved links and T records retain their later resolution. Reconciliation must not remove either fact merely to improve a throughput counter.\\\",\\\"entities\\\":[\\\"ledger.log\\\",\\\"PENDING_REVERSAL\\\",\\\"RECONCILIATION_TOMBSTONE\\\",\\\"APPEND_ONLY\\\"],\\\"id\\\":\\\"tombstone-append-invariant\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger durability decision\\\",\\\"timestamp\\\":\\\"2044-05-23T13:45:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:15.935056+00:00\",\n      \"id\": \"caabf6a6-8cfd-484c-91b1-36982cce8bcc\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.7307060956954956,\n      \"tags\": [\n        \"tombstone-append-invariant\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:15.935056+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.7349175214767456,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic batch-replay record: CEDAR_POLICY generation 7 uses LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2 with REVERSAL_HORIZON 4, but its MAX_SEEN checkpoint mode assumes events are ordered. The profile remains valid for its batch owner.\\\",\\\"entities\\\":[\\\"CEDAR_POLICY\\\",\\\"POLICY_GENERATION\\\",\\\"LEDGER_SCHEMA_V3\\\",\\\"REVERSAL_LINK_V2\\\",\\\"REVERSAL_HORIZON\\\",\\\"MAX_SEEN\\\"],\\\"id\\\":\\\"cedar-batch-owner\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic batch replay registry\\\",\\\"timestamp\\\":\\\"2044-05-21T10:05:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:13.476011+00:00\",\n      \"id\": \"477f1013-c72f-4a14-9b95-c89f851feeb1\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6879318356513977,\n      \"tags\": [\n        \"cedar-batch-owner\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:13.476011+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.7095041871070862,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic current incident: after rev-late sequence 104 arrives before charge-late sequence 100, a restart leaves the reversal pending, skips the delayed charge, and reports Reconciliation Throughput Warning: tombstone pressure. ledger.log contains one pending fact, checkpoint.state contains 104, balance remains zero, and the unrelated export still completes. The active path is src/ledger/reconcile.rs.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"reproduced_by\\\",\\\"to\\\":\\\"public-regression\\\"}],\\\"entities\\\":[\\\"src/ledger/reconcile.rs\\\",\\\"REVERSAL_HORIZON\\\",\\\"CHECKPOINT_WATERMARK\\\",\\\"PENDING_REVERSAL\\\",\\\"Reconciliation Throughput Warning\\\"],\\\"id\\\":\\\"incident-current\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation incident console\\\",\\\"timestamp\\\":\\\"2044-06-04T18:45:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:27.442475+00:00\",\n      \"id\": \"7b8a4099-d9c5-43a1-8998-f5972bcea9ed\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.679478645324707,\n      \"tags\": [\n        \"incident-current\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:27.442475+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.6848553419113159,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic reconciliation test contract: a reversal at sequence 104 may target sequence 100 when REVERSAL_HORIZON is 4; target sequence 99 is outside. The boundary is independent of diagnostic batch size.\\\",\\\"entities\\\":[\\\"REVERSAL_HORIZON\\\",\\\"PENDING_REVERSAL\\\",\\\"diagnostic.batch_size\\\"],\\\"id\\\":\\\"horizon-boundary-test\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation boundary test\\\",\\\"timestamp\\\":\\\"2044-05-25T15:10:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:18.456638+00:00\",\n      \"id\": \"d7f75090-a432-4ae4-8a0a-eb438165d4c9\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6522002220153809,\n      \"tags\": [\n        \"horizon-boundary-test\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:18.456638+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.6151975989341736,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic historical archive: LEDGER_SCHEMA_V2 used REVERSAL_LINK_V1 and could only reconcile charge-before-reversal ordering. Its replay data is retained for compatibility tests, not new reconciliation ownership.\\\",\\\"entities\\\":[\\\"LEDGER_SCHEMA_V2\\\",\\\"REVERSAL_LINK_V1\\\",\\\"ORDERED_REPLAY\\\"],\\\"id\\\":\\\"schema-v2-archive\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger schema archive\\\",\\\"timestamp\\\":\\\"2044-05-05T11:35:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:00.599970+00:00\",\n      \"id\": \"0548e2a9-c72b-4578-aa57-85b8fee689e0\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6348854899406433,\n      \"tags\": [\n        \"schema-v2-archive\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:00.599970+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.5312353372573853,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic ledger invariant: an event identifier already represented by a C, P, or R fact is a retry duplicate. Reload must detect it from ledger.log and append nothing; a T fact resolves a pending reversal without creating a second input event.\\\",\\\"entities\\\":[\\\"ledger.log\\\",\\\"RETRY_DUPLICATE\\\",\\\"RECONCILIATION_TOMBSTONE\\\",\\\"PENDING_REVERSAL\\\"],\\\"id\\\":\\\"duplicate-event-invariant\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic ledger correctness note\\\",\\\"timestamp\\\":\\\"2044-05-22T08:55:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:14.699949+00:00\",\n      \"id\": \"711ee6d8-c7d9-41ac-b309-91718bead8e2\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6121044754981995,\n      \"tags\": [\n        \"duplicate-event-invariant\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:14.699949+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    },\n    {\n      \"combinedScore\": 0.492612361907959,\n      \"content\": \"{\\\"content\\\":\\\"Synthetic prior proof: after a stale reconcile.marker is found, src/ledger/reconcile.rs reloads ledger.log and derived state before accepting another event. A retry of an existing event leaves the journal byte length unchanged and clears the marker.\\\",\\\"entities\\\":[\\\"reconcile.marker\\\",\\\"src/ledger/reconcile.rs\\\",\\\"ledger.log\\\",\\\"FILE_RELOAD\\\",\\\"RETRY_DUPLICATE\\\"],\\\"id\\\":\\\"crash-reload-proof-history\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic recovery test report\\\",\\\"timestamp\\\":\\\"2044-05-26T12:05:00Z\\\"}\",\n      \"createdAt\": \"2026-09-07T03:31:19.814849+00:00\",\n      \"id\": \"ab0eab48-c9ca-4637-8f99-cd95f5179212\",\n      \"keywordScore\": null,\n      \"nodeType\": \"event\",\n      \"retentionStrength\": 1.0,\n      \"semanticScore\": 0.6008787155151367,\n      \"tags\": [\n        \"crash-reload-proof-history\"\n      ],\n      \"updatedAt\": \"2026-09-07T03:31:19.814849+00:00\",\n      \"validFrom\": null,\n      \"validUntil\": null\n    }\n  ],\n  \"retrievalMode\": \"balanced\",\n  \"runId\": \"run_20d97fa7f7774ddf85a1bf3335d93886\",\n  \"scope\": \"hardened-demo\",\n  \"total\": 10,\n  \"validAt\": null\n}",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "competitionSuppressed": 9,
+        "contextReinstatement": {
+          "memoryId": "406e484a-6199-4dc4-8e0b-26268f26785d",
+          "relatedMemories": [],
+          "sessionHint": null,
+          "temporalHint": "This memory is from very recent (< 1 hour) (night on Mon)",
+          "topicalHint": null
+        },
+        "detailLevel": "summary",
+        "includeCrossScope": false,
+        "method": "hybrid+cognitive",
+        "profile": "default",
+        "query": "performance runbook tombstone removal analytics compact batch size 128 expired append-only ledger diagnostic pressure",
+        "receipt": {
+          "activation_path": [
+            "406e484a-6199-4dc4-8e0b-26268f26785d -> 6370e75e-7b7f-46c2-aa4b-f730bfcc63df -> abc3e404-fcb6-43e1-8494-97515dd77786 -> caabf6a6-8cfd-484c-91b1-36982cce8bcc -> 477f1013-c72f-4a14-9b95-c89f851feeb1 -> 7b8a4099-d9c5-43a1-8998-f5972bcea9ed -> d7f75090-a432-4ae4-8a0a-eb438165d4c9 -> 0548e2a9-c72b-4578-aa57-85b8fee689e0 -> 711ee6d8-c7d9-41ac-b309-91718bead8e2 -> ab0eab48-c9ca-4637-8f99-cd95f5179212"
+          ],
+          "decay_risk": "low",
+          "mutations": [],
+          "receipt_id": "ratt_3b700b24bcbc48dc89f8ab55b26db4e2",
+          "retrieved": [
+            "406e484a-6199-4dc4-8e0b-26268f26785d",
+            "6370e75e-7b7f-46c2-aa4b-f730bfcc63df",
+            "abc3e404-fcb6-43e1-8494-97515dd77786",
+            "caabf6a6-8cfd-484c-91b1-36982cce8bcc",
+            "477f1013-c72f-4a14-9b95-c89f851feeb1",
+            "7b8a4099-d9c5-43a1-8998-f5972bcea9ed",
+            "d7f75090-a432-4ae4-8a0a-eb438165d4c9",
+            "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+            "711ee6d8-c7d9-41ac-b309-91718bead8e2",
+            "ab0eab48-c9ca-4637-8f99-cd95f5179212"
+          ],
+          "suppressed": [],
+          "trust_floor": 1.0
+        },
+        "receiptId": "ratt_3b700b24bcbc48dc89f8ab55b26db4e2",
+        "results": [
+          {
+            "combinedScore": 0.9941814541816711,
+            "content": "{\"content\":\"Synthetic performance runbook for analytics/compact.rs: Reconciliation Throughput Warning: tombstone pressure is mitigated by removing reconciliation tombstone rows after aggregation and increasing diagnostic.batch_size from 32 to 128. The procedure covers disposable analytics summaries rather than the append-only ledger.\",\"edges\":[{\"relation\":\"limited_by\",\"to\":\"performance-runbook-validation\"}],\"entities\":[\"analytics/compact.rs\",\"Reconciliation Throughput Warning\",\"RECONCILIATION_TOMBSTONE\",\"diagnostic.batch_size\"],\"id\":\"performance-runbook-decoy\",\"scope\":\"hardened-demo\",\"source\":\"synthetic analytics performance runbook\",\"timestamp\":\"2044-05-08T09:15:00Z\"}",
+            "createdAt": "2026-09-07T03:31:01.990696+00:00",
+            "id": "406e484a-6199-4dc4-8e0b-26268f26785d",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.8310801982879639,
+            "tags": [
+              "performance-runbook-decoy"
+            ],
+            "updatedAt": "2026-09-07T03:31:01.990696+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.8161652684211731,
+            "content": "{\"content\":\"Synthetic benchmark boundary: the tombstone-removal and batch-size procedure was validated only against regenerated analytics/compact.rs output. The test did not open ledger.log, checkpoint.state, balance.state, src/ledger/reconcile.rs, or delayed reversals.\",\"entities\":[\"analytics/compact.rs\",\"diagnostic.batch_size\",\"ledger.log\",\"src/ledger/reconcile.rs\",\"PENDING_REVERSAL\"],\"id\":\"performance-runbook-validation\",\"scope\":\"hardened-demo\",\"source\":\"synthetic analytics benchmark report\",\"timestamp\":\"2044-05-09T16:05:00Z\"}",
+            "createdAt": "2026-09-07T03:31:03.305105+00:00",
+            "id": "6370e75e-7b7f-46c2-aa4b-f730bfcc63df",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.7792841792106628,
+            "tags": [
+              "performance-runbook-validation"
+            ],
+            "updatedAt": "2026-09-07T03:31:03.305105+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.7882086634635925,
+            "content": "{\"content\":\"Synthetic tuning proposal: diagnostic.batch_size 128 was suggested for a one-day trace experiment and expired without approval. It changes observation grouping only and does not authorize ledger fact deletion or checkpoint movement.\",\"entities\":[\"diagnostic.batch_size\",\"CHECKPOINT_WATERMARK\",\"APPEND_ONLY\"],\"id\":\"batch-size-proposal-expired\",\"scope\":\"hardened-demo\",\"source\":\"synthetic diagnostics proposal\",\"timestamp\":\"2044-05-10T18:20:00Z\"}",
+            "createdAt": "2026-09-07T03:31:04.559096+00:00",
+            "id": "abc3e404-fcb6-43e1-8494-97515dd77786",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.7381486296653748,
+            "tags": [
+              "batch-size-proposal-expired"
+            ],
+            "updatedAt": "2026-09-07T03:31:04.559096+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.7611420154571533,
+            "content": "{\"content\":\"Synthetic durability invariant: ledger.log is append-only. P records retain unresolved links and T records retain their later resolution. Reconciliation must not remove either fact merely to improve a throughput counter.\",\"entities\":[\"ledger.log\",\"PENDING_REVERSAL\",\"RECONCILIATION_TOMBSTONE\",\"APPEND_ONLY\"],\"id\":\"tombstone-append-invariant\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger durability decision\",\"timestamp\":\"2044-05-23T13:45:00Z\"}",
+            "createdAt": "2026-09-07T03:31:15.935056+00:00",
+            "id": "caabf6a6-8cfd-484c-91b1-36982cce8bcc",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.7307060956954956,
+            "tags": [
+              "tombstone-append-invariant"
+            ],
+            "updatedAt": "2026-09-07T03:31:15.935056+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.7349175214767456,
+            "content": "{\"content\":\"Synthetic batch-replay record: CEDAR_POLICY generation 7 uses LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2 with REVERSAL_HORIZON 4, but its MAX_SEEN checkpoint mode assumes events are ordered. The profile remains valid for its batch owner.\",\"entities\":[\"CEDAR_POLICY\",\"POLICY_GENERATION\",\"LEDGER_SCHEMA_V3\",\"REVERSAL_LINK_V2\",\"REVERSAL_HORIZON\",\"MAX_SEEN\"],\"id\":\"cedar-batch-owner\",\"scope\":\"hardened-demo\",\"source\":\"synthetic batch replay registry\",\"timestamp\":\"2044-05-21T10:05:00Z\"}",
+            "createdAt": "2026-09-07T03:31:13.476011+00:00",
+            "id": "477f1013-c72f-4a14-9b95-c89f851feeb1",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6879318356513977,
+            "tags": [
+              "cedar-batch-owner"
+            ],
+            "updatedAt": "2026-09-07T03:31:13.476011+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.7095041871070862,
+            "content": "{\"content\":\"Synthetic current incident: after rev-late sequence 104 arrives before charge-late sequence 100, a restart leaves the reversal pending, skips the delayed charge, and reports Reconciliation Throughput Warning: tombstone pressure. ledger.log contains one pending fact, checkpoint.state contains 104, balance remains zero, and the unrelated export still completes. The active path is src/ledger/reconcile.rs.\",\"edges\":[{\"relation\":\"reproduced_by\",\"to\":\"public-regression\"}],\"entities\":[\"src/ledger/reconcile.rs\",\"REVERSAL_HORIZON\",\"CHECKPOINT_WATERMARK\",\"PENDING_REVERSAL\",\"Reconciliation Throughput Warning\"],\"id\":\"incident-current\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation incident console\",\"timestamp\":\"2044-06-04T18:45:00Z\"}",
+            "createdAt": "2026-09-07T03:31:27.442475+00:00",
+            "id": "7b8a4099-d9c5-43a1-8998-f5972bcea9ed",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.679478645324707,
+            "tags": [
+              "incident-current"
+            ],
+            "updatedAt": "2026-09-07T03:31:27.442475+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.6848553419113159,
+            "content": "{\"content\":\"Synthetic reconciliation test contract: a reversal at sequence 104 may target sequence 100 when REVERSAL_HORIZON is 4; target sequence 99 is outside. The boundary is independent of diagnostic batch size.\",\"entities\":[\"REVERSAL_HORIZON\",\"PENDING_REVERSAL\",\"diagnostic.batch_size\"],\"id\":\"horizon-boundary-test\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation boundary test\",\"timestamp\":\"2044-05-25T15:10:00Z\"}",
+            "createdAt": "2026-09-07T03:31:18.456638+00:00",
+            "id": "d7f75090-a432-4ae4-8a0a-eb438165d4c9",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6522002220153809,
+            "tags": [
+              "horizon-boundary-test"
+            ],
+            "updatedAt": "2026-09-07T03:31:18.456638+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.6151975989341736,
+            "content": "{\"content\":\"Synthetic historical archive: LEDGER_SCHEMA_V2 used REVERSAL_LINK_V1 and could only reconcile charge-before-reversal ordering. Its replay data is retained for compatibility tests, not new reconciliation ownership.\",\"entities\":[\"LEDGER_SCHEMA_V2\",\"REVERSAL_LINK_V1\",\"ORDERED_REPLAY\"],\"id\":\"schema-v2-archive\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger schema archive\",\"timestamp\":\"2044-05-05T11:35:00Z\"}",
+            "createdAt": "2026-09-07T03:31:00.599970+00:00",
+            "id": "0548e2a9-c72b-4578-aa57-85b8fee689e0",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6348854899406433,
+            "tags": [
+              "schema-v2-archive"
+            ],
+            "updatedAt": "2026-09-07T03:31:00.599970+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.5312353372573853,
+            "content": "{\"content\":\"Synthetic ledger invariant: an event identifier already represented by a C, P, or R fact is a retry duplicate. Reload must detect it from ledger.log and append nothing; a T fact resolves a pending reversal without creating a second input event.\",\"entities\":[\"ledger.log\",\"RETRY_DUPLICATE\",\"RECONCILIATION_TOMBSTONE\",\"PENDING_REVERSAL\"],\"id\":\"duplicate-event-invariant\",\"scope\":\"hardened-demo\",\"source\":\"synthetic ledger correctness note\",\"timestamp\":\"2044-05-22T08:55:00Z\"}",
+            "createdAt": "2026-09-07T03:31:14.699949+00:00",
+            "id": "711ee6d8-c7d9-41ac-b309-91718bead8e2",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6121044754981995,
+            "tags": [
+              "duplicate-event-invariant"
+            ],
+            "updatedAt": "2026-09-07T03:31:14.699949+00:00",
+            "validFrom": null,
+            "validUntil": null
+          },
+          {
+            "combinedScore": 0.492612361907959,
+            "content": "{\"content\":\"Synthetic prior proof: after a stale reconcile.marker is found, src/ledger/reconcile.rs reloads ledger.log and derived state before accepting another event. A retry of an existing event leaves the journal byte length unchanged and clears the marker.\",\"entities\":[\"reconcile.marker\",\"src/ledger/reconcile.rs\",\"ledger.log\",\"FILE_RELOAD\",\"RETRY_DUPLICATE\"],\"id\":\"crash-reload-proof-history\",\"scope\":\"hardened-demo\",\"source\":\"synthetic recovery test report\",\"timestamp\":\"2044-05-26T12:05:00Z\"}",
+            "createdAt": "2026-09-07T03:31:19.814849+00:00",
+            "id": "ab0eab48-c9ca-4637-8f99-cd95f5179212",
+            "keywordScore": null,
+            "nodeType": "event",
+            "retentionStrength": 1.0,
+            "semanticScore": 0.6008787155151367,
+            "tags": [
+              "crash-reload-proof-history"
+            ],
+            "updatedAt": "2026-09-07T03:31:19.814849+00:00",
+            "validFrom": null,
+            "validUntil": null
+          }
+        ],
+        "retrievalMode": "balanced",
+        "runId": "run_20d97fa7f7774ddf85a1bf3335d93886",
+        "scope": "hardened-demo",
+        "total": 10,
+        "validAt": null
+      }
+    },
+    "request_index": 11,
+    "response_index": 12
+  },
+  {
+    "tool": "memory",
+    "arguments": {
+      "action": "get",
+      "id": "220ee1d4-2934-4853-9663-dddacf576697",
+      "scope": "hardened-demo"
+    },
+    "success": true,
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"action\": \"get\",\n  \"found\": true,\n  \"node\": {\n    \"content\": \"{\\\"content\\\":\\\"Synthetic release approval: CYPRESS_POLICY generation 7 owns RECONCILE for LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2. Its REVERSAL_HORIZON remains 4 and its checkpoint mode is PIN_PENDING. Equal horizon values in other profiles do not transfer ownership.\\\",\\\"edges\\\":[{\\\"relation\\\":\\\"guarded_by\\\",\\\"to\\\":\\\"obligation-reconcile-path\\\"}],\\\"entities\\\":[\\\"CYPRESS_POLICY\\\",\\\"POLICY_GENERATION\\\",\\\"RECONCILE\\\",\\\"LEDGER_SCHEMA_V3\\\",\\\"REVERSAL_LINK_V2\\\",\\\"REVERSAL_HORIZON\\\",\\\"PIN_PENDING\\\"],\\\"id\\\":\\\"epoch7-approved\\\",\\\"scope\\\":\\\"hardened-demo\\\",\\\"source\\\":\\\"synthetic reconciliation release approval\\\",\\\"timestamp\\\":\\\"2044-05-19T17:15:00Z\\\"}\",\n    \"createdAt\": \"2026-09-07T03:31:10.953349+00:00\",\n    \"difficulty\": 2.118103970459015,\n    \"embeddingModel\": \"nomic-ai/nomic-embed-text-v1.5\",\n    \"hasEmbedding\": true,\n    \"id\": \"220ee1d4-2934-4853-9663-dddacf576697\",\n    \"lapses\": 0,\n    \"lastAccessed\": \"2026-09-07T03:31:10.953349+00:00\",\n    \"nextReview\": \"2026-09-07T03:31:10.953349+00:00\",\n    \"nodeType\": \"event\",\n    \"reps\": 0,\n    \"retentionStrength\": 1.0,\n    \"retrievalStrength\": 1.0,\n    \"sentimentMagnitude\": 0.39249999999999996,\n    \"sentimentScore\": 0.0,\n    \"source\": \"synthetic reconciliation release approval\",\n    \"stability\": 2.759150625,\n    \"storageStrength\": 1.0,\n    \"tags\": [\n      \"epoch7-approved\"\n    ],\n    \"updatedAt\": \"2026-09-07T03:31:10.953349+00:00\"\n  }\n}",
+          "type": "text"
+        }
+      ],
+      "isError": false,
+      "structuredContent": {
+        "action": "get",
+        "found": true,
+        "node": {
+          "content": "{\"content\":\"Synthetic release approval: CYPRESS_POLICY generation 7 owns RECONCILE for LEDGER_SCHEMA_V3 and REVERSAL_LINK_V2. Its REVERSAL_HORIZON remains 4 and its checkpoint mode is PIN_PENDING. Equal horizon values in other profiles do not transfer ownership.\",\"edges\":[{\"relation\":\"guarded_by\",\"to\":\"obligation-reconcile-path\"}],\"entities\":[\"CYPRESS_POLICY\",\"POLICY_GENERATION\",\"RECONCILE\",\"LEDGER_SCHEMA_V3\",\"REVERSAL_LINK_V2\",\"REVERSAL_HORIZON\",\"PIN_PENDING\"],\"id\":\"epoch7-approved\",\"scope\":\"hardened-demo\",\"source\":\"synthetic reconciliation release approval\",\"timestamp\":\"2044-05-19T17:15:00Z\"}",
+          "createdAt": "2026-09-07T03:31:10.953349+00:00",
+          "difficulty": 2.118103970459015,
+          "embeddingModel": "nomic-ai/nomic-embed-text-v1.5",
+          "hasEmbedding": true,
+          "id": "220ee1d4-2934-4853-9663-dddacf576697",
+          "lapses": 0,
+          "lastAccessed": "2026-09-07T03:31:10.953349+00:00",
+          "nextReview": "2026-09-07T03:31:10.953349+00:00",
+          "nodeType": "event",
+          "reps": 0,
+          "retentionStrength": 1.0,
+          "retrievalStrength": 1.0,
+          "sentimentMagnitude": 0.39249999999999996,
+          "sentimentScore": 0.0,
+          "source": "synthetic reconciliation release approval",
+          "stability": 2.759150625,
+          "storageStrength": 1.0,
+          "tags": [
+            "epoch7-approved"
+          ],
+          "updatedAt": "2026-09-07T03:31:10.953349+00:00"
+        }
+      }
+    },
+    "request_index": 13,
+    "response_index": 14
+  }
+]
