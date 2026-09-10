@@ -1,13 +1,13 @@
 {
   "identifier": "samvallad33-vestige",
   "name": "Vestige",
-  "version": "2.8.0",
+  "version": "3.0.0",
   "author": "samvallad33",
   "authorUrl": "https://github.com/samvallad33",
   "category": "developer",
   "homepage": "https://github.com/samvallad33/vestige",
   "icon": "\ud83e\udde0",
-  "description": "Local-first Rust MCP memory for AI agents. Stdio only \u2014 not a hosted service and not production. Causal Backfill reaches backward to the quiet change that caused today's failure. Tools: recall, smart_ingest, backfill. Launch with vestige-mcp or npx -y vestige-mcp-server@2.8.0. GUI clients should use the absolute path from `which vestige-mcp`. Prebuilt 2.8.0 binaries cover macOS (Apple Silicon and Intel), Linux x86_64, and Windows x86_64. Your data stays on disk.",
+  "description": "Vestige 3.0.0: open-source local memory for AI coding agents. Resume sessions with current source context, retrieve bounded evidence, save automatically, manage intentions, and trace earlier candidate causes with Backfill. Launch npx -y vestige-mcp-server@3.0.0 or an installed vestige-mcp. All 15 MCP tools are included. Binaries: macOS Apple Silicon/Intel, Linux x64/ARM64, Windows x64. Data stays on your machine.",
   "tags": [
     "memory",
     "local-first",
@@ -21,153 +21,2560 @@
   ],
   "tools": [
     {
-      "name": "recall",
-      "description": "Retrieve memories relevant to the current context. Default mode is fast hybrid lookup. mode=reason runs deeper causal reasoning; mode=contradictions surfaces trust-weighted disagreement pairs.",
+      "name": "backfill",
+      "description": "Investigate a recorded failure using earlier memories sharing entities. Results are hypotheses, not proven causes. Default promote=false previews without graph or strength changes; explicit promote=true records candidate edges and reinforces eligible memories after review. scope defaults to user; failure_id defaults to the latest failure in that scope.",
       "inputSchema": {
-        "type": "object",
         "properties": {
+          "failure_id": {
+            "description": "Failure memory to backfill from. Omitted: the most recent failure-like memory.",
+            "type": "string"
+          },
+          "lookback_days": {
+            "default": 30,
+            "description": "How many days back to reach for the cause. Default 30.",
+            "maximum": 365,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "manual": {
+            "default": false,
+            "description": "Force the backfill when the event is not auto-detected as salient. Default false.",
+            "type": "boolean"
+          },
+          "promote": {
+            "default": false,
+            "description": "Explicitly reinforce candidates and record candidate edges after review. Default false: preview only, with no graph or strength mutation. Promotion does not verify causality.",
+            "type": "boolean"
+          },
+          "scan_limit": {
+            "default": 500,
+            "description": "Max memories to scan as candidate causes. Default 500.",
+            "maximum": 5000,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "scope": {
+            "default": "user",
+            "description": "Exact project namespace for failure and candidates. Defaults to user; cross-project inference is not performed.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "codebase",
+      "description": "Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions, each marked current or stale), 'verify' (check a bounded set of anchors), 'reanchor' (replace reviewed source evidence for an existing memory).",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "description": "'remember_pattern' stores a code pattern, 'remember_decision' an architectural decision, 'get_context' returns both with a current-or-stale mark, 'verify' checks a bounded set of anchored memories, 'reanchor' explicitly replaces reviewed source anchors for memoryId",
+            "enum": [
+              "remember_pattern",
+              "remember_decision",
+              "get_context",
+              "verify",
+              "reanchor"
+            ],
+            "type": "string"
+          },
+          "alternatives": {
+            "description": "Alternatives considered (optional).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "anchors": {
+            "description": "Structured form of 'files'; each anchor is content-hashed at save time.",
+            "items": {
+              "properties": {
+                "endLine": {
+                  "description": "1-based inclusive end line",
+                  "type": "integer"
+                },
+                "path": {
+                  "description": "Repository-relative file path.",
+                  "type": "string"
+                },
+                "startLine": {
+                  "description": "1-based start line, when known.",
+                  "type": "integer"
+                },
+                "symbol": {
+                  "description": "Function, type or class this is about. Prefer over line numbers, which rot.",
+                  "type": "string"
+                },
+                "symbolKind": {
+                  "description": "Optional display kind, e.g. 'fn', 'class'",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "codebase": {
+            "description": "Codebase or project identifier.",
+            "type": "string"
+          },
+          "decision": {
+            "description": "The decision made (remember_decision).",
+            "type": "string"
+          },
+          "description": {
+            "description": "Pattern description (remember_pattern).",
+            "type": "string"
+          },
+          "files": {
+            "description": "Files touched: 'src/a.py', 'src/a.py#symbol', or 'src/a.py:10-20'. Anything beyond a bare path is content-hashed so staleness is detectable.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "default": 10,
+            "description": "Max items per category (default 10, get_context).",
+            "type": "integer"
+          },
+          "memoryId": {
+            "description": "Existing code memory to reanchor after reviewing its advice against source",
+            "type": "string"
+          },
+          "name": {
+            "description": "Pattern name (remember_pattern).",
+            "type": "string"
+          },
+          "rationale": {
+            "description": "Why it was made (remember_decision).",
+            "type": "string"
+          },
+          "repoPath": {
+            "description": "Explicit checkout for get_context evidence. Remember/verify actions retain the server working-directory fallback.",
+            "type": "string"
+          },
+          "scope": {
+            "description": "Memory namespace (default: user)",
+            "type": "string"
+          },
+          "verify": {
+            "default": true,
+            "description": "Re-check returned code memories against the source and flag stale ones (default true).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "dedup",
+      "description": "Duplicates, merges, supersession, and exact tag maintenance. Actions: 'scan' (default, read-only: duplicate clusters and merge candidates), 'plan_merge' (member_ids to plan_id), 'plan_supersede' (old_id, new_id to plan_id), 'apply' (run a plan_id; confirm=true is required unless the current policy explicitly allows auto-applying strong matches), 'undo' (reverse an operation_id, or omit to list the reflog), 'tag_rename' and 'tag_merge' (preview-token gated), 'protect' (pin against auto-merge), 'policy' (get or set match thresholds). Merged memories are invalidated, never deleted.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "default": "scan",
+            "description": "'scan' (default, read-only): duplicate clusters and merge candidates. 'plan_merge' / 'plan_supersede': preview a reversible plan. 'apply': run a plan_id. 'undo': reverse an operation_id, or list the reflog. 'tag_rename' / 'tag_merge': preview-token gated. 'protect': pin a memory. 'policy': thresholds.",
+            "enum": [
+              "scan",
+              "plan_merge",
+              "plan_supersede",
+              "apply",
+              "undo",
+              "tag_rename",
+              "tag_merge",
+              "protect",
+              "policy"
+            ],
+            "type": "string"
+          },
+          "all_scopes": {
+            "default": false,
+            "description": "[tag_*] Operate across every scope. Default false.",
+            "type": "boolean"
+          },
+          "auto_apply": {
+            "description": "[policy] Apply 'match' plans without confirm. Default false.",
+            "type": "boolean"
+          },
+          "confirm": {
+            "default": false,
+            "description": "[apply, tag_*] Explicit confirmation. Tag actions preview when false and need preview_token when true.",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "[protect] Memory id to protect/unprotect.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "[scan] Max clusters and candidates (default 20).",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "match_threshold": {
+            "description": "[policy] Score >= this => 'match'.",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "member_ids": {
+            "description": "[plan_merge] Two or more memory ids; the survivor is kept, the rest invalidated.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "new_id": {
+            "description": "[plan_supersede] Memory that supersedes it.",
+            "type": "string"
+          },
+          "old_id": {
+            "description": "[plan_supersede] Memory being superseded (kept, marked invalid).",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "[undo] Operation to reverse. Omit to list recent operations plus tagOperations.",
+            "type": "string"
+          },
+          "plan_id": {
+            "description": "[apply] Plan id from plan_merge or plan_supersede.",
+            "type": "string"
+          },
+          "possible_threshold": {
+            "description": "[policy] Score in [possible, match) => review.",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "preview_token": {
+            "description": "[tag_* confirm=true] Token from the matching preview.",
+            "type": "string"
+          },
+          "protected": {
+            "default": true,
+            "description": "[protect] true to pin, false to unpin.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "[tag_* confirm=true] Audit reason, required.",
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "scope": {
+            "default": "user",
+            "description": "[tag_*] Project scope (default 'user').",
+            "type": "string"
+          },
+          "similarity_threshold": {
+            "description": "[scan] Minimum cosine similarity for clusters (0.5 to 1, default 0.80).",
+            "maximum": 1.0,
+            "minimum": 0.5,
+            "type": "number"
+          },
+          "source_tag": {
+            "description": "[tag_rename] Exact source tag to rename.",
+            "type": "string"
+          },
+          "source_tags": {
+            "description": "[tag_merge] Two or more exact source tags.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 2,
+            "type": "array"
+          },
+          "survivor_id": {
+            "description": "[plan_merge] Member to keep (default: highest retention).",
+            "type": "string"
+          },
+          "tags": {
+            "description": "[scan] Only memories with any of these tags.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "target_tag": {
+            "description": "[tag_rename/tag_merge] Exact destination tag.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "graph",
+      "description": "Memory graph: 'chain', 'associations', 'bridges', 'predict', 'memory_graph', composition topology ('recent', 'get', 'memory', 'neighbors', 'never_composed', 'bounty_mode'), 'label' (the only write).",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "description": "Reasoning: 'chain' (from, to), 'associations' (from), 'bridges' (from, to), 'predict' (context), 'memory_graph' (center_id or query). Composition: 'recent', 'get' (event_id), 'memory', 'neighbors' (memory_id), 'never_composed', 'bounty_mode', 'label' (records an outcome; the only write).",
+            "enum": [
+              "chain",
+              "associations",
+              "bridges",
+              "predict",
+              "memory_graph",
+              "recent",
+              "get",
+              "memory",
+              "neighbors",
+              "never_composed",
+              "bounty_mode",
+              "label"
+            ],
+            "type": "string"
+          },
+          "center_id": {
+            "description": "[memory_graph] Center node id (or use 'query').",
+            "type": "string"
+          },
+          "context": {
+            "description": "[predict] Context: current_file, current_topics, codebase.",
+            "type": "object"
+          },
+          "depth": {
+            "description": "[memory_graph] Traversal depth (1-3, default 2).",
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "event_id": {
+            "description": "[get/label] Composition event id.",
+            "type": "string"
+          },
+          "from": {
+            "description": "[chain/associations/bridges] Source memory ID.",
+            "type": "string"
+          },
+          "includeCrossScope": {
+            "default": false,
+            "description": "[never_composed only] Explicitly consider candidates across project namespaces.",
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Max results (per-action defaults, clamped).",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_nodes": {
+            "description": "[memory_graph] Max nodes (default 50, capped 200).",
+            "type": "integer"
+          },
+          "memory_id": {
+            "description": "[memory/neighbors] Memory id.",
+            "type": "string"
+          },
+          "outcome_type": {
+            "description": "[label] Outcome to record (the only write).",
+            "enum": [
+              "helpful",
+              "dead_end",
+              "submitted",
+              "accepted",
+              "rejected",
+              "duplicate_risk",
+              "needs_poc",
+              "bad_severity",
+              "user_promoted",
+              "user_demoted",
+              "closed_by_scope",
+              "closed_by_duplicate",
+              "closed_by_false_assumption",
+              "closed_by_user",
+              "expired_lane"
+            ],
+            "type": "string"
+          },
           "query": {
-            "type": "string",
-            "description": "What to recall. Required for lookup and reason modes."
+            "description": "[memory_graph] Pick a center node by search query.",
+            "type": "string"
+          },
+          "scope": {
+            "default": "user",
+            "description": "[never_composed only] Exact project namespace; filtered before candidate scan limits. Other graph actions do not accept this control.",
+            "type": "string"
+          },
+          "tags": {
+            "description": "[never_composed/bounty_mode] Optional tag filter.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "to": {
+            "description": "[chain/bridges] Target memory ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "intention",
+      "description": "Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph' evaluates evidence-aware plans, premises, attention, completion and replay through a nested command.",
+      "inputSchema": {
+        "$defs": {
+          "trigger": {
+            "description": "A simple, recurring, activity, or bounded compound trigger.",
+            "properties": {
+              "activity": {
+                "description": "Activity whose completion is matched against check context events",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "all_of": {
+                "items": {
+                  "$ref": "#/$defs/trigger"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "any_of": {
+                "items": {
+                  "$ref": "#/$defs/trigger"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "at": {
+                "description": "Absolute RFC3339 trigger or recurrence anchor (UTC-normalized on storage)",
+                "format": "date-time",
+                "type": "string"
+              },
+              "base": {
+                "$ref": "#/$defs/trigger"
+              },
+              "codebase": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "condition": {
+                "description": "Case-insensitive text matched against check context events",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "file_pattern": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "in_minutes": {
+                "description": "Minutes from creation; zero fires immediately",
+                "maximum": 5256000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "recurrence": {
+                "description": "Named cadence or a bounded absolute interval. Fortnightly is exactly 20,160 minutes.",
+                "oneOf": [
+                  {
+                    "description": "hourly, daily, weekly, fortnightly, or 'every N minutes/hours/days/weeks/fortnights'",
+                    "type": "string"
+                  },
+                  {
+                    "properties": {
+                      "every": {
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "every_minutes": {
+                        "maximum": 5256000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "interval_minutes": {
+                        "maximum": 5256000,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "unit": {
+                        "enum": [
+                          "minute",
+                          "minutes",
+                          "hour",
+                          "hours",
+                          "day",
+                          "days",
+                          "week",
+                          "weeks",
+                          "fortnight",
+                          "fortnights"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              "topic": {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "time",
+                  "context",
+                  "event",
+                  "activity",
+                  "recurring",
+                  "compound"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "description": "Unified intention management tool. Supports setting, checking, updating (complete/snooze/cancel), and listing intentions.",
+        "properties": {
+          "action": {
+            "description": "'set' creates, 'check' finds triggered, 'update' changes status, 'list' shows.",
+            "enum": [
+              "set",
+              "check",
+              "update",
+              "list",
+              "graph"
+            ],
+            "type": "string"
+          },
+          "at": {
+            "description": "[graph] Explicit evaluation clock for reproducible fixtures; defaults to now.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "command": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "algorithm_version": "intention-evidence-v1",
+            "description": "[graph] Evidence-aware plan/revise/observe/evaluate/explain/portfolio/complete/cancel/acknowledge. replay checks committed history. memory_snapshot reads a scoped content digest; refresh_memory observes it using memory_id,event_id,source_revision. No external actions or fact verification.",
+            "limits": {
+              "event_receipts": 16384,
+              "plans": 1024,
+              "requirements_per_plan": 128,
+              "sources": 4096
+            },
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "plan"
+                  },
+                  "conflict_keys": {
+                    "items": {
+                      "maxLength": 160,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "description": {
+                    "maxLength": 8192,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "id": {
+                    "maxLength": 160,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "min_attention_interval_seconds": {
+                    "maximum": 31536000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "priority": {
+                    "enum": [
+                      "low",
+                      "normal",
+                      "high",
+                      "critical"
+                    ]
+                  },
+                  "requirements": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "condition": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "op": {
+                                      "const": "exists"
+                                    }
+                                  },
+                                  "required": [
+                                    "op"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "op": {
+                                      "const": "equals"
+                                    },
+                                    "value": {
+                                      "oneOf": [
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "maximum": 9223372036854775807,
+                                          "minimum": -9223372036854775808,
+                                          "type": "integer"
+                                        },
+                                        {
+                                          "maxLength": 4096,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "op",
+                                    "value"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "op": {
+                                      "const": "not_equals"
+                                    },
+                                    "value": {
+                                      "oneOf": [
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "maximum": 9223372036854775807,
+                                          "minimum": -9223372036854775808,
+                                          "type": "integer"
+                                        },
+                                        {
+                                          "maxLength": 4096,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "op",
+                                    "value"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "memory_id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "source_key": {
+                              "maxLength": 512,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "evidence"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id",
+                            "source_key",
+                            "condition"
+                          ],
+                          "title": "evidence",
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "event": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "expectation": {
+                              "enum": [
+                                "occurred",
+                                "absent"
+                              ]
+                            },
+                            "grace_seconds": {
+                              "maximum": 31536000,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "memory_id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "source_key": {
+                              "maxLength": 512,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "event"
+                            },
+                            "window_end": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "window_start": {
+                              "format": "date-time",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id",
+                            "source_key",
+                            "event",
+                            "expectation"
+                          ],
+                          "title": "event",
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "plan_id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "plan_fulfilled"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id",
+                            "plan_id"
+                          ],
+                          "title": "plan_fulfilled",
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "action",
+                  "id",
+                  "description"
+                ],
+                "title": "plan",
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "revise"
+                  },
+                  "conflict_keys": {
+                    "items": {
+                      "maxLength": 160,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "description": {
+                    "maxLength": 8192,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "expected_version": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "id": {
+                    "maxLength": 160,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "min_attention_interval_seconds": {
+                    "maximum": 31536000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "priority": {
+                    "enum": [
+                      "low",
+                      "normal",
+                      "high",
+                      "critical"
+                    ]
+                  },
+                  "requirements": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "condition": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "op": {
+                                      "const": "exists"
+                                    }
+                                  },
+                                  "required": [
+                                    "op"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "op": {
+                                      "const": "equals"
+                                    },
+                                    "value": {
+                                      "oneOf": [
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "maximum": 9223372036854775807,
+                                          "minimum": -9223372036854775808,
+                                          "type": "integer"
+                                        },
+                                        {
+                                          "maxLength": 4096,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "op",
+                                    "value"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "op": {
+                                      "const": "not_equals"
+                                    },
+                                    "value": {
+                                      "oneOf": [
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "maximum": 9223372036854775807,
+                                          "minimum": -9223372036854775808,
+                                          "type": "integer"
+                                        },
+                                        {
+                                          "maxLength": 4096,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "op",
+                                    "value"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "memory_id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "source_key": {
+                              "maxLength": 512,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "evidence"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id",
+                            "source_key",
+                            "condition"
+                          ],
+                          "title": "evidence",
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "event": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "expectation": {
+                              "enum": [
+                                "occurred",
+                                "absent"
+                              ]
+                            },
+                            "grace_seconds": {
+                              "maximum": 31536000,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "memory_id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "source_key": {
+                              "maxLength": 512,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "event"
+                            },
+                            "window_end": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "window_start": {
+                              "format": "date-time",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id",
+                            "source_key",
+                            "event",
+                            "expectation"
+                          ],
+                          "title": "event",
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "plan_id": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "plan_fulfilled"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "id",
+                            "plan_id"
+                          ],
+                          "title": "plan_fulfilled",
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 128,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "action",
+                  "id",
+                  "expected_version"
+                ],
+                "title": "revise",
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "observe"
+                  },
+                  "coverage_end": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "coverage_start": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "covered_events": {
+                    "items": {
+                      "maxLength": 160,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 256,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "event_id": {
+                    "maxLength": 160,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observed_events": {
+                    "items": {
+                      "maxLength": 160,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 256,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "source_key": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "source_revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "value": {
+                    "oneOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "type": "integer"
+                      },
+                      {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "action",
+                  "event_id",
+                  "source_key",
+                  "source_revision"
+                ],
+                "title": "observe",
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "evaluate"
+                  },
+                  "id": {
+                    "maxLength": 160,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action"
+                ],
+                "title": "evaluate",
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "explain"
+                  },
+                  "id": {
+                    "maxLength": 160,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "id"
+                ],
+                "title": "explain",
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "portfolio"
+                  }
+                },
+                "required": [
+                  "action"
+                ],
+                "title": "portfolio",
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "complete"
+                  },
+                  "basis": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "report": {
+                            "maxLength": 4096,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "user_report"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "report"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "requirement_ids": {
+                            "items": {
+                              "maxLength": 160,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 128,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "type": {
+                            "const": "evidence"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "requirement_ids"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "expected_version": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "id": {
+                    "maxLength": 160,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "id",
+                  "expected_version",
+                  "basis"
+                ],
+                "title": "complete",
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "cancel"
+                  },
+                  "expected_version": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "id": {
+                    "maxLength": 160,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "reason": {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "id",
+                  "expected_version",
+                  "reason"
+                ],
+                "title": "cancel",
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "acknowledge"
+                  },
+                  "queue_id": {
+                    "maxLength": 160,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "queue_id"
+                ],
+                "title": "acknowledge",
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "replay"
+                  }
+                },
+                "required": [
+                  "action"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "memory_snapshot"
+                  },
+                  "memory_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "memory_id"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "const": "refresh_memory"
+                  },
+                  "event_id": {
+                    "type": "string"
+                  },
+                  "memory_id": {
+                    "type": "string"
+                  },
+                  "source_revision": {
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "action",
+                  "memory_id",
+                  "event_id",
+                  "source_revision"
+                ],
+                "type": "object"
+              }
+            ],
+            "schema_version": 1,
+            "semantics": {
+              "absence": "requires an elapsed explicit requirement window plus complete source coverage of that window and named event",
+              "evaluation_records": "deterministic labels, not cryptographic proof or authorization",
+              "evidence_provenance": "caller_asserted",
+              "external_effects": "never performed or authorized by this engine, including purchases",
+              "journal": "caller-owned; replay accepts timestamped commands"
+            },
+            "title": "Vestige Intention Evidence Lifecycle",
+            "type": "object"
+          },
+          "context": {
+            "description": "[check] Current context for matching intentions",
+            "properties": {
+              "codebase": {
+                "description": "Current codebase/project name",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "current_time": {
+                "description": "Current RFC3339 timestamp (defaults to now)",
+                "format": "date-time",
+                "type": "string"
+              },
+              "event": {
+                "description": "Observed event key; exact case-insensitive match to an event trigger condition",
+                "type": "string"
+              },
+              "events": {
+                "description": "Recent event or activity descriptions for event/activity triggers",
+                "items": {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "file": {
+                "description": "Current file path",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "topics": {
+                "description": "Current discussion topics",
+                "items": {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "deadline": {
+            "description": "[set] Optional deadline (ISO timestamp)",
+            "type": "string"
+          },
+          "description": {
+            "description": "[set] What to remember to do",
+            "type": "string"
+          },
+          "filter_status": {
+            "default": "active",
+            "description": "[list] Filter by status",
+            "enum": [
+              "active",
+              "fulfilled",
+              "cancelled",
+              "snoozed",
+              "all"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "description": "[update] ID of the intention to update",
+            "type": "string"
+          },
+          "include_snoozed": {
+            "default": false,
+            "description": "[check] Include snoozed intentions",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 20,
+            "description": "[list] Maximum number to return",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "priority": {
+            "default": "normal",
+            "description": "[set] Priority level",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "critical"
+            ],
+            "type": "string"
+          },
+          "scope": {
+            "default": "user",
+            "description": "[graph] Local intention namespace, not an authorization boundary.",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "snooze_minutes": {
+            "default": 30,
+            "description": "[update] Minutes to snooze for (when status is 'snooze')",
+            "maximum": 525600,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "description": "[update] 'complete', 'snooze' (delay) or 'cancel'.",
+            "enum": [
+              "complete",
+              "snooze",
+              "cancel"
+            ],
+            "type": "string"
+          },
+          "trigger": {
+            "$ref": "#/$defs/trigger",
+            "description": "[set] When to trigger this intention"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "maintain",
+      "description": "Lifecycle: 'consolidate', 'dream', 'gc' (dry_run default true), 'importance_score', 'backup', 'export', 'restore'.",
+      "inputSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "action": {
+                "const": "consolidate"
+              },
+              "after": {
+                "description": "Embeddings or lifecycle phase: nextCursor from the previous page. Omit after a sweep to retry failures and discover earlier inserts.",
+                "type": "string"
+              },
+              "batchSize": {
+                "default": 10,
+                "description": "Bounded phases: selected memories or log rows per call; embeddings accepts at most 100.",
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "budgetMs": {
+                "default": 1000,
+                "maximum": 10000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "dry_run": {
+                "default": true,
+                "description": "Bounded phases: preview the selected batch without inference or mutation.",
+                "type": "boolean"
+              },
+              "phase": {
+                "default": "all",
+                "enum": [
+                  "all",
+                  "embeddings",
+                  "lifecycle",
+                  "logs"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "dream"
+              },
+              "after": {
+                "description": "ID cursor from previous dream page. Cross-page pairs are outside this page's analysis.",
+                "type": "string"
+              },
+              "max_pairs": {
+                "default": 1225,
+                "description": "Upper bound for within-page memory pairs; reduces selected memory count.",
+                "maximum": 124750,
+                "minimum": 10,
+                "type": "integer"
+              },
+              "memory_count": {
+                "default": 50,
+                "description": "Maximum memories in a scoped ID page (default: 50)",
+                "maximum": 500,
+                "minimum": 5,
+                "type": "integer"
+              },
+              "min_similarity": {
+                "default": 0.5,
+                "description": "Minimum similarity for connection discovery (0.0-1.0, default: 0.5)",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "scope": {
+                "default": "user",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "gc"
+              },
+              "after": {
+                "description": "Live scan cursor from previous page; omit after completing a sweep.",
+                "type": "string"
+              },
+              "batchSize": {
+                "default": 100,
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "budgetMs": {
+                "default": 1000,
+                "maximum": 10000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "dry_run": {
+                "default": true,
+                "description": "If true (default), only report what would be deleted without actually deleting",
+                "type": "boolean"
+              },
+              "max_age_days": {
+                "description": "Only delete memories older than this many days (optional additional filter)",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "min_retention": {
+                "default": 0.1,
+                "description": "Delete memories with retention below this threshold (default: 0.1)",
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "importance_score"
+              },
+              "content": {
+                "description": "The content to score for importance",
+                "type": "string"
+              },
+              "context_topics": {
+                "description": "Optional topics for novelty detection context",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "project": {
+                "description": "Optional project/codebase name for context",
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "backup"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "export"
+              },
+              "format": {
+                "default": "json",
+                "description": "Export format: 'json' (default), 'jsonl', or 'portable' for exact Vestige-to-Vestige transfer",
+                "enum": [
+                  "json",
+                  "jsonl",
+                  "portable"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "description": "Custom filename (not path). File is saved in the active Vestige data directory's exports/ folder. Default: memories-{timestamp}.{format}",
+                "type": "string"
+              },
+              "since": {
+                "description": "Only export memories created after this date (YYYY-MM-DD)",
+                "type": "string"
+              },
+              "tags": {
+                "description": "Filter by tags (ALL must match)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "restore"
+              },
+              "allowAnyPath": {
+                "default": false,
+                "description": "Allow restoring from a file outside the active Vestige backups/ or exports/ directories. Only set true for trusted local files.",
+                "type": "boolean"
+              },
+              "merge": {
+                "default": false,
+                "description": "For portable archives, merge into the current database instead of requiring an empty target. Applies sync tombstones and keeps newer local memory rows on conflict.",
+                "type": "boolean"
+              },
+              "path": {
+                "description": "Path to a regular backup JSON file, at most 64 MiB. Legacy batches are limited to 10000 memories and applied atomically.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "action"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "action": {
+            "description": "Store-wide maintenance: consolidate, dream, gc (preview by default), importance_score, backup, export, restore. Inspect the selected action's schema. Export uses since; start/end are unsupported.",
+            "enum": [
+              "consolidate",
+              "dream",
+              "gc",
+              "importance_score",
+              "backup",
+              "export",
+              "restore"
+            ],
+            "type": "string"
+          },
+          "after": {
+            "description": "[gc] Live scan cursor from previous page; omit after completing a sweep.",
+            "type": "string"
+          },
+          "allowAnyPath": {
+            "default": false,
+            "description": "[restore] Allow restoring from a file outside the active Vestige backups/ or exports/ directories. Only set true for trusted local files.",
+            "type": "boolean"
+          },
+          "batchSize": {
+            "default": 100,
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "budgetMs": {
+            "default": 1000,
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "content": {
+            "description": "[importance_score] The content to score for importance",
+            "type": "string"
+          },
+          "context_topics": {
+            "description": "[importance_score] Optional topics for novelty detection context",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "dry_run": {
+            "default": true,
+            "description": "[gc] If true (default), only report what would be deleted without actually deleting",
+            "type": "boolean"
+          },
+          "format": {
+            "default": "json",
+            "description": "[export] Export format: 'json' (default), 'jsonl', or 'portable' for exact Vestige-to-Vestige transfer",
+            "enum": [
+              "json",
+              "jsonl",
+              "portable"
+            ],
+            "type": "string"
+          },
+          "max_age_days": {
+            "description": "[gc] Only delete memories older than this many days (optional additional filter)",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_pairs": {
+            "default": 1225,
+            "description": "[dream] Upper bound for within-page memory pairs; reduces selected memory count.",
+            "maximum": 124750,
+            "minimum": 10,
+            "type": "integer"
+          },
+          "memory_count": {
+            "default": 50,
+            "description": "[dream] Maximum memories in a scoped ID page (default: 50)",
+            "maximum": 500,
+            "minimum": 5,
+            "type": "integer"
+          },
+          "merge": {
+            "default": false,
+            "description": "[restore] For portable archives, merge into the current database instead of requiring an empty target. Applies sync tombstones and keeps newer local memory rows on conflict.",
+            "type": "boolean"
+          },
+          "min_retention": {
+            "default": 0.1,
+            "description": "[gc] Delete memories with retention below this threshold (default: 0.1)",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "min_similarity": {
+            "default": 0.5,
+            "description": "[dream] Minimum similarity for connection discovery (0.0-1.0, default: 0.5)",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "path": {
+            "description": "[export] Confined filename inside exports/. [restore] JSON archive path, confined unless allowAnyPath=true for a trusted file.",
+            "type": "string"
+          },
+          "phase": {
+            "default": "all",
+            "enum": [
+              "all",
+              "embeddings",
+              "lifecycle",
+              "logs"
+            ],
+            "type": "string"
+          },
+          "project": {
+            "description": "[importance_score] Optional project/codebase name for context",
+            "type": "string"
+          },
+          "scope": {
+            "default": "user",
+            "type": "string"
+          },
+          "since": {
+            "description": "[export] Only export memories created after this date (YYYY-MM-DD)",
+            "type": "string"
+          },
+          "tags": {
+            "description": "[export] Filter by tags (ALL must match)",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "memory",
+      "description": "Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (keeps FSRS state), 'purge' (for good; confirm=true). 'delete' aliases purge.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "description": "'get', 'get_batch' (ids), 'state', 'promote' / 'demote' (retrieval strength; demote never deletes), 'edit' (replace content, keep FSRS state), 'purge' (content and embeddings gone; confirm=true). 'delete' aliases purge",
+            "enum": [
+              "get",
+              "get_batch",
+              "delete",
+              "purge",
+              "state",
+              "promote",
+              "demote",
+              "edit"
+            ],
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "description": "Required for purge and delete. Removes canonical content and embeddings; legacy audit and sync rows keep opaque markers, so this is not verified unlearning.",
+            "type": "boolean"
+          },
+          "content": {
+            "description": "[edit] New content; embedding regenerated, FSRS state kept.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Memory id (single-memory actions).",
+            "type": "string"
+          },
+          "ids": {
+            "description": "[get_batch] Memory ids, max 20.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "description": "Why (optional, logged).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "memory_status",
+      "description": "Store status. view 'health' (default: stats, decay preview, module health, warnings), 'retention' (average, distribution, trend), 'timeline' (memories by day), 'changelog' (state-change audit trail), 'stats' (hygiene counts by type, tag, age, retention, lifecycle), 'tools' (all advertised tools and actions; pass tool for its full input schema).",
+      "inputSchema": {
+        "properties": {
+          "all_scopes": {
+            "default": false,
+            "description": "[stats] Aggregate every scope. Default false.",
+            "type": "boolean"
+          },
+          "detail_level": {
+            "description": "[timeline] Detail level (default 'summary').",
+            "enum": [
+              "brief",
+              "summary",
+              "full"
+            ],
+            "type": "string"
+          },
+          "end": {
+            "description": "[timeline, changelog] Range end (ISO 8601).",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max results: timeline 50 (max 200), changelog 20 (max 100), stats lists 50 (max 200). Ignored by health and retention.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "memory_id": {
+            "description": "[changelog] State transitions for this memory only.",
+            "type": "string"
+          },
+          "node_type": {
+            "description": "[timeline] Filter by node type.",
+            "type": "string"
+          },
+          "schema_introspection": {
+            "description": "[health] Include the response-schema description.",
+            "type": "boolean"
+          },
+          "scope": {
+            "default": "user",
+            "description": "[stats] Scope to aggregate (default 'user'); ignored when all_scopes.",
+            "type": "string"
+          },
+          "start": {
+            "description": "[timeline, changelog] Range start (ISO 8601).",
+            "type": "string"
+          },
+          "tags": {
+            "description": "[timeline view] Filter by tags (ANY match).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tool": {
+            "description": "[tools view] Exact advertised tool name. Omit for a compact inventory of every tool and action; specify a name for its complete input schema. This is discovery, not tool execution.",
+            "type": "string"
+          },
+          "view": {
+            "default": "health",
+            "description": "'tools': current tool/action inventory, or one full schema with tool. 'health' (default): system health, stats, decay preview, warnings, recommendations. 'retention': average, distribution, trend. 'timeline': memories by date. 'changelog': state-change audit trail. 'stats': hygiene counts by type, tag, age, retention, and lifecycle, with bounded detail lists and recent tag operations.",
+            "enum": [
+              "health",
+              "retention",
+              "timeline",
+              "changelog",
+              "stats",
+              "tools"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "project",
+      "description": "Project the durable subset of a scope (decisions, patterns, rule-tagged facts) into a fenced region of CLAUDE.md or MEMORY.md, a memory id on every line. 'preview' (default) shows the diff; 'write' needs confirm=true and replaces only the fence, never the rest of the file.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "default": "preview",
+            "description": "'preview' (default) renders and diffs, writes nothing. 'write' replaces the fenced region in 'path'; needs confirm=true.",
+            "enum": [
+              "preview",
+              "write"
+            ],
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "description": "Required for write. Only the fenced region changes; the rest of the file is kept byte for byte.",
+            "type": "boolean"
+          },
+          "format": {
+            "default": "claude-md",
+            "description": "'claude-md': a grouped section for CLAUDE.md or AGENTS.md. 'memory-md': one line per memory for an index file.",
+            "enum": [
+              "claude-md",
+              "memory-md"
+            ],
+            "type": "string"
+          },
+          "max_items": {
+            "default": 60,
+            "description": "At most this many memories.",
+            "maximum": 500,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_retention": {
+            "default": 0.3,
+            "description": "Leave out memories below this retention.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "path": {
+            "description": "Target file, relative to 'root'. Required for write; a preview diffs against it when given.",
+            "type": "string"
+          },
+          "root": {
+            "description": "Directory the target must stay inside (default: the server's working directory).",
+            "type": "string"
+          },
+          "scope": {
+            "description": "Project namespace to project (default 'user').",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "recall",
+      "description": "Retrieve from memory. mode 'lookup' (default): fast hybrid keyword and semantic search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradictions; needs 'query', use when accuracy matters; its text is assembled from computed values, not written by a model. 'contradictions': disagreement pairs for a 'topic'. Reason mode records composition evidence; retrieval never changes strength; promote what helped via memory.",
+      "inputSchema": {
+        "description": "Mode-specific retrieval. lookup supports the lookup schema. reason supports query, depth, limit, scope/includeCrossScope, retention/similarity/type/tag/validAt/source filters, and token_budget, while rejecting lookup-only controls. contradictions supports topic, since, min_trust, limit, and scope/includeCrossScope; it rejects token_budget and lookup/reason filters instead of silently ignoring them.",
+        "properties": {
+          "concrete": {
+            "default": false,
+            "description": "[lookup mode only; reason returns an unsupported-field error] Literal search, no semantic expansion or side effects. Auto-on for quoted strings, env vars, UUIDs, paths, identifiers.",
+            "type": "boolean"
+          },
+          "context_packet": {
+            "default": false,
+            "description": "[lookup only] Return stable evidence cards with a packet ID. Scores are omitted; cards are ordered by ID for client reuse. No provider cache or savings guarantee.",
+            "type": "boolean"
+          },
+          "context_topics": {
+            "description": "[lookup mode only; reason returns an unsupported-field error] Topics that boost context-dependent retrieval.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "depth": {
+            "description": "[reason mode] How many memories to analyze (default 20, max 50).",
+            "maximum": 50,
+            "minimum": 5,
+            "type": "integer"
+          },
+          "detail_level": {
+            "default": "summary",
+            "description": "[lookup mode only; reason returns an unsupported-field error] 'brief': id, type, tags, score. 'summary' (default): 8 fields. 'full': everything, including FSRS state.",
+            "enum": [
+              "brief",
+              "summary",
+              "full"
+            ],
+            "type": "string"
+          },
+          "exclude_types": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Node types to exclude (reflections are excluded by default).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "includeCrossScope": {
+            "default": false,
+            "description": "Search every project namespace. Only when cross-project retrieval is intended.",
+            "type": "boolean"
+          },
+          "include_types": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Only these node types; overrides exclude_types.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "known_packet_id": {
+            "description": "[lookup only] Send only while the previous complete packet remains in the model context. Matching packets return notModified=true and no cards. Omit after context loss to refresh.",
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "limit": {
+            "default": 10,
+            "description": "Maximum number of results (default: 10)",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_retention": {
+            "default": 0.0,
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Minimum retention strength, 0 to 1 (default 0).",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "min_similarity": {
+            "default": 0.5,
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Minimum similarity, 0 to 1 (default 0.5).",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "min_trust": {
+            "description": "[contradictions mode] Minimum trust for both sides of a contradiction (default 0.3).",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
           },
           "mode": {
-            "type": "string",
+            "default": "lookup",
+            "description": "'lookup' (default): fast hybrid search. 'reason': scoped deep pass with heuristic ranking, spreading activation, supersession, and contradiction analysis; its text is assembled from computed values; needs 'query' and requires current-source verification for material claims. 'contradictions': trust-weighted disagreement pairs for a 'topic', or recent memories.",
             "enum": [
               "lookup",
               "reason",
               "contradictions"
             ],
-            "default": "lookup",
-            "description": "lookup (default): hybrid search. reason: deeper causal reasoning. contradictions: disagreement pairs for a topic."
+            "type": "string"
           },
-          "includeCrossScope": {
-            "type": "boolean",
-            "description": "If true, search across project namespaces. Default recall stays in the user namespace."
+          "query": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Search query",
+            "type": "string"
+          },
+          "rank_native_fusion": {
+            "default": false,
+            "description": "[lookup mode only; reason returns an unsupported-field error] Experimental: fuse post-retrieval stages by weighted RRF instead of multipliers.",
+            "type": "boolean"
+          },
+          "retrieval_mode": {
+            "default": "balanced",
+            "description": "[lookup mode only; reason returns an unsupported-field error] 'precise': top hits, no activation or competition. 'balanced' (default): full pipeline. 'exhaustive': 5x overfetch, deep traversal.",
+            "enum": [
+              "precise",
+              "balanced",
+              "exhaustive"
+            ],
+            "type": "string"
+          },
+          "scope": {
+            "description": "Project namespace (default 'user'); project memories never bleed into an unscoped recall.",
+            "type": "string"
+          },
+          "since": {
+            "description": "[contradictions mode] RFC3339 timestamp; only memories updated after this are considered.",
+            "type": "string"
+          },
+          "source_author": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Source author or reporter (not assignee).",
+            "type": "string"
+          },
+          "source_id": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Only this source record id; pair with source_system.",
+            "type": "string"
+          },
+          "source_project": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Only this source project or repo, exact match.",
+            "type": "string"
+          },
+          "source_status": {
+            "default": "any",
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] 'any' (default), 'valid' (visible upstream), 'tombstoned' (removed upstream, kept for audit).",
+            "enum": [
+              "any",
+              "valid",
+              "tombstoned"
+            ],
+            "type": "string"
+          },
+          "source_system": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Only memories ingested from this external system ('github', 'redmine'). Post-filter.",
+            "type": "string"
+          },
+          "source_type": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Source record type, e.g. 'issue', 'comment'.",
+            "type": "string"
+          },
+          "source_updated_after": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Source updated at or after this RFC3339 time.",
+            "type": "string"
+          },
+          "source_updated_before": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Source updated at or before this RFC3339 time.",
+            "type": "string"
+          },
+          "tag_prefix": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Only results with a tag starting with this prefix (case-insensitive). Post-filter; raise 'limit' if it thins results.",
+            "type": "string"
+          },
+          "token_budget": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Max response tokens; content is truncated to fit. memory(action='get') has the full text.",
+            "maximum": 100000,
+            "minimum": 100,
+            "type": "integer"
           },
           "topic": {
-            "type": "string",
-            "description": "Topic for contradictions mode."
+            "description": "[contradictions mode] Topic to scope contradiction detection. If omitted, scans recent memories.",
+            "type": "string"
+          },
+          "validAt": {
+            "description": "[lookup and reason modes; contradictions returns an unsupported-field error] Only facts valid at this time ('now', RFC3339, YYYY-MM-DD). Omitted: expired and future facts are downranked, not hidden.",
+            "type": "string"
           }
-        }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "receipt",
+      "description": "Inspect a persisted retrieval receipt ('get') or ablate its frozen evidence pack ('replay'): named slots withheld, no rerun, no model, no causal claim.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "not": {
+              "required": [
+                "withheld_slots"
+              ]
+            },
+            "properties": {
+              "action": {
+                "const": "get"
+              }
+            }
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "replay"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "action": {
+            "description": "'get': one receipt with its replay-capsule summary. 'replay': withhold named evidence slots from the frozen context without rerunning retrieval.",
+            "enum": [
+              "get",
+              "replay"
+            ],
+            "type": "string"
+          },
+          "receipt_id": {
+            "description": "Receipt id; replay needs a retrieval receipt with a frozen capsule.",
+            "type": "string"
+          },
+          "withheld_slots": {
+            "description": "[replay] Slots to remove from the frozen context; search is never rerun.",
+            "items": {
+              "pattern": "^evidence_[1-9][0-9]*$",
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "action",
+          "receipt_id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "session_start",
+      "description": "Start-of-session context in one call: relevant memories, open intentions, status, predictions, codebase context, under one token budget.",
+      "inputSchema": {
+        "properties": {
+          "context": {
+            "description": "Current context for intention matching and predictions",
+            "properties": {
+              "codebase": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string"
+              },
+              "repoPath": {
+                "description": "Explicit checkout for code evidence; unavailable when omitted",
+                "type": "string"
+              },
+              "topics": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "include_intentions": {
+            "default": true,
+            "description": "Include triggered intentions (default: true)",
+            "type": "boolean"
+          },
+          "include_predictions": {
+            "default": true,
+            "description": "Include memory predictions (default: true)",
+            "type": "boolean"
+          },
+          "include_status": {
+            "default": true,
+            "description": "Include system health info (default: true)",
+            "type": "boolean"
+          },
+          "queries": {
+            "description": "Search queries to run (default: [\"user preferences\"])",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": "array"
+          },
+          "scope": {
+            "description": "Memory namespace (default: user)",
+            "type": "string"
+          },
+          "token_budget": {
+            "default": 1000,
+            "description": "Serialized response budget in estimated tokens (UTF-8 bytes / 4, rounded up; not a model tokenizer). Includes metadata. Default: 1000.",
+            "maximum": 100000,
+            "minimum": 100,
+            "type": "integer"
+          }
+        },
+        "type": "object"
       }
     },
     {
       "name": "smart_ingest",
-      "description": "Store a fact with prediction-error gating: merge redundant writes, flag contradictions, create only what is novel. Local-first; nothing is sent to a remote API.",
+      "description": "Save to memory through Prediction Error Gating: 'content' is created, merged into a similar memory, or supersedes an outdated one. Batch: 'items' (max 20).",
       "inputSchema": {
-        "type": "object",
+        "oneOf": [
+          {
+            "not": {
+              "required": [
+                "items"
+              ]
+            },
+            "required": [
+              "content"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "content"
+              ]
+            },
+            "required": [
+              "items"
+            ]
+          }
+        ],
         "properties": {
-          "content": {
-            "type": "string",
-            "description": "The content to remember (single mode)."
-          },
-          "node_type": {
-            "type": "string",
-            "description": "Type of knowledge: fact, concept, event, person, place, note, pattern, decision",
-            "default": "fact"
-          },
-          "tags": {
-            "type": "array",
-            "items": {
+          "acceptedTagSuggestions": {
+            "additionalProperties": {
               "type": "string"
             },
-            "description": "Tags for categorization."
+            "description": "Accepted input-tag to existing-tag mappings from a preflight; revalidated before ingest.",
+            "type": "object"
           },
-          "scope": {
-            "type": "string",
-            "description": "Project namespace. Defaults to user. Retrieval stays in that namespace unless includeCrossScope is set on recall."
+          "allowSecrets": {
+            "default": false,
+            "description": "Store a detected credential for this item. Dangerous; redact or store a reference instead.",
+            "type": "boolean"
+          },
+          "batchMergePolicy": {
+            "default": "force_create",
+            "description": "Batch only. 'force_create' (default) keeps items separate; 'smart' lets the gate merge.",
+            "enum": [
+              "force_create",
+              "smart"
+            ],
+            "type": "string"
+          },
+          "content": {
+            "description": "What to remember; compared against existing memories (single mode).",
+            "type": "string"
+          },
+          "forceCreate": {
+            "default": false,
+            "description": "Create even if similar content exists.",
+            "type": "boolean"
           },
           "items": {
-            "type": "array",
-            "description": "Batch mode: up to 20 items.",
+            "description": "Batch: up to 20 items with the same fields as single mode, each force-created unless batchMergePolicy='smart'. For session end or before compaction.",
             "items": {
-              "type": "object",
               "properties": {
+                "acceptedTagSuggestions": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "allowSecrets": {
+                  "default": false,
+                  "type": "boolean"
+                },
                 "content": {
+                  "type": "string"
+                },
+                "forceCreate": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "node_type": {
+                  "default": "fact",
+                  "type": "string"
+                },
+                "previewTagSuggestions": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "validFrom": {
+                  "type": "string"
+                },
+                "validUntil": {
                   "type": "string"
                 }
               },
               "required": [
                 "content"
-              ]
-            }
-          }
-        }
-      }
-    },
-    {
-      "name": "backfill",
-      "description": "Causal Backfill: reach backward from a failure to the earlier memory that most plausibly caused it \u2014 even when the cause shares no vocabulary with the symptom. Local stdio; not a production hosted service.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "failure_id": {
-            "type": "string",
-            "description": "ID of the failure memory. If omitted, uses the most recent failure-like memory."
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "type": "array"
           },
-          "manual": {
-            "type": "boolean",
+          "node_type": {
+            "default": "fact",
+            "description": "fact, concept, event, person, place, note, pattern, decision, or state. 'state' snapshots expire after VESTIGE_STATE_TTL_DAYS (default 30) unless validUntil is set, then rank last with currentlyValid=false.",
+            "type": "string"
+          },
+          "previewTagSuggestions": {
             "default": false,
-            "description": "Force the backfill even if the event is not auto-detected as salient."
+            "description": "Read-only preflight: tag suggestions and inferred validity, nothing stored.",
+            "type": "boolean"
           },
-          "lookback_days": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 365,
-            "default": 30,
-            "description": "How many days back to reach for the cause."
+          "scope": {
+            "description": "Project namespace (default 'user'). Recall searches it unless includeCrossScope=true.",
+            "type": "string"
           },
-          "promote": {
-            "type": "boolean",
-            "default": true,
-            "description": "Promote the surfaced cause in storage. Set false for a dry-run preview."
+          "source": {
+            "description": "Source or reference for this knowledge",
+            "type": "string"
+          },
+          "tags": {
+            "description": "Tags. Close existing same-scope tags come back as suggestions, never auto-applied.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "validFrom": {
+            "description": "When the fact becomes true (RFC3339 or YYYY-MM-DD). Omitted: one unambiguous 'as of DATE' phrase is inferred.",
+            "type": "string"
+          },
+          "validUntil": {
+            "description": "When the fact stops being true (RFC3339 or YYYY-MM-DD, after validFrom).",
+            "type": "string"
           }
-        }
+        },
+        "type": "object"
       }
-    },
-    {
-      "name": "receipt",
-      "description": "Inspect a persisted retrieval receipt or run controlled evidence replay."
-    },
-    {
-      "name": "memory",
-      "description": "Read, inspect, promote, or demote individual memories."
-    },
-    {
-      "name": "graph",
-      "description": "Explore the local memory graph and its links."
-    },
-    {
-      "name": "maintain",
-      "description": "Run local consolidation and lifecycle maintenance."
-    },
-    {
-      "name": "dedup",
-      "description": "Find/merge duplicate memories and preview, apply, audit, or undo tag renames/merges."
-    },
-    {
-      "name": "suppress",
-      "description": "Actively forget a memory (reversible for 24h)."
-    },
-    {
-      "name": "memory_status",
-      "description": "Report health, counts, model readiness, and store hygiene statistics."
-    },
-    {
-      "name": "codebase",
-      "description": "Index and query codebase-scoped memory."
-    },
-    {
-      "name": "intention",
-      "description": "Track goals and open intentions across sessions."
     },
     {
       "name": "source_sync",
-      "description": "Sync memories from external connected sources into the local store."
+      "description": "Index an external system into local memories that cite the source. source='github' (repo, GITHUB_TOKEN) or 'redmine' (project, REDMINE_URL, REDMINE_API_KEY). Re-runs update; reconcile=true tombstones removals.",
+      "inputSchema": {
+        "properties": {
+          "max_pages": {
+            "default": 10,
+            "description": "Max API pages per run (100 issues each); resume a large first sync across calls. Default 10.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project": {
+            "description": "Redmine: project slug or id. Host from REDMINE_URL.",
+            "type": "string"
+          },
+          "reconcile": {
+            "default": false,
+            "description": "Also tombstone local memories for issues gone upstream (full enumeration). Default false.",
+            "type": "boolean"
+          },
+          "repo": {
+            "description": "GitHub: repository as 'owner/name'.",
+            "type": "string"
+          },
+          "source": {
+            "default": "github",
+            "description": "'github' (issues) or 'redmine' (a project).",
+            "enum": [
+              "github",
+              "redmine"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
     },
     {
-      "name": "session_start",
-      "description": "Prime the agent with relevant local context at session start."
+      "name": "suppress",
+      "description": "Inhibit a memory without deleting it: out of retrieval, faster decay, compounding per call, neighbours affected over 72 hours. reverse=true undoes it within 24 hours.",
+      "inputSchema": {
+        "description": "Top-down suppression (Anderson 2025 SIF, Davis Rac1): the memory persists but is inhibited from retrieval and decays faster. Each call compounds. A background worker spreads accelerated decay to co-activated neighbours over 72 hours. Local state is reversible within 24 hours when its snapshot still matches. Journaled cascade effects are reversed atomically when neighbor state still matches.",
+        "properties": {
+          "id": {
+            "description": "Memory UUID to suppress (or reverse-suppress)",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Optional note on why; logged.",
+            "type": "string"
+          },
+          "reverse": {
+            "default": false,
+            "description": "If true, reverse a previous suppression. Requires a matching snapshot within the 24-hour labile window; later state changes and legacy suppressions need review. Includes journaled neighbor cascades when their state still matches.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
     }
   ]
 }

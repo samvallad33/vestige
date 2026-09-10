@@ -5,8 +5,8 @@
 Vestige remembers project decisions across sessions, retrieves focused context, keeps source references current, and helps you investigate failures using earlier evidence. The open-source core runs locally through MCP, with automatic memory writes and an embedded dashboard. No API key is required for local memory and embeddings.
 
 [![Release](https://img.shields.io/github/v/release/samvallad33/vestige?color=06b6d4)](https://github.com/samvallad33/vestige/releases/latest)
-[![Tests](https://img.shields.io/badge/tests-1961_passing-22c55e)](https://github.com/samvallad33/vestige/actions)
-[![Binary](https://img.shields.io/badge/binary-25MB_single_file-informational)](https://github.com/samvallad33/vestige/releases/latest)
+[![Tests](https://img.shields.io/github/actions/workflow/status/samvallad33/vestige/ci.yml?branch=main&label=CI)](https://github.com/samvallad33/vestige/actions)
+[![Binary](https://img.shields.io/badge/platforms-5_release_targets-informational)](https://github.com/samvallad33/vestige/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6)](LICENSE)
 
 [Install](#install) · [Why not RAG](#why-not-just-rag) · [Benchmark](#the-receipts-silent-rotation) · [Science](#the-science) · [Tools](#the-tools) · [Dashboard](#the-dashboard) · [Docs](#go-deeper)
