@@ -20,59 +20,66 @@ they do not establish a released v3 implementation.
 | 8 | Repeated frozen comparisons | Preserve failures, uncertainty, ties and regressions |
 | 9 | Company evaluation package | Reproduce results on company-controlled workloads |
 
-## Stage 1 implementation boundary
+## Implemented candidate surfaces
 
-`benchmarks/task-cost` implements an offline export recorder/accountant with
-OpenAI Responses and Anthropic Messages text-usage shapes, exact decimal rate
-arithmetic, frozen artifacts, explicit missing data, and synthetic tests. It
-does not yet capture a live agent session, reconcile a provider invoice,
-independently score a developer task, or demonstrate savings.
+1. **Accounting and receipts:** frozen identities and artifact hashes, exact
+   decimal provider-usage accounting, caller-owned SDK capture, failed-request
+   retention, task wall-clock spans, and request-level billing-export reconciliation.
+   Missing usage remains unknown; empty exports cannot establish reconciliation.
+2. **Sufficient recall:** whole-evidence budgets, dissent-group preservation,
+   expandable memory IDs and stable opt-in context packets with explicit retention
+   acknowledgment and refresh after context loss.
+3. **Client integration:** schema-derived progressive discovery and an installable
+   Python runtime owning transcript retention, MCP stdio and provider request
+   serialization. The caller owns SDK credentials and execution.
+4. **Memory lifecycle:** explicit batch outcomes, atomic vector invalidation and
+   stale-computation rejection, namespace/policy/stale-plan merge checks, atomic
+   conflict-aware merge undo, schema 34/35 suppression and neighbor journals,
+   and bounded staged restore.
+5. **Continuity:** shared source evidence across session start/source sync/codebase,
+   versioned whitespace-preserving source anchors, deterministic intention clocks,
+   validated triggers and explicit observed-event matching.
+6. **Investigation:** scoped reasoning, bounded graph hypotheses and Backfill
+   previews without automatic reinforcement. Local composition novelty remains
+   distinct from worldwide novelty or causal proof.
+7. **Maintenance:** bounded embedding, lifecycle, log and GC batches, cooperative
+   lifecycle/GC budgets, scoped dream pages and pair limits, durable checkpoints
+   and explicit continuation. Default full consolidation remains compatibility
+   behavior; cross-page dream pairs and hard inference deadlines are not promised.
+8. **Evaluation:** six executable development task families, frozen source/prompt/
+   history/evaluators, deterministic trial order, isolated checkouts, caller-trusted
+   driver execution with timeouts, external scoring and exploratory paired reports.
+   Reference-solution qualification executes no models.
+9. **Company package:** hashed local summaries with task timing, reconciliation,
+   declared sample-policy screening and explicit break-even scenario arithmetic.
+   The original company-controlled bundle remains necessary for reproduction.
 
-The comparison contract starts with the native agent, current released Vestige,
-and candidate Vestige. Use equivalent model, effort, initial repository,
-historical information, stimulus, task limits and evaluators. Verify native
-caching/context management before comparing. Isolate arms and report cold/warm
-behavior separately. Initial suite families: fresh task, interrupted work,
-correction, historical debugging, cross-project similar facts, and accumulated
-memory. Development and held-out cases remain separate; choose confirmatory
-sample sizes from observed variance before looking at held-out results.
+## Empirical and release gates
+
+The code can be qualified with local deterministic tests. Real savings remain
+unmeasured until company-controlled model trials run with frozen model/effort,
+source/history, tool configurations, isolated memory stores and equal task limits.
+No model agents or paid requests are launched by implementing this roadmap.
+
+Compare the native agent, current released Vestige and candidate Vestige. Verify
+native caching/context management and preserve cold/warm, setup/steady-state,
+maintenance, failed attempts and retries. Provider exports and supplied prices
+need independent qualification; reconciliation checks supplied request charges,
+not invoice authenticity, taxes or discounts.
+
+Development fixtures are not held-out company workloads. Freeze quality bounds,
+cost targets and sampling before evaluation. The implemented cluster intervals
+and sample-policy gate are exploratory screening, not confirmatory significance
+or authentication of attached qualification statements. Independent task and
+provider qualification, confirmatory study design and held-out model trials
+remain empirical gates.
 
 Primary metric: total cost of all attempted tasks divided by independently
-verified successes, with success rate, total spend and latency alongside it.
-Zero successful tasks have undefined cost per success. No flat savings claim
-is justified by a single favorable run, synthetic fixture or retrieval score.
+verified successes, with success rate, total spend and complete task latency.
+Zero successful tasks have undefined cost per success. Synthetic fixtures,
+reference solutions and smaller request byte counts cannot prove billed savings.
 
-## Candidate implementation progress
-
-- Stage 1: offline cost ledger and caller-owned SDK capture seam; fake SDK tests
-  cover usage, retries, failure and serialization errors. Live capture/provider
-  reconciliation and the scored baseline remain pending.
-- Stages 2–3: lookup and reason whole-evidence budgets; schema-derived discovery;
-  opt-in stable lookup packets and explicit client acknowledgment of retained
-  context. Provider cache behavior and task-level cost effects remain unmeasured.
-- Existing tool-contract candidate: deterministic intentions, scoped Backfill
-  previews and graph hypotheses, namespace/policy checks during merge apply,
-  truthful embedding edit state with peer index invalidation, effective
-  maintenance controls, and explicit ingest batch outcomes. These implement
-  portions of stages 4–7; they do not complete every lifecycle or maintenance gate.
-
-- Stage 4: merge/supersede previews bind mutation-relevant source state; apply
-  rejects stale or legacy plans and inactive members. Merge undo compares the
-  applied state and restores content, validity, journal and plan status in one
-  transaction. Later edits cause a conflict instead of being overwritten.
-  Legacy operations without post-state snapshots require manual recovery review.
-  Local suppression snapshots and conflict-aware reversal are implemented;
-  cascade reversal remains pending. MCP restore now bounds input and stages
-  legacy batches before a transactional import.
-
-- Stages 8–9: verified-ledger paired comparison and local company summary package
-  with hashed outputs, retained failures/ties/missing accounting and exploratory
-  case-cluster success intervals. A frozen Python evaluator runner now records terminal outcomes; the real
-  developer-task suite, independent evaluator qualification, live
-  provider qualification, task wall-time instrumentation and confirmatory
-  held-out trials remain pending; synthetic packages do not demonstrate savings.
-
-- Stage 7: opt-in bounded embedding maintenance with preview, continuation cursor,
-  committed-row checkpoints, runtime-unavailable status and measured call duration.
-  Full consolidation, dream and other maintenance phases still need separate
-  incremental budgets; row-bounded inference is not a hard time or dollar cap.
+The candidate is local. Installation into a live memory store, schema migration,
+provider execution, publication and release require their own target verification
+and authorization. Retain the pre-upgrade database backup for schema rollback;
+unrecorded historical suppression effects cannot be reconstructed.

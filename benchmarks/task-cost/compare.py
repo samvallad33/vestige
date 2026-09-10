@@ -3,6 +3,7 @@
 
 No model calls. This does not certify provider billing or task evaluators.
 """
+
 import argparse
 from collections import defaultdict
 from decimal import Decimal
@@ -24,20 +25,30 @@ def percentile(values, fraction):
 
 
 def compare(bundle, baseline, candidate, samples=2000, seed=0):
-    ledger.require(type(samples) is int and 100 <= samples <= 100_000,
-                   "samples must be between 100 and 100000")
+    ledger.require(
+        type(samples) is int and 100 <= samples <= 100_000,
+        "samples must be between 100 and 100000",
+    )
     ledger.require(type(seed) is int, "seed must be an integer")
     root = Path(bundle)
-    report = ledger.evaluate(root)  # Verifies contract, accountant, artifacts and events.
+    report = ledger.evaluate(
+        root
+    )  # Verifies contract, accountant, artifacts and events.
     contract = ledger.read_json(root / "contract.json")
-    ledger.require(baseline != candidate and baseline in report["arms"] and candidate in report["arms"],
-                   "select two distinct contract arms")
+    ledger.require(
+        baseline != candidate
+        and baseline in report["arms"]
+        and candidate in report["arms"],
+        "select two distinct contract arms",
+    )
     outcomes = {}
     for line in (root / "events.jsonl").read_text().splitlines():
         if line.strip():
             event = ledger.parse_json(line)
             if event["kind"] == "outcome":
-                outcomes[(event["arm"], event["case"], event["trial"])] = event["status"]
+                outcomes[(event["arm"], event["case"], event["trial"])] = event[
+                    "status"
+                ]
     costs = defaultdict(lambda: Decimal(0))
     unknown = set()
     durations = defaultdict(list)
@@ -54,18 +65,33 @@ def compare(bundle, baseline, candidate, samples=2000, seed=0):
     clusters = defaultdict(list)
     for case in contract["cases"]:
         for trial in range(contract["repetitions"]):
-            pair = {"case": case["id"], "trial": trial, "state": case["state"],
-                    "workload": case["workload"], "arms": {}}
+            pair = {
+                "case": case["id"],
+                "trial": trial,
+                "state": case["state"],
+                "workload": case["workload"],
+                "arms": {},
+            }
             for arm in (baseline, candidate):
                 key = (arm, case["id"], trial)
                 timings = durations[key]
-                pair["arms"][arm] = {"outcome": outcomes.get(key),
-                             "task_attributed_usd": str(costs[key]) if key not in unknown and timings else None,
-                             "summed_request_ms": sum(timings) if timings and None not in timings else None}
+                pair["arms"][arm] = {
+                    "outcome": outcomes.get(key),
+                    "task_attributed_usd": (
+                        str(costs[key]) if key not in unknown and timings else None
+                    ),
+                    "summed_request_ms": (
+                        sum(timings) if timings and None not in timings else None
+                    ),
+                }
             pairs.append(pair)
             clusters[case["id"]].append(pair)
-    complete = all(report["arms"][arm]["accounting_complete"] for arm in (baseline, candidate))
-    costs_per_success = [report["arms"][arm]["usd_per_success"] for arm in (baseline, candidate)]
+    complete = all(
+        report["arms"][arm]["accounting_complete"] for arm in (baseline, candidate)
+    )
+    costs_per_success = [
+        report["arms"][arm]["usd_per_success"] for arm in (baseline, candidate)
+    ]
     savings = None
     if complete and all(value is not None for value in costs_per_success):
         native, treatment = map(Decimal, costs_per_success)
@@ -90,35 +116,83 @@ def compare(bundle, baseline, candidate, samples=2000, seed=0):
         groups = list(clusters.values())
         deltas = []
         for _ in range(samples):
-            selected = [pair for group in rng.choices(groups, k=len(groups)) for pair in group]
-            deltas.append(sum((pair["arms"][candidate]["outcome"] == "success") -
-                              (pair["arms"][baseline]["outcome"] == "success") for pair in selected) / len(selected))
-        interval = {"low": percentile(deltas, .025), "high": percentile(deltas, .975),
-                    "method": "exploratory paired case-cluster percentile bootstrap",
-                    "samples": samples, "seed": seed, "case_clusters": len(clusters)}
+            selected = [
+                pair for group in rng.choices(groups, k=len(groups)) for pair in group
+            ]
+            deltas.append(
+                sum(
+                    (pair["arms"][candidate]["outcome"] == "success")
+                    - (pair["arms"][baseline]["outcome"] == "success")
+                    for pair in selected
+                )
+                / len(selected)
+            )
+        interval = {
+            "low": percentile(deltas, 0.025),
+            "high": percentile(deltas, 0.975),
+            "method": "exploratory paired case-cluster percentile bootstrap",
+            "samples": samples,
+            "seed": seed,
+            "case_clusters": len(clusters),
+        }
+    wall_times = {
+        (item["arm"], item["case"], item["trial"]): item["elapsed_ms"]
+        for item in report["task_spans"]
+    }
+    task_latency = {}
+    for arm in (baseline, candidate):
+        values = [
+            wall_times[(arm, pair["case"], pair["trial"])]
+            for pair in pairs
+            if (arm, pair["case"], pair["trial"]) in wall_times
+        ]
+        task_latency[arm] = {
+            "known_tasks": len(values),
+            "missing_tasks": len(pairs) - len(values),
+            "p50_ms": percentile(values, 0.5),
+            "p95_ms": percentile(values, 0.95),
+        }
     latency = {}
     for arm in (baseline, candidate):
         values = [pair["arms"][arm]["summed_request_ms"] for pair in pairs]
         known = [value for value in values if value is not None]
-        latency[arm] = {"known_tasks": len(known), "missing_tasks": len(values) - len(known),
-                        "p50_summed_request_ms": percentile(known, .5),
-                        "p95_summed_request_ms": percentile(known, .95)}
-    return {"version": "vestige-task-comparison/v1", "analysis_kind": "exploratory",
-            "evidence_kind": report["evidence_kind"], "contract_sha256": report["contract_sha256"],
-            "events_sha256": report["events_sha256"], "analyzer_sha256": ledger.digest(__file__),
-            "baseline": baseline, "candidate": candidate, "accounting_complete": complete,
-            "arms": {arm: report["arms"][arm] for arm in (baseline, candidate)},
-            "cost_per_success_reduction_fraction": savings,
-            "paired_success": {"candidate_wins": wins, "candidate_losses": losses,
-                               "ties": ties, "missing_pairs": missing, "exploratory_interval": interval},
-            "request_duration": latency, "pairs": pairs,
-            "limitations": [
-                "Synthetic evidence is an accounting test, never product savings evidence.",
-                "Task-attributed pair costs exclude shared overhead; arm totals include it.",
-                "Summed request duration is not task wall-clock latency and can include parallel calls.",
-                "Bootstrap intervals are exploratory and unstable with few independent case clusters.",
-                "No causal attribution, noninferiority, live provider qualification or invoice reconciliation is established.",
-                "Unknown billing, missing outcomes or missing overhead prevent complete cost comparisons."]}
+        latency[arm] = {
+            "known_tasks": len(known),
+            "missing_tasks": len(values) - len(known),
+            "p50_summed_request_ms": percentile(known, 0.5),
+            "p95_summed_request_ms": percentile(known, 0.95),
+        }
+    return {
+        "version": "vestige-task-comparison/v1",
+        "analysis_kind": "exploratory",
+        "evidence_kind": report["evidence_kind"],
+        "contract_sha256": report["contract_sha256"],
+        "events_sha256": report["events_sha256"],
+        "analyzer_sha256": ledger.digest(__file__),
+        "baseline": baseline,
+        "candidate": candidate,
+        "accounting_complete": complete,
+        "arms": {arm: report["arms"][arm] for arm in (baseline, candidate)},
+        "cost_per_success_reduction_fraction": savings,
+        "paired_success": {
+            "candidate_wins": wins,
+            "candidate_losses": losses,
+            "ties": ties,
+            "missing_pairs": missing,
+            "exploratory_interval": interval,
+        },
+        "task_wall_time": task_latency,
+        "request_duration": latency,
+        "pairs": pairs,
+        "limitations": [
+            "Synthetic evidence is an accounting test, never product savings evidence.",
+            "Task-attributed pair costs exclude shared overhead; arm totals include it.",
+            "Summed request duration is not task wall-clock latency and can include parallel calls.",
+            "Bootstrap intervals are exploratory and unstable with few independent case clusters.",
+            "No causal attribution, noninferiority, live provider qualification or invoice reconciliation is established.",
+            "Unknown billing, missing outcomes or missing overhead prevent complete cost comparisons.",
+        ],
+    }
 
 
 def main():
@@ -129,7 +203,14 @@ def main():
     parser.add_argument("--samples", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
-    print(json.dumps(compare(args.bundle, args.baseline, args.candidate, args.samples, args.seed), indent=2))
+    print(
+        json.dumps(
+            compare(
+                args.bundle, args.baseline, args.candidate, args.samples, args.seed
+            ),
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

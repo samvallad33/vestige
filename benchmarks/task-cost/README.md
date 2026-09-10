@@ -206,3 +206,52 @@ company isolation, trusted evaluators and held-out sampling remain qualification
 requirements. Receipt duration is evaluation time, not developer-task latency.
 Failed evaluator launches do not produce a fabricated outcome. Run the recorder
 with one writer; concurrent scoring against one ledger is unsupported.
+
+## Executable v3 development evaluation
+
+`developer_suite.py --self-test` verifies six frozen evaluator families against
+broken starting code and reference solutions. It invokes no model. Build a fresh
+suite with `--destination DIR --identity-config CONFIG.json`; configuration
+supplies the existing contract arms, model/effort/revisions, rates,
+`evidence_kind`, and repetitions. The generated source archives exclude reference
+solutions, and all generated cases are explicitly development cases.
+
+`trials.py BUNDLE` prints the deterministic frozen schedule. Execution requires a
+frozen `driver` Python artifact and the explicit `--execute-trusted-driver
+--index N` option. Drivers receive an invocation JSON path with bundle, checkout,
+arm, case and trial. The caller's trusted driver owns SDK execution and records
+every request via `capture.py`. The driver runs in an isolated checkout under
+the frozen `task_timeout_seconds` (default 300); its whole task span is recorded,
+then the frozen evaluator scores the checkout. Failed attempts and timeouts stay
+in the ledger. Completed trials reject before another driver is launched.
+Drivers are trusted code with the caller's environment, not a sandbox. The
+runner creates no models by itself. Do not execute a paid driver without the
+appropriate account and workload authorization.
+
+`capture.measured_task` can also wrap an existing caller-owned task loop. Complete
+task wall time includes its tools and retries; evaluator time follows separately.
+Contracts can require this timing with `require_task_timing: true`. Comparisons
+report task p50/p95 separately from summed request latency. Provider response IDs
+cannot be charged twice, including across comparison arms.
+
+`reconcile.py BUNDLE EXPORT.json` compares supplied USD request charges keyed by
+`usage_format` and `request_id`. The export requires `source`, `currency: "USD"`,
+and `charges: [{usage_format, request_id, usd}]`. Missing, duplicate, unmatched,
+unknown and differing charges remain explicit. Empty evidence does not qualify.
+This checks arithmetic against supplied evidence, not invoice authenticity,
+account completeness, discounts, or taxes.
+
+`company_report.py` accepts optional `--billing-export`. Its package includes
+wall-clock summaries and `qualification.json`, plus reconciliation when supplied.
+`qualification.qualify` screens a frozen `comparison_policy` containing a minimum
+case count, maximum success-rate loss, minimum cost reduction and hashed provider,
+evaluator and isolation qualification artifacts. It requires held-out cases,
+provider exports, complete accounting and task spans. The interval remains
+exploratory; artifact hashes do not authenticate claims, and passing this sample
+gate is not confirmatory statistical proof. `projected_break_even` is exact
+constant-workload scenario arithmetic, not observed amortization.
+
+Freeze all artifacts before running. Never refreeze a completed evidence bundle
+to use a changed accountant; retain its original accountant and create a new run.
+Company-controlled held-out tasks, real model execution and independently
+qualified billing are still needed to establish product savings.

@@ -13,12 +13,20 @@ class CompanyReportTests(unittest.TestCase):
     def test_manifest_summary_and_no_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            bundle = example.create(root / 'bundle')
-            output = company_report.create(bundle, root / 'report', 'native', 'candidate')
-            self.assertEqual({p.name for p in output.iterdir()}, {'manifest.json', 'REPORT.md', 'comparison.json'})
-            manifest = ledger.read_json(output / 'manifest.json')
-            for name, digest in manifest['files'].items():
+            bundle = example.create(root / "bundle")
+            output = company_report.create(
+                bundle, root / "report", "native", "candidate"
+            )
+            self.assertEqual(
+                {p.name for p in output.iterdir()},
+                {"manifest.json", "REPORT.md", "comparison.json", "qualification.json"},
+            )
+            manifest = ledger.read_json(output / "manifest.json")
+            for name, digest in manifest["files"].items():
                 self.assertEqual(ledger.digest(output / name), digest)
-            self.assertIn('Synthetic evidence validates accounting only', (output / 'REPORT.md').read_text())
+            self.assertIn(
+                "Synthetic evidence validates accounting only",
+                (output / "REPORT.md").read_text(),
+            )
             with self.assertRaises(ValueError):
-                company_report.create(bundle, output, 'native', 'candidate')
+                company_report.create(bundle, output, "native", "candidate")
