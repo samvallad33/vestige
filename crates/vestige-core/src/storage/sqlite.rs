@@ -6690,6 +6690,25 @@ impl SqliteMemoryStore {
     ///
     /// This is used for codebase context retrieval where we need to query
     /// by node_type (pattern/decision) and filter by codebase tag.
+    /// Select current durable memory within the scope before applying the cap.
+    pub fn projection_candidates(&self, scope: &str, min_retention: f64, limit: i32) -> Result<Vec<KnowledgeNode>> {
+        let scope = Self::normalize_scope(scope)?;
+        let reader = self.reader.lock().map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let mut stmt = reader.prepare(
+            "SELECT * FROM knowledge_nodes
+             WHERE COALESCE(NULLIF(trim(scope), ''), 'user') = ?1
+               AND retention_strength >= ?2 AND suppression_count = 0 AND superseded_by IS NULL
+               AND (valid_from IS NULL OR julianday(valid_from) <= julianday('now'))
+               AND (valid_until IS NULL OR julianday(valid_until) > julianday('now'))
+               AND (node_type IN ('decision','pattern') OR
+                    (node_type IN ('fact','note') AND EXISTS
+                     (SELECT 1 FROM json_each(knowledge_nodes.tags) WHERE lower(value) IN ('rule','preference','convention'))))
+             ORDER BY CASE node_type WHEN 'decision' THEN 0 WHEN 'pattern' THEN 1 ELSE 2 END,
+                      updated_at DESC, id ASC LIMIT ?3")?;
+        let rows = stmt.query_map(params![scope, min_retention, limit], Self::row_to_node)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
     pub fn get_nodes_by_type_and_tag(
         &self,
         node_type: &str,
