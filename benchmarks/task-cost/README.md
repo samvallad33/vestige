@@ -162,3 +162,47 @@ Integrate capture with one actual agent runtime and reconcile its exports with
 provider usage. Freeze the development suite and verify each baseline's native
 context/cache path. Then run repeated, isolated trials with independent scoring.
 Do not claim token-fee savings from this accounting smoke test.
+
+## Paired analysis and local company package
+
+After recording a complete frozen ledger:
+
+```sh
+python3 benchmarks/task-cost/compare.py BUNDLE --baseline native --candidate candidate
+python3 benchmarks/task-cost/company_report.py BUNDLE NEW_REPORT_DIR --baseline native --candidate candidate
+```
+
+The analyzer verifies the ledger before reporting every case/trial pair, quality
+wins/losses/ties, unknowns, complete total cost per success, and request-duration
+percentiles. Summed request time is not task wall-clock latency. Shared overhead
+is included in arm totals, not silently allocated to individual task rows.
+Success intervals resample paired case clusters with repetitions kept together;
+they are exploratory, not a confirmatory quality or savings gate. Few case
+clusters cannot establish generalization. The analyzer's own hash is recorded.
+
+The local company package contains `REPORT.md`, `comparison.json` and a SHA-256
+manifest. It refuses to overwrite a destination and copies no raw stimuli,
+memories, source archives or provider responses. Reproduction still requires the
+original company-controlled bundle. Review case labels before public sharing.
+No script launches a model or publishes the package.
+
+## Frozen task scoring
+
+Each real case may pin a Python evaluator as its `evaluator` artifact before
+freezing. The evaluator receives the candidate checkout path as its sole argument;
+exit zero means the task passed its checks. Keep evaluators outside candidate
+checkouts and qualify their independence before a benchmark claim.
+
+```sh
+python3 benchmarks/task-cost/score.py BUNDLE CHECKOUT --arm candidate --case CASE_ID --trial 0 --execute-trusted-evaluator
+```
+
+This explicitly executes trusted evaluator code, with a bounded timeout, separate
+process session, no inherited provider credentials, and discarded stdout/stderr.
+It records the frozen evaluator identity, runner identity, duration and terminal
+status, refuses duplicate outcomes, and rechecks ledger integrity after execution.
+On POSIX, timeout kills the evaluator process group. This is not an OS sandbox;
+company isolation, trusted evaluators and held-out sampling remain qualification
+requirements. Receipt duration is evaluation time, not developer-task latency.
+Failed evaluator launches do not produce a fabricated outcome. Run the recorder
+with one writer; concurrent scoring against one ledger is unsupported.

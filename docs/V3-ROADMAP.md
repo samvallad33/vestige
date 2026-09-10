@@ -62,4 +62,12 @@ is justified by a single favorable run, synthetic fixture or retrieval score.
   transaction. Later edits cause a conflict instead of being overwritten.
   Legacy operations without post-state snapshots require manual recovery review.
   Local suppression snapshots and conflict-aware reversal are implemented;
-  cascade reversal and bounded atomic restore remain pending.
+  cascade reversal remains pending. MCP restore now bounds input and stages
+  legacy batches before a transactional import.
+
+- Stages 8–9: verified-ledger paired comparison and local company summary package
+  with hashed outputs, retained failures/ties/missing accounting and exploratory
+  case-cluster success intervals. A frozen Python evaluator runner now records terminal outcomes; the real
+  developer-task suite, independent evaluator qualification, live
+  provider qualification, task wall-time instrumentation and confirmatory
+  held-out trials remain pending; synthetic packages do not demonstrate savings.
