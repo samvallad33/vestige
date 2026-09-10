@@ -38,7 +38,13 @@ fn create_private_file(path: &Path) -> std::io::Result<std::fs::File> {
 pub fn consolidate_schema() -> Value {
     serde_json::json!({
         "type": "object",
-        "properties": {}
+        "properties": {
+            "phase": {"type": "string", "enum": ["all", "embeddings"], "default": "all"},
+            "batchSize": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10,
+                "description": "Embedding phase only: maximum selected memories per call."},
+            "after": {"type": "string", "description": "Embedding phase only: nextCursor from the previous page. Omit after a sweep to retry failures and discover earlier inserts."},
+            "dry_run": {"type": "boolean", "default": true, "description": "Embedding phase only: preview the selected page without inference or mutation."}
+        }
     })
 }
 
@@ -368,8 +374,40 @@ pub async fn execute_system_status(
 /// Consolidate tool
 pub async fn execute_consolidate(
     storage: &Arc<Storage>,
-    _args: Option<Value>,
+    args: Option<Value>,
 ) -> Result<Value, String> {
+    #[derive(Default, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        phase: Option<String>,
+        batch_size: Option<usize>,
+        after: Option<String>,
+        #[serde(alias = "dry_run")]
+        dry_run: Option<bool>,
+    }
+    let parsed: Args = serde_json::from_value(args.unwrap_or_else(|| serde_json::json!({})))
+        .map_err(|error| error.to_string())?;
+    match parsed.phase.as_deref().unwrap_or("all") {
+        "embeddings" => {
+            let storage = Arc::clone(storage);
+            return tokio::task::spawn_blocking(move || {
+                storage.maintain_embedding_batch(
+                    parsed.batch_size.unwrap_or(10),
+                    parsed.after.as_deref(),
+                    parsed.dry_run.unwrap_or(true),
+                )
+            })
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string());
+        }
+        "all" => {
+            if parsed.batch_size.is_some() || parsed.after.is_some() || parsed.dry_run.is_some() {
+                return Err("batchSize, after and dry_run require phase='embeddings'".into());
+            }
+        }
+        _ => return Err("phase must be all or embeddings".into()),
+    }
     let result = storage.run_consolidation().map_err(|e| e.to_string())?;
 
     Ok(serde_json::json!({

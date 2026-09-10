@@ -9037,7 +9037,77 @@ impl SqliteMemoryStore {
         Ok(Some(optimized_w20))
     }
 
-    /// Generate all missing or active-model-mismatched embeddings.
+    /// Repair a bounded page of dirty/missing active-profile embeddings.
+    /// The cursor is a scan position, not a frozen snapshot; restart from None
+    /// after a sweep to discover new or failed rows preceding it.
+    pub fn maintain_embedding_batch(
+        &self,
+        limit: usize,
+        after: Option<&str>,
+        dry_run: bool,
+    ) -> Result<serde_json::Value> {
+        if !(1..=100).contains(&limit) {
+            return Err(StorageError::Init(
+                "embedding batch limit must be 1..100".into(),
+            ));
+        }
+        if after.is_some_and(|id| uuid::Uuid::parse_str(id).is_err()) {
+            return Err(StorageError::Init(
+                "embedding cursor must be a memory UUID".into(),
+            ));
+        }
+        let started = std::time::Instant::now();
+        let ids: Vec<String> = {
+            let reader = self
+                .reader
+                .lock()
+                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+            let profile = Self::active_profile_id_from_conn(&reader)?
+                .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.into());
+            let mut statement = reader.prepare("SELECT id FROM knowledge_nodes n
+                WHERE id > ?1 AND COALESCE(suppression_count, 0) = 0
+                AND (COALESCE(has_embedding, 0) = 0 OR NOT EXISTS (
+                    SELECT 1 FROM embedding_profile_vectors v WHERE v.node_id = n.id AND v.profile_id = ?2))
+                ORDER BY id LIMIT ?3")?;
+            statement
+                .query_map(
+                    params![after.unwrap_or(""), profile, (limit + 1) as i64],
+                    |row| row.get(0),
+                )?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        let has_more = ids.len() > limit;
+        let selected = &ids[..ids.len().min(limit)];
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        let runtime_ready = self.active_embedding_runtime_ready()?;
+        #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
+        let runtime_ready = false;
+        let blocked = !dry_run && !runtime_ready && !selected.is_empty();
+        #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+        let result = if dry_run || blocked {
+            EmbeddingResult::default()
+        } else {
+            self.generate_embeddings(Some(selected), false)?
+        };
+        #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
+        let result = crate::memory::EmbeddingResult::default();
+        let cursor = if blocked {
+            after.map(str::to_string)
+        } else {
+            selected.last().cloned()
+        };
+        Ok(serde_json::json!({
+            "phase": "embeddings", "dryRun": dry_run, "batchSize": limit,
+            "selected": selected.len(), "successful": result.successful, "failed": result.failed,
+            "skipped": result.skipped, "runtimeReady": runtime_ready,
+            "status": if blocked { "runtime_unavailable" } else if dry_run { "preview" } else { "processed" },
+            "hasMore": has_more || blocked, "nextCursor": cursor,
+            "durationMs": started.elapsed().as_millis(),
+            "checkpoint": "committed embedding rows; restart cursor after a sweep to retry failures or discover earlier inserts",
+            "bound": "at most batchSize selected memories; no hard inference deadline"
+        }))
+    }
+
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     fn generate_missing_embeddings(&self) -> Result<i64> {
         if !self.active_embedding_runtime_ready()? {
@@ -23236,6 +23306,56 @@ mod tests {
             (promoted.stability - 15.0).abs() < 1e-6,
             "expected *1.5 multiply (15.0) below crossover, got {}",
             promoted.stability
+        );
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn embedding_maintenance_preview_is_bounded_resumable_and_read_only() {
+        let storage = create_test_storage();
+        let mut ids = Vec::new();
+        for content in ["batch one", "batch two", "batch three"] {
+            ids.push(
+                storage
+                    .ingest(IngestInput {
+                        content: content.into(),
+                        node_type: "fact".into(),
+                        ..Default::default()
+                    })
+                    .unwrap()
+                    .id,
+            );
+        }
+        ids.sort();
+        let first = storage.maintain_embedding_batch(2, None, true).unwrap();
+        assert_eq!(first["selected"], 2);
+        assert_eq!(first["hasMore"], true);
+        assert_eq!(first["nextCursor"], ids[1]);
+        assert_eq!(first["successful"], 0);
+        let second = storage
+            .maintain_embedding_batch(2, Some(&ids[1]), true)
+            .unwrap();
+        assert_eq!(second["selected"], 1);
+        assert_eq!(second["hasMore"], false);
+        assert_eq!(second["nextCursor"], ids[2]);
+        assert!(ids.iter().all(|id| {
+            !storage
+                .get_node(id)
+                .unwrap()
+                .unwrap()
+                .has_embedding
+                .unwrap_or(false)
+        }));
+        storage.suppress_memory(&ids[0]).unwrap();
+        assert_eq!(
+            storage.maintain_embedding_batch(100, None, true).unwrap()["selected"],
+            2
+        );
+        assert!(storage.maintain_embedding_batch(101, None, true).is_err());
+        assert!(
+            storage
+                .maintain_embedding_batch(1, Some("invalid"), true)
+                .is_err()
         );
     }
 

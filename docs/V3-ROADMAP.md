@@ -71,3 +71,8 @@ is justified by a single favorable run, synthetic fixture or retrieval score.
   developer-task suite, independent evaluator qualification, live
   provider qualification, task wall-time instrumentation and confirmatory
   held-out trials remain pending; synthetic packages do not demonstrate savings.
+
+- Stage 7: opt-in bounded embedding maintenance with preview, continuation cursor,
+  committed-row checkpoints, runtime-unavailable status and measured call duration.
+  Full consolidation, dream and other maintenance phases still need separate
+  incremental budgets; row-bounded inference is not a hard time or dollar cap.

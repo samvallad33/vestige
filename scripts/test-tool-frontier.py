@@ -80,6 +80,12 @@ def run(binary, output):
 
             tool("smart_ingest", {"content": "Must not silently disappear", "items": [{"content":"Batch fixture"}]}, error=True)
             tool("maintain", {"action":"export", "start":"2026-01-01"}, error=True)
+            maintenance_page = tool("maintain", {"action":"consolidate", "phase":"embeddings", "batchSize":2})
+            assert maintenance_page["dryRun"] is True and maintenance_page["selected"] == 0
+            assert maintenance_page["hasMore"] is False
+            tool("maintain", {"action":"consolidate", "batchSize":2}, error=True)
+            tool("maintain", {"action":"consolidate", "phase":"embeddings", "batchSize":101}, error=True)
+            passed("embedding maintenance previews bounded pages and rejects misplaced controls")
             assert annotations["receipt"]["readOnlyHint"] is False
             assert annotations["receipt"]["idempotentHint"] is True
             cause = tool("smart_ingest", {"content": "Set FIXTURE_TIMEOUT to two seconds in fixture service.",

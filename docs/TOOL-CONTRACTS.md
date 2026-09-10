@@ -222,3 +222,16 @@ reports `atomic: true`; it does not import staging settings or audit journals.
 Portable archives continue through their transactional importer. An index-refresh
 error after commit requires inspecting the target before retrying. Input limits
 bound file bytes and legacy rows, not a strict process-memory or elapsed-time budget.
+
+### Incremental embedding maintenance
+
+`maintain(action="consolidate", phase="embeddings", batchSize=10)` previews a
+page by default. `dry_run=false` processes at most 100 selected memories per
+call using an already available active runtime; it does not install a model.
+The response exposes selection, success/failure/skip counts, runtime availability,
+elapsed time, `hasMore`, and `nextCursor`. Work runs off the async executor thread.
+Committed embedding rows are the checkpoint. Resume with `after=nextCursor`, then
+start a new sweep without `after` to discover earlier inserts or retry failures.
+The cursor is a live scan position, not a snapshot or a hard inference deadline.
+Suppressed memories are excluded from selection. These controls require the
+embedding phase; the default full consolidation behavior remains separate.
