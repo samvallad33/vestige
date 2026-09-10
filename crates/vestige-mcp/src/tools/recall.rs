@@ -53,7 +53,7 @@ pub fn schema() -> Value {
                     "type": "string",
                     "enum": ["lookup", "reason", "contradictions"],
                     "default": "lookup",
-                    "description": "'lookup' (default): fast hybrid search. 'reason': scoped deep pass with heuristic ranking, spreading activation, supersession, and contradiction analysis; needs 'query' and requires current-source verification for material claims. 'contradictions': trust-weighted disagreement pairs for a 'topic', or recent memories."
+                    "description": "'lookup' (default): fast hybrid search. 'reason': scoped deep pass with heuristic ranking, spreading activation, supersession, and contradiction analysis; its text is assembled from computed values; needs 'query' and requires current-source verification for material claims. 'contradictions': trust-weighted disagreement pairs for a 'topic', or recent memories."
                 }),
             );
             // reason (deep_reference) extra field.
