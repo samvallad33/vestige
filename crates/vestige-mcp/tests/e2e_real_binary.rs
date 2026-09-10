@@ -855,14 +855,22 @@ fn tools_list_is_deterministic_across_restarts_and_carries_cache_hints() {
         "recall lost its result-size annotation: {recall}"
     );
 
-    // Every client pays this payload on every session start. Measured at
-    // 38,474 bytes before the description work, 28,731 after it; the ceiling
-    // stops it creeping back without anyone noticing. Raise it deliberately.
+    // The expanded v3 catalog includes projection, the intention graph and
+    // complete maintenance actions. Its integrated baseline is 52,988 bytes.
+    // Preserve a bounded full catalog and separately bound the common subset
+    // used by clients with v3 progressive discovery.
     let bytes = serde_json::to_string(&a).unwrap().len();
     assert!(
-        bytes <= 30_000,
-        "tools/list is {bytes} bytes, over the 30,000 byte ceiling; a schema or description grew"
+        bytes <= 55_000,
+        "tools/list is {bytes} bytes, over the 55,000 byte v3 ceiling; a schema or description grew"
     );
+
+    let common: Vec<_> = a["tools"].as_array().unwrap().iter()
+        .filter(|tool| ["recall", "smart_ingest", "memory"].contains(&tool["name"].as_str().unwrap()))
+        .collect();
+    assert_eq!(common.len(), 3);
+    assert!(serde_json::to_vec(&common).unwrap().len() <= 13_000,
+        "common progressive tool subset exceeded its 13KB budget");
 
     // Behaviour hints reach the client in MCP's camelCase shape, and the two
     // hints a client acts on (read-only, destructive) are set for every tool.
@@ -2666,8 +2674,10 @@ fn maintain_scores_importance_dry_runs_gc_consolidates_and_restore_needs_a_path(
     assert_under(&score, 6_000, "maintain importance_score");
 
     let gc = server.call_tool_ok("maintain", json!({ "action": "gc" }));
-    assert_keys(&gc, &["dryRun", "candidateCount", "totalMemories"], "maintain gc");
+    assert_keys(&gc, &["dryRun", "candidateCount", "processed", "hasMore", "nextCursor", "atomic"], "maintain gc");
     assert_eq!(gc["dryRun"], json!(true), "gc must default to a dry run: {gc}");
+    assert_eq!(gc["atomic"], json!(true));
+    assert!(gc["processed"].as_u64().unwrap() <= 100);
     assert_under(&gc, 3_000, "maintain gc");
 
     let consolidate = server.call_tool_ok("maintain", json!({ "action": "consolidate" }));

@@ -163,7 +163,7 @@ provider usage. Freeze the development suite and verify each baseline's native
 context/cache path. Then run repeated, isolated trials with independent scoring.
 Do not claim token-fee savings from this accounting smoke test.
 
-## Paired analysis and local company package
+## Paired analysis and local developer report
 
 After recording a complete frozen ledger:
 
@@ -180,10 +180,10 @@ Success intervals resample paired case clusters with repetitions kept together;
 they are exploratory, not a confirmatory quality or savings gate. Few case
 clusters cannot establish generalization. The analyzer's own hash is recorded.
 
-The local company package contains `REPORT.md`, `comparison.json` and a SHA-256
+The local developer report contains `REPORT.md`, `comparison.json` and a SHA-256
 manifest. It refuses to overwrite a destination and copies no raw stimuli,
 memories, source archives or provider responses. Reproduction still requires the
-original company-controlled bundle. Review case labels before public sharing.
+original local benchmark bundle. Review case labels before public sharing.
 No script launches a model or publishes the package.
 
 ## Frozen task scoring
@@ -202,7 +202,7 @@ process session, no inherited provider credentials, and discarded stdout/stderr.
 It records the frozen evaluator identity, runner identity, duration and terminal
 status, refuses duplicate outcomes, and rechecks ledger integrity after execution.
 On POSIX, timeout kills the evaluator process group. This is not an OS sandbox;
-company isolation, trusted evaluators and held-out sampling remain qualification
+isolated developer projects, trusted evaluators and held-out sampling remain qualification
 requirements. Receipt duration is evaluation time, not developer-task latency.
 Failed evaluator launches do not produce a fabricated outcome. Run the recorder
 with one writer; concurrent scoring against one ledger is unsupported.
@@ -253,5 +253,5 @@ constant-workload scenario arithmetic, not observed amortization.
 
 Freeze all artifacts before running. Never refreeze a completed evidence bundle
 to use a changed accountant; retain its original accountant and create a new run.
-Company-controlled held-out tasks, real model execution and independently
+Developer-owned held-out tasks, real model execution and independently
 qualified billing are still needed to establish product savings.
