@@ -127,11 +127,16 @@ fn trace_enabled() -> bool {
         .get_or_init(|| parse_trace_enabled(std::env::var("VESTIGE_TRACE").ok().as_deref()))
 }
 
+fn log_level_rank(level: &str) -> Option<usize> {
+    ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"].iter().position(|item| *item == level)
+}
+
 /// MCP Server implementation
 pub struct McpServer {
     storage: Arc<Storage>,
     cognitive: Arc<Mutex<CognitiveEngine>>,
     initialized: bool,
+    logging_level: usize,
     /// Tool call counter for inline consolidation trigger (every 100 calls)
     tool_call_count: AtomicU64,
     /// Optional event broadcast channel for dashboard real-time updates.
@@ -158,6 +163,7 @@ impl McpServer {
             storage,
             cognitive,
             initialized: false,
+            logging_level: 1,
             tool_call_count: AtomicU64::new(0),
             event_tx: None,
             output_config,
@@ -175,6 +181,7 @@ impl McpServer {
             storage,
             cognitive,
             initialized: false,
+            logging_level: 1,
             tool_call_count: AtomicU64::new(0),
             event_tx: Some(event_tx),
             output_config,
@@ -237,6 +244,14 @@ impl McpServer {
             "resources/read" => self.handle_resources_read(request.params).await,
             "server/discover" => self.handle_server_discover(),
             "ping" => Ok(serde_json::json!({})),
+            // The server only emits info and warning messages about its own
+            // startup (model downloads), so any requested level is accepted.
+            "logging/setLevel" => {
+                match request.params.as_ref().and_then(|p| p.get("level")).and_then(|v| v.as_str()).and_then(log_level_rank) {
+                    Some(level) => { self.logging_level = level; Ok(serde_json::json!({})) }
+                    None => Err(JsonRpcError::invalid_params("level must be debug, info, notice, warning, error, critical, alert, or emergency")),
+                }
+            },
             method => {
                 warn!("Unknown method: {}", method);
                 Err(JsonRpcError::method_not_found())
@@ -285,6 +300,7 @@ impl McpServer {
             "capabilities": {
                 "tools": { "listChanged": false },
                 "resources": { "listChanged": false },
+                "logging": {},
             },
             "instructions": build_instructions(),
             "ttlMs": DISCOVER_TTL_MS,
@@ -354,11 +370,23 @@ impl McpServer {
                     map
                 }),
                 prompts: None,
+                logging: Some(HashMap::new()),
             },
             instructions: Some(build_instructions()),
         };
 
         serde_json::to_value(result).map_err(|e| JsonRpcError::internal_error(&e.to_string()))
+    }
+
+    /// Whether the client has completed the `initialize` handshake. The stdio
+    /// transport holds server-initiated notifications until then, so nothing
+    /// precedes the initialize response on the wire.
+    pub fn logging_allows(&self, notification: &serde_json::Value) -> bool {
+        notification["params"]["level"].as_str().and_then(log_level_rank).is_some_and(|level| level >= self.logging_level)
+    }
+
+    pub fn is_initialized(&self) -> bool {
+        self.initialized
     }
 
     /// Handle tools/list request
@@ -3113,6 +3141,33 @@ mod tests {
                 .unwrap();
             assert_eq!(result["isError"], true);
         }
+    }
+
+    #[tokio::test]
+    async fn logging_capability_is_declared_and_set_level_is_accepted() {
+        let (mut server, _dir) = test_server().await;
+        let init = server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await
+            .unwrap();
+        let caps = init.result.unwrap()["capabilities"].clone();
+        assert!(caps["logging"].is_object(), "{caps}");
+        let set = server
+            .handle_request(make_request(
+                "logging/setLevel",
+                Some(serde_json::json!({ "level": "info" })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(set.result.unwrap(), serde_json::json!({}));
+        assert!(!server.logging_allows(&serde_json::json!({"params":{"level":"debug"}})));
+        assert!(server.logging_allows(&serde_json::json!({"params":{"level":"warning"}})));
+        let invalid = server.handle_request(make_request("logging/setLevel", Some(serde_json::json!({"level":"verbose"})))).await.unwrap();
+        assert!(invalid.error.is_some());
+        assert_eq!(server.logging_level, 1);
+
+        let discover = server.handle_request(make_request("server/discover", None)).await.unwrap();
+        assert!(discover.result.unwrap()["capabilities"]["logging"].is_object());
     }
 
     #[tokio::test]

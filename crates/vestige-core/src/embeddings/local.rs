@@ -69,6 +69,21 @@ impl EmbeddingBackend {
     }
 }
 
+/// Whether the local model cache already holds anything, so a caller can tell
+/// "loading a cached model" from "first run, downloading about 130 MB" before
+/// the download starts. Pure on the directory so it can be tested without
+/// touching the process environment.
+pub fn cache_populated(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
+
+/// [`cache_populated`] for the cache directory this process will use.
+pub fn embedding_model_cached() -> bool {
+    cache_populated(&get_cache_dir())
+}
+
 /// Get the default cache directory for fastembed models.
 ///
 /// Resolution order:
@@ -580,5 +595,17 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, 0); // First candidate should be most similar
         assert!((results[0].1 - 1.0).abs() < 0.0001);
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    #[test]
+    fn cache_populated_tells_a_fresh_cache_from_a_used_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!super::cache_populated(dir.path()));
+        assert!(!super::cache_populated(&dir.path().join("does-not-exist")));
+        std::fs::create_dir(dir.path().join("models--nomic-ai--nomic-embed-text-v1.5")).unwrap();
+        assert!(super::cache_populated(dir.path()));
     }
 }
