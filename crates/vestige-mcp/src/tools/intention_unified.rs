@@ -54,9 +54,9 @@ pub fn schema() -> Value {
                     },
                     "in_minutes": {
                         "type": "integer",
-                        "minimum": 1,
+                        "minimum": 0,
                         "maximum": MAX_DURATION_MINUTES,
-                        "description": "Positive minutes from intention creation for a one-shot time trigger"
+                        "description": "Minutes from creation; zero fires immediately"
                     },
                     "codebase": { "type": "string", "maxLength": MAX_TRIGGER_TEXT_BYTES },
                     "file_pattern": { "type": "string", "maxLength": MAX_TRIGGER_TEXT_BYTES },
@@ -110,7 +110,7 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["set", "check", "update", "list"],
-                "description": "'set' creates, 'check' finds triggered intentions, 'update' changes status (complete, snooze, cancel), 'list' shows them"
+                "description": "'set' creates, 'check' finds triggered, 'update' changes status, 'list' shows."
             },
             // SET action parameters
             "description": {
@@ -139,7 +139,7 @@ pub fn schema() -> Value {
             "status": {
                 "type": "string",
                 "enum": ["complete", "snooze", "cancel"],
-                "description": "[update] New status: 'complete' marks as fulfilled, 'snooze' delays, 'cancel' cancels"
+                "description": "[update] 'complete', 'snooze' (delay) or 'cancel'."
             },
             "snooze_minutes": {
                 "type": "integer",

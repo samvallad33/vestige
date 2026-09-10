@@ -39,17 +39,17 @@ pub fn schema() -> Value {
         "properties": {
             "content": {
                 "type": "string",
-                "description": "The content to remember. Will be compared against existing memories. (Single mode)"
+                "description": "What to remember; compared against existing memories (single mode)."
             },
             "node_type": {
                 "type": "string",
-                "description": "fact, concept, event, person, place, note, pattern, decision, or state. 'state' is a snapshot that rots (versions, progress, inventories): without validUntil it expires after VESTIGE_STATE_TTL_DAYS (default 30), then is downranked and marked currentlyValid=false, still auditable via validAt.",
+                "description": "fact, concept, event, person, place, note, pattern, decision, or state. 'state' snapshots expire after VESTIGE_STATE_TTL_DAYS (default 30) unless validUntil is set, then rank last with currentlyValid=false.",
                 "default": "fact"
             },
             "tags": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Tags for categorization. The response non-destructively suggests close existing tags in the same scope; suggestions are never auto-applied."
+                "description": "Tags. Close existing same-scope tags come back as suggestions, never auto-applied."
             },
             "source": {
                 "type": "string",
@@ -57,98 +57,87 @@ pub fn schema() -> Value {
             },
             "scope": {
                 "type": "string",
-                "description": "Project namespace for this memory. Defaults to 'user' for backward compatibility. Recall searches this namespace unless includeCrossScope=true."
+                "description": "Project namespace (default 'user'). Recall searches it unless includeCrossScope=true."
             },
             "validFrom": {
                 "type": "string",
-                "description": "When the fact becomes true (RFC3339 or YYYY-MM-DD). If omitted, one unambiguous 'as of YYYY-MM-DD' phrase in content is inferred and reported."
+                "description": "When the fact becomes true (RFC3339 or YYYY-MM-DD). Omitted: one unambiguous 'as of DATE' phrase is inferred."
             },
             "validUntil": {
                 "type": "string",
-                "description": "When this fact stops being true. Use RFC3339 or an exact YYYY-MM-DD date; must be after validFrom."
+                "description": "When the fact stops being true (RFC3339 or YYYY-MM-DD, after validFrom)."
             },
             "forceCreate": {
                 "type": "boolean",
-                "description": "Force creation of a new memory even if similar content exists",
+                "description": "Create even if similar content exists.",
                 "default": false
             },
             "allowSecrets": {
                 "type": "boolean",
-                "description": "Allow a detected credential to be stored for this single item. Dangerous: normally redact the value or store a secret-manager reference instead.",
+                "description": "Store a detected credential for this item. Dangerous; redact or store a reference instead.",
                 "default": false
             },
             "previewTagSuggestions": {
                 "type": "boolean",
-                "description": "Read-only preflight. Returns same-scope similar-tag suggestions and inferred validity without storing anything.",
+                "description": "Read-only preflight: tag suggestions and inferred validity, nothing stored.",
                 "default": false
             },
             "acceptedTagSuggestions": {
                 "type": "object",
                 "additionalProperties": { "type": "string" },
-                "description": "Accepted input-tag to existing-tag mappings from a preflight response, revalidated against current same-scope suggestions before ingest."
+                "description": "Accepted input-tag to existing-tag mappings from a preflight; revalidated before ingest."
             },
             "batchMergePolicy": {
                 "type": "string",
                 "enum": ["force_create", "smart"],
-                "description": "Batch only. 'force_create' (default) keeps caller-separated items separate; 'smart' allows Prediction Error Gating against existing memories.",
+                "description": "Batch only. 'force_create' (default) keeps items separate; 'smart' lets the gate merge.",
                 "default": "force_create"
             },
             "items": {
                 "type": "array",
-                "description": "Batch mode: up to 20 items to save, each force-created unless batchMergePolicy='smart'. Use at session end or before context compaction.",
+                "description": "Batch: up to 20 items with the same fields as single mode, each force-created unless batchMergePolicy='smart'. For session end or before compaction.",
                 "maxItems": 20,
                 "items": {
                     "type": "object",
                     "properties": {
                         "content": {
-                            "type": "string",
-                            "description": "The content to remember"
+                            "type": "string"
                         },
                         "tags": {
                             "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Tags for categorization. Similar existing same-scope tags are returned as non-mutating suggestions."
+                            "items": { "type": "string" }
                         },
                         "node_type": {
                             "type": "string",
-                            "description": "Type: fact, concept, event, person, place, note, pattern, decision",
                             "default": "fact"
                         },
                         "source": {
-                            "type": "string",
-                            "description": "Source reference"
+                            "type": "string"
                         },
                         "scope": {
-                            "type": "string",
-                            "description": "Project namespace for this item. Overrides the batch scope when supplied."
+                            "type": "string"
                         },
                         "validFrom": {
-                            "type": "string",
-                            "description": "When this item becomes true (RFC3339 or YYYY-MM-DD). If omitted, one unambiguous 'as of YYYY-MM-DD' phrase is inferred."
+                            "type": "string"
                         },
                         "validUntil": {
-                            "type": "string",
-                            "description": "When this item stops being true (RFC3339 or YYYY-MM-DD; after validFrom)."
+                            "type": "string"
                         },
                         "forceCreate": {
                             "type": "boolean",
-                            "description": "Force creation of this item even if similar content exists",
                             "default": false
                         },
                         "allowSecrets": {
                             "type": "boolean",
-                            "description": "Allow a detected credential for this item only. Defaults to false; do not use for ordinary session summaries.",
                             "default": false
                         },
                         "previewTagSuggestions": {
                             "type": "boolean",
-                            "description": "Read-only per-item tag/validity preflight; this item is not stored.",
                             "default": false
                         },
                         "acceptedTagSuggestions": {
                             "type": "object",
-                            "additionalProperties": { "type": "string" },
-                            "description": "Explicitly accepted tag mappings from a prior preflight."
+                            "additionalProperties": { "type": "string" }
                         }
                     },
                     "required": ["content"]

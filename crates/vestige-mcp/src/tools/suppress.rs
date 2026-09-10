@@ -33,7 +33,7 @@ pub fn schema() -> Value {
             },
             "reason": {
                 "type": "string",
-                "description": "Optional free-form note explaining why this memory is being suppressed. Logged for audit."
+                "description": "Optional note on why; logged."
             },
             "reverse": {
                 "type": "boolean",

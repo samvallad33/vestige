@@ -109,34 +109,34 @@ pub fn schema() -> Value {
             // --- [health view] ---
             "schema_introspection": {
                 "type": "boolean",
-                "description": "[health view] Include the response-schema description in the output."
+                "description": "[health] Include the response-schema description."
             },
             // --- [timeline view] ---
-            "start": { "type": "string", "description": "[timeline/changelog view] Start of range (ISO 8601 date or datetime)." },
-            "end": { "type": "string", "description": "[timeline/changelog view] End of range (ISO 8601 date or datetime)." },
-            "node_type": { "type": "string", "description": "[timeline view] Filter by node type (e.g. 'fact', 'decision')." },
+            "start": { "type": "string", "description": "[timeline, changelog] Range start (ISO 8601)." },
+            "end": { "type": "string", "description": "[timeline, changelog] Range end (ISO 8601)." },
+            "node_type": { "type": "string", "description": "[timeline] Filter by node type." },
             "tags": { "type": "array", "items": { "type": "string" }, "description": "[timeline view] Filter by tags (ANY match)." },
             "detail_level": {
                 "type": "string", "enum": ["brief", "summary", "full"],
-                "description": "[timeline view] Level of detail (default 'summary')."
+                "description": "[timeline] Detail level (default 'summary')."
             },
             // --- [changelog view] ---
-            "memory_id": { "type": "string", "description": "[changelog view] Per-memory mode: state transitions for this memory id." },
+            "memory_id": { "type": "string", "description": "[changelog] State transitions for this memory only." },
             // --- [stats view] ---
             "scope": {
                 "type": "string",
                 "default": "user",
-                "description": "[stats view] Exact normalized memory scope to aggregate (default 'user'). Ignored when all_scopes=true."
+                "description": "[stats] Scope to aggregate (default 'user'); ignored when all_scopes."
             },
             "all_scopes": {
                 "type": "boolean",
                 "default": false,
-                "description": "[stats view] Explicitly aggregate every stored scope. Default false preserves project isolation."
+                "description": "[stats] Aggregate every scope. Default false."
             },
             // --- shared: limit (per-view ranges differ; clamped internally) ---
             "limit": {
                 "type": "integer",
-                "description": "Max results. timeline: default 50, max 200. changelog: default 20, max 100. stats detail lists: default 50, max 200 (aggregate counts always cover the whole store). Ignored by health and retention.",
+                "description": "Max results: timeline 50 (max 200), changelog 20 (max 100), stats lists 50 (max 200). Ignored by health and retention.",
                 "minimum": 1, "maximum": 200
             }
         }

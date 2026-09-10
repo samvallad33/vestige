@@ -44,29 +44,29 @@ pub fn schema() -> Value {
             "action": {
                 "type": "string",
                 "enum": ["get", "get_batch", "delete", "purge", "state", "promote", "demote", "edit"],
-                "description": "'get' (one node), 'get_batch' (by 'ids'), 'state' (accessibility), 'promote' and 'demote' (adjust retrieval strength; demote never deletes), 'edit' (replace content, keep FSRS state), 'purge' (remove content and embeddings for good; confirm=true). 'delete' is an alias for purge"
+                "description": "'get', 'get_batch' (ids), 'state', 'promote' / 'demote' (retrieval strength; demote never deletes), 'edit' (replace content, keep FSRS state), 'purge' (content and embeddings gone; confirm=true). 'delete' aliases purge"
             },
             "id": {
                 "type": "string",
-                "description": "The ID of the memory node (for single-memory actions)"
+                "description": "Memory id (single-memory actions)."
             },
             "ids": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Array of memory IDs (for get_batch action). Max 20 IDs per call."
+                "description": "[get_batch] Memory ids, max 20."
             },
             "reason": {
                 "type": "string",
-                "description": "Why this memory is being promoted/demoted/purged (optional, for logging)."
+                "description": "Why (optional, logged)."
             },
             "confirm": {
                 "type": "boolean",
-                "description": "Required for 'purge' and 'delete'. Purge removes canonical content and embeddings; legacy audit and sync records keep only opaque markers and limited metadata, so this is not verified machine unlearning.",
+                "description": "Required for purge and delete. Removes canonical content and embeddings; legacy audit and sync rows keep opaque markers, so this is not verified unlearning.",
                 "default": false
             },
             "content": {
                 "type": "string",
-                "description": "New content for edit action. Replaces existing content, regenerates embedding, preserves FSRS state."
+                "description": "[edit] New content; embedding regenerated, FSRS state kept."
             }
         },
         "required": ["action"]

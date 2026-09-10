@@ -34,25 +34,25 @@ pub fn schema() -> Value {
             "source": {
                 "type": "string",
                 "enum": ["github", "redmine"],
-                "description": "External system to sync: 'github' (GitHub Issues) or 'redmine' (a Redmine project).",
+                "description": "'github' (issues) or 'redmine' (a project).",
                 "default": "github"
             },
             "repo": {
                 "type": "string",
-                "description": "GitHub only: repository as 'owner/name', e.g. 'samvallad33/vestige'."
+                "description": "GitHub: repository as 'owner/name'."
             },
             "project": {
                 "type": "string",
-                "description": "Redmine only: project identifier (slug or numeric id) to sync. The Redmine host comes from the REDMINE_URL env var."
+                "description": "Redmine: project slug or id. Host from REDMINE_URL."
             },
             "reconcile": {
                 "type": "boolean",
-                "description": "Also tombstone local memories for issues no longer visible upstream (an extra full enumeration pass). Default false on incremental syncs.",
+                "description": "Also tombstone local memories for issues gone upstream (full enumeration). Default false.",
                 "default": false
             },
             "max_pages": {
                 "type": "integer",
-                "description": "Max API pages to fetch this run (each page is up to 100 issues). Lets a first sync of a large project be resumed across calls. Default 10.",
+                "description": "Max API pages per run (100 issues each); resume a large first sync across calls. Default 10.",
                 "default": 10,
                 "minimum": 1,
                 "maximum": 1000

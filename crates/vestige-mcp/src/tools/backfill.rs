@@ -23,11 +23,11 @@ pub fn schema() -> Value {
             "scope": {"type": "string", "default": "user", "description": "Exact project namespace for failure and candidates. Defaults to user; cross-project inference is not performed."},
             "failure_id": {
                 "type": "string",
-                "description": "ID of the failure/'aversive event' memory to backfill from. If omitted, the most recent memory that looks like a failure is used."
+                "description": "Failure memory to backfill from. Omitted: the most recent failure-like memory."
             },
             "manual": {
                 "type": "boolean",
-                "description": "Force the backfill even if the event isn't auto-detected as salient (manual override). Default false.",
+                "description": "Force the backfill when the event is not auto-detected as salient. Default false.",
                 "default": false
             },
             "lookback_days": {
