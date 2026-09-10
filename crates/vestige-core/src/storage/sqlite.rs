@@ -5010,6 +5010,7 @@ impl SqliteMemoryStore {
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
             let tx = Self::begin_write_transaction(&writer, "suppress_memory")?;
+            let before = Self::suppression_state_on(&tx, id)?;
             let changed = tx.execute(
                 // NOTE: last_accessed is deliberately NOT touched here. apply_decay
                 // RECOMPUTES retrieval_strength/retention_strength from
@@ -5029,6 +5030,12 @@ impl SqliteMemoryStore {
             if changed == 0 {
                 return Err(StorageError::NotFound(id.to_string()));
             }
+            let after = Self::suppression_state_on(&tx, id)?;
+            tx.execute(
+                "INSERT INTO suppression_operations(node_id, created_at, before_state, after_state)
+                VALUES (?1, ?2, ?3, ?4)",
+                params![id, now.to_rfc3339(), before, after],
+            )?;
             Self::invalidate_replay_evidence_for_memory_in_transaction(
                 &tx,
                 id,
@@ -5050,59 +5057,83 @@ impl SqliteMemoryStore {
     /// message if more than `labile_hours` have passed. Matches Nader
     /// reconsolidation semantics on a 24h axis.
     pub fn reverse_suppression(&self, id: &str, labile_hours: i64) -> Result<KnowledgeNode> {
-        let node = self
-            .get_node(id)?
-            .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
-
-        let suppressed_at = node.suppressed_at.ok_or_else(|| {
-            StorageError::Init(format!(
-                "memory {} has no active suppression to reverse",
-                id
-            ))
-        })?;
-
-        let elapsed = Utc::now() - suppressed_at;
-        if elapsed >= chrono::Duration::hours(labile_hours) {
-            return Err(StorageError::Init(format!(
-                "labile window expired ({}h since suppression; limit {}h)",
-                elapsed.num_hours(),
-                labile_hours
-            )));
-        }
-
+        let window = chrono::Duration::try_hours(labile_hours)
+            .filter(|value| *value > chrono::Duration::zero())
+            .ok_or_else(|| {
+                StorageError::Init("labile hours must be positive and bounded".into())
+            })?;
         {
             let writer = self
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-            // True inverse of suppress_memory (which applies stability * 0.4,
-            // retrieval - 0.35, retention - 0.20). Dividing by 0.4 exactly undoes
-            // the * 0.4, and adding back the same 0.35 / 0.20 deltas (clamped to
-            // 1.0) undoes the subtraction. Previously this used non-inverse deltas
-            // (* 1.25, + 0.15, + 0.10), so suppress-then-reverse left stability
-            // permanently halved (0.4 * 1.25 = 0.5) while reporting a full undo.
-            // Note: where the forward pass hit the MAX(0.05) floor, the exact
-            // pre-value is unrecoverable without a snapshot — that clip aside,
-            // this restores the pre-suppression FSRS state.
-            writer.execute(
-                "UPDATE knowledge_nodes SET
-                    suppression_count = MAX(0, COALESCE(suppression_count, 0) - 1),
-                    suppressed_at = CASE
-                        WHEN COALESCE(suppression_count, 0) - 1 <= 0 THEN NULL
-                        ELSE suppressed_at
-                    END,
-                    retrieval_strength = MIN(1.0, retrieval_strength + 0.35),
-                    retention_strength = MIN(1.0, retention_strength + 0.20),
-                    stability = stability / 0.4
-                WHERE id = ?1",
-                params![id],
+            let tx = Self::begin_write_transaction(&writer, "reverse_suppression")?;
+            let current = Self::suppression_state_on(&tx, id)?;
+            let state: serde_json::Value = serde_json::from_str(&current)
+                .map_err(|error| StorageError::Init(error.to_string()))?;
+            if state[0].as_i64().unwrap_or(0) <= 0 {
+                return Err(StorageError::Init(
+                    "no active suppression to reverse".into(),
+                ));
+            }
+            let operation: Option<(i64, String, String, String)> = tx.query_row(
+                "SELECT sequence, created_at, before_state, after_state FROM suppression_operations
+                 WHERE node_id = ?1 AND reverted_at IS NULL ORDER BY sequence DESC LIMIT 1",
+                params![id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).optional()?;
+            let (sequence, created, before, after) = operation.ok_or_else(|| {
+                StorageError::Init(
+                    "legacy suppression has no snapshot; explicit review required".into(),
+                )
+            })?;
+            let created = DateTime::parse_from_rfc3339(&created)
+                .map_err(|error| StorageError::Init(error.to_string()))?;
+            let elapsed = Utc::now().signed_duration_since(created);
+            if elapsed < chrono::Duration::zero() || elapsed >= window {
+                return Err(StorageError::Init(
+                    "labile window expired or timestamp is in the future".into(),
+                ));
+            }
+            if current != after {
+                return Err(StorageError::Init(
+                    "suppression reversal conflicts with later memory state; no changes applied"
+                        .into(),
+                ));
+            }
+            tx.execute("UPDATE knowledge_nodes SET
+                suppression_count = json_extract(?1, '$[0]'), suppressed_at = json_extract(?1, '$[1]'),
+                retrieval_strength = json_extract(?1, '$[2]'), retention_strength = json_extract(?1, '$[3]'),
+                stability = json_extract(?1, '$[4]') WHERE id = ?2", params![before, id])?;
+            tx.execute(
+                "UPDATE suppression_operations SET reverted_at = ?1 WHERE sequence = ?2",
+                params![Utc::now().to_rfc3339(), sequence],
             )?;
+            tx.commit()?;
         }
-
         let _ = self.log_access(id, "reverse_suppress");
-
         self.get_node(id)?
             .ok_or_else(|| StorageError::NotFound(id.to_string()))
+    }
+
+    /// Only local suppression state is reversible; cascade effects are separate.
+    fn suppression_state_on(conn: &Connection, id: &str) -> Result<String> {
+        let state: (i64, Option<String>, f64, f64, f64) = conn
+            .query_row(
+                "SELECT COALESCE(suppression_count, 0), suppressed_at,
+             retrieval_strength, retention_strength, stability FROM knowledge_nodes WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+        serde_json::to_string(&state).map_err(|error| StorageError::Init(error.to_string()))
     }
 
     /// Release a memory from quarantine **unconditionally** (no labile-window
@@ -23205,6 +23236,114 @@ mod tests {
             (promoted.stability - 15.0).abs() < 1e-6,
             "expected *1.5 multiply (15.0) below crossover, got {}",
             promoted.stability
+        );
+    }
+
+    #[test]
+    fn suppression_snapshot_restores_floor_and_stack_atomically() {
+        let s = create_test_storage();
+        let node = s
+            .ingest(IngestInput {
+                content: "suppression fixture".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        s.writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET retrieval_strength = 0.06,
+            retention_strength = 0.07, stability = 0.123 WHERE id = ?1",
+                params![node.id],
+            )
+            .unwrap();
+        let original =
+            SqliteMemoryStore::suppression_state_on(&s.reader.lock().unwrap(), &node.id).unwrap();
+        s.suppress_memory(&node.id).unwrap();
+        let first =
+            SqliteMemoryStore::suppression_state_on(&s.reader.lock().unwrap(), &node.id).unwrap();
+        s.suppress_memory(&node.id).unwrap();
+        let second =
+            SqliteMemoryStore::suppression_state_on(&s.reader.lock().unwrap(), &node.id).unwrap();
+        s.writer
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_reverse BEFORE UPDATE ON suppression_operations
+            BEGIN SELECT RAISE(ABORT, 'injected journal failure'); END;",
+            )
+            .unwrap();
+        assert!(s.reverse_suppression(&node.id, 24).is_err());
+        assert_eq!(
+            SqliteMemoryStore::suppression_state_on(&s.reader.lock().unwrap(), &node.id).unwrap(),
+            second
+        );
+        s.writer
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_reverse")
+            .unwrap();
+        s.reverse_suppression(&node.id, 24).unwrap();
+        assert_eq!(
+            SqliteMemoryStore::suppression_state_on(&s.reader.lock().unwrap(), &node.id).unwrap(),
+            first
+        );
+        s.reverse_suppression(&node.id, 24).unwrap();
+        assert_eq!(
+            SqliteMemoryStore::suppression_state_on(&s.reader.lock().unwrap(), &node.id).unwrap(),
+            original
+        );
+        assert!(s.reverse_suppression(&node.id, 24).is_err());
+        assert!(s.reverse_suppression(&node.id, i64::MAX).is_err());
+    }
+
+    #[test]
+    fn suppression_snapshot_rejects_conflict_expiry_and_legacy() {
+        let s = create_test_storage();
+        let node = s
+            .ingest(IngestInput {
+                content: "suppression conflicts".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        s.suppress_memory(&node.id).unwrap();
+        s.writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET stability = 99 WHERE id = ?1",
+                params![node.id],
+            )
+            .unwrap();
+        assert!(
+            s.reverse_suppression(&node.id, 24)
+                .unwrap_err()
+                .to_string()
+                .contains("conflicts")
+        );
+        assert_eq!(s.get_node(&node.id).unwrap().unwrap().stability, 99.0);
+        s.writer.lock().unwrap().execute("UPDATE suppression_operations SET created_at = '2000-01-01T00:00:00Z' WHERE node_id = ?1", params![node.id]).unwrap();
+        assert!(
+            s.reverse_suppression(&node.id, 24)
+                .unwrap_err()
+                .to_string()
+                .contains("expired")
+        );
+        s.writer
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM suppression_operations WHERE node_id = ?1",
+                params![node.id],
+            )
+            .unwrap();
+        assert!(
+            s.reverse_suppression(&node.id, 24)
+                .unwrap_err()
+                .to_string()
+                .contains("legacy")
         );
     }
 

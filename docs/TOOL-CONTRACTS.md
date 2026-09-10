@@ -194,3 +194,20 @@ one transaction. Later edits or control changes produce a conflict. Legacy
 operations without fingerprints require manual recovery review. Embedding
 regeneration follows commit; failure leaves the embedding pending. This contract
 does not claim reversal of suppression cascades or external side effects.
+
+### Suppression reversal
+
+New suppressions journal the local count, timestamp, retrieval strength, retention
+strength and stability in the same transaction as the penalty. Reversal restores
+the latest active snapshot, including values clipped at the penalty floor. It
+requires an unexpired snapshot and unchanged local suppression state. Stacked
+reversals restore each earlier timestamp, so a new suppression cannot extend the
+reversal window of an old one. Concurrent or later state changes fail without
+partial restoration. The response identifies `reversalScope` and reports
+`cascadeReversed: false`.
+
+Schema 34 adds a local suppression journal with cascading deletion. Legacy and
+portable-imported suppressions without journal snapshots require explicit review;
+the tool does not invent their prior strengths. Snapshots do not reverse neighbor
+cascades, replay invalidations, or other external effects. Before installing this
+candidate, retain a paired database backup for rollback to an older binary.

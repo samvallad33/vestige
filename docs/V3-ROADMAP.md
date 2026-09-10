@@ -61,4 +61,5 @@ is justified by a single favorable run, synthetic fixture or retrieval score.
   applied state and restores content, validity, journal and plan status in one
   transaction. Later edits cause a conflict instead of being overwritten.
   Legacy operations without post-state snapshots require manual recovery review.
-  Exact suppression reversal and bounded atomic restore remain pending.
+  Local suppression snapshots and conflict-aware reversal are implemented;
+  cascade reversal and bounded atomic restore remain pending.
