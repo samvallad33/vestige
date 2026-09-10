@@ -41,3 +41,17 @@ Primary metric: total cost of all attempted tasks divided by independently
 verified successes, with success rate, total spend and latency alongside it.
 Zero successful tasks have undefined cost per success. No flat savings claim
 is justified by a single favorable run, synthetic fixture or retrieval score.
+
+## Candidate implementation progress
+
+- Stage 1: offline cost ledger and caller-owned SDK capture seam; fake SDK tests
+  cover usage, retries, failure and serialization errors. Live capture/provider
+  reconciliation and the scored baseline remain pending.
+- Stages 2–3: lookup and reason whole-evidence budgets; schema-derived discovery;
+  opt-in stable lookup packets and explicit client acknowledgment of retained
+  context. Provider cache behavior and task-level cost effects remain unmeasured.
+- Existing tool-contract candidate: deterministic intentions, scoped Backfill
+  previews and graph hypotheses, namespace/policy checks during merge apply,
+  truthful embedding edit state with peer index invalidation, effective
+  maintenance controls, and explicit ingest batch outcomes. These implement
+  portions of stages 4–7; they do not complete every lifecycle or maintenance gate.

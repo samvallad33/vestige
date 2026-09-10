@@ -124,6 +124,31 @@ right event context.
 
 ## Scoped reasoning and bounded evidence
 
+Lookup also budgets the complete response envelope with room for server receipt
+metadata. It omits whole cards and reports `evidenceIncomplete` or `truncated`
+when the budget cannot carry the evidence. Known dissent groups are omitted
+together rather than returning only one side. Lookup and reason share the
+serialized-byte budget unit described below; it is not an exact tokenizer count.
+
+Lookup's opt-in `context_packet=true` returns stable evidence cards, sorted by
+ID, with changing scores and diagnostics omitted. Source and temporal metadata
+remain attached when permitted by the output mask. `temporalState` describes
+only the validity interval (`current`, `historical`, `future`, or `unknown`),
+not source authority or factual correctness. A complete packet receives a
+`packetId` bound to its evidence, store, query/filter arguments and output profile.
+Changes to content, selected membership, validity state, or the boundary change
+the ID. Incomplete packets have no reusable ID.
+
+Only send `known_packet_id` while the previously returned complete packet still
+exists in model context. An exact match returns `notModified=true` and no cards.
+After compaction, eviction, a new conversation, or uncertain retention, omit it
+to get a full refresh. The server does not know the client's context state.
+`examples/python/context_packets.py` demonstrates this host-side handshake and
+selection of exact tool schemas for clients that support dynamic catalogs.
+Neither capability automatically modifies Codex, activates provider prompt
+caching, or demonstrates lower billed tokens. Hash identity is not a signature
+or authorization boundary.
+
 `recall(mode="reason")` defaults to the `user` namespace and applies supported
 scope, type, validity, source, retention and tag filters to retrieved and
 activation-expanded evidence. Cross-namespace reasoning requires

@@ -15,7 +15,7 @@
 //!   7. Reconsolidation (mark labile)
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -31,6 +31,10 @@ pub fn schema() -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
+            "context_packet": {"type":"boolean", "default":false,
+                "description":"[lookup only] Return stable evidence cards with a packet ID. Scores are omitted; cards are ordered by ID for client reuse. No provider cache or savings guarantee."},
+            "known_packet_id": {"type":"string", "pattern":"^[a-f0-9]{64}$",
+                "description":"[lookup only] Send only while the previous complete packet remains in the model context. Matching packets return notModified=true and no cards. Omit after context loss to refresh."},
             "query": {
                 "type": "string",
                 "description": "Search query"
@@ -155,10 +159,14 @@ pub fn schema() -> Value {
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SearchArgs {
     query: String,
+    #[serde(alias = "context_packet")]
+    context_packet: Option<bool>,
+    #[serde(alias = "known_packet_id")]
+    known_packet_id: Option<String>,
     limit: Option<i32>,
     #[serde(alias = "min_retention")]
     min_retention: Option<f64>,
@@ -261,6 +269,27 @@ pub async fn execute(
     let args: SearchArgs = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid arguments: {}", e))?,
         None => return Err("Missing arguments".to_string()),
+    };
+
+    if let Some(known) = args.known_packet_id.as_deref()
+        && (args.context_packet != Some(true)
+            || known.len() != 64
+            || !known
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+    {
+        return Err(
+            "known_packet_id requires context_packet=true and a lowercase SHA-256 ID".into(),
+        );
+    }
+    let packet_boundary = if args.context_packet == Some(true) {
+        let mut boundary = serde_json::to_value(&args).map_err(|error| error.to_string())?;
+        boundary.as_object_mut().unwrap().remove("knownPacketId");
+        boundary["store"] = serde_json::json!(storage.db_path().to_string_lossy());
+        boundary["outputProfile"] = serde_json::json!(format!("{:?}", output_config));
+        boundary
+    } else {
+        Value::Null
     };
 
     if args.query.trim().is_empty() {
@@ -388,11 +417,6 @@ pub async fn execute(
 
         // Audit only memories that are actually present in the response, not
         // candidates removed by retention or token-budget filtering.
-        let shown_ids: Vec<&str> = formatted
-            .iter()
-            .filter_map(|result| result.get("id").and_then(|id| id.as_str()))
-            .collect();
-        let _ = storage.record_batch_retrieval(&shown_ids);
 
         let mut response = serde_json::json!({
             "query": args.query,
@@ -421,6 +445,14 @@ pub async fn execute(
             response["tokenBudgetLimit"] = serde_json::json!(args.token_budget.unwrap());
         }
 
+        let response = super::lookup_packet::finish(
+            response,
+            args.token_budget,
+            args.context_packet == Some(true),
+            args.known_packet_id.as_deref(),
+            &packet_boundary,
+        );
+        record_shown(storage, &response);
         return Ok(response);
     }
 
@@ -1085,11 +1117,6 @@ pub async fn execute(
 
     // Audit only memories that are actually present in the response, not
     // internal candidates removed by a token budget.
-    let shown_ids: Vec<&str> = formatted
-        .iter()
-        .filter_map(|result| result.get("id").and_then(|id| id.as_str()))
-        .collect();
-    let _ = storage.record_batch_retrieval(&shown_ids);
 
     // Check learning mode via attention signal
     let learning_mode = cognitive
@@ -1166,7 +1193,25 @@ pub async fn execute(
         response["tokensUsed"] = serde_json::json!(used);
     }
 
+    let response = super::lookup_packet::finish(
+        response,
+        args.token_budget,
+        args.context_packet == Some(true),
+        args.known_packet_id.as_deref(),
+        &packet_boundary,
+    );
+    record_shown(storage, &response);
     Ok(response)
+}
+
+fn record_shown(storage: &Storage, response: &Value) {
+    let ids: Vec<&str> = response["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|card| card["id"].as_str())
+        .collect();
+    let _ = storage.record_batch_retrieval(&ids);
 }
 
 fn is_literal_query(query: &str) -> bool {
@@ -1704,6 +1749,88 @@ mod tests {
         };
         let node = storage.ingest(input).unwrap();
         node.id
+    }
+
+    #[tokio::test]
+    async fn stable_packets_acknowledge_only_unchanged_retained_context() {
+        let (storage, _dir) = test_storage().await;
+        let id =
+            ingest_test_content(&storage, "PACKET_FIXTURE policy requires two reviewers").await;
+        let request = serde_json::json!({"query":"PACKET_FIXTURE", "concrete":true,
+            "context_packet":true, "token_budget":2000});
+        let first = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(request.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first["results"][0]["id"], id);
+        assert!(first["packetId"].as_str().is_some());
+        let mut acknowledged = request.clone();
+        acknowledged["known_packet_id"] = first["packetId"].clone();
+        let same = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(acknowledged.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(same["notModified"], true);
+        assert_eq!(same["results"], serde_json::json!([]));
+        storage
+            .update_node_content(&id, "PACKET_FIXTURE policy now requires three reviewers")
+            .unwrap();
+        let changed = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(acknowledged),
+        )
+        .await
+        .unwrap();
+        assert_eq!(changed["notModified"], false);
+        assert_ne!(first["packetId"], changed["packetId"]);
+        assert!(
+            changed["results"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("three")
+        );
+        let refreshed = execute(
+            &storage,
+            &test_cognitive(),
+            &OutputConfig::default(),
+            Some(request),
+        )
+        .await
+        .unwrap();
+        assert_eq!(refreshed["notModified"], false);
+        assert!(!refreshed["results"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn lookup_budget_includes_envelope_and_omits_whole_cards() {
+        let (storage, _dir) = test_storage().await;
+        ingest_test_content(&storage, &format!("BUDGET_FIXTURE {}", "🍃".repeat(500))).await;
+        for concrete in [true, false] {
+            for budget in [100, 101, 256, 1000] {
+                let result = execute(
+                    &storage,
+                    &test_cognitive(),
+                    &OutputConfig::default(),
+                    Some(
+                        serde_json::json!({"query":"BUDGET_FIXTURE", "concrete":concrete,
+                        "min_similarity":0, "token_budget":budget}),
+                    ),
+                )
+                .await
+                .unwrap();
+                assert!(result.to_string().len() + 256 <= budget * 4);
+            }
+        }
     }
 
     #[tokio::test]
@@ -2571,7 +2698,8 @@ mod tests {
         assert!(result.is_ok());
 
         let value = result.unwrap();
-        assert!(value["tokenBudget"].as_i64().unwrap() == 200);
+        assert_eq!(value["tokenBudgetLimit"], 200);
+        assert!(value.to_string().len() + 256 <= 800);
         assert!(value["tokensUsed"].is_number());
     }
 

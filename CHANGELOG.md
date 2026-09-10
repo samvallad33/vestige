@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Discoverable tool contracts
 
+- Lookup can emit stable evidence packets with `context_packet=true`; explicit
+  acknowledgment of a packet still retained in model context avoids resending
+  unchanged cards. Changed content/boundaries refresh the packet. Incomplete
+  packets cannot be acknowledged. A Python host integration example is included.
+- Lookup budgets now include the response envelope and reserve receipt metadata,
+  omit whole evidence cards, and keep known dissent groups indivisible.
+
 - `memory_status(view="tools")` derives the installed tool/action inventory from
   `tools/list`; selecting a tool returns its complete schema. Both server prompt
   modes advertise discovery. Public agent instructions use canonical tool names.

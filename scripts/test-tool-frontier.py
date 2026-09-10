@@ -178,6 +178,27 @@ def run(binary, output):
             other = tool("recall", {"mode":"reason", "query":"FOREIGN_CANARY", "scope":"other-project", "min_similarity":0})
             assert foreign in json.dumps(other), other
             passed("reason scopes and final structured-content budgets after receipt metadata")
+            for concrete in (True, False):
+                for budget in (100, 101, 256, 1000):
+                    limited = tool("recall", {"query":"FIXTURE_TIMEOUT", "concrete":concrete,
+                                   "token_budget":budget, "min_similarity":0})
+                    size = len(json.dumps(limited, ensure_ascii=False, separators=(",", ":")).encode())
+                    assert size <= budget * 4, (budget, size, limited)
+                    assert limited["tokensUsed"] == (size + 3) // 4
+            packet_args = {"query":"FOREIGN_CANARY", "scope":"other-project", "concrete":True,
+                           "context_packet":True, "token_budget":2000}
+            packet = tool("recall", packet_args)
+            assert packet["results"] and packet["packetId"]
+            same = tool("recall", dict(packet_args, known_packet_id=packet["packetId"]))
+            assert same["notModified"] is True and same["results"] == []
+            tool("memory", {"action":"edit", "id":foreign,
+                            "content":"FOREIGN_CANARY updated source decision."})
+            changed = tool("recall", dict(packet_args, known_packet_id=packet["packetId"]))
+            assert changed["notModified"] is False and changed["packetId"] != packet["packetId"]
+            fresh = tool("recall", packet_args)
+            assert fresh["results"] and fresh["notModified"] is False
+            tool("recall", {"query":"FOREIGN_CANARY", "known_packet_id":packet["packetId"]}, error=True)
+            passed("lookup complete-envelope budgets and stable-packet acknowledgment/edit/refresh")
             contradictions = tool("recall", {"mode":"contradictions"})
             assert foreign not in json.dumps(contradictions)
             tool("recall", {"mode":"contradictions", "token_budget":100}, error=True)
