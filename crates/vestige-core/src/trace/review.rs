@@ -1,8 +1,8 @@
 //! # Memory PRs — review changes to an agent's brain like code
 //!
-//! Ordinary context auto-commits and always leaves a receipt. But a *risky*
-//! write — one where the agent is rewriting its own brain — opens a reviewable
-//! [`MemoryPr`] instead. [`classify_write`] is the immune system: given a
+//! Memory writes auto-commit by default and leave a receipt. When a user opts
+//! into review, a flagged write opens a reviewable [`MemoryPr`] instead.
+//! [`classify_write`] classifies a
 //! [`WriteContext`] and a [`ReviewMode`], it returns the [`RiskClass`] and the
 //! [`RiskSignal`]s that explain, in plain language, *why* a write needs review.
 //!
@@ -10,8 +10,8 @@
 //!
 //! | Mode | Behaviour |
 //! |------|-----------|
-//! | [`ReviewMode::Fast`] | Never gate. Every write auto-commits. (Demos, trusted solo flows.) |
-//! | [`ReviewMode::RiskGated`] | **Default.** Auto-commit ordinary writes; open a PR for risky ones. |
+//! | [`ReviewMode::Fast`] | Never gate. **Default.** Every write auto-commits. |
+//! | [`ReviewMode::RiskGated`] | Opt-in: auto-commit ordinary writes; open a PR for risky ones. |
 //! | [`ReviewMode::Paranoid`] | Gate *every* write. Nothing enters the brain without approval. |
 //!
 //! ## What counts as "risky" (the taxonomy)
@@ -50,9 +50,9 @@ pub const LOW_CONFIDENCE_FLOOR: f64 = 0.5;
 #[serde(rename_all = "snake_case")]
 pub enum ReviewMode {
     /// Never gate — every write auto-commits.
-    Fast,
-    /// Default: auto-commit ordinary writes, open a PR for risky ones.
     #[default]
+    Fast,
+    /// Opt-in: auto-commit ordinary writes, open a PR for risky ones.
     RiskGated,
     /// Gate every write — nothing enters the brain without approval.
     Paranoid,
@@ -80,7 +80,7 @@ impl ReviewMode {
         }
     }
 
-    /// Lenient parse. Falls back to the default [`ReviewMode::RiskGated`] on
+    /// Lenient parse. Falls back to the default [`ReviewMode::Fast`] on
     /// anything unrecognised; prefer [`Self::try_from_label`] where the caller
     /// can surface the fallback.
     pub fn from_label(s: &str) -> Self {
@@ -915,7 +915,7 @@ offline over a weekend still catches up incrementally instead of rebuilding.";
         assert_eq!(ReviewMode::from_label("FAST"), ReviewMode::Fast);
         assert_eq!(ReviewMode::from_label("risk-gated"), ReviewMode::RiskGated);
         assert_eq!(ReviewMode::from_label("paranoid"), ReviewMode::Paranoid);
-        assert_eq!(ReviewMode::from_label("garbage"), ReviewMode::RiskGated);
+        assert_eq!(ReviewMode::from_label("garbage"), ReviewMode::Fast);
     }
 
     #[test]
@@ -958,7 +958,7 @@ mod review_mode_labels {
         // A typo must be visible to the caller, not silently the default.
         assert_eq!(ReviewMode::try_from_label("fsat"), None);
         assert_eq!(ReviewMode::try_from_label(""), None);
-        assert_eq!(ReviewMode::from_label("fsat"), ReviewMode::RiskGated);
+        assert_eq!(ReviewMode::from_label("fsat"), ReviewMode::Fast);
         for mode in [
             ReviewMode::Fast,
             ReviewMode::RiskGated,

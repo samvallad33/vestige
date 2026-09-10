@@ -2370,11 +2370,57 @@ mod tests {
         );
     }
 
+    /// A fresh store must accept sensitive context without an approval queue.
+    #[tokio::test]
+    async fn default_mode_keeps_sensitive_memory_available_without_approval() {
+        use vestige_core::MemoryPrStatus;
+
+        let (storage, _dir) = test_storage().await;
+        assert!(!storage.data_dir().join("review_mode.json").exists());
+
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut server = McpServer::new(storage.clone(), cognitive);
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+
+        let response = server
+            .handle_request(make_request(
+                "tools/call",
+                Some(serde_json::json!({
+                    "name": "smart_ingest",
+                    "arguments": { "content": "User preference: use the security workflow before billing changes." }
+                })),
+            ))
+            .await
+            .unwrap();
+        assert!(response.error.is_none());
+
+        assert_eq!(
+            storage
+                .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
+                .unwrap()
+                .len(),
+            0,
+            "Fast mode must never open a Memory PR"
+        );
+        let text = serde_json::to_string(&response.result).unwrap();
+        assert!(
+            !text.contains("memoryPrNotice"),
+            "Fast mode must not attach a gating notice: {text}"
+        );
+    }
+
     /// Deprecated aliases share the same destructive policy; otherwise an
     /// older MCP client could bypass the canonical `memory` pre-gate.
     #[tokio::test]
     async fn legacy_delete_knowledge_is_pre_gated_on_the_real_mcp_path() {
         let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"risk_gated"}"#,
+        )
+        .unwrap();
         let node = storage
             .ingest(vestige_core::IngestInput {
                 content: "Memory preserved through the legacy delete alias.".to_string(),
@@ -2436,6 +2482,11 @@ mod tests {
         use vestige_core::MemoryPrStatus;
 
         let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"risk_gated"}"#,
+        )
+        .unwrap();
         let node = storage
             .ingest(vestige_core::IngestInput {
                 content: "Memory that must survive pre-execution review.".to_string(),
@@ -2515,6 +2566,11 @@ mod tests {
         use vestige_core::MemoryPrStatus;
 
         let (storage, _dir) = test_storage().await;
+        std::fs::write(
+            storage.data_dir().join("review_mode.json"),
+            r#"{"mode":"risk_gated"}"#,
+        )
+        .unwrap();
         let node = storage
             .ingest(vestige_core::IngestInput {
                 content: "Memory that must not be inhibited before review.".to_string(),
@@ -2674,38 +2730,33 @@ mod tests {
         );
     }
 
-    /// A corrupt or missing `review_mode.json` must never silently disable
-    /// gating: it falls back to the default RiskGated.
+    /// Defaults never create approval friction; explicit review settings survive restarts.
     #[tokio::test]
-    async fn review_mode_falls_back_to_risk_gated() {
+    async fn review_mode_defaults_to_automatic_and_preserves_explicit_settings() {
         let (storage, _dir) = test_storage().await;
         assert_eq!(
             crate::trace_recorder::read_review_mode(&storage),
-            vestige_core::ReviewMode::RiskGated,
-            "missing file defaults to RiskGated"
+            vestige_core::ReviewMode::Fast
         );
-
-        std::fs::write(
-            storage.data_dir().join("review_mode.json"),
-            "{ not valid json",
-        )
-        .unwrap();
-        assert_eq!(
-            crate::trace_recorder::read_review_mode(&storage),
-            vestige_core::ReviewMode::RiskGated,
-            "corrupt file defaults to RiskGated, never Fast"
-        );
-
-        std::fs::write(
-            storage.data_dir().join("review_mode.json"),
-            r#"{"mode":"fast"}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            crate::trace_recorder::read_review_mode(&storage),
+        for raw in ["{broken", r#"{}"#, r#"{"mode":5}"#, r#"{"mode":"typo"}"#] {
+            std::fs::write(storage.data_dir().join("review_mode.json"), raw).unwrap();
+            assert_eq!(
+                crate::trace_recorder::read_review_mode(&storage),
+                vestige_core::ReviewMode::Fast
+            );
+        }
+        for mode in [
             vestige_core::ReviewMode::Fast,
-            "a valid mode is honored"
-        );
+            vestige_core::ReviewMode::RiskGated,
+            vestige_core::ReviewMode::Paranoid,
+        ] {
+            std::fs::write(
+                storage.data_dir().join("review_mode.json"),
+                serde_json::json!({"mode": mode.as_str()}).to_string(),
+            )
+            .unwrap();
+            assert_eq!(crate::trace_recorder::read_review_mode(&storage), mode);
+        }
     }
 
     // ========================================================================

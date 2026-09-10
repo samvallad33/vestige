@@ -526,10 +526,10 @@ fn assert_store_is_healthy(dir: &Path) {
 
 /// Put the review gate into `fast` mode.
 ///
-/// In the default `risk_gated` mode a destructive or suppressive mutation is
+/// In the opt-in `risk_gated` mode a destructive or suppressive mutation is
 /// intercepted and turned into a pending Memory PR rather than applied, so a
 /// test that wants to observe the mutation itself has to opt out of review
-/// first. See [`purge_with_confirm_is_review_gated_by_default`], which pins the
+/// first. See [`purge_with_confirm_is_review_gated_when_opted_in`], which pins the
 /// default behaviour.
 fn disable_review_gate(dir: &Path) {
     std::fs::write(dir.join("review_mode.json"), r#"{"mode":"fast"}"#)
@@ -1438,7 +1438,32 @@ fn unicode_and_typographic_content_stays_findable_by_keyword() {
 // 4. Deletion, suppression and the review gate
 // ============================================================================
 
-/// In the default review mode a confirmed purge is held for review, not applied.
+/// A fresh installation stores sensitive context without an approval queue and
+/// keeps that context retrievable after the server restarts.
+#[test]
+fn default_memory_writes_are_immediate_and_survive_restart() {
+    let dir = data_dir();
+    assert!(!dir.path().join("review_mode.json").exists());
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    let write = server.call_tool_ok("smart_ingest", json!({
+        "content": "User preference: the ORCHID billing security workflow requires weekly checks.",
+        "tags": ["preference", "security"], "forceCreate": true
+    }));
+    assert_eq!(write["success"], true);
+    assert!(write.get("memoryPrNotice").is_none());
+    let id = write["nodeId"].as_str().unwrap().to_string();
+    assert!(server.recall_ids(json!({"query": "ORCHID", "mode": "lookup"})).contains(&id));
+    drop(server);
+    let mut restarted = Server::spawn(dir.path());
+    restarted.handshake();
+    assert!(restarted.recall_ids(json!({"query": "ORCHID", "mode": "lookup"})).contains(&id));
+    let unconfirmed = restarted.call_tool("memory", json!({"action": "purge", "id": id}));
+    assert!(unconfirmed["error"].as_str().is_some_and(|e| e.contains("confirm=true")));
+    assert!(restarted.recall_ids(json!({"query": "ORCHID", "mode": "lookup"})).contains(&id));
+}
+
+/// In the opt-in review mode a confirmed purge is held for review, not applied.
 ///
 /// This is load-bearing and surprising: `memory(action='purge', confirm=true)`
 /// answers `purge_pending_review`, the memory stays fully retrievable, and
@@ -1446,8 +1471,9 @@ fn unicode_and_typographic_content_stays_findable_by_keyword() {
 /// `confirm=true` as "erased" would be wrong. Catches a regression in either
 /// direction: silently erasing without review, or dropping the review record.
 #[test]
-fn purge_with_confirm_is_review_gated_by_default() {
+fn purge_with_confirm_is_review_gated_when_opted_in() {
     let dir = data_dir();
+    std::fs::write(dir.path().join("review_mode.json"), r#"{"mode":"risk_gated"}"#).unwrap();
     let mut server = Server::spawn(dir.path());
     server.handshake();
 
@@ -1471,7 +1497,7 @@ fn purge_with_confirm_is_review_gated_by_default() {
     assert_eq!(
         gated["action"],
         json!("purge_pending_review"),
-        "default review mode must hold a destructive mutation: {gated}"
+        "opt-in review mode must hold a destructive mutation: {gated}"
     );
     assert_eq!(gated["success"], json!(false));
     assert_eq!(gated["pendingReview"], json!(true));

@@ -87,3 +87,25 @@ baseline. Frozen-frame checks compare frame changes to measured reload noise.
 The browser runner records the tested binary digest and fixture assertions in
 its log directory. Use its exit status alongside the Playwright report; the
 presence of screenshots alone is not a passing result.
+
+## Automatic memory writes
+
+The default review mode is `fast`: memory writes apply immediately without a
+Memory PR approval step, including preferences and other content that optional
+risk classification flags. Receipts remain available. `risk_gated` and `paranoid`
+are explicit opt-ins, selectable in the Memory PR dashboard. Existing valid
+settings survive upgrades; users can switch to Automatic without approving each
+future write. This does not apply historical pending proposals or remove the
+explicit `confirm=true` contract for purge.
+
+Missing or malformed mode files use the automatic default (malformed settings
+are logged). The settings API rejects invalid mode names without changing the
+current setting. Tests cover fresh-store ingestion and retrieval after restart,
+opt-in review, unchanged historical proposals, invalid settings, failed UI saves,
+persisted mode changes and the automatic empty state.
+
+Clean-runner CI exposed an embedding-profile activation regression: migrated
+vectors could be excluded by the legacy availability flag. Activation now updates
+retrieval eligibility in the same transaction as the active-profile pointer. The
+regression fixture explicitly clears legacy availability before activation, so a
+developer model cache cannot hide the failure.

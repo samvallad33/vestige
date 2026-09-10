@@ -3028,7 +3028,8 @@ pub async fn set_review_mode(
     State(state): State<AppState>,
     Json(body): Json<ReviewModeBody>,
 ) -> Result<Json<Value>, StatusCode> {
-    let mode = vestige_core::ReviewMode::from_label(&body.mode);
+    let mode = vestige_core::ReviewMode::try_from_label(&body.mode)
+        .ok_or(StatusCode::BAD_REQUEST)?;
     let path = review_mode_path(&state);
     let payload = serde_json::json!({ "mode": mode.as_str() });
     // B7: atomic write (temp + rename) so a concurrent read can never see a
@@ -3043,7 +3044,7 @@ fn review_mode_path(state: &AppState) -> PathBuf {
     state.storage.data_dir().join("review_mode.json")
 }
 
-/// Read the persisted review mode, defaulting to RiskGated.
+/// Read the persisted review mode, defaulting to Fast.
 ///
 /// Delegates to [`crate::trace_recorder::read_review_mode`] so the dashboard and
 /// the MCP write path read the mode through exactly one implementation. If these
@@ -3707,6 +3708,43 @@ mod tests {
             .unwrap()[0]
             .id
             .clone()
+    }
+
+    #[tokio::test]
+    async fn review_mode_changes_persist_without_applying_historical_proposals() {
+        let (_dir, storage) = seed_storage();
+        let node_id = ingest(&storage, "Historical proposal must stay under user control");
+        let pr_id = open_pending_mutation_pr(&storage, &node_id, "purge");
+        let state = AppState::new(storage.clone(), None);
+        for mode in ["paranoid", "fast"] {
+            let _ = set_review_mode(
+                State(state.clone()),
+                Json(ReviewModeBody { mode: mode.into() }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(read_review_mode(&state).as_str(), mode);
+        }
+        assert!(storage.get_node(&node_id).unwrap().is_some());
+        assert!(
+            storage
+                .list_memory_prs(Some(vestige_core::MemoryPrStatus::Pending), 10)
+                .unwrap()
+                .iter()
+                .any(|pr| pr.id == pr_id)
+        );
+        assert_eq!(
+            set_review_mode(
+                State(state.clone()),
+                Json(ReviewModeBody {
+                    mode: "fsat".into()
+                })
+            )
+            .await
+            .unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(read_review_mode(&state), vestige_core::ReviewMode::Fast);
     }
 
     #[tokio::test]

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Memory writes now apply automatically by default, with receipts and no Memory
+  PR approval wait. Existing opt-in review settings remain configurable in the
+  dashboard. Mode changes preserve historical proposals; purge still requires
+  explicit confirmation. Invalid settings requests are rejected.
+
+
 ### Fixed — Dashboard replay evidence
 
 - Dashboard deep-reference calls now preserve the supplied run identity and

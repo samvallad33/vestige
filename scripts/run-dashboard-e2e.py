@@ -188,7 +188,7 @@ def run(binary, log_dir, arguments):
                     "content": "Browser fixture pending review: change the staging timeout to 90 milliseconds.",
                     "forceCreate": True,
                 }})
-                review_mode.write_text('{"mode":"risk_gated"}')
+                review_mode.unlink()  # Exercise the actual automatic default after opt-in fixture setup.
                 with urlopen(env["VESTIGE_API_TARGET"] + "/api/memory-prs?limit=20", timeout=5) as response:
                     if not json.load(response).get("prs"):
                         raise RuntimeError("fixture Memory PR did not materialize")

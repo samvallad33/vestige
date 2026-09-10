@@ -103,8 +103,8 @@ fn is_write_decision(label: &str) -> bool {
 ///
 /// The mode lives in `<data_dir>/review_mode.json` and is written by the
 /// dashboard (`POST /api/memory-prs/mode`). Anything missing, unreadable, or
-/// unrecognised falls back to the default [`vestige_core::ReviewMode::RiskGated`],
-/// so a corrupt file can never silently disable gating.
+/// unrecognised falls back to the default [`vestige_core::ReviewMode::Fast`]. Explicit valid review settings
+/// remain opt-in and survive upgrades.
 ///
 /// This is the single source of truth: the dashboard handler delegates here so
 /// the MCP write path and the dashboard can never disagree about the mode.
@@ -120,7 +120,7 @@ pub fn read_review_mode(storage: &Storage) -> vestige_core::ReviewMode {
             tracing::warn!(
                 path = %path.display(),
                 %error,
-                "review_mode.json is unreadable; using the default risk_gated review mode"
+                "review_mode.json is unreadable; using the default fast review mode"
             );
             return vestige_core::ReviewMode::default();
         }
@@ -128,22 +128,21 @@ pub fn read_review_mode(storage: &Storage) -> vestige_core::ReviewMode {
     let label = serde_json::from_str::<Value>(&raw)
         .ok()
         .and_then(|v| v.get("mode").and_then(|m| m.as_str()).map(str::to_owned));
-    // Never fall back silently: an operator who wrote `fast` with a typo must
-    // learn they are still risk-gated from the log, not from a surprise later.
+    // Report malformed settings so the operator can repair their opt-in choice.
     match label.as_deref().map(vestige_core::ReviewMode::try_from_label) {
         Some(Some(mode)) => mode,
         Some(None) => {
             tracing::warn!(
                 path = %path.display(),
                 label = label.as_deref().unwrap_or_default(),
-                "review_mode.json names an unknown review mode (known: fast, risk_gated, paranoid); using the default risk_gated review mode"
+                "review_mode.json names an unknown review mode (known: fast, risk_gated, paranoid); using the default fast review mode"
             );
             vestige_core::ReviewMode::default()
         }
         None => {
             tracing::warn!(
                 path = %path.display(),
-                "review_mode.json has no string \"mode\" field; using the default risk_gated review mode"
+                "review_mode.json has no string \"mode\" field; using the default fast review mode"
             );
             vestige_core::ReviewMode::default()
         }

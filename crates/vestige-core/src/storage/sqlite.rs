@@ -3515,8 +3515,8 @@ impl SqliteMemoryStore {
         .transpose()
     }
 
-    /// Change only the active-profile pointer after the caller has explicitly
-    /// installed, evaluated, migrated, and validated the destination. The
+    /// Change the active-profile pointer and retrieval eligibility after the
+    /// caller installs, evaluates, migrates, and validates the destination. The
     /// pointer and both status updates are one SQLite transaction; no vector
     /// rows are copied, removed, or re-embedded during activation.
     pub fn activate_embedding_profile(
@@ -3679,6 +3679,17 @@ impl SqliteMemoryStore {
                 activated_at = excluded.activated_at,
                 updated_at = excluded.updated_at",
             params![profile_id.as_str(), current, now.to_rfc3339()],
+        )?;
+        // The eligibility flag belongs to the newly active vector space.
+        // A clean machine may have no legacy embedding even though migration
+        // produced a verified destination vector. Update it atomically with
+        // the pointer so semantic search does not discard those memories.
+        tx.execute(
+            "UPDATE knowledge_nodes SET has_embedding = EXISTS (
+                SELECT 1 FROM embedding_profile_vectors pv
+                WHERE pv.profile_id = ?1 AND pv.node_id = knowledge_nodes.id
+            )",
+            params![profile_id.as_str()],
         )?;
         tx.commit()?;
         // The index lock blocks semantic search across the committed-pointer /

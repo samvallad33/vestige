@@ -95,6 +95,10 @@ def run(binary):
                                "clientInfo": {"name": "context-evidence-fixture", "version": "1"}})
             proc.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
             proc.stdin.flush()
+            # Mark empty-store consolidation complete before seeding. Otherwise
+            # the server's two-second startup maintenance can race the C12
+            # no-reinforcement snapshot and legitimately change decay scores.
+            tool("maintain", {"action": "consolidate"})
             tool("session_start", {"queries": ["q"] * 17}, error=True)
             tool("session_start", {"queries": [], "scope": "   "}, error=True)
             passed("startup validates query bounds and namespace before retrieval")
@@ -143,7 +147,7 @@ def run(binary):
             contexts(); contexts()
             with sqlite3.connect(db) as conn:
                 after = conn.execute("SELECT reps,storage_strength,retention_strength,content FROM knowledge_nodes WHERE id=?", (node_id,)).fetchone()
-                assert before == after
+                assert before == after, {"before": before, "after": after}
                 cached = conn.execute("SELECT last_verified_at FROM code_memory_anchors WHERE node_id=?", (node_id,)).fetchall()
                 assert all(row[0] is None for row in cached)
             passed("C12 repeated context reads do not reinforce or cache across worktrees")

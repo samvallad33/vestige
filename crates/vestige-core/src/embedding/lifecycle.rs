@@ -1485,6 +1485,11 @@ mod tests {
                 .evaluation
                 .is_some()
         );
+        // Reproduce a clean host without legacy model artifacts even when the
+        // developer machine has a cached legacy embedding runtime.
+        let connection = rusqlite::Connection::open(temp.path().join("store.sqlite")).unwrap();
+        connection.execute("UPDATE knowledge_nodes SET has_embedding = 0", []).unwrap();
+        drop(connection);
         storage
             .activate_embedding_profile(&profile.profile_id)
             .unwrap();

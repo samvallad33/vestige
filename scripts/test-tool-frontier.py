@@ -127,10 +127,12 @@ def run(binary, output):
             for action in ("get", "state"):
                 tool("memory", {"action": action, "id": cause})
             tool("memory", {"action": "get_batch", "ids": [cause, failure]})
+            mode_path = db.parent / "review_mode.json"
+            mode_path.write_text('{"mode":"risk_gated"}')
             held = tool("suppress", {"id": cause})
             assert held["pendingReview"] is True and held["success"] is False
             # Exercise the separate supported fast mode only in this disposable
-            # database, after proving the default review gate above.
+            # database, after proving the opt-in review gate above.
             mode_path = db.parent / "review_mode.json"
             mode_path.write_text('{"mode":"fast"}')
             for action in ("promote", "demote"):
@@ -143,7 +145,7 @@ def run(binary, output):
             assert reversed_state["unrecordedEffectsReversed"] is False
             tool("suppress", {"id": cause, "reverse": True})
             mode_path.unlink()
-            passed("default suppression review gate and explicit fixture fast-mode compounding/reversal")
+            passed("opt-in suppression review gate and automatic compounding/reversal")
 
             for view in ("health", "retention", "timeline", "changelog", "stats"):
                 tool("memory_status", {"view": view})
