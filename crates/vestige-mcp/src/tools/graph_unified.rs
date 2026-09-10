@@ -61,6 +61,8 @@ pub fn schema() -> Value {
                 "enum": OUTCOME_TYPES,
                 "description": "[label] Outcome to record for the composition (the only mutating action)."
             },
+            "scope": { "type": "string", "default": "user", "description": "[never_composed only] Exact project namespace; filtered before candidate scan limits. Other graph actions do not accept this control." },
+            "includeCrossScope": { "type": "boolean", "default": false, "description": "[never_composed only] Explicitly consider candidates across project namespaces." },
             // --- shared ---
             "limit": { "type": "integer", "description": "Max results (per-action defaults; clamped internally).", "minimum": 1, "maximum": 100 }
         },
@@ -81,6 +83,13 @@ pub async fn execute(
         .ok_or("Missing 'action'. Use chain|associations|bridges|predict|memory_graph|recent|get|memory|neighbors|never_composed|bounty_mode|label.")?
         .to_string();
 
+    if action != "never_composed"
+        && args
+            .as_ref()
+            .is_some_and(|a| a.get("scope").is_some() || a.get("includeCrossScope").is_some())
+    {
+        return Err("scope and includeCrossScope currently apply only to never_composed".into());
+    }
     match action.as_str() {
         // explore_connections — re-reads its own `action` (chain/associations/bridges).
         "chain" | "associations" | "bridges" => {
@@ -120,6 +129,71 @@ pub async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn never_composed_obeys_namespace_and_explains_novelty_boundary() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = Arc::new(Storage::new(Some(dir.path().join("test.db"))).unwrap());
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let mut own = Vec::new();
+        let mut other = Vec::new();
+        for (scope, ids) in [("user", &mut own), ("other-project", &mut other)] {
+            for content in [
+                "Shared fixture decision about source evidence",
+                "Shared fixture finding about source evidence",
+            ] {
+                ids.push(
+                    storage
+                        .ingest_in_scope(
+                            vestige_core::IngestInput {
+                                content: content.into(),
+                                tags: vec!["fixture".into()],
+                                ..Default::default()
+                            },
+                            scope,
+                        )
+                        .unwrap()
+                        .id,
+                );
+            }
+        }
+        for scope in [None, Some("other-project")] {
+            let mut args = serde_json::json!({"action": "never_composed", "tags": ["fixture"]});
+            if let Some(scope) = scope {
+                args["scope"] = scope.into();
+            }
+            let output = execute(&storage, &cognitive, Some(args)).await.unwrap();
+            assert_eq!(output["globalNoveltyVerified"], false);
+            let expected = if scope.is_some() { &other } else { &own };
+            let pairs = output["candidates"].as_array().unwrap();
+            assert!(!pairs.is_empty());
+            for pair in pairs {
+                assert!(expected.iter().any(|id| pair["firstId"] == *id));
+                assert!(expected.iter().any(|id| pair["secondId"] == *id));
+            }
+        }
+        let output = execute(
+            &storage,
+            &cognitive,
+            Some(serde_json::json!({
+                "action": "never_composed", "includeCrossScope": true, "limit": 100
+            })),
+        )
+        .await
+        .unwrap();
+        assert!(output["candidates"].as_array().unwrap().iter().any(|pair| {
+            own.iter().any(|id| pair["firstId"] == *id)
+                && other.iter().any(|id| pair["secondId"] == *id)
+                || other.iter().any(|id| pair["firstId"] == *id)
+                    && own.iter().any(|id| pair["secondId"] == *id)
+        }));
+        for args in [
+            serde_json::json!({"action":"never_composed", "scope":" "}),
+            serde_json::json!({"action":"recent", "scope":"user"}),
+        ] {
+            assert!(execute(&storage, &cognitive, Some(args)).await.is_err());
+        }
+    }
 
     #[test]
     fn test_schema_action_count() {

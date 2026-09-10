@@ -4196,10 +4196,10 @@ mod tests {
     }
 
     /// Full proof-spine acceptance: a dashboard preview creates one durable
-    /// Backfill receipt (typed evidence), persists the candidate evidence edge,
-    /// and broadcasts only the route embedded in that receipt.
+    /// Backfill receipt (typed evidence) preserves preview candidates without
+    /// inventing a graph edge or broadcasting an unpersisted route.
     #[tokio::test]
-    async fn backfill_http_preview_persists_receipt_edge_and_exact_live_path() {
+    async fn backfill_http_preview_records_receipt_without_graph_mutation() {
         let (_dir, storage) = seed_storage();
         let cause = storage
             .ingest(IngestInput {
@@ -4246,7 +4246,7 @@ mod tests {
         );
         assert_eq!(
             response["receipt"]["evidence"]["predicate"]["path_ids"],
-            serde_json::json!([cause.id, failure.id])
+            serde_json::json!([])
         );
         assert_eq!(
             response["receipt"]["evidence"]["predicate"]["candidates"][0]["promoted"],
@@ -4259,10 +4259,10 @@ mod tests {
             .expect("receipt saved");
         assert_eq!(
             persisted.backfill_path_ids(),
-            Some([cause.id.clone(), failure.id.clone()].as_slice())
+            None
         );
         assert!(
-            storage
+            !storage
                 .get_connections_for_memory(&cause.id)
                 .unwrap()
                 .iter()
@@ -4271,20 +4271,12 @@ mod tests {
                         && edge.target_id == failure.id
                         && edge.link_type == "backfill_candidate"
                 }),
-            "preview still persists explicit evidence, without a promotion"
+            "preview records candidates in its receipt without persisting graph edges"
         );
-        let emitted = loop {
-            match events.recv().await.expect("dashboard event") {
-                VestigeEvent::BackfillFired {
-                    receipt_id: emitted_receipt,
-                    path_ids,
-                    ..
-                } => break (emitted_receipt, path_ids),
-                _ => continue,
-            }
-        };
-        assert_eq!(emitted.0, receipt_id);
-        assert_eq!(emitted.1, vec![cause.id, failure.id]);
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, VestigeEvent::BackfillFired { .. }),
+                "preview must not animate a route that was never persisted");
+        }
     }
 
     #[test]

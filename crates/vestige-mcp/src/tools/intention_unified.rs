@@ -38,7 +38,7 @@ pub fn schema() -> Value {
             },
             "trigger": {
                 "type": "object",
-                "description": "[set] When to trigger this intention",
+                "description": "[set] When to trigger. Context constraints are combined with AND; event conditions match an explicit context.event string.",
                 "properties": {
                     "type": {
                         "type": "string",
@@ -51,15 +51,15 @@ pub fn schema() -> Value {
                     },
                     "in_minutes": {
                         "type": "integer",
-                        "description": "Minutes from now for duration-based triggers"
+                        "minimum": 0, "maximum": 525600, "description": "Minutes from now for duration-based triggers"
                     },
                     "codebase": {
                         "type": "string",
-                        "description": "Trigger when working in this codebase"
+                        "description": "Case-insensitive substring of the current codebase; AND with other supplied context constraints"
                     },
                     "file_pattern": {
                         "type": "string",
-                        "description": "Trigger when editing files matching this pattern"
+                        "description": "Literal case-sensitive file-path substring (not a glob); AND with other context constraints"
                     },
                     "topic": {
                         "type": "string",
@@ -67,7 +67,7 @@ pub fn schema() -> Value {
                     },
                     "condition": {
                         "type": "string",
-                        "description": "Natural language condition for event triggers"
+                        "description": "Event key matched exactly, case-insensitively, against check context.event; no natural-language condition evaluation"
                     }
                 }
             },
@@ -94,6 +94,7 @@ pub fn schema() -> Value {
             "snooze_minutes": {
                 "type": "integer",
                 "default": 30,
+                "minimum": 1, "maximum": 525600,
                 "description": "[update] Minutes to snooze for (when status is 'snooze')"
             },
             // CHECK action parameters
@@ -101,6 +102,7 @@ pub fn schema() -> Value {
                 "type": "object",
                 "description": "[check] Current context for matching intentions",
                 "properties": {
+                    "event": {"type": "string", "description": "Observed event key; exact case-insensitive match to an event trigger condition"},
                     "current_time": {
                         "type": "string",
                         "description": "Current ISO timestamp (defaults to now)"
@@ -164,8 +166,9 @@ struct TriggerSpec {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ContextSpec {
-    #[allow(dead_code)]
+    #[serde(alias = "current_time")]
     current_time: Option<String>,
+    event: Option<String>,
     codebase: Option<String>,
     file: Option<String>,
     topics: Option<Vec<String>>,
@@ -210,6 +213,7 @@ pub async fn execute(
         None => return Err("Missing arguments".to_string()),
     };
 
+    validate_inputs(&args)?;
     match args.action.as_str() {
         "set" => execute_set(storage, cognitive, &args).await,
         "check" => execute_check(storage, cognitive, &args).await,
@@ -220,6 +224,82 @@ pub async fn execute(
             args.action
         )),
     }
+}
+
+fn timestamp(value: &str, field: &str) -> Result<DateTime<Utc>, String> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|time| time.with_timezone(&Utc))
+        .map_err(|_| format!("{field} must be an RFC3339 timestamp with timezone"))
+}
+
+fn validate_inputs(args: &UnifiedIntentionArgs) -> Result<(), String> {
+    if args.limit.is_some_and(|limit| !(1..=200).contains(&limit)) {
+        return Err("limit must be between 1 and 200".into());
+    }
+    if args
+        .snooze_minutes
+        .is_some_and(|minutes| !(1..=525600).contains(&minutes))
+    {
+        return Err("snooze_minutes must be between 1 and 525600".into());
+    }
+    if args
+        .priority
+        .as_deref()
+        .is_some_and(|p| !["low", "normal", "high", "critical"].contains(&p))
+    {
+        return Err("Unknown priority; use low|normal|high|critical".into());
+    }
+    if args
+        .filter_status
+        .as_deref()
+        .is_some_and(|p| !["active", "fulfilled", "cancelled", "snoozed", "all"].contains(&p))
+    {
+        return Err("Unknown filter_status; use active|fulfilled|cancelled|snoozed|all".into());
+    }
+    if let Some(deadline) = &args.deadline {
+        timestamp(deadline, "deadline")?;
+    }
+    if let Some(time) = args
+        .context
+        .as_ref()
+        .and_then(|c| c.current_time.as_deref())
+    {
+        timestamp(time, "context.current_time")?;
+    }
+    if let Some(trigger) = &args.trigger {
+        if trigger.at.is_some() && trigger.in_minutes.is_some() {
+            return Err("Specify only one of trigger.at and trigger.in_minutes".into());
+        }
+        if let Some(at) = &trigger.at {
+            timestamp(at, "trigger.at")?;
+        }
+        if trigger
+            .in_minutes
+            .is_some_and(|minutes| !(0..=525600).contains(&minutes))
+        {
+            return Err("trigger.in_minutes must be between 0 and 525600".into());
+        }
+        for text in [
+            &trigger.codebase,
+            &trigger.file_pattern,
+            &trigger.topic,
+            &trigger.condition,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if text.trim().is_empty() {
+                return Err("Trigger constraints must not be empty".into());
+            }
+        }
+        match trigger.trigger_type.as_deref().unwrap_or("time") {
+            "time" if trigger.at.is_some() || trigger.in_minutes.is_some() => {},
+            "context" if trigger.codebase.is_some() || trigger.file_pattern.is_some() || trigger.topic.is_some() => {},
+            "event" if trigger.condition.is_some() => {},
+            _ => return Err("Trigger requires time with at/in_minutes, context with a constraint, or event with condition".into()),
+        }
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -265,9 +345,9 @@ async fn execute_set(
             nlp_parsed = true;
             // Extract trigger info from parsed intention
             let (t_type, t_data) = match &parsed.trigger {
-                ProspectiveTrigger::TimeBased { .. } => (
+                ProspectiveTrigger::TimeBased { at } => (
                     "time".to_string(),
-                    serde_json::json!({"type": "time"}).to_string(),
+                    serde_json::json!({"type": "time", "at": at.to_rfc3339()}).to_string(),
                 ),
                 ProspectiveTrigger::DurationBased { after, .. } => {
                     let mins = after.num_minutes();
@@ -322,8 +402,9 @@ async fn execute_set(
             .trigger_type
             .clone()
             .unwrap_or_else(|| "time".to_string());
-        let data = serde_json::to_string(trigger).unwrap_or_else(|_| "{}".to_string());
-        (t_type, data)
+        let mut data = serde_json::to_value(trigger).map_err(|e| e.to_string())?;
+        data["type"] = t_type.clone().into();
+        (t_type, data.to_string())
     } else if let (Some(t_type), Some(t_data)) = (nlp_trigger_type, nlp_trigger_data) {
         (t_type, t_data)
     } else {
@@ -353,21 +434,24 @@ async fn execute_set(
         }
     };
 
-    // Parse deadline
-    let deadline = args.deadline.as_ref().and_then(|s| {
-        DateTime::parse_from_rfc3339(s)
-            .ok()
-            .map(|dt| dt.with_timezone(&Utc))
-    });
-
-    // Calculate trigger time if specified
-    let trigger_at = if let Some(trigger) = &args.trigger {
-        if let Some(at) = &trigger.at {
-            DateTime::parse_from_rfc3339(at)
-                .ok()
-                .map(|dt| dt.with_timezone(&Utc))
+    let deadline = args
+        .deadline
+        .as_deref()
+        .map(|s| timestamp(s, "deadline"))
+        .transpose()?;
+    // Both explicit and parsed triggers carry the same stored time contract.
+    let parsed_trigger: Option<TriggerSpec> = serde_json::from_str(&trigger_data).ok();
+    let trigger_at = if let Some(trigger) = parsed_trigger {
+        if let Some(at) = trigger.at {
+            Some(timestamp(&at, "trigger.at")?)
+        } else if let Some(minutes) = trigger.in_minutes {
+            let delta = Duration::try_minutes(minutes).ok_or("Trigger duration is out of range")?;
+            Some(
+                now.checked_add_signed(delta)
+                    .ok_or("Trigger time is out of range")?,
+            )
         } else {
-            trigger.in_minutes.map(|mins| now + Duration::minutes(mins))
+            None
         }
     } else {
         None
@@ -402,6 +486,8 @@ async fn execute_set(
         "message": format!("Intention created: {}", description),
         "priority": priority,
         "triggerAt": trigger_at.map(|dt| dt.to_rfc3339()),
+        "triggerType": record.trigger_type,
+        "trigger": serde_json::from_str::<Value>(&record.trigger_data).unwrap_or(Value::Null),
         "deadline": deadline.map(|dt| dt.to_rfc3339()),
         "nlpParsed": nlp_parsed,
     }))
@@ -413,7 +499,13 @@ async fn execute_check(
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: &UnifiedIntentionArgs,
 ) -> Result<Value, String> {
-    let now = Utc::now();
+    let now = args
+        .context
+        .as_ref()
+        .and_then(|c| c.current_time.as_deref())
+        .map(|time| timestamp(time, "context.current_time"))
+        .transpose()?
+        .unwrap_or_else(Utc::now);
 
     // ====================================================================
     // COGNITIVE: Update prospective memory context
@@ -466,7 +558,11 @@ async fn execute_check(
 
         // Check if triggered
         let is_triggered = if let Some(t) = &trigger {
-            match t.trigger_type.as_deref() {
+            match t
+                .trigger_type
+                .as_deref()
+                .or(Some(intention.trigger_type.as_str()))
+            {
                 Some("time") => {
                     if let Some(at) = &t.at {
                         if let Ok(trigger_time) = DateTime::parse_from_rfc3339(at) {
@@ -475,36 +571,37 @@ async fn execute_check(
                             false
                         }
                     } else if let Some(mins) = t.in_minutes {
-                        let trigger_time = intention.created_at + Duration::minutes(mins);
-                        trigger_time <= now
+                        Duration::try_minutes(mins)
+                            .and_then(|delta| intention.created_at.checked_add_signed(delta))
+                            .is_some_and(|trigger_time| trigger_time <= now)
                     } else {
                         false
                     }
                 }
-                Some("context") => {
-                    if let Some(ctx) = &args.context {
-                        // Check codebase match
-                        if let (Some(trigger_codebase), Some(current_codebase)) =
-                            (&t.codebase, &ctx.codebase)
-                        {
-                            current_codebase
-                                .to_lowercase()
-                                .contains(&trigger_codebase.to_lowercase())
-                        // Check file pattern match
-                        } else if let (Some(pattern), Some(file)) = (&t.file_pattern, &ctx.file) {
-                            file.contains(pattern)
-                        // Check topic match
-                        } else if let (Some(topic), Some(topics)) = (&t.topic, &ctx.topics) {
-                            topics
-                                .iter()
-                                .any(|t| t.to_lowercase().contains(&topic.to_lowercase()))
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                }
+                Some("context") => args.context.as_ref().is_some_and(|ctx| {
+                    (t.codebase.is_some() || t.file_pattern.is_some() || t.topic.is_some())
+                        && t.codebase.as_ref().is_none_or(|wanted| {
+                            ctx.codebase.as_ref().is_some_and(|got| {
+                                got.to_lowercase().contains(&wanted.to_lowercase())
+                            })
+                        })
+                        && t.file_pattern.as_ref().is_none_or(|wanted| {
+                            ctx.file.as_ref().is_some_and(|got| got.contains(wanted))
+                        })
+                        && t.topic.as_ref().is_none_or(|wanted| {
+                            ctx.topics.as_ref().is_some_and(|got| {
+                                got.iter().any(|topic| {
+                                    topic.to_lowercase().contains(&wanted.to_lowercase())
+                                })
+                            })
+                        })
+                }),
+                Some("event") => t.condition.as_ref().is_some_and(|wanted| {
+                    args.context
+                        .as_ref()
+                        .and_then(|ctx| ctx.event.as_deref())
+                        .is_some_and(|got| got.trim().eq_ignore_ascii_case(wanted.trim()))
+                }),
                 _ => false,
             }
         } else {
@@ -528,9 +625,12 @@ async fn execute_check(
             "deadline": intention.deadline.map(|d| d.to_rfc3339()),
             "snoozedUntil": intention.snoozed_until.map(|d| d.to_rfc3339()),
             "isOverdue": is_overdue,
+            "triggerType": intention.trigger_type,
+            "trigger": serde_json::from_str::<Value>(&intention.trigger_data).unwrap_or(Value::Null),
         });
 
-        if is_triggered || is_overdue {
+        let snooze_elapsed = intention.snoozed_until.is_none_or(|until| until <= now);
+        if snooze_elapsed && (is_triggered || is_overdue) {
             triggered.push(item);
         } else {
             pending.push(item);
@@ -667,6 +767,8 @@ async fn execute_list(
                 "id": i.id,
                 "description": i.content,
                 "status": i.status,
+                "triggerType": i.trigger_type,
+                "trigger": serde_json::from_str::<Value>(&i.trigger_data).unwrap_or(Value::Null),
                 "priority": match i.priority {
                     1 => "low",
                     3 => "high",
@@ -1280,6 +1382,93 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["total"], 2);
+    }
+
+    #[tokio::test]
+    async fn check_uses_supplied_clock_and_respects_snooze_and_event() {
+        let (storage, _dir) = test_storage().await;
+        let cog = test_cognitive();
+        let created = execute(&storage, &cog, Some(serde_json::json!({
+            "action": "set", "description": "Clock fixture", "trigger": {"at":"2030-01-01T00:00:00Z"}
+        }))).await.unwrap();
+        for (time, expected) in [("2029-12-31T23:59:59Z", 0), ("2030-01-01T00:00:00Z", 1)] {
+            let out = execute(
+                &storage,
+                &cog,
+                Some(serde_json::json!({
+                    "action":"check", "context":{"current_time":time}
+                })),
+            )
+            .await
+            .unwrap();
+            assert_eq!(out["triggered"].as_array().unwrap().len(), expected);
+            assert_eq!(
+                timestamp(out["checkedAt"].as_str().unwrap(), "checkedAt").unwrap(),
+                timestamp(time, "fixture").unwrap()
+            );
+        }
+        let id = created["intentionId"].as_str().unwrap();
+        storage
+            .snooze_intention(id, timestamp("2030-01-02T00:00:00Z", "fixture").unwrap())
+            .unwrap();
+        for (time, expected) in [("2030-01-01T00:00:00Z", 0), ("2030-01-02T00:00:00Z", 1)] {
+            let out = execute(
+                &storage,
+                &cog,
+                Some(serde_json::json!({
+                    "action":"check", "include_snoozed":true, "context":{"currentTime":time}
+                })),
+            )
+            .await
+            .unwrap();
+            assert_eq!(out["triggered"].as_array().unwrap().len(), expected);
+        }
+        execute(&storage, &cog, Some(serde_json::json!({
+            "action":"set", "description":"Event fixture", "trigger":{"type":"event", "condition":"build_finished"}
+        }))).await.unwrap();
+        for (event, expected) in [("build_started", 0), ("BUILD_FINISHED", 1)] {
+            let out = execute(&storage, &cog, Some(serde_json::json!({
+                "action":"check", "context":{"current_time":"2029-01-01T00:00:00Z", "event":event}
+            }))).await.unwrap();
+            assert_eq!(out["triggered"].as_array().unwrap().len(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn context_constraints_are_conjunctive_and_invalid_controls_rejected() {
+        let (storage, _dir) = test_storage().await;
+        let cog = test_cognitive();
+        execute(
+            &storage,
+            &cog,
+            Some(serde_json::json!({
+                "action":"set", "description":"All constraints fixture", "trigger":{
+                    "type":"context", "codebase":"fixture", "file_pattern":".rs", "topic":"storage"
+                }
+            })),
+        )
+        .await
+        .unwrap();
+        for (topics, expected) in [
+            (serde_json::json!(["web"]), 0),
+            (serde_json::json!(["storage"]), 1),
+        ] {
+            let out = execute(&storage, &cog, Some(serde_json::json!({
+                "action":"check", "context":{"codebase":"fixture", "file":"lib.rs", "topics":topics}
+            }))).await.unwrap();
+            assert_eq!(out["triggered"].as_array().unwrap().len(), expected);
+        }
+        for args in [
+            serde_json::json!({"action":"check", "context":{"current_time":"invalid"}}),
+            serde_json::json!({"action":"list", "limit":-1}),
+            serde_json::json!({"action":"list", "filter_status":"missing"}),
+            serde_json::json!({"action":"update", "status":"snooze", "snooze_minutes":-1}),
+            serde_json::json!({"action":"set", "description":"bad date", "deadline":"invalid"}),
+            serde_json::json!({"action":"set", "description":"bad trigger", "trigger":{"type":"time", "in_minutes":9223372036854775807i64}}),
+            serde_json::json!({"action":"set", "description":"bad event", "trigger":{"type":"event"}}),
+        ] {
+            assert!(execute(&storage, &cog, Some(args)).await.is_err());
+        }
     }
 
     // ========================================================================

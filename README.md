@@ -132,11 +132,13 @@ Your agent calls these; you rarely do.
 | `backfill` | Reach backward from a failure to its candidate cause |
 | `receipt` | Inspect retrieval receipts and evidence replay ([guide](docs/DECISION_RECEIPTS.md)) |
 | `memory` · `graph` · `intention` | Inspect, promote, explore, track goals |
-| `maintain` · `dedup` · `suppress` | Consolidation, merge, reversible forgetting |
+| `maintain` · `dedup` · `suppress` | Consolidation, merge, suppression and bounded reversal |
 | `memory_status` · `codebase` · `source_sync` · `session_start` | Health, code index, connectors, session priming |
 
 For checkout-specific code advice, evidence states, explicit re-anchoring and
 startup response budgets, see [Code context evidence](docs/CODE-CONTEXT-EVIDENCE.md).
+
+For the installed action inventory, previews, typed intentions and compatibility changes, see [Tool contracts](docs/TOOL-CONTRACTS.md).
 
 Project scoping, hygiene workflows, and making memory a standing habit for your agent: [docs/MEMORY_HYGIENE.md](docs/MEMORY_HYGIENE.md) · [docs/AGENT-MEMORY-PROTOCOL.md](docs/AGENT-MEMORY-PROTOCOL.md) · [docs/CLAUDE-SETUP.md](docs/CLAUDE-SETUP.md).
 

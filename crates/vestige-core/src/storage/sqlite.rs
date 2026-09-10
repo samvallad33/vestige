@@ -2701,7 +2701,8 @@ impl SqliteMemoryStore {
             .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.to_string());
         let mut stmt = reader.prepare(
             "SELECT embedding FROM embedding_profile_vectors
-             WHERE profile_id = ?1 AND node_id = ?2",
+             WHERE profile_id = ?1 AND node_id = ?2
+               AND EXISTS (SELECT 1 FROM knowledge_nodes kn WHERE kn.id = node_id AND kn.has_embedding = 1)",
         )?;
 
         let embedding_row: Option<Vec<u8>> = stmt
@@ -2715,7 +2716,8 @@ impl SqliteMemoryStore {
             if embedding_row.is_none() && active_profile_id == LEGACY_EMBEDDING_PROFILE_ID {
                 reader
                     .query_row(
-                        "SELECT embedding FROM node_embeddings WHERE node_id = ?1",
+                        "SELECT embedding FROM node_embeddings WHERE node_id = ?1
+                           AND EXISTS (SELECT 1 FROM knowledge_nodes kn WHERE kn.id = node_id AND kn.has_embedding = 1)",
                         params![node_id],
                         |row| row.get(0),
                     )
@@ -2738,7 +2740,8 @@ impl SqliteMemoryStore {
         let active_profile_id = Self::active_profile_id_from_conn(&reader)?
             .unwrap_or_else(|| LEGACY_EMBEDDING_PROFILE_ID.to_string());
         let mut stmt = reader.prepare(
-            "SELECT node_id, embedding FROM embedding_profile_vectors WHERE profile_id = ?1",
+            "SELECT node_id, embedding FROM embedding_profile_vectors WHERE profile_id = ?1
+               AND EXISTS (SELECT 1 FROM knowledge_nodes kn WHERE kn.id = node_id AND kn.has_embedding = 1)",
         )?;
 
         let mut unreadable_rows = 0_usize;
@@ -2787,7 +2790,8 @@ impl SqliteMemoryStore {
             let mut legacy_stmt = reader.prepare(
                 "SELECT ne.node_id, ne.embedding
                  FROM node_embeddings ne
-                 WHERE NOT EXISTS (
+                 WHERE EXISTS (SELECT 1 FROM knowledge_nodes kn WHERE kn.id = ne.node_id AND kn.has_embedding = 1)
+                 AND NOT EXISTS (
                      SELECT 1 FROM embedding_profile_vectors pv
                      WHERE pv.profile_id = ?1 AND pv.node_id = ne.node_id
                  )",
@@ -2941,10 +2945,22 @@ impl SqliteMemoryStore {
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-            writer.execute(
-                "UPDATE knowledge_nodes SET content = ?1, updated_at = ?2 WHERE id = ?3",
+            let tx = Self::begin_write_transaction(&writer, "update_node_content")?;
+            tx.execute(
+                "UPDATE knowledge_nodes SET content = ?1, updated_at = ?2, has_embedding = 0 WHERE id = ?3",
                 params![new_content, now.to_rfc3339(), id],
             )?;
+            // Deleting profile vectors journals invalidation for peer indexes.
+            // Every profile encodes the old content, so invalidate all of them.
+            tx.execute(
+                "DELETE FROM embedding_profile_vectors WHERE node_id = ?1",
+                params![id],
+            )?;
+            tx.execute(
+                "DELETE FROM node_embeddings WHERE node_id = ?1",
+                params![id],
+            )?;
+            tx.commit()?;
         }
 
         // Regenerate embedding for updated content
@@ -6304,6 +6320,33 @@ impl SqliteMemoryStore {
         Ok(result)
     }
 
+    /// Read a bounded namespace before pagination, including historical nodes.
+    /// NULL/blank legacy scopes match user; other namespaces cannot crowd out
+    /// this namespace's candidates by consuming the LIMIT first.
+    pub fn get_all_nodes_in_scope(
+        &self,
+        scope: &str,
+        limit: i32,
+        offset: i32,
+    ) -> Result<Vec<KnowledgeNode>> {
+        let scope = Self::normalize_scope(scope)?;
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let mut stmt = reader.prepare(
+            "SELECT * FROM knowledge_nodes
+             WHERE COALESCE(NULLIF(trim(scope), ''), 'user') = ?1
+             ORDER BY created_at DESC, id ASC LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![scope, limit.clamp(1, 5000), offset.max(0)],
+            Self::row_to_node,
+        )?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     /// Read the complete metadata population for hygiene aggregation in one
     /// query. Content is bounded to a short preview; access history is reduced
     /// with `NOT EXISTS` in SQL, avoiding both full-body loads and N+1 reads.
@@ -6847,6 +6890,7 @@ impl SqliteMemoryStore {
 
         let query_embedding = self.get_query_embedding(query)?;
 
+        self.refresh_vector_index_if_stale();
         let index = index_lock
             .lock()
             .map_err(|_| StorageError::Init("Vector index lock poisoned".to_string()))?;
@@ -6858,7 +6902,9 @@ impl SqliteMemoryStore {
         let mut similarity_results = Vec::with_capacity(results.len());
 
         for (node_id, similarity) in results {
-            if let Some(node) = self.get_node(&node_id)? {
+            if let Some(node) = self.get_node(&node_id)?
+                && node.has_embedding == Some(true)
+            {
                 similarity_results.push(SimilarityResult { node, similarity });
             }
         }
@@ -7413,7 +7459,7 @@ impl SqliteMemoryStore {
                 return 0;
             };
             let Ok(mut stmt) = snapshot
-                .prepare("SELECT node_id FROM embedding_profile_vectors WHERE profile_id = ?1")
+                .prepare("SELECT node_id FROM embedding_profile_vectors WHERE profile_id = ?1 AND EXISTS (SELECT 1 FROM knowledge_nodes kn WHERE kn.id = node_id AND kn.has_embedding = 1)")
             else {
                 return 0;
             };
@@ -7462,7 +7508,7 @@ impl SqliteMemoryStore {
                 return 0;
             };
             let Ok(mut stmt) = reader.prepare(
-                "SELECT embedding FROM embedding_profile_vectors WHERE profile_id = ?1 AND node_id = ?2",
+                "SELECT embedding FROM embedding_profile_vectors WHERE profile_id = ?1 AND node_id = ?2 AND EXISTS (SELECT 1 FROM knowledge_nodes kn WHERE kn.id = node_id AND kn.has_embedding = 1)",
             ) else {
                 return 0;
             };
@@ -7589,9 +7635,17 @@ impl SqliteMemoryStore {
             .lock()
             .map_err(|_| StorageError::Init("Vector index lock poisoned".to_string()))?;
 
-        index
+        let results = index
             .search(&query_embedding, limit as usize)
-            .map_err(|e| StorageError::Init(format!("Vector search failed: {}", e)))
+            .map_err(|e| StorageError::Init(format!("Vector search failed: {}", e)))?;
+        drop(index);
+        let mut current = Vec::with_capacity(results.len());
+        for (id, score) in results {
+            if self.get_node(&id)?.is_some_and(|node| node.has_embedding == Some(true)) {
+                current.push((id, score));
+            }
+        }
+        Ok(current)
     }
 
     /// Generate embeddings for nodes
@@ -7723,7 +7777,7 @@ impl SqliteMemoryStore {
              FROM knowledge_nodes kn
              LEFT JOIN embedding_profile_vectors epv
                ON epv.node_id = kn.id AND epv.profile_id = ?1
-             WHERE epv.node_id IS NULL OR epv.dimensions != ?2 OR epv.model != ?3",
+             WHERE COALESCE(kn.has_embedding, 0) != 1 OR epv.node_id IS NULL OR epv.dimensions != ?2 OR epv.model != ?3",
         )?;
         let rows = stmt.query_map(
             params![profile_id.as_str(), profile_dimension as i64, profile_model],
@@ -9399,7 +9453,19 @@ impl SqliteMemoryStore {
         limit: i32,
         tag_filter: Option<&[String]>,
     ) -> Result<Vec<NeverComposedCandidate>> {
-        let nodes = self.composition_candidate_nodes(tag_filter)?;
+        self.get_never_composed_candidates_in_scope(limit, tag_filter, None)
+    }
+
+    /// Scope candidates before either the recent or tag-targeted scan budget.
+    /// None is an explicit cross-scope request; callers choose their boundary.
+    pub fn get_never_composed_candidates_in_scope(
+        &self,
+        limit: i32,
+        tag_filter: Option<&[String]>,
+        scope: Option<&str>,
+    ) -> Result<Vec<NeverComposedCandidate>> {
+        let scope = scope.map(Self::normalize_scope).transpose()?;
+        let nodes = self.composition_candidate_nodes(tag_filter, scope)?;
         let composed_pairs = self.composed_pair_set()?;
         let composition_degrees = self.composition_degree_map()?;
         let outcome_map = self.composition_outcome_map()?;
@@ -9912,15 +9978,20 @@ impl SqliteMemoryStore {
     fn composition_candidate_nodes(
         &self,
         tag_filter: Option<&[String]>,
+        scope: Option<&str>,
     ) -> Result<Vec<KnowledgeNode>> {
         const BASE_SCAN_LIMIT: i32 = 750;
         const TAGGED_SCAN_LIMIT: i32 = 1500;
 
-        let mut nodes = self.get_all_nodes(BASE_SCAN_LIMIT, 0)?;
+        let mut nodes = match scope {
+            Some(scope) => self.get_all_nodes_in_scope(scope, BASE_SCAN_LIMIT, 0)?,
+            None => self.get_all_nodes(BASE_SCAN_LIMIT, 0)?,
+        };
         if let Some(filter) = tag_filter
             && !filter.is_empty()
         {
-            let tagged_nodes = self.get_nodes_matching_any_tag_prefix(filter, TAGGED_SCAN_LIMIT)?;
+            let tagged_nodes =
+                self.get_nodes_matching_any_tag_prefix(filter, TAGGED_SCAN_LIMIT, scope)?;
             let mut by_id = HashMap::new();
             for node in nodes.into_iter().chain(tagged_nodes) {
                 by_id.entry(node.id.clone()).or_insert(node);
@@ -9933,6 +10004,14 @@ impl SqliteMemoryStore {
                     .then_with(|| b.created_at.cmp(&a.created_at))
             });
         }
+        let superseded = self.superseded_node_ids()?;
+        let now = Utc::now();
+        nodes.retain(|node| {
+            node.suppression_count == 0
+                && !superseded.contains(&node.id)
+                && node.valid_from.is_none_or(|date| date <= now)
+                && node.valid_until.is_none_or(|date| date > now)
+        });
         Ok(nodes)
     }
 
@@ -9940,6 +10019,7 @@ impl SqliteMemoryStore {
         &self,
         tag_filter: &[String],
         limit: i32,
+        scope: Option<&str>,
     ) -> Result<Vec<KnowledgeNode>> {
         let mut patterns = Vec::new();
         for wanted in tag_filter
@@ -9959,7 +10039,7 @@ impl SqliteMemoryStore {
             .join(" OR ");
         let sql = format!(
             "SELECT * FROM knowledge_nodes
-             WHERE {clauses}
+             WHERE ({clauses}) AND (? IS NULL OR COALESCE(NULLIF(trim(scope), ''), 'user') = ?)
              ORDER BY retention_strength DESC, created_at DESC
              LIMIT {}",
             limit.clamp(1, 5000)
@@ -9970,7 +10050,13 @@ impl SqliteMemoryStore {
             .lock()
             .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
         let mut stmt = reader.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(patterns.iter()), Self::row_to_node)?;
+        let mut parameters: Vec<rusqlite::types::Value> =
+            patterns.into_iter().map(Into::into).collect();
+        let scope_value = scope
+            .map(|s| rusqlite::types::Value::Text(s.to_string()))
+            .unwrap_or(rusqlite::types::Value::Null);
+        parameters.extend([scope_value.clone(), scope_value]);
+        let rows = stmt.query_map(params_from_iter(parameters), Self::row_to_node)?;
         let mut result = Vec::new();
         for row in rows {
             result.push(row?);
@@ -13593,16 +13679,6 @@ impl SqliteMemoryStore {
             _ => {}
         }
 
-        // Confirmation gate: only auto-applyable Match plans may skip confirm.
-        let needs_confirm = !(plan.classification == MatchClass::Match);
-        if needs_confirm && !confirm {
-            return Err(StorageError::Init(format!(
-                "plan {plan_id} is classified '{}' (confidence {:.3}) and requires confirm=true to apply",
-                plan.classification.as_str(),
-                plan.confidence
-            )));
-        }
-
         let now = Utc::now();
         let op_id = uuid::Uuid::new_v4().to_string();
 
@@ -13658,6 +13734,47 @@ impl SqliteMemoryStore {
                 _ => {}
             }
 
+            // Re-read policy in the same transaction as the mutation. A plan's
+            // classification alone never grants unattended write permission.
+            let auto_apply: Option<f64> = tx
+                .query_row(
+                    "SELECT value FROM fsrs_config WHERE key = 'merge_auto_apply'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let auto_apply = auto_apply.map(|v| v != 0.0).unwrap_or_else(|| {
+                std::env::var("VESTIGE_MERGE_AUTO_APPLY")
+                    .ok()
+                    .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            });
+            if !confirm && (plan.classification != MatchClass::Match || !auto_apply) {
+                return Err(StorageError::Init(format!(
+                    "plan {plan_id} requires confirm=true under the current merge policy"
+                )));
+            }
+            // Check every affected identity at action time. A stored plan is
+            // not authorization to combine independent project namespaces.
+            let mut plan_scope: Option<String> = None;
+            for id in std::iter::once(&plan.survivor_id)
+                .chain(plan.member_ids.iter())
+                .chain(plan.invalidated_ids.iter())
+            {
+                let scope: String = tx.query_row(
+                    "SELECT COALESCE(NULLIF(trim(scope), ''), 'user') FROM knowledge_nodes WHERE id = ?1",
+                    params![id], |row| row.get(0),
+                )?;
+                if plan_scope
+                    .as_ref()
+                    .is_some_and(|expected| expected != &scope)
+                {
+                    return Err(StorageError::Init(
+                        "merge plan crosses project scopes; no changes applied".into(),
+                    ));
+                }
+                plan_scope = Some(scope);
+            }
+
             // Snapshot everything we need to undo, BEFORE mutating, and from
             // inside the same transaction so the snapshot and the mutation see
             // one consistent state.
@@ -13678,7 +13795,10 @@ impl SqliteMemoryStore {
                         .ok_or_else(|| StorageError::NotFound(plan.survivor_id.clone()))?;
                     let prev_tags: Vec<String> =
                         serde_json::from_str(&prev_tags_json).unwrap_or_default();
-                    undo.insert("survivor_prev_content".into(), serde_json::json!(prev_content));
+                    undo.insert(
+                        "survivor_prev_content".into(),
+                        serde_json::json!(prev_content),
+                    );
                     undo.insert("survivor_prev_tags".into(), serde_json::json!(prev_tags));
 
                     let mut absorbed = Vec::new();
@@ -13761,6 +13881,8 @@ impl SqliteMemoryStore {
                             "UPDATE knowledge_nodes SET has_embedding = 0 WHERE id = ?1",
                             params![plan.survivor_id],
                         )?;
+                        tx.execute("DELETE FROM embedding_profile_vectors WHERE node_id = ?1", params![plan.survivor_id])?;
+                        tx.execute("DELETE FROM node_embeddings WHERE node_id = ?1", params![plan.survivor_id])?;
                     }
                     for id in &plan.invalidated_ids {
                         Self::invalidate_node_in_transaction(&tx, id, &plan.survivor_id, now)?;
@@ -16923,6 +17045,68 @@ mod tests {
         assert_eq!(candidates.len(), 125);
     }
 
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn dirty_embeddings_are_hidden_and_queued_for_regeneration() {
+        let storage = create_test_storage();
+        let node = storage
+            .ingest(IngestInput {
+                content: "original embedded content".into(),
+                node_type: "fact".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let bytes = Embedding::new(vec![0.1; EMBEDDING_DIMENSIONS]).to_bytes();
+        let model = "fixture-model";
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "INSERT OR REPLACE INTO embedding_profile_vectors
+                (profile_id, node_id, embedding, dimensions, model, created_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        LEGACY_EMBEDDING_PROFILE_ID,
+                        node.id,
+                        bytes,
+                        EMBEDDING_DIMENSIONS as i64,
+                        model,
+                        Utc::now().to_rfc3339()
+                    ],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET has_embedding = 1 WHERE id = ?1",
+                    params![node.id],
+                )
+                .unwrap();
+        }
+        assert!(storage.get_node_embedding(&node.id).unwrap().is_some());
+        // Simulate the committed edit state before an unavailable runtime can rebuild.
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer.execute("UPDATE knowledge_nodes SET content = 'edited content', has_embedding = 0 WHERE id = ?1", params![node.id]).unwrap();
+        }
+        assert!(storage.get_node_embedding(&node.id).unwrap().is_none());
+        assert!(
+            !storage
+                .get_all_embeddings()
+                .unwrap()
+                .iter()
+                .any(|(id, _)| id == &node.id)
+        );
+        let profile = EmbeddingProfileId::new(LEGACY_EMBEDDING_PROFILE_ID).unwrap();
+        let candidates = storage
+            .embedding_regeneration_candidates(&profile, EMBEDDING_DIMENSIONS, model, None, false)
+            .unwrap();
+        assert!(
+            candidates
+                .iter()
+                .any(|(id, content, _)| id == &node.id && content == "edited content")
+        );
+    }
+
     #[test]
     fn test_storage_creation() {
         let storage = create_test_storage();
@@ -19113,6 +19297,62 @@ mod tests {
     }
 
     #[test]
+    fn composition_candidates_exclude_inactive_memories() {
+        let storage = create_test_storage();
+        let mut ids = Vec::new();
+        for label in ["active", "suppressed", "superseded", "expired", "future"] {
+            ids.push(
+                storage
+                    .ingest(IngestInput {
+                        content: format!("composition lifecycle {label}"),
+                        node_type: "fact".into(),
+                        ..Default::default()
+                    })
+                    .unwrap()
+                    .id,
+            );
+        }
+        {
+            let writer = storage.writer.lock().unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET suppression_count = 1 WHERE id = ?1",
+                    params![ids[1]],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET superseded_by = ?1 WHERE id = ?2",
+                    params![ids[0], ids[2]],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET valid_until = ?1 WHERE id = ?2",
+                    params![
+                        (Utc::now() - chrono::Duration::days(1)).to_rfc3339(),
+                        ids[3]
+                    ],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "UPDATE knowledge_nodes SET valid_from = ?1 WHERE id = ?2",
+                    params![
+                        (Utc::now() + chrono::Duration::days(1)).to_rfc3339(),
+                        ids[4]
+                    ],
+                )
+                .unwrap();
+        }
+        for scope in [None, Some("user")] {
+            let candidates = storage.composition_candidate_nodes(None, scope).unwrap();
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(candidates[0].id, ids[0]);
+        }
+    }
+
+    #[test]
     fn test_never_composed_tag_filter_includes_older_tagged_candidates() {
         let storage = create_test_storage();
         let first = storage
@@ -21145,6 +21385,48 @@ mod tests {
         assert!(!index_contains(&ours, &id));
     }
 
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn peer_content_edit_invalidates_vectors_and_queues_rebuild() {
+        let dir = tempdir().unwrap();
+        let ours = create_test_storage_at(&dir, "shared.db");
+        let peer = create_test_storage_at(&dir, "shared.db");
+        assert!(!peer.active_embedding_runtime_ready().unwrap());
+        let id = ingest_plain(&peer, "original content on the fourth axis");
+        persist_test_vector(&peer, &id, &axis_vector(4, 0.01));
+        ours.refresh_vector_index_if_stale();
+        assert!(index_contains(&ours, &id));
+        peer.update_node_content(&id, "edited content awaiting regeneration")
+            .unwrap();
+        assert_eq!(
+            peer.get_node(&id).unwrap().unwrap().has_embedding,
+            Some(false)
+        );
+        assert!(ours.get_node_embedding(&id).unwrap().is_none());
+        ours.refresh_vector_index_if_stale();
+        assert!(!index_contains(&ours, &id));
+        ours.reconcile_vector_index(ours.vector_index.as_ref().unwrap(), LEGACY_EMBEDDING_PROFILE_ID);
+        assert!(!index_contains(&ours, &id));
+        let profile = EmbeddingProfileId::new(LEGACY_EMBEDDING_PROFILE_ID).unwrap();
+        assert!(
+            peer.embedding_regeneration_candidates(
+                &profile,
+                EMBEDDING_DIMENSIONS,
+                "test-model",
+                None,
+                false
+            )
+            .unwrap()
+            .iter()
+            .any(|(candidate, _, _)| candidate == &id)
+        );
+        // Complete the same persistence funnel used by regeneration, without loading a model.
+        persist_test_vector(&peer, &id, &axis_vector(5, 0.01));
+        ours.refresh_vector_index_if_stale();
+        assert!(index_contains(&ours, &id));
+        assert!(ours.get_node_embedding(&id).unwrap().is_some());
+    }
+
     /// #181: this process's own writes bump the reader's data_version exactly
     /// like a peer's would, but the vector is already in the index. The journal
     /// head says so, and the refresh re-adds nothing.
@@ -22142,6 +22424,94 @@ mod tests {
         assert!(storage.apply_plan(&plan.id, true).is_ok());
         // Re-applying an applied plan => rejected.
         assert!(storage.apply_plan(&plan.id, true).is_err());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn apply_match_obeys_current_policy_and_project_boundary() {
+        let storage = create_test_storage();
+        let policy = MergePolicy::new(0.1, 0.05, true);
+        storage.set_merge_policy(policy).unwrap();
+        let a = seed_node(
+            &storage,
+            "Same scoped fixture note",
+            &["fixture"],
+            axis_vector(13, 0.01),
+        );
+        let b = seed_node(
+            &storage,
+            "Same scoped fixture note",
+            &["fixture"],
+            axis_vector(13, 0.01),
+        );
+        let plan = storage
+            .plan_merge(&[a.clone(), b.clone()], None, policy)
+            .unwrap();
+        assert_eq!(plan.classification, MatchClass::Match);
+        // Policy can change after a preview: application checks current policy.
+        storage
+            .set_merge_policy(MergePolicy::new(0.1, 0.05, false))
+            .unwrap();
+        assert!(
+            storage
+                .apply_plan(&plan.id, false)
+                .unwrap_err()
+                .to_string()
+                .contains("confirm=true")
+        );
+        assert!(storage.read_bitemporal(&b).unwrap().1.is_none());
+        // Even explicit confirmation does not authorize a cross-project merge.
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET scope = 'other-project' WHERE id = ?1",
+                params![b],
+            )
+            .unwrap();
+        assert!(
+            storage
+                .apply_plan(&plan.id, true)
+                .unwrap_err()
+                .to_string()
+                .contains("crosses project scopes")
+        );
+        assert!(storage.read_bitemporal(&a).unwrap().1.is_none());
+        assert!(storage.read_bitemporal(&b).unwrap().1.is_none());
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE knowledge_nodes SET scope = 'user' WHERE id = ?1",
+                params![b],
+            )
+            .unwrap();
+        assert!(storage.apply_plan(&plan.id, true).is_ok());
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn apply_match_can_use_explicit_auto_apply_policy() {
+        let storage = create_test_storage();
+        let policy = MergePolicy::new(0.1, 0.05, true);
+        storage.set_merge_policy(policy).unwrap();
+        let a = seed_node(
+            &storage,
+            "Same auto fixture",
+            &["fixture"],
+            axis_vector(13, 0.01),
+        );
+        let b = seed_node(
+            &storage,
+            "Same auto fixture",
+            &["fixture"],
+            axis_vector(13, 0.01),
+        );
+        let plan = storage.plan_merge(&[a, b], None, policy).unwrap();
+        assert_eq!(plan.classification, MatchClass::Match);
+        assert!(storage.apply_plan(&plan.id, false).is_ok());
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]

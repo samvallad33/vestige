@@ -495,7 +495,8 @@ async fn execute_edit(
         "nodeId": id,
         "oldContentPreview": old_preview,
         "newContentPreview": new_preview,
-        "note": "FSRS state preserved (stability, difficulty, reps, lapses unchanged). Embedding regenerated for new content."
+        "embeddingStatus": if storage.get_node(id).map_err(|e| e.to_string())?.is_some_and(|node| node.has_embedding == Some(true)) { "available" } else { "pending" },
+        "note": "FSRS state preserved (stability, difficulty, reps, lapses unchanged). Embedding state was invalidated with the content update; regeneration may complete now or in maintenance. Inspect embeddingStatus."
     }))
 }
 

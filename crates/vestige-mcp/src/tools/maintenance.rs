@@ -616,8 +616,11 @@ pub async fn execute_export(storage: &Arc<Storage>, args: Option<Value>) -> Resu
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GcArgs {
+    #[serde(alias = "min_retention")]
     min_retention: Option<f64>,
+    #[serde(alias = "max_age_days")]
     max_age_days: Option<u64>,
+    #[serde(alias = "dry_run")]
     dry_run: Option<bool>,
 }
 

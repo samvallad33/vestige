@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Discoverable tool contracts
+
+- `memory_status(view="tools")` derives the installed tool/action inventory from
+  `tools/list`; selecting a tool returns its complete schema. Both server prompt
+  modes advertise discovery. Public agent instructions use canonical tool names.
+- Backfill previews are non-mutating by default and namespace-filtered before
+  scan limits; explicit promotion remains available. Graph `never_composed`
+  gains a default user namespace and explicit cross-scope selection. Both label
+  candidates as hypotheses instead of causal or worldwide-novel findings.
+- Recall reason and contradictions honor explicit namespaces. Reasoning validates
+  supported filters, labels confidence as heuristic, and budgets whole evidence
+  groups including final server metadata.
+- Intention checks honor caller-supplied time, snooze boundaries, combined context
+  constraints and explicit event keys. Invalid dates/durations/statuses fail;
+  parsed absolute time triggers retain their timestamp.
+
+### Fixed — Tool behavior and review boundaries
+
+- Merge apply checks current auto-apply policy and affected project namespaces
+  inside its write transaction. Strong similarity alone cannot bypass review.
+- Maintenance schemas derive from their handlers; previously hidden export,
+  restore, GC, dream and scoring controls are discoverable. Unsupported action
+  fields fail explicitly; advertised snake_case GC/scoring fields are honored.
+- Ambiguous single-plus-batch ingestion is rejected. Batch outcomes explicitly
+  report partial/no-change results and non-atomic behavior.
+- Memory edits invalidate embedding state with the content write and report
+  pending/available status. Dirty vectors are excluded from direct/bulk reads and
+  selected for regeneration even when model and dimensions match. Automatic
+  Backfill hooks preserve ingest scope and preview without promotion; composition
+  candidates exclude inactive memories. Recall/receipt effects and suppression retry hints
+  now reflect durable composition/replay and compounding behavior.
+- See `docs/TOOL-CONTRACTS.md` for compatibility and remaining boundaries.
+
 ### Added — Code context evidence
 
 - `session_start` and `codebase.get_context` share current, scoped code-memory

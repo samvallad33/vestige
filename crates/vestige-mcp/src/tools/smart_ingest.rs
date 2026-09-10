@@ -154,7 +154,11 @@ pub fn schema() -> Value {
                     "required": ["content"]
                 }
             }
-        }
+        },
+        "oneOf": [
+            {"required":["content"], "not":{"required":["items"]}},
+            {"required":["items"], "not":{"required":["content"]}}
+        ]
     })
 }
 
@@ -665,6 +669,12 @@ pub async fn execute(
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: Option<Value>,
 ) -> Result<Value, String> {
+    if args
+        .as_ref()
+        .is_some_and(|value| value.get("content").is_some() && value.get("items").is_some())
+    {
+        return Err("Provide either content or items, never both; no memories were stored".into());
+    }
     let args: SmartIngestArgs = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid arguments: {}", e))?,
         None => return Err("Missing arguments".to_string()),
@@ -816,6 +826,8 @@ pub async fn execute(
     // INGEST (storage lock)
     // ====================================================================
 
+    let hook_tags = input.tags.clone();
+
     // Check if force_create is enabled
     if args.force_create.unwrap_or(false) {
         let node = storage
@@ -837,7 +849,9 @@ pub async fn execute(
             importance_snapshot.clone(),
         );
 
-        return Ok(serde_json::json!({
+        let failure_hooks =
+            run_failure_hooks(storage, &node_id, &node_content, &hook_tags, &scope).await;
+        let mut response = serde_json::json!({
             "success": true,
             "decision": "create",
             "nodeId": node_id,
@@ -852,7 +866,9 @@ pub async fn execute(
             "tagSuggestions": tag_suggestions.suggestions,
             "tagSuggestionStatus": tag_suggestions.status,
             "acceptedTagSuggestions": accepted_tag_suggestions,
-        }));
+        });
+        attach_failure_hooks(&mut response, failure_hooks);
+        return Ok(response);
     }
 
     // Use smart ingest with prediction error gating
@@ -891,7 +907,8 @@ pub async fn execute(
             importance_snapshot.clone(),
         );
 
-        let failure_hooks = run_failure_hooks(storage, &node_id, &node_content, &hook_tags).await;
+        let failure_hooks =
+            run_failure_hooks(storage, &node_id, &node_content, &hook_tags, &scope).await;
         let mut response = serde_json::json!({
             "success": true,
             "decision": result.decision,
@@ -947,7 +964,8 @@ pub async fn execute(
             importance_snapshot,
         );
 
-        let failure_hooks = run_failure_hooks(storage, &node_id, &node_content, &hook_tags).await;
+        let failure_hooks =
+            run_failure_hooks(storage, &node_id, &node_content, &hook_tags, &scope).await;
         let mut response = serde_json::json!({
             "success": true,
             "decision": "create",
@@ -1035,6 +1053,7 @@ async fn run_failure_hooks(
     node_id: &str,
     content: &str,
     tags: &[String],
+    scope: &str,
 ) -> Option<Value> {
     if !vestige_core::advanced::retroactive_backfill::looks_like_failure(content, tags) {
         return None;
@@ -1054,21 +1073,33 @@ async fn run_failure_hooks(
         }
     }
     if env_flag_enabled("VESTIGE_BACKFILL_AUTOFIRE") {
-        match super::backfill::execute(storage, Some(serde_json::json!({ "failure_id": node_id })))
-            .await
+        match super::backfill::execute(
+            storage,
+            Some(serde_json::json!({ "failure_id": node_id, "scope": scope, "promote": false })),
+        )
+        .await
         {
             Ok(result) => {
                 let promoted = result
-                    .get("promoted")
+                    .get("causes")
                     .and_then(Value::as_array)
-                    .map(|causes| causes.iter().filter(|c| c.get("promoted") == Some(&Value::Bool(true))).count())
+                    .map(|causes| {
+                        causes
+                            .iter()
+                            .filter(|c| c.get("promoted") == Some(&Value::Bool(true)))
+                            .count()
+                    })
                     .unwrap_or(0);
                 hooks.insert(
                     "backfill".to_string(),
                     serde_json::json!({
                         "triggered": result.get("triggered").cloned().unwrap_or(Value::Bool(false)),
                         "causesPromoted": promoted,
-                        "receiptId": result.get("receipt_id").cloned().unwrap_or(Value::Null),
+                        "candidatesFound": result.get("causes").and_then(Value::as_array).map_or(0, Vec::len),
+                        "preview": true,
+                        "scope": scope,
+                        "evidenceStatus": "hypothesis",
+                        "causalityVerified": false,
                     }),
                 );
             }
@@ -1440,6 +1471,10 @@ async fn execute_batch(
     Ok(serde_json::json!({
         "success": errors == 0,
         "mode": "batch",
+        "atomic": false,
+        "batchOutcome": if errors > 0 {
+            if created + updated > 0 { "partial" } else { "failed" }
+        } else if created + updated == 0 { "no_changes" } else { "applied" },
         "batchMergePolicy": batch_merge_policy,
         "summary": {
             "total": results.len(),
@@ -3466,5 +3501,25 @@ mod tests {
         let result = execute(&storage, &test_cognitive(), Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("content"));
+    }
+    #[tokio::test]
+    async fn project_failure_hook_preserves_scope_and_previews() {
+        let (storage, _dir) = test_storage().await;
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "content": "The deployment failed because the database connection timed out.",
+                "tags": ["failure"], "scope": "project-hook", "forceCreate": true
+            })),
+        )
+        .await
+        .unwrap();
+        let hook = &result["failureHooks"]["backfill"];
+        assert_eq!(hook["scope"], "project-hook");
+        assert_eq!(hook["preview"], true);
+        assert_eq!(hook["causesPromoted"], 0);
+        assert_eq!(hook["evidenceStatus"], "hypothesis");
+        assert!(hook.get("candidatesFound").is_some());
     }
 }

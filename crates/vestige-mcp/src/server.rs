@@ -38,11 +38,10 @@ use vestige_core::{OutputConfig, Storage, VestigeConfig};
 /// Anything other than `full` falls back to minimal.
 fn build_instructions() -> String {
     let mode = std::env::var("VESTIGE_SYSTEM_PROMPT_MODE").unwrap_or_default();
-    if mode.eq_ignore_ascii_case("full") {
+    let mut instructions = if mode.eq_ignore_ascii_case("full") {
         "Vestige is your long-term cognitive memory AND reasoning engine, not a RAG database. \
          Every retrieval MUST be composed into a recommendation, never summarized.\
-         \n\nCOMPOSITION MANDATE: When you receive memories from search, deep_reference, \
-         cross_reference, or explore_connections, your response MUST follow this shape. \
+         \n\nCOMPOSITION MANDATE: When you receive memories from recall or graph, your response MUST follow this shape. \
          (a) Composing: [memory IDs], followed by a brief composition rationale \
          about how the memories relate, NOT a restatement of their contents). \
          (b) Never-composed detected: list combinations of retrieved memories that share \
@@ -51,7 +50,7 @@ fn build_instructions() -> String {
          If your draft begins 'Memory A says X. Memory B says Y.' STOP and rewrite.\
          \n\nBLOCKING PHRASE: If retrieved high-trust memories (retention > 0.7, reps > 0) \
          contradict what you were about to say, start your response with 'Vestige is blocking this:' \
-         and surface the contradiction verbatim before proceeding. FSRS trust overrides fresh guesses.\
+         and surface the contradiction before proceeding. FSRS scores reflect memory history, not truth; verify against current evidence.\
          \n\nFEEDBACK: If the user confirms a memory was helpful, call memory(action='promote'). \
          If they correct it, call memory(action='demote'). Do not ask permission, just act."
             .to_string()
@@ -61,7 +60,9 @@ fn build_instructions() -> String {
          On user feedback, call memory(action='promote') for helpful retrievals and \
          memory(action='demote') for wrong ones — do not ask permission, just act."
             .to_string()
-    }
+    };
+    instructions.push_str("\nDiscover all available actions with memory_status(view='tools'); pass tool='<name>' for its exact schema. Choose calls that serve the task; no tool-call quota is required.");
+    instructions
 }
 
 fn supported_protocol_versions() -> &'static [&'static str] {
@@ -381,12 +382,12 @@ impl McpServer {
                 name: "recall".to_string(),
                 title: Some("Recall".to_string()),
                 annotations: Some(ToolAnnotations {
-                    read_only_hint: true,
+                    read_only_hint: false,
                     destructive_hint: false,
-                    idempotent_hint: true,
+                    idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid keyword and semantic search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradictions; needs 'query', use when accuracy matters. 'contradictions': disagreement pairs for a 'topic'. Reading never changes strength; promote what helped via memory.".to_string()),
+description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid keyword and semantic search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradictions; needs 'query', use when accuracy matters. 'contradictions': disagreement pairs for a 'topic'. Reason mode records composition evidence; retrieval never changes strength; promote what helped via memory.".to_string()),
                 input_schema: tools::recall::schema(),
                 ..Default::default()
             },
@@ -394,7 +395,7 @@ description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid ke
                 name: "receipt".to_string(),
                 title: Some("Receipt".to_string()),
                 annotations: Some(ToolAnnotations {
-                    read_only_hint: true,
+                    read_only_hint: false,
                     destructive_hint: false,
                     idempotent_hint: true,
                     open_world_hint: false,
@@ -492,7 +493,7 @@ description: Some("Index an external system into local, searchable memories that
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Store status. view 'health' (default: stats, decay preview, module health, warnings), 'retention' (average, distribution, trend), 'timeline' (memories by day), 'changelog' (state-change audit trail), 'stats' (hygiene counts by type, tag, age, retention, lifecycle).".to_string()),
+description: Some("Store status. view 'health' (default: stats, decay preview, module health, warnings), 'retention' (average, distribution, trend), 'timeline' (memories by day), 'changelog' (state-change audit trail), 'stats' (hygiene counts by type, tag, age, retention, lifecycle), 'tools' (all advertised tools and actions; pass tool for its full input schema).".to_string()),
                 input_schema: tools::memory_status::schema(),
                 ..Default::default()
             },
@@ -529,7 +530,7 @@ description: Some("Lifecycle maintenance. Actions: 'consolidate' (decay and embe
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Duplicates, merges, supersession, and exact tag maintenance. Actions: 'scan' (default, read-only: duplicate clusters and merge candidates), 'plan_merge' (member_ids to plan_id), 'plan_supersede' (old_id, new_id to plan_id), 'apply' (run a plan_id; weak matches need confirm=true), 'undo' (reverse an operation_id, or omit to list the reflog), 'tag_rename' and 'tag_merge' (preview-token gated), 'protect' (pin against auto-merge), 'policy' (get or set match thresholds). Merged memories are invalidated, never deleted.".to_string()),
+description: Some("Duplicates, merges, supersession, and exact tag maintenance. Actions: 'scan' (default, read-only: duplicate clusters and merge candidates), 'plan_merge' (member_ids to plan_id), 'plan_supersede' (old_id, new_id to plan_id), 'apply' (run a plan_id; confirm=true is required unless the current policy explicitly allows auto-applying strong matches), 'undo' (reverse an operation_id, or omit to list the reflog), 'tag_rename' and 'tag_merge' (preview-token gated), 'protect' (pin against auto-merge), 'policy' (get or set match thresholds). Merged memories are invalidated, never deleted.".to_string()),
                 input_schema: tools::dedup::unified_schema(),
                 ..Default::default()
             },
@@ -596,7 +597,7 @@ description: Some("Start-of-session context in one call: relevant memories, open
                 annotations: Some(ToolAnnotations {
                     read_only_hint: false,
                     destructive_hint: false,
-                    idempotent_hint: true,
+                    idempotent_hint: false,
                     open_world_hint: false,
                 }),
 description: Some("Inhibit a memory without deleting it (top-down suppression, Anderson 2025 and Davis Rac1): it drops out of retrieval and decays faster, each call compounds, and a background worker spreads accelerated decay to co-activated neighbours. reverse=true undoes it within 24 hours.".to_string()),
@@ -619,7 +620,7 @@ description: Some("Inhibit a memory without deleting it (top-down suppression, A
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Memory with hindsight. After a failure is recorded, reach backward in time and promote the quiet earlier memory that caused it (same file, env var, or service), which similarity search cannot surface because a root cause rarely resembles the bug. Backward-only by construction (Cai 2024). Pass failure_id (defaults to the latest failure), manual=true to force, promote=false for a dry run.".to_string()),
+description: Some("Investigate a recorded failure using earlier memories sharing entities. Results are hypotheses, not proven causes. Default promote=false previews without graph or strength changes; explicit promote=true records candidate edges and reinforces eligible memories after review. scope defaults to user; failure_id defaults to the latest failure in that scope.".to_string()),
                 input_schema: tools::backfill::schema(),
                 ..Default::default()
             },
@@ -947,6 +948,17 @@ description: Some("Memory with hindsight. After a failure is recorded, reach bac
             // MEMORY STATUS — unified status/temporal tool (v2.2)
             // view = health (default) | retention | timeline | changelog
             // ================================================================
+            "memory_status"
+                if request
+                    .arguments
+                    .as_ref()
+                    .and_then(|a| a.get("view"))
+                    .and_then(|v| v.as_str())
+                    == Some("tools") =>
+            {
+                let catalog = self.handle_tools_list(None).await?;
+                tools::memory_status::tool_guide(&catalog, request.arguments.as_ref().unwrap())
+            }
             "memory_status" => {
                 tools::memory_status::execute(
                     &self.storage,
@@ -1583,6 +1595,27 @@ description: Some("Memory with hindsight. After a failure is recorded, reach bac
                             parts.join("; ")
                         )),
                     );
+                }
+            }
+            // Reason mode budgets complete evidence groups before recording
+            // the retrieval receipt. Account for the actual attached metadata
+            // here; a caller-supplied trace ID may be arbitrarily long, so omit
+            // that optional echo if necessary (the receipt keeps correlation).
+            if let Some(budget) = content.get("tokenBudgetLimit").and_then(|v| v.as_u64()) {
+                content["budgetUnit"] = serde_json::json!("utf8_bytes_div_4_ceiling");
+                for _ in 0..3 {
+                    let bytes = content.to_string().len();
+                    content["tokensUsed"] = serde_json::json!(bytes.div_ceil(4));
+                }
+                if content.to_string().len() > budget as usize * 4 {
+                    if let Some(object) = content.as_object_mut() {
+                        object.remove("runId");
+                        object.insert("runIdOmitted".into(), serde_json::json!(true));
+                    }
+                    for _ in 0..3 {
+                        let bytes = content.to_string().len();
+                        content["tokensUsed"] = serde_json::json!(bytes.div_ceil(4));
+                    }
                 }
             }
             // Emit after receipt attachment and gating so the dashboard sees the
@@ -2969,6 +3002,69 @@ mod tests {
     // ========================================================================
 
     #[tokio::test]
+    async fn tool_guide_matches_live_catalog_and_rejects_hidden_names() {
+        let (mut server, _dir) = test_server().await;
+        server
+            .handle_request(make_request("initialize", Some(init_params())))
+            .await;
+        let catalog = server.handle_tools_list(None).await.unwrap();
+        let result = server
+            .handle_tools_call(Some(serde_json::json!({
+                "name": "memory_status", "arguments": {"view": "tools"}
+            })))
+            .await
+            .unwrap();
+        assert_ne!(result["isError"], true);
+        let guide = &result["structuredContent"];
+        assert_eq!(
+            guide["tools"].as_array().unwrap().len(),
+            catalog["tools"].as_array().unwrap().len()
+        );
+        for (entry, definition) in guide["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(catalog["tools"].as_array().unwrap())
+        {
+            assert_eq!(entry["name"], definition["name"]);
+            assert_eq!(entry["toolAnnotations"], definition["annotations"]);
+            assert!(entry.get("inputSchema").is_none());
+            for selector in ["action", "mode", "view"] {
+                if definition["inputSchema"]["properties"][selector]["enum"].is_array() {
+                    assert_eq!(
+                        entry["selectors"][selector]["values"],
+                        definition["inputSchema"]["properties"][selector]["enum"]
+                    );
+                }
+            }
+            let detail = server
+                .handle_tools_call(Some(serde_json::json!({
+                    "name": "memory_status", "arguments": {"view": "tools", "tool": entry["name"]}
+                })))
+                .await
+                .unwrap();
+            assert_ne!(detail["isError"], true);
+            assert_eq!(
+                detail["structuredContent"]["tools"][0]["inputSchema"],
+                definition["inputSchema"]
+            );
+        }
+        for invalid in [
+            serde_json::json!("search"),
+            serde_json::json!(""),
+            serde_json::json!(12),
+        ] {
+            let result = server
+                .handle_tools_call(Some(serde_json::json!({
+                    "name": "memory_status", "arguments": {"view": "tools", "tool": invalid}
+                })))
+                .await
+                .unwrap();
+            assert_eq!(result["isError"], true);
+        }
+    }
+
+    #[tokio::test]
     async fn test_tools_list_returns_all_tools() {
         let (mut server, _dir) = test_server().await;
 
@@ -3032,10 +3128,7 @@ mod tests {
         }
         read_only.sort();
         destructive.sort();
-        assert_eq!(
-            read_only,
-            ["memory_status", "recall", "receipt", "session_start"]
-        );
+        assert_eq!(read_only, ["memory_status", "session_start"]);
         // Reanchoring replaces existing evidence, so the mixed codebase tool
         // must advertise its destructive action conservatively.
         assert_eq!(

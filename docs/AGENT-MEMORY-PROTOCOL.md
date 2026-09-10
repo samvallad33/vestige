@@ -34,13 +34,21 @@ Add this to the agent's global or project instruction file:
 ```text
 Use Vestige as durable local memory.
 
-At the start of a new session, call `session_context` with the current user,
-project, and task context. If `session_context` is unavailable or too broad, call
-`search` with a concrete query matching the current task.
+At session start, call `session_start` with queries and current project context.
+Use an explicit scope for project memories. For source-aware code context, pass
+context.codebase and context.repoPath for the checkout you are actually editing.
 
-When accuracy or prior decisions matter, call `deep_reference`. When memories may
-conflict, call `contradictions` before answering. Compose retrieved evidence into
-the answer; do not merely paste memory summaries.
+Discover the installed toolset with `memory_status` view="tools". Supply
+`tool="<name>"` to inspect one tool's complete input schema. This guide is derived
+from the server's own tools/list, including every advertised action, mode and
+view. Select calls for the task; using every tool in every session wastes context
+and can cause unwanted mutations.
+
+Use `recall` mode="lookup" for search (concrete=true for literal identifiers),
+mode="reason" for prior decisions, and mode="contradictions" to inspect conflicts.
+Check current source evidence before treating memory as fact. Retention is a
+retrieval signal, not truth. Graph connections and backfill candidates are
+hypotheses; a retrieval receipt records evidence use, not proof of causality.
 
 Save durable preferences, project decisions, recurring corrections, stable facts,
 and reusable code patterns with `smart_ingest`. Do not store secrets, credentials,
@@ -54,16 +62,33 @@ call `memory` with `action="purge"` and `confirm=true`.
 
 ## Practical Tool Choices
 
-| Situation | Tool |
-|-----------|------|
-| Start of session | `session_context` |
-| Find exact identifiers, paths, env vars, names | `search` |
-| Answer from prior decisions or evolving facts | `deep_reference` |
-| Inspect disagreements before answering | `contradictions` |
-| Save a preference, decision, correction, or code pattern | `smart_ingest` |
-| Retrieve, promote, demote, edit, or purge one memory | `memory` |
-| Create a future reminder | `intention` |
-| Check health or maintenance state | `system_status` |
+| Situation | Tool and selection |
+|-----------|--------------------|
+| Discover all installed tools/actions or inspect exact arguments | `memory_status(view="tools")`; add `tool` for a full schema |
+| Start a session with a bounded context packet | `session_start` |
+| Search exact identifiers, paths, env vars or names | `recall(mode="lookup", concrete=true)` |
+| Reason over earlier decisions or inspect disagreements | `recall(mode="reason")` or `recall(mode="contradictions")` |
+| Save durable verified knowledge, singly or in a batch | `smart_ingest` |
+| Fetch, inspect state, reinforce, correct or explicitly erase memories | `memory` |
+| Remember source-linked patterns/decisions; check or replace reviewed anchors | `codebase` |
+| Index and reconcile supported upstream issue systems | `source_sync` |
+| Set, check, list, complete, snooze or cancel future intentions | `intention` |
+| Inspect health, retention, timeline, audit trail or hygiene | `memory_status` |
+| Inspect duplicate candidates, plan/review/apply/undo merges, maintain tags | `dedup` |
+| Inspect connections, predictions, recorded compositions and uncombined candidates | `graph` |
+| Inspect a retrieval receipt or ablate its frozen evidence | `receipt` |
+| Temporarily inhibit a memory or reverse within its supported window | `suppress` |
+| Investigate earlier candidates related to a recorded failure | `backfill(promote=false)` first; investigate before promotion |
+| Run requested consolidation, dreaming, garbage collection, scoring, backup, export or restore | `maintain` |
+
+Tool annotations apply to the entire tool, including tools mixing read and write
+actions. Inspect the specific action's schema and required confirmation. A guide
+entry is neither an execution request nor permission. Prefer previews for merge,
+tag, garbage-collection and backfill investigations; review before applying.
+Never interpret `never_composed` as worldwide novelty or a causal result.
+
+The old `search`, `deep_reference`, `session_context` and `system_status` names
+are compatibility redirects. New agents should use the advertised names above.
 
 ## What Not To Store
 

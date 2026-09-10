@@ -15,15 +15,18 @@
 //! Replaces cross_reference with full cognitive reasoning. cross_reference
 //! is kept as a backward-compatible alias.
 
-use chrono::Utc;
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::cognitive::CognitiveEngine;
-use vestige_core::{CompositionEventRecord, CompositionMemberRecord, Storage};
+use vestige_core::{
+    CompositionEventRecord, CompositionMemberRecord, DEFAULT_MEMORY_SCOPE, KnowledgeNode, Storage,
+};
 
 /// Input schema for deep_reference / cross_reference tool
 pub fn schema() -> Value {
@@ -51,6 +54,378 @@ pub fn schema() -> Value {
 struct DeepRefArgs {
     query: String,
     depth: Option<i32>,
+    limit: Option<i32>,
+    #[serde(alias = "min_retention")]
+    min_retention: Option<f64>,
+    #[serde(alias = "min_similarity")]
+    min_similarity: Option<f32>,
+    #[serde(alias = "exclude_types")]
+    exclude_types: Option<Vec<String>>,
+    #[serde(alias = "include_types")]
+    include_types: Option<Vec<String>>,
+    #[serde(alias = "token_budget")]
+    token_budget: Option<i32>,
+    #[serde(alias = "tag_prefix")]
+    tag_prefix: Option<String>,
+    scope: Option<String>,
+    #[serde(alias = "include_cross_scope")]
+    include_cross_scope: Option<bool>,
+    #[serde(alias = "valid_at")]
+    valid_at: Option<String>,
+    #[serde(alias = "source_system")]
+    source_system: Option<String>,
+    #[serde(alias = "source_project")]
+    source_project: Option<String>,
+    #[serde(alias = "source_id")]
+    source_id: Option<String>,
+    #[serde(alias = "source_type")]
+    source_type: Option<String>,
+    #[serde(alias = "source_author")]
+    source_author: Option<String>,
+    #[serde(alias = "source_updated_after")]
+    source_updated_after: Option<String>,
+    #[serde(alias = "source_updated_before")]
+    source_updated_before: Option<String>,
+    #[serde(alias = "source_status")]
+    source_status: Option<String>,
+}
+
+/// Fields inherited from lookup's schema that do not have equivalent semantics
+/// in the deep-reasoning pipeline. Rejecting them is intentional: silently
+/// accepting a lookup control while running different behavior is worse than a
+/// precise error that tells the caller to choose `mode="lookup"`.
+const UNSUPPORTED_REASON_FIELDS: &[&str] = &[
+    "detail_level",
+    "detailLevel",
+    "context_topics",
+    "contextTopics",
+    "retrieval_mode",
+    "retrievalMode",
+    "concrete",
+    "rank_native_fusion",
+    "rankNativeFusion",
+    "topic",
+    "since",
+    "min_trust",
+    "minTrust",
+];
+
+const SUPPORTED_REASON_FIELDS: &[&str] = &[
+    "mode",
+    "query",
+    "depth",
+    "limit",
+    "min_retention",
+    "minRetention",
+    "min_similarity",
+    "minSimilarity",
+    "exclude_types",
+    "excludeTypes",
+    "include_types",
+    "includeTypes",
+    "token_budget",
+    "tokenBudget",
+    "tag_prefix",
+    "tagPrefix",
+    "scope",
+    "includeCrossScope",
+    "include_cross_scope",
+    "validAt",
+    "valid_at",
+    "source_system",
+    "sourceSystem",
+    "source_project",
+    "sourceProject",
+    "source_id",
+    "sourceId",
+    "source_type",
+    "sourceType",
+    "source_author",
+    "sourceAuthor",
+    "source_updated_after",
+    "sourceUpdatedAfter",
+    "source_updated_before",
+    "sourceUpdatedBefore",
+    "source_status",
+    "sourceStatus",
+    // Trace correlation is protocol metadata, not a reasoning control.
+    "runId",
+    "run_id",
+];
+
+fn validate_reason_envelope(value: &Value) -> Result<(), String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "Reason-mode arguments must be an object".to_string())?;
+
+    let unsupported: Vec<&str> = UNSUPPORTED_REASON_FIELDS
+        .iter()
+        .copied()
+        .filter(|field| object.contains_key(*field))
+        .collect();
+    if !unsupported.is_empty() {
+        return Err(format!(
+            "Unsupported recall reason-mode field(s): {}. Use mode='lookup' for these lookup-pipeline controls.",
+            unsupported.join(", ")
+        ));
+    }
+
+    let unknown: Vec<&str> = object
+        .keys()
+        .map(String::as_str)
+        .filter(|field| {
+            !SUPPORTED_REASON_FIELDS.contains(field) && !UNSUPPORTED_REASON_FIELDS.contains(field)
+        })
+        .collect();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "Unknown recall reason-mode field(s): {}.",
+            unknown.join(", ")
+        ));
+    }
+
+    if let Some(mode) = object.get("mode").and_then(Value::as_str)
+        && mode != "reason"
+    {
+        return Err(format!(
+            "cross_reference executes reason mode; received mode='{mode}'"
+        ));
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct ScopeFilter {
+    scope: String,
+    include_cross_scope: bool,
+}
+
+impl ScopeFilter {
+    fn from_args(args: &DeepRefArgs) -> Result<Self, String> {
+        let scope = args
+            .scope
+            .as_deref()
+            .unwrap_or(DEFAULT_MEMORY_SCOPE)
+            .trim()
+            .to_string();
+        if scope.is_empty() || scope.len() > 200 || scope.chars().any(char::is_control) {
+            return Err(
+                "Invalid scope: expected a non-empty identifier of at most 200 visible characters"
+                    .to_string(),
+            );
+        }
+        Ok(Self {
+            scope,
+            include_cross_scope: args.include_cross_scope.unwrap_or(false),
+        })
+    }
+
+    fn matches(&self, storage: &Storage, node_id: &str) -> Result<bool, String> {
+        if self.include_cross_scope {
+            Ok(true)
+        } else {
+            storage
+                .node_is_in_scope(node_id, &self.scope)
+                .map_err(|error| error.to_string())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SourceStatus {
+    #[default]
+    Any,
+    Valid,
+    Tombstoned,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SourceFilter {
+    system: Option<String>,
+    project: Option<String>,
+    id: Option<String>,
+    source_type: Option<String>,
+    author: Option<String>,
+    updated_after: Option<DateTime<Utc>>,
+    updated_before: Option<DateTime<Utc>>,
+    status: SourceStatus,
+}
+
+impl SourceFilter {
+    fn from_args(args: &DeepRefArgs) -> Result<Self, String> {
+        let parse_ts = |raw: &Option<String>,
+                        field: &str|
+         -> Result<Option<DateTime<Utc>>, String> {
+            match raw {
+                None => Ok(None),
+                Some(value) => DateTime::parse_from_rfc3339(value)
+                    .map(|timestamp| Some(timestamp.with_timezone(&Utc)))
+                    .map_err(|_| format!("Invalid {field}: '{value}' is not an RFC3339 timestamp")),
+            }
+        };
+        let status = match args.source_status.as_deref() {
+            None | Some("any") => SourceStatus::Any,
+            Some("valid") => SourceStatus::Valid,
+            Some("tombstoned") => SourceStatus::Tombstoned,
+            Some(other) => {
+                return Err(format!(
+                    "Invalid source_status '{other}'. Must be 'any', 'valid', or 'tombstoned'."
+                ));
+            }
+        };
+        Ok(Self {
+            system: args.source_system.clone(),
+            project: args.source_project.clone(),
+            id: args.source_id.clone(),
+            source_type: args.source_type.clone(),
+            author: args.source_author.clone(),
+            updated_after: parse_ts(&args.source_updated_after, "source_updated_after")?,
+            updated_before: parse_ts(&args.source_updated_before, "source_updated_before")?,
+            status,
+        })
+    }
+
+    fn is_active(&self) -> bool {
+        self.system.is_some()
+            || self.project.is_some()
+            || self.id.is_some()
+            || self.source_type.is_some()
+            || self.author.is_some()
+            || self.updated_after.is_some()
+            || self.updated_before.is_some()
+            || self.status != SourceStatus::Any
+    }
+}
+
+fn parse_valid_at(raw: Option<&str>) -> Result<Option<DateTime<Utc>>, String> {
+    let Some(raw) = raw else { return Ok(None) };
+    if raw == "now" {
+        return Ok(Some(Utc::now()));
+    }
+    if raw.trim() != raw || raw.is_empty() {
+        return Err(
+            "Invalid validAt: expected 'now', RFC3339, or YYYY-MM-DD without surrounding whitespace"
+                .to_string(),
+        );
+    }
+    if let Ok(timestamp) = DateTime::parse_from_rfc3339(raw) {
+        return Ok(Some(timestamp.with_timezone(&Utc)));
+    }
+    if let Ok(date) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        return Ok(Some(Utc.from_utc_datetime(
+            &date.and_hms_opt(0, 0, 0).expect("midnight is valid"),
+        )));
+    }
+    Err("Invalid validAt: expected 'now', RFC3339, or YYYY-MM-DD".to_string())
+}
+
+fn tags_match_prefix(tags: &[String], prefix: &str) -> bool {
+    let needle = prefix.to_ascii_lowercase();
+    tags.iter()
+        .any(|tag| tag.to_ascii_lowercase().starts_with(&needle))
+}
+
+fn node_matches_source(node: &KnowledgeNode, filter: &SourceFilter) -> bool {
+    match filter.status {
+        SourceStatus::Any => {}
+        SourceStatus::Valid if !node.is_currently_valid() => return false,
+        SourceStatus::Tombstoned if node.is_currently_valid() => return false,
+        _ => {}
+    }
+
+    if !filter.is_active() {
+        return true;
+    }
+    let Some(envelope) = node.source_envelope.as_ref() else {
+        return false;
+    };
+    let exact = |want: &Option<String>, have: &Option<String>| match want {
+        None => true,
+        Some(value) => have.as_deref() == Some(value.as_str()),
+    };
+    if !exact(&filter.system, &envelope.source_system)
+        || !exact(&filter.project, &envelope.source_project)
+        || !exact(&filter.id, &envelope.source_id)
+        || !exact(&filter.source_type, &envelope.source_type)
+        || !exact(&filter.author, &envelope.source_author)
+    {
+        return false;
+    }
+    if filter.updated_after.is_some() || filter.updated_before.is_some() {
+        let Some(timestamp) = envelope.source_updated_at else {
+            return false;
+        };
+        if filter.updated_after.is_some_and(|after| timestamp < after)
+            || filter
+                .updated_before
+                .is_some_and(|before| timestamp > before)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+#[allow(clippy::too_many_arguments)] // Explicit immutable filter inputs shared by seed and expansion paths.
+fn node_matches_reason_filters(
+    storage: &Storage,
+    node: &KnowledgeNode,
+    semantic_score: Option<f32>,
+    args: &DeepRefArgs,
+    scope: &ScopeFilter,
+    source: &SourceFilter,
+    valid_at: Option<DateTime<Utc>>,
+    superseded_ids: &HashSet<String>,
+) -> Result<bool, String> {
+    if !scope.matches(storage, &node.id)? {
+        return Ok(false);
+    }
+    // Suppression is a current safety/control state, so it applies even to a
+    // historical validAt query. A caller must explicitly release suppression
+    // before the memory can influence reasoning again.
+    if node.suppression_count > 0 {
+        return Ok(false);
+    }
+    // Default reasoning is an active-world view. Historical records remain
+    // available by asking for the time at which they were valid; this keeps
+    // bitemporal supersession analysis possible without allowing an activation
+    // edge or broad seed search to resurrect stale evidence by default.
+    if let Some(at) = valid_at {
+        if !node.is_valid_at(at) {
+            return Ok(false);
+        }
+    } else if source.status != SourceStatus::Tombstoned
+        && (!node.is_currently_valid() || superseded_ids.contains(&node.id))
+    {
+        return Ok(false);
+    }
+    if node.retention_strength < args.min_retention.unwrap_or(0.0).clamp(0.0, 1.0) {
+        return Ok(false);
+    }
+    if semantic_score
+        .is_some_and(|score| score < args.min_similarity.unwrap_or(0.5).clamp(0.0, 1.0))
+    {
+        return Ok(false);
+    }
+    if let Some(includes) = args.include_types.as_deref() {
+        if !includes.iter().any(|kind| kind == &node.node_type) {
+            return Ok(false);
+        }
+    } else if let Some(excludes) = args.exclude_types.as_deref()
+        && excludes.iter().any(|kind| kind == &node.node_type)
+    {
+        return Ok(false);
+    }
+    if let Some(prefix) = args.tag_prefix.as_deref()
+        && !tags_match_prefix(&node.tags, prefix)
+    {
+        return Ok(false);
+    }
+    if !node_matches_source(node, source) {
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 // ============================================================================
@@ -357,7 +732,10 @@ fn generate_reasoning_chain(
         chain.push_str("NO CONTRADICTIONS DETECTED. Evidence is consistent.\n");
     }
 
-    chain.push_str(&format!("OVERALL CONFIDENCE: {:.0}%\n", confidence * 100.0));
+    chain.push_str(&format!(
+        "HEURISTIC RANKING SIGNAL: {:.0}% (not a calibrated truth probability; verify current sources)\n",
+        confidence * 100.0
+    ));
 
     chain
 }
@@ -475,16 +853,21 @@ pub async fn execute(
     cognitive: &Arc<Mutex<CognitiveEngine>>,
     args: Option<Value>,
 ) -> Result<Value, String> {
-    let args: DeepRefArgs = match args {
-        Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid arguments: {}", e))?,
-        None => return Err("Missing arguments".to_string()),
-    };
+    let raw_args = args.ok_or_else(|| "Missing arguments".to_string())?;
+    validate_reason_envelope(&raw_args)?;
+    let args: DeepRefArgs =
+        serde_json::from_value(raw_args).map_err(|e| format!("Invalid arguments: {}", e))?;
 
     if args.query.trim().is_empty() {
         return Err("Query cannot be empty".to_string());
     }
 
     let depth = args.depth.unwrap_or(20).clamp(5, 50) as usize;
+    let result_limit = args.limit.unwrap_or(10).clamp(1, 100) as usize;
+    let scope_filter = ScopeFilter::from_args(&args)?;
+    let source_filter = SourceFilter::from_args(&args)?;
+    let valid_at = parse_valid_at(args.valid_at.as_deref())?;
+    let superseded_ids = storage.superseded_node_ids().map_err(|e| e.to_string())?;
 
     // ====================================================================
     // STAGE 0: Intent Classification (MAGMA-inspired query routing)
@@ -494,19 +877,65 @@ pub async fn execute(
     // ====================================================================
     // STAGE 1: Broad Retrieval + Reranking
     // ====================================================================
+    // Scope and source fields are post-filters because the core hybrid index is
+    // not namespace-aware yet. Over-fetch within the storage ceiling so a busy
+    // unrelated scope cannot trivially starve the requested namespace.
+    let filters_can_thin = !scope_filter.include_cross_scope
+        || source_filter.is_active()
+        || args.tag_prefix.is_some()
+        || valid_at.is_some()
+        || args.min_retention.is_some()
+        || args.min_similarity.is_some();
+    let fetch_limit = if filters_can_thin {
+        (depth.saturating_mul(4)).min(100)
+    } else {
+        depth
+    } as i32;
     let results = storage
-        .hybrid_search(&args.query, depth as i32, 0.3, 0.7)
+        .hybrid_search_filtered(
+            &args.query,
+            fetch_limit,
+            0.3,
+            0.7,
+            args.include_types.as_deref(),
+            args.exclude_types.as_deref(),
+        )
         .map_err(|e| e.to_string())?;
 
+    let mut results =
+        results
+            .into_iter()
+            .try_fold(Vec::new(), |mut kept, result| -> Result<_, String> {
+                if node_matches_reason_filters(
+                    storage,
+                    &result.node,
+                    result.semantic_score,
+                    &args,
+                    &scope_filter,
+                    &source_filter,
+                    valid_at,
+                    &superseded_ids,
+                )? {
+                    kept.push(result);
+                }
+                Ok(kept)
+            })?;
+    results.truncate(depth);
+
     if results.is_empty() {
-        return Ok(serde_json::json!({
+        let response = serde_json::json!({
             "query": args.query,
             "status": "no_memories",
             "confidence": 0.0,
+            "confidenceType": "heuristic_ranking_signal",
             "guidance": "No memories found. Use smart_ingest to add memories.",
             "memoriesAnalyzed": 0,
             "compositionWriteStatus": "skipped_empty",
-        }));
+            "scope": scope_filter.scope,
+            "includeCrossScope": scope_filter.include_cross_scope,
+            "validAt": valid_at.map(|at| at.to_rfc3339()),
+        });
+        return Ok(enforce_reason_token_budget(response, args.token_budget));
     }
 
     let mut ranked = results;
@@ -541,6 +970,18 @@ pub async fn execute(
         // Fetch expanded memories from storage
         for id in &expanded_ids {
             if let Ok(Some(node)) = storage.get_node(id) {
+                if !node_matches_reason_filters(
+                    storage,
+                    &node,
+                    None,
+                    &args,
+                    &scope_filter,
+                    &source_filter,
+                    valid_at,
+                    &superseded_ids,
+                )? {
+                    continue;
+                }
                 // Create a minimal SearchResult-like entry
                 ranked.push(vestige_core::SearchResult {
                     node,
@@ -553,6 +994,7 @@ pub async fn execute(
             }
         }
     }
+    ranked.truncate(depth);
 
     // ====================================================================
     // STAGE 3: FSRS-6 Trust Scoring
@@ -568,6 +1010,9 @@ pub async fn execute(
                 r.node.lapses,
             );
             let currently_valid = r.node.is_currently_valid();
+            let valid_for_ranking = valid_at
+                .map(|at| r.node.is_valid_at(at))
+                .unwrap_or(currently_valid);
             ScoredMemory {
                 id: r.node.id.clone(),
                 content: r.node.content.clone(),
@@ -576,7 +1021,7 @@ pub async fn execute(
                 updated_at: r.node.updated_at,
                 created_at: r.node.created_at,
                 retention: r.node.retention_strength,
-                combined_score: validity_adjusted_score(r.combined_score, currently_valid),
+                combined_score: validity_adjusted_score(r.combined_score, valid_for_ranking),
                 valid_until: r.node.valid_until,
                 currently_valid,
             }
@@ -702,11 +1147,16 @@ pub async fn execute(
         let memory_ids: std::collections::HashSet<&str> =
             scored.iter().map(|s| s.id.as_str()).collect();
         for insight in insights {
-            let overlaps = insight
-                .source_memories
-                .iter()
-                .any(|src_id| memory_ids.contains(src_id.as_str()));
-            if overlaps {
+            // An insight can synthesize several source memories. Returning it
+            // merely because one source survived the query can disclose a
+            // cross-scope synthesis through the insight text or its other IDs.
+            // Require the complete evidence set to be in this reason envelope.
+            let sources_all_in_envelope = !insight.source_memories.is_empty()
+                && insight
+                    .source_memories
+                    .iter()
+                    .all(|src_id| memory_ids.contains(src_id.as_str()));
+            if sources_all_in_envelope {
                 related_insights.push(serde_json::json!({
                     "insight": insight.insight,
                     "type": insight.insight_type,
@@ -849,7 +1299,7 @@ pub async fn execute(
     });
     let evidence: Vec<Value> = non_superseded
         .iter()
-        .take(10)
+        .take(result_limit)
         .enumerate()
         .map(|(i, s)| {
             serde_json::json!({
@@ -877,13 +1327,13 @@ pub async fn execute(
             })
         })
         .collect();
-    evolution.truncate(15); // cap timeline length
+    evolution.truncate(result_limit);
 
     // Confidence scoring: derived from the same composite as `recommended`,
     // so confidence actually moves with query relevance instead of being a
     // function of trust + corpus size alone.
     let base_confidence = recommended.map(composite).unwrap_or(0.0);
-    let agreement_boost = (evidence.len() as f64 * 0.03).min(0.2);
+    let agreement_boost = (non_superseded.len().min(10) as f64 * 0.03).min(0.2);
     // A claim that conflicts with a stored memory is the strongest possible signal
     // to lower confidence (heavier penalty than an inter-memory disagreement).
     let contradiction_penalty =
@@ -916,14 +1366,14 @@ pub async fn execute(
     } else if let Some(rec) = recommended {
         if contradictions.is_empty() {
             format!(
-                "High confidence ({:.0}%). Recommended memory (trust {:.0}%, {}) is the most reliable source.",
+                "Heuristic ranking signal {:.0}% (FSRS trust {:.0}%, stored {}). Treat this as a memory-retrieval lead, not truth probability; verify material claims against current code, logs, tests, provider state, or a primary source before acting.",
                 confidence * 100.0,
                 rec.trust * 100.0,
                 rec.updated_at.format("%b %d, %Y")
             )
         } else {
             format!(
-                "WARNING: {} contradiction(s) detected. Recommended memory has trust {:.0}% but conflicts exist. Review contradictions below.",
+                "WARNING: {} contradiction(s) detected. The top stored memory has FSRS trust {:.0}%, but this is still a heuristic retrieval result. Review both sides and verify the current source before acting.",
                 contradictions.len(),
                 rec.trust * 100.0
             )
@@ -931,10 +1381,6 @@ pub async fn execute(
     } else {
         "No strong evidence found. Verify with external sources.".to_string()
     };
-
-    // Evidence shown to a caller is not automatically evidence of usefulness.
-    let ids: Vec<&str> = scored.iter().map(|s| s.id.as_str()).collect();
-    let _ = storage.record_batch_retrieval(&ids);
 
     // Generate reasoning chain (the key differentiator — no LLM needed)
     let reasoning_chain = if let Some(rec) = recommended {
@@ -949,10 +1395,30 @@ pub async fn execute(
         "intent": format!("{:?}", intent),
         "status": status,
         "confidence": (confidence * 100.0).round() / 100.0,
+        "confidenceType": "heuristic_ranking_signal",
         "reasoning": reasoning_chain,
         "guidance": guidance,
         "memoriesAnalyzed": scored.len(),
         "activationExpanded": activation_expanded,
+        "resultLimit": result_limit,
+        "scope": scope_filter.scope,
+        "includeCrossScope": scope_filter.include_cross_scope,
+        "validAt": valid_at.map(|at| at.to_rfc3339()),
+        "filtersApplied": {
+            "minRetention": args.min_retention.unwrap_or(0.0).clamp(0.0, 1.0),
+            "minSimilarity": args.min_similarity.unwrap_or(0.5).clamp(0.0, 1.0),
+            "includeTypes": args.include_types,
+            "excludeTypes": if args.include_types.is_some() { Value::Null } else { serde_json::json!(args.exclude_types) },
+            "tagPrefix": args.tag_prefix,
+            "sourceSystem": args.source_system,
+            "sourceProject": args.source_project,
+            "sourceId": args.source_id,
+            "sourceType": args.source_type,
+            "sourceAuthor": args.source_author,
+            "sourceUpdatedAfter": args.source_updated_after,
+            "sourceUpdatedBefore": args.source_updated_before,
+            "sourceStatus": args.source_status.as_deref().unwrap_or("any"),
+        },
     });
 
     if !claim_conflicts.is_empty() {
@@ -1002,6 +1468,15 @@ pub async fn execute(
             response["compositionWriteStatus"] = serde_json::json!("failed");
         }
     }
+
+    let response = enforce_reason_token_budget(response, args.token_budget);
+
+    // Evidence shown to a caller is not automatically evidence of usefulness.
+    // Audit only IDs that survived result limiting and whole-group budgeting;
+    // internal candidates are not caller-visible retrievals.
+    let shown_ids = response_memory_ids(&response);
+    let shown_id_refs: Vec<&str> = shown_ids.iter().map(String::as_str).collect();
+    let _ = storage.record_batch_retrieval(&shown_id_refs);
 
     Ok(response)
 }
@@ -1141,6 +1616,253 @@ fn preview_text(value: &str, max: usize) -> String {
         return collapsed;
     }
     format!("{}...", &collapsed[..collapsed.floor_char_boundary(max)])
+}
+
+/// Reserve room for the post-dispatch `runId` and `receiptId` fields appended
+/// by the MCP server. Budgeted reason responses set `detailLevel="brief"`, so
+/// the server keeps the full receipt durable by ID instead of embedding it in
+/// the response. The final stdio contract still needs a server-level test: this
+/// handler cannot observe metadata appended after it returns.
+const SERVER_METADATA_RESERVE_CHARS: usize = 192;
+
+fn serialized_chars(value: &Value) -> usize {
+    // Rust String::len is UTF-8 bytes, matching the wire-budget unit.
+    serde_json::to_string(value)
+        .map(|json| json.len())
+        .unwrap_or(0)
+}
+
+fn memory_ids_in_value(value: &Value) -> Vec<String> {
+    fn walk(value: &Value, ids: &mut Vec<String>) {
+        match value {
+            Value::Object(object) => {
+                for (key, nested) in object {
+                    if matches!(key.as_str(), "id" | "memory_id" | "superseded_by") {
+                        if let Some(id) = nested.as_str()
+                            && !ids.iter().any(|existing| existing == id)
+                        {
+                            ids.push(id.to_string());
+                        }
+                    } else if key == "source_memories" {
+                        if let Some(values) = nested.as_array() {
+                            for id in values.iter().filter_map(Value::as_str) {
+                                if !ids.iter().any(|existing| existing == id) {
+                                    ids.push(id.to_string());
+                                }
+                            }
+                        }
+                    } else {
+                        walk(nested, ids);
+                    }
+                }
+            }
+            Value::Array(values) => {
+                for nested in values {
+                    walk(nested, ids);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut ids = Vec::new();
+    walk(value, &mut ids);
+    ids
+}
+
+fn response_memory_ids(response: &Value) -> Vec<String> {
+    let mut visible = response.clone();
+    if let Some(object) = visible.as_object_mut() {
+        // Expandable IDs name candidates omitted from the response; they must
+        // not be counted as retrieved evidence.
+        object.remove("expandable");
+    }
+    memory_ids_in_value(&visible)
+}
+
+fn remove_complete_group(response: &mut Value, field: &str, omitted_ids: &mut Vec<String>) {
+    if let Some(value) = response
+        .as_object_mut()
+        .and_then(|object| object.remove(field))
+    {
+        for id in memory_ids_in_value(&value) {
+            if !omitted_ids.iter().any(|existing| existing == &id) {
+                omitted_ids.push(id);
+            }
+        }
+    }
+}
+
+fn trim_complete_items(
+    response: &mut Value,
+    field: &str,
+    keep_at_least: usize,
+    usable_chars: usize,
+    omitted_ids: &mut Vec<String>,
+) {
+    loop {
+        if serialized_chars(response) <= usable_chars {
+            break;
+        }
+        let removed = response
+            .get_mut(field)
+            .and_then(Value::as_array_mut)
+            .and_then(|items| {
+                if items.len() > keep_at_least {
+                    items.pop()
+                } else {
+                    None
+                }
+            });
+        let Some(item) = removed else { break };
+        for id in memory_ids_in_value(&item) {
+            if !omitted_ids.iter().any(|existing| existing == &id) {
+                omitted_ids.push(id);
+            }
+        }
+    }
+}
+
+fn add_projected_usage(response: &mut Value, reserve: usize) {
+    if let Some(object) = response.as_object_mut() {
+        object.insert("tokensUsed".to_string(), serde_json::json!(0));
+    }
+    // Two passes account for the digit-width change when replacing zero.
+    for _ in 0..2 {
+        let projected_tokens = (serialized_chars(response) + reserve).div_ceil(4);
+        if let Some(object) = response.as_object_mut() {
+            object.insert(
+                "tokensUsed".to_string(),
+                serde_json::json!(projected_tokens),
+            );
+        }
+    }
+}
+
+/// Enforce the reason-mode budget on complete evidence units. Candidate cards,
+/// contradiction pairs, supersession records, and insight records are removed
+/// whole; their memory IDs remain fetchable through `expandable` when space
+/// allows. This avoids producing syntactically valid but semantically severed
+/// half-pairs through arbitrary JSON-string truncation.
+fn enforce_reason_token_budget(mut response: Value, raw_budget: Option<i32>) -> Value {
+    let Some(raw_budget) = raw_budget else {
+        return response;
+    };
+    let budget = raw_budget.clamp(100, 100_000) as usize;
+    let budget_chars = budget.saturating_mul(4);
+    let usable_chars = budget_chars.saturating_sub(SERVER_METADATA_RESERVE_CHARS);
+    let mut omitted_ids = Vec::new();
+
+    if let Some(object) = response.as_object_mut() {
+        object.insert("tokenBudgetLimit".to_string(), serde_json::json!(budget));
+        object.insert(
+            "budgetUnit".to_string(),
+            serde_json::json!("utf8_bytes_div_4_ceiling"),
+        );
+        // This is also a server contract: it suppresses the embedded receipt,
+        // leaving the full receipt available via receiptId.
+        object.insert("detailLevel".to_string(), serde_json::json!("brief"));
+    }
+    add_projected_usage(&mut response, SERVER_METADATA_RESERVE_CHARS);
+    if serialized_chars(&response) <= usable_chars {
+        return response;
+    }
+    if let Some(object) = response.as_object_mut() {
+        object.insert("truncated".to_string(), serde_json::json!(true));
+    }
+
+    // Lowest-value diagnostic groups go first. Each removal is atomic.
+    for field in ["related_insights", "evolution"] {
+        if serialized_chars(&response) > usable_chars {
+            remove_complete_group(&mut response, field, &mut omitted_ids);
+        }
+    }
+
+    // Keep the strongest complete item or pair in each evidence-bearing group
+    // for as long as the budget permits.
+    for field in [
+        "evidence",
+        "superseded",
+        "contradictions",
+        "claim_conflicts",
+    ] {
+        trim_complete_items(&mut response, field, 1, usable_chars, &mut omitted_ids);
+    }
+
+    // The prose chain duplicates structured cards. Remove it as one complete
+    // field before dropping the final structured evidence units.
+    if serialized_chars(&response) > usable_chars {
+        remove_complete_group(&mut response, "reasoning", &mut omitted_ids);
+    }
+    for field in [
+        "related_insights",
+        "evolution",
+        "superseded",
+        "evidence",
+        "contradictions",
+        "claim_conflicts",
+        "filtersApplied",
+    ] {
+        if serialized_chars(&response) > usable_chars {
+            remove_complete_group(&mut response, field, &mut omitted_ids);
+        }
+    }
+
+    // Add omitted IDs only while each complete identifier still fits.
+    for id in omitted_ids {
+        let mut candidate = response.clone();
+        if let Some(object) = candidate.as_object_mut() {
+            object
+                .entry("expandable".to_string())
+                .or_insert_with(|| serde_json::json!([]));
+            if let Some(ids) = object.get_mut("expandable").and_then(Value::as_array_mut) {
+                ids.push(serde_json::json!(id));
+            }
+        }
+        add_projected_usage(&mut candidate, SERVER_METADATA_RESERVE_CHARS);
+        if serialized_chars(&candidate) <= usable_chars {
+            response = candidate;
+        } else {
+            break;
+        }
+    }
+    add_projected_usage(&mut response, SERVER_METADATA_RESERVE_CHARS);
+    if serialized_chars(&response) <= usable_chars {
+        return response;
+    }
+
+    // An unusually long query/guidance/scope can exceed even after all groups
+    // are removed. Return a bounded control record instead of slicing strings.
+    let status = response
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("partial_evidence");
+    let mut compact = serde_json::json!({
+        "status": status,
+        "truncated": true,
+        "tokenBudgetLimit": budget,
+        "budgetUnit": "utf8_bytes_div_4_ceiling",
+        "detailLevel": "brief",
+        "guidance": "Reasoning groups omitted to fit token_budget; fetch memories by ID or increase the budget."
+    });
+    if let Some(confidence) = response.get("confidence") {
+        compact["confidence"] = confidence.clone();
+        compact["confidenceType"] = serde_json::json!("heuristic_ranking_signal");
+    }
+    add_projected_usage(&mut compact, SERVER_METADATA_RESERVE_CHARS);
+    if serialized_chars(&compact) <= usable_chars {
+        return compact;
+    }
+
+    let mut minimal = serde_json::json!({
+        "status": "budget_truncated",
+        "truncated": true,
+        "tokenBudgetLimit": budget,
+        "budgetUnit": "utf8_bytes_div_4_ceiling",
+        "detailLevel": "brief"
+    });
+    add_projected_usage(&mut minimal, SERVER_METADATA_RESERVE_CHARS);
+    minimal
 }
 
 // ============================================================================
@@ -1803,7 +2525,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_expired_memory_ranked_below_current_and_flagged() {
+    async fn test_expired_memory_excluded_from_current_reasoning() {
         let (storage, _dir) = test_storage().await;
 
         let expired_id = ingest_with_validity(
@@ -1836,37 +2558,15 @@ mod tests {
         .await
         .expect("execute should succeed");
 
-        let expired = evidence_entry(&result, &expired_id);
+        assert!(
+            !result["evidence"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["id"] == expired_id)
+        );
         let current = evidence_entry(&result, &current_id);
-
-        assert_eq!(
-            expired["currentlyValid"].as_bool(),
-            Some(false),
-            "expired memory must carry currentlyValid=false: {:?}",
-            expired
-        );
-        assert!(
-            expired["validUntil"].as_str().is_some(),
-            "expired memory must surface its validUntil (RFC3339): {:?}",
-            expired
-        );
-        assert_eq!(
-            current["currentlyValid"].as_bool(),
-            Some(true),
-            "current memory must carry currentlyValid=true: {:?}",
-            current
-        );
-
-        let expired_score = expired["relevanceScore"].as_f64().unwrap();
-        let current_score = current["relevanceScore"].as_f64().unwrap();
-        assert!(
-            expired_score < current_score,
-            "an expired fact must rank below its current replacement \
-             (expired={}, current={}). Without the validity penalty, both \
-             carry identical trust/terms and the expired one can win.",
-            expired_score,
-            current_score
-        );
+        assert_eq!(current["currentlyValid"], true);
         assert_eq!(
             result["recommended"]["memory_id"].as_str(),
             Some(current_id.as_str()),
@@ -1880,7 +2580,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_future_valid_until_not_penalized() {
+    async fn test_future_valid_until_remains_eligible() {
         let (storage, _dir) = test_storage().await;
 
         let expired_id = ingest_with_validity(
@@ -1914,7 +2614,13 @@ mod tests {
         .expect("execute should succeed");
 
         let future = evidence_entry(&result, &future_id);
-        let expired = evidence_entry(&result, &expired_id);
+        assert!(
+            !result["evidence"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["id"] == expired_id)
+        );
 
         assert_eq!(
             future["currentlyValid"].as_bool(),
@@ -1928,23 +2634,300 @@ mod tests {
             future
         );
 
-        let future_score = future["relevanceScore"].as_f64().unwrap();
-        let expired_score = expired["relevanceScore"].as_f64().unwrap();
-        // If future validity were wrongly penalized (e.g. keying the penalty on
-        // valid_until.is_some() instead of is_currently_valid()), both twins
-        // would sit in the same 0.1x band and the gap collapses to <=~0.03.
-        // Unpenalized, the future-valid fact keeps its full 0.5-weighted
-        // relevance slot: the gap over the penalized expired twin is >=~0.09.
-        assert!(
-            future_score - expired_score >= 0.05,
-            "a future-valid fact must NOT be penalized (future={}, expired={})",
-            future_score,
-            expired_score
-        );
         assert_eq!(
             result["recommended"]["memory_id"].as_str(),
             Some(future_id.as_str()),
             "the future-valid fact must win primary selection over the expired one"
+        );
+    }
+}
+
+#[cfg(test)]
+mod reason_envelope_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn test_storage() -> (Arc<Storage>, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let storage = Storage::new(Some(dir.path().join("test.db"))).unwrap();
+        (Arc::new(storage), dir)
+    }
+
+    fn test_cognitive() -> Arc<Mutex<CognitiveEngine>> {
+        Arc::new(Mutex::new(CognitiveEngine::new()))
+    }
+
+    fn ingest_in_scope(storage: &Storage, scope: &str, content: &str, node_type: &str) -> String {
+        storage
+            .ingest_in_scope(
+                vestige_core::IngestInput {
+                    content: content.to_string(),
+                    node_type: node_type.to_string(),
+                    tags: vec!["reason-scope-test".to_string()],
+                    ..Default::default()
+                },
+                scope,
+            )
+            .unwrap()
+            .id
+    }
+
+    #[tokio::test]
+    async fn defaults_to_user_scope_and_cross_scope_is_explicit() {
+        let (storage, _dir) = test_storage();
+        let user_id = ingest_in_scope(
+            &storage,
+            "user",
+            "quasar-envelope default namespace evidence user record",
+            "fact",
+        );
+        let project_id = ingest_in_scope(
+            &storage,
+            "private-project",
+            "quasar-envelope default namespace evidence private project record",
+            "fact",
+        );
+        let scoped = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "query": "quasar-envelope default namespace evidence",
+                "depth": 10
+            })),
+        )
+        .await
+        .unwrap();
+        let scoped_ids = response_memory_ids(&scoped);
+        assert!(scoped_ids.contains(&user_id));
+        assert!(!scoped_ids.contains(&project_id));
+        assert_eq!(scoped["scope"], "user");
+        assert_eq!(scoped["includeCrossScope"], false);
+
+        let cross_scope = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "query": "quasar-envelope default namespace evidence",
+                "depth": 10,
+                "includeCrossScope": true
+            })),
+        )
+        .await
+        .unwrap();
+        let cross_scope_ids = response_memory_ids(&cross_scope);
+        assert!(cross_scope_ids.contains(&user_id));
+        assert!(cross_scope_ids.contains(&project_id));
+    }
+
+    #[tokio::test]
+    async fn activation_expansion_cannot_cross_scope() {
+        let (storage, _dir) = test_storage();
+        let seed_id = ingest_in_scope(
+            &storage,
+            "user",
+            "scope-activation-seed unique retrieval anchor",
+            "fact",
+        );
+        let private_id = ingest_in_scope(
+            &storage,
+            "private-project",
+            "confidential activation-only candidate",
+            "fact",
+        );
+        let cognitive = test_cognitive();
+        cognitive.lock().await.activation_network.add_edge(
+            seed_id,
+            private_id.clone(),
+            vestige_core::neuroscience::spreading_activation::LinkType::Semantic,
+            1.0,
+        );
+        let scoped = execute(
+            &storage,
+            &cognitive,
+            Some(serde_json::json!({
+                "query": "scope-activation-seed unique retrieval anchor",
+                "depth": 10
+            })),
+        )
+        .await
+        .unwrap();
+        assert!(!response_memory_ids(&scoped).contains(&private_id));
+        assert_eq!(scoped["activationExpanded"], 0);
+
+        let cross_scope = execute(
+            &storage,
+            &cognitive,
+            Some(serde_json::json!({
+                "query": "scope-activation-seed unique retrieval anchor",
+                "depth": 10,
+                "includeCrossScope": true
+            })),
+        )
+        .await
+        .unwrap();
+        assert!(response_memory_ids(&cross_scope).contains(&private_id));
+        assert_eq!(cross_scope["activationExpanded"], 1);
+    }
+
+    #[tokio::test]
+    async fn honors_type_validity_tag_source_and_limit_filters() {
+        let (storage, _dir) = test_storage();
+        let now = Utc::now();
+        let mut source_envelope = vestige_core::SourceEnvelope::default();
+        source_envelope.source_system = Some("github".to_string());
+        source_envelope.source_project = Some("sam/vestige".to_string());
+        source_envelope.source_id = Some("4242".to_string());
+        source_envelope.source_type = Some("issue".to_string());
+        source_envelope.source_author = Some("sam".to_string());
+        source_envelope.source_updated_at = Some(now);
+        let matching = storage
+            .ingest_in_scope(
+                vestige_core::IngestInput {
+                    content: "heliotrope-filter exact github issue evidence".to_string(),
+                    node_type: "decision".to_string(),
+                    tags: vec!["Meeting:Architecture".to_string()],
+                    valid_from: Some(now - chrono::Duration::days(2)),
+                    valid_until: Some(now + chrono::Duration::days(2)),
+                    source_envelope: Some(source_envelope),
+                    ..Default::default()
+                },
+                "user",
+            )
+            .unwrap()
+            .id;
+        ingest_in_scope(
+            &storage,
+            "user",
+            "heliotrope-filter exact github issue evidence distractor",
+            "note",
+        );
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "query": "heliotrope-filter exact github issue evidence",
+                "depth": 10,
+                "limit": 1,
+                "include_types": ["decision"],
+                "tag_prefix": "meeting:",
+                "validAt": now.to_rfc3339(),
+                "source_system": "github",
+                "source_project": "sam/vestige",
+                "source_id": "4242",
+                "source_type": "issue",
+                "source_author": "sam",
+                "source_updated_after": (now - chrono::Duration::minutes(1)).to_rfc3339(),
+                "source_updated_before": (now + chrono::Duration::minutes(1)).to_rfc3339(),
+                "source_status": "valid"
+            })),
+        )
+        .await
+        .unwrap();
+        let evidence = result["evidence"].as_array().unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0]["id"], matching);
+        assert_eq!(result["resultLimit"], 1);
+        assert_eq!(result["filtersApplied"]["sourceSystem"], "github");
+    }
+
+    #[tokio::test]
+    async fn rejects_lookup_only_and_unknown_fields() {
+        let (storage, _dir) = test_storage();
+        let lookup_only = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "query": "anything",
+                "detail_level": "brief"
+            })),
+        )
+        .await
+        .unwrap_err();
+        assert!(lookup_only.contains("Unsupported recall reason-mode field"));
+        assert!(lookup_only.contains("detail_level"));
+        let unknown = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "query": "anything",
+                "mystery_filter": true
+            })),
+        )
+        .await
+        .unwrap_err();
+        assert!(unknown.contains("Unknown recall reason-mode field"));
+        assert!(unknown.contains("mystery_filter"));
+    }
+
+    #[tokio::test]
+    async fn budget_is_bounded_before_reserved_server_metadata() {
+        let (storage, _dir) = test_storage();
+        for index in 0..12 {
+            ingest_in_scope(
+                &storage,
+                "user",
+                &format!(
+                    "budget-orbit reason evidence {index}: {}",
+                    "long supporting explanation ".repeat(30)
+                ),
+                "fact",
+            );
+        }
+        let budget = 200usize;
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "query": "budget-orbit reason evidence",
+                "depth": 20,
+                "token_budget": budget
+            })),
+        )
+        .await
+        .unwrap();
+        let encoded = serde_json::to_string(&result).unwrap();
+        assert!(
+            encoded.len() + SERVER_METADATA_RESERVE_CHARS <= budget * 4,
+            "handler response plus server reserve exceeded token budget: {} + {} > {}",
+            encoded.len(),
+            SERVER_METADATA_RESERVE_CHARS,
+            budget * 4
+        );
+        assert_eq!(result["tokenBudgetLimit"], budget);
+        assert_eq!(result["detailLevel"], "brief");
+        assert_eq!(result["truncated"], true);
+    }
+
+    #[tokio::test]
+    async fn labels_confidence_as_heuristic_and_requires_verification() {
+        let (storage, _dir) = test_storage();
+        ingest_in_scope(
+            &storage,
+            "user",
+            "current-source-check memory ranking evidence",
+            "fact",
+        );
+        let result = execute(
+            &storage,
+            &test_cognitive(),
+            Some(serde_json::json!({
+                "query": "current-source-check memory ranking evidence"
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["confidenceType"], "heuristic_ranking_signal");
+        assert!(
+            result["guidance"]
+                .as_str()
+                .unwrap()
+                .contains("verify material claims against current")
+        );
+        assert!(
+            !result["guidance"]
+                .as_str()
+                .unwrap()
+                .contains("most reliable source")
         );
     }
 }
