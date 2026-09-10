@@ -682,7 +682,10 @@ fn evidence_report(b: &ReasoningBasis<'_>) -> String {
         b.query
     ));
 
-    out.push_str(&format!("Evidence: {} memories scored", b.memories_analyzed));
+    out.push_str(&format!(
+        "Evidence: {} memories scored",
+        b.memories_analyzed
+    ));
     if b.activation_expanded > 0 {
         out.push_str(&format!(
             ", {} of them reached through spreading activation",
@@ -1994,7 +1997,11 @@ mod tests {
     /// template said the same thing whatever the evidence was.
     #[test]
     fn evidence_report_changes_with_the_evidence() {
-        let primary = scored("p", "The deploy failed because the cache key was stale", 0.69);
+        let primary = scored(
+            "p",
+            "The deploy failed because the cache key was stale",
+            0.69,
+        );
         let none: Vec<(String, f64, super::RelationAssessment)> = vec![];
         let conflicting = vec![(
             "The deploy failed because of a network partition".to_string(),
@@ -2009,17 +2016,27 @@ mod tests {
         let loud = super::evidence_report(&basis(&primary, &conflicting, 1));
         assert_ne!(quiet, loud);
         assert!(loud.contains("1 contradict"), "{loud}");
-        assert!(loud.contains("Contradiction pairs found among the 7 analyzed memories: 1."), "{loud}");
+        assert!(
+            loud.contains("Contradiction pairs found among the 7 analyzed memories: 1."),
+            "{loud}"
+        );
         assert!(loud.contains("Same topic, opposite claims"), "{loud}");
     }
 
     /// No assessed relation means "unmeasured", never "consistent".
     #[test]
     fn evidence_report_never_claims_consistency_without_comparisons() {
-        let primary = scored("p", "The deploy failed because the cache key was stale", 0.69);
+        let primary = scored(
+            "p",
+            "The deploy failed because the cache key was stale",
+            0.69,
+        );
         let none: Vec<(String, f64, super::RelationAssessment)> = vec![];
         let text = super::evidence_report(&basis(&primary, &none, 0));
-        assert!(text.contains("none. No other memory was close enough"), "{text}");
+        assert!(
+            text.contains("none. No other memory was close enough"),
+            "{text}"
+        );
         assert!(!text.to_lowercase().contains("consistent"), "{text}");
         assert!(text.contains("No model wrote this text"), "{text}");
     }
@@ -2027,7 +2044,11 @@ mod tests {
     /// Every number in the text is one of the breakdown values.
     #[test]
     fn evidence_report_numbers_match_the_breakdown() {
-        let primary = scored("p", "The deploy failed because the cache key was stale", 0.69);
+        let primary = scored(
+            "p",
+            "The deploy failed because the cache key was stale",
+            0.69,
+        );
         let none: Vec<(String, f64, super::RelationAssessment)> = vec![];
         let text = super::evidence_report(&basis(&primary, &none, 0));
         for needle in [

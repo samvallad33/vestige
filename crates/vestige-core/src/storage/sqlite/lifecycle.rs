@@ -3,7 +3,6 @@
 use super::*;
 
 impl SqliteMemoryStore {
-
     /// Mark a memory as reviewed
     pub fn mark_reviewed(&self, id: &str, rating: Rating) -> Result<KnowledgeNode> {
         let node = self
@@ -404,14 +403,14 @@ impl SqliteMemoryStore {
                 params![since.to_rfc3339(), until.to_rfc3339(), MAX_RECEIPTS],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )?;
-            rows.filter_map(warn_skipped_row("apply_failure_feedback")).collect()
+            rows.filter_map(warn_skipped_row("apply_failure_feedback"))
+                .collect()
         };
 
         // memory_id -> (weight, receipt_id, rank); the strongest reactivation wins.
         let mut weights: HashMap<String, (f64, String, usize)> = HashMap::new();
         for (receipt_id, payload) in &receipts {
-            let Ok(receipt) = serde_json::from_str::<crate::trace::Receipt>(payload)
-            else {
+            let Ok(receipt) = serde_json::from_str::<crate::trace::Receipt>(payload) else {
                 continue;
             };
             for (rank, memory_id) in receipt.retrieved.iter().enumerate() {
@@ -508,7 +507,9 @@ impl SqliteMemoryStore {
             let mapped = stmt.query_map(params![failure_id], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })?;
-            mapped.filter_map(warn_skipped_row("revert_failure_feedback")).collect()
+            mapped
+                .filter_map(warn_skipped_row("revert_failure_feedback"))
+                .collect()
         };
         let now = Utc::now().to_rfc3339();
         for (row_id, memory_id, delta) in &rows {

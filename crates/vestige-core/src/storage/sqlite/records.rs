@@ -308,7 +308,9 @@ impl SqliteMemoryStore {
         Ok(())
     }
 
-    pub(super) fn row_to_composition_event(row: &rusqlite::Row) -> rusqlite::Result<CompositionEventRecord> {
+    pub(super) fn row_to_composition_event(
+        row: &rusqlite::Row,
+    ) -> rusqlite::Result<CompositionEventRecord> {
         let metadata_json: String = row.get("metadata")?;
         Ok(CompositionEventRecord {
             id: row.get("id")?,
@@ -325,7 +327,9 @@ impl SqliteMemoryStore {
         })
     }
 
-    pub(super) fn row_to_composition_member(row: &rusqlite::Row) -> rusqlite::Result<CompositionMemberRecord> {
+    pub(super) fn row_to_composition_member(
+        row: &rusqlite::Row,
+    ) -> rusqlite::Result<CompositionMemberRecord> {
         let metadata_json: String = row.get("metadata")?;
         Ok(CompositionMemberRecord {
             event_id: row.get("event_id")?,

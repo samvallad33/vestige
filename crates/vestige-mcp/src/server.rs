@@ -128,7 +128,18 @@ fn trace_enabled() -> bool {
 }
 
 fn log_level_rank(level: &str) -> Option<usize> {
-    ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"].iter().position(|item| *item == level)
+    [
+        "debug",
+        "info",
+        "notice",
+        "warning",
+        "error",
+        "critical",
+        "alert",
+        "emergency",
+    ]
+    .iter()
+    .position(|item| *item == level)
 }
 
 /// MCP Server implementation
@@ -247,11 +258,22 @@ impl McpServer {
             // The server only emits info and warning messages about its own
             // startup (model downloads), so any requested level is accepted.
             "logging/setLevel" => {
-                match request.params.as_ref().and_then(|p| p.get("level")).and_then(|v| v.as_str()).and_then(log_level_rank) {
-                    Some(level) => { self.logging_level = level; Ok(serde_json::json!({})) }
-                    None => Err(JsonRpcError::invalid_params("level must be debug, info, notice, warning, error, critical, alert, or emergency")),
+                match request
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("level"))
+                    .and_then(|v| v.as_str())
+                    .and_then(log_level_rank)
+                {
+                    Some(level) => {
+                        self.logging_level = level;
+                        Ok(serde_json::json!({}))
+                    }
+                    None => Err(JsonRpcError::invalid_params(
+                        "level must be debug, info, notice, warning, error, critical, alert, or emergency",
+                    )),
                 }
-            },
+            }
             method => {
                 warn!("Unknown method: {}", method);
                 Err(JsonRpcError::method_not_found())
@@ -382,7 +404,10 @@ impl McpServer {
     /// transport holds server-initiated notifications until then, so nothing
     /// precedes the initialize response on the wire.
     pub fn logging_allows(&self, notification: &serde_json::Value) -> bool {
-        notification["params"]["level"].as_str().and_then(log_level_rank).is_some_and(|level| level >= self.logging_level)
+        notification["params"]["level"]
+            .as_str()
+            .and_then(log_level_rank)
+            .is_some_and(|level| level >= self.logging_level)
     }
 
     pub fn is_initialized(&self) -> bool {
@@ -3181,11 +3206,20 @@ mod tests {
         assert_eq!(set.result.unwrap(), serde_json::json!({}));
         assert!(!server.logging_allows(&serde_json::json!({"params":{"level":"debug"}})));
         assert!(server.logging_allows(&serde_json::json!({"params":{"level":"warning"}})));
-        let invalid = server.handle_request(make_request("logging/setLevel", Some(serde_json::json!({"level":"verbose"})))).await.unwrap();
+        let invalid = server
+            .handle_request(make_request(
+                "logging/setLevel",
+                Some(serde_json::json!({"level":"verbose"})),
+            ))
+            .await
+            .unwrap();
         assert!(invalid.error.is_some());
         assert_eq!(server.logging_level, 1);
 
-        let discover = server.handle_request(make_request("server/discover", None)).await.unwrap();
+        let discover = server
+            .handle_request(make_request("server/discover", None))
+            .await
+            .unwrap();
         assert!(discover.result.unwrap()["capabilities"]["logging"].is_object());
     }
 

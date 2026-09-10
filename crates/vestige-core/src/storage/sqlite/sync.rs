@@ -3,7 +3,6 @@
 use super::*;
 
 impl SqliteMemoryStore {
-
     /// Export an exact portable archive preserving raw Vestige storage rows.
     ///
     /// Unlike the user-facing JSON export, this preserves IDs, timestamps,
@@ -201,7 +200,10 @@ impl SqliteMemoryStore {
                 PortableImportMode::Merge => {}
             }
 
-            let tx = Self::begin_write_transaction(&writer, "import_portable_archive_with_secret_policy")?;
+            let tx = Self::begin_write_transaction(
+                &writer,
+                "import_portable_archive_with_secret_policy",
+            )?;
             let mut merge_state = PortableMergeState::default();
 
             for table_name in PORTABLE_TABLES {

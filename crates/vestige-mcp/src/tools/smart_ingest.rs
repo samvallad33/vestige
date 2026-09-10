@@ -1840,11 +1840,21 @@ mod tests {
         });
         super::lean_response(&mut create);
         for gone in [
-            "similarity", "supersededId", "previousContent", "mergedFrom", "mergePreview",
-            "autoClosedUntil", "tagSuggestions", "acceptedTagSuggestions",
-            "tagSuggestionStatus", "validity",
+            "similarity",
+            "supersededId",
+            "previousContent",
+            "mergedFrom",
+            "mergePreview",
+            "autoClosedUntil",
+            "tagSuggestions",
+            "acceptedTagSuggestions",
+            "tagSuggestionStatus",
+            "validity",
         ] {
-            assert!(create.get(gone).is_none(), "{gone} should be dropped: {create}");
+            assert!(
+                create.get(gone).is_none(),
+                "{gone} should be dropped: {create}"
+            );
         }
         assert_eq!(create["predictionError"], 1.0);
         assert_eq!(create["nodeId"], "n1");
@@ -1860,7 +1870,10 @@ mod tests {
         });
         super::lean_response(&mut update);
         assert_eq!(update["previousContent"].as_str().unwrap().len(), 3_000);
-        assert_eq!(update["mergePreview"].as_str().unwrap().chars().count(), 240);
+        assert_eq!(
+            update["mergePreview"].as_str().unwrap().chars().count(),
+            240
+        );
         assert_eq!(update["mergePreviewTruncated"], true);
         assert_eq!(update["mergedContentLength"], 3_000);
     }
@@ -1894,7 +1907,10 @@ mod tests {
                 "ignoredSecretShapedVocabularyTags": 0 }
         });
         super::lean_response(&mut preflight);
-        assert!(preflight.get("tagSuggestionStatus").is_some(), "{preflight}");
+        assert!(
+            preflight.get("tagSuggestionStatus").is_some(),
+            "{preflight}"
+        );
 
         let mut inferred = serde_json::json!({
             "decision": "create",

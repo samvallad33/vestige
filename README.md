@@ -1,30 +1,25 @@
 # Vestige
 
-**Local-first memory for AI agents that finds the cause, not just the match.**
+**Local-first memory for developers and their AI coding agents.**
 
-Vestige remembers your decisions, catches contradictions before they cost you, and traces a failure back to the older memory that actually caused it. One 25MB Rust binary over MCP. No cloud, no API keys, no telemetry. Your data never leaves your machine.
+Vestige remembers project decisions across sessions, retrieves focused context, keeps source references current, and helps you investigate failures using earlier evidence. The open-source core runs locally through MCP, with automatic memory writes and an embedded dashboard. No API key is required for local memory and embeddings.
 
 [![Release](https://img.shields.io/github/v/release/samvallad33/vestige?color=06b6d4)](https://github.com/samvallad33/vestige/releases/latest)
 [![Tests](https://img.shields.io/badge/tests-1961_passing-22c55e)](https://github.com/samvallad33/vestige/actions)
 [![Binary](https://img.shields.io/badge/binary-25MB_single_file-informational)](https://github.com/samvallad33/vestige/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6)](LICENSE)
 
-[Consulting](#-consulting--core-infrastructure-advisory) · [Install](#install) · [Why not RAG](#why-not-just-rag) · [Benchmark](#the-receipts-silent-rotation) · [Science](#the-science) · [Tools](#the-14-tools) · [Dashboard](#the-dashboard) · [Pro](#vestige-pro) · [Docs](#go-deeper)
+[Install](#install) · [Why not RAG](#why-not-just-rag) · [Benchmark](#the-receipts-silent-rotation) · [Science](#the-science) · [Tools](#the-tools) · [Dashboard](#the-dashboard) · [Docs](#go-deeper)
 
-## 💼 Consulting & Core Infrastructure Advisory
+## New in v3
 
-Autonomous agents are currently bleeding enterprise budgets via prompt bloat and context window amnesia.
-
-I take on a limited number of technical advisory retainers and consulting projects for AI developer tool startups, multi-agent frameworks, and enterprise engineering teams looking to optimize their context economics.
-
-### Core Specializations:
-* **Context Optimization & Filtering:** Implementing local Prediction Error Gating to strip out redundant tool runtime noise and drop token overhead by 40%–60%.
-* **Causal Agent Memory Design:** Structuring local SQLite graph architectures using Retroactive Salience Backfilling to eliminate agent amnesia during heavy, multi-file code execution.
-* **Air-Gapped AI Governance:** Designing zero-knowledge, high-performance Rust memory scaffolding that runs entirely on local metal to protect proprietary enterprise IP.
-
-For architectural reviews, integration advisory, or founding infrastructure roles, reach out directly at: **sam@vestige.sh**
-
----
+- Resume with current code references and focused, expandable context.
+- Save memory automatically; inspect receipts and undo supported lifecycle changes.
+- Keep durable recurring intentions across sessions, including snooze and explicit event triggers.
+- Project selected project decisions and conventions into your client’s Markdown rules file.
+- Merge duplicates from the dashboard and see when first-run embeddings are warming up.
+- Use progressive tool discovery and smaller save responses to reduce repeated context overhead.
+- Run the included developer benchmarks against your own tasks and usage data.
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/samvallad33/vestige/media/vestige-black-box.mp4">
@@ -173,3 +168,19 @@ Everything above is free forever and never metered. **Pro ($19/month)** is manag
 If Vestige saves you from one repeated mistake, that is the whole point: **never solve the same problem twice.** If it earns a place in your setup, [a star](https://github.com/samvallad33/vestige) genuinely helps.
 
 Built by [Sam](https://github.com/samvallad33). Licensed under [AGPL-3.0](LICENSE).
+
+
+## 💼 Consulting & Core Infrastructure Advisory
+
+Autonomous agents are currently bleeding enterprise budgets via prompt bloat and context window amnesia.
+
+I take on a limited number of technical advisory retainers and consulting projects for AI developer tool startups, multi-agent frameworks, and enterprise engineering teams looking to optimize their context economics.
+
+### Core Specializations:
+* **Context Optimization & Filtering:** Implementing local Prediction Error Gating to strip out redundant tool runtime noise and drop token overhead by 40%–60%.
+* **Causal Agent Memory Design:** Structuring local SQLite graph architectures using Retroactive Salience Backfilling to eliminate agent amnesia during heavy, multi-file code execution.
+* **Air-Gapped AI Governance:** Designing zero-knowledge, high-performance Rust memory scaffolding that runs entirely on local metal to protect proprietary enterprise IP.
+
+For architectural reviews, integration advisory, or founding infrastructure roles, reach out directly at: **sam@vestige.sh**
+
+---

@@ -3,7 +3,6 @@
 use super::*;
 
 impl SqliteMemoryStore {
-
     // ========================================================================
     // Merge / Supersede controls (Phase 3 — v2.1.25)
     //
@@ -1124,7 +1123,10 @@ impl SqliteMemoryStore {
     }
 
     /// Read a single operation by id.
-    pub(super) fn read_operation(&self, op_id: &str) -> Result<Option<crate::advanced::MergeOperation>> {
+    pub(super) fn read_operation(
+        &self,
+        op_id: &str,
+    ) -> Result<Option<crate::advanced::MergeOperation>> {
         let reader = self
             .reader
             .lock()
@@ -1141,7 +1143,9 @@ impl SqliteMemoryStore {
         Ok(op)
     }
 
-    pub(super) fn row_to_operation(row: &rusqlite::Row) -> rusqlite::Result<crate::advanced::MergeOperation> {
+    pub(super) fn row_to_operation(
+        row: &rusqlite::Row,
+    ) -> rusqlite::Result<crate::advanced::MergeOperation> {
         let affected: String = row.get("affected_ids")?;
         let affected_ids: Vec<String> = serde_json::from_str(&affected).unwrap_or_default();
         Ok(crate::advanced::MergeOperation {

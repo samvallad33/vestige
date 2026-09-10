@@ -79,7 +79,10 @@ impl SqliteMemoryStore {
     /// index. Activation uses this preflight so an invalid destination can
     /// never become the visible database pointer.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    pub(super) fn build_embedding_profile_index(&self, profile_id: &str) -> Result<(VectorIndex, i64)> {
+    pub(super) fn build_embedding_profile_index(
+        &self,
+        profile_id: &str,
+    ) -> Result<(VectorIndex, i64)> {
         let reader = self
             .reader
             .lock()
@@ -199,9 +202,10 @@ impl SqliteMemoryStore {
         // Direct table writes remain a supported test and migration fixture.
         // Only the legacy profile may consult that compatibility mirror; every
         // non-legacy profile is strictly isolated from it.
-        let embedding_row =
-            if embedding_row.is_none() && active_profile_id == LEGACY_EMBEDDING_PROFILE_ID {
-                reader
+        let embedding_row = if embedding_row.is_none()
+            && active_profile_id == LEGACY_EMBEDDING_PROFILE_ID
+        {
+            reader
                     .query_row(
                         "SELECT embedding FROM node_embeddings WHERE node_id = ?1
                            AND EXISTS (SELECT 1 FROM knowledge_nodes kn WHERE kn.id = node_id AND kn.has_embedding = 1)",
@@ -209,9 +213,9 @@ impl SqliteMemoryStore {
                         |row| row.get(0),
                     )
                     .optional()?
-            } else {
-                embedding_row
-            };
+        } else {
+            embedding_row
+        };
 
         Ok(embedding_row
             .and_then(|bytes| Embedding::from_bytes(&bytes).map(|embedding| embedding.vector)))
@@ -1046,14 +1050,15 @@ impl SqliteMemoryStore {
         // before the pointer was ever visible.
         #[cfg(all(feature = "embeddings", feature = "vector-search"))]
         {
-            let swapped_journal_seq = if let (Some(live_index), Some((rebuilt_index, journal_seq))) =
-                (live_index.as_deref_mut(), rebuilt_index)
-            {
-                *live_index = rebuilt_index;
-                Some(journal_seq)
-            } else {
-                None
-            };
+            let swapped_journal_seq =
+                if let (Some(live_index), Some((rebuilt_index, journal_seq))) =
+                    (live_index.as_deref_mut(), rebuilt_index)
+                {
+                    *live_index = rebuilt_index;
+                    Some(journal_seq)
+                } else {
+                    None
+                };
             // Release the index before touching the watermark: the refresh path
             // never holds both locks at once, so neither may this one.
             drop(live_index);
@@ -1409,7 +1414,10 @@ impl SqliteMemoryStore {
             .writer
             .lock()
             .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        let tx = Self::begin_write_transaction(&writer, "put_embedding_profile_vector_with_migration_checkpoint")?;
+        let tx = Self::begin_write_transaction(
+            &writer,
+            "put_embedding_profile_vector_with_migration_checkpoint",
+        )?;
         let destination_profile: Option<String> = tx
             .query_row(
                 "SELECT destination_profile_id FROM embedding_profile_migrations WHERE migration_id = ?1",
@@ -2015,9 +2023,16 @@ impl SqliteMemoryStore {
     /// vector this index cannot hold (unreadable, wrong dimension) is skipped;
     /// the memory stays keyword-searchable and never fails a query.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    pub(super) fn add_journaled_vector(index: &mut VectorIndex, node_id: &str, blob: &[u8]) -> bool {
+    pub(super) fn add_journaled_vector(
+        index: &mut VectorIndex,
+        node_id: &str,
+        blob: &[u8],
+    ) -> bool {
         let Some(embedding) = Embedding::from_bytes(blob) else {
-            tracing::warn!(node_id, "skipping an unreadable vector during index refresh");
+            tracing::warn!(
+                node_id,
+                "skipping an unreadable vector during index refresh"
+            );
             return false;
         };
         if embedding.dimensions != index.dimensions() {
@@ -2032,7 +2047,11 @@ impl SqliteMemoryStore {
     /// node ids (a covering index scan), fetching only the vectors that are
     /// missing. Returns the number of index mutations.
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    pub(super) fn reconcile_vector_index(&self, index_mutex: &Mutex<VectorIndex>, profile_id: &str) -> usize {
+    pub(super) fn reconcile_vector_index(
+        &self,
+        index_mutex: &Mutex<VectorIndex>,
+        profile_id: &str,
+    ) -> usize {
         // --- reader lock, one snapshot: every id the table holds, and the head ---
         let (present, head): (HashSet<String>, i64) = {
             let Ok(reader) = self.reader.lock() else {
@@ -2098,11 +2117,13 @@ impl SqliteMemoryStore {
             missing
                 .into_iter()
                 .filter_map(|node_id| {
-                    stmt.query_row(params![profile_id, &node_id], |row| row.get::<_, Vec<u8>>(0))
-                        .optional()
-                        .ok()
-                        .flatten()
-                        .map(|blob| (node_id, blob))
+                    stmt.query_row(params![profile_id, &node_id], |row| {
+                        row.get::<_, Vec<u8>>(0)
+                    })
+                    .optional()
+                    .ok()
+                    .flatten()
+                    .map(|blob| (node_id, blob))
                 })
                 .collect()
         };
@@ -2174,7 +2195,11 @@ impl SqliteMemoryStore {
 
     /// Semantic search returning scores
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    pub(super) fn semantic_search_raw(&self, query: &str, limit: i32) -> Result<Vec<(String, f32)>> {
+    pub(super) fn semantic_search_raw(
+        &self,
+        query: &str,
+        limit: i32,
+    ) -> Result<Vec<(String, f32)>> {
         if !self.vector_search_available() {
             return Ok(vec![]);
         }
@@ -2224,7 +2249,10 @@ impl SqliteMemoryStore {
         drop(index);
         let mut current = Vec::with_capacity(results.len());
         for (id, score) in results {
-            if self.get_node(&id)?.is_some_and(|node| node.has_embedding == Some(true)) {
+            if self
+                .get_node(&id)?
+                .is_some_and(|node| node.has_embedding == Some(true))
+            {
                 current.push((id, score));
             }
         }
@@ -2335,7 +2363,9 @@ impl SqliteMemoryStore {
                     row.get::<_, Option<String>>(2)?,
                 ))
             })?;
-            return Ok(rows.filter_map(warn_skipped_row("embedding_regeneration_candidates")).collect());
+            return Ok(rows
+                .filter_map(warn_skipped_row("embedding_regeneration_candidates"))
+                .collect());
         }
 
         if force {
@@ -2352,7 +2382,9 @@ impl SqliteMemoryStore {
                     row.get::<_, Option<String>>(2)?,
                 ))
             })?;
-            return Ok(rows.filter_map(warn_skipped_row("embedding_regeneration_candidates")).collect());
+            return Ok(rows
+                .filter_map(warn_skipped_row("embedding_regeneration_candidates"))
+                .collect());
         }
 
         let mut stmt = reader.prepare(
@@ -2372,7 +2404,9 @@ impl SqliteMemoryStore {
                 ))
             },
         )?;
-        Ok(rows.filter_map(warn_skipped_row("embedding_regeneration_candidates")).collect())
+        Ok(rows
+            .filter_map(warn_skipped_row("embedding_regeneration_candidates"))
+            .collect())
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]

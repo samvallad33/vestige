@@ -3,8 +3,8 @@
 //! Handles JSON-RPC communication over stdin/stdout.
 //! v1.9.2: Async tokio I/O with error resilience.
 
-use std::io;
 use serde_json::Value;
+use std::io;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -57,7 +57,9 @@ pub struct StdioTransport {
 
 impl StdioTransport {
     pub fn new() -> Self {
-        Self { notifications: None }
+        Self {
+            notifications: None,
+        }
     }
 
     /// A transport plus the [`Notifier`] that feeds it.

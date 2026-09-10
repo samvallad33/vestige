@@ -817,7 +817,6 @@ fn begin_read_snapshot(conn: &Connection) -> Result<rusqlite::Transaction<'_>> {
 }
 
 impl SqliteMemoryStore {
-
     /// Run an explicit SQLite WAL checkpoint and return SQLite's raw counters.
     ///
     /// `Passive` is safe for live status/recovery workflows. `Truncate` should
@@ -959,9 +958,17 @@ impl SqliteMemoryStore {
     /// This is used for codebase context retrieval where we need to query
     /// by node_type (pattern/decision) and filter by codebase tag.
     /// Select current durable memory within the scope before applying the cap.
-    pub fn projection_candidates(&self, scope: &str, min_retention: f64, limit: i32) -> Result<Vec<KnowledgeNode>> {
+    pub fn projection_candidates(
+        &self,
+        scope: &str,
+        min_retention: f64,
+        limit: i32,
+    ) -> Result<Vec<KnowledgeNode>> {
         let scope = Self::normalize_scope(scope)?;
-        let reader = self.reader.lock().map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
         let mut stmt = reader.prepare(
             "SELECT * FROM knowledge_nodes
              WHERE COALESCE(NULLIF(trim(scope), ''), 'user') = ?1
@@ -974,7 +981,8 @@ impl SqliteMemoryStore {
              ORDER BY CASE node_type WHEN 'decision' THEN 0 WHEN 'pattern' THEN 1 ELSE 2 END,
                       updated_at DESC, id ASC LIMIT ?3")?;
         let rows = stmt.query_map(params![scope, min_retention, limit], Self::row_to_node)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// Repair a bounded page of dirty/missing active-profile embeddings.
@@ -1254,7 +1262,6 @@ pub struct NeverComposedCandidate {
 }
 
 impl SqliteMemoryStore {
-
     /// Scope candidates before either the recent or tag-targeted scan budget.
     /// None is an explicit cross-scope request; callers choose their boundary.
     pub fn get_never_composed_candidates_in_scope(
@@ -1791,7 +1798,12 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         if let Some(vector) = &record.embedding {
             #[cfg(all(feature = "embeddings", feature = "vector-search"))]
             {
-                self.index_supplied_embedding(&id_str, vector, supplied_model.as_deref(), &record.content)?;
+                self.index_supplied_embedding(
+                    &id_str,
+                    vector,
+                    supplied_model.as_deref(),
+                    &record.content,
+                )?;
             }
             #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
             {
@@ -2544,8 +2556,7 @@ pub struct ReconcileReport {
     pub considered: usize,
 }
 
-impl SqliteMemoryStore {
-}
+impl SqliteMemoryStore {}
 
 // ============================================================================
 // TESTS
@@ -2585,13 +2596,25 @@ mod write_transaction_policy {
         ("trace_store.rs", include_str!("../trace_store.rs")),
         ("synaptic_store.rs", include_str!("../synaptic_store.rs")),
         ("replay_store.rs", include_str!("../replay_store.rs")),
-        ("attestation_store.rs", include_str!("../attestation_store.rs")),
-        ("unlearning_store.rs", include_str!("../unlearning_store.rs")),
+        (
+            "attestation_store.rs",
+            include_str!("../attestation_store.rs"),
+        ),
+        (
+            "unlearning_store.rs",
+            include_str!("../unlearning_store.rs"),
+        ),
         ("memory_store.rs", include_str!("../memory_store.rs")),
         ("portable.rs", include_str!("../portable.rs")),
         ("intention_claim.rs", include_str!("../intention_claim.rs")),
-        ("intention_graph_store.rs", include_str!("../intention_graph_store.rs")),
-        ("maintenance_batches.rs", include_str!("../maintenance_batches.rs")),
+        (
+            "intention_graph_store.rs",
+            include_str!("../intention_graph_store.rs"),
+        ),
+        (
+            "maintenance_batches.rs",
+            include_str!("../maintenance_batches.rs"),
+        ),
     ];
 
     /// Modules whose writers must additionally route through the shared
@@ -2638,7 +2661,9 @@ mod write_transaction_policy {
                          not consult the busy handler for that upgrade"
                     ));
                 }
-                if (HELPER_ROUTED.contains(&name) || name.starts_with("sqlite/")) && line.contains(&bypasses_helper) {
+                if (HELPER_ROUTED.contains(&name) || name.starts_with("sqlite/"))
+                    && line.contains(&bypasses_helper)
+                {
                     offenders.push(format!(
                         "{name}:{number} opens a writer transaction directly; use \
                          SqliteMemoryStore::begin_write_transaction so BUSY retries are logged"
@@ -2669,7 +2694,11 @@ mod write_transaction_policy {
         // Sibling storage modules are not descendants of this one, so the
         // helper has to stay at least `pub(super)` for them to reach it.
         assert!(
-            source.contains(["pub(super) fn begin_write_", "transaction"].concat().as_str()),
+            source.contains(
+                ["pub(super) fn begin_write_", "transaction"]
+                    .concat()
+                    .as_str()
+            ),
             "the helper must stay visible to sibling storage modules"
         );
     }

@@ -3,7 +3,6 @@
 use super::*;
 
 impl SqliteMemoryStore {
-
     pub(super) fn data_dir_from_env() -> Option<PathBuf> {
         std::env::var_os(DATA_DIR_ENV).and_then(|value| {
             if value.is_empty() {
@@ -318,7 +317,10 @@ impl SqliteMemoryStore {
         })
     }
 
-    pub(super) fn run_integrity_checks(conn: &Connection, phase: &str) -> Result<SqliteIntegrityStatus> {
+    pub(super) fn run_integrity_checks(
+        conn: &Connection,
+        phase: &str,
+    ) -> Result<SqliteIntegrityStatus> {
         let mut quick_rows = Self::quick_check_rows(conn)?;
 
         // An FTS5 external-content index is DERIVED STATE. `knowledge_fts` is

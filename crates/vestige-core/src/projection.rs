@@ -104,7 +104,8 @@ const MAX_LINE_CHARS: usize = 400;
 /// Pick the durable subset of `opts.scope`.
 pub fn select_durable(storage: &Storage, opts: &ProjectionOptions) -> Result<Vec<ProjectedItem>> {
     let now = Utc::now();
-    let candidates = storage.projection_candidates(&opts.scope, opts.min_retention, CANDIDATE_LIMIT)?;
+    let candidates =
+        storage.projection_candidates(&opts.scope, opts.min_retention, CANDIDATE_LIMIT)?;
 
     let mut seen = std::collections::HashSet::new();
     let mut items = Vec::new();
@@ -169,7 +170,13 @@ fn kind_heading(rank: u8) -> &'static str {
 /// One line of Markdown for a memory: whitespace collapsed, cut at
 /// `MAX_LINE_CHARS`, provenance comment at the end.
 fn render_line(item: &ProjectedItem) -> String {
-    let collapsed = item.content.split_whitespace().collect::<Vec<_>>().join(" ").replace("<!--", "&lt;!--").replace("-->", "--&gt;");
+    let collapsed = item
+        .content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace("<!--", "&lt;!--")
+        .replace("-->", "--&gt;");
     let mut text: String = collapsed.chars().take(MAX_LINE_CHARS).collect();
     if collapsed.chars().count() > MAX_LINE_CHARS {
         text.push('…');
@@ -181,6 +188,7 @@ fn render_line(item: &ProjectedItem) -> String {
 /// no timestamps inside the fence, so an unchanged store projects to an
 /// unchanged file.
 pub fn render(format: ProjectionFormat, scope: &str, items: &[ProjectedItem]) -> String {
+    let scope = scope.trim().replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('`', "&#96;");
     let mut out = String::new();
     out.push_str(&format!(
         "{BEGIN_MARKER} scope={scope} format={} -->\n",
@@ -249,7 +257,11 @@ pub fn splice(existing: &str, region: &str) -> String {
             let end = begin + end_rel + END_MARKER.len();
             // Swallow the newline that closed the old end marker so the new
             // region's own terminator does not double it.
-            let end = if existing[end..].starts_with('\n') { end + 1 } else { end };
+            let end = if existing[end..].starts_with('\n') {
+                end + 1
+            } else {
+                end
+            };
             let mut out = String::with_capacity(existing.len() + region.len());
             out.push_str(&existing[..line_start]);
             out.push_str(region);
@@ -288,9 +300,15 @@ pub fn line_diff(old: &str, new: &str) -> Vec<DiffLine> {
     if a.len() > LCS_MAX_LINES || b.len() > LCS_MAX_LINES {
         let mut out: Vec<DiffLine> = a
             .iter()
-            .map(|l| DiffLine { kind: '-', text: l.to_string() })
+            .map(|l| DiffLine {
+                kind: '-',
+                text: l.to_string(),
+            })
             .collect();
-        out.extend(b.iter().map(|l| DiffLine { kind: '+', text: l.to_string() }));
+        out.extend(b.iter().map(|l| DiffLine {
+            kind: '+',
+            text: l.to_string(),
+        }));
         return out;
     }
     let (n, m) = (a.len(), b.len());
@@ -308,19 +326,34 @@ pub fn line_diff(old: &str, new: &str) -> Vec<DiffLine> {
     let mut out = Vec::new();
     while i < n && j < m {
         if a[i] == b[j] {
-            out.push(DiffLine { kind: ' ', text: a[i].to_string() });
+            out.push(DiffLine {
+                kind: ' ',
+                text: a[i].to_string(),
+            });
             i += 1;
             j += 1;
         } else if table[i + 1][j] >= table[i][j + 1] {
-            out.push(DiffLine { kind: '-', text: a[i].to_string() });
+            out.push(DiffLine {
+                kind: '-',
+                text: a[i].to_string(),
+            });
             i += 1;
         } else {
-            out.push(DiffLine { kind: '+', text: b[j].to_string() });
+            out.push(DiffLine {
+                kind: '+',
+                text: b[j].to_string(),
+            });
             j += 1;
         }
     }
-    out.extend(a[i..].iter().map(|l| DiffLine { kind: '-', text: l.to_string() }));
-    out.extend(b[j..].iter().map(|l| DiffLine { kind: '+', text: l.to_string() }));
+    out.extend(a[i..].iter().map(|l| DiffLine {
+        kind: '-',
+        text: l.to_string(),
+    }));
+    out.extend(b[j..].iter().map(|l| DiffLine {
+        kind: '+',
+        text: l.to_string(),
+    }));
     out
 }
 
@@ -370,11 +403,18 @@ pub fn unified(diff: &[DiffLine], max_lines: usize) -> String {
 
 /// Serialize Vestige writers, preserve unrelated edits, and atomically replace the file.
 /// External editors do not share our lock; a changed snapshot is rejected before rename.
-pub fn write_projection(path: &std::path::Path, expected: Option<&str>, replacement: &str) -> std::io::Result<()> {
+pub fn write_projection(
+    path: &std::path::Path,
+    expected: Option<&str>,
+    replacement: &str,
+) -> std::io::Result<()> {
     use std::io::{Error, ErrorKind, Write};
     let check = || -> std::io::Result<Option<String>> {
         match std::fs::symlink_metadata(path) {
-            Ok(meta) if meta.file_type().is_symlink() => Err(Error::new(ErrorKind::InvalidInput, "projection target must not be a symlink")),
+            Ok(meta) if meta.file_type().is_symlink() => Err(Error::new(
+                ErrorKind::InvalidInput,
+                "projection target must not be a symlink",
+            )),
             Ok(_) => std::fs::read_to_string(path).map(Some),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
@@ -382,23 +422,44 @@ pub fn write_projection(path: &std::path::Path, expected: Option<&str>, replacem
     };
     let lock_path = path.with_extension("vestige-projection.lock");
     if std::fs::symlink_metadata(&lock_path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err(Error::new(ErrorKind::InvalidInput, "projection lock must not be a symlink"));
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "projection lock must not be a symlink",
+        ));
     }
-    let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(lock_path)?;
-    lock.try_lock().map_err(|e| Error::other(format!("another projection writer is active: {e}")))?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock_path)?;
+    lock.try_lock()
+        .map_err(|e| Error::other(format!("another projection writer is active: {e}")))?;
     if check()?.as_deref() != expected {
-        return Err(Error::other("projection target changed; retry with current content"));
+        return Err(Error::other(
+            "projection target changed; retry with current content",
+        ));
     }
     let tmp = path.with_extension(format!("{}.vestige-projection.tmp", uuid::Uuid::new_v4()));
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new().create_new(true).write(true).open(&tmp)?;
-        if let Ok(meta) = std::fs::metadata(path) { file.set_permissions(meta.permissions())?; }
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp)?;
+        if let Ok(meta) = std::fs::metadata(path) {
+            file.set_permissions(meta.permissions())?;
+        }
         file.write_all(replacement.as_bytes())?;
         file.sync_all()?;
-        if check()?.as_deref() != expected { return Err(Error::other("projection target changed during write; retry")); }
+        if check()?.as_deref() != expected {
+            return Err(Error::other(
+                "projection target changed during write; retry",
+            ));
+        }
         std::fs::rename(&tmp, path)
     })();
-    if result.is_err() { let _ = std::fs::remove_file(tmp); }
+    if result.is_err() {
+        let _ = std::fs::remove_file(tmp);
+    }
     result
 }
 
@@ -422,11 +483,28 @@ mod tests {
     fn selection_excludes_future_and_suppressed_memory() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::new(Some(dir.path().join("test.db"))).unwrap();
-        let future = storage.ingest(IngestInput { content: "future decision".into(), node_type: "decision".into(), valid_from: Some(Utc::now() + chrono::Duration::days(2)), ..Default::default() }).unwrap();
-        let hidden = storage.ingest(IngestInput { content: "suppressed decision".into(), node_type: "decision".into(), ..Default::default() }).unwrap();
+        let future = storage
+            .ingest(IngestInput {
+                content: "future decision".into(),
+                node_type: "decision".into(),
+                valid_from: Some(Utc::now() + chrono::Duration::days(2)),
+                ..Default::default()
+            })
+            .unwrap();
+        let hidden = storage
+            .ingest(IngestInput {
+                content: "suppressed decision".into(),
+                node_type: "decision".into(),
+                ..Default::default()
+            })
+            .unwrap();
         storage.suppress_memory(&hidden.id).unwrap();
         let selected = select_durable(&storage, &ProjectionOptions::default()).unwrap();
-        assert!(!selected.iter().any(|item| item.id == future.id || item.id == hidden.id));
+        assert!(
+            !selected
+                .iter()
+                .any(|item| item.id == future.id || item.id == hidden.id)
+        );
     }
 
     #[test]
@@ -443,16 +521,28 @@ mod tests {
     #[test]
     fn render_is_deterministic_and_carries_provenance() {
         let items = vec![
-            item("d1", "decision", "Use content-hashed cache keys\nfor build artifacts"),
-            item("p1", "pattern", "Wrap every writer in begin_write_transaction"),
+            item(
+                "d1",
+                "decision",
+                "Use content-hashed cache keys\nfor build artifacts",
+            ),
+            item(
+                "p1",
+                "pattern",
+                "Wrap every writer in begin_write_transaction",
+            ),
         ];
         let a = render(ProjectionFormat::ClaudeMd, "user", &items);
         let b = render(ProjectionFormat::ClaudeMd, "user", &items);
         assert_eq!(a, b);
         assert!(a.starts_with(BEGIN_MARKER));
         assert!(a.ends_with(&format!("{END_MARKER}\n")));
-        assert!(a.contains("### Decisions\n- Use content-hashed cache keys for build artifacts <!-- vestige:d1 -->"));
-        assert!(a.contains("### Patterns\n- Wrap every writer in begin_write_transaction <!-- vestige:p1 -->"));
+        assert!(a.contains(
+            "### Decisions\n- Use content-hashed cache keys for build artifacts <!-- vestige:d1 -->"
+        ));
+        assert!(a.contains(
+            "### Patterns\n- Wrap every writer in begin_write_transaction <!-- vestige:p1 -->"
+        ));
         let index = render(ProjectionFormat::MemoryMd, "user", &items);
         assert!(index.contains("- [decision] Use content-hashed cache keys"));
     }
@@ -468,19 +558,36 @@ mod tests {
 
     #[test]
     fn splice_replaces_only_the_fence_and_is_idempotent() {
-        let region = render(ProjectionFormat::ClaudeMd, "user", &[item("d1", "decision", "one")]);
+        let region = render(
+            ProjectionFormat::ClaudeMd,
+            "user",
+            &[item("d1", "decision", "one")],
+        );
         let hand_written = "# My project\n\nKeep this paragraph.\n";
         let first = splice(hand_written, &region);
-        assert!(first.starts_with(hand_written), "text before the fence must survive:\n{first}");
+        assert!(
+            first.starts_with(hand_written),
+            "text before the fence must survive:\n{first}"
+        );
         assert!(first.contains("<!-- vestige:d1 -->"));
         let again = splice(&first, &region);
-        assert_eq!(first, again, "re-projecting an unchanged store must not change the file");
+        assert_eq!(
+            first, again,
+            "re-projecting an unchanged store must not change the file"
+        );
 
         let with_tail = format!("{first}\n## After the fence\nStill mine.\n");
-        let updated = render(ProjectionFormat::ClaudeMd, "user", &[item("d2", "decision", "two")]);
+        let updated = render(
+            ProjectionFormat::ClaudeMd,
+            "user",
+            &[item("d2", "decision", "two")],
+        );
         let spliced = splice(&with_tail, &updated);
         assert!(spliced.starts_with(hand_written));
-        assert!(spliced.ends_with("## After the fence\nStill mine.\n"), "{spliced}");
+        assert!(
+            spliced.ends_with("## After the fence\nStill mine.\n"),
+            "{spliced}"
+        );
         assert!(spliced.contains("vestige:d2") && !spliced.contains("vestige:d1"));
         assert_eq!(spliced.matches(BEGIN_MARKER).count(), 1);
     }
@@ -492,7 +599,10 @@ mod tests {
         let diff = line_diff(old, new);
         assert_eq!(diff_summary(&diff), (2, 1));
         let text = unified(&diff, 100);
-        assert!(text.contains("-b\n") && text.contains("+B\n") && text.contains("+d\n"), "{text}");
+        assert!(
+            text.contains("-b\n") && text.contains("+B\n") && text.contains("+d\n"),
+            "{text}"
+        );
         assert!(line_diff("same\n", "same\n").iter().all(|l| l.kind == ' '));
     }
 
@@ -512,7 +622,12 @@ mod tests {
                 .unwrap()
                 .id
         };
-        let decision = ingest("Ship releases from an integration branch", "decision", &[], None);
+        let decision = ingest(
+            "Ship releases from an integration branch",
+            "decision",
+            &[],
+            None,
+        );
         let pattern = ingest("Touch files after scripted edits", "pattern", &[], None);
         let rule = ingest("Prefer tabs in Svelte files", "fact", &["preference"], None);
         let plain = ingest("The office moved in spring", "fact", &[], None);
@@ -528,8 +643,14 @@ mod tests {
         assert!(ids.contains(&decision.as_str()), "{ids:?}");
         assert!(ids.contains(&pattern.as_str()), "{ids:?}");
         assert!(ids.contains(&rule.as_str()), "{ids:?}");
-        assert!(!ids.contains(&plain.as_str()), "an untagged fact is not durable: {ids:?}");
-        assert!(!ids.contains(&expired.as_str()), "an invalidated memory is out: {ids:?}");
+        assert!(
+            !ids.contains(&plain.as_str()),
+            "an untagged fact is not durable: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&expired.as_str()),
+            "an invalidated memory is out: {ids:?}"
+        );
         assert_eq!(items[0].node_type, "decision", "decisions render first");
 
         let strict = select_durable(

@@ -254,7 +254,8 @@ impl Server {
         let deadline = Instant::now() + window;
         loop {
             if let Some(found) = self.notifications.iter().find(|n| {
-                n["method"] == json!("notifications/message") && n["params"]["logger"] == json!(logger)
+                n["method"] == json!("notifications/message")
+                    && n["params"]["logger"] == json!(logger)
             }) {
                 return found.clone();
             }
@@ -725,10 +726,21 @@ fn warm_up_is_announced_as_mcp_logging_after_the_handshake() {
     let note = server.wait_for_log_notification("vestige.embeddings", Duration::from_secs(20));
     let event = note["params"]["data"]["event"].as_str().unwrap_or("");
     assert!(
-        matches!(event, "model_loading" | "model_download_started" | "embedding_runtime_ready" | "embedding_runtime_unavailable"),
+        matches!(
+            event,
+            "model_loading"
+                | "model_download_started"
+                | "embedding_runtime_ready"
+                | "embedding_runtime_unavailable"
+        ),
         "unexpected warm-up event: {note}"
     );
-    assert_eq!(note["params"]["level"].as_str().map(|l| l == "info" || l == "warning"), Some(true));
+    assert_eq!(
+        note["params"]["level"]
+            .as_str()
+            .map(|l| l == "info" || l == "warning"),
+        Some(true)
+    );
 
     // Ordinary traffic keeps working with notifications interleaved.
     let list = server.result("tools/list", None);
@@ -865,12 +877,19 @@ fn tools_list_is_deterministic_across_restarts_and_carries_cache_hints() {
         "tools/list is {bytes} bytes, over the 55,000 byte v3 ceiling; a schema or description grew"
     );
 
-    let common: Vec<_> = a["tools"].as_array().unwrap().iter()
-        .filter(|tool| ["recall", "smart_ingest", "memory"].contains(&tool["name"].as_str().unwrap()))
+    let common: Vec<_> = a["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|tool| {
+            ["recall", "smart_ingest", "memory"].contains(&tool["name"].as_str().unwrap())
+        })
         .collect();
     assert_eq!(common.len(), 3);
-    assert!(serde_json::to_vec(&common).unwrap().len() <= 13_000,
-        "common progressive tool subset exceeded its 13KB budget");
+    assert!(
+        serde_json::to_vec(&common).unwrap().len() <= 13_000,
+        "common progressive tool subset exceeded its 13KB budget"
+    );
 
     // Behaviour hints reach the client in MCP's camelCase shape, and the two
     // hints a client acts on (read-only, destructive) are set for every tool.
@@ -1393,8 +1412,17 @@ fn smart_ingest_create_response_is_lean() {
         value.get("tagSuggestionStatus").is_none(),
         "a create with nothing to report about tags must not carry the status block: {value}"
     );
-    for key in ["similarity", "supersededId", "previousContent", "mergePreview", "mergedFrom"] {
-        assert!(value.get(key).is_none(), "{key} is null on a create and must be absent: {value}");
+    for key in [
+        "similarity",
+        "supersededId",
+        "previousContent",
+        "mergePreview",
+        "mergedFrom",
+    ] {
+        assert!(
+            value.get(key).is_none(),
+            "{key} is null on a create and must be absent: {value}"
+        );
     }
     server.shutdown();
 }
@@ -1507,16 +1535,27 @@ fn project_previews_then_writes_a_fenced_region_and_keeps_the_rest() {
     );
     assert_eq!(preview["itemCount"], json!(2), "{preview}");
     let region = preview["region"].as_str().unwrap();
-    assert!(region.contains(&decision) && region.contains(&pattern), "{region}");
+    assert!(
+        region.contains(&decision) && region.contains(&pattern),
+        "{region}"
+    );
     assert_eq!(preview["target"]["exists"], json!(true));
     assert!(preview["target"]["added"].as_u64().unwrap() > 0);
-    assert_eq!(std::fs::read_to_string(&target).unwrap(), "# Mine\n\nKeep me.\n");
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "# Mine\n\nKeep me.\n"
+    );
 
     let refused = server.call_tool(
         "project",
         json!({ "action": "write", "path": "CLAUDE.md", "root": root.path() }),
     );
-    assert!(refused["error"].as_str().is_some_and(|e| e.contains("confirm")), "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("confirm")),
+        "{refused}"
+    );
 
     let written = server.call_tool_ok(
         "project",
@@ -1537,7 +1576,12 @@ fn project_previews_then_writes_a_fenced_region_and_keeps_the_rest() {
         "project",
         json!({ "action": "write", "path": "../escape.md", "root": root.path(), "confirm": true }),
     );
-    assert!(escape["error"].as_str().is_some_and(|e| e.contains("outside")), "{escape}");
+    assert!(
+        escape["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("outside")),
+        "{escape}"
+    );
     server.shutdown();
 }
 
@@ -1660,14 +1704,30 @@ fn default_memory_writes_are_immediate_and_survive_restart() {
     assert_eq!(write["success"], true);
     assert!(write.get("memoryPrNotice").is_none());
     let id = write["nodeId"].as_str().unwrap().to_string();
-    assert!(server.recall_ids(json!({"query": "ORCHID", "mode": "lookup"})).contains(&id));
+    assert!(
+        server
+            .recall_ids(json!({"query": "ORCHID", "mode": "lookup"}))
+            .contains(&id)
+    );
     drop(server);
     let mut restarted = Server::spawn(dir.path());
     restarted.handshake();
-    assert!(restarted.recall_ids(json!({"query": "ORCHID", "mode": "lookup"})).contains(&id));
+    assert!(
+        restarted
+            .recall_ids(json!({"query": "ORCHID", "mode": "lookup"}))
+            .contains(&id)
+    );
     let unconfirmed = restarted.call_tool("memory", json!({"action": "purge", "id": id}));
-    assert!(unconfirmed["error"].as_str().is_some_and(|e| e.contains("confirm=true")));
-    assert!(restarted.recall_ids(json!({"query": "ORCHID", "mode": "lookup"})).contains(&id));
+    assert!(
+        unconfirmed["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("confirm=true"))
+    );
+    assert!(
+        restarted
+            .recall_ids(json!({"query": "ORCHID", "mode": "lookup"}))
+            .contains(&id)
+    );
 }
 
 /// In the opt-in review mode a confirmed purge is held for review, not applied.
@@ -1680,7 +1740,11 @@ fn default_memory_writes_are_immediate_and_survive_restart() {
 #[test]
 fn purge_with_confirm_is_review_gated_when_opted_in() {
     let dir = data_dir();
-    std::fs::write(dir.path().join("review_mode.json"), r#"{"mode":"risk_gated"}"#).unwrap();
+    std::fs::write(
+        dir.path().join("review_mode.json"),
+        r#"{"mode":"risk_gated"}"#,
+    )
+    .unwrap();
     let mut server = Server::spawn(dir.path());
     server.handshake();
 
@@ -2470,7 +2534,9 @@ fn corrupt_fts_rebuild_preserves_embeddings() {
 // than two calls in it.
 
 fn payload_bytes(value: &Value) -> usize {
-    serde_json::to_string(value).map(|s| s.len()).unwrap_or(usize::MAX)
+    serde_json::to_string(value)
+        .map(|s| s.len())
+        .unwrap_or(usize::MAX)
 }
 
 fn assert_keys(value: &Value, keys: &[&str], context: &str) {
@@ -2505,7 +2571,10 @@ fn session_start_returns_a_budgeted_context_and_rejects_a_bad_budget() {
     let dir = data_dir();
     let mut server = Server::spawn(dir.path());
     server.handshake();
-    server.ingest_keyword_only("The user prefers tabs over spaces in Rust files", &["preference"]);
+    server.ingest_keyword_only(
+        "The user prefers tabs over spaces in Rust files",
+        &["preference"],
+    );
 
     let value = server.call_tool_ok(
         "session_start",
@@ -2513,7 +2582,13 @@ fn session_start_returns_a_budgeted_context_and_rejects_a_bad_budget() {
     );
     assert_keys(
         &value,
-        &["context", "profile", "tokenBudget", "tokensUsed", "automationTriggers"],
+        &[
+            "context",
+            "profile",
+            "tokenBudget",
+            "tokensUsed",
+            "automationTriggers",
+        ],
         "session_start",
     );
     assert_eq!(value["tokenBudget"], json!(800));
@@ -2534,17 +2609,30 @@ fn memory_status_every_view_has_its_shape_and_an_unknown_view_errors() {
     let health = server.call_tool_ok("memory_status", json!({ "view": "health" }));
     assert_keys(
         &health,
-        &["embeddingsCompiledIn", "embeddingReady", "cognitiveHealth", "averageRetention"],
+        &[
+            "embeddingsCompiledIn",
+            "embeddingReady",
+            "cognitiveHealth",
+            "averageRetention",
+        ],
         "memory_status health",
     );
     assert_under(&health, 8_000, "memory_status health");
 
     let stats = server.call_tool_ok("memory_status", json!({ "view": "stats" }));
-    assert_keys(&stats, &["counts", "lifecycle", "retentionDistribution", "population"], "stats");
+    assert_keys(
+        &stats,
+        &["counts", "lifecycle", "retentionDistribution", "population"],
+        "stats",
+    );
     assert_under(&stats, 24_000, "memory_status stats");
 
     let timeline = server.call_tool_ok("memory_status", json!({ "view": "timeline" }));
-    assert_keys(&timeline, &["days", "timeline", "totalMemories"], "timeline");
+    assert_keys(
+        &timeline,
+        &["days", "timeline", "totalMemories"],
+        "timeline",
+    );
     assert_eq!(timeline["totalMemories"], json!(1));
     assert_under(&timeline, 4_000, "memory_status timeline");
 
@@ -2553,7 +2641,11 @@ fn memory_status_every_view_has_its_shape_and_an_unknown_view_errors() {
     assert_under(&changelog, 4_000, "memory_status changelog");
 
     let retention = server.call_tool_ok("memory_status", json!({ "view": "retention" }));
-    assert_keys(&retention, &["avgRetention", "distribution", "trend", "totalMemories"], "retention");
+    assert_keys(
+        &retention,
+        &["avgRetention", "distribution", "trend", "totalMemories"],
+        "retention",
+    );
     assert_under(&retention, 3_000, "memory_status retention");
 
     let bad = server.call_tool("memory_status", json!({ "view": "weather" }));
@@ -2570,19 +2662,34 @@ fn dedup_scan_policy_and_undo_answer_and_apply_needs_a_plan() {
     server.ingest_keyword_only("Rotate the payments cache key on every deploy", &["ops"]);
 
     let scan = server.call_tool_ok("dedup", json!({ "action": "scan" }));
-    assert_keys(&scan, &["duplicateClusters", "mergeCandidates", "nextStep"], "dedup scan");
+    assert_keys(
+        &scan,
+        &["duplicateClusters", "mergeCandidates", "nextStep"],
+        "dedup scan",
+    );
     assert_under(&scan, 8_000, "dedup scan");
 
     let policy = server.call_tool_ok("dedup", json!({ "action": "policy" }));
-    assert_keys(&policy, &["matchThreshold", "possibleThreshold", "autoApply"], "dedup policy");
+    assert_keys(
+        &policy,
+        &["matchThreshold", "possibleThreshold", "autoApply"],
+        "dedup policy",
+    );
     assert_under(&policy, 2_000, "dedup policy");
 
     let undo = server.call_tool_ok("dedup", json!({ "action": "undo" }));
-    assert_keys(&undo, &["operations", "tagOperations", "totalOperations"], "dedup undo");
+    assert_keys(
+        &undo,
+        &["operations", "tagOperations", "totalOperations"],
+        "dedup undo",
+    );
     assert_under(&undo, 4_000, "dedup undo");
 
     let bad = server.call_tool("dedup", json!({ "action": "apply" }));
-    assert!(bad.get("error").is_some(), "apply without plan_id must error: {bad}");
+    assert!(
+        bad.get("error").is_some(),
+        "apply without plan_id must error: {bad}"
+    );
     server.shutdown();
 }
 
@@ -2591,7 +2698,10 @@ fn graph_recent_predict_and_memory_graph_answer_and_chain_needs_endpoints() {
     let dir = data_dir();
     let mut server = Server::spawn(dir.path());
     server.handshake();
-    server.ingest_keyword_only("The deploy pipeline caches build artifacts by branch", &["deploy"]);
+    server.ingest_keyword_only(
+        "The deploy pipeline caches build artifacts by branch",
+        &["deploy"],
+    );
 
     let recent = server.call_tool_ok("graph", json!({ "action": "recent" }));
     assert_keys(&recent, &["events"], "graph recent");
@@ -2604,12 +2714,22 @@ fn graph_recent_predict_and_memory_graph_answer_and_chain_needs_endpoints() {
     assert_keys(&predict, &["predictions", "suggestions"], "graph predict");
     assert_under(&predict, 4_000, "graph predict");
 
-    let subgraph = server.call_tool_ok("graph", json!({ "action": "memory_graph", "query": "deploy" }));
-    assert_keys(&subgraph, &["nodes", "edges", "nodeCount", "edgeCount"], "graph memory_graph");
+    let subgraph = server.call_tool_ok(
+        "graph",
+        json!({ "action": "memory_graph", "query": "deploy" }),
+    );
+    assert_keys(
+        &subgraph,
+        &["nodes", "edges", "nodeCount", "edgeCount"],
+        "graph memory_graph",
+    );
     assert_under(&subgraph, 8_000, "graph memory_graph");
 
     let bad = server.call_tool("graph", json!({ "action": "chain" }));
-    assert!(bad.get("error").is_some(), "chain without from/to must error: {bad}");
+    assert!(
+        bad.get("error").is_some(),
+        "chain without from/to must error: {bad}"
+    );
     server.shutdown();
 }
 
@@ -2670,22 +2790,48 @@ fn maintain_scores_importance_dry_runs_gc_consolidates_and_restore_needs_a_path(
         "maintain",
         json!({ "action": "importance_score", "content": "the cache key rotation broke production" }),
     );
-    assert_keys(&score, &["composite", "channels", "dominantSignal"], "maintain importance_score");
+    assert_keys(
+        &score,
+        &["composite", "channels", "dominantSignal"],
+        "maintain importance_score",
+    );
     assert_under(&score, 6_000, "maintain importance_score");
 
     let gc = server.call_tool_ok("maintain", json!({ "action": "gc" }));
-    assert_keys(&gc, &["dryRun", "candidateCount", "processed", "hasMore", "nextCursor", "atomic"], "maintain gc");
-    assert_eq!(gc["dryRun"], json!(true), "gc must default to a dry run: {gc}");
+    assert_keys(
+        &gc,
+        &[
+            "dryRun",
+            "candidateCount",
+            "processed",
+            "hasMore",
+            "nextCursor",
+            "atomic",
+        ],
+        "maintain gc",
+    );
+    assert_eq!(
+        gc["dryRun"],
+        json!(true),
+        "gc must default to a dry run: {gc}"
+    );
     assert_eq!(gc["atomic"], json!(true));
     assert!(gc["processed"].as_u64().unwrap() <= 100);
     assert_under(&gc, 3_000, "maintain gc");
 
     let consolidate = server.call_tool_ok("maintain", json!({ "action": "consolidate" }));
-    assert_keys(&consolidate, &["nodesProcessed", "decayApplied", "durationMs"], "maintain consolidate");
+    assert_keys(
+        &consolidate,
+        &["nodesProcessed", "decayApplied", "durationMs"],
+        "maintain consolidate",
+    );
     assert_under(&consolidate, 3_000, "maintain consolidate");
 
     let bad = server.call_tool("maintain", json!({ "action": "restore" }));
-    assert!(bad.get("error").is_some(), "restore without a path must error: {bad}");
+    assert!(
+        bad.get("error").is_some(),
+        "restore without a path must error: {bad}"
+    );
     server.shutdown();
 }
 
@@ -2712,7 +2858,11 @@ fn codebase_remembers_a_decision_returns_context_verifies_and_needs_its_fields()
         "codebase",
         json!({ "action": "get_context", "codebase": "e2e-probe" }),
     );
-    assert_keys(&context, &["decisions", "patterns", "staleMemories"], "codebase get_context");
+    assert_keys(
+        &context,
+        &["decisions", "patterns", "staleMemories"],
+        "codebase get_context",
+    );
     // `decisions` is `{ count, items }`; the anchor to src/cache.rs is reported
     // missing because that file does not exist here, which is the honest answer.
     assert_eq!(
@@ -2722,8 +2872,15 @@ fn codebase_remembers_a_decision_returns_context_verifies_and_needs_its_fields()
     );
     assert_under(&context, 6_000, "codebase get_context");
 
-    let verify = server.call_tool_ok("codebase", json!({ "action": "verify", "codebase": "e2e-probe" }));
-    assert_keys(&verify, &["checked", "fresh", "stale", "unverifiable"], "codebase verify");
+    let verify = server.call_tool_ok(
+        "codebase",
+        json!({ "action": "verify", "codebase": "e2e-probe" }),
+    );
+    assert_keys(
+        &verify,
+        &["checked", "fresh", "stale", "unverifiable"],
+        "codebase verify",
+    );
     assert_under(&verify, 6_000, "codebase verify");
 
     let bad = server.call_tool("codebase", json!({ "action": "remember_decision" }));
@@ -2765,7 +2922,10 @@ fn receipt_get_returns_the_receipt_a_recall_produced_and_an_unknown_id_errors() 
     server.handshake();
     server.ingest_keyword_only("Receipts record what a retrieval used", &["e2e"]);
 
-    let recall = server.call_tool_ok("recall", json!({ "query": "receipts record", "concrete": true }));
+    let recall = server.call_tool_ok(
+        "recall",
+        json!({ "query": "receipts record", "concrete": true }),
+    );
     let receipt_id = recall["receiptId"]
         .as_str()
         .unwrap_or_else(|| panic!("recall carried no receiptId: {recall}"))
@@ -2777,12 +2937,17 @@ fn receipt_get_returns_the_receipt_a_recall_produced_and_an_unknown_id_errors() 
     );
     assert!(receipt.get("error").is_none(), "{receipt}");
     assert!(
-        serde_json::to_string(&receipt).unwrap().contains(&receipt_id),
+        serde_json::to_string(&receipt)
+            .unwrap()
+            .contains(&receipt_id),
         "the receipt response must reference its own id: {receipt}"
     );
     assert_under(&receipt, 8_000, "receipt get");
 
-    let bad = server.call_tool("receipt", json!({ "action": "get", "receipt_id": "r_does_not_exist" }));
+    let bad = server.call_tool(
+        "receipt",
+        json!({ "action": "get", "receipt_id": "r_does_not_exist" }),
+    );
     assert_error_mentions(&bad, "not found", "receipt get with an unknown id");
     server.shutdown();
 }
@@ -2797,10 +2962,16 @@ fn source_sync_rejects_an_unknown_source_and_a_missing_repo_without_touching_the
     server.handshake();
 
     let unknown = server.call_tool("source_sync", json!({ "source": "gitlab", "repo": "a/b" }));
-    assert!(unknown.get("error").is_some(), "unknown source must error: {unknown}");
+    assert!(
+        unknown.get("error").is_some(),
+        "unknown source must error: {unknown}"
+    );
 
     let missing = server.call_tool("source_sync", json!({ "source": "github" }));
-    assert!(missing.get("error").is_some(), "github without repo must error: {missing}");
+    assert!(
+        missing.get("error").is_some(),
+        "github without repo must error: {missing}"
+    );
     server.shutdown();
 }
 
@@ -2811,10 +2982,16 @@ fn smart_ingest_and_suppress_reject_calls_without_their_subject() {
     server.handshake();
 
     let no_content = server.call_tool("smart_ingest", json!({ "tags": ["orphan"] }));
-    assert!(no_content.get("error").is_some(), "smart_ingest without content must error: {no_content}");
+    assert!(
+        no_content.get("error").is_some(),
+        "smart_ingest without content must error: {no_content}"
+    );
 
     let no_id = server.call_tool("suppress", json!({ "reason": "no subject" }));
-    assert!(no_id.get("error").is_some(), "suppress without id must error: {no_id}");
+    assert!(
+        no_id.get("error").is_some(),
+        "suppress without id must error: {no_id}"
+    );
     server.shutdown();
 }
 

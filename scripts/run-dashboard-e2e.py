@@ -76,6 +76,7 @@ def run(binary, log_dir, arguments):
                 stdout=subprocess.PIPE,
                 stderr=log,
                 start_new_session=True,
+                bufsize=0,
             )
             browser = None
             try:
@@ -109,11 +110,17 @@ def run(binary, log_dir, arguments):
                         + b"\n"
                     )
                     backend.stdin.flush()
-                    if not select.select([backend.stdout], [], [], 30)[0]:
-                        raise TimeoutError("fixture RPC did not return")
-                    response = json.loads(backend.stdout.readline())
-                    if response.get("id") != sequence or "error" in response:
-                        raise RuntimeError("fixture RPC failed")
+                    deadline = time.monotonic() + 30
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0 or not select.select([backend.stdout], [], [], remaining)[0]:
+                            raise TimeoutError("fixture RPC did not return")
+                        response = json.loads(backend.stdout.readline())
+                        if response.get("method", "").startswith("notifications/"):
+                            continue
+                        if response.get("id") != sequence or "error" in response:
+                            raise RuntimeError("fixture RPC failed")
+                        break
                     result = response["result"]
                     if result.get("isError"):
                         raise RuntimeError("fixture tool failed")

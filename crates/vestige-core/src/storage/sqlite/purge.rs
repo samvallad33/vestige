@@ -3,7 +3,6 @@
 use super::*;
 
 impl SqliteMemoryStore {
-
     /// Delete a node through the same privacy cleanup coordinator as an explicit
     /// purge.  Keeping one deletion path prevents maintenance, dashboard, and
     /// library callers from bypassing replay invalidation or durable-evidence
@@ -372,7 +371,11 @@ impl SqliteMemoryStore {
         Ok(count > 0)
     }
 
-    pub(super) fn record_sync_tombstone(conn: &Connection, table_name: &str, row_id: &str) -> Result<()> {
+    pub(super) fn record_sync_tombstone(
+        conn: &Connection,
+        table_name: &str,
+        row_id: &str,
+    ) -> Result<()> {
         let tombstone_row_id = if table_name == "knowledge_nodes" {
             Self::opaque_tombstone_marker(row_id)
         } else {

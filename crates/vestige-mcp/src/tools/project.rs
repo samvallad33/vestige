@@ -70,7 +70,8 @@ fn default_format() -> String {
 fn resolve_target(root: Option<&str>, path: &str) -> Result<PathBuf, String> {
     let root = match root {
         Some(dir) => PathBuf::from(dir),
-        None => std::env::current_dir().map_err(|e| format!("cannot read the working directory: {e}"))?,
+        None => std::env::current_dir()
+            .map_err(|e| format!("cannot read the working directory: {e}"))?,
     };
     let root = root
         .canonicalize()
@@ -117,7 +118,9 @@ fn items_json(items: &[projection::ProjectedItem]) -> Vec<Value> {
 
 pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
     let args: ProjectArgs = match args {
-        Some(value) => serde_json::from_value(value).map_err(|e| format!("Invalid arguments: {e}"))?,
+        Some(value) => {
+            serde_json::from_value(value).map_err(|e| format!("Invalid arguments: {e}"))?
+        }
         None => ProjectArgs {
             action: default_action(),
             format: default_format(),
@@ -129,8 +132,12 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             max_items: None,
         },
     };
-    let format = ProjectionFormat::parse(&args.format)
-        .ok_or_else(|| format!("unknown format '{}'; use claude-md or memory-md", args.format))?;
+    let format = ProjectionFormat::parse(&args.format).ok_or_else(|| {
+        format!(
+            "unknown format '{}'; use claude-md or memory-md",
+            args.format
+        )
+    })?;
     let opts = ProjectionOptions {
         scope: args.scope.clone().unwrap_or_else(|| "user".to_string()),
         format,
@@ -144,9 +151,10 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         None => None,
     };
     let existing = match &target {
-        Some(path) if path.exists() => {
-            Some(std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?)
-        }
+        Some(path) if path.exists() => Some(
+            std::fs::read_to_string(path)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))?,
+        ),
         _ => None,
     };
     let new_text = projection::splice(existing.as_deref().unwrap_or(""), &projection.region);
@@ -305,7 +313,9 @@ mod tests {
         .await
         .unwrap_err();
         assert!(escape.contains("outside"), "{escape}");
-        let unknown = execute(&storage, Some(json!({ "format": "yaml" }))).await.unwrap_err();
+        let unknown = execute(&storage, Some(json!({ "format": "yaml" })))
+            .await
+            .unwrap_err();
         assert!(unknown.contains("unknown format"), "{unknown}");
     }
 }

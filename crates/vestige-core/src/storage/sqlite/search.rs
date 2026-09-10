@@ -3,7 +3,6 @@
 use super::*;
 
 impl SqliteMemoryStore {
-
     /// Get a node by ID
     pub fn get_node(&self, id: &str) -> Result<Option<KnowledgeNode>> {
         let reader = self
@@ -49,7 +48,10 @@ impl SqliteMemoryStore {
     ///
     /// We therefore parse RFC 3339 first and fall back to the SQLite-native
     /// format (assumed UTC) so the store stays tolerant of either writer.
-    pub(super) fn parse_timestamp(value: &str, field_name: &str) -> rusqlite::Result<DateTime<Utc>> {
+    pub(super) fn parse_timestamp(
+        value: &str,
+        field_name: &str,
+    ) -> rusqlite::Result<DateTime<Utc>> {
         if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
             return Ok(dt.with_timezone(&Utc));
         }

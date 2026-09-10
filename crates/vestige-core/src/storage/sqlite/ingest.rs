@@ -3,7 +3,6 @@
 use super::*;
 
 impl SqliteMemoryStore {
-
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]
     pub(super) fn regular_ingest_result(
         &self,
@@ -59,7 +58,10 @@ impl SqliteMemoryStore {
         findings
     }
 
-    pub(super) fn enforce_secret_policy_for_input(input: &IngestInput, policy: SecretPolicy) -> Result<()> {
+    pub(super) fn enforce_secret_policy_for_input(
+        input: &IngestInput,
+        policy: SecretPolicy,
+    ) -> Result<()> {
         if policy == SecretPolicy::AllowExplicitly {
             return Ok(());
         }
@@ -76,7 +78,10 @@ impl SqliteMemoryStore {
         }
     }
 
-    pub(super) fn enforce_secret_policy_for_content(content: &str, policy: SecretPolicy) -> Result<()> {
+    pub(super) fn enforce_secret_policy_for_content(
+        content: &str,
+        policy: SecretPolicy,
+    ) -> Result<()> {
         if policy == SecretPolicy::AllowExplicitly {
             return Ok(());
         }
@@ -240,7 +245,11 @@ impl SqliteMemoryStore {
     }
 
     /// Raw scoped insert after a caller has completed the credential preflight.
-    pub(super) fn ingest_unchecked_in_scope(&self, input: IngestInput, scope: &str) -> Result<KnowledgeNode> {
+    pub(super) fn ingest_unchecked_in_scope(
+        &self,
+        input: IngestInput,
+        scope: &str,
+    ) -> Result<KnowledgeNode> {
         let now = Utc::now();
         let id = Uuid::new_v4().to_string();
 
@@ -568,7 +577,10 @@ impl SqliteMemoryStore {
                 // A protected strong memory keeps its content and gets a link
                 // instead of an append, so the relation survives without the
                 // strong record being rewritten (Yang, Duncan and Barense 2026).
-                if matches!(reason, crate::advanced::prediction_error::CreateReason::ProtectedStrongMemory) {
+                if matches!(
+                    reason,
+                    crate::advanced::prediction_error::CreateReason::ProtectedStrongMemory
+                ) {
                     let link_type = crate::memory::EdgeType::Semantic.to_string();
                     for related in &related_memory_ids {
                         let conn = ConnectionRecord {
@@ -587,7 +599,10 @@ impl SqliteMemoryStore {
                 }
                 let mut reason = if related_memory_ids.is_empty() {
                     format!("Created new memory: {:?}", reason)
-                } else if matches!(reason, crate::advanced::prediction_error::CreateReason::ProtectedStrongMemory) {
+                } else if matches!(
+                    reason,
+                    crate::advanced::prediction_error::CreateReason::ProtectedStrongMemory
+                ) {
                     format!(
                         "Created new memory linked to a strong existing memory kept intact: {:?}. Prediction error updates weak memories, not strong ones",
                         related_memory_ids
@@ -1707,7 +1722,11 @@ impl SqliteMemoryStore {
         Ok(format!("tag-plan-v1:{}", blake3::hash(&encoded).to_hex()))
     }
 
-    pub(super) fn rewrite_tags(tags: &[String], source_tags: &[String], target_tag: &str) -> Vec<String> {
+    pub(super) fn rewrite_tags(
+        tags: &[String],
+        source_tags: &[String],
+        target_tag: &str,
+    ) -> Vec<String> {
         let sources: std::collections::HashSet<&str> =
             source_tags.iter().map(String::as_str).collect();
         if !tags.iter().any(|tag| sources.contains(tag.as_str())) {

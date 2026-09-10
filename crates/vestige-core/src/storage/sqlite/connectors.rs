@@ -282,7 +282,8 @@ impl SqliteMemoryStore {
             let rows = stmt.query_map(params![source_system, scope], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?;
-            rows.filter_map(warn_skipped_row("reconcile_source_tombstones")).collect()
+            rows.filter_map(warn_skipped_row("reconcile_source_tombstones"))
+                .collect()
         };
 
         let considered = local.len();
