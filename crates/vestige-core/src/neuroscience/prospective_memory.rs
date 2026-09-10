@@ -389,8 +389,20 @@ impl IntentionTrigger {
 
     /// Check if this trigger matches the current state
     pub fn is_triggered(&self, context: &Context, events: &[String]) -> bool {
-        let now = Utc::now();
+        self.is_triggered_at(context, events, context.timestamp)
+    }
 
+    /// Check if this trigger matches at an explicitly supplied time.
+    ///
+    /// Keeping time injectable makes trigger checks deterministic and lets the
+    /// MCP layer evaluate stored intentions against its public `current_time`
+    /// check context without consulting the wall clock again.
+    pub fn is_triggered_at(
+        &self,
+        context: &Context,
+        events: &[String],
+        now: DateTime<Utc>,
+    ) -> bool {
         match self {
             Self::TimeBased { at } => now >= *at,
             Self::DurationBased { trigger_at, .. } => trigger_at.map(|t| now >= t).unwrap_or(false),
@@ -400,15 +412,39 @@ impl IntentionTrigger {
                 completion_pattern, ..
             } => events.iter().any(|e| completion_pattern.matches(e)),
             Self::Recurring {
-                next_occurrence, ..
-            } => next_occurrence.map(|t| now >= t).unwrap_or(false),
+                base,
+                next_occurrence,
+                ..
+            } => {
+                next_occurrence.map(|t| now >= t).unwrap_or(false)
+                    && base.is_triggered_at(context, events, now)
+            }
             Self::Compound { all_of, any_of } => {
-                let all_match =
-                    all_of.is_empty() || all_of.iter().all(|t| t.is_triggered(context, events));
-                let any_match =
-                    any_of.is_empty() || any_of.iter().any(|t| t.is_triggered(context, events));
+                if all_of.is_empty() && any_of.is_empty() {
+                    return false;
+                }
+                let all_match = all_of.is_empty()
+                    || all_of
+                        .iter()
+                        .all(|t| t.is_triggered_at(context, events, now));
+                let any_match = any_of.is_empty()
+                    || any_of
+                        .iter()
+                        .any(|t| t.is_triggered_at(context, events, now));
                 all_match && any_match
             }
+        }
+    }
+
+    /// Whether this trigger contains a recurring schedule at any depth.
+    pub fn contains_recurrence(&self) -> bool {
+        match self {
+            Self::Recurring { .. } => true,
+            Self::Compound { all_of, any_of } => all_of
+                .iter()
+                .chain(any_of.iter())
+                .any(Self::contains_recurrence),
+            _ => false,
         }
     }
 
@@ -424,10 +460,72 @@ impl IntentionTrigger {
                 next_occurrence,
                 ..
             } => {
-                // Advance from the later of "now" and the slot that just fired,
-                // so we never re-arm into an already-past occurrence.
-                let from = next_occurrence.map(|t| t.max(now)).unwrap_or(now);
-                *next_occurrence = Some(recurrence.next_occurrence(from));
+                let Some(mut next) = *next_occurrence else {
+                    let candidate = recurrence.next_occurrence(now);
+                    if candidate <= now {
+                        return false;
+                    }
+                    *next_occurrence = Some(candidate);
+                    return true;
+                };
+
+                if next > now {
+                    return false;
+                }
+
+                // Fixed absolute intervals can catch up in constant time. A
+                // user may supply an old RFC3339 anchor with a one-minute
+                // cadence; iterating once per missed slot would make `check`
+                // unbounded even though trigger depth and count are bounded.
+                let fixed_seconds = match recurrence {
+                    RecurrencePattern::EveryMinutes(minutes) => {
+                        minutes.checked_mul(60).filter(|value| *value > 0)
+                    }
+                    RecurrencePattern::EveryHours(hours) => {
+                        hours.checked_mul(3_600).filter(|value| *value > 0)
+                    }
+                    RecurrencePattern::Custom { interval } => {
+                        let seconds = interval.num_seconds();
+                        (seconds > 0).then_some(seconds)
+                    }
+                    _ => None,
+                };
+                if let Some(interval_seconds) = fixed_seconds {
+                    let elapsed_seconds = (now - next).num_seconds();
+                    let steps = elapsed_seconds / interval_seconds + 1;
+                    let advance_seconds = interval_seconds.checked_mul(steps);
+                    let candidate = advance_seconds
+                        .and_then(Duration::try_seconds)
+                        .and_then(|advance| next.checked_add_signed(advance));
+                    let Some(candidate) = candidate else {
+                        return false;
+                    };
+                    *next_occurrence = Some(candidate);
+                    return true;
+                }
+
+                // Preserve the cadence anchored by the previous occurrence,
+                // while skipping missed slots. The strict progress check keeps
+                // invalid zero/negative custom intervals from looping forever.
+                for _ in 0..4_096 {
+                    if next > now {
+                        *next_occurrence = Some(next);
+                        return true;
+                    }
+                    let candidate = recurrence.next_occurrence(next);
+                    if candidate <= next {
+                        return false;
+                    }
+                    next = candidate;
+                }
+                // Calendar schedules older than the bounded catch-up horizon
+                // resume after `now`; this preserves safety without inventing
+                // a local timezone (all core timestamps are UTC).
+                let candidate = recurrence.next_occurrence(now);
+                if candidate <= now {
+                    return false;
+                }
+                *next_occurrence = Some(candidate);
                 true
             }
             Self::Compound { all_of, any_of } => {
@@ -436,6 +534,36 @@ impl IntentionTrigger {
                     any |= t.re_arm(now);
                 }
                 any
+            }
+            _ => false,
+        }
+    }
+
+    /// Re-arm only recurring branches that actually matched this check.
+    /// This matters for `any_of`: a due but context-mismatched sibling must keep
+    /// its occurrence instead of being consumed when another branch fires.
+    pub fn re_arm_triggered(
+        &mut self,
+        context: &Context,
+        events: &[String],
+        now: DateTime<Utc>,
+    ) -> bool {
+        // A matching descendant of a false compound did not contribute to
+        // this occurrence and must not be consumed by a matching sibling.
+        if !self.is_triggered_at(context, events, now) {
+            return false;
+        }
+        match self {
+            Self::Recurring { base, .. } => {
+                let base_rearmed = base.re_arm_triggered(context, events, now);
+                self.re_arm(now) || base_rearmed
+            }
+            Self::Compound { all_of, any_of } => {
+                let mut rearmed = false;
+                for trigger in all_of.iter_mut().chain(any_of.iter_mut()) {
+                    rearmed |= trigger.re_arm_triggered(context, events, now);
+                }
+                rearmed
             }
             _ => false,
         }
@@ -695,7 +823,12 @@ impl Intention {
 
     /// Check if the intention is overdue
     pub fn is_overdue(&self) -> bool {
-        self.deadline.map(|d| Utc::now() > d).unwrap_or(false)
+        self.is_overdue_at(Utc::now())
+    }
+
+    /// Check if the intention is overdue at an explicitly supplied time.
+    pub fn is_overdue_at(&self, now: DateTime<Utc>) -> bool {
+        self.deadline.map(|d| now > d).unwrap_or(false)
     }
 
     /// Check if deadline is approaching
@@ -710,24 +843,36 @@ impl Intention {
 
     /// Check if should remind again
     pub fn should_remind(&self) -> bool {
+        self.should_remind_at(Utc::now())
+    }
+
+    /// Check reminder limits at an explicitly supplied time.
+    ///
+    /// Recurring intentions use their schedule as the rate limiter. Applying
+    /// the one-shot five-reminder cap or 30-minute retry delay to them would
+    /// silently disable a perpetual schedule (and make sub-30-minute public
+    /// recurrence intervals impossible).
+    pub fn should_remind_at(&self, now: DateTime<Utc>) -> bool {
         if self.status != IntentionStatus::Active && self.status != IntentionStatus::Triggered {
             return false;
         }
 
-        if self.reminder_count >= MAX_REMINDERS_PER_INTENTION {
+        let recurring = self.trigger.contains_recurrence();
+        if !recurring && self.reminder_count >= MAX_REMINDERS_PER_INTENTION {
             return false;
         }
 
         // Check snoozed
         if let Some(snoozed_until) = self.snoozed_until
-            && Utc::now() < snoozed_until
+            && now < snoozed_until
         {
             return false;
         }
 
         // Check minimum interval
         if let Some(last) = self.last_reminded_at
-            && (Utc::now() - last) < Duration::minutes(MIN_REMINDER_INTERVAL_MINUTES)
+            && !recurring
+            && (now - last) < Duration::minutes(MIN_REMINDER_INTERVAL_MINUTES)
         {
             return false;
         }
@@ -737,7 +882,11 @@ impl Intention {
 
     /// Mark as triggered
     pub fn mark_triggered(&mut self) {
-        let now = Utc::now();
+        self.mark_triggered_at(Utc::now());
+    }
+
+    /// Mark as triggered at an explicitly supplied time.
+    pub fn mark_triggered_at(&mut self, now: DateTime<Utc>) {
         self.reminder_count += 1;
         self.last_reminded_at = Some(now);
         // A recurring intention re-arms to its next occurrence and returns to
@@ -745,6 +894,23 @@ impl Intention {
         // Previously recurring intentions never advanced next_occurrence, so they
         // fired once and never again (or stayed perpetually triggered).
         if self.trigger.re_arm(now) {
+            self.status = IntentionStatus::Active;
+        } else {
+            self.status = IntentionStatus::Triggered;
+        }
+    }
+
+    /// Mark as triggered while retaining the context needed to advance only
+    /// the recurring compound branches that matched.
+    pub fn mark_triggered_with_context(
+        &mut self,
+        now: DateTime<Utc>,
+        context: &Context,
+        events: &[String],
+    ) {
+        self.reminder_count += 1;
+        self.last_reminded_at = Some(now);
+        if self.trigger.re_arm_triggered(context, events, now) {
             self.status = IntentionStatus::Active;
         } else {
             self.status = IntentionStatus::Triggered;
@@ -823,7 +989,7 @@ pub enum IntentionSource {
 // ============================================================================
 
 /// Current context for trigger matching
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Context {
     /// Current time
     pub timestamp: DateTime<Utc>,
@@ -845,13 +1011,26 @@ pub struct Context {
     pub conversation_context: Option<String>,
 }
 
+impl Default for Context {
+    fn default() -> Self {
+        Self {
+            timestamp: Utc::now(),
+            project_name: None,
+            project_path: None,
+            active_files: Vec::new(),
+            active_topics: Vec::new(),
+            user_mode: None,
+            recent_events: Vec::new(),
+            mentioned_entities: Vec::new(),
+            conversation_context: None,
+        }
+    }
+}
+
 impl Context {
     /// Create a new context
     pub fn new() -> Self {
-        Self {
-            timestamp: Utc::now(),
-            ..Default::default()
-        }
+        Self::default()
     }
 
     /// Set project
@@ -960,7 +1139,7 @@ impl IntentionParser {
         let text_lower = text.to_lowercase();
 
         // Detect trigger type and extract content
-        let (trigger, content) = self.extract_trigger_and_content(&text_lower, text)?;
+        let (trigger, content) = self.extract_trigger_and_content(&text_lower, text, 0)?;
 
         let mut intention = Intention::new(content, trigger);
         intention.source = IntentionSource::NaturalLanguage {
@@ -985,7 +1164,48 @@ impl IntentionParser {
         &self,
         text_lower: &str,
         original: &str,
+        depth: usize,
     ) -> Result<(IntentionTrigger, String)> {
+        if depth >= 5 {
+            return Err(ProspectiveMemoryError::ParseError(
+                "Recurrence nesting exceeds five levels".into(),
+            ));
+        }
+        // Recurrence must be recognized before generic time/event phrases so
+        // the parser does not reduce "every 15 minutes" or "every fortnight"
+        // to a one-shot duration. If the remaining text contains an event
+        // clause, preserve it as the recurring base condition.
+        if let Some((recurrence, interval, start, end)) = Self::parse_recurrence(original) {
+            let without_recurrence = format!("{}{}", &original[..start], &original[end..]);
+            let cleaned = Self::clean_intention_content(&without_recurrence);
+            let next = Utc::now().checked_add_signed(interval).ok_or_else(|| {
+                ProspectiveMemoryError::ParseError("Recurrence exceeds timestamp range".into())
+            })?;
+            let base = self
+                .extract_trigger_and_content(
+                    &without_recurrence.to_lowercase(),
+                    &without_recurrence,
+                    depth + 1,
+                )
+                .map(|(trigger, _)| trigger)
+                .or_else(|error| {
+                    if Self::parse_recurrence(&without_recurrence).is_some() {
+                        Err(error)
+                    } else {
+                        Ok(IntentionTrigger::TimeBased { at: next })
+                    }
+                })?;
+
+            return Ok((
+                IntentionTrigger::Recurring {
+                    base: Box::new(base),
+                    recurrence,
+                    next_occurrence: Some(next),
+                },
+                cleaned,
+            ));
+        }
+
         // Check for "remind me to X when Y" pattern
         if let Some(when_byte_idx) = text_lower.find(" when ") {
             // Convert byte index to char index for safe slicing
@@ -1099,6 +1319,108 @@ impl IntentionParser {
         Err(ProspectiveMemoryError::ParseError(
             "Could not parse intention from text".to_string(),
         ))
+    }
+
+    /// Parse bounded, calendar-independent recurrence phrases. Fortnights are
+    /// represented as the exact absolute interval 20,160 minutes; no local
+    /// timezone or daylight-saving assumption is introduced.
+    fn parse_recurrence(original: &str) -> Option<(RecurrencePattern, Duration, usize, usize)> {
+        let lower = original.to_ascii_lowercase();
+        let named = [
+            ("every fortnight", 20_160_i64),
+            ("fortnightly", 20_160_i64),
+            ("every two weeks", 20_160_i64),
+            ("every other week", 20_160_i64),
+            ("every 2 weeks", 20_160_i64),
+            ("every week", 10_080_i64),
+            ("weekly", 10_080_i64),
+            ("every day", 1_440_i64),
+            ("daily", 1_440_i64),
+            ("every hour", 60_i64),
+            ("hourly", 60_i64),
+        ];
+        for (phrase, minutes) in named {
+            if let Some(start) = lower.find(phrase) {
+                let interval = Duration::minutes(minutes);
+                return Some((
+                    RecurrencePattern::EveryMinutes(minutes),
+                    interval,
+                    start,
+                    start + phrase.len(),
+                ));
+            }
+        }
+
+        let mut search_from = 0;
+        while let Some(relative) = lower[search_from..].find("every ") {
+            let start = search_from + relative;
+            let number_start = start + "every ".len();
+            let tail = &lower[number_start..];
+            let digit_count = tail
+                .bytes()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+            if digit_count == 0 {
+                search_from = number_start;
+                continue;
+            }
+            let amount = tail[..digit_count].parse::<i64>().ok()?;
+            if amount <= 0 {
+                return None;
+            }
+            let unit_start = number_start + digit_count;
+            let unit_tail = lower[unit_start..].trim_start();
+            let whitespace = lower[unit_start..].len() - unit_tail.len();
+            let (unit_len, minutes) = if unit_tail.starts_with("minutes") {
+                ("minutes".len(), amount.checked_mul(1)?)
+            } else if unit_tail.starts_with("minute") {
+                ("minute".len(), amount.checked_mul(1)?)
+            } else if unit_tail.starts_with("hours") {
+                ("hours".len(), amount.checked_mul(60)?)
+            } else if unit_tail.starts_with("hour") {
+                ("hour".len(), amount.checked_mul(60)?)
+            } else if unit_tail.starts_with("days") {
+                ("days".len(), amount.checked_mul(1_440)?)
+            } else if unit_tail.starts_with("day") {
+                ("day".len(), amount.checked_mul(1_440)?)
+            } else if unit_tail.starts_with("weeks") {
+                ("weeks".len(), amount.checked_mul(10_080)?)
+            } else if unit_tail.starts_with("week") {
+                ("week".len(), amount.checked_mul(10_080)?)
+            } else if unit_tail.starts_with("fortnights") {
+                ("fortnights".len(), amount.checked_mul(20_160)?)
+            } else if unit_tail.starts_with("fortnight") {
+                ("fortnight".len(), amount.checked_mul(20_160)?)
+            } else {
+                search_from = number_start;
+                continue;
+            };
+            // Match the public adapter's ten-year bound before constructing a
+            // timestamp; TimeDelta accepts values larger than DateTime can.
+            if !(1..=5_256_000).contains(&minutes) {
+                return None;
+            }
+            let interval = Duration::try_minutes(minutes)?;
+            let end = unit_start + whitespace + unit_len;
+            return Some((
+                RecurrencePattern::EveryMinutes(minutes),
+                interval,
+                start,
+                end,
+            ));
+        }
+        None
+    }
+
+    fn clean_intention_content(text: &str) -> String {
+        let mut cleaned = text.trim().to_string();
+        for prefix in ["remind me to ", "remind me ", "remember to "] {
+            if cleaned.to_ascii_lowercase().starts_with(prefix) {
+                cleaned = cleaned[prefix.len()..].trim().to_string();
+                break;
+            }
+        }
+        cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
     /// Extract content from text, removing trigger keywords
@@ -1315,27 +1637,30 @@ impl ProspectiveMemory {
 
         let mut triggered = Vec::new();
 
+        let now = context.timestamp;
+
         for intention in intentions.values_mut() {
             // Skip non-active intentions
             if intention.status != IntentionStatus::Active {
                 // Check if snoozed intention should wake
                 if intention.status == IntentionStatus::Snoozed
                     && let Some(until) = intention.snoozed_until
-                    && Utc::now() >= until
+                    && now >= until
                 {
                     intention.wake();
+                } else {
+                    continue;
                 }
-                continue;
             }
 
             // Check if triggered
             let mut just_triggered = false;
             if intention
                 .trigger
-                .is_triggered(context, &context.recent_events)
-                && intention.should_remind()
+                .is_triggered_at(context, &context.recent_events, now)
+                && intention.should_remind_at(now)
             {
-                intention.mark_triggered();
+                intention.mark_triggered_with_context(now, context, &context.recent_events);
                 triggered.push(intention.clone());
                 just_triggered = true;
             }
@@ -1354,7 +1679,7 @@ impl ProspectiveMemory {
 
             // Auto-expire overdue intentions — but never clobber one we JUST
             // triggered this iteration (it should fire before it expires).
-            if self.config.auto_expire && intention.is_overdue() && !just_triggered {
+            if self.config.auto_expire && intention.is_overdue_at(now) && !just_triggered {
                 intention.status = IntentionStatus::Expired;
             }
         }
@@ -1620,6 +1945,22 @@ mod tests {
     }
 
     #[test]
+    fn test_context_composite_requires_every_all_condition() {
+        let context = Context::new()
+            .with_project("vestige", "/code/vestige")
+            .with_file("/code/vestige/src/lib.rs");
+        let pattern = ContextPattern::Composite {
+            all: vec![
+                ContextPattern::in_codebase("vestige"),
+                ContextPattern::topic_active("release"),
+            ],
+            any: Vec::new(),
+        };
+        assert!(!pattern.matches(&context));
+        assert!(pattern.matches(&context.with_topic("release readiness")));
+    }
+
+    #[test]
     fn test_intention_creation() {
         let intention = Intention::new(
             "Review code",
@@ -1676,6 +2017,82 @@ mod tests {
     }
 
     #[test]
+    fn intention_nlp_recurrence_rejects_out_of_range_intervals() {
+        assert_eq!(
+            IntentionParser::parse_recurrence("every other week")
+                .unwrap()
+                .1
+                .num_minutes(),
+            20_160
+        );
+        assert!(IntentionParser::parse_recurrence("every 5256001 minutes").is_none());
+        assert!(IntentionParser::parse_recurrence("every 100000000 days").is_none());
+        assert!(IntentionParser::parse_recurrence("every 5256000 minutes").is_some());
+        let parser = IntentionParser::new();
+        assert!(parser.parse("remind me every 100000000 days").is_err());
+        assert!(
+            parser
+                .parse(&format!("remind me {}", "every hour ".repeat(100)))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn intention_false_nested_compound_does_not_consume_recurrence() {
+        let now = Utc::now();
+        let mut trigger = IntentionTrigger::Compound {
+            all_of: vec![],
+            any_of: vec![
+                IntentionTrigger::on_event("ping", TriggerPattern::contains("ping")),
+                IntentionTrigger::Compound {
+                    all_of: vec![
+                        IntentionTrigger::Recurring {
+                            base: Box::new(IntentionTrigger::at_time(now)),
+                            recurrence: RecurrencePattern::EveryMinutes(60),
+                            next_occurrence: Some(now),
+                        },
+                        IntentionTrigger::ContextBased {
+                            context_match: ContextPattern::InCodebase("missing".into()),
+                        },
+                    ],
+                    any_of: vec![],
+                },
+            ],
+        };
+        let context = Context {
+            timestamp: now,
+            ..Default::default()
+        };
+        let events = vec!["ping".into()];
+        let before = serde_json::to_value(&trigger).unwrap();
+        assert!(trigger.is_triggered_at(&context, &events, now));
+        assert!(!trigger.re_arm_triggered(&context, &events, now));
+        assert_eq!(serde_json::to_value(&trigger).unwrap(), before);
+    }
+
+    #[test]
+    fn intention_nested_recurring_base_preserves_both_cadences() {
+        let now = Utc::now();
+        let inner = IntentionTrigger::Recurring {
+            base: Box::new(IntentionTrigger::at_time(now)),
+            recurrence: RecurrencePattern::EveryMinutes(1440),
+            next_occurrence: Some(now),
+        };
+        let mut outer = IntentionTrigger::Recurring {
+            base: Box::new(inner),
+            recurrence: RecurrencePattern::EveryMinutes(60),
+            next_occurrence: Some(now),
+        };
+        let context = Context {
+            timestamp: now,
+            ..Default::default()
+        };
+        assert!(outer.re_arm_triggered(&context, &[], now));
+        assert!(!outer.is_triggered_at(&context, &[], now + Duration::hours(1)));
+        assert!(outer.is_triggered_at(&context, &[], now + Duration::days(1)));
+    }
+
+    #[test]
     fn test_parse_natural_language() {
         let parser = IntentionParser::new();
 
@@ -1690,6 +2107,21 @@ mod tests {
         // Test implicit intention
         let result = parser.parse("I should tell Sarah about the bug");
         assert!(result.is_ok());
+
+        let recurring = parser
+            .parse("remind me to review the roadmap every fortnight")
+            .unwrap();
+        match recurring.trigger {
+            IntentionTrigger::Recurring {
+                recurrence: RecurrencePattern::EveryMinutes(minutes),
+                next_occurrence: Some(next),
+                ..
+            } => {
+                assert_eq!(minutes, 20_160);
+                assert!(next > recurring.created_at);
+            }
+            other => panic!("expected preserved recurring trigger, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1759,6 +2191,51 @@ mod tests {
             !intention.trigger.is_triggered(&Context::default(), &[]),
             "recurring trigger must not stay perpetually due after re-arming"
         );
+    }
+
+    #[test]
+    fn test_recurring_event_requires_schedule_and_base_event() {
+        let now = Utc::now();
+        let trigger = IntentionTrigger::Recurring {
+            base: Box::new(IntentionTrigger::on_event(
+                "deployment completed",
+                TriggerPattern::contains("deployment completed"),
+            )),
+            recurrence: RecurrencePattern::EveryMinutes(5),
+            next_occurrence: Some(now - Duration::minutes(1)),
+        };
+        let context = Context {
+            timestamp: now,
+            ..Context::default()
+        };
+
+        assert!(!trigger.is_triggered_at(&context, &[], now));
+        assert!(trigger.is_triggered_at(
+            &context,
+            &["deployment completed successfully".to_string()],
+            now
+        ));
+    }
+
+    #[test]
+    fn test_check_uses_injected_time_and_wakes_snooze_immediately() {
+        let pm = ProspectiveMemory::new();
+        let now = Utc::now();
+        let mut intention = Intention::new(
+            "wake on first post-snooze check",
+            IntentionTrigger::at_time(now - Duration::minutes(1)),
+        );
+        intention.status = IntentionStatus::Snoozed;
+        intention.snoozed_until = Some(now + Duration::minutes(30));
+        pm.create_intention(intention).unwrap();
+
+        let context = Context {
+            timestamp: now + Duration::minutes(31),
+            ..Context::default()
+        };
+        let triggered = pm.check_triggers(&context).unwrap();
+        assert_eq!(triggered.len(), 1);
+        assert_eq!(triggered[0].status, IntentionStatus::Triggered);
     }
 
     #[test]

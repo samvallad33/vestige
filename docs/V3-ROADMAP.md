@@ -18,7 +18,7 @@ they do not establish a released v3 implementation.
 | 6 | Bounded graph and failure investigation | Fewer failed attempts; ablation establishes added value |
 | 7 | Incremental, observable maintenance | Setup, steady-state, maintenance and break-even costs accounted for |
 | 8 | Repeated frozen comparisons | Preserve failures, uncertainty, ties and regressions |
-| 9 | Company evaluation package | Reproduce results on company-controlled workloads |
+| 9 | Developer evaluation examples | Reproduce results on developer-owned projects |
 
 ## Implemented candidate surfaces
 
@@ -50,14 +50,14 @@ they do not establish a released v3 implementation.
    history/evaluators, deterministic trial order, isolated checkouts, caller-trusted
    driver execution with timeouts, external scoring and exploratory paired reports.
    Reference-solution qualification executes no models.
-9. **Company package:** hashed local summaries with task timing, reconciliation,
+9. **Developer reports:** hashed local summaries with task timing, reconciliation,
    declared sample-policy screening and explicit break-even scenario arithmetic.
-   The original company-controlled bundle remains necessary for reproduction.
+   The original original local benchmark bundle remains necessary for reproduction.
 
 ## Empirical and release gates
 
 The code can be qualified with local deterministic tests. Real savings remain
-unmeasured until company-controlled model trials run with frozen model/effort,
+unmeasured until developer-run model trials run with frozen model/effort,
 source/history, tool configurations, isolated memory stores and equal task limits.
 No model agents or paid requests are launched by implementing this roadmap.
 
@@ -67,7 +67,7 @@ maintenance, failed attempts and retries. Provider exports and supplied prices
 need independent qualification; reconciliation checks supplied request charges,
 not invoice authenticity, taxes or discounts.
 
-Development fixtures are not held-out company workloads. Freeze quality bounds,
+Development fixtures are not held-out developer tasks. Freeze quality bounds,
 cost targets and sampling before evaluation. The implemented cluster intervals
 and sample-policy gate are exploratory screening, not confirmatory significance
 or authentication of attached qualification statements. Independent task and
