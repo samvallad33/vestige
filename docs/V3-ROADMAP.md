@@ -5,8 +5,8 @@ task, including memory operation, while preserving task success. Proposed
 engineering targets are 30% reduction, with 50%+ a stretch for repeated-context
 workflows. These are goals, not measured results or release promises.
 
-Work proceeds solo and sequentially. Earlier tool-contract edits are a separate,
-uncommitted candidate and do not establish a released v3 implementation.
+Work proceeds solo and sequentially. Tool-contract and lifecycle changes are committed in the candidate branch;
+they do not establish a released v3 implementation.
 
 | Order | Work | Exit gate |
 |---|---|---|
@@ -55,3 +55,10 @@ is justified by a single favorable run, synthetic fixture or retrieval score.
   truthful embedding edit state with peer index invalidation, effective
   maintenance controls, and explicit ingest batch outcomes. These implement
   portions of stages 4–7; they do not complete every lifecycle or maintenance gate.
+
+- Stage 4: merge/supersede previews bind mutation-relevant source state; apply
+  rejects stale or legacy plans and inactive members. Merge undo compares the
+  applied state and restores content, validity, journal and plan status in one
+  transaction. Later edits cause a conflict instead of being overwritten.
+  Legacy operations without post-state snapshots require manual recovery review.
+  Exact suppression reversal and bounded atomic restore remain pending.

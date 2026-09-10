@@ -12899,6 +12899,15 @@ impl SqliteMemoryStore {
             ));
         }
 
+        if member_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != member_ids.len()
+        {
+            return Err(StorageError::Init("merge members must be distinct".into()));
+        }
+        let expected_state = self.merge_state_snapshot(member_ids)?;
         let mut nodes: Vec<KnowledgeNode> = Vec::new();
         for id in member_ids {
             let node = self
@@ -12989,6 +12998,7 @@ impl SqliteMemoryStore {
         let classification = policy.classify(min_score);
 
         let plan = crate::advanced::MergePlan {
+            expected_state,
             id: uuid::Uuid::new_v4().to_string(),
             kind: PlanKind::Merge,
             survivor_id: survivor.clone(),
@@ -13027,6 +13037,13 @@ impl SqliteMemoryStore {
     ) -> Result<crate::advanced::MergePlan> {
         use crate::advanced::{PlanKind, score_pair};
 
+        if old_id == new_id {
+            return Err(StorageError::Init(
+                "supersede members must be distinct".into(),
+            ));
+        }
+        let expected_state =
+            self.merge_state_snapshot(&[old_id.to_string(), new_id.to_string()])?;
         let old = self
             .get_node(old_id)?
             .ok_or_else(|| StorageError::NotFound(old_id.to_string()))?;
@@ -13045,6 +13062,7 @@ impl SqliteMemoryStore {
         let classification = policy.classify(signals.combined_score);
 
         let plan = crate::advanced::MergePlan {
+            expected_state,
             id: uuid::Uuid::new_v4().to_string(),
             kind: PlanKind::Supersede,
             survivor_id: new_id.to_string(),
@@ -13063,6 +13081,43 @@ impl SqliteMemoryStore {
 
         self.persist_plan(&plan)?;
         Ok(plan)
+    }
+
+    /// Hash only mutation-relevant state. Access counters and passive decay do
+    /// not invalidate a plan; content, source identity and control state do.
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn merge_state_on(
+        conn: &Connection,
+        ids: &[String],
+    ) -> Result<std::collections::BTreeMap<String, String>> {
+        use sha2::{Digest, Sha256};
+        let mut state = std::collections::BTreeMap::new();
+        for id in ids {
+            let payload: String = conn.query_row(
+                "SELECT json_array(content, node_type, COALESCE(tags, '[]'), source,
+                    COALESCE(NULLIF(trim(scope), ''), 'user'), protected, suppression_count,
+                    valid_from, valid_until, superseded_by, source_system, source_project,
+                    source_id, source_url, source_updated_at, content_hash, source_type, source_author)
+                 FROM knowledge_nodes WHERE id = ?1", params![id], |row| row.get(0))
+                .optional()?.ok_or_else(|| StorageError::NotFound(id.clone()))?;
+            state.insert(
+                id.clone(),
+                format!("{:x}", Sha256::digest(payload.as_bytes())),
+            );
+        }
+        Ok(state)
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    fn merge_state_snapshot(
+        &self,
+        ids: &[String],
+    ) -> Result<std::collections::BTreeMap<String, String>> {
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        Self::merge_state_on(&reader, ids)
     }
 
     /// Cosine similarity between two nodes' stored embeddings (0 if missing).
@@ -13775,6 +13830,24 @@ impl SqliteMemoryStore {
                 plan_scope = Some(scope);
             }
 
+            let actual = Self::merge_state_on(&tx, &plan.member_ids)?;
+            if plan.expected_state.is_empty() || actual != plan.expected_state {
+                return Err(StorageError::Init(
+                    "merge plan is stale or lacks source-state fingerprints; create a new plan"
+                        .into(),
+                ));
+            }
+            for id in &plan.member_ids {
+                let node = tx.query_row(
+                    "SELECT * FROM knowledge_nodes WHERE id = ?1",
+                    params![id],
+                    Self::row_to_node,
+                )?;
+                if node.suppression_count > 0 || !node.is_currently_valid() {
+                    return Err(StorageError::Init("merge plan contains suppressed or temporally inactive memory; no changes applied".into()));
+                }
+            }
+
             // Snapshot everything we need to undo, BEFORE mutating, and from
             // inside the same transaction so the snapshot and the mutation see
             // one consistent state.
@@ -13851,7 +13924,7 @@ impl SqliteMemoryStore {
                     plan.confidence as f64,
                     signals,
                     plan.explanation,
-                    serde_json::Value::Object(undo).to_string(),
+                    serde_json::Value::Object(undo.clone()).to_string(),
                 ],
             )?;
             tx.execute(
@@ -13881,8 +13954,14 @@ impl SqliteMemoryStore {
                             "UPDATE knowledge_nodes SET has_embedding = 0 WHERE id = ?1",
                             params![plan.survivor_id],
                         )?;
-                        tx.execute("DELETE FROM embedding_profile_vectors WHERE node_id = ?1", params![plan.survivor_id])?;
-                        tx.execute("DELETE FROM node_embeddings WHERE node_id = ?1", params![plan.survivor_id])?;
+                        tx.execute(
+                            "DELETE FROM embedding_profile_vectors WHERE node_id = ?1",
+                            params![plan.survivor_id],
+                        )?;
+                        tx.execute(
+                            "DELETE FROM node_embeddings WHERE node_id = ?1",
+                            params![plan.survivor_id],
+                        )?;
                     }
                     for id in &plan.invalidated_ids {
                         Self::invalidate_node_in_transaction(&tx, id, &plan.survivor_id, now)?;
@@ -13893,6 +13972,17 @@ impl SqliteMemoryStore {
                     Self::invalidate_node_in_transaction(&tx, old_id, &plan.survivor_id, now)?;
                 }
             }
+
+            let post_state = Self::merge_state_on(&tx, &plan.member_ids)?;
+            undo.insert(
+                "post_state".into(),
+                serde_json::to_value(post_state)
+                    .map_err(|error| StorageError::Init(error.to_string()))?,
+            );
+            tx.execute(
+                "UPDATE merge_operations SET undo_payload = ?1 WHERE id = ?2",
+                params![serde_json::Value::Object(undo).to_string(), op_id],
+            )?;
 
             tx.commit()?;
         }
@@ -13935,87 +14025,116 @@ impl SqliteMemoryStore {
         if matches!(op.op_type.as_str(), "tag_rename" | "tag_merge") {
             return self.undo_tag_mutation(op_id);
         }
-        if op.status == "reverted" {
-            return Err(StorageError::Init(format!(
-                "operation {op_id} was already reverted"
-            )));
-        }
         if op.op_type == "undo" {
             return Err(StorageError::Init("cannot undo an undo operation".into()));
         }
-
-        let undo: serde_json::Value = {
-            let reader = self
-                .reader
-                .lock()
-                .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
-            let payload: String = reader.query_row(
-                "SELECT undo_payload FROM merge_operations WHERE id = ?1",
-                params![op_id],
-                |row| row.get(0),
-            )?;
-            serde_json::from_str(&payload)
-                .map_err(|e| StorageError::Init(format!("undo payload parse failed: {e}")))?
-        };
-
-        let kind = undo.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-        let survivor_id = undo
-            .get("survivor_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        // Restore survivor content/tags if this was a merge.
-        if kind == "merge"
-            && let (Some(content), Some(tags)) = (
-                undo.get("survivor_prev_content").and_then(|v| v.as_str()),
-                undo.get("survivor_prev_tags").and_then(|v| v.as_array()),
-            )
-        {
-            let tags: Vec<String> = tags
-                .iter()
-                .filter_map(|t| t.as_str().map(|s| s.to_string()))
-                .collect();
-            self.rewrite_survivor(&survivor_id, content, &tags)?;
-        }
-
-        // Clear invalidation on every absorbed node, restoring prior values.
-        if let Some(absorbed) = undo.get("absorbed").and_then(|v| v.as_array()) {
-            for entry in absorbed {
-                let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-                if id.is_empty() {
-                    continue;
-                }
-                let prev_vu = entry.get("prev_valid_until").and_then(|v| v.as_str());
-                let prev_sb = entry.get("prev_superseded_by").and_then(|v| v.as_str());
-                self.restore_bitemporal(id, prev_vu, prev_sb)?;
-            }
-        }
-
         let now = Utc::now();
         let new_op_id = uuid::Uuid::new_v4().to_string();
+        let mut regenerated = None;
         {
             let writer = self
                 .writer
                 .lock()
                 .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-            // Mark original reverted.
-            writer.execute(
+            let tx = Self::begin_write_transaction(&writer, "merge_undo")?;
+            let (status, payload): (String, String) = tx.query_row(
+                "SELECT status, undo_payload FROM merge_operations WHERE id = ?1",
+                params![op_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            if status != "applied" {
+                return Err(StorageError::Init(format!(
+                    "operation {op_id} was already reverted or is not applied"
+                )));
+            }
+            let undo: serde_json::Value = serde_json::from_str(&payload)
+                .map_err(|error| StorageError::Init(format!("undo payload invalid: {error}")))?;
+            let expected: std::collections::BTreeMap<String, String> = serde_json::from_value(
+                undo.get("post_state").cloned().ok_or_else(|| StorageError::Init(
+                    "legacy undo has no post-state fingerprints; manual recovery review required".into()))?)
+                .map_err(|error| StorageError::Init(error.to_string()))?;
+            if expected.is_empty() || Self::merge_state_on(&tx, &op.affected_ids)? != expected {
+                return Err(StorageError::Init(
+                    "undo conflicts with later memory changes; no changes applied".into(),
+                ));
+            }
+            let survivor_id = undo
+                .get("survivor_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| StorageError::Init("undo missing survivor".into()))?;
+            let kind = undo.get("kind").and_then(|v| v.as_str());
+            if kind == Some("merge") {
+                let content = undo
+                    .get("survivor_prev_content")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| StorageError::Init("undo missing survivor content".into()))?;
+                let tags: Vec<String> = serde_json::from_value(
+                    undo.get("survivor_prev_tags")
+                        .cloned()
+                        .ok_or_else(|| StorageError::Init("undo missing tags".into()))?,
+                )
+                .map_err(|error| StorageError::Init(error.to_string()))?;
+                tx.execute(
+                    "UPDATE knowledge_nodes SET content = ?1, tags = ?2,
+                    updated_at = ?3, has_embedding = 0 WHERE id = ?4",
+                    params![
+                        content,
+                        serde_json::to_string(&tags)
+                            .map_err(|error| StorageError::Init(error.to_string()))?,
+                        now.to_rfc3339(),
+                        survivor_id
+                    ],
+                )?;
+                tx.execute(
+                    "DELETE FROM embedding_profile_vectors WHERE node_id = ?1",
+                    params![survivor_id],
+                )?;
+                tx.execute(
+                    "DELETE FROM node_embeddings WHERE node_id = ?1",
+                    params![survivor_id],
+                )?;
+                regenerated = Some((survivor_id.to_string(), content.to_string()));
+            } else if kind != Some("supersede") {
+                return Err(StorageError::Init("unsupported undo kind".into()));
+            }
+            let absorbed = undo
+                .get("absorbed")
+                .and_then(|value| value.as_array())
+                .ok_or_else(|| StorageError::Init("undo missing absorbed state".into()))?;
+            for entry in absorbed {
+                let id = entry
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| StorageError::Init("undo missing absorbed identity".into()))?;
+                let previous_until = entry
+                    .get("prev_valid_until")
+                    .and_then(|value| value.as_str());
+                let previous_superseded = entry
+                    .get("prev_superseded_by")
+                    .and_then(|value| value.as_str());
+                if tx.execute(
+                    "UPDATE knowledge_nodes SET valid_until = ?1, superseded_by = ?2,
+                    updated_at = ?3 WHERE id = ?4",
+                    params![previous_until, previous_superseded, now.to_rfc3339(), id],
+                )? != 1
+                {
+                    return Err(StorageError::NotFound(id.to_string()));
+                }
+            }
+            tx.execute(
                 "UPDATE merge_operations SET status = 'reverted', reverted_at = ?1 WHERE id = ?2",
                 params![now.to_rfc3339(), op_id],
             )?;
-            // Re-open the plan so it could be re-applied if desired.
             if let Some(plan_id) = op.plan_id.as_deref() {
-                writer.execute(
+                tx.execute(
                     "UPDATE merge_plans SET status = 'pending', applied_at = NULL WHERE id = ?1",
                     params![plan_id],
                 )?;
             }
-            // Record compensating undo op.
-            writer.execute(
+            tx.execute(
                 "INSERT INTO merge_operations
-                    (id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
-                     survivor_id, affected_ids, confidence, signals, reason, undo_payload)
+                (id, plan_id, op_type, status, created_at, reverted_at, reverts_op_id,
+                 survivor_id, affected_ids, confidence, signals, reason, undo_payload)
                  VALUES (?1, ?2, 'undo', 'applied', ?3, NULL, ?4, ?5, ?6, NULL, NULL, ?7, '{}')",
                 params![
                     new_op_id,
@@ -14023,12 +14142,26 @@ impl SqliteMemoryStore {
                     now.to_rfc3339(),
                     op_id,
                     survivor_id,
-                    serde_json::to_string(&op.affected_ids).unwrap_or_else(|_| "[]".into()),
-                    format!("Reverted {} operation {op_id}", op.op_type),
+                    serde_json::to_string(&op.affected_ids)
+                        .map_err(|error| StorageError::Init(error.to_string()))?,
+                    format!("Reverted {} operation {op_id}", op.op_type)
                 ],
             )?;
+            tx.commit()?;
         }
-
+        // All durable state is committed before index cleanup or inference.
+        if let Some((id, content)) = regenerated {
+            if let Some(index) = self.vector_index.as_ref()
+                && let Ok(mut index) = index.lock()
+            {
+                let _ = index.remove(&id);
+            }
+            if self.active_embedding_runtime_ready().unwrap_or(false)
+                && let Err(error) = self.generate_embedding_for_node(&id, &content)
+            {
+                tracing::warn!(%error, "undo committed; embedding remains pending regeneration");
+            }
+        }
         self.read_operation(&new_op_id)?
             .ok_or_else(|| StorageError::Init("undo operation vanished after insert".into()))
     }
@@ -14210,44 +14343,6 @@ impl SqliteMemoryStore {
              SET valid_until = ?1, superseded_by = ?2, updated_at = ?1
              WHERE id = ?3",
             params![now.to_rfc3339(), superseded_by, id],
-        )?;
-        Ok(())
-    }
-
-    /// Restore a node's bitemporal columns (used by undo).
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    fn restore_bitemporal(
-        &self,
-        id: &str,
-        valid_until: Option<&str>,
-        superseded_by: Option<&str>,
-    ) -> Result<()> {
-        let writer = self
-            .writer
-            .lock()
-            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        writer.execute(
-            "UPDATE knowledge_nodes
-             SET valid_until = ?1, superseded_by = ?2, updated_at = ?3
-             WHERE id = ?4",
-            params![valid_until, superseded_by, Utc::now().to_rfc3339(), id],
-        )?;
-        Ok(())
-    }
-
-    /// Rewrite a survivor's content and tags (used by merge apply + undo).
-    /// Content rewrite regenerates the embedding via `update_node_content`.
-    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
-    fn rewrite_survivor(&self, id: &str, content: &str, tags: &[String]) -> Result<()> {
-        self.update_node_content(id, content)?;
-        let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
-        let writer = self
-            .writer
-            .lock()
-            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
-        writer.execute(
-            "UPDATE knowledge_nodes SET tags = ?1, updated_at = ?2 WHERE id = ?3",
-            params![tags_json, Utc::now().to_rfc3339(), id],
         )?;
         Ok(())
     }
@@ -21858,6 +21953,166 @@ mod tests {
             "undo row must snapshot the survivor's pre-merge content: {undo}"
         );
         assert_eq!(storage.plan_status(&plan.id).unwrap().as_deref(), Some("applied"));
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_merge_state_rejects_changed_and_legacy_plans() {
+        for mutation in [
+            "content = 'later edit'",
+            "protected = 1",
+            "scope = 'project:other'",
+            "suppression_count = 1",
+            "valid_until = '2000-01-01T00:00:00Z'",
+        ] {
+            let storage = create_test_storage();
+            let a = seed_node(&storage, "canonical", &["x"], axis_vector(7, 0.02));
+            let b = seed_node(&storage, "detail", &["x"], axis_vector(7, 0.01));
+            let plan = storage
+                .plan_merge(&[a.clone(), b.clone()], Some(&a), MergePolicy::default())
+                .unwrap();
+            storage
+                .writer
+                .lock()
+                .unwrap()
+                .execute(
+                    &format!("UPDATE knowledge_nodes SET {mutation} WHERE id = ?1"),
+                    params![b],
+                )
+                .unwrap();
+            assert!(storage.apply_plan(&plan.id, true).is_err(), "{mutation}");
+            assert_eq!(
+                storage.plan_status(&plan.id).unwrap().as_deref(),
+                Some("pending")
+            );
+            assert_eq!(storage.get_node(&a).unwrap().unwrap().content, "canonical");
+            assert!(storage.read_bitemporal(&b).unwrap().1.is_none());
+        }
+        let storage = create_test_storage();
+        let a = seed_node(&storage, "canonical", &["x"], axis_vector(7, 0.02));
+        let b = seed_node(&storage, "detail", &["x"], axis_vector(7, 0.01));
+        assert!(
+            storage
+                .plan_merge(&[a.clone(), a.clone()], Some(&a), MergePolicy::default())
+                .is_err()
+        );
+        assert!(
+            storage
+                .plan_supersede(&a, &a, MergePolicy::default())
+                .is_err()
+        );
+        let mut plan = storage
+            .plan_merge(&[a.clone(), b], Some(&a), MergePolicy::default())
+            .unwrap();
+        plan.expected_state.clear();
+        storage.persist_plan(&plan).unwrap();
+        assert!(
+            storage
+                .apply_plan(&plan.id, true)
+                .unwrap_err()
+                .to_string()
+                .contains("fingerprints")
+        );
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_merge_undo_conflict_and_transaction_rollback() {
+        let storage = create_test_storage();
+        let a = seed_node(&storage, "canonical", &["x"], axis_vector(7, 0.02));
+        let b = seed_node(&storage, "detail", &["x"], axis_vector(7, 0.01));
+        let plan = storage
+            .plan_merge(&[a.clone(), b.clone()], Some(&a), MergePolicy::default())
+            .unwrap();
+        let op = storage.apply_plan(&plan.id, true).unwrap();
+        let applied = storage
+            .merge_state_snapshot(&[a.clone(), b.clone()])
+            .unwrap();
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_undo BEFORE INSERT ON merge_operations
+             WHEN NEW.op_type = 'undo' BEGIN SELECT RAISE(ABORT, 'injected undo failure'); END;",
+            )
+            .unwrap();
+        assert!(storage.merge_undo(&op.id).is_err());
+        assert_eq!(
+            storage
+                .merge_state_snapshot(&[a.clone(), b.clone()])
+                .unwrap(),
+            applied
+        );
+        assert_eq!(
+            storage.read_operation(&op.id).unwrap().unwrap().status,
+            "applied"
+        );
+        assert_eq!(
+            storage.plan_status(&plan.id).unwrap().as_deref(),
+            Some("applied")
+        );
+        storage
+            .writer
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_undo")
+            .unwrap();
+        storage
+            .update_node_content(&a, "later independent edit")
+            .unwrap();
+        assert!(
+            storage
+                .merge_undo(&op.id)
+                .unwrap_err()
+                .to_string()
+                .contains("conflicts")
+        );
+        assert_eq!(
+            storage.get_node(&a).unwrap().unwrap().content,
+            "later independent edit"
+        );
+        assert!(storage.read_bitemporal(&b).unwrap().0.is_some());
+        assert_eq!(
+            storage.read_operation(&op.id).unwrap().unwrap().status,
+            "applied"
+        );
+    }
+
+    #[cfg(all(feature = "embeddings", feature = "vector-search"))]
+    #[test]
+    fn test_merge_undo_concurrent_has_one_winner() {
+        let storage = std::sync::Arc::new(create_test_storage());
+        let a = seed_node(&storage, "canonical", &["x"], axis_vector(7, 0.02));
+        let b = seed_node(&storage, "detail", &["x"], axis_vector(7, 0.01));
+        let plan = storage
+            .plan_merge(&[a.clone(), b.clone()], Some(&a), MergePolicy::default())
+            .unwrap();
+        let op = storage.apply_plan(&plan.id, true).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let racers: Vec<_> = (0..2)
+            .map(|_| {
+                let storage = storage.clone();
+                let barrier = barrier.clone();
+                let id = op.id.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    storage.merge_undo(&id).is_ok()
+                })
+            })
+            .collect();
+        assert_eq!(
+            racers
+                .into_iter()
+                .filter_map(|racer| racer.join().ok())
+                .filter(|won| *won)
+                .count(),
+            1
+        );
+        assert_eq!(storage.get_node(&a).unwrap().unwrap().content, "canonical");
+        assert_eq!(storage.read_bitemporal(&b).unwrap(), (None, None));
+        // Exact restoration permits the original preview to be applied again.
+        assert!(storage.apply_plan(&plan.id, true).is_ok());
     }
 
     #[cfg(all(feature = "embeddings", feature = "vector-search"))]

@@ -181,3 +181,16 @@ corrected annotations are compatibility changes. Update callers that relied on
 implicit promotion, cross-project reasoning, or silently ignored arguments.
 The prior code-anchor change on this branch has its own versioned-hash rollback
 boundary: read `CODE-CONTEXT-EVIDENCE.md` before installing either change.
+
+### Merge plan and undo consistency
+
+Merge and supersede previews include fingerprints of content, source identity,
+scope, protection, suppression and temporal state. Apply checks these inside
+its write transaction; changed or legacy previews require a new plan. Members
+must be distinct and currently active. Confirmation does not bypass these checks.
+
+Merge undo checks the post-apply fingerprints before restoring durable state in
+one transaction. Later edits or control changes produce a conflict. Legacy
+operations without fingerprints require manual recovery review. Embedding
+regeneration follows commit; failure leaves the embedding pending. This contract
+does not claim reversal of suppression cascades or external side effects.
