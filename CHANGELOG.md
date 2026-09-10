@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — v3 efficiency evaluation and runtime candidate
+
+- Installable Python runtime for explicit transcript ownership, progressive native
+  tool selection, retained recall packets and refresh after compaction. It
+  serializes OpenAI Responses and Anthropic Messages requests; the caller owns
+  provider execution. POSIX MCP transport bounds reads and writes and cleans up
+  its owned child on failure.
+- Frozen developer evaluation with six development task families, deterministic
+  isolated trial order, caller-trusted driver execution, independently executed
+  frozen evaluators and whole driver-task timing. Exact usage accounting rejects
+  duplicate provider response IDs across arms and retains missing usage/failures.
+- Request-charge reconciliation and hashed company reports with task timing,
+  declared sample-policy screening and explicit break-even projections. Synthetic
+  fixtures qualify the machinery, not product savings; live held-out cost and
+  quality measurements remain required.
+- Bounded lifecycle, access-log and garbage-collection batches alongside embedding
+  repair pages. Lifecycle/GC time budgets are cooperative. Scoped dream pages
+  bound pair discovery and preserve newer/unprocessed waking tags. Default full
+  consolidation retains its compatibility behavior.
+
+### Fixed — Journaled lifecycle consistency
+
+- Suppression journal schema 34 records exact local before/after state. Schema 35
+  journals neighbor effects so repeated cascade sweeps do not compound the same
+  operation. Reversal restores local and recorded neighbor state atomically,
+  rejecting later changes. Unrecorded historical effects cannot be reconstructed.
+- Merge/supersede previews reject stale state and merge undo rejects conflicts.
+  Legacy restore stages bounded input before a transactional import, leaving
+  embeddings pending. Retain a pre-upgrade database backup for schema rollback.
+- Embedding persistence rejects computations made against changed content or an
+  outdated active profile before storing them. Peer-index invalidation and
+  runtime-independent regression fixtures cover the edit/persistence path.
+
 ### Added — Discoverable tool contracts
 
 - Lookup can emit stable evidence packets with `context_packet=true`; explicit
