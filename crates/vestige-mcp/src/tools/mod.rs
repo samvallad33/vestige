@@ -11,6 +11,7 @@
 //! arms in server.rs). See docs/launch/tool-consolidation-v2.2.0.md.
 
 // Active unified tools
+mod code_context;
 pub mod codebase_unified;
 pub mod intention_unified;
 pub mod memory_unified;

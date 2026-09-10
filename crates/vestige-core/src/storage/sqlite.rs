@@ -6500,6 +6500,39 @@ impl SqliteMemoryStore {
         })
     }
 
+    /// Current code advice, with exact project tags and an explicit namespace.
+    /// Eligibility is applied before LIMIT so expired rows cannot crowd out
+    /// current advice. Historical reads continue to use the existing APIs.
+    pub fn current_code_context_nodes(
+        &self,
+        node_type: &str,
+        tag: Option<&str>,
+        scope: &str,
+        limit: i32,
+    ) -> Result<Vec<KnowledgeNode>> {
+        let scope = Self::normalize_scope(scope)?;
+        let reader = self
+            .reader
+            .lock()
+            .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+        let mut stmt = reader.prepare(
+            "SELECT n.* FROM knowledge_nodes n
+             WHERE n.node_type = ?1 AND n.scope = ?2
+               AND (?3 IS NULL OR EXISTS (
+                   SELECT 1 FROM json_each(n.tags) t WHERE t.type = 'text' AND t.value = ?3))
+               AND n.superseded_by IS NULL
+               AND (n.valid_from IS NULL OR julianday(n.valid_from) <= julianday(?4))
+               AND (n.valid_until IS NULL OR julianday(n.valid_until) > julianday(?4))
+             ORDER BY n.retention_strength DESC, n.created_at DESC, n.id ASC LIMIT ?5",
+        )?;
+        let rows = stmt.query_map(
+            params![node_type, scope, tag, Utc::now().to_rfc3339(), limit],
+            Self::row_to_node,
+        )?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     /// Get nodes by type and optional tag filter
     ///
     /// This is used for codebase context retrieval where we need to query

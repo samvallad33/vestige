@@ -143,6 +143,12 @@ jobs:
       - name: Test vestige-mcp without embeddings
         run: cargo test -p vestige-mcp --no-default-features --features connectors,cloud-sync --lib
 
+      - name: Build disposable context-contract test server
+        run: cargo build -p vestige-mcp --no-default-features --features connectors,cloud-sync --bin vestige-mcp
+
+      - name: Verify evidence parity through MCP
+        run: python3 scripts/test-context-evidence.py --binary target/debug/vestige-mcp
+
   # The Termux target built by CI instead of by hand (#145). cargo-ndk drives
   # the NDK clang that GitHub's ubuntu-24.04 image ships (ANDROID_NDK_HOME is
   # preset), API 24 is Termux's floor, and the no-embeddings profile is the one

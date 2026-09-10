@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Code context evidence
+
+- `session_start` and `codebase.get_context` share current, scoped code-memory
+  selection and live anchor evidence. Startup includes actionable summaries,
+  stable memory IDs, coverage and explicit recheck/unavailable states.
+- Context reads require an explicit `repoPath` to verify source; similarly named
+  codebases no longer match through a tag prefix. `scope` is available on codebase
+  writes/reads and session startup. Partial anchor matches do not imply complete
+  verification, and storage failures remain visible.
+- `codebase.reanchor` atomically replaces explicitly reviewed source anchors for
+  an existing memory ID without changing its content or strength.
+- V2 anchors preserve significant whitespace. Legacy hashes stay stored with an
+  unverifiable verdict. See `docs/CODE-CONTEXT-EVIDENCE.md` for compatibility and
+  rollback details before deploying a binary that writes the new format.
+- Startup accounts for its complete serialized response using a labeled byte-based
+  token estimate, keeps code summaries with their evidence, and evaluates due time
+  intentions even when no context object is provided.
+
 ### Fixed — CI
 
 - The Observatory privacy test built file paths from `import.meta.url` with

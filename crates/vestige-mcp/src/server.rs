@@ -424,11 +424,11 @@ description: Some("Manage one memory. Actions: 'get', 'get_batch' (ids), 'state'
                 title: Some("Codebase".to_string()),
                 annotations: Some(ToolAnnotations {
                     read_only_hint: false,
-                    destructive_hint: false,
+                    destructive_hint: true,
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions, each marked current or stale), 'verify' (re-check anchored code memories against the working tree).".to_string()),
+description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions, each marked current or stale), 'verify' (check a bounded set of anchors), 'reanchor' (replace reviewed source evidence for an existing memory).".to_string()),
                 input_schema: tools::codebase_unified::schema(),
                 ..Default::default()
             },
@@ -3036,7 +3036,12 @@ mod tests {
             read_only,
             ["memory_status", "recall", "receipt", "session_start"]
         );
-        assert_eq!(destructive, ["dedup", "intention", "maintain", "memory"]);
+        // Reanchoring replaces existing evidence, so the mixed codebase tool
+        // must advertise its destructive action conservatively.
+        assert_eq!(
+            destructive,
+            ["codebase", "dedup", "intention", "maintain", "memory"]
+        );
         assert_eq!(
             open_world,
             ["source_sync"],

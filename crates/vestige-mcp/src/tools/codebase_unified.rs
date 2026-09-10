@@ -10,11 +10,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::cognitive::CognitiveEngine;
-use vestige_core::codebase::{
-    AnchorDraft, AnchorStatus, AnchorVerification, CodeAnchor, capture_anchor, verify_anchor,
-};
+use vestige_core::codebase::{AnchorDraft, CodeAnchor, capture_anchor};
 use vestige_core::{IngestInput, OutputConfig, Storage};
 
+use super::code_context::{self, verification_json, verify_nodes};
 use super::search_unified::apply_output_masks;
 
 /// Input schema for the unified codebase tool
@@ -24,8 +23,8 @@ pub fn schema() -> Value {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["remember_pattern", "remember_decision", "get_context", "verify"],
-                "description": "'remember_pattern' stores a code pattern, 'remember_decision' an architectural decision, 'get_context' returns both with a current-or-stale mark, 'verify' re-checks every anchored code memory against the working tree"
+                "enum": ["remember_pattern", "remember_decision", "get_context", "verify", "reanchor"],
+                "description": "'remember_pattern' stores a code pattern, 'remember_decision' an architectural decision, 'get_context' returns both with a current-or-stale mark, 'verify' checks a bounded set of anchored memories, 'reanchor' explicitly replaces reviewed source anchors for memoryId"
             },
             // remember_pattern fields
             "name": {
@@ -71,9 +70,11 @@ pub fn schema() -> Value {
                     "required": ["path"]
                 }
             },
+            "memoryId": {"type":"string", "description":"Existing code memory to reanchor after reviewing its advice against source"},
+            "scope": {"type":"string", "description":"Memory namespace (default: user)"},
             "repoPath": {
                 "type": "string",
-                "description": "Repository root used to resolve anchor paths (default: the server's working directory)"
+                "description": "Explicit checkout for get_context evidence. Remember/verify actions retain the server working-directory fallback."
             },
             "verify": {
                 "type": "boolean",
@@ -99,6 +100,7 @@ pub fn schema() -> Value {
 #[serde(rename_all = "camelCase")]
 struct CodebaseArgs {
     action: String,
+    memory_id: Option<String>,
     // Pattern fields
     name: Option<String>,
     description: Option<String>,
@@ -110,6 +112,7 @@ struct CodebaseArgs {
     files: Option<Vec<String>>,
     anchors: Option<Vec<AnchorArg>>,
     repo_path: Option<String>,
+    scope: Option<String>,
     codebase: Option<String>,
     // Context fields
     limit: Option<i32>,
@@ -144,8 +147,9 @@ pub async fn execute(
         "remember_decision" => execute_remember_decision(storage, cognitive, &args).await,
         "get_context" => execute_get_context(storage, cognitive, output_config, &args).await,
         "verify" => execute_verify(storage, &args).await,
+        "reanchor" => execute_reanchor(storage, &args),
         _ => Err(format!(
-            "Invalid action '{}'. Must be one of: remember_pattern, remember_decision, get_context, verify",
+            "Invalid action '{}'. Must be one of: remember_pattern, remember_decision, get_context, verify, reanchor",
             args.action
         )),
     }
@@ -201,13 +205,17 @@ async fn execute_remember_pattern(
         source_envelope: None,
     };
 
-    let node = storage.ingest(input).map_err(|e| e.to_string())?;
+    let node = storage
+        .ingest_in_scope(input, args.scope.as_deref().unwrap_or("user"))
+        .map_err(|e| e.to_string())?;
     let node_id = node.id.clone();
 
     // ====================================================================
     // COGNITIVE: Cross-project pattern recording
     // ====================================================================
-    if let Ok(cog) = cognitive.try_lock() {
+    if args.scope.as_deref().unwrap_or("user").trim() == "user"
+        && let Ok(cog) = cognitive.try_lock()
+    {
         let codebase_name = args.codebase.as_deref().unwrap_or("default");
         cog.cross_project
             .record_project_memory(&node_id, codebase_name, None);
@@ -304,13 +312,17 @@ async fn execute_remember_decision(
         source_envelope: None,
     };
 
-    let node = storage.ingest(input).map_err(|e| e.to_string())?;
+    let node = storage
+        .ingest_in_scope(input, args.scope.as_deref().unwrap_or("user"))
+        .map_err(|e| e.to_string())?;
     let node_id = node.id.clone();
 
     // ====================================================================
     // COGNITIVE: Cross-project decision recording
     // ====================================================================
-    if let Ok(cog) = cognitive.try_lock() {
+    if args.scope.as_deref().unwrap_or("user").trim() == "user"
+        && let Ok(cog) = cognitive.try_lock()
+    {
         let codebase_name = args.codebase.as_deref().unwrap_or("default");
         cog.cross_project
             .record_project_memory(&node_id, codebase_name, None);
@@ -349,6 +361,51 @@ async fn execute_remember_decision(
 // exactly the same confidence as one that was still true. The fix is not to
 // delete rotted memories - the user values that memories are preserved - it is
 // to make rot *visible* at retrieval time.
+
+/// Explicit opt-in only: changed source is not automatically accepted as evidence.
+fn execute_reanchor(storage: &Arc<Storage>, args: &CodebaseArgs) -> Result<Value, String> {
+    let id = args
+        .memory_id
+        .as_deref()
+        .ok_or("reanchor requires memoryId")?;
+    let scope = args.scope.as_deref().unwrap_or("user");
+    if !storage
+        .node_is_in_scope(id, scope)
+        .map_err(|e| e.to_string())?
+    {
+        return Err("Code memory not found in requested scope".into());
+    }
+    let raw_root = args
+        .repo_path
+        .as_deref()
+        .filter(|p| !p.trim().is_empty())
+        .ok_or("reanchor requires explicit repoPath")?;
+    let root =
+        std::fs::canonicalize(raw_root).map_err(|_| "reanchor requires an available checkout")?;
+    if !root.is_dir() {
+        return Err("repoPath must be a directory".into());
+    }
+    let drafts = collect_drafts(args);
+    if drafts.is_empty() {
+        return Err("reanchor requires explicit files or anchors reviewed by the caller".into());
+    }
+    let anchors: Vec<_> = drafts
+        .iter()
+        .map(|d| capture_anchor(id, &root, d))
+        .collect();
+    if anchors.iter().any(|a| !a.is_verifiable()) {
+        return Err(
+            "Could not capture every requested anchor; existing evidence was preserved".into(),
+        );
+    }
+    let count = storage
+        .replace_code_anchors(id, scope, &anchors)
+        .map_err(|e| e.to_string())?;
+    Ok(
+        serde_json::json!({"action":"reanchor","nodeId":id,"scope":scope,"anchorsReplaced":count,
+        "hashVersion":"v2","claimVerified":false,"memoryContentChanged":false}),
+    )
+}
 
 /// Resolve the repository root used to interpret anchor paths.
 fn resolve_repo_root(args: &CodebaseArgs) -> Option<PathBuf> {
@@ -455,133 +512,6 @@ fn capture_and_record(storage: &Arc<Storage>, node_id: &str, args: &CodebaseArgs
     })
 }
 
-/// One anchor verdict, rendered for the tool response.
-fn verification_json(v: &AnchorVerification) -> Value {
-    serde_json::json!({
-        "path": v.file_path,
-        "symbol": v.symbol,
-        "status": v.status.as_str(),
-        "detail": v.detail,
-        "recordedLine": v.recorded_line,
-        "currentLine": v.current_line,
-    })
-}
-
-/// Roll several anchor verdicts for one memory into a single status.
-///
-/// Staleness wins over freshness: if any anchor of a memory no longer matches,
-/// the memory is flagged. A memory whose anchors are all unverifiable is
-/// "unverifiable", never "stale" - this is the legacy path, and accusing a
-/// correct memory of being wrong would be worse than the bug being fixed.
-fn worst_status(verifications: &[AnchorVerification]) -> AnchorStatus {
-    if verifications
-        .iter()
-        .any(|v| v.status == AnchorStatus::Missing)
-    {
-        AnchorStatus::Missing
-    } else if verifications
-        .iter()
-        .any(|v| v.status == AnchorStatus::Drifted)
-    {
-        AnchorStatus::Drifted
-    } else if verifications.iter().any(|v| v.status.is_fresh()) {
-        // Some anchor positively matched and none contradicted it.
-        if verifications
-            .iter()
-            .any(|v| v.status == AnchorStatus::Moved)
-        {
-            AnchorStatus::Moved
-        } else {
-            AnchorStatus::Verified
-        }
-    } else {
-        AnchorStatus::Unverifiable
-    }
-}
-
-/// Verify every anchor belonging to `node_ids` and return, per node, the rolled
-/// up status plus the individual verdicts.
-fn verify_nodes(
-    storage: &Arc<Storage>,
-    repo_root: &std::path::Path,
-    node_ids: &[String],
-) -> std::collections::HashMap<String, (AnchorStatus, Vec<AnchorVerification>)> {
-    let mut out = std::collections::HashMap::new();
-    let Ok(by_node) = storage.code_anchors_for_nodes(node_ids) else {
-        return out;
-    };
-    for (node_id, anchors) in by_node {
-        let verdicts: Vec<AnchorVerification> = anchors
-            .iter()
-            .map(|a| verify_anchor(a, repo_root))
-            .collect();
-        // Cache the verdict for reporting. The retrieval path always
-        // re-verifies against the live tree, so this is never load-bearing.
-        for (anchor, verdict) in anchors.iter().zip(verdicts.iter()) {
-            let _ =
-                storage.record_anchor_verification(&anchor.id, verdict.status, verdict.checked_at);
-        }
-        out.insert(node_id, (worst_status(&verdicts), verdicts));
-    }
-    out
-}
-
-/// Annotate already-formatted memory items with their verification verdict.
-/// Returns the ids of the memories that are visibly stale.
-fn annotate_items(
-    items: &mut [Value],
-    verified: &std::collections::HashMap<String, (AnchorStatus, Vec<AnchorVerification>)>,
-) -> Vec<String> {
-    let mut stale_ids = Vec::new();
-    for item in items.iter_mut() {
-        let Some(id) = item.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
-            continue;
-        };
-        let Some(obj) = item.as_object_mut() else {
-            continue;
-        };
-
-        match verified.get(&id) {
-            Some((status, verdicts)) => {
-                obj.insert(
-                    "anchorStatus".to_string(),
-                    Value::String(status.as_str().to_string()),
-                );
-                obj.insert(
-                    "anchors".to_string(),
-                    Value::Array(verdicts.iter().map(verification_json).collect()),
-                );
-                if status.is_stale() {
-                    stale_ids.push(id);
-                    let reason = verdicts
-                        .iter()
-                        .filter(|v| v.is_stale())
-                        .map(|v| v.detail.clone())
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    obj.insert("stale".to_string(), Value::Bool(true));
-                    obj.insert("staleReason".to_string(), Value::String(reason));
-                }
-            }
-            None => {
-                // No anchor row at all: every memory written before anchoring
-                // existed lands here. Unverifiable, explicitly not stale.
-                obj.insert(
-                    "anchorStatus".to_string(),
-                    Value::String("unanchored".to_string()),
-                );
-                obj.insert(
-                    "anchorNote".to_string(),
-                    Value::String(
-                        "This memory has no source anchor, so Vestige cannot check it against the code. It may be perfectly correct - it just cannot prove it.".to_string(),
-                    ),
-                );
-            }
-        }
-    }
-    stale_ids
-}
-
 /// Get codebase context (patterns and decisions)
 async fn execute_get_context(
     storage: &Arc<Storage>,
@@ -592,18 +522,11 @@ async fn execute_get_context(
     // Precedence: explicit MCP param > config limit > built-in default (10).
     let limit = output_config.resolve_limit(args.limit, 10).clamp(1, 50);
 
-    // Build tag filter for codebase
-    let tag_filter = args.codebase.as_ref().map(|cb| format!("codebase:{}", cb));
-
-    // Query patterns by node_type and tag
-    let patterns = storage
-        .get_nodes_by_type_and_tag("pattern", tag_filter.as_deref(), limit)
-        .unwrap_or_default();
-
-    // Query decisions by node_type and tag
-    let decisions = storage
-        .get_nodes_by_type_and_tag("decision", tag_filter.as_deref(), limit)
-        .unwrap_or_default();
+    let scope = args.scope.as_deref().unwrap_or("user");
+    let patterns =
+        code_context::current_nodes(storage, "pattern", args.codebase.as_deref(), scope, limit)?;
+    let decisions =
+        code_context::current_nodes(storage, "decision", args.codebase.as_deref(), scope, limit)?;
 
     let mut formatted_patterns: Vec<Value> = patterns
         .iter()
@@ -638,6 +561,7 @@ async fn execute_get_context(
     // ====================================================================
     let mut universal_patterns = Vec::new();
     if let Some(codebase_name) = &args.codebase
+        && scope == "user"
         && let Ok(cog) = cognitive.try_lock()
     {
         let context = vestige_core::advanced::cross_project::ProjectContext {
@@ -663,66 +587,26 @@ async fn execute_get_context(
     // - the memory is returned exactly as the user saved it, with the verdict
     // attached so it cannot be read without being seen.
     // ====================================================================
-    let verify_enabled = args.verify.unwrap_or(true);
-    let repo_root = if verify_enabled {
-        resolve_repo_root(args)
-    } else {
-        None
-    };
-
-    let mut verification = serde_json::json!({
-        "enabled": false,
-        "reason": if !verify_enabled {
-            "verification disabled by the caller (verify=false)"
-        } else {
-            "no repository root could be resolved; pass repoPath to enable staleness detection"
-        },
-    });
-    let mut stale_ids: Vec<String> = Vec::new();
-
-    if let Some(root) = repo_root.as_deref() {
-        let node_ids: Vec<String> = patterns
-            .iter()
-            .chain(decisions.iter())
-            .map(|n| n.id.clone())
-            .collect();
-        let verified = verify_nodes(storage, root, &node_ids);
-
-        stale_ids.extend(annotate_items(&mut formatted_patterns, &verified));
-        stale_ids.extend(annotate_items(&mut formatted_decisions, &verified));
-
-        let all: Vec<&AnchorStatus> = verified.values().map(|(s, _)| s).collect();
-        let fresh = all.iter().filter(|s| s.is_fresh()).count();
-        let stale = all.iter().filter(|s| s.is_stale()).count();
-        let unverifiable = node_ids.len() - fresh - stale;
-
-        verification = serde_json::json!({
-            "enabled": true,
-            "repoPath": root.display().to_string(),
-            "checked": node_ids.len(),
-            "fresh": fresh,
-            "stale": stale,
-            "unverifiable": unverifiable,
-            "warning": if stale > 0 {
-                Value::String(format!(
-                    "{stale} of {} returned code memories no longer match the code they describe (`stale: true`, see `staleReason`). They are preserved, not deleted - re-read the source before acting on them.",
-                    node_ids.len()
-                ))
-            } else {
-                Value::Null
-            },
-            "note": if unverifiable > 0 {
-                Value::String(format!(
-                    "{unverifiable} memory/memories have no verifiable anchor. That means Vestige cannot check them, NOT that they are wrong. Re-save them with `files: [\"path#symbol\"]` to make them self-checking."
-                ))
-            } else {
-                Value::Null
-            },
-        });
-    }
+    let mut items = formatted_patterns;
+    let pattern_count = items.len();
+    items.extend(formatted_decisions);
+    let verification = code_context::annotate(
+        storage,
+        &mut items,
+        args.repo_path.as_deref(),
+        args.verify.unwrap_or(true),
+    )?;
+    let stale_ids: Vec<String> = items
+        .iter()
+        .filter(|v| v["stale"] == true)
+        .filter_map(|v| v["id"].as_str().map(str::to_owned))
+        .collect();
+    let formatted_decisions = items.split_off(pattern_count);
+    let formatted_patterns = items;
 
     Ok(serde_json::json!({
         "action": "get_context",
+        "scope": scope,
         "codebase": args.codebase,
         "profile": output_config.profile.as_str(),
         "verification": verification,
@@ -750,20 +634,20 @@ async fn execute_verify(storage: &Arc<Storage>, args: &CodebaseArgs) -> Result<V
         "Could not resolve a repository root. Pass `repoPath` pointing at the checkout to verify against.",
     )?;
 
-    let tag_filter = args.codebase.as_ref().map(|cb| format!("codebase:{}", cb));
     let limit = args.limit.unwrap_or(200).clamp(1, 1000);
-
-    let mut nodes = storage
-        .get_nodes_by_type_and_tag("pattern", tag_filter.as_deref(), limit)
-        .unwrap_or_default();
-    nodes.extend(
-        storage
-            .get_nodes_by_type_and_tag("decision", tag_filter.as_deref(), limit)
-            .unwrap_or_default(),
-    );
+    let scope = args.scope.as_deref().unwrap_or("user");
+    let mut nodes =
+        code_context::current_nodes(storage, "pattern", args.codebase.as_deref(), scope, limit)?;
+    nodes.extend(code_context::current_nodes(
+        storage,
+        "decision",
+        args.codebase.as_deref(),
+        scope,
+        limit,
+    )?);
 
     let node_ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
-    let verified = verify_nodes(storage, &repo_root, &node_ids);
+    let verified = verify_nodes(storage, &repo_root, &node_ids)?;
 
     let mut stale = Vec::new();
     let mut fresh = 0usize;
@@ -1450,7 +1334,10 @@ pub fn load_config(path: &str) -> Config {
             .await
             .unwrap();
         assert_eq!(ctx["verification"]["enabled"], false);
-        assert!(ctx["patterns"]["items"][0].get("anchorStatus").is_none());
+        assert_eq!(
+            ctx["patterns"]["items"][0]["evidence"]["state"],
+            "unavailable"
+        );
     }
 
     #[tokio::test]

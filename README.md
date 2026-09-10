@@ -135,6 +135,9 @@ Your agent calls these; you rarely do.
 | `maintain` · `dedup` · `suppress` | Consolidation, merge, reversible forgetting |
 | `memory_status` · `codebase` · `source_sync` · `session_start` | Health, code index, connectors, session priming |
 
+For checkout-specific code advice, evidence states, explicit re-anchoring and
+startup response budgets, see [Code context evidence](docs/CODE-CONTEXT-EVIDENCE.md).
+
 Project scoping, hygiene workflows, and making memory a standing habit for your agent: [docs/MEMORY_HYGIENE.md](docs/MEMORY_HYGIENE.md) · [docs/AGENT-MEMORY-PROTOCOL.md](docs/AGENT-MEMORY-PROTOCOL.md) · [docs/CLAUDE-SETUP.md](docs/CLAUDE-SETUP.md).
 
 ## The dashboard

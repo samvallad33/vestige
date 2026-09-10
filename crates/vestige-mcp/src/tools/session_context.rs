@@ -12,6 +12,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::code_context;
 use crate::cognitive::CognitiveEngine;
 use vestige_core::{OutputConfig, Storage};
 
@@ -23,20 +24,23 @@ pub fn schema() -> Value {
             "queries": {
                 "type": "array",
                 "items": { "type": "string" },
+                "maxItems": 16,
                 "description": "Search queries to run (default: [\"user preferences\"])"
             },
             "token_budget": {
                 "type": "integer",
-                "description": "Max tokens for response (default: 1000). Server truncates content to fit budget. With 1M context models, budgets up to 100K are practical.",
+                "description": "Serialized response budget in estimated tokens (UTF-8 bytes / 4, rounded up; not a model tokenizer). Includes metadata. Default: 1000.",
                 "default": 1000,
                 "minimum": 100,
                 "maximum": 100000
             },
+            "scope": {"type":"string", "description":"Memory namespace (default: user)"},
             "context": {
                 "type": "object",
                 "description": "Current context for intention matching and predictions",
                 "properties": {
                     "codebase": { "type": "string" },
+                    "repoPath": {"type":"string", "description":"Explicit checkout for code evidence; unavailable when omitted"},
                     "topics": {
                         "type": "array",
                         "items": { "type": "string" }
@@ -67,6 +71,7 @@ pub fn schema() -> Value {
 struct SessionContextArgs {
     queries: Option<Vec<String>>,
     token_budget: Option<i32>,
+    scope: Option<String>,
     context: Option<ContextSpec>,
     include_status: Option<bool>,
     include_intentions: Option<bool>,
@@ -75,6 +80,8 @@ struct SessionContextArgs {
 
 #[derive(Debug, Deserialize, Default)]
 struct ContextSpec {
+    #[serde(rename = "repoPath", alias = "repo_path")]
+    repo_path: Option<String>,
     codebase: Option<String>,
     topics: Option<Vec<String>>,
     file: Option<String>,
@@ -123,6 +130,15 @@ pub async fn execute(
         .queries
         .unwrap_or_else(|| vec!["user preferences".to_string()]);
 
+    if queries.len() > 16 {
+        return Err("At most 16 startup queries are supported per call".into());
+    }
+    let scope = args.scope.as_deref().unwrap_or("user").trim();
+    if scope.is_empty() || scope.len() > 200 || scope.chars().any(char::is_control) {
+        return Err("scope must be a non-empty identifier of at most 200 visible bytes".into());
+    }
+    let superseded = storage.superseded_node_ids().map_err(|e| e.to_string())?;
+    let mut code_items: Vec<Value> = Vec::new();
     let mut context_parts: Vec<String> = Vec::new();
     let mut expandable_ids: Vec<String> = Vec::new();
     let mut char_count = 0;
@@ -134,21 +150,40 @@ pub async fn execute(
     let mut shown_ids = Vec::new();
     let mut memory_lines: Vec<String> = Vec::new();
 
-    for query in &queries {
+    for query in queries.iter().take(16) {
         let results = storage
             .hybrid_search(query, per_query_limit, 0.3, 0.7)
             .map_err(|e| e.to_string())?;
 
         for r in results {
+            let now = Utc::now();
+            if !storage
+                .node_is_in_scope(&r.node.id, scope)
+                .map_err(|e| e.to_string())?
+                || superseded.contains(&r.node.id)
+                || r.node.valid_from.is_some_and(|t| t > now)
+                || r.node.valid_until.is_some_and(|t| t <= now)
+            {
+                continue;
+            }
             if seen_ids.contains(&r.node.id) {
+                continue;
+            }
+            if code_context::is_code_memory(&r.node) {
+                let project = args.context.as_ref().and_then(|c| c.codebase.as_deref());
+                if project.is_none_or(|cb| r.node.tags.contains(&format!("codebase:{cb}"))) {
+                    code_items.push(serde_json::json!({"id":r.node.id,"kind":r.node.node_type,
+                        "summary":code_context::summary(&r.node.content)}));
+                    seen_ids.insert(r.node.id.clone());
+                }
                 continue;
             }
             let summary = first_sentence(&r.node.content);
             let line = if show_dates {
                 let date_str = r.node.updated_at.format("%b %d, %Y").to_string();
-                format!("- ({}) {}", date_str, summary)
+                format!("- [{}] ({}) {}", r.node.id, date_str, summary)
             } else {
-                format!("- {}", summary)
+                format!("- [{}] {}", r.node.id, summary)
             };
             let line_len = line.len() + 1; // +1 for newline
 
@@ -162,11 +197,6 @@ pub async fn execute(
             seen_ids.insert(r.node.id.clone());
         }
     }
-
-    // Context inclusion is telemetry, not positive feedback. Skip candidates
-    // omitted by the session token budget.
-    let accessed_ids: Vec<&str> = shown_ids.iter().map(|s| s.as_str()).collect();
-    let _ = storage.record_batch_retrieval(&accessed_ids);
 
     if !memory_lines.is_empty() {
         context_parts.push(format!("**Memories:**\n{}", memory_lines.join("\n")));
@@ -184,11 +214,12 @@ pub async fn execute(
             let is_overdue = intention.deadline.map(|d| d < now).unwrap_or(false);
 
             // Check context-based triggers
-            let is_context_triggered = if let Some(ctx) = &args.context {
-                check_intention_triggered(intention, ctx, now)
-            } else {
-                false
-            };
+            let empty_context = ContextSpec::default();
+            let is_context_triggered = check_intention_triggered(
+                intention,
+                args.context.as_ref().unwrap_or(&empty_context),
+                now,
+            );
 
             if is_overdue || is_context_triggered || intention.priority >= 3 {
                 let priority_str = match intention.priority {
@@ -308,8 +339,8 @@ pub async fn execute(
                     .and_then(|c| c.file.as_ref())
                     .map(|f| vec![f.clone()])
                     .unwrap_or_default(),
-                accessed_memories: Vec::new(),
-                recent_queries: Vec::new(),
+                accessed_memories: shown_ids.clone(),
+                recent_queries: queries.iter().take(16).cloned().collect(),
                 detected_intent: None,
                 project_context: args.context.as_ref().and_then(|c| c.codebase.as_ref()).map(
                     |name| vestige_core::neuroscience::predictive_retrieval::ProjectContext {
@@ -325,6 +356,40 @@ pub async fn execute(
             .predictive_memory
             .predict_needed_memories(&session_ctx)
             .unwrap_or_default();
+
+        let mut eligible_predictions = Vec::new();
+        for prediction in predictions {
+            if !storage
+                .node_is_in_scope(&prediction.memory_id, scope)
+                .map_err(|e| e.to_string())?
+                || superseded.contains(&prediction.memory_id)
+            {
+                continue;
+            }
+            let Some(node) = storage
+                .get_node(&prediction.memory_id)
+                .map_err(|e| e.to_string())?
+            else {
+                continue;
+            };
+            let now = Utc::now();
+            if node.valid_from.is_some_and(|t| t > now)
+                || node.valid_until.is_some_and(|t| t <= now)
+            {
+                continue;
+            }
+            if code_context::is_code_memory(&node) {
+                let project = args.context.as_ref().and_then(|c| c.codebase.as_deref());
+                if project.is_none_or(|cb| node.tags.contains(&format!("codebase:{cb}")))
+                    && seen_ids.insert(node.id.clone())
+                {
+                    code_items.push(serde_json::json!({"id":node.id,"kind":node.node_type,"summary":code_context::summary(&node.content)}));
+                }
+            } else {
+                eligible_predictions.push(prediction);
+            }
+        }
+        let predictions = eligible_predictions;
 
         if !predictions.is_empty() {
             let pred_lines: Vec<String> = predictions
@@ -343,73 +408,135 @@ pub async fn execute(
             let pred_len = pred_section.len() + 1;
             if char_count + pred_len <= budget_chars {
                 context_parts.push(pred_section);
-                char_count += pred_len;
             }
         }
     }
 
-    // ====================================================================
-    // 5. Codebase patterns/decisions (if codebase specified)
-    // ====================================================================
-    if let Some(ref ctx) = args.context
-        && let Some(ref codebase) = ctx.codebase
+    // Code advice uses the same current selection and live evidence evaluator
+    // as codebase.get_context, including items discovered by search.
+    if let Some(ctx) = &args.context
+        && let Some(codebase) = &ctx.codebase
     {
-        let codebase_tag = format!("codebase:{}", codebase);
-        let mut cb_lines: Vec<String> = Vec::new();
-
-        // Get patterns
-        if let Ok(patterns) = storage.get_nodes_by_type_and_tag("pattern", Some(&codebase_tag), 3) {
-            for p in &patterns {
-                let line = format!("- [pattern] {}", first_sentence(&p.content));
-                let line_len = line.len() + 1;
-                if char_count + line_len <= budget_chars {
-                    cb_lines.push(line);
-                    char_count += line_len;
+        for kind in ["pattern", "decision"] {
+            for node in code_context::current_nodes(storage, kind, Some(codebase), scope, 3)? {
+                if seen_ids.insert(node.id.clone()) {
+                    code_items.push(serde_json::json!({"id":node.id, "kind":kind,
+                        "summary":code_context::summary(&node.content)}));
                 }
             }
         }
-
-        // Get decisions
-        if let Ok(decisions) = storage.get_nodes_by_type_and_tag("decision", Some(&codebase_tag), 3)
-        {
-            for d in &decisions {
-                let line = format!("- [decision] {}", first_sentence(&d.content));
-                let line_len = line.len() + 1;
-                if char_count + line_len <= budget_chars {
-                    cb_lines.push(line);
-                    char_count += line_len;
-                }
-            }
-        }
-
-        if !cb_lines.is_empty() {
-            context_parts.push(format!(
-                "**Codebase ({}):**\n{}",
-                codebase,
-                cb_lines.join("\n")
+    }
+    let repo_path = args.context.as_ref().and_then(|c| c.repo_path.as_deref());
+    let verification = code_context::annotate(storage, &mut code_items, repo_path, true)?;
+    let header = format!("## Session ({} memories, {})", stats.total_nodes, status);
+    let initially_omitted = expandable_ids.len();
+    let mut result = serde_json::json!({
+        "context": "",
+        "profile": output_config.profile.as_str(),
+        "tokensUsed": 0,
+        "tokenBudget": token_budget,
+        "budgetUnit": "utf8_bytes_div_4_ceiling",
+        "expandable": expandable_ids,
+        "omitted": initially_omitted,
+        "codeContext": {"scope":scope,"codebase":args.context.as_ref().and_then(|c| c.codebase.as_deref()),"verification":verification,"items":code_items},
+        "automationTriggers": {"needsDream":needs_dream,"needsBackup":needs_backup,"needsGc":needs_gc},
+    });
+    // Reserve evidence as an atomic item: never retain a summary but trim off
+    // its warning. Drop other sections first, then whole code items. Expansion
+    // hints are bounded too. The final count includes the serialized envelope.
+    loop {
+        let items = result["codeContext"]["items"].as_array();
+        let code_lines: Vec<String> = items
+            .into_iter()
+            .flatten()
+            .map(|item| {
+                format!(
+                    "- [{}] [{} / {}] {}",
+                    item["id"].as_str().unwrap_or(""),
+                    item["kind"].as_str().unwrap_or("code"),
+                    item["evidence"]["state"].as_str().unwrap_or("unavailable"),
+                    item["summary"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        let mut sections = vec![header.clone()];
+        if !code_lines.is_empty() {
+            sections.push(format!(
+                "**Code evidence ({}):**\n{}",
+                args.context
+                    .as_ref()
+                    .and_then(|c| c.codebase.as_deref())
+                    .unwrap_or("query"),
+                code_lines.join("\n")
             ));
         }
+        sections.extend(context_parts.iter().cloned());
+        result["context"] = Value::String(sections.join("\n\n"));
+        if fits_budget(&mut result, budget_chars) {
+            break;
+        }
+        if context_parts.pop().is_some() {
+            result["omitted"] = serde_json::json!(result["omitted"].as_u64().unwrap_or(0) + 1);
+            continue;
+        }
+        if let Some(item) = result["codeContext"]["items"]
+            .as_array_mut()
+            .and_then(Vec::pop)
+        {
+            result["expandable"]
+                .as_array_mut()
+                .unwrap()
+                .push(item["id"].clone());
+            result["omitted"] = serde_json::json!(result["omitted"].as_u64().unwrap_or(0) + 1);
+            continue;
+        }
+        if result["expandable"]
+            .as_array_mut()
+            .and_then(Vec::pop)
+            .is_some()
+        {
+            continue;
+        }
+        if result
+            .as_object_mut()
+            .unwrap()
+            .remove("codeContext")
+            .is_some()
+        {
+            continue;
+        }
+        // Minimum budgets may omit all optional sections, but retain honest
+        // accounting and an explicit omission signal.
+        result["context"] =
+            serde_json::json!("Context omitted to fit budget; increase token_budget.");
+        result.as_object_mut().unwrap().remove("automationTriggers");
+        fits_budget(&mut result, budget_chars);
+        break;
     }
+    // Only final exposure is recorded; retrieval never promotes a memory.
+    let rendered = result["context"].as_str().unwrap_or("");
+    let visible: Vec<&str> = seen_ids
+        .iter()
+        .filter(|id| rendered.contains(id.as_str()))
+        .map(String::as_str)
+        .collect();
+    let _ = storage.record_batch_retrieval(&visible);
+    Ok(result)
+}
 
-    // ====================================================================
-    // 6. Assemble final response
-    // ====================================================================
-    let header = format!("## Session ({} memories, {})\n", stats.total_nodes, status);
-    let context_text = format!("{}{}", header, context_parts.join("\n\n"));
-    let tokens_used = context_text.len() / 4;
-
-    Ok(serde_json::json!({
-        "context": context_text,
-        "profile": output_config.profile.as_str(),
-        "tokensUsed": tokens_used,
-        "tokenBudget": token_budget,
-        "expandable": expandable_ids,
-        "automationTriggers": {
-            "needsDream": needs_dream,
-            "needsBackup": needs_backup,
-            "needsGc": needs_gc,
-        },
-    }))
+fn fits_budget(result: &mut Value, bytes: usize) -> bool {
+    // A fixed point accounts for the decimal digits of tokensUsed itself.
+    for _ in 0..4 {
+        let used = serde_json::to_vec(result)
+            .expect("JSON value")
+            .len()
+            .div_ceil(4);
+        if result["tokensUsed"].as_u64() == Some(used as u64) {
+            return used * 4 <= bytes;
+        }
+        result["tokensUsed"] = serde_json::json!(used);
+    }
+    serde_json::to_vec(result).expect("JSON value").len() <= bytes
 }
 
 /// Check if an intention should be triggered based on the current context.
@@ -618,13 +745,11 @@ mod tests {
 
         let value = result.unwrap();
         assert!(value["context"].is_string());
-        // Context should be within budget (200 tokens * 4 = 800 chars + header overhead)
-        // The actual char count of context should be reasonable
+        // The complete serialized result is bounded, not just prose.
         let tokens_used = value["tokensUsed"].as_u64().unwrap();
-        // Allow some overhead for the header
         assert!(
-            tokens_used <= 300,
-            "tokens_used {} should be near budget 200",
+            tokens_used <= 200,
+            "tokens_used {} must fit budget 200",
             tokens_used
         );
     }
