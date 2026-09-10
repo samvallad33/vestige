@@ -211,3 +211,14 @@ portable-imported suppressions without journal snapshots require explicit review
 the tool does not invent their prior strengths. Snapshots do not reverse neighbor
 cascades, replay invalidations, or other external effects. Before installing this
 candidate, retain a paired database backup for rollback to an older binary.
+
+### Bounded restore
+
+MCP restore reads at most 64 MiB from a regular file. Legacy JSON batches are
+limited to 10000 memories, validated in a disposable store, then imported into
+the target in one transaction. Empty content rejects the batch before target
+writes. Legacy restore copies only memory rows, leaves embeddings pending and
+reports `atomic: true`; it does not import staging settings or audit journals.
+Portable archives continue through their transactional importer. An index-refresh
+error after commit requires inspecting the target before retrying. Input limits
+bound file bytes and legacy rows, not a strict process-memory or elapsed-time budget.
