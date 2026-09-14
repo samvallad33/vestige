@@ -1,0 +1,52 @@
+{
+  "id": "the-autoscale-that-got-rewritten",
+  "title": "The Autoscale That Got Rewritten",
+  "subtitle": "Phase-2 Operator Auto-Recovery \u2014 STOP then ALLOW on $100k Autoscale",
+  "run_id": "film-20260914T111507Z",
+  "date_utc": "2026-09-14T11:15:07Z",
+  "repo_path": "benchmarks/the-autoscale-that-got-rewritten",
+  "claim_boundary": "SYNTHETIC LOCAL",
+  "twin": [
+    "UNGATED",
+    "UNGATED",
+    "ALLOW"
+  ],
+  "right_trail": [
+    "STOP",
+    "ALLOW"
+  ],
+  "quiet_cause": "CAUSE-FINOPS-CEILING",
+  "fail_today_uuid": "0fb859ff-3e35-43a5-aead-dc715caf6236",
+  "permit": "permit:effect-1d1ac13b071d",
+  "model": "z-ai/glm-5.3-flash",
+  "eval": "PASS 8/8",
+  "cost_usd": 0.1101,
+  "walls_s": {
+    "LEFT": 250.3,
+    "MIDDLE": 246.7,
+    "RIGHT": 323.1
+  },
+  "demo_slug": "rank16-100k-autoscale",
+  "files": {
+    "run/DEMO-THREE-ARM-LIVE.mp4": {
+      "bytes": 16955013,
+      "sha256": "56c0f7edc7b8fdcf635be3b64545a6c33ae8c25867198d6f1f21b5931eda62ae"
+    },
+    "run/EVAL.json": {
+      "bytes": 10613,
+      "sha256": "04fcb0045338cf5fa655f3292be6564f2102deef6a5ba32304b7224d01d440a3"
+    },
+    "run/EVIDENCE.md": {
+      "bytes": 52159,
+      "sha256": "0b28eba14ac35ddbb88a1930aa9be8652c929bb32a8528216714a70a5ffe3a99"
+    },
+    "run/TWIN.json": {
+      "bytes": 10989,
+      "sha256": "ad6424c6e4b119acc7d0449d7d8239fe70e377ad9a9994d7172b0d039472fb4d"
+    },
+    "run/VERIFY.md": {
+      "bytes": 1705,
+      "sha256": "2b53369ff5c62aff31a09fff66b1ce0058a43931f370e5c8907a4014a1397bbf"
+    }
+  }
+}
