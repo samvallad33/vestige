@@ -1,0 +1,62 @@
+{
+  "id": "the-blast-that-got-rewritten",
+  "title": "The Blast That Got Rewritten",
+  "subtitle": "Phase-2 Operator Auto-Recovery \u2014 STOP then ALLOW on Impossible Approval",
+  "run_id": "film-20260914T092544Z",
+  "date_utc": "2026-09-14T09:25:44Z",
+  "repo_path": "benchmarks/the-blast-that-got-rewritten",
+  "claim_boundary": "SYNTHETIC LOCAL",
+  "twin": [
+    "UNGATED",
+    "UNGATED",
+    "ALLOW"
+  ],
+  "right_trail": [
+    "DEPTH_GATE",
+    "DEPTH_GATE",
+    "DEPTH_GATE",
+    "STOP",
+    "ALLOW"
+  ],
+  "quiet_cause": "HR-XW-Q3-441",
+  "fail_today_uuid": "1aea98a2-fd71-421e-be75-1dae7d0171e7",
+  "permit": "permit:effect-a43fff4811b8",
+  "model": "z-ai/glm-5.3-flash",
+  "max_tokens": 16000,
+  "reasoning": {
+    "effort": "high",
+    "enabled": true,
+    "max_tokens": 16000
+  },
+  "eval": "PASS 8/8",
+  "cost_usd": 0.0739,
+  "walls_s": {
+    "LEFT": 254.1,
+    "MIDDLE": 361.3,
+    "RIGHT": 329.0
+  },
+  "mp4_duration_s": 951.0,
+  "category_line": "Every memory system answers what is like this? Vestige answers what caused this? Then Operator enforces Thinking \u2260 Doing.",
+  "files": {
+    "run/DEMO-THREE-ARM-LIVE.mp4": {
+      "bytes": 12797815,
+      "sha256": "c1035c092d0ed94b833aff2708b19b8d485dbedbeb3afbd4a8876e114bb7b04a"
+    },
+    "run/EVAL.json": {
+      "bytes": 10928,
+      "sha256": "cd897852a55f782962f11865cc0846f86bc867be4b3c63d1530bca9e5c67b05b"
+    },
+    "run/EVIDENCE.md": {
+      "bytes": 36091,
+      "sha256": "7a20af9235a68d79291143f8c6ed5559a4c58a072cb217aab0ab2f0659fccc70"
+    },
+    "run/TWIN.json": {
+      "bytes": 9989,
+      "sha256": "9fbeba6f0cc2c58484e7101e2a37632700668270b9126d4f3f0280d09b528832"
+    },
+    "run/VERIFY.md": {
+      "bytes": 1395,
+      "sha256": "197008326f94c6b47b7369c94aeef9566800f426a8ff2b1b27fc3e971f59ff3e"
+    }
+  }
+}
