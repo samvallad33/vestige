@@ -1,0 +1,55 @@
+{
+  "id": "the-refund-that-got-rewritten",
+  "title": "The Refund That Got Rewritten",
+  "subtitle": "Phase-2 Operator Auto-Recovery \u2014 STOP then ALLOW on Cash Duplicate-Refund",
+  "run_id": "film-20260914T101148Z",
+  "date_utc": "2026-09-14T10:11:48Z",
+  "repo_path": "benchmarks/the-refund-that-got-rewritten",
+  "claim_boundary": "SYNTHETIC LOCAL",
+  "twin": [
+    "UNGATED",
+    "UNGATED",
+    "ALLOW"
+  ],
+  "right_trail": [
+    "DEPTH_GATE",
+    "STOP",
+    "ALLOW"
+  ],
+  "quiet_cause": "ST-XW-S9-441",
+  "fail_today_uuid": "be9df620-4706-49c8-b5ab-35a6febe263b",
+  "permit": "permit:effect-50a36cf48083",
+  "model": "z-ai/glm-5.3-flash",
+  "max_tokens": 16000,
+  "eval": "PASS 8/8",
+  "cost_usd": 0.073,
+  "walls_s": {
+    "LEFT": 240.6,
+    "MIDDLE": 247.3,
+    "RIGHT": 386.3
+  },
+  "mp4_duration_s": 881.0,
+  "demo_slug": "rank10-refund-network-failed",
+  "files": {
+    "run/DEMO-THREE-ARM-LIVE.mp4": {
+      "bytes": 13173543,
+      "sha256": "612dfc74b496ad86f2dad0d366ca67f189ccf95c22dc06dda51157081b5b9dc1"
+    },
+    "run/EVAL.json": {
+      "bytes": 9675,
+      "sha256": "496f2308751ba04706890d9d083f0f3d8e240fe2d2b87b32a0e835f73b4f2487"
+    },
+    "run/EVIDENCE.md": {
+      "bytes": 63255,
+      "sha256": "482ce6f00537a9d0e049ede4641a480330def0cd771b587b186054eda5a420d9"
+    },
+    "run/TWIN.json": {
+      "bytes": 11487,
+      "sha256": "6dbd9a48a6e36199653c70eafbbeb4893730c5d8c88a353d37fded249651457e"
+    },
+    "run/VERIFY.md": {
+      "bytes": 1238,
+      "sha256": "bbdd631526cb3d1e00e0f0433a9cecd398d9daec8b6688800b58c4982d4e9cad"
+    }
+  }
+}
