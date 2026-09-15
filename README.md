@@ -148,7 +148,37 @@ A living WebGPU observatory of your memory at **http://localhost:3927/dashboard*
 
 ## Vestige Pro
 
-Everything above is free forever and never metered. **Pro ($19/month)** is managed, end-to-end encrypted continuity: your memory graph and accountability history (receipts, traces, memory PRs) following you across machines. XChaCha20-Poly1305 applied on your device, Argon2id over a passphrase only you know, ciphertext-only server. Zero-knowledge is the design: lose the passphrase and the data is unrecoverable, by anyone. Checkout opens shortly; watch [Releases](https://github.com/samvallad33/vestige/releases) for the announcement.
+Everything above is free forever and never metered. The paid ladder is live:
+
+| Tier | Price | What it is |
+|---|---|---|
+| **Managed Continuity** | **$19/mo** | End-to-end encrypted continuity: your memory graph and accountability history (receipts, traces, memory PRs) across machines. XChaCha20-Poly1305 on your device, Argon2id over a passphrase only you know, ciphertext-only server. Zero-knowledge: lose the passphrase and the data is unrecoverable, by anyone. |
+| **Investigator** | **$79/mo** | The instruments — Backfill causal trails, recall tooling, evidence surfaces you drive yourself. |
+| **Founding Operator** | **$149/mo — $49 first month, first 100** | The fail-closed kernel: receipt → one-use permit → effect, or STOP with zero effects. Thinking ≠ authority. Includes Continuity. |
+
+<a id="founding-operator"></a>
+### Founding Operator — see it stop a real agent
+
+[![The Live Gate — real agent, real stop](https://img.shields.io/badge/watch-The_Live_Gate-red)](https://github.com/samvallad33/vestige/releases/tag/launch-night-live-gate-20260914)
+
+Recorded live: an AI agent stores a memory, then tries to permanently purge its own trail. Operator refuses the effect, opens a Memory PR, and waits for the human. No cuts, no staging — the gate decision is the product.
+
+**Checkout:** https://vestige-pro-production.fly.dev/account
+
+<a id="managed-continuity"></a>
+### Managed Continuity in 3 commands
+
+```bash
+vestige backup ~/vestige-backup.db                                  # full local safety net
+vestige sync ~/vestige-archive.vportable                            # encrypted archive → iCloud/Dropbox/Git
+vestige --data-dir ~/new-machine-store sync ~/vestige-archive.vportable   # restore anywhere
+```
+
+Local-first: your machine is always the source of truth. If a sync is refused with
+`Refused to store probable credential(s)` — that is the secret guard working; run
+`vestige scan-secrets`, rotate, redact, retry.
+
+*Demos are synthetic/local. No production-incident claims. Receipts are ordered reference digests, not signatures.*
 
 ## Under the hood
 
