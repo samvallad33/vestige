@@ -153,7 +153,6 @@ Everything above is free forever and never metered. The paid ladder is live:
 | Tier | Price | What it is |
 |---|---|---|
 | **Managed Continuity** | **$19/mo** | End-to-end encrypted continuity: your memory graph and accountability history (receipts, traces, memory PRs) across machines. XChaCha20-Poly1305 on your device, Argon2id over a passphrase only you know, ciphertext-only server. Zero-knowledge: lose the passphrase and the data is unrecoverable, by anyone. |
-| **Investigator** | **$79/mo** | The instruments — Backfill causal trails, recall tooling, evidence surfaces you drive yourself. |
 | **Founding Operator** | **$149/mo — $49 first month, first 100** | The fail-closed kernel: receipt → one-use permit → effect, or STOP with zero effects. Thinking ≠ authority. Includes Continuity. |
 
 <a id="founding-operator"></a>
