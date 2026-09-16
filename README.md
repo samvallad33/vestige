@@ -145,9 +145,28 @@ vestige dashboard
 
 A living WebGPU observatory of your memory at **http://localhost:3927/dashboard**: memories appear, link, strengthen, and fade in real time, 1000+ nodes at 60fps. It renders a deterministic 12-second loop of your store's life that you can export as an mp4 with one click, and mints a **brain print**, a signature seeded from your store's shape. Share artifacts are structure-only by design: your brain, never your memories.
 
-## Vestige Pro
+## Pro, Investigator & Operator
 
-Everything above is free forever and never metered. **Pro ($19/month)** is managed, end-to-end encrypted continuity: your memory graph and accountability history (receipts, traces, memory PRs) following you across machines. XChaCha20-Poly1305 applied on your device, Argon2id over a passphrase only you know, ciphertext-only server. Zero-knowledge is the design: lose the passphrase and the data is unrecoverable, by anyone. Checkout opens shortly; watch [Releases](https://github.com/samvallad33/vestige/releases) for the announcement.
+Everything above is free forever and never metered.
+
+| Tier | Price | What it is |
+|---|---|---|
+| **[Pro / Managed Continuity](https://vestige-pro-production.fly.dev/account)** | **$19/mo** | Your memory graph and accountability history (receipts, traces, memory PRs) follow you across machines. XChaCha20-Poly1305 applied on your device, Argon2id over a passphrase only you know, ciphertext-only server. Zero-knowledge: lose the passphrase and the data is unrecoverable, by anyone. |
+| **Investigator** | **$79/mo** | The instruments you run when something needs answering: deep backfill passes, evidence packets, retrieval tribunals, the full forensics surface for postmortems and audits. For engineers who debug with receipts. |
+| **Operator** | **$149/mo** | The rituals that run for you. Every morning and every night, your agent's judgment gets governed and remembered: |
+
+**The Operator day:**
+
+- **Taste Lock** — the moment your agent commits to something consequential, it is locked and receipted before it can drift.
+- **The Seven** — seven signed receipts of the last consequential writes, laid out like polaroids. What your agent actually did today, at a glance.
+- **Almost-Forgot** — the three dim memories that are still load-bearing but fading, surfaced before they fail.
+- **Night Letter** — a signed letter from your store at night: what changed, what contradicted, what decayed. Not a merge log. A letter.
+- **Facepalm Backfill** — it broke again? Walk backward from the failure to the quiet decision that set it up, with the evidence path attached.
+- **Canary Bite** — a secret about to leave the store gets eaten before it ships.
+
+Operator includes Continuity, the fail-closed authority kernel as a managed surface, and the full ritual suite. Founding month: **$49**. [Get Operator →](https://vestige-pro-production.fly.dev/account)
+
+*Claim boundary: all demonstrations are synthetic and local; receipts are ordered reference digests providing tamper-evident ordering, not cryptographic signatures. Pricing may change once the first 100 founding Operators are aboard.*
 
 ## Under the hood
 
