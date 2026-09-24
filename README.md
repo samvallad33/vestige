@@ -38,6 +38,14 @@ You need Node.js. No Docker, no signup, no compile step. Prebuilt for macOS ARM 
 npm install -g vestige-mcp-server@latest
 ```
 
+Prefer Homebrew?
+
+```bash
+brew install samvallad33/tap/vestige
+```
+
+Scripted installs work too: `eget samvallad33/vestige` pulls the right prebuilt binary from Releases, and Claude Desktop users can grab the `.mcpb` bundle from the same Releases page.
+
 Connect it to your agent. Every MCP client understands this config:
 
 ```json
