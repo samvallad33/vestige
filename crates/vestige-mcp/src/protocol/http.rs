@@ -375,8 +375,11 @@ async fn post_mcp(
         }
 
         // Handle the initialize request holding no global lock.
+        // `handle_request` takes `&self` since the concurrent-dispatch change,
+        // and this arm touches nothing else on the session, so the binding no
+        // longer needs to be mutable.
         let response = {
-            let mut sess = session.lock().await;
+            let sess = session.lock().await;
             sess.server.handle_request(request).await
         };
 

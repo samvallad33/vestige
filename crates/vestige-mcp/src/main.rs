@@ -46,6 +46,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{Level, debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -279,8 +280,43 @@ fn prepare_storage_path(data_dir: Option<PathBuf>) -> io::Result<Option<PathBuf>
     Ok(Some(data_dir.join(DATABASE_FILE)))
 }
 
-#[tokio::main]
-async fn main() {
+/// How long the runtime gets to stop its workers before the process leaves
+/// them where they are.
+const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Stop the runtime without joining a worker that cannot be stopped.
+///
+/// Dropping a multi-thread runtime joins its worker threads, and a worker
+/// running a task that is parked in a blocking `std::sync::Mutex` never gets to
+/// the point where it can be joined. The stdio transport bounds its own EOF
+/// drain and then abandons whatever it could not cancel (see
+/// `protocol::stdio::run_io`), so a handler inside `vestige-core`'s
+/// `Mutex<Connection>` can still be running when the transport returns. With
+/// `#[tokio::main]`, which drops the runtime at the end of `main`, that drop is
+/// where the process stopped instead of exiting. Measured: with one task
+/// holding such a lock, a plain drop had not returned 10 s later, while this
+/// bounded shutdown returns inside its timeout.
+fn shutdown_runtime(runtime: tokio::runtime::Runtime) {
+    runtime.shutdown_timeout(RUNTIME_SHUTDOWN_TIMEOUT);
+}
+
+fn main() {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!("Failed to start the tokio runtime: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    runtime.block_on(serve());
+    shutdown_runtime(runtime);
+}
+
+async fn serve() {
     // Parse CLI arguments first (before logging init, so --help/--version work cleanly)
     let config = parse_args();
 
@@ -678,6 +714,52 @@ mod tests {
 
     fn os_args(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
+    }
+
+    /// The runtime shutdown must return while a worker is parked in a blocking
+    /// lock, because that is the state the stdio transport can leave behind
+    /// when its EOF bound abandons a handler it could not cancel. Dropping the
+    /// runtime instead joins that worker, and the join is what does not return.
+    #[test]
+    fn the_runtime_shutdown_returns_while_a_worker_is_parked_in_a_blocking_lock() {
+        static PARK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        let held = PARK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let (parked_tx, parked_rx) = std::sync::mpsc::channel::<()>();
+        runtime.spawn(async move {
+            parked_tx.send(()).unwrap();
+            let _parked = PARK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        });
+        parked_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the parked task started");
+        // The task is on its way to the lock; give it the moment it needs to
+        // get there, so the worker is genuinely parked.
+        std::thread::sleep(Duration::from_millis(200));
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let shutdown = std::thread::spawn(move || {
+            shutdown_runtime(runtime);
+            let _ = done_tx.send(());
+        });
+        let returned = done_rx.recv_timeout(Duration::from_secs(10)).is_ok();
+
+        // Release the park whatever the outcome, so the shutdown thread can
+        // finish and this test process can exit.
+        drop(held);
+        shutdown.join().unwrap();
+
+        assert!(
+            returned,
+            "the runtime shutdown waited for a worker parked in a blocking lock, \
+             which is the wait that kept the process alive after its client was gone"
+        );
     }
 
     #[test]
