@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.samvallad33/vestige",
   "title": "Vestige",
-  "description": "Local-first memory for AI agents that reaches backward to find a failure's root cause.",
+  "description": "Cognitive deterministic memory-transaction security OPERATING SYSTEM for agents. Receipt \u2192 one-use permit \u2192 effect, or STOP. Local-first.",
   "repository": {
     "url": "https://github.com/samvallad33/vestige",
     "source": "github"
