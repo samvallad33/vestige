@@ -2,7 +2,7 @@
 	// ═══════════════════════════════════════════════════════════════════════
 	//  AGENT BLACK BOX — the flight recorder for agent cognition.
 	// ───────────────────────────────────────────────────────────────────────
-	//  Watch the agent think. Watch memory change. Watch the receipt prove why.
+	//  Watch the agent think. Watch the memory transaction. Watch receipt → permit → effect — or STOP.
 	//
 	//  Every MCP tool call carries a runId that threads, unbroken, through the
 	//  tool output → SQLite trace rows → WebSocket → this page → the export →
@@ -324,7 +324,7 @@
 	<PageHeader
 		icon="blackbox"
 		title="Agent Black Box"
-		subtitle="Watch the agent think. Watch memory change. Watch the receipt prove why."
+		subtitle="Watch the agent think. Watch the memory transaction. Watch receipt → permit → effect — or STOP."
 		accent="synapse"
 	>
 		<button
@@ -662,7 +662,7 @@
 				<AnimatedNumber value={$traceEvents.length} />
 				<span class="proof-counter-label">trace events</span>
 			</div>
-			<p class="proof-tagline">Watch the agent think. Watch memory change. Watch the receipt prove why.</p>
+			<p class="proof-tagline">Watch the agent think. Watch the memory transaction. Watch receipt → permit → effect — or STOP.</p>
 		</div>
 	{/if}
 </div>
