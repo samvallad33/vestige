@@ -44,7 +44,7 @@ Prefer Homebrew?
 brew install samvallad33/tap/vestige
 ```
 
-Scripted installs work too: `eget samvallad33/vestige` pulls the right prebuilt binary from Releases, and Claude Desktop users can grab the `.mcpb` bundle from the same Releases page.
+Scripted installs work too: `eget samvallad33/vestige` pulls the right prebuilt binary from Releases.
 
 Connect it to your agent. Every MCP client understands this config:
 
