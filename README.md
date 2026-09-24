@@ -4,11 +4,11 @@
 
 # Vestige
 
-**Cognitive Deterministic Memory Security OS for Agentic AI.**
+**Cognitive deterministic memory-transaction security OPERATING SYSTEM for agents.**
 
-Your agent can think anything. Vestige decides what it is allowed to do.
+Your agent can think anything. Vestige is the operating system that decides what it is allowed to remember, transact, and do.
 
-It remembers every decision your project ever made, reaches backward through time to find the quiet choice behind today's failure, and blocks the actions your agent should never take. Receipt, one-use permit, effect. Or STOP with zero effects. Local. Encrypted. No cloud, no telemetry.
+This is it: the cognitive, deterministic memory-transaction security layer agents run on. It remembers every decision your project ever made, reaches backward through time to find the quiet choice behind today's failure, and gates consequential effects. Receipt, then a one-use permit, then the effect. Or STOP with zero effects. Local. Encrypted. No cloud, no telemetry.
 
 [![Release](https://img.shields.io/github/v/release/samvallad33/vestige?color=06b6d4)](https://github.com/samvallad33/vestige/releases/latest)
 [![Tests](https://img.shields.io/github/actions/workflow/status/samvallad33/vestige/ci.yml?branch=main&label=CI)](https://github.com/samvallad33/vestige/actions)
@@ -20,7 +20,7 @@ It remembers every decision your project ever made, reaches backward through tim
 <a id="getting-started"></a>
 ## The cause never looks like the bug
 
-Agents re-learn the same lessons. They recommend a change you already tested and rejected, re-derive a fix that was already written down, and treat every session as if the last one never happened. Vestige is the deterministic memory security OS that ends that. Any MCP-capable agent writes memories as you work and retrieves them later: redundant memories merge, contradicted ones are flagged, unused ones fade, and when a failure hits, Vestige reaches **backward** to the decision that set it up.
+Agents re-learn the same lessons. They recommend a change you already tested and rejected, re-derive a fix that was already written down, and treat every session as if the last one never happened. Vestige is the deterministic memory-transaction security OS that ends that. Any MCP-capable agent writes memories as you work and retrieves them later: redundant memories merge, contradicted ones are flagged, unused ones fade, and when a failure hits, Vestige reaches **backward** to the decision that set it up.
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/samvallad33/vestige/media/vestige-black-box.mp4">
@@ -75,9 +75,11 @@ The backward reach implements Retroactive Salience Backfill (Zaki, Cai et al., *
 
 ## 🛡️ Founding Operator
 
-The fail-closed authority kernel for AI agents. Your agent can think anything. Operator decides what it is allowed to do.
+The fail-closed authority kernel of the agent OS. Your agent can think anything. Operator decides which memory transactions become effects.
 
 Receipt, then a one-use permit, then the effect. Or STOP with zero effects. Thinking is not authority.
+
+**Proof (SYNTHETIC LOCAL, three-arm, `z-ai/glm-5.3-flash`):** same refund incident, same model. LEFT generic RAG and MIDDLE AI memory both `UNGATED` a duplicate refund for `RFD-2201`. RIGHT Vestige+Operator **STOP**s while the ledger is pristine, rewrites the safe subset, then **ALLOW**s with a one-use permit and receipt — `NO SECOND REFUND`. That is the OS: memory transaction + security gate, not similarity search.
 
 **See it stop a real agent: [▶ THE LIVE GATE (1:44)](https://github.com/samvallad33/vestige/releases/tag/launch-night-live-gate-20260914)**, recorded in one take. An agent tries to permanently purge its own memory trail. Operator refuses the effect, opens a Memory PR, and waits for a human.
 
