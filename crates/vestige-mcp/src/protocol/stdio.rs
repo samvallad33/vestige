@@ -360,7 +360,8 @@ impl StdioTransport {
 ///
 /// First, a handler that cannot be cancelled keeps running on the runtime after
 /// this returns, so the caller has to stop the runtime without joining it (see
-/// `shutdown_runtime` in `main.rs`) for the process to exit.
+/// `join_runtime` and `leave_without_running_exit_handlers` in `main.rs`) for
+/// the process to exit.
 ///
 /// Second, the loop can block on the bounded writer channel, and while it does
 /// it observes stdin EOF only when the client has left nothing unread. That
