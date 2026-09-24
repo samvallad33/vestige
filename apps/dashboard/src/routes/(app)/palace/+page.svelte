@@ -93,7 +93,7 @@
 			{
 				id: 'palace:title',
 				kind: 'palace-hud',
-				text: 'VESTIGE // MEMORY PALACE',
+				text: 'VESTIGE // AGENT OS',
 				x: -0.92,
 				y: 0.88,
 				size: 0.052,
@@ -105,7 +105,7 @@
 			{
 				id: 'palace:sub',
 				kind: 'palace-hud',
-				text: sanitizeAscii(`${ORGAN_REGIONS.length} LIVING ORGANS - HOVER TO REVEAL - CLICK TO ENTER`),
+				text: sanitizeAscii('MEMORY-TRANSACTION SECURITY OS - RECEIPT THEN PERMIT THEN EFFECT - OR STOP'),
 				x: -0.92,
 				y: 0.8,
 				size: 0.025,
@@ -275,7 +275,7 @@
 </script>
 
 <svelte:head>
-	<title>Memory Palace · VestigeOS</title>
+	<title>Agent OS · VestigeOS</title>
 </svelte:head>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -283,7 +283,7 @@
 	bind:this={hostEl}
 	class="palace-host fixed inset-0 bg-[#020307]"
 	role="application"
-	aria-label="VestigeOS Memory Palace. Nine living cognitive organs. Use the Command palette for keyboard navigation."
+	aria-label="VestigeOS agent operating system. Cognitive deterministic memory-transaction security. Use the Command palette for keyboard navigation."
 	onpointerdown={handlePointerDown}
 	onpointerup={handlePointerUp}
 	onpointercancel={handlePointerCancel}
