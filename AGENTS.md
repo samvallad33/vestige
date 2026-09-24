@@ -33,14 +33,23 @@ personal operating notes, or mandatory background hooks.
 
 ## Project Shape
 
-Vestige is a local-first MCP memory server written in Rust, with a SvelteKit
-dashboard embedded into the release binary. The core product promise is:
+Vestige is the cognitive deterministic **memory-transaction security OPERATING
+SYSTEM** for agents: a local-first Rust MCP server with a SvelteKit dashboard
+(VestigeOS) embedded in the release binary. Not another memory/RAG store.
 
+The core product promise is:
+
+- Operator gate: receipt → one-use permit → effect, or STOP with zero effects
+- Deterministic memory transactions (writes gated, receipted, permitted)
 - user-owned memory stored locally by default
 - MCP-native integration with coding agents
 - retrieval and memory lifecycle behavior informed by cognitive science
 - explicit tools for search, review, suppression, purge, graph exploration,
   contradiction inspection, and maintenance
+
+Preferred proof frame (SYNTHETIC LOCAL only): rank10 cash · GLM 5.3-flash ·
+three-arm Operator demo — LEFT/MIDDLE `UNGATED` duplicate refund `RFD-2201`;
+RIGHT Vestige+Operator STOP→ALLOW withhold (`NO SECOND REFUND`).
 
 ## Working Rules
 
