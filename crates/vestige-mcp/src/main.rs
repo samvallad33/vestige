@@ -303,8 +303,8 @@ const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 /// `if self.shutdown_rx.wait(timeout)`, so one thread that misses the bound
 /// leaves every thread unjoined, including threads that finished long before,
 /// and the caller cannot tell that case from a clean stop. `false` here means
-/// at least one runtime thread is still running, which is the case
-/// [`leave_without_running_exit_handlers`] exists for.
+/// at least one runtime thread is still running, and [`stop_runtime`] leaves
+/// the process without exit-time teardown on that verdict.
 fn join_runtime(runtime: tokio::runtime::Runtime, timeout: Duration) -> bool {
     let (joined_tx, joined_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -316,22 +316,27 @@ fn join_runtime(runtime: tokio::runtime::Runtime, timeout: Duration) -> bool {
 
 /// Leave the process without running exit-time teardown.
 ///
-/// Returning from `main` reaches libc `exit()`, which runs atexit handlers and
-/// the static destructors of everything linked in, including the statically
-/// linked ONNX Runtime's `onnx::OpSchemaRegistry` op-schema map. `serve` warms
-/// embeddings and the cross-encoder reranker on `spawn_blocking` threads, and
-/// each spends seconds inside `OrtApis::CreateSession`. When [`join_runtime`]
-/// reports the runtime threads unjoined, one of those threads can still be
-/// inside ONNX Runtime, and running its destructors underneath it reads freed
-/// memory.
+/// Returning from `main` reaches libc `exit()`, and so does
+/// `std::process::exit`. Both run atexit handlers and the static destructors of
+/// everything linked in, including the statically linked ONNX Runtime's
+/// `onnx::OpSchemaRegistry` op-schema map. `serve` warms embeddings and the
+/// cross-encoder reranker on `spawn_blocking` threads, and each spends seconds
+/// inside `OrtApis::CreateSession`. When [`join_runtime`] reports the runtime
+/// threads unjoined, one of those threads can still be inside ONNX Runtime, and
+/// running its destructors underneath it reads freed memory.
 ///
 /// Measured on this branch before this call existed: `cargo test -p vestige-mcp
 /// --test e2e_real_binary` raised `stdin EOF must be a clean shutdown, got
 /// signal: 11 (SIGSEGV)` in 7 of 15 runs, with the faulting thread in
 /// `onnx::OpSchemaRegistry::Schema` under `OrtApis::CreateSession` and the main
-/// thread in `__run_exit_handlers`. Deleting the `_exit` call brings that flaky
-/// SIGSEGV back; it does not produce a compile error.
-fn leave_without_running_exit_handlers() -> ! {
+/// thread in `__run_exit_handlers`. Deleting the call to this function brings
+/// that flaky SIGSEGV back and produces no compile error, which is why
+/// [`stop_runtime`] takes it as an argument and is tested through it.
+///
+/// `serve` uses it for the server-error exit as well. That path leaves with the
+/// whole runtime live, including any warm-up still inside ONNX Runtime, so it
+/// has the same teardown race and keeps its exit status of 1.
+fn leave_without_running_exit_handlers(code: i32) -> ! {
     use std::io::Write;
 
     // `_exit` skips the flush that Rust's normal exit path performs.
@@ -345,13 +350,37 @@ fn leave_without_running_exit_handlers() -> ! {
         unsafe extern "C" {
             fn _exit(code: i32) -> !;
         }
-        _exit(0)
+        _exit(code)
     }
     // Off unix there is no teardown-free exit here: `std::process::exit` still
     // runs the CRT's atexit list and the DLL detach routines. That narrows the
     // window rather than closing it, and no occurrence has been observed there.
     #[cfg(not(unix))]
-    std::process::exit(0)
+    std::process::exit(code)
+}
+
+/// Stop the runtime, and leave the process when it cannot be stopped.
+///
+/// [`join_runtime`] produces the verdict and this function acts on it. The
+/// acting half is a single call that compiles cleanly when it is removed, and
+/// what it prevents showed up in 7 of 15 integration runs rather than in every
+/// one, so it sits here with `leave_without_teardown` as an argument and the
+/// tests below assert both directions: the call runs when a worker is parked,
+/// and it does not run when the runtime joins.
+fn stop_runtime(
+    runtime: tokio::runtime::Runtime,
+    timeout: Duration,
+    leave_without_teardown: fn(i32) -> !,
+) {
+    if join_runtime(runtime, timeout) {
+        return;
+    }
+
+    warn!(
+        "A runtime thread was still running {timeout:?} after shutdown began, \
+         so this process is leaving without exit-time teardown"
+    );
+    leave_without_teardown(0);
 }
 
 fn main() {
@@ -367,9 +396,11 @@ fn main() {
     };
 
     runtime.block_on(serve());
-    if !join_runtime(runtime, RUNTIME_SHUTDOWN_TIMEOUT) {
-        leave_without_running_exit_handlers();
-    }
+    stop_runtime(
+        runtime,
+        RUNTIME_SHUTDOWN_TIMEOUT,
+        leave_without_running_exit_handlers,
+    );
 }
 
 async fn serve() {
@@ -758,7 +789,10 @@ async fn serve() {
     // Run the server
     if let Err(e) = transport.run(server).await {
         error!("Server error: {}", e);
-        std::process::exit(1);
+        // Not `std::process::exit`: this runs on a runtime thread with the
+        // warm-up tasks possibly still inside ONNX Runtime, which is the state
+        // `leave_without_running_exit_handlers` documents. The status stays 1.
+        leave_without_running_exit_handlers(1);
     }
 
     info!("Vestige MCP Server shutting down");
@@ -772,14 +806,25 @@ mod tests {
         args.iter().map(OsString::from).collect()
     }
 
+    /// The exit handed to `stop_runtime` by the two tests below. It has to
+    /// diverge, because the real one does, so it reports by panicking and the
+    /// tests read that through `catch_unwind`.
+    fn panic_instead_of_leaving(code: i32) -> ! {
+        panic!("the teardown-free exit ran with status {code}");
+    }
+
     /// A worker parked in a blocking lock is the state the stdio transport can
     /// leave behind when its EOF bound abandons a handler it could not cancel.
-    /// `join_runtime` has to report that as unjoined inside its bound, because
-    /// that verdict is what sends `main` out through
-    /// `leave_without_running_exit_handlers` instead of into libc's exit path,
-    /// where the static destructors would run underneath the live thread.
+    /// `stop_runtime` has to take the teardown-free exit there. Returning
+    /// instead reaches libc's exit path, whose static destructors ran
+    /// underneath a live ONNX Runtime warm-up in 7 of 15 runs of
+    /// `e2e_real_binary` on this branch.
+    ///
+    /// The assertion covers both halves of the fix: `join_runtime` reporting
+    /// the parked worker as unjoined, and the call that acts on that verdict.
+    /// Deleting either one leaves this test failing and the build clean.
     #[test]
-    fn join_runtime_reports_a_worker_parked_in_a_blocking_lock_as_unjoined() {
+    fn stop_runtime_leaves_without_teardown_when_a_worker_is_parked_in_a_blocking_lock() {
         static PARK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
         let held = PARK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -803,7 +848,10 @@ mod tests {
         // get there, so the worker is genuinely parked.
         std::thread::sleep(Duration::from_millis(200));
 
-        let joined = join_runtime(runtime, RUNTIME_SHUTDOWN_TIMEOUT);
+        let left = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stop_runtime(runtime, RUNTIME_SHUTDOWN_TIMEOUT, panic_instead_of_leaving);
+        }))
+        .is_err();
 
         // Release the park whatever the outcome, so the thread `join_runtime`
         // left dropping the runtime can finish before this test returns.
@@ -811,18 +859,19 @@ mod tests {
         let _ = released_rx.recv_timeout(Duration::from_secs(10));
 
         assert!(
-            !joined,
-            "join_runtime reported a clean stop while a worker was parked in a \
-             blocking lock, so main would return into libc's exit path with that \
-             thread still running"
+            left,
+            "stop_runtime returned while a worker was parked in a blocking lock, \
+             so main would return into libc's exit path with that thread still \
+             running"
         );
     }
 
     /// The positive control for the test above: with nothing parked, the same
-    /// bound is enough to join everything, and `main` returns normally so the
-    /// exit handlers still run.
+    /// bound joins everything, and `stop_runtime` has to return so that `main`
+    /// returns and the exit handlers still run, the coverage profile writer
+    /// among them.
     #[test]
-    fn join_runtime_reports_an_idle_runtime_as_joined() {
+    fn stop_runtime_returns_without_leaving_when_the_runtime_joins() {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -830,10 +879,15 @@ mod tests {
             .unwrap();
         runtime.block_on(async {});
 
+        let left = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stop_runtime(runtime, Duration::from_secs(10), panic_instead_of_leaving);
+        }))
+        .is_err();
+
         assert!(
-            join_runtime(runtime, Duration::from_secs(10)),
-            "join_runtime could not join an idle runtime, which would send every \
-             shutdown out through the teardown-free exit"
+            !left,
+            "stop_runtime took the teardown-free exit after joining an idle \
+             runtime, which would skip every atexit handler on a clean shutdown"
         );
     }
 
