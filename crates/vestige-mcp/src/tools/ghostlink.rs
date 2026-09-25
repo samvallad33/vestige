@@ -24,8 +24,8 @@ pub fn schema() -> Value {
         "properties": {
             "mode": {
                 "type": "string",
-                "enum": ["propose", "bounty", "weave", "map", "inspect", "explore", "predict"],
-                "description": "propose: surface never-composed memory pairings (the ghosts: combinations that exist in your graph but have never fired together). bounty: gamified ghost-hunting lanes. weave: record a composition outcome for an event (the only write). map: force-directed subgraph for visualization. inspect: recent/get/memory/neighbors over composition events. explore: chain/associations/bridges between two memories. predict: context-ahead memory predictions."
+                "enum": ["propose", "bounty", "weave", "map", "inspect", "explore", "predict", "harden"],
+                "description": "propose: surface never-composed memory pairings (the ghosts: combinations that exist in your graph but have never fired together). bounty: gamified ghost-hunting lanes. weave: record a composition outcome for an event (the only write). map: force-directed subgraph for visualization. inspect: recent/get/memory/neighbors over composition events. explore: chain/associations/bridges between two memories. predict: context-ahead memory predictions. harden: seed invariant bug-class laws into the store so future compose/backfill can detect absence-of-invariant bugs."
             },
             "view": {
                 "type": "string",
@@ -54,6 +54,7 @@ pub fn schema() -> Value {
             },
             "scope": { "type": "string", "default": "user", "description": "[propose] Exact project namespace; filtered before candidate scan limits." },
             "includeCrossScope": { "type": "boolean", "default": false, "description": "[propose] Explicitly consider candidates across project namespaces." },
+            "data_dir": { "type": "string", "description": "[harden] Target data-dir to seed laws into (defaults to current store)." },
             "limit": { "type": "integer", "description": "Max results (per-mode defaults, clamped).", "minimum": 1, "maximum": 100 }
         },
         "required": ["mode"]
@@ -75,6 +76,63 @@ pub async fn execute(
         .to_string();
 
     let action: String = match mode.as_str() {
+        "harden" => {
+            // Superpower: seed invariant bug-class laws into the store.
+            // These are the six laws distilled from 4 root-caused bugs across
+            // 4 frameworks (crewAI, langgraph, claude-code, mem0) on 2026-09-25.
+            let laws = [
+                ("LAW-REPLAY", "Claim-Before-Execute (Replay Class)", "Wherever retries and side-effecting tools co-occur without a claim-before-execute ledger, duplicate execution exists. Fix: durable action ledger keyed on (run_id, operation, normalized_args_hash), claimed BEFORE execution, settled AFTER, returning prior receipt on any retry."),
+                ("LAW-EPOCH", "Attempt Epoch + Fencing Token", "Wherever a supervisor re-dispatches work from a checkpoint, the task identity must include an attempt epoch. Without it, a duplicate is byte-identical to the original and storage cannot distinguish them. Heartbeat must be bidirectional: the worker must be able to learn it lost the lease."),
+                ("LAW-ANCHOR", "Ground-Truth State Anchor", "Any state the agent believes (cwd, balance, nonce, context) must be re-verified against ground truth before destructive operations. Belief stored in conversational transcript is lossy — compaction/restart loses it."),
+                ("LAW-SUPERSEDE", "Supersession + Validity Windows", "Wherever new facts are added without marking old contradicting facts as superseded, the context becomes contradictory. Fix: every write must emit ADD/UPDATE/DELETE/NONE events; every stored fact carries validFrom/validUntil; superseded facts are demoted and excluded from recall."),
+                ("LAW-RECEIPT", "Success Receipts Bound to Verified Outcomes", "Every success signal must be a receipt bound to a verified outcome — not a status flag. An index that reports success but has unembedded chunks is a green-badge failure. Fix: coverage watermarks and verify-anchors."),
+                ("LAW-SETTLE", "Settlement Identity Uniqueness", "Wherever multiple flows can produce the same settlement (mint, redeem, claim, distribution), each settlement must carry a unique identity that prevents duplicates."),
+            ];
+            let mut seeded = Vec::new();
+            for (id, name, law) in &laws {
+                let content = format!(
+                    "INVARIANT LAW [{}]: {}. {} Severity if absent: Critical. \
+                     Signals: retry, re-execut, idempoten, nonce, claim, ledger, \
+                     checkpoint, resume, replay, duplicate, heartbeat, fencing, \
+                     lease, epoch, attempt, sweep, timeout, cwd, compaction, \
+                     context loss, anchor, reset, supersede, contradict, stale, \
+                     valid_from, valid_until, accumulat, pollut, coverage, \
+                     watermark, verify, receipt, settle, settlement, identity, \
+                     duplicate, double, mint, redeem, distribution",
+                    id, name, law
+                );
+                let result = storage.ingest(vestige_core::IngestInput {
+                    content,
+                    node_type: "pattern".to_string(),
+                    source: Some(format!("ghostlink-harden:{}", id)),
+                    sentiment_score: 0.0,
+                    sentiment_magnitude: 0.0,
+                    tags: vec![
+                        "ghostlink".to_string(),
+                        "pattern-neuron".to_string(),
+                        "invariant-law".to_string(),
+                        id.to_string(),
+                    ],
+                    valid_from: None,
+                    valid_until: None,
+                    validity_inferred: false,
+                    source_envelope: None,
+                });
+                match result {
+                    Ok(_) => seeded.push(format!("✓ {} — {}", id, name)),
+                    Err(e) => seeded.push(format!("✗ {} — {}", id, e)),
+                }
+            }
+            return Ok(serde_json::json!({
+                "mode": "harden",
+                "action": "seed_invariant_laws",
+                "laws_seeded": laws.len(),
+                "results": seeded,
+                "note": "Pattern neurons seeded. GhostLink compose and backfill \
+                         can now pair these laws against code in this store to \
+                         detect absence-of-invariant bugs."
+            }));
+        }
         "propose" => "never_composed".to_string(),
         "bounty" => "bounty_mode".to_string(),
         "weave" => "label".to_string(),
@@ -133,7 +191,7 @@ mod tests {
             .collect();
         assert_eq!(
             modes,
-            ["propose", "bounty", "weave", "map", "inspect", "explore", "predict"]
+            ["propose", "bounty", "weave", "map", "inspect", "explore", "predict", "harden"]
         );
         let mode_desc = s["properties"]["mode"]["description"].as_str().unwrap_or("");
         assert!(
