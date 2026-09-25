@@ -64,6 +64,7 @@ pub mod health;
 
 // v2.2: Unified graph surface — folds explore_connections + predict +
 // memory_graph + composed_graph into one action-dispatched tool.
+pub mod ghostlink;
 pub mod graph_unified;
 
 // v2.1: Cross-reference (connect the dots)

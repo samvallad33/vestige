@@ -614,18 +614,18 @@ description: Some("Duplicates, merges, supersession, and exact tag maintenance. 
             // Folds explore_connections + predict + memory_graph + composed_graph.
             // ================================================================
             ToolDescription {
-                name: "graph".to_string(),
-                title: Some("Graph".to_string()),
-                // Every graph action reads, except 'label', which records a
-                // composition outcome. One write makes the tool not read-only.
+                name: "ghostlink".to_string(),
+                title: Some("GhostLink".to_string()),
+                // Every mode reads, except 'weave', which records a composition
+                // outcome. One write makes the tool not read-only.
                 annotations: Some(ToolAnnotations {
                     read_only_hint: false,
                     destructive_hint: false,
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Memory graph: 'chain', 'associations', 'bridges', 'predict', 'memory_graph', composition topology ('recent', 'get', 'memory', 'neighbors', 'never_composed', 'bounty_mode'), 'label' (the only write).".to_string()),
-                input_schema: tools::graph_unified::schema(),
+description: Some("GhostLink - the ghost is the never-composed: a pairing that already exists in your memory graph but has never been summoned. Modes: 'propose' (surface ghost pairings), 'bounty' (gamified ghost lanes), 'weave' (record a composition outcome; the only write), 'map' (subgraph for visualization), 'inspect' (recent/get/memory/neighbors over composition events), 'explore' (chain/associations/bridges), 'predict' (context-ahead predictions).".to_string()),
+                input_schema: tools::ghostlink::schema(),
                 ..Default::default()
             },
             // ================================================================
@@ -729,6 +729,7 @@ description: Some("Investigate a recorded failure using earlier memories sharing
                 "dedup" => Some(150_000),
                 // v2.2: graph action='memory_graph' (force-directed layout) and
                 // 'bounty_mode' pagination can both produce large payloads.
+                "ghostlink" => Some(250_000),
                 "graph" => Some(250_000),
                 _ => None,
             };
@@ -1467,7 +1468,17 @@ description: Some("Investigate a recorded failure using earlier memories sharing
             // ================================================================
             // GRAPH — unified graph/association/prediction tool (v2.2)
             // ================================================================
+            "ghostlink" => {
+                tools::ghostlink::execute(&self.storage, &self.cognitive, request.arguments)
+                    .await
+            }
+            // DEPRECATED (v3.1): renamed to `ghostlink`. Hidden alias: still
+            // dispatches (graph_unified is the shared engine) but no longer
+            // advertised in tools/list. Warn so callers migrate before removal.
             "graph" => {
+                warn!(
+                    "Tool 'graph' is deprecated in v3.1. Use 'ghostlink' (modes: propose|bounty|weave|map|inspect|explore|predict)."
+                );
                 tools::graph_unified::execute(&self.storage, &self.cognitive, request.arguments)
                     .await
             }
@@ -3419,7 +3430,9 @@ mod tests {
         // Graph — unified `graph` tool (v2.2). explore_connections + predict +
         // memory_graph + composed_graph folded in; old names dispatch as hidden
         // aliases but are off the advertised list. (memory_health → memory_status.)
-        assert!(tool_names.contains(&"graph"));
+        assert!(tool_names.contains(&"ghostlink"));
+        // v3.1 GhostLink swap: `graph` is a hidden alias, off the advertised list.
+        assert!(!tool_names.contains(&"graph"));
         for old in [
             "explore_connections",
             "predict",
@@ -3540,10 +3553,10 @@ mod tests {
             ("memory_graph", serde_json::json!({})),
             ("composed_graph", serde_json::json!({"action": "recent"})),
             // New unified actions (read-only).
-            ("graph", serde_json::json!({"action": "predict"})),
-            ("graph", serde_json::json!({"action": "memory_graph"})),
-            ("graph", serde_json::json!({"action": "recent"})),
-            ("graph", serde_json::json!({"action": "never_composed"})),
+            ("ghostlink", serde_json::json!({"mode": "predict"})),
+            ("ghostlink", serde_json::json!({"mode": "map"})),
+            ("ghostlink", serde_json::json!({"mode": "inspect", "view": "recent"})),
+            ("ghostlink", serde_json::json!({"mode": "propose", "tags": ["fixture"]} )),
         ];
 
         for (name, args) in calls {
@@ -4011,6 +4024,7 @@ mod tests {
             // v2.2: dedup action='scan' returns clusters + candidates + policy.
             "dedup" => Some(150_000),
             // v2.2: graph memory_graph layout + bounty_mode pagination.
+            "ghostlink" => Some(250_000),
             "graph" => Some(250_000),
             _ => None,
         }
@@ -4033,7 +4047,7 @@ mod tests {
             "memory",
             "codebase",
             "dedup",
-            "graph",
+            "ghostlink",
         ] {
             let tool = tools
                 .iter()

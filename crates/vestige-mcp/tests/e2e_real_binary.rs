@@ -2734,6 +2734,48 @@ fn graph_recent_predict_and_memory_graph_answer_and_chain_needs_endpoints() {
 }
 
 #[test]
+fn ghostlink_propose_map_inspect_and_missing_kind_errors() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    server.ingest_keyword_only(
+        "The deploy pipeline caches build artifacts by branch",
+        &["deploy"],
+    );
+
+    // The flagship read: surface never-composed ghost pairings.
+    let propose = server.call_tool_ok("ghostlink", json!({ "mode": "propose" }));
+    assert_under(&propose, 8_000, "ghostlink propose");
+
+    // Map mode delegates to memory_graph: same wire shape.
+    let map = server.call_tool_ok(
+        "ghostlink",
+        json!({ "mode": "map", "query": "deploy" }),
+    );
+    assert_keys(
+        &map,
+        &["nodes", "edges", "nodeCount", "edgeCount"],
+        "ghostlink map",
+    );
+    assert_under(&map, 8_000, "ghostlink map");
+
+    // Inspect mode reads composition events.
+    let inspect = server.call_tool_ok(
+        "ghostlink",
+        json!({ "mode": "inspect", "view": "recent" }),
+    );
+    assert_keys(&inspect, &["events"], "ghostlink inspect recent");
+
+    // Validation: explore without kind must error.
+    let bad = server.call_tool("ghostlink", json!({ "mode": "explore" }));
+    assert!(
+        bad.get("error").is_some(),
+        "explore without kind must error: {bad}"
+    );
+    server.shutdown();
+}
+
+#[test]
 fn intention_set_list_check_update_round_trip_and_a_bad_trigger_errors() {
     let dir = data_dir();
     let mut server = Server::spawn(dir.path());
