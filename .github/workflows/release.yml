@@ -544,3 +544,110 @@ jobs:
             dist/vestige-mcp-aarch64-unknown-linux-gnu.tar.gz.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Android (#145): the no-embeddings Termux profile Jelloeater is testing on
+  # a Pixel. Build recipe mirrors ci.yml's android-build job so what ships is
+  # byte-for-byte the configuration CI already verifies on every PR: cargo-ndk
+  # against API 24, static C++ runtime, and a hard gate that only bionic's
+  # libc/libm/libdl/liblog appear as runtime dependencies. No npm installer
+  # mapping yet — on-device Termux users build from source or take the asset.
+  build-android:
+    name: Build aarch64-linux-android (no embeddings)
+    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_API: "24"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Add target to the pinned toolchain
+        run: rustup target add aarch64-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-aarch64-linux-android-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # ~/.cargo/bin is in the cache, so a warm cache already holds cargo-ndk
+      # and `cargo install` refuses to overwrite it (exit 101). Reuse it.
+      - name: Install cargo-ndk
+        run: command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
+
+      # openssl-src (git2's vendored OpenSSL) configures Android through the
+      # NDK's clang wrappers, which it looks for on PATH under ANDROID_NDK_ROOT.
+      # cargo-ndk sets the Rust-side CC, AR, and linker variables.
+      - name: Point OpenSSL's build at the NDK
+        run: |
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Build (release, no embeddings)
+        env:
+          CXXSTDLIB: c++_static
+        run: |
+          # cargo-ndk 4 takes the API level as --platform; a bare -p is handed
+          # to cargo as --package, and "unknown package: 24" is what you get.
+          cargo ndk -t arm64-v8a --platform "$ANDROID_API" build --release -p vestige-mcp \
+            --no-default-features --features connectors,cloud-sync
+
+      - name: Only bionic may be a runtime dependency
+        run: |
+          BIN=target/aarch64-linux-android/release/vestige-mcp
+          READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$READELF" -h "$BIN" | grep -E 'Machine:\s+AArch64'
+          "$READELF" -d "$BIN" | grep NEEDED | tee needed.txt
+          if grep -vE '\[(libc|libm|libdl|liblog)\.so\]' needed.txt; then
+            echo "::error::vestige-mcp links a library Termux does not guarantee (listed above)"
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          cd target/aarch64-linux-android/release
+          tar czf ../../../vestige-mcp-aarch64-linux-android.tar.gz vestige-mcp
+
+      - name: Upload android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-mcp-aarch64-linux-android
+          path: vestige-mcp-aarch64-linux-android.tar.gz
+
+  publish-android:
+    name: Checksum + publish aarch64-linux-android
+    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    runs-on: ubuntu-latest
+    needs: [build-android]
+    steps:
+      - name: Download android artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vestige-mcp-aarch64-linux-android
+          path: dist
+
+      - name: Generate checksum
+        working-directory: dist
+        run: sha256sum vestige-mcp-aarch64-linux-android.tar.gz > vestige-mcp-aarch64-linux-android.tar.gz.sha256
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            dist/vestige-mcp-aarch64-linux-android.tar.gz
+            dist/vestige-mcp-aarch64-linux-android.tar.gz.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
