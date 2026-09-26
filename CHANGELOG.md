@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — per-platform npm packages, no eager postinstall (#220)
+
+- `vestige-mcp-server` now resolves its binary from an exact-pinned
+  `optionalDependency` (`@vestige/mcp-<os>-<arch>`, turbo/rolldown/biome
+  pattern), so installs need no lifecycle script at all — pnpm v10 and
+  current Yarn block postinstall by default, and a registry-fetched binary
+  works where GitHub Releases is unreachable. The GitHub download remains
+  only as a lazy fallback for `npm install --no-optional`. The release
+  workflow gained a matrix job that publishes the platform packages from
+  the assets it already builds (requires NPM_TOKEN; --provenance on).
+  Lockfiles now pin the binary version.
+
 ### Fixed
 
 - Fresh reflections surface in recall (#232): an `Insight` written in the
