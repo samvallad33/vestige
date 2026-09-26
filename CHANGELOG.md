@@ -7,28 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — precision decay: results lose detail before they disappear (#225)
+### Changed — per-platform npm packages, no eager postinstall (#220)
 
-- Ko 2025 (Nature) shows memories lose precision before availability:
-  the gist survives while the detail fades. A derived precision score
-  (retention², decaying strictly faster than retention) now gates the
-  `full` detail level: below the floor (precision < 0.45, retention
-  ≲ 0.67) recall returns the brief shape with `precisionLow: true` and a
-  sentence-boundary `gist` instead of the whole memory.
-  `memory(action='get')` still returns full content — precision degrades
-  recall, never access. No schema change: precision derives from existing
-  FSRS state.
-
-### Added — recall abstains when the store cannot answer (#224)
-
-- Metamemory, after Ning 2026 (Neuron): a separate judgement about whether
-  retrieval will succeed, made before committing to an answer. Every recall
-  response now carries `confidence` (from the match evidence, the gap to the
-  second result, and the top result's FSRS retention — signals the pipeline
-  already computes). Below `abstain_floor` (default 0.35, 1 disables) the
-  response is `{ results: [], abstained: true, reason, nearest: [...] }` so
-  the caller sees what was closest without being handed a weak match
-  dressed as an answer.
+- `vestige-mcp-server` now resolves its binary from an exact-pinned
+  `optionalDependency` (`@vestige/mcp-<os>-<arch>`, turbo/rolldown/biome
+  pattern), so installs need no lifecycle script at all — pnpm v10 and
+  current Yarn block postinstall by default, and a registry-fetched binary
+  works where GitHub Releases is unreachable. The GitHub download remains
+  only as a lazy fallback for `npm install --no-optional`. The release
+  workflow gained a matrix job that publishes the platform packages from
+  the assets it already builds (requires NPM_TOKEN; --provenance on).
+  Lockfiles now pin the binary version.
 
 ### Fixed
 

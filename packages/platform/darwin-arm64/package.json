@@ -1,0 +1,19 @@
+{
+  "name": "@vestige/mcp-darwin-arm64",
+  "version": "3.1.0",
+  "description": "Platform binary for vestige-mcp-server (do not install directly).",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samvallad33/vestige.git"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/"
+  ]
+}
