@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — supersession is enforced, not labeled (#252 phase 1)
+
+- arXiv:2609.08258 tested five agent-memory systems and found none
+  enforces soft revocation at retrieval: superseded facts still surface,
+  merely down-ranked. A down-rank is a label; withholding is enforcement.
+  Memories whose validity window has closed are now removed from
+  current-time recall results entirely, with a `supersededWithheld` count
+  on the response for observability. `include_superseded=true` opts back
+  in (kept, down-ranked x0.1), and as-of `validAt` queries are unchanged:
+  audit stays opt-in, currency becomes the default. Phase 2 (actor
+  registry, role-weighted endorsements, persisted replacement edges)
+  builds on this gate.
+
 ### Fixed
 
 - Fresh reflections surface in recall (#232): an `Insight` written in the
