@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — recall abstains when the store cannot answer (#224)
+
+- Metamemory, after Ning 2026 (Neuron): a separate judgement about whether
+  retrieval will succeed, made before committing to an answer. Every recall
+  response now carries `confidence` (from the match evidence, the gap to the
+  second result, and the top result's FSRS retention — signals the pipeline
+  already computes). Below `abstain_floor` (default 0.35, 1 disables) the
+  response is `{ results: [], abstained: true, reason, nearest: [...] }` so
+  the caller sees what was closest without being handed a weak match
+  dressed as an answer.
+
 ### Fixed
 
 - Fresh reflections surface in recall (#232): an `Insight` written in the
