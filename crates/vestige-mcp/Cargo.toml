@@ -1,6 +1,6 @@
 [package]
 name = "vestige-mcp"
-version = "3.0.0"
+version = "3.1.0"
 edition = "2024"
 description = "Cognitive memory MCP server for AI agents - FSRS-6, spreading activation, synaptic tagging, 3D dashboard, and 130 years of memory research"
 authors = ["samvallad33"]

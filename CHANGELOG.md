@@ -5,6 +5,42 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-09-25
+
+Vestige v3.1.0 is a concurrency and distribution release: the stdio transport
+serves requests concurrently with bounded backpressure, the shutdown path no
+longer races ONNX Runtime teardown, and the README gains Homebrew and eget
+install paths.
+
+### Added
+
+- Concurrent request dispatch over stdio: one slow handler no longer stalls
+  every other request on the connection. One writer task owns stdout so JSON
+  documents never interleave, backpressure is bounded at every layer
+  (in-flight cap, pending cap, writer queue), the post-EOF drain is bounded
+  and hands abandoned request ids a -32603, and inline consolidation can no
+  longer be triggered twice at once. By @randomnimbus in #268.
+- Homebrew (`brew install samvallad33/tap/vestige`) and eget install paths in
+  the README (#269).
+
+### Fixed
+
+- Shutdown SIGSEGV: returning from `main` ran libc exit handlers while a
+  warm-up task was still inside ONNX Runtime's `CreateSession`, corrupting the
+  op-schema registry in 7 of 15 integration runs. The runtime now joins with a
+  bound, and when it cannot, the process leaves without running exit-time
+  teardown (#268).
+
+### Changed
+
+- README hero renamed to Transaction-Security OS; Operator rituals named in
+  the Founding Operator section (#266).
+- Benchmark writeups published: The Blast, The Refund, The Autoscale
+  (Phase-2 STOP→ALLOW evidence) (#258, #259, #260, #248).
+- Release workflow skips binary builds and registry publish for announcement
+  tags — `launch-*`, `vestige-*`, `benchmark-*` (#264).
+- v3 distribution manifests and installer references aligned (#254).
+
 ## [3.0.0] - 2026-09-10
 
 Vestige v3 brings the open-source developer upgrade together: current code
