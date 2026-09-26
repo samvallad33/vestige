@@ -5,6 +5,18 @@ All notable changes to Vestige will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `tools/list` payloads dropped from 56 KB to 19.8 KB (#212): discriminator
+  enums and types stay on the wire, deep variant trees and per-field prose
+  move one call deeper. `memory_status` `view='tools'` with `tool='<name>'`
+  now serves the full, unfolded schema for the selected tool, so no detail
+  is lost — a build-time guard fails if the wire payload ever exceeds 20 KiB
+  again. Recall's investigation filters are grouped into `source` and
+  `filters` objects in the compact form; the full schema keeps them flat.
+
 ## [3.1.0] - 2026-09-25
 
 Vestige v3.1.0 is a concurrency and distribution release: the stdio transport
