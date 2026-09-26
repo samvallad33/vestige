@@ -4,7 +4,7 @@
 
 # Vestige
 
-**Cognitive Deterministic Memory Security OS for Agentic AI.**
+**Cognitive Deterministic Memory Transaction-Security OS for Agentic AI.**
 
 Your agent can think anything. Vestige decides what it is allowed to do.
 
