@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fresh reflections surface in recall (#232): an `Insight` written in the
+  last 24 hours takes the lead slot when it is at least 30% as relevant as
+  the top result. Raw term-score gaps between a terse reflection and a
+  content-rich memory (measured 2.75x on a two-node corpus) previously hid
+  same-day insights entirely at small limits; no score multiplier can span
+  that, so the guarantee is structural. Stale or below-floor insights are
+  untouched. Also corrects the `exclude_types` schema description, which
+  wrongly claimed reflections are excluded by default.
+
 ### Changed
 
 - `tools/list` payloads dropped from 56 KB to 19.8 KB (#212): discriminator
