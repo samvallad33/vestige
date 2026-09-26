@@ -53,6 +53,12 @@ pub fn schema() -> Value {
                 "minimum": 0.0,
                 "maximum": 1.0
             },
+            "abstain_floor": {
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "description": "Metamemory: below this confidence recall abstains and returns nearest matches instead of a weak answer. Default 0.35; 1 disables."
+            },
             "min_similarity": {
                 "type": "number",
                 "description": "Minimum similarity, 0 to 1 (default 0.5).",
@@ -172,6 +178,9 @@ struct SearchArgs {
     min_retention: Option<f64>,
     #[serde(alias = "min_similarity")]
     min_similarity: Option<f32>,
+    /// #224: below this confidence (0..=1) recall abstains and returns the
+    /// nearest matches instead of a weak answer. Default 0.35; 1 disables.
+    abstain_floor: Option<f64>,
     #[serde(alias = "detail_level")]
     detail_level: Option<String>,
     #[serde(alias = "context_topics")]
@@ -350,6 +359,142 @@ mod fresh_insight_tests {
     }
 }
 
+/// #224 metamemory: the store's judgement that it cannot answer.
+///
+/// Ning 2026 (Neuron) describes metamemory as a separate judgement about
+/// whether retrieval will succeed, made before committing to an answer. An
+/// agent handed a weak match treats it as an answer; telling it "no memory
+/// covers this" produces better decisions. The confidence combines signals
+/// the pipeline already computes: how well the best result matched, how
+/// unique that match is (gap to the second result), and how much the top
+/// result can be trusted (FSRS retention). A poor score on all three is a
+/// store that does not know.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct AbstainVerdict {
+    pub confidence: f64,
+    pub abstain: bool,
+}
+
+/// Score scale note: every matching path lands meaningfully-matched results
+/// at combined scores >= ~1.0 (the literal path floor is 1.2; keyword and
+/// RRF-fused matches cluster near or above 1 when terms actually hit), so
+/// 1.0 normalizes "a real match" across paths.
+const ABSTAIN_TOP_NORM: f32 = 1.0;
+/// Default floor below which recall abstains instead of answering weakly.
+pub(crate) const DEFAULT_ABSTAIN_FLOOR: f64 = 0.35;
+
+pub(crate) fn abstention_decision(
+    results: &[vestige_core::SearchResult],
+    floor: f64,
+) -> AbstainVerdict {
+    let Some(top) = results.first() else {
+        // Nothing matched at all: that is the existing empty-response path,
+        // not an abstention. Abstaining requires something to withhold.
+        return AbstainVerdict { confidence: 0.0, abstain: false };
+    };
+    let top_score = top.combined_score.max(0.0);
+    let match_evidence = (top_score / ABSTAIN_TOP_NORM).clamp(0.0, 1.0) as f64;
+    let gap = match results.get(1) {
+        Some(second) => {
+            let diff = top_score - second.combined_score;
+            if top_score > 0.0 { (diff / top_score).clamp(0.0, 1.0) as f64 } else { 0.0 }
+        }
+        None => 1.0,
+    };
+    let retention = top.node.retention_strength.clamp(0.0, 1.0);
+    let confidence = (0.6 * match_evidence + 0.25 * retention + 0.15 * gap).clamp(0.0, 1.0);
+    // A floor of 1.0 (or above) disables abstention: the operator asked to
+    // always answer, so nothing is withheld.
+    let abstain = floor < 1.0 && confidence < floor;
+    AbstainVerdict { confidence, abstain }
+}
+
+/// The abstained response envelope (#224): no results dressed as an answer,
+/// the confidence and reason stated, and the nearest matches offered for
+/// inspection so the caller can still see what was closest.
+pub(crate) fn abstain_envelope(
+    query: &str,
+    verdict: AbstainVerdict,
+    floor: f64,
+    nearest: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "query": query,
+        "results": [],
+        "abstained": true,
+        "confidence": verdict.confidence,
+        "reason": format!(
+            "No memory answers this: the best match scored {:.2} confidence, below the {:.2} floor. What follows is nearest-known, not an answer.",
+            verdict.confidence, floor
+        ),
+        "nearest": nearest,
+        "total": 0,
+    })
+}
+
+#[cfg(test)]
+mod abstention_tests {
+    use super::{AbstainVerdict, DEFAULT_ABSTAIN_FLOOR, abstain_envelope, abstention_decision};
+    use vestige_core::memory::SearchResult;
+    use vestige_core::KnowledgeNode;
+
+    fn result(score: f32, retention: f64, second: Option<f32>) -> Vec<SearchResult> {
+        let mk = |score: f32, retention: f64| {
+            let mut node = KnowledgeNode::default();
+            node.retention_strength = retention;
+            SearchResult {
+                node,
+                keyword_score: None,
+                semantic_score: None,
+                combined_score: score,
+                match_type: vestige_core::MatchType::Keyword,
+            }
+        };
+        let mut v = vec![mk(score, retention)];
+        if let Some(s2) = second {
+            v.push(mk(s2, retention));
+        }
+        v
+    }
+
+    #[test]
+    fn a_strong_unique_match_does_not_abstain() {
+        let v = abstention_decision(&result(2.0, 0.9, Some(0.5)), DEFAULT_ABSTAIN_FLOOR);
+        assert!(!v.abstain, "confidence {}", v.confidence);
+        assert!(v.confidence > 0.8);
+    }
+
+    #[test]
+    fn a_weak_low_trust_match_abstains() {
+        let v = abstention_decision(&result(0.1, 0.1, None), DEFAULT_ABSTAIN_FLOOR);
+        assert!(v.abstain, "confidence {}", v.confidence);
+        assert!(v.confidence < DEFAULT_ABSTAIN_FLOOR);
+    }
+
+    #[test]
+    fn empty_results_are_not_an_abstention() {
+        let v = abstention_decision(&[], DEFAULT_ABSTAIN_FLOOR);
+        assert_eq!(v, AbstainVerdict { confidence: 0.0, abstain: false });
+    }
+
+    #[test]
+    fn the_floor_is_configurable_and_one_disables() {
+        let weak = result(0.15, 0.15, None);
+        assert!(abstention_decision(&weak, 0.9).abstain);
+        assert!(!abstention_decision(&weak, 1.0).abstain, "floor 1.0 never abstains (clamped confidence can equal but not exceed only when <); confidence is < 1.0 here");
+    }
+
+    #[test]
+    fn the_envelope_states_itself_clearly() {
+        let v = super::abstention_decision(&result(0.12, 0.1, None), DEFAULT_ABSTAIN_FLOOR);
+        let env = abstain_envelope("q", v, DEFAULT_ABSTAIN_FLOOR, vec![serde_json::json!({"id": "x"})]);
+        assert_eq!(env["abstained"], serde_json::json!(true));
+        assert_eq!(env["results"], serde_json::json!([]));
+        assert!(env["reason"].as_str().unwrap().contains("below the"));
+        assert_eq!(env["nearest"].as_array().unwrap().len(), 1);
+    }
+}
+
 fn apply_default_validity_penalty(
     result: &mut vestige_core::SearchResult,
     valid_at: Option<DateTime<Utc>>,
@@ -466,7 +611,7 @@ pub async fn execute(
         } else {
             limit
         };
-        let results = storage
+        let concrete_kept = storage
             .concrete_search_filtered(
                 &args.query,
                 concrete_fetch_limit,
@@ -477,7 +622,8 @@ pub async fn execute(
 
         // Apply post-filters before formatting the response. Retrieval
         // telemetry is recorded later, after the final budget selection.
-        let mut results = filter_results_to_scope(storage, results, &scope_filter)?;
+        let concrete_verdict = abstention_decision(&concrete_kept, DEFAULT_ABSTAIN_FLOOR);
+        let mut results = filter_results_to_scope(storage, concrete_kept, &scope_filter)?;
         for result in &mut results {
             apply_default_validity_penalty(result, valid_at);
         }
@@ -531,6 +677,10 @@ pub async fn execute(
         // Audit only memories that are actually present in the response, not
         // candidates removed by retention or token-budget filtering.
 
+        // #224: concrete lookups carry confidence too, but never abstain —
+        // an exact-match path answering weakly is not the failure mode
+        // metamemory guards against.
+        let verdict = concrete_verdict;
         let mut response = serde_json::json!({
             "query": args.query,
             "method": "concrete",
@@ -543,6 +693,7 @@ pub async fn execute(
             "validAt": valid_at.map(|at| at.to_rfc3339()),
             "total": formatted.len(),
             "results": formatted,
+            "confidence": verdict.confidence,
         });
 
         if formatted.is_empty() {
@@ -1244,6 +1395,25 @@ pub async fn execute(
         .map(|cog| cog.attention_signal.is_learning_mode())
         .unwrap_or(false);
 
+    // #224 metamemory: judge answerability before answering. A weak match
+    // dressed as an answer is worse than an honest abstention with the
+    // nearest-known offered for inspection.
+    let abstain_floor = args.abstain_floor.unwrap_or(DEFAULT_ABSTAIN_FLOOR).clamp(0.0, 1.0);
+    let verdict = abstention_decision(&filtered_results, abstain_floor);
+    if verdict.abstain && !formatted.is_empty() {
+        let nearest: Vec<serde_json::Value> = formatted
+            .iter()
+            .take(3)
+            .cloned()
+            .collect();
+        let mut envelope = abstain_envelope(&args.query, verdict, abstain_floor, nearest);
+        envelope["method"] = serde_json::json!("hybrid+cognitive");
+        envelope["detailLevel"] = serde_json::json!(detail_level);
+        envelope["scope"] = serde_json::json!(scope_filter.scope);
+        envelope["abstainFloor"] = serde_json::json!(abstain_floor);
+        return Ok(envelope);
+    }
+
     let mut response = serde_json::json!({
         "query": args.query,
         "method": "hybrid+cognitive",
@@ -1255,6 +1425,7 @@ pub async fn execute(
         "validAt": valid_at.map(|at| at.to_rfc3339()),
         "total": formatted.len(),
         "results": formatted,
+        "confidence": verdict.confidence,
     });
 
     // Helpful hint when no results found
