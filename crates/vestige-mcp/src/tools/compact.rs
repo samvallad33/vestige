@@ -68,10 +68,10 @@ fn truncate(s: &str, limit: usize) -> String {
         return s.to_string();
     }
     let cut = &s[..limit];
-    if let Some(i) = cut.rfind(". ") {
-        if i > limit / 2 {
-            return cut[..i + 1].to_string();
-        }
+    if let Some(i) = cut.rfind(". ")
+        && i > limit / 2
+    {
+        return cut[..i + 1].to_string();
     }
     match cut.rfind(' ') {
         Some(i) if i > 0 => cut[..i].to_string(),
