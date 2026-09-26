@@ -6,7 +6,7 @@
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, info, warn};
 
@@ -146,10 +146,20 @@ fn log_level_rank(level: &str) -> Option<usize> {
 pub struct McpServer {
     storage: Arc<Storage>,
     cognitive: Arc<Mutex<CognitiveEngine>>,
-    initialized: bool,
-    logging_level: usize,
+    /// Handshake flag. Atomic rather than `bool` so `handle_request` can take
+    /// `&self` and the stdio transport can dispatch requests concurrently
+    /// behind an `Arc<McpServer>` (see `protocol/stdio.rs::run_io`).
+    initialized: AtomicBool,
+    /// Minimum MCP log level the client asked for, as a rank. Atomic for the
+    /// same reason as `initialized`.
+    logging_level: AtomicUsize,
     /// Tool call counter for inline consolidation trigger (every 100 calls)
     tool_call_count: AtomicU64,
+    /// Set while an inline consolidation worker is running. The trigger
+    /// predicate below claims nothing and resets nothing, so with requests
+    /// dispatched concurrently several handlers can reach the trigger together
+    /// and each spawn its own synchronous consolidation.
+    consolidating: Arc<AtomicBool>,
     /// Optional event broadcast channel for dashboard real-time updates.
     event_tx: Option<broadcast::Sender<VestigeEvent>>,
     /// Resolved output config from `<data_dir>/vestige.toml` (Phase 2). Tools
@@ -166,6 +176,16 @@ fn load_output_config(storage: &Arc<Storage>) -> Arc<OutputConfig> {
     Arc::new(config.output())
 }
 
+/// Holds the right to run one inline consolidation, and releases it when the
+/// worker finishes, returns early, or unwinds.
+struct ConsolidationClaim(Arc<AtomicBool>);
+
+impl Drop for ConsolidationClaim {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 impl McpServer {
     #[allow(dead_code)]
     pub fn new(storage: Arc<Storage>, cognitive: Arc<Mutex<CognitiveEngine>>) -> Self {
@@ -173,9 +193,10 @@ impl McpServer {
         Self {
             storage,
             cognitive,
-            initialized: false,
-            logging_level: 1,
+            initialized: AtomicBool::new(false),
+            logging_level: AtomicUsize::new(1),
             tool_call_count: AtomicU64::new(0),
+            consolidating: Arc::new(AtomicBool::new(false)),
             event_tx: None,
             output_config,
         }
@@ -191,12 +212,30 @@ impl McpServer {
         Self {
             storage,
             cognitive,
-            initialized: false,
-            logging_level: 1,
+            initialized: AtomicBool::new(false),
+            logging_level: AtomicUsize::new(1),
             tool_call_count: AtomicU64::new(0),
+            consolidating: Arc::new(AtomicBool::new(false)),
             event_tx: Some(event_tx),
             output_config,
         }
+    }
+
+    /// Take the right to run one inline consolidation, or `None` when one is
+    /// already running.
+    ///
+    /// `ConsolidationScheduler::should_consolidate` is a pure read: it claims
+    /// nothing and resets nothing, so it answers the same way for every caller
+    /// that asks in the same moment. With one request served at a time that
+    /// could not matter. With requests dispatched concurrently, a burst of
+    /// handlers reaching the trigger together would each spawn their own
+    /// `run_consolidation`, and that call is synchronous, so each one occupies
+    /// a runtime worker for its whole run.
+    fn claim_consolidation(&self) -> Option<ConsolidationClaim> {
+        self.consolidating
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| ConsolidationClaim(Arc::clone(&self.consolidating)))
     }
 
     /// Emit an event to the dashboard (no-op if no event channel).
@@ -207,7 +246,7 @@ impl McpServer {
     }
 
     /// Handle an incoming JSON-RPC request
-    pub async fn handle_request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
+    pub async fn handle_request(&self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         debug!("Handling request: {}", request.method);
 
         if request.id.is_none() {
@@ -226,7 +265,7 @@ impl McpServer {
         // stdio. Gating it behind the very handshake it exists to precede makes
         // it useless: a modern client probing this server would get
         // "Server not initialized" and have to guess.
-        if !self.initialized
+        if !self.initialized.load(Ordering::Acquire)
             && request.method != "initialize"
             && request.method != "notifications/initialized"
             && request.method != "server/discover"
@@ -266,7 +305,7 @@ impl McpServer {
                     .and_then(log_level_rank)
                 {
                     Some(level) => {
-                        self.logging_level = level;
+                        self.logging_level.store(level, Ordering::Release);
                         Ok(serde_json::json!({}))
                     }
                     None => Err(JsonRpcError::invalid_params(
@@ -340,7 +379,7 @@ impl McpServer {
 
     /// Handle initialize request
     async fn handle_initialize(
-        &mut self,
+        &self,
         params: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, JsonRpcError> {
         let request: InitializeRequest = match params {
@@ -368,7 +407,7 @@ impl McpServer {
                 MCP_VERSION.to_string()
             };
 
-        self.initialized = true;
+        self.initialized.store(true, Ordering::Release);
         info!(
             "MCP session initialized with protocol version {}",
             negotiated_version
@@ -407,11 +446,11 @@ impl McpServer {
         notification["params"]["level"]
             .as_str()
             .and_then(log_level_rank)
-            .is_some_and(|level| level >= self.logging_level)
+            .is_some_and(|level| level >= self.logging_level.load(Ordering::Acquire))
     }
 
     pub fn is_initialized(&self) -> bool {
-        self.initialized
+        self.initialized.load(Ordering::Acquire)
     }
 
     /// Handle tools/list request
@@ -1733,10 +1772,19 @@ description: Some("Investigate a recorded failure using earlier memories sharing
             .map(|cog| cog.consolidation_scheduler.should_consolidate())
             .unwrap_or(count.is_multiple_of(100)); // Fallback to count-based if lock unavailable
 
-        if should_consolidate {
+        // The claim is what holds this to one worker at a time; the predicate
+        // above cannot, because it reads state it never changes.
+        let claim = if should_consolidate {
+            self.claim_consolidation()
+        } else {
+            None
+        };
+
+        if let Some(claim) = claim {
             let storage_clone = Arc::clone(&self.storage);
             let cognitive_clone = Arc::clone(&self.cognitive);
             tokio::spawn(async move {
+                let _claim = claim;
                 // Expire labile reconsolidation windows
                 if let Ok(mut cog) = cognitive_clone.try_lock() {
                     let _expired = cog.reconsolidation.reconsolidate_expired();
@@ -2280,6 +2328,54 @@ mod tests {
         (server, dir)
     }
 
+    /// Only one inline consolidation may be in flight at a time.
+    ///
+    /// `ConsolidationScheduler::should_consolidate` is a pure read, so with
+    /// requests dispatched concurrently every handler in a burst can see the
+    /// same "yes". The claim is the thing that decides.
+    #[tokio::test]
+    async fn only_one_consolidation_can_be_claimed_at_a_time() {
+        let (server, _dir) = test_server().await;
+
+        let first = server
+            .claim_consolidation()
+            .expect("the first caller takes the claim");
+        assert!(
+            server.claim_consolidation().is_none(),
+            "a second consolidation cannot start while one is running"
+        );
+        assert!(
+            server.claim_consolidation().is_none(),
+            "and neither can a third"
+        );
+
+        drop(first);
+        assert!(
+            server.claim_consolidation().is_some(),
+            "the claim is released when the worker finishes"
+        );
+    }
+
+    /// The claim is released even when the worker unwinds, so one panicking
+    /// consolidation does not disable consolidation for the process lifetime.
+    #[tokio::test]
+    async fn a_panicking_consolidation_worker_releases_the_claim() {
+        let (server, _dir) = test_server().await;
+        let claim = server.claim_consolidation().expect("claim taken");
+
+        let joined = tokio::spawn(async move {
+            let _claim = claim;
+            panic!("consolidation worker panicked");
+        })
+        .await;
+        assert!(joined.is_err(), "the worker panicked");
+
+        assert!(
+            server.claim_consolidation().is_some(),
+            "the claim is released by its drop guard"
+        );
+    }
+
     /// Create a JSON-RPC request
     fn make_request(method: &str, params: Option<serde_json::Value>) -> JsonRpcRequest {
         JsonRpcRequest {
@@ -2334,7 +2430,7 @@ mod tests {
         .unwrap();
 
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let mut server = McpServer::new(storage.clone(), cognitive);
+        let server = McpServer::new(storage.clone(), cognitive);
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
@@ -2410,7 +2506,7 @@ mod tests {
         .unwrap();
 
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let mut server = McpServer::new(storage.clone(), cognitive);
+        let server = McpServer::new(storage.clone(), cognitive);
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
@@ -2451,7 +2547,7 @@ mod tests {
         assert!(!storage.data_dir().join("review_mode.json").exists());
 
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let mut server = McpServer::new(storage.clone(), cognitive);
+        let server = McpServer::new(storage.clone(), cognitive);
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
@@ -2502,7 +2598,7 @@ mod tests {
             .unwrap();
 
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let mut server = McpServer::new(storage.clone(), cognitive);
+        let server = McpServer::new(storage.clone(), cognitive);
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
@@ -2568,7 +2664,7 @@ mod tests {
             .unwrap();
         let (event_tx, mut events) = tokio::sync::broadcast::channel(16);
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let mut server = McpServer::new_with_events(storage.clone(), cognitive, event_tx);
+        let server = McpServer::new_with_events(storage.clone(), cognitive, event_tx);
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
@@ -2651,7 +2747,7 @@ mod tests {
             })
             .unwrap();
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let mut server = McpServer::new(storage.clone(), cognitive);
+        let server = McpServer::new(storage.clone(), cognitive);
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
@@ -2709,7 +2805,7 @@ mod tests {
             })
             .unwrap();
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let mut server = McpServer::new(storage.clone(), cognitive);
+        let server = McpServer::new(storage.clone(), cognitive);
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
@@ -2756,7 +2852,7 @@ mod tests {
         .unwrap();
         let (event_tx, mut events) = tokio::sync::broadcast::channel(16);
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let mut server = McpServer::new_with_events(storage, cognitive, event_tx);
+        let server = McpServer::new_with_events(storage, cognitive, event_tx);
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
@@ -2868,7 +2964,7 @@ mod tests {
     /// client concluded the server offered no revision at all.
     #[tokio::test]
     async fn discover_is_a_schema_shaped_discover_result() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         // No initialize on purpose: discover precedes the handshake.
         let response = server
             .handle_request(make_request("server/discover", None))
@@ -2914,7 +3010,7 @@ mod tests {
     /// cursor, so any non-empty cursor is one it did not hand out.
     #[tokio::test]
     async fn unknown_cursors_are_rejected_and_absent_equivalents_are_not() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await
@@ -2956,7 +3052,7 @@ mod tests {
     /// the method belongs to the `resources` capability the server declares.
     #[tokio::test]
     async fn resources_templates_list_is_empty_not_method_not_found() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await
@@ -2978,8 +3074,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_initialize_sets_initialized_flag() {
-        let (mut server, _dir) = test_server().await;
-        assert!(!server.initialized);
+        let (server, _dir) = test_server().await;
+        assert!(!server.initialized.load(Ordering::Acquire));
 
         let request = make_request(
             "initialize",
@@ -2998,12 +3094,12 @@ mod tests {
         let response = response.unwrap();
         assert!(response.result.is_some());
         assert!(response.error.is_none());
-        assert!(server.initialized);
+        assert!(server.initialized.load(Ordering::Acquire));
     }
 
     #[tokio::test]
     async fn test_initialize_returns_server_info() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         // Send with current protocol version to get it back
         let params = serde_json::json!({
             "protocolVersion": MCP_VERSION,
@@ -3024,7 +3120,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_initialize_unsupported_protocol_falls_back_to_latest() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let params = serde_json::json!({
             "protocolVersion": "1.0.0",
             "capabilities": {},
@@ -3040,14 +3136,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_initialize_missing_params_returns_error() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let request = make_request("initialize", None);
 
         let response = server.handle_request(request).await.unwrap();
         assert!(response.result.is_none());
         assert!(response.error.is_some());
         assert_eq!(response.error.unwrap().code, -32602);
-        assert!(!server.initialized);
+        assert!(!server.initialized.load(Ordering::Acquire));
     }
 
     // ========================================================================
@@ -3056,7 +3152,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_before_initialize_returns_error() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let request = make_request("tools/list", None);
         let response = server.handle_request(request).await.unwrap();
@@ -3069,7 +3165,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ping_before_initialize_returns_error() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let request = make_request("ping", None);
         let response = server.handle_request(request).await.unwrap();
@@ -3084,7 +3180,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_initialized_notification_returns_none() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         // First initialize
         let init_request = make_request("initialize", Some(init_params()));
@@ -3100,7 +3196,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_initialized_notification_with_id_returns_invalid_request() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let request = make_request("notifications/initialized", None);
         let response = server.handle_request(request).await.unwrap();
@@ -3111,13 +3207,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_notification_does_not_emit_response_or_side_effect() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let notification = make_notification("initialize", None);
         let response = server.handle_request(notification).await;
 
         assert!(response.is_none());
-        assert!(!server.initialized);
+        assert!(!server.initialized.load(Ordering::Acquire));
     }
 
     // ========================================================================
@@ -3126,7 +3222,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_guide_matches_live_catalog_and_rejects_hidden_names() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
@@ -3189,7 +3285,7 @@ mod tests {
 
     #[tokio::test]
     async fn logging_capability_is_declared_and_set_level_is_accepted() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let init = server
             .handle_request(make_request("initialize", Some(init_params())))
             .await
@@ -3214,7 +3310,7 @@ mod tests {
             .await
             .unwrap();
         assert!(invalid.error.is_some());
-        assert_eq!(server.logging_level, 1);
+        assert_eq!(server.logging_level.load(Ordering::Acquire), 1);
 
         let discover = server
             .handle_request(make_request("server/discover", None))
@@ -3225,7 +3321,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_list_returns_all_tools() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         // Initialize first
         let init_request = make_request("initialize", Some(init_params()));
@@ -3457,7 +3553,7 @@ mod tests {
     /// the call resolves without mutating or requiring extra setup.
     #[tokio::test]
     async fn test_deprecated_dedup_aliases_redirect() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
 
@@ -3493,7 +3589,7 @@ mod tests {
     /// each `view` of the new tool must resolve.
     #[tokio::test]
     async fn test_memory_status_views_and_aliases() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
 
@@ -3530,7 +3626,7 @@ mod tests {
     /// guards the no-`.await` facade branch.)
     #[tokio::test]
     async fn test_graph_actions_and_aliases() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
 
@@ -3566,7 +3662,7 @@ mod tests {
     /// fetch by the caller-supplied run id, and return that same receipt inline.
     #[tokio::test]
     async fn recall_run_produces_fetchable_decision_receipt() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
@@ -3614,7 +3710,7 @@ mod tests {
     /// path validation (a nonexistent path errors rather than silently no-op).
     #[tokio::test]
     async fn test_maintain_actions_and_safety() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
 
@@ -3691,7 +3787,7 @@ mod tests {
     /// names still dispatch, and the reason/contradictions modes resolve.
     #[tokio::test]
     async fn test_recall_modes_and_aliases() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
 
@@ -3734,7 +3830,7 @@ mod tests {
     /// faithful pass-through, not a reasoning call.
     #[tokio::test]
     async fn test_recall_lookup_matches_search_shape() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
 
@@ -3760,7 +3856,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_have_descriptions_and_schemas() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
@@ -3790,7 +3886,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resources_list_returns_all_resources() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
@@ -3819,7 +3915,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resources_have_descriptions() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
@@ -3846,7 +3942,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_method_returns_error() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         // Initialize first
         let init_request = make_request("initialize", Some(init_params()));
@@ -3863,7 +3959,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unknown_tool_returns_error() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
@@ -3887,7 +3983,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ping_returns_empty_object() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
@@ -3906,7 +4002,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_call_missing_params_returns_error() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
@@ -3924,7 +4020,7 @@ mod tests {
         // caller — so agent_traces/receipts/memory_prs never populated. A tool
         // call must now record at least the opening mcp.call event under the
         // supplied runId.
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         server
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
@@ -3949,7 +4045,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_call_invalid_params_returns_error() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
@@ -3968,7 +4064,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_call_rejects_non_object_arguments() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
 
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
@@ -4018,7 +4114,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_high_payload_tools_have_max_result_size_annotation() {
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
 
@@ -4074,7 +4170,7 @@ mod tests {
         // the discipline-prescribed set MUST NOT carry the annotation.
         // Adding the annotation to a small-payload tool dilutes the signal
         // and trains future maintainers that the value is arbitrary.
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
 
@@ -4113,7 +4209,7 @@ mod tests {
         // Anthropic's MCP spec is explicit: the field on the wire is `_meta`,
         // NOT `meta`. The Rust struct uses `meta: Option<Value>` with
         // `#[serde(rename = "_meta")]` — assert the rename actually fired.
-        let (mut server, _dir) = test_server().await;
+        let (server, _dir) = test_server().await;
         let init_request = make_request("initialize", Some(init_params()));
         server.handle_request(init_request).await;
 
