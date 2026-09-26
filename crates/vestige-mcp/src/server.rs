@@ -476,6 +476,13 @@ fn tool_catalog() -> Vec<ToolDescription> {
                 }),
 description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid keyword and semantic search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradictions; needs 'query', use when accuracy matters; its text is assembled from computed values, not written by a model. 'contradictions': disagreement pairs for a 'topic'. Reason mode records composition evidence; retrieval never changes strength; promote what helped via memory.".to_string()),
                 input_schema: tools::compact::of(&tools::recall::schema()),
+                output_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "results": {"type": "array"},
+                        "query": {"type": "string"}
+                    }
+                })),
                 ..Default::default()
             },
             ToolDescription {
@@ -489,6 +496,13 @@ description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid ke
                 }),
 description: Some("Inspect a persisted retrieval receipt ('get') or ablate its frozen evidence pack ('replay'): named slots withheld, no rerun, no model, no causal claim.".to_string()),
                 input_schema: tools::compact::of(&tools::receipt::schema()),
+                output_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "receiptId": {"type": "string"},
+                        "retrieved": {"type": "array"}
+                    }
+                })),
                 ..Default::default()
             },
             // ================================================================
@@ -505,6 +519,27 @@ description: Some("Inspect a persisted retrieval receipt ('get') or ablate its f
                 }),
 description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (keeps FSRS state), 'purge' (for good; confirm=true). 'delete' aliases purge.".to_string()),
                 input_schema: tools::compact::of(&tools::memory_unified::schema()),
+                ..Default::default()
+            },
+            // ================================================================
+            // PURGE (#219): the one irreversible call, on its own so a host
+            // can gate it without gating the reads that share `memory`.
+            // Claude Code honours `anthropic/requiresUserInteraction` with a
+            // prompt on every call. Same code path as memory(action='purge');
+            // the alias keeps working.
+            // ================================================================
+            ToolDescription {
+                name: "purge".to_string(),
+                title: Some("Purge".to_string()),
+                annotations: Some(ToolAnnotations {
+                    read_only_hint: false,
+                    destructive_hint: true,
+                    idempotent_hint: false,
+                    open_world_hint: false,
+                }),
+                description: Some("Remove one memory's content and embeddings for good. Irreversible; confirm=true required, the client prompts. Same path as memory(action='purge').".to_string()),
+                input_schema: tools::memory_unified::purge_schema(),
+                meta: Some(serde_json::json!({ "anthropic/requiresUserInteraction": true })),
                 ..Default::default()
             },
             ToolDescription {
@@ -565,6 +600,13 @@ description: Some("Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph
                 }),
 description: Some("Save to memory through Prediction Error Gating: 'content' is created, merged into a similar memory, or supersedes an outdated one. Batch: 'items' (max 20).".to_string()),
                 input_schema: tools::compact::of(&tools::smart_ingest::schema()),
+                output_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "decision": {"type": "string"},
+                        "nodeId": {"type": "string"}
+                    }
+                })),
                 ..Default::default()
             },
             // ================================================================
@@ -600,6 +642,12 @@ description: Some("Index an external system into local memories that cite the so
                 }),
 description: Some("Store status. view 'health' (default: stats, decay preview, module health, warnings), 'retention' (average, distribution, trend), 'timeline' (memories by day), 'changelog' (state-change audit trail), 'stats' (hygiene counts by type, tag, age, retention, lifecycle), 'tools' (all advertised tools and actions; pass tool for its full input schema).".to_string()),
                 input_schema: tools::compact::of(&tools::memory_status::schema()),
+                output_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "view": {"type": "string"}
+                    }
+                })),
                 ..Default::default()
             },
             // ================================================================
@@ -1023,6 +1071,23 @@ description: Some("Investigate a recorded failure using earlier memories sharing
                         Some(new_args)
                     }
                     None => Some(serde_json::json!({"action": "promote"})),
+                };
+                tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args).await
+            }
+
+            // #219: the standalone purge tool. Forces action='purge' and runs
+            // the identical path as memory(action='purge') — same review gate,
+            // same tombstone.
+            "purge" => {
+                let unified_args = match request.arguments {
+                    Some(ref args) => {
+                        let mut new_args = args.clone();
+                        if let Some(obj) = new_args.as_object_mut() {
+                            obj.insert("action".to_string(), serde_json::json!("purge"));
+                        }
+                        Some(new_args)
+                    }
+                    None => Some(serde_json::json!({"action": "purge"})),
                 };
                 tools::memory_unified::execute(&self.storage, &self.cognitive, unified_args).await
             }
@@ -3230,6 +3295,49 @@ mod tests {
     // TOOLS/LIST TESTS
     // ========================================================================
 
+    /// #219: the interaction flag belongs to purge alone. If another tool
+    /// picks it up, every call to that tool prompts the user.
+    #[test]
+    fn purge_is_the_only_tool_with_the_interaction_flag() {
+        for tool in McpServer::tool_catalog() {
+            let wants_prompt = tool
+                .meta
+                .as_ref()
+                .and_then(|m| m.get("anthropic/requiresUserInteraction"))
+                .is_some();
+            if tool.name == "purge" {
+                assert!(wants_prompt, "purge must carry the interaction flag");
+            } else {
+                assert!(
+                    !wants_prompt,
+                    "{} picked up the interaction flag; only purge may have it",
+                    tool.name
+                );
+            }
+        }
+    }
+
+    /// #219: outputSchema on the four tools whose shapes the e2e suite
+    /// already asserts; all valid object schemas.
+    #[test]
+    fn output_schema_present_on_the_four_documented_tools() {
+        let with_output = ["recall", "smart_ingest", "memory_status", "receipt"];
+        for tool in McpServer::tool_catalog() {
+            let has = tool.output_schema.is_some();
+            if with_output.contains(&tool.name.as_str()) {
+                assert!(has, "{} must advertise outputSchema", tool.name);
+                assert_eq!(
+                    tool.output_schema.as_ref().unwrap()["type"],
+                    serde_json::json!("object"),
+                    "{} output schema must be an object schema",
+                    tool.name
+                );
+            } else {
+                assert!(!has, "{} must not advertise outputSchema yet", tool.name);
+            }
+        }
+    }
+
     /// #212: the wire budget. tools/list must stay under 20 KiB no matter
     /// how schemas grow; new surface goes through tools::compact or shrinks.
     #[test]
@@ -3250,7 +3358,7 @@ mod tests {
     #[test]
     fn full_schema_registry_matches_the_advertised_catalog() {
         let catalog = McpServer::tool_catalog();
-        assert_eq!(catalog.len(), 15, "catalog size changed; update the registry");
+        assert_eq!(catalog.len(), 16, "catalog size changed; update the registry");
         for tool in &catalog {
             assert!(
                 tools::compact::full_schema(&tool.name).is_some(),
@@ -3426,10 +3534,10 @@ mod tests {
         // dispatchable as hidden back-compat aliases but drop off the advertised list.
         assert_eq!(
             tools.len(),
-            15,
-            "Expected exactly 14 tools after v2.3 receipt replay integration \
-             (12 consolidated: dedup + memory_status + graph + maintain + recall; \
-             session_context renamed) plus `receipt`, the flagship `backfill` and `project`"
+            16,
+            "Expected 16 tools: the v2.3/v3 consolidated set (dedup + memory_status + \
+             graph + maintain + recall; session_context renamed) plus `receipt`, \
+             `backfill`, `project`, and the #219 standalone `purge`"
         );
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -3476,7 +3584,7 @@ mod tests {
         // must advertise its destructive action conservatively.
         assert_eq!(
             destructive,
-            ["codebase", "dedup", "intention", "maintain", "memory"]
+            ["codebase", "dedup", "intention", "maintain", "memory", "purge"]
         );
         assert_eq!(
             open_world,
