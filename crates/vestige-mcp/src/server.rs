@@ -453,18 +453,13 @@ impl McpServer {
         self.initialized.load(Ordering::Acquire)
     }
 
-    /// Handle tools/list request
-    async fn handle_tools_list(
-        &self,
-        params: Option<&serde_json::Value>,
-    ) -> Result<serde_json::Value, JsonRpcError> {
-        reject_unknown_cursor(params)?;
-
-        // v2.3: 14 advertised tools after adding the controlled `receipt`
-        // surface and retaining the distinct flagship `backfill` primitive.
-        // 22 deprecated/folded names still work as hidden redirects in
-        // handle_tools_call. See docs/launch/tool-consolidation-v2.2.0.md.
-        let mut tools = vec![
+/// The advertised tool catalog. Single source of the full schemas:
+/// `handle_tools_list` compacts it for the wire (#212), and
+/// `tools::compact::full_schema` serves the same schemas in full through
+/// `memory_status` `view='tools'`. The parity guard test keeps this
+/// function and that registry name-for-name identical.
+fn tool_catalog() -> Vec<ToolDescription> {
+    vec![
             // ================================================================
             // RECALL — unified retrieval tool (v2.2). HOT PATH.
             // Folds search + deep_reference + cross_reference + contradictions.
@@ -480,7 +475,7 @@ impl McpServer {
                     open_world_hint: false,
                 }),
 description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid keyword and semantic search. 'reason': deep pass with trust scoring, spreading activation, supersession, and contradictions; needs 'query', use when accuracy matters; its text is assembled from computed values, not written by a model. 'contradictions': disagreement pairs for a 'topic'. Reason mode records composition evidence; retrieval never changes strength; promote what helped via memory.".to_string()),
-                input_schema: tools::recall::schema(),
+                input_schema: tools::compact::of(&tools::recall::schema()),
                 ..Default::default()
             },
             ToolDescription {
@@ -493,7 +488,7 @@ description: Some("Retrieve from memory. mode 'lookup' (default): fast hybrid ke
                     open_world_hint: false,
                 }),
 description: Some("Inspect a persisted retrieval receipt ('get') or ablate its frozen evidence pack ('replay'): named slots withheld, no rerun, no model, no causal claim.".to_string()),
-                input_schema: tools::receipt::schema(),
+                input_schema: tools::compact::of(&tools::receipt::schema()),
                 ..Default::default()
             },
             // ================================================================
@@ -509,7 +504,7 @@ description: Some("Inspect a persisted retrieval receipt ('get') or ablate its f
                     open_world_hint: false,
                 }),
 description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / 'demote' (demote never deletes), 'edit' (keeps FSRS state), 'purge' (for good; confirm=true). 'delete' aliases purge.".to_string()),
-                input_schema: tools::memory_unified::schema(),
+                input_schema: tools::compact::of(&tools::memory_unified::schema()),
                 ..Default::default()
             },
             ToolDescription {
@@ -522,7 +517,7 @@ description: Some("Manage one memory: 'get', 'get_batch', 'state', 'promote' / '
                     open_world_hint: false,
                 }),
 description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision', 'get_context' (patterns and decisions, each marked current or stale), 'verify' (check a bounded set of anchors), 'reanchor' (replace reviewed source evidence for an existing memory).".to_string()),
-                input_schema: tools::codebase_unified::schema(),
+                input_schema: tools::compact::of(&tools::codebase_unified::schema()),
                 ..Default::default()
             },
             // ================================================================
@@ -540,7 +535,7 @@ description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision'
                     open_world_hint: false,
                 }),
                 description: Some("Project the durable subset of a scope (decisions, patterns, rule-tagged facts) into a fenced region of CLAUDE.md or MEMORY.md, a memory id on every line. 'preview' (default) shows the diff; 'write' needs confirm=true and replaces only the fence, never the rest of the file.".to_string()),
-                input_schema: tools::project::schema(),
+                input_schema: tools::compact::of(&tools::project::schema()),
                 ..Default::default()
             },
             ToolDescription {
@@ -553,7 +548,7 @@ description: Some("Code memory. Actions: 'remember_pattern', 'remember_decision'
                     open_world_hint: false,
                 }),
 description: Some("Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph' evaluates evidence-aware plans, premises, attention, completion and replay through a nested command.".to_string()),
-                input_schema: tools::intention_graph::schema(),
+                input_schema: tools::compact::of(&tools::intention_graph::schema()),
                 ..Default::default()
             },
             // ================================================================
@@ -569,7 +564,7 @@ description: Some("Intentions. Actions: 'set', 'check', 'update', 'list'; 'graph
                     open_world_hint: false,
                 }),
 description: Some("Save to memory through Prediction Error Gating: 'content' is created, merged into a similar memory, or supersedes an outdated one. Batch: 'items' (max 20).".to_string()),
-                input_schema: tools::smart_ingest::schema(),
+                input_schema: tools::compact::of(&tools::smart_ingest::schema()),
                 ..Default::default()
             },
             // ================================================================
@@ -585,7 +580,7 @@ description: Some("Save to memory through Prediction Error Gating: 'content' is 
                     open_world_hint: true,
                 }),
 description: Some("Index an external system into local memories that cite the source. source='github' (repo, GITHUB_TOKEN) or 'redmine' (project, REDMINE_URL, REDMINE_API_KEY). Re-runs update; reconcile=true tombstones removals.".to_string()),
-                input_schema: tools::source_sync::schema(),
+                input_schema: tools::compact::of(&tools::source_sync::schema()),
                 ..Default::default()
             },
             // ================================================================
@@ -604,7 +599,7 @@ description: Some("Index an external system into local memories that cite the so
                     open_world_hint: false,
                 }),
 description: Some("Store status. view 'health' (default: stats, decay preview, module health, warnings), 'retention' (average, distribution, trend), 'timeline' (memories by day), 'changelog' (state-change audit trail), 'stats' (hygiene counts by type, tag, age, retention, lifecycle), 'tools' (all advertised tools and actions; pass tool for its full input schema).".to_string()),
-                input_schema: tools::memory_status::schema(),
+                input_schema: tools::compact::of(&tools::memory_status::schema()),
                 ..Default::default()
             },
             // ================================================================
@@ -622,7 +617,7 @@ description: Some("Store status. view 'health' (default: stats, decay preview, m
                     open_world_hint: false,
                 }),
 description: Some("Lifecycle: 'consolidate', 'dream', 'gc' (dry_run default true), 'importance_score', 'backup', 'export', 'restore'.".to_string()),
-                input_schema: tools::maintain::schema(),
+                input_schema: tools::compact::of(&tools::maintain::schema()),
                 ..Default::default()
             },
             // ================================================================
@@ -641,7 +636,7 @@ description: Some("Lifecycle: 'consolidate', 'dream', 'gc' (dry_run default true
                     open_world_hint: false,
                 }),
 description: Some("Duplicates, merges, supersession, and exact tag maintenance. Actions: 'scan' (default, read-only: duplicate clusters and merge candidates), 'plan_merge' (member_ids to plan_id), 'plan_supersede' (old_id, new_id to plan_id), 'apply' (run a plan_id; confirm=true is required unless the current policy explicitly allows auto-applying strong matches), 'undo' (reverse an operation_id, or omit to list the reflog), 'tag_rename' and 'tag_merge' (preview-token gated), 'protect' (pin against auto-merge), 'policy' (get or set match thresholds). Merged memories are invalidated, never deleted.".to_string()),
-                input_schema: tools::dedup::unified_schema(),
+                input_schema: tools::compact::of(&tools::dedup::unified_schema()),
                 ..Default::default()
             },
             // ================================================================
@@ -664,7 +659,7 @@ description: Some("Duplicates, merges, supersession, and exact tag maintenance. 
                     open_world_hint: false,
                 }),
 description: Some("Memory graph: 'chain', 'associations', 'bridges', 'predict', 'memory_graph', composition topology ('recent', 'get', 'memory', 'neighbors', 'never_composed', 'bounty_mode'), 'label' (the only write).".to_string()),
-                input_schema: tools::graph_unified::schema(),
+                input_schema: tools::compact::of(&tools::graph_unified::schema()),
                 ..Default::default()
             },
             // ================================================================
@@ -684,7 +679,7 @@ description: Some("Memory graph: 'chain', 'associations', 'bridges', 'predict', 
                     open_world_hint: false,
                 }),
 description: Some("Start-of-session context in one call: relevant memories, open intentions, status, predictions, codebase context, under one token budget.".to_string()),
-                input_schema: tools::session_context::schema(),
+                input_schema: tools::compact::of(&tools::session_context::schema()),
                 ..Default::default()
             },
             // ================================================================
@@ -711,7 +706,7 @@ description: Some("Start-of-session context in one call: relevant memories, open
                     open_world_hint: false,
                 }),
 description: Some("Inhibit a memory without deleting it: out of retrieval, faster decay, compounding per call, neighbours affected over 72 hours. reverse=true undoes it within 24 hours.".to_string()),
-                input_schema: tools::suppress::schema(),
+                input_schema: tools::compact::of(&tools::suppress::schema()),
                 ..Default::default()
             },
             // ================================================================
@@ -731,10 +726,25 @@ description: Some("Inhibit a memory without deleting it: out of retrieval, faste
                     open_world_hint: false,
                 }),
 description: Some("Investigate a recorded failure using earlier memories sharing entities. Results are hypotheses, not proven causes. Default promote=false previews without graph or strength changes; explicit promote=true records candidate edges and reinforces eligible memories after review. scope defaults to user; failure_id defaults to the latest failure in that scope.".to_string()),
-                input_schema: tools::backfill::schema(),
+                input_schema: tools::compact::of(&tools::backfill::schema()),
                 ..Default::default()
             },
-        ];
+            ]
+
+}
+
+    /// Handle tools/list request
+    async fn handle_tools_list(
+        &self,
+        params: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, JsonRpcError> {
+        reject_unknown_cursor(params)?;
+
+        // v2.3: 14 advertised tools after adding the controlled `receipt`
+        // surface and retaining the distinct flagship `backfill` primitive.
+        // 22 deprecated/folded names still work as hidden redirects in
+        // handle_tools_call. See docs/launch/tool-consolidation-v2.2.0.md.
+        let mut tools = Self::tool_catalog();
 
         // Per-tool result-size annotation `_meta["anthropic/maxResultSizeChars"]`.
         //
@@ -3220,6 +3230,75 @@ mod tests {
     // TOOLS/LIST TESTS
     // ========================================================================
 
+    /// #212: the wire budget. tools/list must stay under 20 KiB no matter
+    /// how schemas grow; new surface goes through tools::compact or shrinks.
+    #[test]
+    fn tools_list_wire_payload_stays_under_20_kib() {
+        let catalog = McpServer::tool_catalog();
+        let payload = serde_json::to_string(&catalog).unwrap();
+        assert!(
+            payload.len() <= 20 * 1024,
+            "tools/list payload is {} bytes (budget {}); compact the schema or shrink it",
+            payload.len(),
+            20 * 1024
+        );
+    }
+
+    /// #212: the full-schema registry behind memory_status view='tools' must
+    /// cover exactly the advertised catalog — every name resolvable, no
+    /// extras — so compaction never orphans a tool's complete schema.
+    #[test]
+    fn full_schema_registry_matches_the_advertised_catalog() {
+        let catalog = McpServer::tool_catalog();
+        assert_eq!(catalog.len(), 15, "catalog size changed; update the registry");
+        for tool in &catalog {
+            assert!(
+                tools::compact::full_schema(&tool.name).is_some(),
+                "{} has no full schema in the registry",
+                tool.name
+            );
+        }
+        assert!(
+            tools::compact::full_schema("search").is_none(),
+            "hidden redirect names must not enter the registry"
+        );
+    }
+
+    /// #212: compaction keeps the dispatch surface. Every tool whose FULL
+    /// schema declares an action/view/mode enum at the root must still declare
+    /// it after compaction, so agents can choose without ever fetching the
+    /// full schema. Tools without a discriminator (session_start, backfill,
+    /// receipt) have nothing to preserve and are skipped.
+    #[test]
+    fn compact_schemas_keep_their_discriminator_enums() {
+        for tool in McpServer::tool_catalog() {
+            let full = tools::compact::full_schema(&tool.name).unwrap();
+            let compact = tools::compact::of(&full);
+            let full_props = full["properties"].as_object().unwrap();
+            let compact_props = compact["properties"].as_object().unwrap();
+            for field in ["action", "mode", "view"] {
+                let full_enum = full_props
+                    .get(field)
+                    .and_then(|p| p.get("enum"))
+                    .and_then(serde_json::Value::as_array);
+                if let Some(values) = full_enum {
+                    let kept = compact_props
+                        .get(field)
+                        .and_then(|p| p.get("enum"))
+                        .and_then(serde_json::Value::as_array)
+                        .expect("compaction dropped a discriminator that exists in full");
+                    assert_eq!(
+                        kept.len(),
+                        values.len(),
+                        "{}: {} enum shrank under compaction",
+                        tool.name,
+                        field
+                    );
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn tool_guide_matches_live_catalog_and_rejects_hidden_names() {
         let (server, _dir) = test_server().await;
@@ -3263,9 +3342,18 @@ mod tests {
                 .await
                 .unwrap();
             assert_ne!(detail["isError"], true);
+            // #212: the catalog schema is compact; the selected tool must get
+            // the FULL registry schema — strictly richer than the wire form,
+            // never the other way around.
+            let full = tools::compact::full_schema(entry["name"].as_str().unwrap()).unwrap();
             assert_eq!(
                 detail["structuredContent"]["tools"][0]["inputSchema"],
-                definition["inputSchema"]
+                serde_json::to_value(&full).unwrap()
+            );
+            assert!(
+                detail["structuredContent"]["tools"][0]["inputSchema"].to_string().len()
+                    >= definition["inputSchema"].to_string().len(),
+                "full schema must not be smaller than the compact catalog schema"
             );
         }
         for invalid in [

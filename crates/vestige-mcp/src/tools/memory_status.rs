@@ -28,9 +28,13 @@ use vestige_core::{OutputConfig, Storage};
 
 use crate::cognitive::CognitiveEngine;
 
-/// Progressive discovery from the exact `tools/list` result, with no second
-/// registry of action names or schemas to become stale. Tool-level annotations
-/// remain tool-level hints; they are not permission for individual actions.
+/// Progressive discovery from the `tools/list` result. Since #212 the
+/// catalog on the wire is compact; a selected tool's `inputSchema` here comes
+/// from the full-schema registry in `tools::compact`, so the complete shape
+/// stays available one call deeper. The parity guard test in `server.rs`
+/// keeps that registry and the catalog name-for-name identical. Tool-level
+/// annotations remain tool-level hints; they are not permission for
+/// individual actions.
 pub fn tool_guide(catalog: &Value, args: &Value) -> Result<Value, String> {
     let selected = match args.get("tool") {
         None => None,
@@ -64,8 +68,12 @@ pub fn tool_guide(catalog: &Value, args: &Value) -> Result<Value, String> {
             "selectors": selectors,
             "toolAnnotations": definition["annotations"],
         });
-        if selected.is_some() {
-            entry["inputSchema"] = schema.clone();
+        if let Some(name) = selected {
+            // #212: the catalog schema is compact; the selected tool gets the
+            // full registry schema, falling back to the catalog form only if
+            // the registry ever missed a name (the parity test forbids that).
+            entry["inputSchema"] =
+                crate::tools::compact::full_schema(name).unwrap_or_else(|| schema.clone());
         }
         entries.push(entry);
     }

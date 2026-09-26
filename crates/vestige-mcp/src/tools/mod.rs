@@ -10,6 +10,10 @@
 //! the implementation layer and as hidden back-compat aliases (see the redirect
 //! arms in server.rs). See docs/launch/tool-consolidation-v2.2.0.md.
 
+// Wire-budget compaction for tools/list (#212); full schemas stay
+// available through memory_status view='tools'.
+pub mod compact;
+
 // Active unified tools
 mod code_context;
 pub mod codebase_unified;

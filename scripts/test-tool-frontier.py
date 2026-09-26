@@ -70,7 +70,19 @@ def run(binary, output):
                     if values is not None:
                         assert entry["selectors"][selector]["values"] == values
                 detail = tool("memory_status", {"view": "tools", "tool": entry["name"]})
-                assert detail["tools"][0]["inputSchema"] == definition["inputSchema"]
+                # #212: the catalog schema is compact; the selected tool gets
+                # the full registry schema. It must carry every property the
+                # compact form has and must not be smaller.
+                full = detail["tools"][0]["inputSchema"]
+                assert full.get("type") == definition["inputSchema"].get("type")
+                assert len(json.dumps(full)) >= len(json.dumps(definition["inputSchema"]))
+                for selector in ("action", "mode", "view"):
+                    compact_enum = definition["inputSchema"].get("properties", {}).get(selector, {}).get("enum")
+                    if compact_enum is not None:
+                        full_enum = full.get("properties", {}).get(selector, {}).get("enum")
+                        assert full_enum == compact_enum, (
+                            f"{entry['name']}: {selector} enum drifted under compaction"
+                        )
             for invalid in ("search", "", 12):
                 tool("memory_status", {"view": "tools", "tool": invalid}, error=True)
             annotations = {x["name"]: x["annotations"] for x in catalog}
