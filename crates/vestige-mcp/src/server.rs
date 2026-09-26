@@ -3783,6 +3783,57 @@ mod tests {
         );
     }
 
+    /// #232: a fresh Insight must surface above a Fact whose raw term score
+    /// is slightly higher. Both nodes are written now through real
+    /// smart_ingest; the Fact carries more query-term occurrences, so before
+    /// the freshness bonus the Fact ranked first and the just-written
+    /// insight was invisible at small limits. The Insight node_type is what
+    /// the issue calls a "reflection".
+    #[tokio::test]
+    async fn a_fresh_insight_surfaces_above_a_higher_scoring_fact() {
+        let (server, _dir) = test_server().await;
+        let init_request = make_request("initialize", Some(init_params()));
+        server.handle_request(init_request).await;
+
+        let fact = serde_json::json!({
+            "content": "deploy rollback policy: roll back the deploy when errors double. The rollback policy applies to every service.",
+            "node_type": "fact"
+        });
+        let insight = serde_json::json!({
+            "content": "deploy rollback policy held under load today; the deploy rollback drill rehearsed cleanly.",
+            "node_type": "insight"
+        });
+        for args in [&fact, &insight] {
+            let result = server
+                .handle_tools_call(Some(serde_json::json!({
+                    "name": "smart_ingest", "arguments": args
+                })))
+                .await
+                .unwrap();
+            assert_ne!(result["isError"], true, "ingest failed: {result}");
+        }
+
+        let recall = server
+            .handle_tools_call(Some(serde_json::json!({
+                "name": "recall",
+                "arguments": {"query": "deploy rollback policy", "limit": 2, "detail_level": "brief"}
+            })))
+            .await
+            .unwrap();
+        assert_ne!(recall["isError"], true, "recall failed: {recall}");
+        let text = recall.to_string();
+        let fact_pos = text.find("\"nodeType\":\"fact\"").unwrap_or(usize::MAX);
+        let insight_pos = text.find("\"nodeType\":\"insight\"").unwrap_or(usize::MAX);
+        assert!(
+            insight_pos != usize::MAX,
+            "the fresh insight must appear in recall results: {text}"
+        );
+        assert!(
+            insight_pos < fact_pos,
+            "fresh insight (pos {insight_pos}) must rank above the fact (pos {fact_pos})"
+        );
+    }
+
     /// v2.2 HOT PATH: `recall` defaults to mode='lookup' (search), the folded
     /// names still dispatch, and the reason/contradictions modes resolve.
     #[tokio::test]

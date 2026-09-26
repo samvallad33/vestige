@@ -74,7 +74,7 @@ pub fn schema() -> Value {
             "exclude_types": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Node types to exclude (reflections are excluded by default)."
+                "description": "Node types to exclude. Default: nothing is excluded; every type is searched."
             },
             "include_types": {
                 "type": "array",
@@ -235,6 +235,119 @@ fn parse_valid_at(raw: Option<&str>) -> Result<Option<DateTime<Utc>>, String> {
         )));
     }
     Err("Invalid validAt: expected 'now', RFC3339, or YYYY-MM-DD".to_string())
+}
+
+/// #232: a same-day `Insight` — the node type the issue calls a
+/// "reflection". The freshest synthesis of what the store knows.
+fn is_fresh_insight(node: &vestige_core::KnowledgeNode, now: DateTime<Utc>) -> bool {
+    if node.node_type != "insight" {
+        return false;
+    }
+    let age = now - node.created_at;
+    age < chrono::Duration::hours(24)
+}
+
+/// #232: guarantee a same-day Insight the lead slot when it clears a
+/// relevance floor relative to the leader.
+///
+/// Raw BM25/semantic gaps between a terse reflection and a content-rich
+/// memory are routinely 2-3x — measured 1.69 vs 0.77 on a two-node corpus —
+/// so no bounded score multiplier can span the distance, and the 15%
+/// temporal slice of the blend moves at most ~12%. The guarantee is
+/// therefore structural instead of scored: after the final sort, the
+/// highest-ranked same-day Insight that is at least 30% as relevant as the
+/// leader moves to the front. Older insights and below-floor candidates are
+/// untouched; when the leader is already the fresh insight, nothing moves.
+/// Returns whether a promotion happened.
+fn promote_fresh_insight(results: &mut Vec<vestige_core::SearchResult>, now: DateTime<Utc>) -> bool {
+    const RELEVANCE_FLOOR: f32 = 0.3;
+    let Some(leader) = results.first() else {
+        return false;
+    };
+    if is_fresh_insight(&leader.node, now) {
+        return false;
+    }
+    let floor = leader.combined_score * RELEVANCE_FLOOR;
+    let pos = results
+        .iter()
+        .position(|r| is_fresh_insight(&r.node, now) && r.combined_score >= floor);
+    match pos {
+        Some(pos) => {
+            let fresh = results.remove(pos);
+            results.insert(0, fresh);
+            true
+        }
+        None => false,
+    }
+}
+
+#[cfg(test)]
+mod fresh_insight_tests {
+    use super::{is_fresh_insight, promote_fresh_insight};
+    use vestige_core::memory::SearchResult;
+    use vestige_core::KnowledgeNode;
+
+    fn node(node_type: &str, age_hours: i64, score: f32) -> SearchResult {
+        let mut node = KnowledgeNode::default();
+        node.node_type = node_type.to_string();
+        node.created_at = chrono::Utc::now() - chrono::Duration::hours(age_hours);
+        SearchResult {
+            node,
+            keyword_score: None,
+            semantic_score: None,
+            combined_score: score,
+            match_type: vestige_core::MatchType::Keyword,
+        }
+    }
+
+    #[test]
+    fn only_same_day_insights_count_as_fresh() {
+        // A fixed now, with nodes built against it, so the 24-hour boundary
+        // is exact rather than racing the clock between two Utc::now calls.
+        let now = chrono::Utc::now();
+        let at = |age_hours: i64| {
+            let mut node = KnowledgeNode::default();
+            node.node_type = "insight".to_string();
+            node.created_at = now - chrono::Duration::hours(age_hours);
+            node
+        };
+        assert!(is_fresh_insight(&at(0), now));
+        assert!(is_fresh_insight(&at(23), now));
+        assert!(!is_fresh_insight(&at(24), now));
+        assert!(!is_fresh_insight(&at(24 * 30), now));
+        let mut fact = KnowledgeNode::default();
+        fact.node_type = "fact".to_string();
+        assert!(!is_fresh_insight(&fact, now));
+    }
+
+    #[test]
+    fn a_fresh_insight_above_the_floor_takes_the_lead() {
+        let now = chrono::Utc::now();
+        let mut results = vec![node("fact", 60 * 24, 1.69), node("insight", 1, 0.77)];
+        assert!(promote_fresh_insight(&mut results, now));
+        assert_eq!(results[0].node.node_type, "insight");
+        assert_eq!(results[1].node.node_type, "fact");
+    }
+
+    #[test]
+    fn a_below_floor_or_stale_insight_stays_put() {
+        let now = chrono::Utc::now();
+        let mut below_floor = vec![node("fact", 60 * 24, 1.69), node("insight", 1, 0.5)];
+        assert!(!promote_fresh_insight(&mut below_floor, now));
+        assert_eq!(below_floor[0].node.node_type, "fact");
+
+        let mut stale = vec![node("fact", 1, 1.69), node("insight", 48, 1.0)];
+        assert!(!promote_fresh_insight(&mut stale, now));
+        assert_eq!(stale[0].node.node_type, "fact");
+    }
+
+    #[test]
+    fn a_leading_fresh_insight_is_a_no_op() {
+        let now = chrono::Utc::now();
+        let mut results = vec![node("insight", 2, 0.7), node("fact", 60 * 24, 1.69)];
+        assert!(!promote_fresh_insight(&mut results, now));
+        assert_eq!(results[0].node.node_type, "insight");
+    }
 }
 
 fn apply_default_validity_penalty(
@@ -999,6 +1112,9 @@ pub async fn execute(
             .partial_cmp(&a.combined_score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+
+    // #232: the freshest synthesis leads. See promote_fresh_insight.
+    promote_fresh_insight(&mut filtered_results, Utc::now());
 
     // ====================================================================
     // STAGE 6: Spreading activation (find associated memories)
