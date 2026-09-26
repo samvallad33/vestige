@@ -17,9 +17,9 @@ use std::collections::BTreeMap;
 use serde_json::{json, Map, Value};
 
 /// Cap for tool-level and inputSchema-root descriptions.
-const ROOT_DESCRIPTION_CAP: usize = 160;
+const ROOT_DESCRIPTION_CAP: usize = 60;
 /// Cap for descriptions on discriminator properties (`action`/`view`/`mode`).
-const SELECTOR_DESCRIPTION_CAP: usize = 100;
+const SELECTOR_DESCRIPTION_CAP: usize = 50;
 /// Properties this deep in the tree keep their `items` shape only as a type.
 const ITEMS_FLATTEN_DEPTH: usize = 2;
 
@@ -268,6 +268,7 @@ pub fn full_schema(name: &str) -> Option<Value> {
         "session_start" => session_context::schema(),
         "suppress" => suppress::schema(),
         "backfill" => backfill::schema(),
+        "purge" => memory_unified::purge_schema(),
         _ => return None,
     })
 }

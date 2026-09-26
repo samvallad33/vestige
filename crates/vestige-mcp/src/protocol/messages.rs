@@ -134,6 +134,10 @@ pub struct ToolDescription {
     /// changes.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Value>,
+    /// Optional JSON Schema for the tool's `structuredContent` result
+    /// (MCP 2026-07-28 tools spec: when present, results MUST conform).
+    #[serde(rename = "outputSchema", skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
 }
 
 /// Result of tools/list

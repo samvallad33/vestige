@@ -85,6 +85,30 @@ struct MemoryArgs {
 }
 
 /// Execute the unified memory tool
+/// Standalone `purge` tool schema (#219): the one irreversible call,
+/// advertised on its own so hosts can gate it without gating the reads that
+/// share `memory`. Same parameters as `memory(action='purge')`.
+pub fn purge_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "id": {
+                "description": "Memory UUID to purge (for good; confirm=true).",
+                "type": "string"
+            },
+            "confirm": {
+                "description": "Required: purge is irreversible. Content and embeddings are removed; legacy audit/sync rows keep only opaque markers.",
+                "type": "boolean"
+            },
+            "reason": {
+                "description": "Why (optional, logged).",
+                "type": "string"
+            }
+        },
+        "required": ["id", "confirm"]
+    })
+}
+
 pub async fn execute(
     storage: &Arc<Storage>,
     cognitive: &Arc<Mutex<CognitiveEngine>>,
