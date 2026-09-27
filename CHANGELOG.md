@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — dependency modernization with the Linux link fix (#214, #215)
+
+- fastembed 5.13 → 7.1.0 (pairs with ort 2.0.0-rc.13 / ONNX Runtime 1.28,
+  which it exact-pins): `InitOptions` → `TextInitOptions`. reqwest 0.12 →
+  0.13.5: rustls default TLS (feature `rustls-tls` renamed `rustls`),
+  `query` opt-in (enabled for the Redmine connector). usearch 2.26.2
+  (tombstone reclamation under churn, memory-safety hardening — directly
+  relevant to demote/suppress deletes). Vector-index quantization becomes
+  configurable (`VectorIndexConfig.quantization`), F32 today; the int8
+  flip ships separately with a real-embedding recall benchmark.
+- Release workflow: Linux jobs install GCC 13 from the toolchain PPA and
+  statically link libstdc++ (`RUSTFLAGS=-C link-arg=-static-libstdc++`) —
+  ONNX Runtime 1.28's static library references GCC-13-era symbols that
+  Ubuntu 22.04's GCC 12 cannot satisfy; embedding the runtime keeps the
+  shipped ELF's dynamic GLIBCXX set empty, preserving the Debian 12 /
+  Ubuntu 22.04 floor (the glibc ceiling check reads dynamic symbols only).
+
 ### Changed — per-platform npm packages, no eager postinstall (#220)
 
 - `vestige-mcp-server` now resolves its binary from an exact-pinned

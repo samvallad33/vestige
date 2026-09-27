@@ -86,6 +86,11 @@ pub struct VectorIndexConfig {
     pub expansion_search: usize,
     /// Distance metric
     pub metric: MetricKind,
+    /// Vector quantization. F32 today; int8 is a pending spike — the ~99%
+    /// recall figure holds for real embeddings, but synthetic one-hot
+    /// geometry in tests flips neighbors, so the flip ships with its own
+    /// recall benchmark, not inside the dependency re-land.
+    pub quantization: ScalarKind,
 }
 
 impl Default for VectorIndexConfig {
@@ -96,6 +101,7 @@ impl Default for VectorIndexConfig {
             expansion_add: DEFAULT_EXPANSION_ADD,
             expansion_search: DEFAULT_EXPANSION_SEARCH,
             metric: MetricKind::Cos, // Cosine similarity
+            quantization: ScalarKind::F32,
         }
     }
 }
@@ -137,7 +143,7 @@ impl VectorIndex {
         let options = IndexOptions {
             dimensions: config.dimensions,
             metric: config.metric,
-            quantization: ScalarKind::F32,
+            quantization: config.quantization,
             connectivity: config.connectivity,
             expansion_add: config.expansion_add,
             expansion_search: config.expansion_search,
@@ -330,7 +336,7 @@ impl VectorIndex {
         let options = IndexOptions {
             dimensions: config.dimensions,
             metric: config.metric,
-            quantization: ScalarKind::F32,
+            quantization: config.quantization,
             connectivity: config.connectivity,
             expansion_add: config.expansion_add,
             expansion_search: config.expansion_search,

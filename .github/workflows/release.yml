@@ -219,6 +219,20 @@ jobs:
         with:
           node-version: 22
 
+      # fastembed 7 pairs with ort rc.13 / ONNX Runtime 1.28, whose static
+      # library references GCC-13-era libstdc++ symbols (GLIBCXX_3.4.31+,
+      # e.g. std::__cxx11::basic_string::_M_replace_cold). GCC 12 from this
+      # container cannot satisfy them at link time. Install GCC 13 from the
+      # toolchain PPA and statically link libstdc++: the binary embeds the
+      # newer runtime and keeps ZERO dynamic GLIBCXX references, so the
+      # Debian 12 / Ubuntu 22.04 floor holds (check-linux-glibc.sh reads the
+      # dynamic symbol table only).
+      - name: Install GCC 13 (ONNX 1.28 libstdc++ requirements)
+        run: |
+          bash -lc "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common"
+          bash -lc "add-apt-repository -y ppa:ubuntu-toolchain-r/test && apt-get update"
+          bash -lc "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends g++-13"
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -297,6 +311,12 @@ jobs:
           NODE
 
       - name: Build
+        env:
+          CXX: g++-13
+          # Statically link libstdc++: ONNX Runtime 1.28's static library needs
+          # GCC-13-era symbols; embedding the runtime keeps the shipped ELF's
+          # dynamic GLIBCXX set empty (floor: Debian 12 / Ubuntu 22.04).
+          RUSTFLAGS: -C link-arg=-static-libstdc++
         run: cargo build --locked --package vestige-mcp --release --target x86_64-unknown-linux-gnu
 
       - name: Package
@@ -396,6 +416,20 @@ jobs:
         with:
           node-version: 22
 
+      # fastembed 7 pairs with ort rc.13 / ONNX Runtime 1.28, whose static
+      # library references GCC-13-era libstdc++ symbols (GLIBCXX_3.4.31+,
+      # e.g. std::__cxx11::basic_string::_M_replace_cold). GCC 12 from this
+      # container cannot satisfy them at link time. Install GCC 13 from the
+      # toolchain PPA and statically link libstdc++: the binary embeds the
+      # newer runtime and keeps ZERO dynamic GLIBCXX references, so the
+      # Debian 12 / Ubuntu 22.04 floor holds (check-linux-glibc.sh reads the
+      # dynamic symbol table only).
+      - name: Install GCC 13 (ONNX 1.28 libstdc++ requirements)
+        run: |
+          bash -lc "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common"
+          bash -lc "add-apt-repository -y ppa:ubuntu-toolchain-r/test && apt-get update"
+          bash -lc "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends g++-13"
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -474,6 +508,12 @@ jobs:
           NODE
 
       - name: Build
+        env:
+          CXX: g++-13
+          # Statically link libstdc++: ONNX Runtime 1.28's static library needs
+          # GCC-13-era symbols; embedding the runtime keeps the shipped ELF's
+          # dynamic GLIBCXX set empty (floor: Debian 12 / Ubuntu 22.04).
+          RUSTFLAGS: -C link-arg=-static-libstdc++
         run: cargo build --locked --package vestige-mcp --release --target aarch64-unknown-linux-gnu
 
       - name: Package
