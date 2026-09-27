@@ -454,6 +454,37 @@ async fn serve() {
     // model download can announce itself as MCP logging instead of dying on
     // stderr, which stdio clients hide.
     let (transport, notifier) = StdioTransport::with_notifications();
+
+    // Wave-S UX: start-time version hint (canonical pattern per the Sep 2026
+    // ecosystem scan — check-and-hint, never self-update). One stderr line,
+    // spawned off the critical path so the handshake budget is untouched.
+    // Compare against npm's registry metadata for vestige-mcp-server; any
+    // network failure or timeout is silently skipped.
+    #[cfg(feature = "cloud-sync")]
+    {
+        let notifier = notifier.clone();
+        tokio::spawn(async move {
+            // reqwest reaches vestige-mcp only through vestige-core's
+            // cloud-sync/connectors feature; the guard above keeps builds
+            // without it compiling.
+            // Offline / rate-limited / parse failure: None, silently skipped.
+            if let Some(latest_version) = vestige_core::latest_npm_version().await {
+                let current = env!("CARGO_PKG_VERSION");
+                if latest_version != current {
+                    notifier.log(
+                        "info",
+                        "vestige.update",
+                        serde_json::json!({
+                            "event": "newer_version_available",
+                            "current": current,
+                            "latest": latest_version,
+                            "hint": "npm install -g vestige-mcp-server@latest  (or brew upgrade vestige)",
+                        }),
+                    );
+                }
+            }
+        });
+    }
     // In builds without an embedding runtime nothing warms up, so the notifier
     // has no sender beyond this scope; dropping it parks the channel.
     let _notifier: Notifier = notifier.clone();
@@ -472,6 +503,7 @@ async fn serve() {
                     "model": "nomic-ai/nomic-embed-text-v1.5",
                     "approxBytes": if first_run { Some(130_000_000u64) } else { None },
                     "effect": "recall answers by keyword and smart_ingest stores without a vector until the runtime is ready; those responses carry a `warming` block meanwhile",
+                    "milestone": if first_run { Some("first run: ~130 MB download, then keyword search works immediately; semantic ranking joins when ready") } else { None },
                 }),
             );
             if let Err(error) = storage_clone.init_embeddings() {

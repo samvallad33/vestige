@@ -686,3 +686,24 @@ pub mod prelude {
         TopicalContext,
     };
 }
+
+/// Wave-S UX: the latest published version of `vestige-mcp-server` on the
+/// npm registry, or None on any failure (offline, timeout, parse). Used by
+/// the server's start-time check-and-hint — never a self-update. Two-second
+/// budget so a slow registry cannot delay anything.
+#[cfg(feature = "cloud-sync")]
+pub async fn latest_npm_version() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .ok()?;
+    let resp: serde_json::Value = client
+        .get("https://registry.npmjs.org/vestige-mcp-server/latest")
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    resp.get("version")?.as_str().map(String::from)
+}
