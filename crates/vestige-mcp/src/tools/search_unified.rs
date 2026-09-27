@@ -300,7 +300,6 @@ fn promote_fresh_insight(results: &mut Vec<vestige_core::SearchResult>, now: Dat
 }
 
 #[cfg(test)]
-<<<<<<< HEAD
 mod supersession_gate_tests {
     use super::partition_superseded;
     use vestige_core::memory::SearchResult;
@@ -357,7 +356,10 @@ mod supersession_gate_tests {
         let (kept, withheld) = partition_superseded(results, None, false);
         assert_eq!(kept.len(), 2);
         assert_eq!(withheld, 0);
-=======
+    }
+}
+
+#[cfg(test)]
 mod precision_decay_tests {
     use super::{PRECISION_FLOOR, gist_of, precision_is_low, precision_of};
 
@@ -391,9 +393,9 @@ mod precision_decay_tests {
         let gist = gist_of(&long);
         assert!(gist.chars().count() <= 210, "gist stays compact: {gist}");
         assert!(gist.ends_with('.') || gist.ends_with('…'), "clean boundary: {gist}");
->>>>>>> b16c3e7 (feat(recall): precision decay — results lose detail before they disappear (#225))
     }
 }
+
 
 #[cfg(test)]
 mod fresh_insight_tests {
