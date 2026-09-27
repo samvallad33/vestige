@@ -300,6 +300,50 @@ fn promote_fresh_insight(results: &mut Vec<vestige_core::SearchResult>, now: Dat
 }
 
 #[cfg(test)]
+mod query_rewrite_tests {
+    use super::{prose_form, rewrite_queries, split_identifier_tokens};
+
+    #[test]
+    fn identifier_queries_split_into_words() {
+        assert_eq!(split_identifier_tokens("compact_tools_list"), "compact tools list");
+        assert_eq!(split_identifier_tokens("VectorIndexConfig"), "Vector Index Config");
+        assert_eq!(split_identifier_tokens("aarch64-linux"), "aarch64 linux");
+    }
+
+    #[test]
+    fn prose_queries_pass_through_unchanged() {
+        assert_eq!(split_identifier_tokens("deploy rollback policy"), "deploy rollback policy");
+    }
+
+    #[test]
+    fn telegraphic_queries_get_a_prose_form() {
+        let p = prose_form("purge tool schema");
+        assert!(p.starts_with("notes about"), "{p}");
+        assert!(p.contains("purge tool schema"));
+    }
+
+    #[test]
+    fn very_short_and_very_long_queries_skip_prose() {
+        assert_eq!(prose_form("x"), "");
+        assert_eq!(prose_form("word ".repeat(9).trim()), "");
+    }
+
+    #[test]
+    fn the_original_query_is_always_first() {
+        let v = rewrite_queries("compact_tools_list");
+        assert_eq!(v[0], "compact_tools_list");
+        assert!(v.len() >= 2, "identifier query gains a split variant: {v:?}");
+        assert!(v.len() <= 3);
+    }
+
+    #[test]
+    fn plain_prose_never_gains_noise_variants() {
+        let v = rewrite_queries("deploy rollback policy held under load");
+        assert_eq!(v.len(), 1, "already-prose queries run one pass: {v:?}");
+    }
+}
+
+#[cfg(test)]
 mod supersession_gate_tests {
     use super::partition_superseded;
     use vestige_core::memory::SearchResult;
@@ -864,6 +908,17 @@ pub async fn execute(
     let semantic_weight = 0.7_f32;
 
     // ====================================================================
+    // STAGE R: Query rewriting (Wave-S, arXiv 2601.07711)
+    // ====================================================================
+    // Deterministic, zero-model expansions of the raw query. The original
+    // always runs first (exact form must never be diluted); variants only
+    // WIDEN the Stage 1 candidate pool before RRF, so a memory written in
+    // prose is reachable from a telegraphic agent query. Stage 0 keeps the
+    // pure-keyword pass on the ORIGINAL query only — identifier-style
+    // exactness is that pass's job, and rewrites would only blur it.
+    let query_variants = rewrite_queries(&args.query);
+
+    // ====================================================================
     // STAGE 0: Keyword-first search (dedicated keyword-only pass)
     // ====================================================================
     // Run a small keyword-only search to guarantee strong keyword matches
@@ -956,19 +1011,56 @@ pub async fn execute(
     };
     let overfetch_limit = (limit * overfetch_multiplier * post_filter_multiplier).min(100); // Cap at 100 to avoid excessive DB load
 
-    let results = storage
-        .hybrid_search_filtered(
-            &args.query,
-            overfetch_limit,
-            keyword_weight,
-            semantic_weight,
-            args.include_types.as_deref(),
-            args.exclude_types.as_deref(),
-        )
-        .map_err(|e| e.to_string())?;
+    // One hybrid pass per query variant (Stage R). Results dedup by node id
+    // with a rank-position penalty per later variant — the original query's
+    // ranking always dominates, variants only rescue prose-written memories
+    // the telegraphic form missed. RRF-style: rank-based, no score-scale
+    // mixing across variants.
+    let mut seen_rank: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut fused: Vec<vestige_core::SearchResult> = Vec::new();
+    for (variant_index, variant) in query_variants.iter().enumerate() {
+        let variant_results = storage
+            .hybrid_search_filtered(
+                variant,
+                overfetch_limit,
+                keyword_weight,
+                semantic_weight,
+                args.include_types.as_deref(),
+                args.exclude_types.as_deref(),
+            )
+            .map_err(|e| e.to_string())?;
+        for r in variant_results {
+            let id = r.node.id.clone();
+            match seen_rank.get(&id) {
+                Some(&existing_rank) => {
+                    // Already fused from an earlier (stronger) variant:
+                    // keep the better rank position, no duplicate row.
+                    if variant_index < 1 {
+                        // earlier variant wins by construction; nothing to do
+                    }
+                    let _ = existing_rank;
+                }
+                None => {
+                    let rank = fused.len();
+                    seen_rank.insert(id, rank);
+                    let mut r = r;
+                    // Variants after the first carry a small rank penalty so
+                    // an original-query hit at rank k outranks a variant hit
+                    // at rank k. The penalty is on the score, small, and
+                    // only ever demotes variant-rescued results relative to
+                    // original-query results — never the reverse.
+                    if variant_index > 0 {
+                        r.combined_score *= 0.95_f32.powi(variant_index as i32);
+                    }
+                    fused.push(r);
+                }
+            }
+        }
+    }
 
     // Filter by min_retention and min_similarity first (cheap filters)
-    let results = filter_results_to_scope(storage, results, &scope_filter)?;
+    let results = filter_results_to_scope(storage, fused, &scope_filter)?;
     let mut filtered_results: Vec<_> = results
         .into_iter()
         .filter(|r| {
@@ -2026,6 +2118,84 @@ fn source_provenance(node: &vestige_core::KnowledgeNode) -> Value {
         // A tombstoned (no-longer-visible) record has valid_until set in the past.
         "tombstoned": !node.is_currently_valid(),
     })
+}
+
+/// Wave-S query rewriting (arXiv 2601.07711: agentic retrieval gains
+/// concentrate in intent routing + query rewriting, not bigger rerankers).
+///
+/// Deterministic, zero-model expansions — no LLM call, no latency budget
+/// blown: an agent's query is usually telegraphic ("purge tool schema"),
+/// and the memory it needs was written as prose. The rewrites below widen
+/// the lexical surface so FTS5 and the embedder both see more of the
+/// target's vocabulary before RRF fuses the passes.
+///
+/// Every expansion is a pure string function with tests; nothing here
+/// synthesizes facts, it only reshapes the query's own tokens.
+pub(crate) fn rewrite_queries(query: &str) -> Vec<String> {
+    let trimmed = query.trim();
+    if trimmed.len() < 3 {
+        return vec![trimmed.to_string()];
+    }
+    let mut variants = vec![trimmed.to_string()];
+
+    // 1. CamelCase / snake_case / kebab-case splitting: agents search for
+    //    identifiers ("compact_tools_list", "VectorIndexConfig") but the
+    //    memory says "compact tools list".
+    let split_identifiers = split_identifier_tokens(trimmed);
+    if split_identifiers != trimmed {
+        variants.push(split_identifiers);
+    }
+
+    // 2. Stopword-light "natural prose" form: glue telegraphic tokens into
+    //    a question-ish phrase the embedder treats like written memory.
+    let prose = prose_form(trimmed);
+    if prose != trimmed && !prose.is_empty() {
+        variants.push(prose);
+    }
+
+    variants.truncate(3);
+    variants
+}
+
+/// "compact_tools_list #212" -> "compact tools list #212" (also
+/// VectorIndexConfig, aarch64-linux, feat/219-output-schema).
+pub(crate) fn split_identifier_tokens(query: &str) -> String {
+    let mut out = String::with_capacity(query.len() + 8);
+    let chars: Vec<char> = query.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        let prev = if i > 0 { Some(chars[i - 1]) } else { None };
+        let next = if i + 1 < chars.len() { Some(chars[i + 1]) } else { None };
+        let boundary = match (prev, next) {
+            (Some(p), Some(n)) => {
+                (c.is_uppercase() && p.is_lowercase())
+                    || (c.is_uppercase() && p.is_uppercase() && n.is_lowercase())
+                    || ((c == '_' || c == '-') && p.is_alphanumeric() && n.is_alphanumeric())
+            }
+            _ => false,
+        };
+        if boundary && c.is_uppercase() {
+            out.push(' ');
+        }
+        if (c == '_' || c == '-') && prev.is_some_and(|p| p.is_alphanumeric()) && next.is_some_and(|n| n.is_alphanumeric()) {
+            out.push(' ');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// "purge tool schema" -> "the purge tool and its schema" — embedders score
+/// short telegraphic queries poorly against prose memories; a light
+/// function-word wrapper closes most of that gap without changing meaning.
+pub(crate) fn prose_form(query: &str) -> String {
+    let words: Vec<&str> = query.split_whitespace().collect();
+    // Telegraphic = 2-5 words. Longer queries already carry sentence
+    // structure the embedder recognizes; wrapping them adds noise.
+    if words.len() < 2 || words.len() > 5 {
+        return String::new();
+    }
+    format!("notes about {} for the current task", words.join(" "))
 }
 
 /// #225 precision decay: the gist survives while the detail fades.

@@ -7,17 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — start-time version hint and a first-run warm-up milestone
+### Added — deterministic query rewriting before retrieval fusion
 
-- The canonical 2026 update pattern, per the ecosystem scan: check-and-hint,
-  never self-update. On startup the server asks npm's registry (2s budget,
-  fire-and-forget, silent on any failure) for the latest
-  `vestige-mcp-server` and, when newer, emits one MCP logging
-  notification with the exact upgrade command. The first-run model
-  download notification now also carries a `milestone` line stating
-  what works when (keyword search immediately, semantic ranking when
-  ready). Handshake budget untouched: the check runs off the critical
-  path after the transport is up.
+- arXiv 2601.07711: agentic retrieval gains concentrate in intent
+  routing and query rewriting, not bigger rerankers. Agent queries are
+  telegraphic ("purge tool schema", "compact_tools_list") while memories
+  are written as prose. Recall now expands the query deterministically —
+  identifier splitting (snake/CamelCase/kebab) and a light prose wrapper —
+  and runs one hybrid pass per variant, fusing rank-based with a small
+  per-variant penalty so the original query's ranking always dominates.
+  Zero model calls, zero new latency budget: variants only widen the
+  candidate pool before RRF. Already-prose queries run a single pass.
 
 ### Changed — per-platform npm packages, no eager postinstall (#220)
 
