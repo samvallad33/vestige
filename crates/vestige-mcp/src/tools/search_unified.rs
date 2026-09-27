@@ -59,6 +59,11 @@ pub fn schema() -> Value {
                 "maximum": 1.0,
                 "description": "Metamemory: below this confidence recall abstains and returns nearest matches instead of a weak answer. Default 0.35; 1 disables."
             },
+            "include_superseded": {
+                "type": "boolean",
+                "description": "Include memories whose validity window closed. Default false: supersession is enforced (withheld), not down-ranked. As-of validAt queries always include history."
+            },
+
             "min_similarity": {
                 "type": "number",
                 "description": "Minimum similarity, 0 to 1 (default 0.5).",
@@ -181,6 +186,10 @@ struct SearchArgs {
     /// #224: below this confidence (0..=1) recall abstains and returns the
     /// nearest matches instead of a weak answer. Default 0.35; 1 disables.
     abstain_floor: Option<f64>,
+    /// #252: include memories whose validity window has closed. Default
+    /// false: supersession is enforced, superseded facts are withheld from
+    /// current-time results rather than down-ranked.
+    include_superseded: Option<bool>,
     #[serde(alias = "detail_level")]
     detail_level: Option<String>,
     #[serde(alias = "context_topics")]
@@ -287,6 +296,66 @@ fn promote_fresh_insight(results: &mut Vec<vestige_core::SearchResult>, now: Dat
             true
         }
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod supersession_gate_tests {
+    use super::partition_superseded;
+    use vestige_core::memory::SearchResult;
+    use vestige_core::KnowledgeNode;
+
+    fn result(valid: bool, score: f32) -> SearchResult {
+        let mut node = KnowledgeNode::default();
+        if valid {
+            node.valid_from = None;
+            node.valid_until = None;
+        } else {
+            node.valid_from = Some(chrono::Utc::now() - chrono::Duration::days(10));
+            node.valid_until = Some(chrono::Utc::now() - chrono::Duration::days(1));
+        }
+        SearchResult {
+            node,
+            keyword_score: None,
+            semantic_score: None,
+            combined_score: score,
+            match_type: vestige_core::MatchType::Keyword,
+        }
+    }
+
+    #[test]
+    fn closed_windows_are_withheld_by_default() {
+        let results = vec![result(true, 1.0), result(false, 5.0)];
+        let (kept, withheld) = partition_superseded(results, None, false);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(withheld, 1);
+    }
+
+    #[test]
+    fn include_superseded_keeps_and_downranks() {
+        let results = vec![result(false, 5.0)];
+        let (kept, withheld) = partition_superseded(results, None, true);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(withheld, 0);
+        assert!((kept[0].combined_score - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn as_of_queries_see_history() {
+        let results = vec![result(false, 5.0)];
+        let at = Some(chrono::Utc::now() - chrono::Duration::days(5));
+        let (kept, withheld) = partition_superseded(results, at, false);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(withheld, 0);
+        assert!((kept[0].combined_score - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn everything_current_is_untouched() {
+        let results = vec![result(true, 2.0), result(true, 1.0)];
+        let (kept, withheld) = partition_superseded(results, None, false);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(withheld, 0);
     }
 }
 
@@ -495,15 +564,42 @@ mod abstention_tests {
     }
 }
 
-fn apply_default_validity_penalty(
-    result: &mut vestige_core::SearchResult,
+/// #252 phase 1 — supersession is enforced at the rank path, not labeled.
+///
+/// arXiv:2609.08258 ("Revoked but Still Authoritative", Sep 2026) tested
+/// five agent-memory systems and found none enforces soft revocation at
+/// retrieval: superseded facts still surface, merely down-ranked. A
+/// down-rank is a label; withholding is enforcement. By default a memory
+/// whose validity window has closed is removed from current-time results
+/// entirely (counted in `supersededWithheld` for observability). Explicit
+/// `include_superseded=true` and as-of `validAt` queries still see them:
+/// audit is opt-in, currency is the default.
+fn partition_superseded(
+    results: Vec<vestige_core::SearchResult>,
     valid_at: Option<DateTime<Utc>>,
-) {
-    if valid_at.is_none() && !result.node.is_currently_valid() {
-        // Historical and future facts remain available for audit, but should
-        // not outrank a current policy on relevance alone.
-        result.combined_score *= 0.1;
+    include_superseded: bool,
+) -> (Vec<vestige_core::SearchResult>, usize) {
+    if valid_at.is_some() || include_superseded {
+        // Historical mode: keep everything, down-rank closed windows so a
+        // current policy still leads if both are requested.
+        let mut kept = results;
+        for result in kept.iter_mut() {
+            if valid_at.is_none() && !result.node.is_currently_valid() {
+                result.combined_score *= 0.1;
+            }
+        }
+        return (kept, 0);
     }
+    let mut current = Vec::with_capacity(results.len());
+    let mut withheld = 0usize;
+    for result in results {
+        if result.node.is_currently_valid() {
+            current.push(result);
+        } else {
+            withheld += 1;
+        }
+    }
+    (current, withheld)
 }
 
 /// Execute unified search with 7-stage cognitive pipeline.
@@ -623,10 +719,9 @@ pub async fn execute(
         // Apply post-filters before formatting the response. Retrieval
         // telemetry is recorded later, after the final budget selection.
         let concrete_verdict = abstention_decision(&concrete_kept, DEFAULT_ABSTAIN_FLOOR);
-        let mut results = filter_results_to_scope(storage, concrete_kept, &scope_filter)?;
-        for result in &mut results {
-            apply_default_validity_penalty(result, valid_at);
-        }
+        let scoped = filter_results_to_scope(storage, concrete_kept, &scope_filter)?;
+        let (mut results, superseded_withheld) =
+            partition_superseded(scoped, valid_at, args.include_superseded.unwrap_or(false));
         results.sort_by(|a, b| {
             b.combined_score
                 .partial_cmp(&a.combined_score)
@@ -695,6 +790,9 @@ pub async fn execute(
             "results": formatted,
             "confidence": verdict.confidence,
         });
+        if superseded_withheld > 0 {
+            response["supersededWithheld"] = serde_json::json!(superseded_withheld);
+        }
 
         if formatted.is_empty() {
             response["hint"] = serde_json::json!(
@@ -863,16 +961,25 @@ pub async fn execute(
     if let Some(at) = valid_at {
         filtered_results.retain(|result| result.node.is_valid_at(at));
     }
-    for result in &mut filtered_results {
-        apply_default_validity_penalty(result, valid_at);
-    }
+    // #252: enforcement, not labeling — closed validity windows are
+    // withheld from current-time results (counted), unless explicitly
+    // requested or the query is an as-of audit.
+    let (kept_results, mut superseded_withheld) =
+        partition_superseded(filtered_results, valid_at, args.include_superseded.unwrap_or(false));
+    let mut filtered_results = kept_results;
 
     // ====================================================================
     // Dedup: merge Stage 0 keyword-priority results into Stage 1 results
     // ====================================================================
     for keyword_priority in &keyword_priority_results {
-        let mut kp = keyword_priority.clone();
-        apply_default_validity_penalty(&mut kp, valid_at);
+        // #252: the Stage 0 re-inject path obeys the same gate.
+        let (mut kept_kp, extra_withheld) = partition_superseded(
+            vec![keyword_priority.clone()],
+            valid_at,
+            args.include_superseded.unwrap_or(false),
+        );
+        superseded_withheld += extra_withheld;
+        let Some(kp) = kept_kp.pop() else { continue };
         // Respect tag_prefix here too — Stage 0 ran without it and can
         // re-introduce filtered-out memories on the "new result" branch.
         if let Some(prefix) = args.tag_prefix.as_deref()
@@ -1427,6 +1534,9 @@ pub async fn execute(
         "results": formatted,
         "confidence": verdict.confidence,
     });
+    if superseded_withheld > 0 {
+        response["supersededWithheld"] = serde_json::json!(superseded_withheld);
+    }
 
     // Helpful hint when no results found
     if formatted.is_empty() {
