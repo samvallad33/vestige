@@ -300,6 +300,7 @@ fn promote_fresh_insight(results: &mut Vec<vestige_core::SearchResult>, now: Dat
 }
 
 #[cfg(test)]
+<<<<<<< HEAD
 mod supersession_gate_tests {
     use super::partition_superseded;
     use vestige_core::memory::SearchResult;
@@ -356,6 +357,41 @@ mod supersession_gate_tests {
         let (kept, withheld) = partition_superseded(results, None, false);
         assert_eq!(kept.len(), 2);
         assert_eq!(withheld, 0);
+=======
+mod precision_decay_tests {
+    use super::{PRECISION_FLOOR, gist_of, precision_is_low, precision_of};
+
+    #[test]
+    fn precision_decays_faster_than_retention() {
+        // The Ko 2025 property: a memory can be well-retained (available)
+        // while its precision has already fallen below the floor.
+        let retention = 0.65;
+        let precision = precision_of(retention);
+        assert!(precision < retention, "precision must decay faster");
+        assert!(precision_is_low(retention), "at retention {retention} precision {precision} is below the floor");
+        assert!(!precision_is_low(0.95), "fresh high-retention memory keeps full precision");
+    }
+
+    #[test]
+    fn the_floor_sits_where_gist_takes_over() {
+        // retention^2 = 0.45 -> retention ~= 0.6708
+        let boundary = PRECISION_FLOOR.sqrt();
+        assert!(!precision_is_low(boundary + 1e-3));
+        assert!(precision_is_low(boundary - 1e-3));
+    }
+
+    #[test]
+    fn short_content_is_its_own_gist() {
+        assert_eq!(gist_of("deploy uses blue-green"), "deploy uses blue-green");
+    }
+
+    #[test]
+    fn long_content_gists_at_a_sentence_or_word_boundary() {
+        let long = "First sentence carries the decision. ".repeat(20);
+        let gist = gist_of(&long);
+        assert!(gist.chars().count() <= 210, "gist stays compact: {gist}");
+        assert!(gist.ends_with('.') || gist.ends_with('…'), "clean boundary: {gist}");
+>>>>>>> b16c3e7 (feat(recall): precision decay — results lose detail before they disappear (#225))
     }
 }
 
@@ -1990,6 +2026,56 @@ fn source_provenance(node: &vestige_core::KnowledgeNode) -> Value {
     })
 }
 
+/// #225 precision decay: the gist survives while the detail fades.
+///
+/// Ko 2025 (Nature) shows memories lose precision before they lose
+/// availability. Vestige's single retention number cannot express that:
+/// a memory is returned whole or not at all. Precision here is derived,
+/// not stored — it decays strictly faster than retention
+/// (retention^2.5), so a half-retained memory is already below the
+/// precision floor while still retrievable. An explicit full read
+/// (memory action='get', or recall with detail_level=full on a
+/// high-precision memory) is the restoration path; recall stays
+/// audit-only and does not itself restore precision (#155 semantics).
+const PRECISION_FLOOR: f32 = 0.45;
+
+pub(crate) fn precision_of(retention_strength: f32) -> f32 {
+    retention_strength.clamp(0.0, 1.0).powi(2)
+}
+
+fn precision_is_low(retention_strength: f32) -> bool {
+    precision_of(retention_strength) < PRECISION_FLOOR
+}
+
+/// #225: the gist of a memory — first sentence(s) up to ~200 chars at a
+/// word boundary. Content already that short is its own gist (None).
+fn gist_of(content: &str) -> String {
+    let trimmed = content.trim();
+    if trimmed.chars().count() <= 200 {
+        return trimmed.to_string();
+    }
+    let mut end = 0;
+    for (idx, ch) in trimmed.char_indices() {
+        if idx >= 200 {
+            break;
+        }
+        if ch == '.' || ch == '\n' {
+            end = idx + 1;
+        }
+    }
+    if end == 0 {
+        // No sentence boundary in range: cut at a word boundary.
+        let prefix: String = trimmed.chars().take(200).collect();
+        match prefix.rfind(' ') {
+            Some(i) => format!("{}…", &prefix[..i]),
+            None => format!("{prefix}…"),
+        }
+    } else {
+        trimmed[..end].trim_end().to_string()
+    }
+}
+
+
 fn format_search_result(r: &vestige_core::SearchResult, detail_level: &str) -> Value {
     match detail_level {
         "brief" => serde_json::json!({
@@ -2000,6 +2086,22 @@ fn format_search_result(r: &vestige_core::SearchResult, detail_level: &str) -> V
             "combinedScore": r.combined_score,
         }),
         "full" => {
+            // #225: precision decay — below the floor the verbatim detail is
+            // fading; return the gist (brief shape plus the flag) instead of
+            // the whole memory. memory(action='get') still returns full
+            // content: precision degrades recall, never access.
+            if precision_is_low(r.node.retention_strength as f32) {
+                let mut v = serde_json::json!({
+                    "id": r.node.id,
+                    "nodeType": r.node.node_type,
+                    "tags": r.node.tags,
+                    "retentionStrength": r.node.retention_strength,
+                    "combinedScore": r.combined_score,
+                    "precisionLow": true,
+                });
+                v["gist"] = serde_json::json!(gist_of(&r.node.content));
+                return v;
+            }
             let mut v = serde_json::json!({
                 "id": r.node.id,
                 "content": r.node.content,

@@ -7,18 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — narrative edges: memories retrieved together are linked (#226)
+### Added — precision decay: results lose detail before they disappear (#225)
 
-- Tang & Reagh 2026 (PNAS): events experienced as one narrative are
-  recalled together, independent of semantic similarity. Vestige now
-  writes a `narrative` edge between memories shown in one recall
-  response — strength grows with REPEATED co-retrieval (0.2 per
-  co-occurrence, hard-capped at 0.6, below the semantic ceiling).
-  Anti-contamination bounds after RoMeRL (arXiv:2608.02508): at most the
-  top three rank-ordered pairs link per retrieval, single-result
-  responses link nothing, and edges that stop co-occurring stop growing.
-  The graph renders the new edge type; spreading activation follows it
-  like any connection.
+- Ko 2025 (Nature) shows memories lose precision before availability:
+  the gist survives while the detail fades. A derived precision score
+  (retention², decaying strictly faster than retention) now gates the
+  `full` detail level: below the floor (precision < 0.45, retention
+  ≲ 0.67) recall returns the brief shape with `precisionLow: true` and a
+  sentence-boundary `gist` instead of the whole memory.
+  `memory(action='get')` still returns full content — precision degrades
+  recall, never access. No schema change: precision derives from existing
+  FSRS state.
 
 ### Added — recall abstains when the store cannot answer (#224)
 
