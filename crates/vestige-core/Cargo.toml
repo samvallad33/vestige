@@ -147,7 +147,7 @@ notify = "8"
 # ============================================================================
 # nomic-embed-text-v1.5: 768 dimensions, 8192 token context, Matryoshka support
 # fastembed v5 provides Nomic v2 MoE and Qwen3 feature-gated model loaders.
-fastembed = { version = "5.11", default-features = false, features = ["hf-hub-native-tls", "image-models"], optional = true }
+fastembed = { version = "7.1", default-features = false, features = ["hf-hub-native-tls", "image-models"], optional = true }
 candle-core = { version = "0.10.2", optional = true }
 candle-nn = { version = "0.10.2", optional = true }
 tokenizers = { version = "0.22.2", default-features = false, features = ["onig"], optional = true }
@@ -166,7 +166,7 @@ tokenizers = { version = "0.22.2", default-features = false, features = ["onig"]
 # Default features stay OFF so release binaries do not include NumKong (the
 # SimSIMD successor) and its Haswell+/AVX2/FMA dispatch kernels, which can
 # raise illegal instructions on older x86_64 CPUs that Vestige supports (#71).
-usearch = { version = "2.26", default-features = false, optional = true }
+usearch = { version = "2.26.2", default-features = false, optional = true }
 
 # LRU cache for query embeddings
 lru = "0.16"
@@ -180,7 +180,7 @@ sha2 = "0.10"
 # HTTP client for network-backed reference connectors (GitHub Issues, Redmine).
 # rustls so connectors build with no system OpenSSL dependency. Behind the
 # `connectors` feature — the default local-first build does not link reqwest.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "query"], optional = true }
 
 # ============================================================================
 # OPTIONAL: Zero-knowledge client-side encryption for Vestige Cloud sync
