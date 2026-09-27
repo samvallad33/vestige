@@ -535,6 +535,60 @@ fn server_binary() -> &'static Path {
     })
 }
 
+/// #219: the standalone purge tool — the one irreversible call — gets
+/// its own e2e coverage: happy path purges and the memory is really
+/// gone; the unconfirmed call is refused; the alias still dispatches.
+#[test]
+fn purge_tool_purges_refuses_without_confirm_and_alias_matches() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    let id_a = server.ingest_keyword_only(
+        "purge e2e fixture alpha: idempotent removal check",
+        &["purge-e2e"],
+    );
+    let id_b = server.ingest_keyword_only(
+        "purge e2e fixture beta: alias path check",
+        &["purge-e2e"],
+    );
+
+    // Unconfirmed purge is refused — the destructive call requires
+    // confirm=true exactly like memory(action='purge').
+    let refused = server.call_tool("purge", json!({ "id": id_a }));
+    assert!(
+        refused.get("error").is_some() || refused["isError"] == json!(true)
+            || refused.to_string().contains("confirm"),
+        "unconfirmed purge must be refused: {refused}"
+    );
+
+    // Confirmed purge removes the memory for good.
+    let done = server.call_tool_ok(
+        "purge",
+        json!({ "id": id_a, "confirm": true, "reason": "e2e" }),
+    );
+    assert!(
+        done.to_string().contains(&id_a) || done["success"] == json!(true),
+        "purge should report the removed id: {done}"
+    );
+    let gone = server.call_tool("memory", json!({ "action": "get", "id": id_a }));
+    assert!(
+        gone.get("error").is_some() || gone["isError"] == json!(true)
+            || gone["found"] == json!(false),
+        "purged memory must be unreachable: {gone}"
+    );
+
+    // The legacy alias still dispatches the identical path (#219 keeps
+    // it for one release).
+    let alias = server.call_tool_ok(
+        "memory",
+        json!({ "action": "purge", "id": id_b, "confirm": true }),
+    );
+    assert!(
+        alias.to_string().contains(&id_b) || alias["success"] == json!(true),
+        "alias purge should report the removed id: {alias}"
+    );
+}
+
 fn data_dir() -> tempfile::TempDir {
     tempfile::tempdir().expect("temporary Vestige data directory")
 }
