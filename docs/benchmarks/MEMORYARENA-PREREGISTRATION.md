@@ -238,5 +238,30 @@ part of the protocol.
 
 ## 11. Amendments
 
-None. Format for any future entry: date, what changed, why, and whether data
+Format for any future entry: date, what changed, why, and whether data
 already existed when the change was made.
+
+### Amendment 1 — 2026-09-27: task agent and judge model is `deepseek-chat`, not `gpt-5-mini`
+
+What changed: the `model_name` in both the agent and judge slots (section 3)
+is `deepseek-chat`, served by the DeepSeek API (`https://api.deepseek.com`)
+through the harness's `backend: "openai"` path. Every other pinned value is
+unchanged: temperatures (0.0 agent, 1.0 judge), max_tokens (8192 agent, 4096
+judge), the tool-call loop, the arms, the metrics, the decision rules, the run
+order.
+
+Why: no credential on the run machine (macOS arm64) can serve `gpt-5-mini`.
+There is no `OPENAI_API_KEY`; `OPENROUTER_API_KEY` authenticates against
+OpenRouter and is rejected with 401 `User not found`; the opencode gateway
+key serves Claude-family models only; the Moonshot key serves Kimi models;
+the Google key serves Gemini. `deepseek-chat` was verified pre-run for plain
+chat, function calling (the agent's `_act_with_tools` path), and the
+`max_completion_tokens` parameter the harness sends. Consequence, already
+covered by section 7: our numbers share no table with the paper's.
+
+Recorded honestly: DeepSeek's API reports the served model string as
+`deepseek-flash` for `deepseek-chat` requests as of this date; the manifest
+records the requested name, the served string, and the provider.
+
+Data already existed: **no**. Zero benchmark tasks had been run when this
+amendment was committed.
