@@ -41,12 +41,5 @@
   "cpu": [
     "x64",
     "arm64"
-  ],
-  "optionalDependencies": {
-    "@vestige/mcp-darwin-arm64": "3.1.0",
-    "@vestige/mcp-darwin-x64": "3.1.0",
-    "@vestige/mcp-linux-x64": "3.1.0",
-    "@vestige/mcp-linux-arm64": "3.1.0",
-    "@vestige/mcp-win32-x64": "3.1.0"
-  }
+  ]
 }

@@ -585,7 +585,7 @@ jobs:
 
       - name: Extract binary into the platform package
         run: |
-          cd packages/platform/${{ matrix.pkg }}/bin
+          cd packages/mcp-${{ matrix.pkg }}/bin
           case "${{ matrix.asset }}" in
             *.zip) unzip "../../../..//${{ matrix.asset }}" ;;
             *) tar xzf "../../../..//${{ matrix.asset }}" ;;
@@ -595,6 +595,33 @@ jobs:
 
       - name: Publish
         run: npm publish --provenance --access public
-        working-directory: packages/platform/${{ matrix.pkg }}
+        working-directory: packages/mcp-${{ matrix.pkg }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # #220: publish the meta package AFTER the platform packages exist on the
+  # registry, injecting the exact-pinned optionalDependencies at publish
+  # time (the committed manifest stays pin-free so CI lockfiles resolve).
+  publish-npm-meta:
+    name: Publish vestige-mcp-server (with platform pins)
+    needs: [publish-npm-platforms]
+    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.inputs.tag || github.ref }}
+
+      - name: Inject platform pins
+        run: node scripts/inject-platform-deps.js
+        working-directory: packages/vestige-mcp-npm
+
+      - name: Publish
+        run: npm publish --provenance --access public
+        working-directory: packages/vestige-mcp-npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
