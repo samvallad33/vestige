@@ -10,7 +10,7 @@
 //! - Optional Qwen profiles are owned by the explicit Embedding Profiles
 //!   runtime. They are never selected from an environment variable here.
 
-use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::sync::{Mutex, OnceLock};
 
 // ============================================================================
@@ -134,7 +134,7 @@ fn get_backend() -> Result<std::sync::MutexGuard<'static, EmbeddingBackend>, Emb
 
         match spec {
             EmbeddingModelSpec::NomicV15 => {
-                let options = TextInitOptions::new(EmbeddingModel::NomicEmbedTextV15)
+                let options = InitOptions::new(EmbeddingModel::NomicEmbedTextV15)
                     .with_show_download_progress(true)
                     .with_cache_dir(cache_dir);
 
