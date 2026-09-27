@@ -192,7 +192,80 @@ impl SqliteMemoryStore {
         for id in ids {
             self.log_access(id, "retrieval_shown")?;
         }
+        self.strengthen_narrative_edges(ids)
+    }
 
+    /// #226 narrative edges: memories retrieved together in one response
+    /// are linked, after Tang & Reagh 2026 (PNAS) — events experienced as
+    /// one narrative are recalled together independent of semantic
+    /// similarity. Strength is proportional to REPEATED co-retrieval, not
+    /// presence: one shared result page creates only a hairline.
+    ///
+    /// ANTI-CONTAMINATION (RoMeRL, arXiv:2608.02508): co-retrieved items
+    /// receiving joint outcomes can contaminate each other, so this writer
+    /// is deliberately bounded. At most the top-ranked pairs of a batch
+    /// link (rank order, not N²), narrative strength is capped below the
+    /// semantic ceiling so an old session can never outrank meaning, and
+    /// edges that stop co-occurring simply stop growing — nothing decays
+    /// other content.
+    fn strengthen_narrative_edges(&self, ids: &[&str]) -> Result<()> {
+        const LINK_TYPE: &str = "narrative";
+        const MAX_PAIRS_PER_RETRIEVAL: usize = 3;
+        const BASE_STRENGTH: f64 = 0.2;
+        const MAX_STRENGTH: f64 = 0.6;
+
+        if ids.len() < 2 {
+            return Ok(());
+        }
+
+        // Rank-ordered pairs, capped before any lock is taken.
+        let mut pairs: Vec<(&str, &str)> = Vec::new();
+        'outer: for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                if pairs.len() >= MAX_PAIRS_PER_RETRIEVAL {
+                    break 'outer;
+                }
+                pairs.push(if ids[i] < ids[j] {
+                    (ids[i], ids[j])
+                } else {
+                    (ids[j], ids[i])
+                });
+            }
+        }
+
+        let now = chrono::Utc::now();
+        let writer = self
+            .writer
+            .lock()
+            .map_err(|_| StorageError::Init("Writer lock poisoned".into()))?;
+        for (source, target) in pairs {
+            let prior: Option<i64> = {
+                let reader = self
+                    .reader
+                    .lock()
+                    .map_err(|_| StorageError::Init("Reader lock poisoned".into()))?;
+                reader
+                    .query_row(
+                        "SELECT activation_count FROM memory_connections
+                         WHERE source_id = ?1 AND target_id = ?2 AND link_type = ?3",
+                        params![source, target, LINK_TYPE],
+                        |row| row.get(0),
+                    )
+                    .map(Some)
+                    .or_else(|e| match e {
+                        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                        other => Err(other),
+                    })?
+            };
+            let count = prior.unwrap_or(0) + 1;
+            let strength = (BASE_STRENGTH * count as f64).min(MAX_STRENGTH);
+            writer.execute(
+                "INSERT OR REPLACE INTO memory_connections (
+                    source_id, target_id, strength, link_type, created_at, last_activated, activation_count
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![source, target, strength, LINK_TYPE, now.to_rfc3339(), now.to_rfc3339(), count],
+            )?;
+        }
         Ok(())
     }
 

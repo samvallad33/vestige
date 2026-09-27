@@ -7,14 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed — backfill claims match their evidence (#250)
+### Added — narrative edges: memories retrieved together are linked (#226)
 
-- The last surfaces asserting backfill surfaces "root-cause memories a
-  semantic search would have missed" now say what the evidence supports:
-  associated candidates surfaced through shared entities, quiet on
-  similarity at backfill time — association, not proven cause. The MCP
-  response already carried this contract; the stats doc, consolidation
-  log, and two CLI strings now match it.
+- Tang & Reagh 2026 (PNAS): events experienced as one narrative are
+  recalled together, independent of semantic similarity. Vestige now
+  writes a `narrative` edge between memories shown in one recall
+  response — strength grows with REPEATED co-retrieval (0.2 per
+  co-occurrence, hard-capped at 0.6, below the semantic ceiling).
+  Anti-contamination bounds after RoMeRL (arXiv:2608.02508): at most the
+  top three rank-ordered pairs link per retrieval, single-result
+  responses link nothing, and edges that stop co-occurring stop growing.
+  The graph renders the new edge type; spreading activation follows it
+  like any connection.
+
+### Added — recall abstains when the store cannot answer (#224)
+
+- Metamemory, after Ning 2026 (Neuron): a separate judgement about whether
+  retrieval will succeed, made before committing to an answer. Every recall
+  response now carries `confidence` (from the match evidence, the gap to the
+  second result, and the top result's FSRS retention — signals the pipeline
+  already computes). Below `abstain_floor` (default 0.35, 1 disables) the
+  response is `{ results: [], abstained: true, reason, nearest: [...] }` so
+  the caller sees what was closest without being handed a weak match
+  dressed as an answer.
 
 ### Fixed
 

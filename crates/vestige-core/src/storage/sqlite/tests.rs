@@ -8366,3 +8366,86 @@ fn update_node_validity_merges_bounds_and_validates_the_effective_window() {
         .unwrap_err();
     assert!(matches!(error, StorageError::InvalidTimestamp(_)));
 }
+
+// ============================================================================
+// #226 NARRATIVE EDGES — co-retrieval links with anti-contamination bounds
+// ============================================================================
+
+fn narrative_seed(store: &Storage, n: usize) -> Vec<String> {
+    (0..n)
+        .map(|i| {
+            store
+                .ingest(IngestInput {
+                        content: format!("narrative fixture {i}: co-retrieval check"),
+                        node_type: "fact".to_string(),
+                        ..Default::default()
+                    })
+                .unwrap()
+                .id
+                .to_string()
+        })
+        .collect()
+}
+
+fn narrative_edges(store: &Storage) -> Vec<(String, String, f64, i64)> {
+    let reader = store.reader.lock().unwrap();
+    let mut stmt = reader
+        .prepare(
+            "SELECT source_id, target_id, strength, activation_count
+             FROM memory_connections WHERE link_type = 'narrative'",
+        )
+        .unwrap();
+    stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, f64>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })
+    .unwrap()
+    .filter_map(|r| r.ok())
+    .collect()
+}
+
+#[test]
+fn one_retrieval_links_the_top_pairs_only() {
+    let store = create_test_storage();
+    let ids = narrative_seed(&store, 5);
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    store.record_batch_retrieval(&refs).unwrap();
+    let edges = narrative_edges(&store);
+    assert!(
+        edges.len() <= 3,
+        "anti-contamination cap: at most 3 pairs per retrieval, got {}",
+        edges.len()
+    );
+    for (_, _, strength, count) in &edges {
+        assert!(*strength <= 0.2 + 1e-9, "first co-retrieval is a hairline, got {strength}");
+        assert_eq!(*count, 1);
+    }
+}
+
+#[test]
+fn repeated_co_retrieval_grows_strength_to_a_cap() {
+    let store = create_test_storage();
+    let ids = narrative_seed(&store, 2);
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    for _ in 0..10 {
+        store.record_batch_retrieval(&refs).unwrap();
+    }
+    let edges = narrative_edges(&store);
+    assert_eq!(edges.len(), 1);
+    let (_, _, strength, count) = &edges[0];
+    assert_eq!(*count, 10);
+    assert!((*strength - 0.6).abs() < 1e-9, "capped at 0.6, got {strength}");
+}
+
+#[test]
+fn single_memory_retrievals_link_nothing() {
+    let store = create_test_storage();
+    let ids = narrative_seed(&store, 2);
+    store.record_batch_retrieval(&[ids[0].as_str()]).unwrap();
+    store.record_batch_retrieval(&[ids[1].as_str()]).unwrap();
+    assert!(narrative_edges(&store).is_empty());
+}
