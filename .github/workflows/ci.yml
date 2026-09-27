@@ -364,7 +364,10 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Install build dependencies
-        run: bash -lc "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev"
+        run: |
+          bash -lc "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev software-properties-common"
+          bash -lc "add-apt-repository -y ppa:ubuntu-toolchain-r/test && apt-get update"
+          bash -lc "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends g++-13"
 
       - uses: actions/checkout@v4
 
@@ -388,6 +391,13 @@ jobs:
           key: linux-gnu-glibc235-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release
+        env:
+          CXX: g++-13
+          # Statically link libstdc++: ONNX Runtime 1.28's static library needs
+          # GCC-13-era symbols; embedding the runtime keeps the ELF's dynamic
+          # GLIBCXX set empty (floor: Debian 12 / Ubuntu 22.04). Mirrors the
+          # release workflow's Linux build.
+          RUSTFLAGS: -C link-arg=-static-libstdc++
         run: cargo build --release --target x86_64-unknown-linux-gnu -p vestige-mcp
 
       - name: Package
@@ -462,7 +472,10 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Install build dependencies
-        run: bash -lc "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev"
+        run: |
+          bash -lc "apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config cmake python3 perl xz-utils unzip binutils libssl-dev software-properties-common"
+          bash -lc "add-apt-repository -y ppa:ubuntu-toolchain-r/test && apt-get update"
+          bash -lc "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends g++-13"
 
       - uses: actions/checkout@v4
 
@@ -486,6 +499,13 @@ jobs:
           key: linux-gnu-arm64-glibc235-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release
+        env:
+          CXX: g++-13
+          # Statically link libstdc++: ONNX Runtime 1.28's static library needs
+          # GCC-13-era symbols; embedding the runtime keeps the ELF's dynamic
+          # GLIBCXX set empty (floor: Debian 12 / Ubuntu 22.04). Mirrors the
+          # release workflow's Linux build.
+          RUSTFLAGS: -C link-arg=-static-libstdc++
         run: cargo build --release --target aarch64-unknown-linux-gnu -p vestige-mcp
 
       - name: Package
