@@ -1333,7 +1333,7 @@ impl SqliteMemoryStore {
                 if backfilled_causes > 0 {
                     tracing::info!(
                         backfilled_causes,
-                        "Retroactive Salience Backfill: promoted {} root-cause memor{} a semantic search would miss",
+                        "Retroactive Salience Backfill: promoted {} associated candidate memor{} surfaced through shared entities (association, not proven cause)",
                         backfilled_causes,
                         if backfilled_causes == 1 { "y" } else { "ies" }
                     );

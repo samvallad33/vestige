@@ -362,9 +362,11 @@ pub struct ConsolidationResult {
     pub activations_computed: i64,
     /// Personalized w20 if optimized this cycle
     pub w20_optimized: Option<f64>,
-    /// Retroactive Salience Backfill: number of quiet earlier *causes* promoted
-    /// because a recent salient failure reached backward and surfaced them
-    /// (root-cause memories a semantic search would have missed).
+    /// Retroactive Salience Backfill: number of quiet earlier associated
+    /// candidates promoted because a recent salient failure reached backward
+    /// and surfaced them through shared entities (association candidates,
+    /// not proven causes; the rank evidence establishes they were quiet, not
+    /// that semantic search would have missed them).
     pub backfilled_causes: i64,
 }
 

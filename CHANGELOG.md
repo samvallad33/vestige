@@ -7,26 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed — supersession is enforced, not labeled (#252 phase 1)
+### Fixed — backfill claims match their evidence (#250)
 
-- arXiv:2609.08258 tested five agent-memory systems and found none
-  enforces soft revocation at retrieval: superseded facts still surface,
-  merely down-ranked. A down-rank is a label; withholding is enforcement.
-  Memories whose validity window has closed are now removed from
-  current-time results entirely, with a `supersededWithheld` count on the
-  response for observability. `include_superseded=true` opts back in
-  (kept, down-ranked x0.1), and as-of `validAt` queries are unchanged.
-
-### Added — recall abstains when the store cannot answer (#224)
-
-- Metamemory, after Ning 2026 (Neuron): a separate judgement about whether
-  retrieval will succeed, made before committing to an answer. Every recall
-  response now carries `confidence` (from the match evidence, the gap to the
-  second result, and the top result's FSRS retention — signals the pipeline
-  already computes). Below `abstain_floor` (default 0.35, 1 disables) the
-  response is `{ results: [], abstained: true, reason, nearest: [...] }` so
-  the caller sees what was closest without being handed a weak match
-  dressed as an answer.
+- The last surfaces asserting backfill surfaces "root-cause memories a
+  semantic search would have missed" now say what the evidence supports:
+  associated candidates surfaced through shared entities, quiet on
+  similarity at backfill time — association, not proven cause. The MCP
+  response already carried this contract; the stats doc, consolidation
+  log, and two CLI strings now match it.
 
 ### Fixed
 

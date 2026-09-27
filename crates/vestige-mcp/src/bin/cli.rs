@@ -3662,7 +3662,7 @@ fn run_backfill(
     println!();
     println!(
         "{}",
-        "Reached BACKWARD and surfaced the cause(s) a vector search would miss:".white()
+        "Reached BACKWARD and surfaced associated candidates through shared entities:".white()
     );
     println!();
     if let Some(causes) = result["causes"].as_array() {
@@ -3688,7 +3688,7 @@ fn run_backfill(
                     "     {} ranked #{} on similarity {}",
                     "🔍".magenta(),
                     r,
-                    "(so semantic search would NOT have surfaced it)".dimmed()
+                    "(quiet on similarity at backfill time; association, not proven cause)".dimmed()
                 );
             }
             if c["promoted"] == serde_json::json!(true) {
