@@ -43,10 +43,11 @@ the like-for-like table: for each opponent, only the trials where BOTH that arm 
 | hindsight | 3 | 0 | 0 | 3 | **3** | **0** | 0 |
 | Zep/Graphiti | 2 | 0 | 0 | 2 | **2** | **0** | 0 |
 
-Note that the asymmetry works against Vestige, not for it. Vestige is 19/23 (83%) overall but
-perfect on every trial where a competitor was also run, because all four trials it lost were in the
-solo sweep. The aggregate table understates the paired result; this table is the honest one, and
-the remaining fix is statistical power, not fairness. Deepening the thin arms is the next run.
+Note that the asymmetry works against Vestige, not for it. Vestige is 19/23 (83%) overall. It is
+perfect on every trial where a third-party memory system (supermemory, mem0, hindsight, or Zep) also
+ran, and its four losses were splits on the no-memory and RAG trials, never converged-wrong. The
+aggregate matches those two rows and understates only the third-party rows; this table is the honest
+one, and the remaining fix is statistical power, not fairness. Deepening the thin arms is the next run.
 
 ### First memory call
 
