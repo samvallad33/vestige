@@ -603,9 +603,32 @@ jobs:
   # published separately with matching version + optionalDependencies pins.
   # Requires NPM_TOKEN with publish rights for the @vestige scope; trusted
   # publishing can replace the token later (--provenance needs id-token).
+  # secrets is not a legal context in jobs.<id>.if, so a step records
+  # whether NPM_TOKEN is non-empty. publish-npm-platforms waits for the
+  # release assets and runs only when that output is true. publish-npm-meta
+  # runs only when every platform publish succeeded, so an empty token
+  # skips both and the GitHub Release still ships.
+  npm-token:
+    name: NPM token present
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - id: check
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NPM_TOKEN is empty; npm publish jobs will be skipped."
+          fi
+
   publish-npm-platforms:
     name: Publish @vestige/mcp platform package
-    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    needs: [build, publish-linux, publish-linux-arm64, npm-token]
+    if: ${{ success() && needs.npm-token.outputs.enabled == 'true' && !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -666,7 +689,7 @@ jobs:
   publish-npm-meta:
     name: Publish vestige-mcp-server (with platform pins)
     needs: [publish-npm-platforms]
-    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    if: ${{ success() && needs.publish-npm-platforms.result == 'success' && !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -690,32 +713,5 @@ jobs:
       - name: Publish
         run: npm publish --provenance --access public
         working-directory: packages/vestige-mcp-npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  # @vestige/init is Sam's scoped package. It has no platform binary, so it
-  # publishes alongside the platform matrix and does not wait on it.
-  publish-npm-init:
-    name: Publish @vestige/init
-    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.inputs.tag || github.ref }}
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-
-      - name: Publish
-        run: npm publish --provenance --access public
-        working-directory: packages/vestige-init
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
