@@ -7,149 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed — code memory closes the loop at retrieval time
-
-- A remembered pattern or decision always surfaced in `recall` (the
-  codebase tool stores through the normal ingest path — it was never a
-  silo), but it came back looking exactly like any other fact, with no
-  sign of the anchoring that makes it trustworthy. Recall results now
-  attach a compact `codeEvidence` block to code memories: anchor count,
-  verifiable count, and the last-known anchor status with its check time,
-  plus a `possiblyStale` flag when that status accuses the memory. The
-  block is database-only — live checking remains the explicit `codebase`
-  action `verify`.
-- Verification verdicts are now persisted (`last_status` /
-  `last_verified_at` were written by nothing but a unit test before), so
-  the last-known state of every anchor survives the process. Writes are
-  change-only, and `reanchor` resets them: a fresh capture has not been
-  checked yet.
-- The `remember_pattern`/`remember_decision` response teaches
-  `path#symbol` at exactly the failure point where anchors came back
-  path-only and unverifiable — the compact wire schema drops this tool's
-  field prose, so the response is the one place a first-time caller
-  reliably learns the convention. The action description is reshaped so
-  its 50-char compact truncation lands on the end of a sentence instead
-  of mid-list.
-- The server instructions name the code-memory workflow, so agents learn
-  that anchored code knowledge exists before they need it.
-### Changed — memory_status views: from counters to diagnostics
-
-- `health` now emits a structured `diagnostics` array alongside the
-  legacy string `warnings`. Each entry names a detected problem (decay,
-  review backlog, embedding coverage/model mismatch, consolidation
-  staleness, declining retention trend), carries a count, up to 10
-  example memory IDs, and a `nextAction` referencing an existing tool —
-  the panel an agent can act on, not just read. `stateDistribution` is
-  computed in SQL over every row instead of a 500-row insertion-ordered
-  sample; `sampled` keeps its key and now equals the whole store
-  (`basis: "full"`). `modulesActive` comes from a maintained constant —
-  the old hardcode said 28 while the struct holds 27 base modules (+2
-  search), the exact drift the constant prevents. Duplicate
-  `embeddingsCompiledIn` key removed from the response.
-- `stats` gains `recommendedActions`: every non-zero hygiene problem
-  (expired, superseded, low retention, untagged, malformed tag rows,
-  never accessed) pairs its count with bounded example memory IDs and a
-  concrete action against an advertised tool.
-- `changelog` closes the audit gap: merge, supersede, undo, tag_rename
-  and tag_merge operations from the `merge_operations` reflog now appear
-  as `merge_operation` events; they were previously visible only through
-  the stats view's bounded tag window.
-- `retention` distribution buckets out-of-range values explicitly:
-  NULL retention lands in `unknown`, negatives in `below0`, above 1.0 in
-  `above100%`. Previously NULL and >1.0 rows inflated `80-100%`, so a
-  store with unreadable retention could read as fully healthy. In-range
-  bucketing is unchanged.
-- `timeline` now returns explicit `returned` and `truncated` fields;
-  `totalMemories` was (and is) the bounded returned count, and the new
-  fields stop it being mistaken for the range's full population.
-- New storage helpers behind the diagnostics: `lowest_retention_nodes`,
-  `due_for_review_node_ids`, `state_distribution` (all bounded reads).
-- Sized-store performance guard: new test file builds a 1000-memory
-  store, budgets every view, and asserts the stats view scales without
-  quadratic behavior (4x store, sub-25x time).
-- Test calibration: the stdio shutdown test's deadline moved 10s → 30s.
-  A fresh data dir pays ~19s of first-run embedding warm-up before the
-  stdin loop starts (clean exit 0 verified manually), so the old
-  deadline failed spuriously on cold starts. The behavior assertion is
-  unchanged.
-### Fixed — source_sync hardening (connectors audit)
-
-- Rate-limit respect: GitHub *secondary* rate limits (403 carrying
-  `Retry-After` with nonzero `x-ratelimit-remaining`) were classified as a
-  generic "forbidden" and re-prompted immediate retries that deepened the
-  penalty. They now classify as `RateLimited`, and the sync driver backs off
-  once and retries the same page when the server's wait is at most 60s;
-  longer waits abort with the wait surfaced instead of blocking an MCP call
-  for an hour.
-- Resumable pagination: the incremental-sync checkpoint is persisted after
-  every completed page, not only at the end of a run. An interrupted
-  multi-page first sync (network drop, mid-sync shutdown) resumes from the
-  last good page instead of re-fetching the whole window.
-- Error messages name the exact failing call: every connector error now
-  carries `GET <url> -> <status>` plus the API's own `message` body and an
-  actionable hint for 401/403/404 (repo not found vs token without access
-  was previously indistinguishable from a bare "Not Found").
-- Stale tags on updated issues: `upsert_by_source` wrote content and the
-  envelope on upstream change but never `tags`, so a label or state change
-  left the original `state:open`-style tags on the node forever. Tags now
-  track every update, and the Unchanged path refreshes them too so tag
-  normalization changes converge on the next touch.
-- `recall` with `source_status=tombstoned` always returned empty: the
-  current-time validity partition withheld tombstoned nodes before the
-  source filter ran. The tombstone filter now counts as the audit opt-in.
-- One flaky comment-fetch response no longer aborts a whole GitHub sync
-  page: one retry, then the issue is skipped with a cursor clamp so the
-  next sync re-fetches exactly that issue (previously the entire run died
-  and later issues in the page were lost from it).
-- Both connectors set explicit connect (10s) and request (30s) timeouts;
-  a stalled connection previously blocked the tool call indefinitely.
-  GitHub live-id enumeration gained the same hard page cap the Redmine
-  connector already had.
-### Changed — dependency graph refreshed to the current registry state
-
-- Semver-compatible refresh across the lockfile (98 packages moved), plus
-  major bumps where the migration is proven: `sha2` 0.10 → 0.11 (digest
-  0.11 dropped `LowerHex` on the digest output, so hex encoding is now
-  explicit), `ed25519-dalek` 2 → 3, `argon2` 0.5 → 0.6, `chacha20poly1305`
-  0.10 → 0.11 (aead 0.6 replaces `generate_nonce(&mut OsRng)` with the
-  `Generate` trait on the nonce type; salt bytes now come from `getrandom`
-  0.4, which is also a new direct dependency — `rand_core` 0.10 dropped
-  `OsRng`), `git2` 0.20 → 0.21 (`Signature::name`/`shorthand` now return
-  `Result`), `criterion` 0.5 → 0.8 (benchmarks use `std::hint::black_box`
-  after criterion deprecated its own), `lru` 0.16 → 0.18, `base64` 0.22 →
-  0.23, `tower-http` 0.6 → 0.7, and `candle`/`tokenizers` unified onto the
-  single 0.11/0.23.2 copies fastembed 7.1 already used (one less duplicate
-  compile). Held intentionally: `fastembed` 7.1 + `ort` 2.0.0-rc.13 (the
-  pairing is load-bearing), `usearch` 2.26.2 (current), and the wasm family
-  (`wasm-bindgen` 0.2.128 exact-pinned by `js-sys`, unreachable from any
-  shipped target). The release profile was already at
-  `lto + codegen-units=1 + panic=abort + strip + opt-level=z`; nothing to
-  add there.
-
-### Added — deterministic query rewriting before retrieval fusion
-
-- arXiv 2601.07711: agentic retrieval gains concentrate in intent
-  routing and query rewriting, not bigger rerankers. Agent queries are
-  telegraphic ("purge tool schema", "compact_tools_list") while memories
-  are written as prose. Recall now expands the query deterministically —
-  identifier splitting (snake/CamelCase/kebab) and a light prose wrapper —
-  and runs one hybrid pass per variant, fusing rank-based with a small
-  per-variant penalty so the original query's ranking always dominates.
-  Zero model calls, zero new latency budget: variants only widen the
-  candidate pool before RRF. Already-prose queries run a single pass.
-
-### Changed — per-platform npm packages, no eager postinstall (#220)
-
-- `vestige-mcp-server` now resolves its binary from an exact-pinned
-  `optionalDependency` (`@vestige/mcp-<os>-<arch>`, turbo/rolldown/biome
-  pattern), so installs need no lifecycle script at all — pnpm v10 and
-  current Yarn block postinstall by default, and a registry-fetched binary
-  works where GitHub Releases is unreachable. The GitHub download remains
-  only as a lazy fallback for `npm install --no-optional`. The release
-  workflow gained a matrix job that publishes the platform packages from
-  the assets it already builds (requires NPM_TOKEN; --provenance on).
-  Lockfiles now pin the binary version.
-
 ### Fixed
 
 - Fresh reflections surface in recall (#232): an `Insight` written in the
@@ -170,6 +27,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is lost — a build-time guard fails if the wire payload ever exceeds 20 KiB
   again. Recall's investigation filters are grouped into `source` and
   `filters` objects in the compact form; the full schema keeps them flat.
+
+## [3.1.1] - 2026-09-28
+
+Vestige v3.1.1 is a retrieval-honesty and distribution release: recall can
+abstain, withhold superseded facts, fade detail before it disappears, and
+link memories that were retrieved together. npm installs resolve a
+per-platform binary with no eager postinstall.
+
+### Added
+
+- Metamemory abstention (#276): every recall response carries `confidence`
+  from match evidence, the gap to the next hit, and top-result retention.
+  Below `abstain_floor` (default 0.35; `1` disables) the body is
+  `{ results: [], abstained: true, reason, nearest }`. Exact-match lookup
+  reports confidence and does not abstain.
+- `outputSchema` on `recall`, `smart_ingest`, `memory_status`, and
+  `receipt`, plus a standalone `purge` tool with `destructiveHint` and
+  `anthropic/requiresUserInteraction`. `memory(action='purge')` stays the
+  same path (#275).
+- Supersession withheld at the rank path (#281): closed validity windows
+  leave current-time results and increment `supersededWithheld`.
+  `include_superseded=true` restores keep-and-downrank; `validAt` queries
+  are unchanged.
+- Narrative co-retrieval edges (#284): memories shown together gain a
+  narrative edge, 0.2 per co-occurrence, capped at 0.6, at most the top
+  three rank-ordered pairs per retrieval.
+- Precision decay (#283): below precision 0.45 recall returns the brief
+  shape with `precisionLow` and a gist. `memory(action='get')` still
+  returns full content.
+- Deterministic query rewriting before retrieval fusion (#286): identifier
+  splitting and a light prose wrapper, one hybrid pass per variant, fused
+  so the original query dominates. No model calls.
+- Start-time version hint and a first-run warm-up milestone (#287): one
+  logging notification with the upgrade command when npm has a newer
+  `vestige-mcp-server` (2s budget, silent on failure). No self-update.
+- Per-platform npm packages `@vestige/mcp-<os>-<arch>`, exact-pinned as
+  optionalDependencies at publish time. The committed meta manifest stays
+  pin-free; the GitHub download is only the `--no-optional` fallback
+  (#278).
+- MCP 2026-07-28 stateless core alongside the legacy handshake, and a
+  receipt-card app at `ui://vestige/receipt/{id}` (#241).
+- Actor provenance on receipts and mutation surfaces (#252 phase A): a
+  per-data-dir Ed25519 actor, operator role weights, and transactional
+  endorsements. Unbound stores keep the previous behavior.
+- `maintain(action=dream_compile)` runs the four-phase dream engine
+  review-gated. Conflicts against labile memories open reconsolidation
+  plans. Triggered intentions can resurface on recall inside their scope.
+- Code memories in recall carry a `codeEvidence` block, and anchor
+  verification verdicts persist. `memory_status` views emit diagnostics,
+  recommended actions, and honest retention buckets.
+
+### Fixed
+
+- Backfill claims match their evidence (#280): stats text, consolidation
+  logs, and CLI strings use the same association-not-cause contract as
+  the MCP response.
+- `abstain_floor` and `include_superseded` honor the snake_case names the
+  schema advertises. The camelCase spellings still work.
+- `source_sync` treats GitHub secondary rate limits as rate limits,
+  checkpoints each completed page, and names the failing call.
+- Linux glibc-2.35 builds on ONNX Runtime 1.28 (#279, reverted in #282,
+  re-landed in #285, CI jobs in #288): fastembed 7.1, ort 2.0.0-rc.13,
+  reqwest 0.13, usearch 2.26.2. GCC 13 and static libstdc++ leave the
+  shipped ELF with an empty dynamic GLIBCXX set.
+
+### Changed
+
+- Lockfile refresh beyond that stack: `sha2` 0.11, `ed25519-dalek` 3,
+  `argon2` 0.6, `chacha20poly1305` 0.11, `git2` 0.21, `criterion` 0.8,
+  `lru` 0.18, `base64` 0.23, `tower-http` 0.7, and candle/tokenizers
+  unified onto the fastembed 7.1 copies.
+- Tool dispatch and the search pipeline were split into smaller functions,
+  dead helpers were removed, and a 47-case real-binary failure suite now
+  drives the shipped binary over stdio.
 
 ## [3.1.0] - 2026-09-25
 
