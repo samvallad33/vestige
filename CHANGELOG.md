@@ -65,7 +65,9 @@ per-platform binary with no eager postinstall.
 - Per-platform npm packages `@vestige/mcp-<os>-<arch>`, exact-pinned as
   optionalDependencies at publish time. The committed meta manifest stays
   pin-free; the GitHub download is only the `--no-optional` fallback
-  (#278).
+  (#278). The release workflow also publishes `@vestige/init`.
+- Official MCP registry listing `io.github.samvallad33/vestige` in
+  `server.json` is 3.1.1, package `vestige-mcp-server`.
 - MCP 2026-07-28 stateless core alongside the legacy handshake, and a
   receipt-card app at `ui://vestige/receipt/{id}` (#241).
 - Actor provenance on receipts and mutation surfaces (#252 phase A): a

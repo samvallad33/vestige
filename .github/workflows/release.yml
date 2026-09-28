@@ -98,7 +98,8 @@ jobs:
             'packages/vestige-init/package.json',
             'packages/vestige-mcp-npm/package.json',
             'packages/vestige-mcpb/manifest.json',
-            'lhm.plugin.json'
+            'lhm.plugin.json',
+            'server.json'
           ];
           for (const file of packageFiles) {
             const actual = require(`./${file}`).version;
@@ -260,7 +261,8 @@ jobs:
             'packages/vestige-init/package.json',
             'packages/vestige-mcp-npm/package.json',
             'packages/vestige-mcpb/manifest.json',
-            'lhm.plugin.json'
+            'lhm.plugin.json',
+            'server.json'
           ];
           for (const file of packageFiles) {
             const actual = require(`./${file}`).version;
@@ -462,7 +464,8 @@ jobs:
             'packages/vestige-init/package.json',
             'packages/vestige-mcp-npm/package.json',
             'packages/vestige-mcpb/manifest.json',
-            'lhm.plugin.json'
+            'lhm.plugin.json',
+            'server.json'
           ];
           for (const file of packageFiles) {
             const actual = require(`./${file}`).version;
@@ -643,6 +646,14 @@ jobs:
           rm -f README.md
           ls -la
 
+      # NODE_AUTH_TOKEN is read from the .npmrc that setup-node writes.
+      # The runner's preinstalled npm does not consult that env var.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
       - name: Publish
         run: npm publish --provenance --access public
         working-directory: packages/mcp-${{ matrix.pkg }}
@@ -666,6 +677,12 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.inputs.tag || github.ref }}
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
       - name: Inject platform pins
         run: node scripts/inject-platform-deps.js
         working-directory: packages/vestige-mcp-npm
@@ -673,5 +690,32 @@ jobs:
       - name: Publish
         run: npm publish --provenance --access public
         working-directory: packages/vestige-mcp-npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # @vestige/init is Sam's scoped package. It has no platform binary, so it
+  # publishes alongside the platform matrix and does not wait on it.
+  publish-npm-init:
+    name: Publish @vestige/init
+    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.inputs.tag || github.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish
+        run: npm publish --provenance --access public
+        working-directory: packages/vestige-init
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

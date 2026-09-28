@@ -7,6 +7,8 @@ authors = ["Vestige Team"]
 description = "Cognitive memory engine - FSRS-6 spaced repetition, semantic embeddings, and temporal memory"
 license = "AGPL-3.0-only"
 repository = "https://github.com/samvallad33/vestige"
+# crates.io already has this name under conorluddy/Vestige. Do not publish.
+publish = false
 keywords = ["memory", "spaced-repetition", "fsrs", "embeddings", "knowledge-graph"]
 categories = ["science", "database"]
 

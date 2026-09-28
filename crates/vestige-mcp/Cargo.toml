@@ -8,6 +8,8 @@ license = "AGPL-3.0-only"
 keywords = ["mcp", "ai", "memory", "fsrs", "neuroscience", "cognitive-science", "spaced-repetition"]
 categories = ["command-line-utilities", "database"]
 repository = "https://github.com/samvallad33/vestige"
+# crates.io already has this name under conorluddy/Vestige. Do not publish.
+publish = false
 
 [features]
 default = ["embeddings", "ort-download", "vector-search", "connectors", "cloud-sync", "codebase-git"]
