@@ -32,19 +32,15 @@ Agents re-learn the same lessons. They recommend a change you already tested and
 
 ## Install
 
-You need Node.js. No Docker, no signup, no compile step. Prebuilt for macOS ARM and Intel, Linux x86_64 and arm64, Windows x86_64.
+v3.1.1 is the GitHub Release binaries. Download the archive for your machine from [Releases](https://github.com/samvallad33/vestige/releases):
 
-```bash
-npm install -g vestige-mcp-server@latest
-```
+- macOS Apple Silicon: `vestige-mcp-aarch64-apple-darwin.tar.gz`
+- macOS Intel: `vestige-mcp-x86_64-apple-darwin.tar.gz`
+- Linux x86_64: `vestige-mcp-x86_64-unknown-linux-gnu.tar.gz`
+- Linux arm64: `vestige-mcp-aarch64-unknown-linux-gnu.tar.gz`
+- Windows x64: `vestige-mcp-x86_64-pc-windows-msvc.zip`
 
-Prefer Homebrew?
-
-```bash
-brew install samvallad33/tap/vestige
-```
-
-Scripted installs work too: `eget samvallad33/vestige` pulls the right prebuilt binary from Releases.
+`eget samvallad33/vestige` pulls the same archive. Unpack it and put `vestige-mcp` on your PATH. Do not install this version with npm.
 
 Connect it to your agent. Every MCP client understands this config:
 

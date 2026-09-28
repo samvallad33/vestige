@@ -20,8 +20,8 @@ brew install onnxruntime
 ## Install
 
 ```bash
-# 1. Install the binary
-npm install -g vestige-mcp-server@latest
+# 1. Download vestige-mcp-x86_64-apple-darwin.tar.gz from
+#    https://github.com/samvallad33/vestige/releases and unpack vestige-mcp
 
 # 2. Point the binary at Homebrew's libonnxruntime (CLI / terminal clients)
 echo 'export ORT_DYLIB_PATH="'"$(brew --prefix onnxruntime)"'/lib/libonnxruntime.dylib"' >> ~/.zshrc

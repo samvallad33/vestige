@@ -28,9 +28,7 @@ Vestige is local-first. Memories are stored in SQLite on your machine, can be sc
 
 ### 1. Install Vestige
 
-```bash
-npm install -g vestige-mcp-server@latest
-```
+Download the archive for your machine from the [GitHub Release](https://github.com/samvallad33/vestige/releases) and put `vestige-mcp` on your PATH. Do not install this version with npm.
 
 Verify the binary:
 
@@ -38,7 +36,7 @@ Verify the binary:
 vestige-mcp --version
 ```
 
-If you prefer not to install globally, use `npx` directly in the OpenCode command array:
+Point OpenCode at the unpacked binary:
 
 ```json
 {
@@ -46,17 +44,13 @@ If you prefer not to install globally, use `npx` directly in the OpenCode comman
   "mcp": {
     "vestige": {
       "type": "local",
-      "command": ["npx", "-y", "-p", "vestige-mcp-server@latest", "vestige-mcp"],
+      "command": ["vestige-mcp"],
       "enabled": true,
-      "timeout": 60000
+      "timeout": 10000
     }
   }
 }
 ```
-
-The higher timeout is for the first cold `npx` run, which may need to download the npm package before OpenCode can connect. If you install `vestige-mcp-server` globally, `10000` is enough for normal startup.
-
-If `npx` times out against an older published Vestige build, install globally once and use `command: ["vestige-mcp"]`. The current integration keeps the MCP handshake fast by moving embedding startup work into the background.
 
 ### 2. Add Vestige To OpenCode
 

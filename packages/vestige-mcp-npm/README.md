@@ -6,13 +6,9 @@ Built on 130 years of cognitive science research, Vestige provides biologically-
 
 ## Installation
 
-```bash
-npm install -g vestige-mcp-server
-```
+v3.1.1 is not published to npm. Download the archive for your machine from the [GitHub Release](https://github.com/samvallad33/vestige/releases).
 
-This automatically downloads the correct binary for your platform (macOS, Linux, Windows) from GitHub releases.
-
-Already installed? Update without copying release URLs:
+Already installed from a previous release? Update without copying release URLs:
 
 ```bash
 vestige update
@@ -95,7 +91,7 @@ Add to `~/.config/opencode/opencode.json` or a project-local `opencode.json`:
 }
 ```
 
-Prefer the installed `vestige-mcp` command for OpenCode. If you run Vestige directly through `npx`, use a longer first-run timeout because npm may need to download the package before OpenCode can connect:
+Prefer the unpacked `vestige-mcp` command for OpenCode:
 
 ```json
 {
@@ -103,9 +99,9 @@ Prefer the installed `vestige-mcp` command for OpenCode. If you run Vestige dire
   "mcp": {
     "vestige": {
       "type": "local",
-      "command": ["npx", "-y", "-p", "vestige-mcp-server@latest", "vestige-mcp"],
+      "command": ["vestige-mcp"],
       "enabled": true,
-      "timeout": 60000
+      "timeout": 10000
     }
   }
 }
@@ -190,10 +186,7 @@ Storage precedence is `--data-dir <path>`, then `VESTIGE_DATA_DIR`, then your OS
 
 ### "vestige: command not found"
 
-Reinstall the package:
-```bash
-npm install -g vestige-mcp-server
-```
+Unpack the GitHub Release archive again and put `vestige-mcp` on your PATH.
 
 ### Embeddings not downloading
 

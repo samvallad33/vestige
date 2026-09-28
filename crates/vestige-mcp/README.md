@@ -9,11 +9,7 @@ portable import/export commands.
 
 ## Install
 
-For normal users, prefer the release package:
-
-```bash
-npm install -g vestige-mcp-server
-```
+For normal users, download the v3.1.1 archive from the [GitHub Release](https://github.com/samvallad33/vestige/releases). Do not install this version with npm.
 
 For local development:
 

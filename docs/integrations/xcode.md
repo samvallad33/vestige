@@ -12,9 +12,7 @@ Xcode 26.3 supports [agentic coding](https://developer.apple.com/documentation/x
 
 ### 1. Install Vestige
 
-```bash
-npm install -g vestige-mcp-server@latest
-```
+Download the archive for your machine from the [GitHub Release](https://github.com/samvallad33/vestige/releases) and put `vestige-mcp` on your PATH. Do not install this version with npm.
 
 ### 2. Add to your Xcode project
 

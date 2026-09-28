@@ -8,7 +8,7 @@ Cursor has native MCP support. Add Vestige and your AI assistant remembers your 
 
 ## Setup
 
-After `npm install -g vestige-mcp-server@latest`, the `vestige-mcp` binary is on your **shell** PATH. Cursor's GUI does not reliably inherit that PATH and does not expand `~`. Paste the absolute path; do not guess `/usr/local/bin`.
+Unpack the GitHub Release archive and put `vestige-mcp` on your PATH. Cursor's GUI does not reliably inherit that PATH and does not expand `~`. Paste the absolute path; do not guess `/usr/local/bin`.
 
 ### 1. Create or edit the config file
 
