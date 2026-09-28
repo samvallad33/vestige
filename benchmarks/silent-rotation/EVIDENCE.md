@@ -17,36 +17,37 @@ it the right one?**
 
 | arm | converged on the CORRECT key | converged on a WRONG key | split, no consensus | n |
 |---|---|---|---|---|
-| anarchy (no memory) | 0/25 | **21/25** | 4/25 | 25 |
-| rag (dense cosine) | 4/23 | **12/23** | 7/23 | 23 |
-| **sync (Vestige)** | **20/23** | **0/23** | 3/23 | 23 |
+| anarchy (no memory) | 0/25 | **17/25** | 8/25 | 25 |
+| rag (dense cosine) | 4/23 | **10/23** | 9/23 | 23 |
+| **sync (Vestige)** | **19/23** | **0/23** | 4/23 | 23 |
 | supermemory | 5/6 | 0/6 | 1/6 | 6 |
-| mem0 | 2/5 | 1/5 | 2/5 | 5 |
+| mem0 | 1/5 | 1/5 | 3/5 | 5 |
 | hindsight | 0/3 | 0/3 | 3/3 | 3 |
-| zep | 0/2 | 1/2 | 1/2 | 2 |
+| zep | 0/2 | 0/2 | 2/2 | 2 |
 
 Models: Kimi K3, Kimi K2.7-code, MiniMax M3, GLM 5.2, GPT-5.6 Sol, DeepSeek V4 Flash.
 
 ### Paired comparison, same trials only
 
-The arms were not all run on the same trials. The `anarchy`, `rag` and `sync` arms ran on all 25;
+The arms were not all run on the same trials. The `anarchy` arm ran on all 25; `rag` and `sync` ran on 23;
 the other memory systems were integrated later and ran only on the 6 earliest trials. Comparing a
 23-trial arm against a 2-trial arm across different trial sets is not a fair comparison, so here is
 the like-for-like table: for each opponent, only the trials where BOTH that arm and Vestige ran.
 
 | Opponent | shared trials | their correct | their wrong | their split | Vestige correct | Vestige wrong | Vestige split |
 |---|---|---|---|---|---|---|---|
-| no memory | 23 | 0 | 20 | 3 | **20** | **0** | 3 |
-| dense cosine RAG | 23 | 4 | 12 | 7 | **20** | **0** | 3 |
+| no memory | 23 | 0 | 17 | 6 | **19** | **0** | 4 |
+| dense cosine RAG | 23 | 4 | 10 | 9 | **19** | **0** | 4 |
 | supermemory | 6 | 5 | 0 | 1 | **6** | **0** | 0 |
-| mem0 | 5 | 2 | 1 | 2 | **5** | **0** | 0 |
+| mem0 | 5 | 1 | 1 | 3 | **5** | **0** | 0 |
 | hindsight | 3 | 0 | 0 | 3 | **3** | **0** | 0 |
-| Zep/Graphiti | 2 | 0 | 1 | 1 | **2** | **0** | 0 |
+| Zep/Graphiti | 2 | 0 | 0 | 2 | **2** | **0** | 0 |
 
-Note that the asymmetry works against Vestige, not for it. Vestige is 20/23 (87%) overall but
-perfect on every trial where a competitor was also run, because both trials it lost were in the
-solo sweep. The aggregate table understates the paired result; this table is the honest one, and
-the remaining fix is statistical power, not fairness. Deepening the thin arms is the next run.
+Note that the asymmetry works against Vestige, not for it. Vestige is 19/23 (83%) overall. It is
+perfect on every trial where a third-party memory system (supermemory, mem0, hindsight, or Zep) also
+ran, and its four losses were splits on the no-memory and RAG trials, never converged-wrong. The
+aggregate matches those two rows and understates only the third-party rows; this table is the honest
+one, and the remaining fix is statistical power, not fairness. Deepening the thin arms is the next run.
 
 ### First memory call
 
@@ -76,8 +77,8 @@ You find out immediately.
 **Converged wrong.** The agents all agree, on a decoy. The tests go green. The merge is clean. The
 production replay fails. **This is the one that ships.**
 
-Look at that middle column again. A memoryless fleet converged on a wrong key **16 times out of 22**.
-The dense-cosine fleet did it **10 times out of 21**. Vestige did it **zero times out of 21**.
+Look at that middle column again. A memoryless fleet converged on a wrong key **17 times out of 25**.
+The dense-cosine fleet did it **10 times out of 23**. Vestige did it **zero times out of 23**.
 
 Not "rarely". Not "less often". Zero.
 
@@ -315,4 +316,4 @@ conjunction and the statistic that governs it is a minimum, not a mean.
 And the failure you should actually fear is not the one where your agents argue. It is the one where
 they all agree, the tests pass, and the key is wrong.
 
-**Zero out of twenty-one.**
+**Zero out of twenty-three.**
