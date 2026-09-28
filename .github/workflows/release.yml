@@ -312,6 +312,12 @@ jobs:
           }
           NODE
 
+      - name: Cache ONNX Runtime prebuilt
+        uses: actions/cache@v4
+        with:
+          path: /github/home/.cache/ort.pyke.io
+          key: ort-prebuilt-2.0.0-rc.13-x86_64-unknown-linux-gnu
+
       - name: Build
         env:
           CXX: g++-13
@@ -324,7 +330,28 @@ jobs:
           ORT_CXX_STDLIB: static=stdc++
           CXXSTDLIB: static=stdc++
           RUSTFLAGS: -C link-arg=-static-libstdc++ -L native=/usr/lib/gcc/x86_64-linux-gnu/13
-        run: cargo build --locked --package vestige-mcp --release --target x86_64-unknown-linux-gnu
+        run: |
+          set -uo pipefail
+          # cdn.pyke.io drops the ort-sys prebuilt mid-extract (Peer disconnected).
+          # A failed extract stays in tmp.* and is not the hashed cache dir, so
+          # the next attempt downloads again.
+          attempt=1
+          while true; do
+            set +e
+            cargo build --locked --package vestige-mcp --release --target x86_64-unknown-linux-gnu
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ "$attempt" -ge 4 ]; then
+              exit "$status"
+            fi
+            echo "ort prebuilt download failed (attempt ${attempt}/4); retrying"
+            find /github/home/.cache/ort.pyke.io -type d -name 'tmp.*' -prune -exec rm -rf {} + 2>/dev/null || true
+            sleep $((attempt * 30))
+            attempt=$((attempt + 1))
+          done
 
       - name: Package
         run: |
@@ -515,6 +542,12 @@ jobs:
           }
           NODE
 
+      - name: Cache ONNX Runtime prebuilt
+        uses: actions/cache@v4
+        with:
+          path: /github/home/.cache/ort.pyke.io
+          key: ort-prebuilt-2.0.0-rc.13-aarch64-unknown-linux-gnu
+
       - name: Build
         env:
           CXX: g++-13
@@ -527,7 +560,28 @@ jobs:
           ORT_CXX_STDLIB: static=stdc++
           CXXSTDLIB: static=stdc++
           RUSTFLAGS: -C link-arg=-static-libstdc++ -L native=/usr/lib/gcc/aarch64-linux-gnu/13
-        run: cargo build --locked --package vestige-mcp --release --target aarch64-unknown-linux-gnu
+        run: |
+          set -uo pipefail
+          # cdn.pyke.io drops the ort-sys prebuilt mid-extract (Peer disconnected).
+          # A failed extract stays in tmp.* and is not the hashed cache dir, so
+          # the next attempt downloads again.
+          attempt=1
+          while true; do
+            set +e
+            cargo build --locked --package vestige-mcp --release --target aarch64-unknown-linux-gnu
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ "$attempt" -ge 4 ]; then
+              exit "$status"
+            fi
+            echo "ort prebuilt download failed (attempt ${attempt}/4); retrying"
+            find /github/home/.cache/ort.pyke.io -type d -name 'tmp.*' -prune -exec rm -rf {} + 2>/dev/null || true
+            sleep $((attempt * 30))
+            attempt=$((attempt + 1))
+          done
 
       - name: Package
         run: |
