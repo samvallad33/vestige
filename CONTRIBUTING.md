@@ -105,23 +105,10 @@ Version tags (`vX.Y.Z`) drive two independent workflows:
    `mcp-publisher login github-oidc` and publishes repo-root
    `server.json` to `https://registry.modelcontextprotocol.io`.
 
-The Release workflow publishes npm after a GitHub Release is created,
-and only after the release assets exist: the five
-`@vestige/mcp-<os>-<arch>` packages first, then `vestige-mcp-server`
-with exact platform pins injected at publish time. Auth is `NPM_TOKEN`
-(`NODE_AUTH_TOKEN` via `setup-node`). If that secret is empty, both npm
-jobs are skipped and the GitHub Release still ships; the meta package
-does not publish unless every platform job succeeded. Unscoped `vestige`
-and `vestige-mcp` on npm are not this project's, and nothing publishes
-to crates.io.
-
-The official MCP registry checks `mcpName`
-(`io.github.samvallad33/vestige`) on the published `vestige-mcp-server`
-package, so `vestige-mcp-server@X.Y.Z` must already exist on npm
-**before** the registry job can succeed. That job only waits about two
-minutes. The npm publish waits on the release binaries, so the first
-registry run usually loses the race; re-run **Publish MCP Registry**
-after npm shows the version.
+v3.1.1 ships from the GitHub Release archives only. The npm publish
+jobs and the MCP registry job are `if: false` while the npm account is
+suspended. Do not `npm install` this version. Nothing publishes to
+crates.io.
 
 GitHub OIDC for `io.github.samvallad33/*` is automatic from this
 repository (`id-token: write` on the registry job). No PAT, no GitHub

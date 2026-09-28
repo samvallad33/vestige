@@ -604,10 +604,8 @@ jobs:
   # Requires NPM_TOKEN with publish rights for the @vestige scope; trusted
   # publishing can replace the token later (--provenance needs id-token).
   # secrets is not a legal context in jobs.<id>.if, so a step records
-  # whether NPM_TOKEN is non-empty. publish-npm-platforms waits for the
-  # release assets and runs only when that output is true. publish-npm-meta
-  # runs only when every platform publish succeeded, so an empty token
-  # skips both and the GitHub Release still ships.
+  # whether NPM_TOKEN is non-empty. Both publish jobs are if: false while
+  # the npm account is suspended, so an old token cannot publish.
   npm-token:
     name: NPM token present
     runs-on: ubuntu-latest
@@ -628,7 +626,8 @@ jobs:
   publish-npm-platforms:
     name: Publish @vestige/mcp platform package
     needs: [build, publish-linux, publish-linux-arm64, npm-token]
-    if: ${{ success() && needs.npm-token.outputs.enabled == 'true' && !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    # npm account suspended; re-enable after restore
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -689,7 +688,8 @@ jobs:
   publish-npm-meta:
     name: Publish vestige-mcp-server (with platform pins)
     needs: [publish-npm-platforms]
-    if: ${{ success() && needs.publish-npm-platforms.result == 'success' && !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    # npm account suspended; re-enable after restore
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: read

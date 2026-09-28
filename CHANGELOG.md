@@ -30,10 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.1.1] - 2026-09-28
 
-Vestige v3.1.1 is a retrieval-honesty and distribution release: recall can
-abstain, withhold superseded facts, fade detail before it disappears, and
-link memories that were retrieved together. npm installs resolve a
-per-platform binary with no eager postinstall.
+Vestige v3.1.1 is a retrieval-honesty release: recall can abstain,
+withhold superseded facts, fade detail before it disappears, and link
+memories that were retrieved together. Install the GitHub Release
+binaries for your platform. npm publish is held while the npm account
+is suspended.
 
 ### Added
 
@@ -62,12 +63,11 @@ per-platform binary with no eager postinstall.
 - Start-time version hint and a first-run warm-up milestone (#287): one
   logging notification with the upgrade command when npm has a newer
   `vestige-mcp-server` (2s budget, silent on failure). No self-update.
-- Per-platform npm packages `@vestige/mcp-<os>-<arch>`, exact-pinned as
-  optionalDependencies at publish time. The committed meta manifest stays
-  pin-free; the GitHub download is only the `--no-optional` fallback
-  (#278).
-- Official MCP registry listing `io.github.samvallad33/vestige` in
-  `server.json` is 3.1.1, package `vestige-mcp-server`.
+- Per-platform packages `@vestige/mcp-<os>-<arch>` are in the tree and
+  stay pin-free in the committed manifest (#278). This release does not
+  publish them. Install the GitHub Release archive for your platform.
+- `server.json` is 3.1.1 (`io.github.samvallad33/vestige`,
+  `vestige-mcp-server`). MCP registry publish is held with npm.
 - MCP 2026-07-28 stateless core alongside the legacy handshake, and a
   receipt-card app at `ui://vestige/receipt/{id}` (#241).
 - Actor provenance on receipts and mutation surfaces (#252 phase A): a

@@ -7,7 +7,7 @@
   "category": "developer",
   "homepage": "https://github.com/samvallad33/vestige",
   "icon": "\ud83e\udde0",
-  "description": "Vestige 3.1.1: open-source local memory for AI coding agents. Resume sessions with current source context, retrieve bounded evidence, save automatically, manage intentions, and trace earlier candidate causes with Backfill. Launch npx -y vestige-mcp-server@3.1.1 or an installed vestige-mcp. All 15 MCP tools are included. Binaries: macOS Apple Silicon/Intel, Linux x64/ARM64, Windows x64. Data stays on your machine.",
+  "description": "Vestige 3.1.1: open-source local memory for AI coding agents. Resume sessions with current source context, retrieve bounded evidence, save automatically, manage intentions, and trace earlier candidate causes with Backfill. Install the v3.1.1 binary from the GitHub Release, or use an already installed vestige-mcp. All 15 MCP tools are included. Binaries: macOS Apple Silicon/Intel, Linux x64/ARM64, Windows x64. Data stays on your machine.",
   "tags": [
     "memory",
     "local-first",

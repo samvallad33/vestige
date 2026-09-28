@@ -57,8 +57,8 @@ env:
 jobs:
   publish:
     name: Publish server.json
-    # Benchmark evidence is not a product version or registry publication.
-    if: ${{ github.repository == 'samvallad33/vestige' && !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    # npm account suspended; re-enable after restore
+    if: false
     runs-on: ubuntu-latest
     permissions:
       id-token: write
