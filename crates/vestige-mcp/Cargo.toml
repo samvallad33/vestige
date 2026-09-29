@@ -36,6 +36,10 @@ v3-engine = ["legacy-sqlite", "vestige-core/v3-engine"]
 # Mirrors the stub in vestige-core's Cargo.toml. Do not gate new code on them.
 embeddings = []
 vector-search = []
+# Release flags still pass these names. Empty, matching vestige-core: the
+# embedding stack is gone, and cargo rejects an unknown feature name.
+ort-download = []
+ort-dynamic = []
 # Git history for the codebase tool (libgit2, OpenSSL, libssh2). On by default;
 # off for Android/Termux builds (#145), where the tool reports git history as
 # unavailable instead of the build failing on those C libraries.

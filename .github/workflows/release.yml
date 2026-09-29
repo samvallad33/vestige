@@ -153,7 +153,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          out=$(cargo tree -e features -i reqwest --locked ${{ matrix.cargo_flags }} 2>reqwest-tree.err)
+          out=$(cargo tree -e features -i reqwest --locked -p vestige-mcp ${{ matrix.cargo_flags }} 2>reqwest-tree.err)
           status=$?
           set -e
           printf '%s\n' "$out"
@@ -334,7 +334,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          out=$(cargo tree -e features -i reqwest --locked 2>reqwest-tree.err)
+          out=$(cargo tree -e features -i reqwest --locked -p vestige-mcp 2>reqwest-tree.err)
           status=$?
           set -e
           printf '%s\n' "$out"
@@ -555,7 +555,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          out=$(cargo tree -e features -i reqwest --locked 2>reqwest-tree.err)
+          out=$(cargo tree -e features -i reqwest --locked -p vestige-mcp 2>reqwest-tree.err)
           status=$?
           set -e
           printf '%s\n' "$out"
@@ -823,7 +823,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          out=$(cargo tree -e features -i reqwest --locked --no-default-features 2>reqwest-tree.err)
+          out=$(cargo tree -e features -i reqwest --locked -p vestige-mcp --no-default-features 2>reqwest-tree.err)
           status=$?
           set -e
           printf '%s\n' "$out"
