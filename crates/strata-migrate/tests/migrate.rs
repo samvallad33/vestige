@@ -348,7 +348,7 @@ fn empty_store_migrates_to_verifying_log() {
 }
 
 #[test]
-fn re_migration_extends_the_log_and_keeps_the_chain() {
+fn partial_destination_rolls_back_and_a_completed_one_is_refused() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let archive_path = tmp.path().join("portable.json");
     {
@@ -357,22 +357,54 @@ fn re_migration_extends_the_log_and_keeps_the_chain() {
     }
 
     let strata_dir = tmp.path().join("strata");
-    let first = migrate(&archive_path, &strata_dir).expect("first run");
-    assert!(first.verify_passed);
+    std::fs::create_dir_all(&strata_dir).expect("dest");
+    let torn = strata_dir.join("torn.seg");
+    std::fs::write(&torn, b"killed mid-run").expect("torn segment");
 
-    // A second run into a non-empty destination is refused: a killed run
-    // followed by a re-run must never double the rows (audit finding).
+    let partial = migrate(&archive_path, &strata_dir);
+    let msg = partial.as_ref().unwrap_err().to_string();
+    assert!(
+        msg.contains("--rollback"),
+        "refusal must name --rollback: {msg}"
+    );
+    assert!(
+        matches!(
+            partial,
+            Err(strata_migrate::MigrationError::DestinationPartial { .. })
+        ),
+        "partial destination must refuse: {partial:?}"
+    );
+    assert!(torn.exists(), "refusal must not delete the partial dest");
+
+    strata_migrate::rollback(&strata_dir).expect("rollback partial");
+    assert!(!strata_dir.exists(), "rollback removes the partial dest");
+
+    let first = migrate(&archive_path, &strata_dir).expect("migrate after rollback");
+    assert!(first.verify_passed);
+    assert_eq!(first.nodes, 3);
+
     let second = migrate(&archive_path, &strata_dir);
     assert!(
         matches!(
             second,
-            Err(strata_migrate::MigrationError::DestinationNotEmpty { .. })
+            Err(strata_migrate::MigrationError::DestinationComplete { .. })
         ),
-        "non-empty destination must refuse: {second:?}"
+        "completed destination must refuse: {second:?}"
     );
     let opened = strata_migrate::open_migrated(&strata_dir).expect("reopen");
-    let log = &opened.log;
-    let snapshot = read_snapshot(&log).expect("snapshot");
+    let snapshot = read_snapshot(&opened.log).expect("snapshot");
     assert_eq!(snapshot.nodes.len(), 3, "the refusal wrote nothing");
     assert_eq!(snapshot.checkpoints.len(), 1);
+    drop(opened);
+
+    let refused = strata_migrate::rollback(&strata_dir);
+    assert!(
+        matches!(
+            refused,
+            Err(strata_migrate::MigrationError::RollbackRefused { .. })
+        ),
+        "rollback must not delete a completed log: {refused:?}"
+    );
+    let opened = strata_migrate::open_migrated(&strata_dir).expect("still opens");
+    assert_eq!(read_snapshot(&opened.log).expect("snapshot").nodes.len(), 3);
 }

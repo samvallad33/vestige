@@ -223,13 +223,24 @@ pub enum MigrationError {
     /// first break; nothing is written.
     #[error("broken receipt_envelopes hash chain: {0}")]
     BrokenEnvelopeChain(String),
-    /// The destination directory is not empty and holds no receipt for this
-    /// source. A killed run must be cleared by the operator, never extended.
+    /// A killed run left files in `--to`. `--rollback` removes them.
     #[error(
-        "destination {path} is not empty; a killed run must be removed by hand, never extended"
+        "destination {path} is a partial migration; rerun with --rollback to remove it before migrating again"
     )]
-    DestinationNotEmpty {
+    DestinationPartial {
         /// The refusing destination directory.
+        path: String,
+    },
+    /// `--to` already holds a sealed MIGRATION_RECEIPT. It is not extended.
+    #[error("destination {path} already holds a completed migration; refusing to extend it")]
+    DestinationComplete {
+        /// The refusing destination directory.
+        path: String,
+    },
+    /// `--rollback` does not delete a finished log.
+    #[error("refusing to roll back completed destination {path}")]
+    RollbackRefused {
+        /// The destination that still holds a receipt.
         path: String,
     },
     /// The source's BLAKE3 changed while frames were being appended. The
@@ -286,8 +297,8 @@ pub struct MigrationReport {
     pub receipt_digest: Option<String>,
     /// Whether the sealed receipt verifies (checksum + ed25519 signature).
     pub receipt_verified: bool,
-    /// True when the destination already carried a receipt for this source:
-    /// nothing was written; the existing receipt is echoed.
+    /// Always false. A destination that already holds a receipt is refused
+    /// (`DestinationComplete`) instead of being reused.
     pub idempotent_reuse: bool,
     /// Wall-clock duration of the migration.
     #[serde(serialize_with = "ser_duration_secs", rename = "durationSeconds")]
@@ -325,18 +336,7 @@ pub fn migrate_with_options(
         if options.dry_run {
             return Ok(dry_run_report(&snapshot, "", started));
         }
-        let destination_has_content = std::fs::read_dir(strata_dir)
-            .map(|entries| {
-                entries
-                    .filter_map(Result::ok)
-                    .any(|e| !e.file_name().to_string_lossy().starts_with('.'))
-            })
-            .unwrap_or(false);
-        if destination_has_content {
-            return Err(MigrationError::DestinationNotEmpty {
-                path: strata_dir.display().to_string(),
-            });
-        }
+        refuse_occupied(strata_dir)?;
         let (log, verifying_key) = open_log(strata_dir, options.seed)?;
         let outcome = migrate_snapshot_into(&snapshot, &log, "", verifying_key)?;
         return finish(log, strata_dir, outcome, snapshot, "", started);
@@ -352,29 +352,10 @@ pub fn migrate_with_options(
         return Ok(dry_run_report(&snapshot, &blake3_before, started));
     }
 
-    // ---- destination policy (audit: killed run + re-run doubled rows) ----
-    // Empty destination: proceed. Non-empty destination: idempotent no-op
-    // when the log already carries a MIGRATION_RECEIPT for THIS source
-    // (return it, write nothing); any other non-empty destination is an
-    // error — a killed run must be cleared by the operator, never extended.
+    // Empty destination: proceed. A partial destination names --rollback.
+    // A completed destination is refused; it is not silently reused.
     std::fs::create_dir_all(strata_dir)?;
-    let destination_has_content = std::fs::read_dir(strata_dir)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .any(|e| !e.file_name().to_string_lossy().starts_with('.'))
-        })
-        .unwrap_or(false);
-    if destination_has_content {
-        if let Ok(opened) = open_migrated(strata_dir) {
-            if let Some(receipt) = existing_receipt_for(&opened.log, &blake3_before) {
-                return Ok(idempotent_report(&snapshot, &receipt, started));
-            }
-        }
-        return Err(MigrationError::DestinationNotEmpty {
-            path: strata_dir.display().to_string(),
-        });
-    }
+    refuse_occupied(strata_dir)?;
 
     // ---- replay ----------------------------------------------------------
     let (log, verifying_key) = open_log(strata_dir, options.seed)?;
@@ -395,37 +376,65 @@ pub fn migrate_with_options(
     finish(log, strata_dir, outcome, snapshot, &blake3_after, started)
 }
 
-/// A prior receipt covering exactly this source: the idempotent re-run path.
-fn existing_receipt_for(log: &StrataLog, source_blake3: &str) -> Option<records::MigrationReceipt> {
-    let frames = log.read_frames(1).ok()?;
-    frames
-        .iter()
-        .find(|f| f.kind == records::KIND_MIGRATION_RECEIPT)
-        .and_then(|f| records::decode_receipt(&f.payload).ok())
-        .filter(|r| r.body.source_blake3_before == source_blake3)
+enum DestState {
+    Empty,
+    Partial,
+    Complete,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn idempotent_report(
-    snapshot: &source::SourceSnapshot,
-    receipt: &records::MigrationReceipt,
-    started: Instant,
-) -> MigrationReport {
-    MigrationReport {
-        nodes: table_rows(snapshot, "knowledge_nodes"),
-        edges: table_rows(snapshot, "memory_connections"),
-        fsrs_events: table_rows(snapshot, "fsrs_cards"),
-        skipped_tables: skipped_tables_for(snapshot),
-        verify_passed: true,
-        frames_verified: 0,
-        frames_total: 0,
-        dropped_vectors: snapshot.dropped_vectors,
-        envelope_head: snapshot.envelope_head.clone().unwrap_or_default(),
-        source_blake3: receipt.body.source_blake3_before.clone(),
-        receipt_digest: Some(hex32(&receipt.checksum)),
-        receipt_verified: receipt.verify_checksum() && receipt.verify_signature(),
-        duration: started.elapsed(),
-        idempotent_reuse: true,
+fn dest_state(dir: &Path) -> DestState {
+    let occupied = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .any(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        })
+        .unwrap_or(false);
+    if !occupied {
+        return DestState::Empty;
+    }
+    let Ok(opened) = open_migrated(dir) else {
+        return DestState::Partial;
+    };
+    let has_receipt = opened.log.read_frames(1).ok().is_some_and(|frames| {
+        frames
+            .iter()
+            .any(|f| f.kind == records::KIND_MIGRATION_RECEIPT)
+    });
+    if has_receipt {
+        DestState::Complete
+    } else {
+        DestState::Partial
+    }
+}
+
+fn refuse_occupied(dir: &Path) -> Result<(), MigrationError> {
+    let path = dir.display().to_string();
+    match dest_state(dir) {
+        DestState::Empty => Ok(()),
+        DestState::Partial => Err(MigrationError::DestinationPartial { path }),
+        DestState::Complete => Err(MigrationError::DestinationComplete { path }),
+    }
+}
+
+/// Remove a partial `--to` (and its external log key). A completed
+/// destination is refused.
+pub fn rollback(dest: &Path) -> Result<(), MigrationError> {
+    match dest_state(dest) {
+        DestState::Empty => Ok(()),
+        DestState::Complete => Err(MigrationError::RollbackRefused {
+            path: dest.display().to_string(),
+        }),
+        DestState::Partial => {
+            if dest.exists() {
+                std::fs::remove_dir_all(dest)?;
+            }
+            let key = log_signing_key_path(dest);
+            if key.exists() {
+                std::fs::remove_file(key)?;
+            }
+            Ok(())
+        }
     }
 }
 
