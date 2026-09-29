@@ -1,294 +1,663 @@
-//! `selftest` MCP tool — planted-cause self-calibration.
+//! `selftest` MCP tool — recorded-edge walk on a throwaway Strata log.
 //!
-//! End-to-end check that the retroactive backfill actually reaches the quiet
-//! cause a similarity search never surfaces. The flow NEVER touches the live
-//! store:
+//! The live store is never mutated. The tool opens a fresh temp log (it does
+//! not copy, vacuum, or seal the caller's store), plants a cause → intermediate
+//! → symptom chain as recorded memories plus recorded `derived_from` edges,
+//! plants distractors (shared wording, a non-causal incoming edge, a forward
+//! causal edge, a disconnected chain, an ancestor past the bound, and a
+//! cycle), then runs a bounded backward walk from the symptom.
 //!
-//! 1. `backup_to` the live store into a fresh tempdir (the same consistent
-//!    `VACUUM INTO` snapshot `vestige backup` uses — read-only on the source).
-//! 2. Open the copy as a second `Storage`.
-//! 3. Five rounds: plant a synthetic quiet cause (distinctive env-shaped
-//!    `PLANTED_CAUSE_<k>` anchor + a file path, backdated 5 days via
-//!    `set_created_at`) in an isolated `selftest-round-<k>` scope, ingest a
-//!    synthetic failure sharing EXACTLY that one anchor, then run the real
-//!    `tools::backfill::execute` against the COPY (`failure_id` + `manual=true`,
-//!    preview) and score hit@1 / hit@3.
-//! 4. A 6th round shares NO anchor: the backfill must fire its gap report and
-//!    name the missing anchor (`planted_cause_6`) — the calibration metric
-//!    that says "when the trail breaks, the tool says so instead of guessing".
-//! 5. Delete the temp store.
-//!
-//! Deterministic by construction: each round lives in its own scope, the
-//! only in-window candidate is the planted cause, ages are exact (5.0 days),
-//! and every round runs as a preview (no graph or FSRS writes at all).
+//! The walk reads recorded edges only. It does not read content, tags,
+//! entities, keywords, FTS, embeddings, or SQLite, and it does not call a
+//! model. Pass/fail is one deterministic check per property. The temp log
+//! is deleted before the tool returns.
 
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use vestige_core::{IngestInput, Storage};
+use vestige_core::{ConnectionRecord, IngestInput, Storage};
+
+const CAUSAL_LINK: &str = "derived_from";
+/// Hop cap. Depth 0 is the symptom, so 2 reaches the cause and stops before
+/// the ancestor planted one hop further back.
+const WALK_BOUND: usize = 2;
+const PLANTED_NODES: usize = 9;
+const PLANTED_EDGES: usize = 8;
 
 pub fn schema() -> Value {
     json!({
         "type": "object",
-        "description": "Planted-cause selftest on a temp copy; read-only.",
+        "description": "Plant cause, intermediate, and symptom plus distractors in a throwaway Strata log, walk backward over recorded derived_from edges only, report pass/fail per check, and delete the temp log. The caller store is not mutated.",
         "properties": {}
     })
 }
 
-/// One scored round: cause planted, failure referencing exactly one anchor.
-struct RoundOutcome {
-    round: u32,
-    cause_id: String,
-    hit_at_1: bool,
-    hit_at_3: bool,
-    rank: Option<usize>,
+struct Planted {
+    cause: String,
+    intermediate: String,
+    symptom: String,
+    ancestor: String,
+    overlap: String,
+    noncausal: String,
+    forward: String,
+    side_a: String,
+    side_b: String,
 }
 
-/// Plant a quiet, non-failure-looking cause carrying exactly two anchors: the
-/// env-shaped `PLANTED_CAUSE_<k>` tag and a file path in the content.
-fn plant_cause(storage: &Arc<Storage>, scope: &str, k: u32) -> Result<String, String> {
-    let cause = storage
-        .ingest_in_scope(
-            IngestInput {
-                content: format!("Tuned PLANTED_KNOB_{k} inside src/selftest/planted_{k}.rs"),
-                node_type: "decision".to_string(),
-                tags: vec![format!("PLANTED_CAUSE_{k}")],
-                ..Default::default()
-            },
-            scope,
-        )
-        .map_err(|e| format!("round {k}: planting cause failed: {e}"))?;
-    storage
-        .set_created_at(&cause.id, chrono::Utc::now() - chrono::Duration::days(5))
-        .map_err(|e| format!("round {k}: backdating cause failed: {e}"))?;
-    Ok(cause.id)
+#[derive(Clone, PartialEq, Eq)]
+struct Hop {
+    depth: usize,
+    memory_id: String,
+    via: Option<String>,
 }
 
-/// Ingest a synthetic failure that shares EXACTLY the `PLANTED_CAUSE_<k>`
-/// anchor with round k's cause (share_anchor=true) or none at all (round 6).
-fn plant_failure(
-    storage: &Arc<Storage>,
-    scope: &str,
-    k: u32,
-    share_anchor: bool,
-) -> Result<String, String> {
-    let failure = storage
-        .ingest_in_scope(
-            IngestInput {
-                content: if share_anchor {
-                    format!("Outage on shard {k}: crash followed PLANTED_CAUSE_{k} change")
-                } else {
-                    "Outage with no recorded trigger: crash after PLANTED_CAUSE_6 flip".to_string()
-                },
-                node_type: "event".to_string(),
-                tags: vec![format!("PLANTED_CAUSE_{k}")],
-                ..Default::default()
-            },
-            scope,
-        )
-        .map_err(|e| format!("round {k}: planting failure failed: {e}"))?;
-    Ok(failure.id)
-}
-
-/// Run the REAL backfill tool (manual=true, preview) against the copy.
-async fn run_backfill(
-    storage: &Arc<Storage>,
-    scope: &str,
-    failure_id: &str,
-) -> Result<Value, String> {
-    super::backfill::execute(
-        storage,
-        Some(json!({
-            "failure_id": failure_id,
-            "scope": scope,
-            "manual": true,
-            "promote": false,
-            "lookback_days": 30,
-            "scan_limit": 100,
-        })),
-    )
-    .await
+struct Check {
+    name: &'static str,
+    pass: bool,
+    detail: String,
 }
 
 pub async fn execute(storage: &Arc<Storage>, _args: Option<Value>) -> Result<Value, String> {
-    if crate::strata_memory::is_strata_backend(storage.as_ref()) {
-        return Err(
-            "pending_strata: selftest plants causes and scores entity overlap; that is not a recorded edge"
-                .into(),
-        );
-    }
-    // 1. Consistent snapshot of the live store into a throwaway tempdir.
+    let before = snapshot(storage.as_ref())?;
+    let user_dir = storage.data_dir().to_path_buf();
+
     let dir = tempfile::TempDir::new().map_err(|e| format!("tempdir failed: {e}"))?;
-    let copy_path = dir.path().join("selftest-copy.db");
-    storage
-        .backup_to(&copy_path)
-        .map_err(|e| format!("backing the store up for the selftest failed: {e}"))?;
+    let temp_dir = dir.path().to_path_buf();
+    let isolated = paths_isolated(&user_dir, &temp_dir);
 
-    // 2. Open the copy as its own storage. Everything below mutates only this.
-    let copy = Arc::new(
-        vestige_core::open_storage(Some(copy_path))
-            .map_err(|e| format!("opening the selftest copy failed: {e}"))?,
-    );
+    let temp = crate::strata_memory::open(&temp_dir)
+        .map_err(|e| format!("opening the temp store failed: {e}"))?;
+    let evaluated = evaluate(&temp);
+    drop(temp);
+    let temp_store_deleted = dir.close().is_ok() && !temp_dir.exists();
 
-    // 3. Five planted-cause rounds, each isolated in its own scope.
-    let mut outcomes: Vec<RoundOutcome> = Vec::new();
-    for k in 1..=5u32 {
-        let scope = format!("selftest-round-{k}");
-        let cause_id = plant_cause(&copy, &scope, k)?;
-        let failure_id = plant_failure(&copy, &scope, k, true)?;
-        let out = run_backfill(&copy, &scope, &failure_id).await?;
-        let causes = out["causes"].as_array().cloned().unwrap_or_default();
-        let rank = causes
-            .iter()
-            .position(|c| c["memory_id"].as_str() == Some(cause_id.as_str()));
-        outcomes.push(RoundOutcome {
-            round: k,
-            cause_id,
-            hit_at_1: rank == Some(0),
-            hit_at_3: rank.is_some_and(|r| r < 3),
-            rank,
-        });
-    }
+    let after = snapshot(storage.as_ref())?;
+    let user_store_unchanged = before == after;
 
-    let hits = outcomes.iter().filter(|o| o.hit_at_1).count();
-    let hits_at_3 = outcomes.iter().filter(|o| o.hit_at_3).count();
-    let misses = outcomes.len() - hits;
+    let (mut checks, walk, walk_twice_equal) = evaluated?;
+    checks.push(check(
+        "temp_store_deleted",
+        temp_store_deleted,
+        if temp_store_deleted {
+            "throwaway log removed"
+        } else {
+            "throwaway log still present"
+        },
+    ));
+    checks.push(check(
+        "temp_store_isolated",
+        isolated,
+        if isolated {
+            "temp log is not the caller data dir"
+        } else {
+            "temp log overlaps the caller data dir"
+        },
+    ));
+    checks.push(check(
+        "user_store_unchanged",
+        user_store_unchanged,
+        if user_store_unchanged {
+            "caller node and edge snapshot matched"
+        } else {
+            "caller node or edge snapshot changed"
+        },
+    ));
+    checks.sort_by(|a, b| a.name.cmp(b.name));
 
-    // 4. Gap-calibration round: NO shared anchor. The backfill must fire its
-    //    gap report and name the failure's env-shaped anchor as the missing
-    //    record class, instead of surfacing an unrelated cause. The only
-    //    in-window record is an unrelated change that shares nothing.
-    let gap_scope = "selftest-round-6".to_string();
-    let unrelated = copy
-        .ingest_in_scope(
-            IngestInput {
-                content: "Rotated an unrelated credential in src/selftest/other.rs".to_string(),
-                node_type: "decision".to_string(),
-                tags: vec!["SELFTEST_UNRELATED".to_string()],
-                ..Default::default()
-            },
-            &gap_scope,
-        )
-        .map_err(|e| format!("round 6: planting unrelated record failed: {e}"))?;
-    copy.set_created_at(&unrelated.id, chrono::Utc::now() - chrono::Duration::days(5))
-        .map_err(|e| format!("round 6: backdating failed: {e}"))?;
-    let gap_failure_id = plant_failure(&copy, &gap_scope, 6, false)?;
-    let gap_out = run_backfill(&copy, &gap_scope, &gap_failure_id).await?;
-
-    let gap_fired = gap_out["triggered"] == json!(true)
-        && gap_out["causes"].as_array().is_some_and(Vec::is_empty)
-        && gap_out["gap"].is_object();
-    let missing: Vec<String> = gap_out["gap"]["missing_entities"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
+    let passed = checks.iter().all(|c| c.pass) && walk_twice_equal;
+    let walk_json: Vec<Value> = walk
+        .iter()
+        .map(|hop| {
+            json!({
+                "depth": hop.depth,
+                "role": hop.role,
+                "memory_id": hop.memory_id,
+                "via": hop.via,
+            })
         })
-        .unwrap_or_default();
-    let mut missing = missing; missing.sort();
-    let named_missing_anchor = missing.iter().find(|e| *e == "planted_cause_6").cloned();
-    let gap_calibration = gap_fired && named_missing_anchor.is_some();
-
-    // 5. Drop the copy (closing its connections) and remove the temp store.
-    drop(copy);
-    let temp_store_deleted = dir.close().is_ok();
+        .collect();
 
     Ok(json!({
         "tool": "selftest",
-        "kind": "planted_cause_selftest",
-        "rounds": outcomes.len(),
-        "hits": hits,
-        "misses": misses,
-        "hit_at_3": hits_at_3,
-        "hit_rate_1": (hits as f64 / outcomes.len() as f64 * 1000.0).round() / 1000.0,
-        "hit_rate_3": (hits_at_3 as f64 / outcomes.len() as f64 * 1000.0).round() / 1000.0,
-        "rounds_detail": outcomes.iter().map(|o| json!({
-            "round": o.round,
-            "cause_id": o.cause_id,
-            "rank": o.rank.map(|r| r + 1),
-            "hit_at_1": o.hit_at_1,
-            "hit_at_3": o.hit_at_3,
-        })).collect::<Vec<_>>(),
-        "gap_calibration": gap_calibration,
-        "gap": {
-            "fired": gap_fired,
-            "named_missing_anchor": named_missing_anchor,
-            "missing_entities": missing,
-        },
-        "deterministic": true,
-        "live_store_touched": false,
+        "kind": "recorded_edge_walk",
+        "status": "completed",
+        "passed": passed,
+        "deterministic": walk_twice_equal,
+        "bound": WALK_BOUND,
+        "link_type": CAUSAL_LINK,
+        "live_store_touched": !user_store_unchanged,
         "temp_store_deleted": temp_store_deleted,
-        "note": "Planted 5 quiet causes (env-shaped anchor + file path, backdated 5d) plus failures sharing exactly one anchor, ran the real backfill against a temp copy of the store, and scored hit@1/hit@3. The 6th round shares no anchor and must fire the gap report naming the missing anchor. The live store is only read (backup_to snapshot).",
+        "checks": checks.into_iter().map(|c| json!({
+            "name": c.name,
+            "pass": c.pass,
+            "detail": c.detail,
+        })).collect::<Vec<_>>(),
+        "walk": walk_json,
     }))
 }
 
-#[cfg(all(test, feature = "legacy-sqlite"))]
+struct LabeledHop {
+    depth: usize,
+    role: &'static str,
+    memory_id: String,
+    via: Option<String>,
+}
+
+fn evaluate(temp: &Arc<Storage>) -> Result<(Vec<Check>, Vec<LabeledHop>, bool), String> {
+    let planted = plant(temp)?;
+    let walk = backward_walk(temp.as_ref(), &planted.symptom, WALK_BOUND)?;
+    let again = backward_walk(temp.as_ref(), &planted.symptom, WALK_BOUND)?;
+    let walk_twice_equal = walk == again;
+    let checks = fixture_checks(temp.as_ref(), &planted, &walk, walk_twice_equal)?;
+    let labeled = label_walk(&planted, &walk);
+    Ok((checks, labeled, walk_twice_equal))
+}
+
+fn plant(storage: &Arc<Storage>) -> Result<Planted, String> {
+    // Wording overlaps on purpose. The walk must not use it.
+    let cause = ingest(storage, "cause raised PLANTED_CHAIN_TOKEN pool limit")?;
+    let intermediate = ingest(
+        storage,
+        "intermediate relay of PLANTED_CHAIN_TOKEN pressure",
+    )?;
+    let symptom = ingest(
+        storage,
+        "symptom outage after PLANTED_CHAIN_TOKEN cache stampede",
+    )?;
+    let ancestor = ingest(storage, "ancestor deploy of PLANTED_CHAIN_TOKEN binary")?;
+    let overlap = ingest(
+        storage,
+        "distractor note mentioning symptom outage PLANTED_CHAIN_TOKEN but no edge",
+    )?;
+    let noncausal = ingest(storage, "distractor file touch beside the symptom")?;
+    let forward = ingest(storage, "distractor downstream alert of the symptom")?;
+    let side_a = ingest(storage, "distractor billing job PLANTED_CHAIN_TOKEN")?;
+    let side_b = ingest(storage, "distractor invoice delay PLANTED_CHAIN_TOKEN")?;
+
+    // Upstream is source, downstream is target. Backward walk follows target → source.
+    record_edge(storage, &ancestor, &cause, CAUSAL_LINK)?;
+    record_edge(storage, &cause, &intermediate, CAUSAL_LINK)?;
+    record_edge(storage, &intermediate, &symptom, CAUSAL_LINK)?;
+    // Cycle inside the bound: symptom also points at intermediate.
+    record_edge(storage, &symptom, &intermediate, CAUSAL_LINK)?;
+    record_edge(storage, &symptom, &noncausal, "touched")?;
+    record_edge(storage, &noncausal, &symptom, "anchored_to")?;
+    record_edge(storage, &symptom, &forward, CAUSAL_LINK)?;
+    record_edge(storage, &side_a, &side_b, CAUSAL_LINK)?;
+
+    Ok(Planted {
+        cause,
+        intermediate,
+        symptom,
+        ancestor,
+        overlap,
+        noncausal,
+        forward,
+        side_a,
+        side_b,
+    })
+}
+
+fn ingest(storage: &Arc<Storage>, content: &str) -> Result<String, String> {
+    let node = storage
+        .ingest(IngestInput {
+            content: content.to_string(),
+            node_type: "fact".to_string(),
+            ..Default::default()
+        })
+        .map_err(|e| format!("planting memory failed: {e}"))?;
+    Ok(node.id)
+}
+
+fn record_edge(
+    storage: &Arc<Storage>,
+    source: &str,
+    target: &str,
+    link_type: &str,
+) -> Result<(), String> {
+    let stamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(0)
+        .ok_or_else(|| "epoch timestamp missing".to_string())?;
+    storage
+        .save_connection(&ConnectionRecord {
+            source_id: source.to_string(),
+            target_id: target.to_string(),
+            strength: 1.0,
+            link_type: link_type.to_string(),
+            created_at: stamp,
+            last_activated: stamp,
+            activation_count: 0,
+        })
+        .map_err(|e| format!("recording {link_type} edge failed: {e}"))
+}
+
+/// Bounded backward walk over recorded causal edges.
+///
+/// An edge counts only when it is stored, `link_type` is [`CAUSAL_LINK`], and
+/// the current node is its target (the effect). The predecessor is the source.
+/// Content, tags, entities, keywords, FTS, embeddings, and models are not read.
+fn backward_walk(storage: &Storage, start: &str, bound: usize) -> Result<Vec<Hop>, String> {
+    let mut visited = BTreeSet::from([start.to_string()]);
+    let mut hops = vec![Hop {
+        depth: 0,
+        memory_id: start.to_string(),
+        via: None,
+    }];
+    let mut frontier = vec![start.to_string()];
+    for depth in 1..=bound {
+        let mut next: Vec<(String, String)> = Vec::new();
+        for current in &frontier {
+            let mut incoming = incoming_causal(storage, current)?;
+            incoming.sort_by(|a, b| {
+                a.source_id
+                    .cmp(&b.source_id)
+                    .then(a.link_type.cmp(&b.link_type))
+            });
+            for edge in incoming {
+                if visited.insert(edge.source_id.clone()) {
+                    next.push((edge.source_id, edge.link_type));
+                }
+            }
+        }
+        next.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        if next.is_empty() {
+            break;
+        }
+        let mut frontier_next = Vec::with_capacity(next.len());
+        for (memory_id, via) in next {
+            hops.push(Hop {
+                depth,
+                memory_id: memory_id.clone(),
+                via: Some(via),
+            });
+            frontier_next.push(memory_id);
+        }
+        frontier = frontier_next;
+    }
+    Ok(hops)
+}
+
+fn incoming_causal(storage: &Storage, current: &str) -> Result<Vec<ConnectionRecord>, String> {
+    let edges = storage
+        .get_connections_for_memory(current)
+        .map_err(|e| format!("reading recorded edges failed: {e}"))?;
+    Ok(edges
+        .into_iter()
+        .filter(|edge| {
+            edge.target_id == current && edge.source_id != current && edge.link_type == CAUSAL_LINK
+        })
+        .collect())
+}
+
+fn fixture_checks(
+    storage: &Storage,
+    planted: &Planted,
+    walk: &[Hop],
+    walk_twice_equal: bool,
+) -> Result<Vec<Check>, String> {
+    let nodes = all_nodes(storage)?;
+    let edges = storage
+        .get_all_connections()
+        .map_err(|e| format!("reading temp edges failed: {e}"))?;
+    let ids: BTreeSet<&str> = walk.iter().map(|hop| hop.memory_id.as_str()).collect();
+    let at = |depth: usize| -> Option<&Hop> { walk.iter().find(|hop| hop.depth == depth) };
+
+    let mut checks = vec![
+        check(
+            "planted_cause",
+            nodes.iter().any(|node| node.id == planted.cause),
+            "cause memory is on the temp log",
+        ),
+        check(
+            "planted_intermediate",
+            nodes.iter().any(|node| node.id == planted.intermediate),
+            "intermediate memory is on the temp log",
+        ),
+        check(
+            "planted_symptom",
+            nodes.iter().any(|node| node.id == planted.symptom),
+            "symptom memory is on the temp log",
+        ),
+        check(
+            "causal_edge_cause_intermediate",
+            has_recorded_edge(&edges, &planted.cause, &planted.intermediate, CAUSAL_LINK),
+            "derived_from cause to intermediate is recorded",
+        ),
+        check(
+            "causal_edge_intermediate_symptom",
+            has_recorded_edge(&edges, &planted.intermediate, &planted.symptom, CAUSAL_LINK),
+            "derived_from intermediate to symptom is recorded",
+        ),
+        check(
+            "temp_store_is_fresh",
+            nodes.len() == PLANTED_NODES,
+            "temp log holds only the planted memories",
+        ),
+        check(
+            "temp_store_edge_count",
+            edges.len() == PLANTED_EDGES,
+            "temp log holds only the planted edges",
+        ),
+        check(
+            "overlap_has_no_edges",
+            edge_touch_count(&edges, &planted.overlap) == 0,
+            "keyword-overlapping distractor has no recorded edge",
+        ),
+        check(
+            "noncausal_edge_recorded",
+            has_recorded_edge(&edges, &planted.noncausal, &planted.symptom, "anchored_to"),
+            "non-causal incoming edge is recorded and must be ignored",
+        ),
+        check(
+            "forward_edge_recorded",
+            has_recorded_edge(&edges, &planted.symptom, &planted.forward, CAUSAL_LINK),
+            "forward derived_from edge is recorded and must not be walked backward",
+        ),
+        check(
+            "disconnected_edge_recorded",
+            has_recorded_edge(&edges, &planted.side_a, &planted.side_b, CAUSAL_LINK),
+            "disconnected causal chain is recorded",
+        ),
+        check(
+            "ancestor_edge_recorded",
+            has_recorded_edge(&edges, &planted.ancestor, &planted.cause, CAUSAL_LINK),
+            "ancestor beyond the bound is recorded",
+        ),
+        check(
+            "walk_reaches_intermediate",
+            at(1).is_some_and(|hop| {
+                hop.memory_id == planted.intermediate && hop.via.as_deref() == Some(CAUSAL_LINK)
+            }),
+            "depth 1 is the intermediate over derived_from",
+        ),
+        check(
+            "walk_reaches_cause",
+            at(2).is_some_and(|hop| {
+                hop.memory_id == planted.cause && hop.via.as_deref() == Some(CAUSAL_LINK)
+            }),
+            "depth 2 is the cause over derived_from",
+        ),
+        check(
+            "walk_node_count",
+            walk.len() == 3 && ids.len() == 3,
+            "walk is symptom, intermediate, cause",
+        ),
+        check(
+            "walk_recorded_edges_only",
+            walk.iter()
+                .all(|hop| hop.depth == 0 || hop.via.as_deref() == Some(CAUSAL_LINK)),
+            "every hop is a recorded derived_from edge",
+        ),
+        check(
+            "walk_respects_bound",
+            walk.iter().all(|hop| hop.depth <= WALK_BOUND)
+                && !ids.contains(planted.ancestor.as_str()),
+            "ancestor past the bound is not reached",
+        ),
+        check(
+            "cycle_not_revisited",
+            walk.iter()
+                .filter(|hop| hop.memory_id == planted.symptom)
+                .count()
+                == 1,
+            "cycle edge back to the symptom is not re-entered",
+        ),
+        check(
+            "overlap_distractor_excluded",
+            !ids.contains(planted.overlap.as_str()),
+            "shared wording is not a walk admission",
+        ),
+        check(
+            "noncausal_neighbor_excluded",
+            !ids.contains(planted.noncausal.as_str()),
+            "anchored_to incoming edge is not followed",
+        ),
+        check(
+            "forward_edge_excluded",
+            !ids.contains(planted.forward.as_str()),
+            "outgoing derived_from edge is not a backward hop",
+        ),
+        check(
+            "disconnected_chain_excluded",
+            !ids.contains(planted.side_a.as_str()) && !ids.contains(planted.side_b.as_str()),
+            "unconnected causal chain is not reached",
+        ),
+        check(
+            "walk_deterministic",
+            walk_twice_equal,
+            "second walk matched the first",
+        ),
+    ];
+    checks.sort_by(|a, b| a.name.cmp(b.name));
+    Ok(checks)
+}
+
+fn label_walk(planted: &Planted, walk: &[Hop]) -> Vec<LabeledHop> {
+    walk.iter()
+        .map(|hop| LabeledHop {
+            depth: hop.depth,
+            role: role_of(planted, &hop.memory_id),
+            memory_id: hop.memory_id.clone(),
+            via: hop.via.clone(),
+        })
+        .collect()
+}
+
+fn role_of(planted: &Planted, id: &str) -> &'static str {
+    if id == planted.symptom {
+        "symptom"
+    } else if id == planted.intermediate {
+        "intermediate"
+    } else if id == planted.cause {
+        "cause"
+    } else if id == planted.ancestor {
+        "ancestor"
+    } else if id == planted.overlap {
+        "overlap"
+    } else if id == planted.noncausal {
+        "noncausal"
+    } else if id == planted.forward {
+        "forward"
+    } else if id == planted.side_a {
+        "side_a"
+    } else if id == planted.side_b {
+        "side_b"
+    } else {
+        "unlabeled"
+    }
+}
+
+fn has_recorded_edge(
+    edges: &[ConnectionRecord],
+    source: &str,
+    target: &str,
+    link_type: &str,
+) -> bool {
+    edges.iter().any(|edge| {
+        edge.source_id == source && edge.target_id == target && edge.link_type == link_type
+    })
+}
+
+fn edge_touch_count(edges: &[ConnectionRecord], id: &str) -> usize {
+    edges
+        .iter()
+        .filter(|edge| edge.source_id == id || edge.target_id == id)
+        .count()
+}
+
+fn all_nodes(storage: &Storage) -> Result<Vec<vestige_core::KnowledgeNode>, String> {
+    let mut nodes = Vec::new();
+    let mut offset = 0i32;
+    loop {
+        let page = storage
+            .get_all_nodes(1000, offset)
+            .map_err(|e| format!("reading memories failed: {e}"))?;
+        if page.is_empty() {
+            break;
+        }
+        let len = i32::try_from(page.len()).unwrap_or(i32::MAX);
+        offset = offset.saturating_add(len);
+        let done = page.len() < 1000;
+        nodes.extend(page);
+        if done {
+            break;
+        }
+    }
+    Ok(nodes)
+}
+
+fn check(name: &'static str, pass: bool, detail: &str) -> Check {
+    Check {
+        name,
+        pass,
+        detail: detail.to_string(),
+    }
+}
+
+fn paths_isolated(user: &Path, temp: &Path) -> bool {
+    let user = canonicalize_or_buf(user);
+    let temp = canonicalize_or_buf(temp);
+    user != temp && !temp.starts_with(&user) && !user.starts_with(&temp)
+}
+
+fn canonicalize_or_buf(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Content-bearing snapshot of the caller store. Read-only: ids, content,
+/// type, tags, and recorded edge endpoints. No scores, no clock.
+fn snapshot(storage: &Storage) -> Result<String, String> {
+    let mut nodes = all_nodes(storage)?;
+    nodes.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut edges = storage
+        .get_all_connections()
+        .map_err(|e| format!("reading caller edges failed: {e}"))?;
+    edges.sort_by(|a, b| {
+        (&a.source_id, &a.target_id, &a.link_type).cmp(&(&b.source_id, &b.target_id, &b.link_type))
+    });
+    let mut out = String::new();
+    for node in &nodes {
+        let mut tags = node.tags.clone();
+        tags.sort();
+        out.push_str(&node.id);
+        out.push('\t');
+        out.push_str(&node.node_type);
+        out.push('\t');
+        out.push_str(&tags.join(","));
+        out.push('\t');
+        out.push_str(&node.content);
+        out.push('\n');
+    }
+    out.push_str("---\n");
+    for edge in &edges {
+        out.push_str(&edge.source_id);
+        out.push('\t');
+        out.push_str(&edge.target_id);
+        out.push('\t');
+        out.push_str(&edge.link_type);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use vestige_core::IngestInput;
 
-    fn live_store() -> (Arc<Storage>, tempfile::TempDir) {
+    fn user_store() -> (Arc<Storage>, tempfile::TempDir) {
         let dir = tempfile::TempDir::new().unwrap();
-        let storage = vestige_core::open_storage(Some(dir.path().join("live.db"))).unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
         (storage, dir)
     }
 
-    /// The full planted-cause flow against a seeded (non-empty) store: every
-    /// round must hit@1, the gap round must fire and name the missing
-    /// anchor, the temp store must be deleted, and the LIVE store must be
-    /// untouched (same nodes, no selftest scopes).
     #[tokio::test]
-    async fn planted_cause_selftest_scores_perfectly_and_never_touches_the_live_store() {
-        let (storage, _dir) = live_store();
-        // Seed one ordinary memory so the backup copies real content.
+    async fn recorded_edge_selftest_passes_and_leaves_the_caller_store_unchanged() {
+        let (storage, dir) = user_store();
         storage
             .ingest(IngestInput {
-                content: "Ordinary note: the coffee machine is on the third floor".to_string(),
+                content: "caller memory that selftest must not alter".to_string(),
                 ..Default::default()
             })
             .unwrap();
+        let before_nodes = storage.get_all_nodes(100, 0).unwrap();
+        let before_edges = storage.get_all_connections().unwrap();
+        let before_files = tree_bytes(dir.path());
 
-        let out = execute(&storage, None).await.expect("selftest must run");
+        let first = execute(&storage, None).await.expect("selftest");
+        let second = execute(&storage, None).await.expect("selftest");
 
-        assert_eq!(out["rounds"], json!(5));
-        assert_eq!(out["hits"], json!(5), "every planted cause must be rank 1: {out}");
-        assert_eq!(out["misses"], json!(0));
-        assert_eq!(out["hit_at_3"], json!(5));
-        assert_eq!(out["hit_rate_1"], json!(1.0));
-        assert_eq!(out["deterministic"], json!(true));
-        assert_eq!(out["temp_store_deleted"], json!(true));
-        assert_eq!(out["live_store_touched"], json!(false));
+        assert_eq!(first, second, "two runs must be identical");
+        assert_eq!(first["status"], json!("completed"));
+        assert_eq!(first["passed"], json!(true), "{first}");
+        assert_eq!(first["deterministic"], json!(true));
+        assert_eq!(first["live_store_touched"], json!(false));
+        assert_eq!(first["temp_store_deleted"], json!(true));
+        assert_eq!(first["link_type"], json!(CAUSAL_LINK));
+        assert_eq!(first["bound"], json!(WALK_BOUND));
 
-        // Calibration metric: the no-shared-anchor round fires the gap report
-        // and names the missing env-shaped anchor class.
-        assert_eq!(out["gap_calibration"], json!(true), "{out}");
-        assert_eq!(out["gap"]["fired"], json!(true));
-        assert_eq!(out["gap"]["named_missing_anchor"], json!("planted_cause_6"));
+        let checks = first["checks"].as_array().expect("checks");
+        assert!(checks.len() >= 20, "expected a check per property: {first}");
+        for item in checks {
+            assert_eq!(item["pass"], json!(true), "check failed: {item}");
+        }
+        let names: Vec<&str> = checks.iter().filter_map(|c| c["name"].as_str()).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted, "checks must be emitted in name order");
 
-        // Live store untouched: same single node, nothing in the selftest scopes.
-        let nodes = storage.get_all_nodes(100, 0).unwrap();
-        assert_eq!(nodes.len(), 1, "no planted record may leak into the live store");
-        assert!(
-            storage
-                .get_all_nodes_in_scope("selftest-round-1", 100, 0)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            storage
-                .get_all_nodes_in_scope("selftest-round-6", 100, 0)
-                .unwrap()
-                .is_empty()
-        );
+        let walk = first["walk"].as_array().expect("walk");
+        assert_eq!(walk.len(), 3);
+        assert_eq!(walk[0]["role"], json!("symptom"));
+        assert_eq!(walk[0]["depth"], json!(0));
+        assert_eq!(walk[1]["role"], json!("intermediate"));
+        assert_eq!(walk[1]["via"], json!(CAUSAL_LINK));
+        assert_eq!(walk[2]["role"], json!("cause"));
+        assert_eq!(walk[2]["via"], json!(CAUSAL_LINK));
+
+        let after_nodes = storage.get_all_nodes(100, 0).unwrap();
+        let after_edges = storage.get_all_connections().unwrap();
+        assert_eq!(after_nodes.len(), 1);
+        assert_eq!(after_nodes[0].id, before_nodes[0].id);
+        assert_eq!(after_nodes[0].content, before_nodes[0].content);
+        assert_eq!(before_edges.len(), 0);
+        assert_eq!(after_edges.len(), 0);
+        assert_eq!(tree_bytes(dir.path()), before_files);
     }
 
-    /// The selftest works on an empty store too (a fresh install's baseline).
     #[tokio::test]
-    async fn planted_cause_selftest_runs_on_an_empty_store() {
-        let (storage, _dir) = live_store();
-        let out = execute(&storage, None).await.expect("selftest must run");
-        assert_eq!(out["hits"], json!(5), "{out}");
-        assert_eq!(out["gap_calibration"], json!(true));
+    async fn recorded_edge_selftest_passes_on_an_empty_caller_store() {
+        let (storage, _dir) = user_store();
+        let out = execute(&storage, None).await.expect("selftest");
+        assert_eq!(out["status"], json!("completed"));
+        assert_eq!(out["passed"], json!(true), "{out}");
+        assert!(storage.get_all_nodes(100, 0).unwrap().is_empty());
+    }
+
+    fn tree_bytes(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let entries = std::fs::read_dir(&dir).unwrap();
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    // The directory lock names this process and is removed on drop.
+                    if rel.ends_with("strata.lock") {
+                        continue;
+                    }
+                    out.push((rel, std::fs::read(&path).unwrap()));
+                }
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 }

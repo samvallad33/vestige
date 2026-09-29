@@ -164,6 +164,9 @@ ctor = "0.4"
 # created a SQLite store and then refused to open it, invisible while the
 # guard was test-disabled).
 [[test]]
+name = "selftest_stdio"
+
+[[test]]
 name = "e2e_failure_cases"
 required-features = ["legacy-sqlite"]
 
