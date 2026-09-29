@@ -1862,6 +1862,9 @@ fn scrub_dependent_replay_receipts(tx: &Transaction<'_>, capsule_id: &str) -> Re
 }
 
 #[cfg(test)]
+// Reopen-style durability tests: the v3-engine harness feature disables
+// the read-write guard for these synthetic-store round trips.
+#[cfg(all(test, feature = "v3-engine"))]
 mod tests {
     use super::*;
     // Only the rollback fixture drives a transaction by hand; production

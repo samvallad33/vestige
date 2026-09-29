@@ -12,7 +12,13 @@ repository = "https://github.com/samvallad33/vestige"
 publish = false
 
 [features]
-default = ["connectors", "cloud-sync", "codebase-git"]
+# legacy-sqlite stays in the default set FOR COMPILATION ONLY: every
+# Storage-shaped module (server, tools, dashboard, autopilot, cognitive)
+# still binds vestige-core's Storage until the Strata runtime boot
+# (build/wire-strata) lands. Creation is blocked at runtime (see
+# vestige-core admin.rs): a fresh 4.0 install writes NO SQLite file
+# (audit blocker 1).
+default = ["legacy-sqlite", "connectors", "cloud-sync", "codebase-git"]
 # LEGACY SQLITE QUARANTINE (build/t5-legacy-isolation), mirroring
 # vestige-core. Gates every Storage/sqlite-touching module (server, tools,
 # dashboard, cognitive, resources, trace_recorder, autopilot,
@@ -146,10 +152,10 @@ regex = "1"
 
 # Integration tests drive the Storage-backed server/tools; the e2e binary
 # test also reads the SQLite file directly (backup WAL). Skipped in a
-# legacy-sqlite-free build (build/t5-legacy-isolation). Tests get the raw
-# v3-engine harness (no read-write guard) so they may reopen their own
-# synthetic stores; release builds never enable it.
-vestige-core = { path = "../vestige-core", features = ["v3-engine"] }
+# legacy-sqlite-free build (build/t5-legacy-isolation). NO v3-engine here:
+# the guard must be armed in test builds too (audit finding: a fresh install
+# created a SQLite store and then refused to open it, invisible while the
+# guard was test-disabled).
 [[test]]
 name = "e2e_failure_cases"
 required-features = ["legacy-sqlite"]

@@ -20,7 +20,7 @@ use argon2::Argon2;
 use chacha20poly1305::aead::{Aead, Generate, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 
-use super::sqlite::{Result, StorageError};
+use crate::storage::types::{Result, StorageError};
 
 /// Magic marker identifying a Vestige zero-knowledge envelope.
 const MAGIC: &[u8; 8] = b"VSTGENC1";

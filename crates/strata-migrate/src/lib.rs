@@ -66,7 +66,8 @@ use strata_kernel::event::ReviewEvent;
 use strata_kernel::fsrs::ALGO_V1;
 use strata_kernel::kernel::Kernel;
 use strata_kernel::verify::verify_with_head;
-use vestige_core::PortableArchive;
+use vestige_core::storage::PortableArchive;
+use vestige_core::storage::PortableValue;
 
 pub use records::{
     EdgeRecord, GenesisRecord, MigrationReceipt, NodeRecord, ParamsRecord, ReceiptBody,
@@ -147,6 +148,24 @@ pub enum MigrationError {
     /// first break; nothing is written.
     #[error("broken receipt_envelopes hash chain: {0}")]
     BrokenEnvelopeChain(String),
+    /// The destination directory is not empty and holds no receipt for this
+    /// source. A killed run must be cleared by the operator, never extended.
+    #[error(
+        "destination {path} is not empty; a killed run must be removed by hand, never extended"
+    )]
+    DestinationNotEmpty {
+        /// The refusing destination directory.
+        path: String,
+    },
+    /// The source's BLAKE3 changed while frames were being appended. The
+    /// log is incomplete; the destination is poisoned (further runs refuse).
+    #[error("source changed during migration (before {before}, after {after}); the destination log is incomplete and must not be trusted")]
+    SourceTampered {
+        /// BLAKE3 taken before the first read.
+        before: String,
+        /// BLAKE3 taken before the seal.
+        after: String,
+    },
     /// A source row could not be decoded into a record.
     #[error("corrupt source data: {0}")]
     Corrupt(String),
@@ -184,8 +203,11 @@ pub struct MigrationReport {
     pub source_blake3: String,
     /// The sealed receipt digest, hex (`None` under `--dry-run`).
     pub receipt_digest: Option<String>,
-    /// Whether the sealed receipt verifies against its body.
+    /// Whether the sealed receipt verifies (checksum + ed25519 signature).
     pub receipt_verified: bool,
+    /// True when the destination already carried a receipt for this source:
+    /// nothing was written; the existing receipt is echoed.
+    pub idempotent_reuse: bool,
     /// Wall-clock duration of the migration.
     #[serde(serialize_with = "ser_duration_secs", rename = "durationSeconds")]
     pub duration: Duration,
@@ -222,9 +244,21 @@ pub fn migrate_with_options(
         if options.dry_run {
             return Ok(dry_run_report(&snapshot, "", started));
         }
+        let destination_has_content = std::fs::read_dir(strata_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .any(|e| !e.file_name().to_string_lossy().starts_with('.'))
+            })
+            .unwrap_or(false);
+        if destination_has_content {
+            return Err(MigrationError::DestinationNotEmpty {
+                path: strata_dir.display().to_string(),
+            });
+        }
         let log = open_log(strata_dir, options.seed, "")?;
         let outcome = migrate_snapshot_into(&snapshot, &log, "")?;
-        return finish(log, outcome, snapshot, "", started);
+        return finish(log, strata_dir, outcome, snapshot, "", started);
     }
 
     // ---- hash BEFORE any SQL read --------------------------------------
@@ -237,35 +271,109 @@ pub fn migrate_with_options(
         return Ok(dry_run_report(&snapshot, &blake3_before, started));
     }
 
+    // ---- destination policy (audit: killed run + re-run doubled rows) ----
+    // Empty destination: proceed. Non-empty destination: idempotent no-op
+    // when the log already carries a MIGRATION_RECEIPT for THIS source
+    // (return it, write nothing); any other non-empty destination is an
+    // error — a killed run must be cleared by the operator, never extended.
+    std::fs::create_dir_all(strata_dir)?;
+    let destination_has_content = std::fs::read_dir(strata_dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .any(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        })
+        .unwrap_or(false);
+    if destination_has_content {
+        let existing =
+            StrataLog::open(strata_dir).map_err(|e| MigrationError::Strata(e.to_string()))?;
+        if let Some(receipt) = existing_receipt_for(&existing, &blake3_before) {
+            return Ok(idempotent_report(&snapshot, &receipt, started));
+        }
+        return Err(MigrationError::DestinationNotEmpty {
+            path: strata_dir.display().to_string(),
+        });
+    }
+
     // ---- replay ----------------------------------------------------------
     let log = open_log(strata_dir, options.seed, &blake3_before)?;
     let outcome = migrate_snapshot_into(&snapshot, &log, &blake3_before)?;
 
     // ---- re-hash the source: a single changed byte stops the seal -------
     let blake3_after = files.blake3_hex()?;
-    assert_eq!(
-        blake3_before,
-        blake3_after,
-        "strata-migrate: source changed during migration — refusing to seal \
-         (before {blake3_before}, after {blake3_after}); the destination log \
-         at {} is incomplete and must not be trusted",
-        strata_dir.display(),
-    );
+    if blake3_before != blake3_after {
+        // Frames already landed; the log is incomplete and the destination
+        // policy above refuses any further run into this directory. Report
+        // as an error instead of panicking past the write (audit finding).
+        return Err(MigrationError::SourceTampered {
+            before: blake3_before,
+            after: blake3_after,
+        });
+    }
 
-    finish(log, outcome, snapshot, &blake3_after, started)
+    finish(log, strata_dir, outcome, snapshot, &blake3_after, started)
+}
+
+/// A prior receipt covering exactly this source: the idempotent re-run path.
+fn existing_receipt_for(log: &StrataLog, source_blake3: &str) -> Option<records::MigrationReceipt> {
+    let frames = log.read_frames(1).ok()?;
+    frames
+        .iter()
+        .find(|f| f.kind == records::KIND_MIGRATION_RECEIPT)
+        .and_then(|f| records::decode_receipt(&f.payload).ok())
+        .filter(|r| r.body.source_blake3_before == source_blake3)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn idempotent_report(
+    snapshot: &source::SourceSnapshot,
+    receipt: &records::MigrationReceipt,
+    started: Instant,
+) -> MigrationReport {
+    MigrationReport {
+        nodes: table_rows(snapshot, "knowledge_nodes"),
+        edges: table_rows(snapshot, "memory_connections"),
+        fsrs_events: table_rows(snapshot, "fsrs_cards"),
+        skipped_tables: skipped_tables_for(snapshot),
+        verify_passed: true,
+        dropped_vectors: snapshot.dropped_vectors,
+        envelope_head: snapshot.envelope_head.clone().unwrap_or_default(),
+        source_blake3: receipt.body.source_blake3_before.clone(),
+        receipt_digest: Some(hex32(&receipt.checksum)),
+        receipt_verified: receipt.verify_checksum() && receipt.verify_signature(),
+        duration: started.elapsed(),
+        idempotent_reuse: true,
+    }
 }
 
 fn open_log(
     strata_dir: &Path,
     pinned_seed: Option<[u8; 32]>,
-    source_blake3: &str,
+    _source_blake3: &str,
 ) -> Result<StrataLog, MigrationError> {
-    let seed = pinned_seed.unwrap_or_else(|| {
-        let digest = blake3::Hasher::new_derive_key("vestige strata migrate log seed v1")
-            .update(source_blake3.as_bytes())
-            .finalize();
-        *digest.as_bytes()
-    });
+    // The log signing seed comes from OS entropy unless a test pins it.
+    // Deriving it from the source BLAKE3 put the seed inside the log itself
+    // (the PARAMS frame), so any reader could re-derive strata.key and forge
+    // segments (audit finding (a): CONFIRMED forge).
+    let seed = match pinned_seed {
+        Some(seed) => seed,
+        None => {
+            let mut seed = [0u8; 32];
+            std::fs::File::open("/dev/urandom")
+                .and_then(|mut f| {
+                    use std::io::Read;
+                    f.read_exact(&mut seed)?;
+                    Ok(())
+                })
+                .map_err(|e| {
+                    MigrationError::Io(std::io::Error::new(
+                        e.kind(),
+                        format!("no OS entropy for the log signing seed: {e}"),
+                    ))
+                })?;
+            seed
+        }
+    };
     StrataLog::open_seeded(strata_dir, seed).map_err(|e| MigrationError::Strata(e.to_string()))
 }
 
@@ -287,6 +395,7 @@ fn dry_run_report(
         source_blake3: source_blake3.to_string(),
         receipt_digest: None,
         receipt_verified: false,
+        idempotent_reuse: false,
         duration: started.elapsed(),
     }
 }
@@ -298,12 +407,13 @@ fn table_rows(snapshot: &source::SourceSnapshot, table: &str) -> u64 {
 }
 
 fn skipped_tables_for(snapshot: &source::SourceSnapshot) -> Vec<String> {
+    // Driven by sqlite_master (audit finding): every nonempty table without
+    // a STRATA mapping is named, so the receipt never overclaims.
     snapshot
-        .archive
-        .tables
+        .all_nonempty_tables
         .iter()
-        .filter(|t| !t.rows.is_empty() && !MAPPED_TABLES.contains(&t.name.as_str()))
-        .map(|t| t.name.clone())
+        .filter(|(name, _)| !MAPPED_TABLES.contains(&name.as_str()))
+        .map(|(name, _)| name.clone())
         .collect()
 }
 
@@ -329,10 +439,11 @@ fn migrate_snapshot_into(
 ) -> Result<ReplayOutcome, MigrationError> {
     let archive = &snapshot.archive;
 
-    let (node_records, kernel_ids, supersessions) = extract_nodes(archive)?;
+    let (mut node_records, kernel_ids, supersessions) = extract_nodes(archive)?;
     let edge_records = extract_edges(archive, &kernel_ids)?;
     let tombstones = extract_tombstones(archive)?;
     let walk_nodes = extract_walk_receipts(snapshot, &kernel_ids)?;
+    attach_fsrs_legacy(archive, &kernel_ids, &mut node_records)?;
 
     let mut nodes = 0u64;
     let mut edges = 0u64;
@@ -446,6 +557,7 @@ fn migrate_snapshot_into(
 /// and assemble the report.
 fn finish(
     log: StrataLog,
+    strata_dir: &Path,
     outcome: ReplayOutcome,
     snapshot: source::SourceSnapshot,
     source_blake3: &str,
@@ -462,16 +574,25 @@ fn finish(
         table_counts.sort();
     }
 
-    let receipt = MigrationReceipt::seal(ReceiptBody {
-        record_version: RECORD_VERSION,
-        source_blake3_before: source_blake3.to_string(),
-        source_blake3_after: source_blake3.to_string(),
-        schema_version: snapshot.schema_version,
-        envelope_head: snapshot.envelope_head.clone().unwrap_or_default(),
-        counts: table_counts,
-        dropped_vectors: snapshot.dropped_vectors,
-        signing_key_id: RECEIPT_SIGNING_KEY_ID.to_string(),
-    });
+    let signing = records::load_or_create_receipt_key(&receipt_key_dir_of(strata_dir))?;
+    let receipt = MigrationReceipt::seal(
+        ReceiptBody {
+            record_version: RECORD_VERSION,
+            source_blake3_before: source_blake3.to_string(),
+            source_blake3_after: source_blake3.to_string(),
+            schema_version: snapshot.schema_version,
+            envelope_head: snapshot.envelope_head.clone().unwrap_or_default(),
+            counts: table_counts,
+            dropped_vectors: snapshot.dropped_vectors,
+            dropped_columns: vec![
+                "node_embeddings.embedding (H1: vector values are dropped and counted)".to_string(),
+                "schema_version.applied_at".to_string(),
+                "receipt_envelopes.receipt_id/projection_json/issued_at/stored_at".to_string(),
+            ],
+            signing_key_id: RECEIPT_SIGNING_KEY_ID.to_string(),
+        },
+        &signing,
+    );
     let receipt_bytes = borsh::to_vec(&receipt)
         .map_err(|e| MigrationError::Corrupt(format!("borsh encode receipt: {e}")))?;
     log.append(records::KIND_MIGRATION_RECEIPT, &receipt_bytes)
@@ -497,10 +618,18 @@ fn finish(
         dropped_vectors: snapshot.dropped_vectors,
         envelope_head: snapshot.envelope_head.unwrap_or_default(),
         source_blake3: source_blake3.to_string(),
-        receipt_digest: Some(hex32(&receipt.digest)),
-        receipt_verified: receipt.verify(),
+        receipt_digest: Some(hex32(&receipt.checksum)),
+        receipt_verified: receipt.verify_checksum() && receipt.verify_signature(),
+        idempotent_reuse: false,
         duration: started.elapsed(),
     })
+}
+
+/// The receipt-signing key lives NEXT TO the destination log, never inside
+/// the log: `<parent-of---to>/receipt-signing.key`. The log carries only
+/// the verifying key.
+fn receipt_key_dir_of(strata_dir: &Path) -> std::path::PathBuf {
+    strata_dir.parent().unwrap_or(strata_dir).to_path_buf()
 }
 
 fn hex32(bytes: &[u8; 32]) -> String {
@@ -614,6 +743,32 @@ fn fsrs_ratings_for(reps: i64, lapses: i64) -> Vec<u8> {
     ratings
 }
 
+const FSRS_MAPPED_COLUMNS: &[&str] = &["memory_id", "reps", "lapses"];
+
+/// FSRS final state the fold cannot reproduce (stability/difficulty floats,
+/// due dates, phase) rides on the node's legacy capture (blocker 4).
+fn attach_fsrs_legacy(
+    archive: &PortableArchive,
+    kernel_ids: &HashMap<String, u64>,
+    node_records: &mut [NodeRecord],
+) -> Result<(), MigrationError> {
+    let Some(table) = source::table(archive, "fsrs_cards") else {
+        return Ok(());
+    };
+    for index in 0..table.rows.len() {
+        let row = source::Row::new(table, index);
+        let memory_id = row.text("memory_id")?.to_string();
+        let Some(kernel_id) = kernel_ids.get(&memory_id) else {
+            continue;
+        };
+        let legacy = capture_legacy("fsrs_cards", &row, FSRS_MAPPED_COLUMNS)?;
+        if let Some(node) = node_records.iter_mut().find(|n| n.kernel_id == *kernel_id) {
+            node.legacy.extend(legacy);
+        }
+    }
+    Ok(())
+}
+
 /// V40 `walk_receipts` rows become reference nodes tagged `migrated_from_v4`
 /// (PR-0a spec 4d). Kernel ids continue after the knowledge nodes so the
 /// dense identity space stays total.
@@ -636,9 +791,52 @@ fn extract_walk_receipts(
             created_ms: row.created_ms,
             updated_ms: row.created_ms,
             last_accessed_ms: row.created_ms,
+            legacy: Vec::new(),
         })
         .collect();
     Ok(records)
+}
+
+/// Canonical string form of a snapshot value for legacy column capture:
+/// ints/floats/text verbatim (floats are Display'd, deterministic), blobs hex.
+fn legacy_value(value: &source::PortableValue) -> String {
+    match value {
+        PortableValue::Null => String::new(),
+        PortableValue::Integer(v) => v.to_string(),
+        PortableValue::Real(v) => v.to_string(),
+        PortableValue::Text(t) => t.clone(),
+        PortableValue::Blob(hex) => hex.clone(),
+    }
+}
+
+/// Columns with dedicated fields on the record (everything else is captured
+/// verbatim in `legacy`).
+const NODE_MAPPED_COLUMNS: &[&str] = &[
+    "id",
+    "content",
+    "node_type",
+    "tags",
+    "created_at",
+    "updated_at",
+    "last_accessed",
+    "superseded_by",
+];
+
+fn capture_legacy(
+    table: &str,
+    row: &source::Row<'_>,
+    mapped: &[&str],
+) -> Result<Vec<(String, String)>, MigrationError> {
+    let columns = row.columns();
+    let mut out = Vec::new();
+    for column in columns {
+        if mapped.contains(&column.as_str()) {
+            continue;
+        }
+        let value = row.get(&column)?;
+        out.push((format!("{table}.{column}"), legacy_value(value)));
+    }
+    Ok(out)
 }
 
 /// Decoded `knowledge_nodes`: node records, the legacy→kernel id map (dense,
@@ -664,6 +862,7 @@ fn extract_nodes(archive: &PortableArchive) -> Result<NodeSet, MigrationError> {
         let legacy_id = row.text("id")?.to_string();
         let kernel_id = (index as u64) + 1;
         kernel_ids.insert(legacy_id.clone(), kernel_id);
+        let legacy = capture_legacy("knowledge_nodes", &row, NODE_MAPPED_COLUMNS)?;
         records.push(NodeRecord {
             record_version: RECORD_VERSION,
             kernel_id,
@@ -673,6 +872,7 @@ fn extract_nodes(archive: &PortableArchive) -> Result<NodeSet, MigrationError> {
             created_ms: source::timestamp_ms(row.text("created_at")?)?,
             updated_ms: source::timestamp_ms(row.text("updated_at")?)?,
             last_accessed_ms: source::timestamp_ms(row.text("last_accessed")?)?,
+            legacy,
             legacy_id,
         });
     }
@@ -739,6 +939,19 @@ fn extract_edges(
             } else {
                 ("derived_from".to_string(), true)
             };
+        let legacy = capture_legacy(
+            "memory_connections",
+            &row,
+            &[
+                "source_id",
+                "target_id",
+                "strength",
+                "link_type",
+                "created_at",
+                "last_activated",
+                "activation_count",
+            ],
+        )?;
         records.push(EdgeRecord {
             record_version: RECORD_VERSION,
             source_kernel_id,
@@ -750,6 +963,7 @@ fn extract_edges(
             created_ms: source::timestamp_ms(row.text("created_at")?)?,
             last_activated_ms: source::timestamp_ms(row.text("last_activated")?)?,
             activation_count: row.integer_or("activation_count", 0)? as i32,
+            legacy,
             source_legacy_id,
             target_legacy_id,
         });
@@ -766,6 +980,7 @@ fn extract_tombstones(archive: &PortableArchive) -> Result<Vec<TombstoneRecord>,
             records.push(TombstoneRecord {
                 record_version: RECORD_VERSION,
                 origin_table: "sync_tombstones".to_string(),
+                source_table: row.opt_text("table_name")?.map(str::to_string),
                 row_id: row.text("row_id")?.to_string(),
                 deleted_ms: source::timestamp_ms(row.text("deleted_at")?)?,
                 reason: row.opt_text("reason")?.map(str::to_string),
@@ -780,6 +995,7 @@ fn extract_tombstones(archive: &PortableArchive) -> Result<Vec<TombstoneRecord>,
             records.push(TombstoneRecord {
                 record_version: RECORD_VERSION,
                 origin_table: "deletion_tombstones".to_string(),
+                source_table: None,
                 row_id: row.text("memory_id")?.to_string(),
                 deleted_ms: source::timestamp_ms(row.text("deleted_at")?)?,
                 reason: row.opt_text("reason")?.map(str::to_string),
@@ -881,6 +1097,7 @@ mod tests {
 
     #[test]
     fn receipt_seals_and_verifies() {
+        use ed25519_dalek::SigningKey;
         let body = ReceiptBody {
             record_version: RECORD_VERSION,
             source_blake3_before: "aa".repeat(32),
@@ -889,18 +1106,31 @@ mod tests {
             envelope_head: String::new(),
             counts: vec![("knowledge_nodes".to_string(), 3)],
             dropped_vectors: 7,
+            dropped_columns: Vec::new(),
             signing_key_id: RECEIPT_SIGNING_KEY_ID.to_string(),
         };
-        let receipt = MigrationReceipt::seal(body);
-        assert!(receipt.verify());
-        let mutated = MigrationReceipt {
-            record_version: receipt.record_version,
-            body: ReceiptBody {
-                dropped_vectors: 8,
-                ..receipt.body.clone()
-            },
-            digest: receipt.digest,
-        };
-        assert!(!mutated.verify());
+        let key = SigningKey::from_bytes(&[9u8; 32]);
+        let receipt = MigrationReceipt::seal(body, &key);
+        assert!(receipt.verify_checksum());
+        assert!(receipt.verify_signature());
+        // A mutated body breaks BOTH the checksum and the signature.
+        let mut mutated = receipt.clone();
+        mutated.body.dropped_vectors = 8;
+        assert!(!mutated.verify_checksum());
+        assert!(!mutated.verify_signature());
+        // A signature that does not match the receipt's claimed verifying
+        // key fails authorship: swap the in-log key (as a forger would) and
+        // the signature no longer matches.
+        let mut wrong_key = receipt.clone();
+        let other = SigningKey::from_bytes(&[8u8; 32]);
+        wrong_key.verifying_key = other.verifying_key().to_bytes();
+        assert!(
+            !wrong_key.verify_signature(),
+            "wrong key must fail authorship"
+        );
+        assert!(
+            wrong_key.verify_checksum(),
+            "the checksum is key-independent"
+        );
     }
 }

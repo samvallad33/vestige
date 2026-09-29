@@ -545,7 +545,12 @@ mod tests {
     use tempfile::tempdir;
 
     fn create_test_storage() -> std::sync::Arc<Storage> {
-        vestige_core::open_storage(None).expect("test storage")
+        // Private per-call store: the shared default store made these tests
+        // order-dependent (audit-adjacent isolation bug, same family as
+        // test_create_batch). The TempDir is leaked so it outlives the Arc.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path: &'static std::path::Path = Box::leak(dir.keep().into_boxed_path());
+        vestige_core::open_storage(Some(path.join("test.db"))).expect("private test storage")
     }
 
     #[test]

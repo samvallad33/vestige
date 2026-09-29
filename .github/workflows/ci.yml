@@ -106,6 +106,10 @@ jobs:
         run: cargo test --workspace
     - name: Forbidden-mechanism guard (ratchet: fails on new hits and stale allowlist entries)
       run: cargo test -p vestige-mcp --test forbidden_mechanisms
+    - name: strata-migrate acceptance tests (workspace-excluded crate; own CI job per audit)
+      run: cargo test --manifest-path crates/strata-migrate/Cargo.toml
+    - name: strata-verify (migrated-log verification)
+      run: cargo test --manifest-path crates/strata-verify/Cargo.toml
 
       - name: Test paid cloud-sync path
         run: cargo test --locked --package vestige-core --features cloud-sync cloud --lib

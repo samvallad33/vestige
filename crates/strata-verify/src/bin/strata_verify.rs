@@ -9,6 +9,39 @@ fn main() {
         eprintln!("usage: strata-verify <store-dir>");
         std::process::exit(2);
     };
+    // A migrated STRATA directory (MIGRATION_RECEIPT inside) gets the
+    // migration verification: chain, receipt checksum + signature, and a
+    // frame-count replay against the receipt.
+    let has_migration_receipt = strata::StrataLog::open(&dir)
+        .ok()
+        .and_then(|log| log.read_frames(1).ok())
+        .map(|frames| frames.iter().any(|f| f.kind == 46))
+        .unwrap_or(false);
+
+    if has_migration_receipt {
+        match strata_verify::migration::verify_migrated_log(&dir) {
+            Ok(report) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).expect("report serializes")
+                );
+                if report.failures.is_empty() {
+                    println!("OK");
+                } else {
+                    println!("FAILED");
+                    for failure in &report.failures {
+                        eprintln!("  {failure}");
+                    }
+                    std::process::exit(1);
+                }
+            }
+            Err(err) => {
+                eprintln!("FAILED: {err}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     let report = strata_verify::verify_store(&dir);
     println!(
         "{}",

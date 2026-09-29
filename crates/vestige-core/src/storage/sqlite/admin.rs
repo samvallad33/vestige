@@ -34,10 +34,14 @@ impl SqliteMemoryStore {
 
     pub(super) fn prepare_data_dir(data_dir: PathBuf) -> Result<PathBuf> {
         let data_dir = Self::expand_tilde(data_dir);
+        // Owner-only 0700 applies ONLY to a directory this call created.
+        // Tightening a pre-existing data directory happened before the v3
+        // guard could refuse, narrowing the user's whole data dir as a side
+        // effect of a refused command (audit finding).
+        let existed = data_dir.exists();
         std::fs::create_dir_all(&data_dir)?;
-        // Restrict directory permissions to owner-only on Unix
         #[cfg(unix)]
-        {
+        if !existed {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o700);
             let _ = std::fs::set_permissions(&data_dir, perms);
@@ -652,19 +656,32 @@ impl SqliteMemoryStore {
         // PR 0a: a v3 SQLite file is never opened read-write. Detect by
         // magic bytes first — before the write handle, the chmod, and the
         // migration pass can touch it — and refuse with the migration hint.
-        // Escapes: `v3-engine` (the raw engine test harness) and this
-        // crate's own unit tests, which reopen synthetic stores by design.
-        #[cfg(all(
-            feature = "legacy-sqlite",
-            not(feature = "v3-engine"),
-            not(test)
-        ))]
-        crate::storage::v3_guard::ensure_not_v3(&path)?;
+        // The only escape is the `v3-engine` raw engine harness (restart /
+        // durability tests that reopen synthetic stores); test builds are
+        // NOT exempt (audit: a fresh install created a SQLite store and then
+        // refused to open it, invisible while the guard was test-disabled).
+        #[cfg(all(feature = "legacy-sqlite", not(feature = "v3-engine")))]
+        {
+            crate::storage::v3_guard::ensure_not_v3(&path)?;
+            // Guard-armed 4.0 builds never CREATE a SQLite store either: a
+            // fresh install must not write a file the very next start would
+            // refuse (audit blocker 1). Strata is the 4.0 store; SQLite is
+            // a read-only migration source.
+            if !path.exists() {
+                return Err(StorageError::Init(
+                    "SQLite store creation is disabled: SQLite is a read-only migration source in 4.0. hint: the Strata backend owns new stores (run: vestige migrate-to-strata --from <path> for existing v3 stores)".to_string(),
+                ));
+            }
+        }
 
         // Open writer connection
         let writer_conn = Connection::open(&path)?;
 
-        // Restrict database file permissions to owner-only on Unix
+        // Restrict database file permissions to owner-only on Unix — the
+        // database FILE only. Chmodding a pre-existing data DIRECTORY here
+        // narrowed the user's whole data dir before the guard could refuse
+        // (audit finding); directories are only chmod'd when this call
+        // created them (see prepare_data_dir).
         #[cfg(unix)]
         if path.exists() {
             use std::os::unix::fs::PermissionsExt;

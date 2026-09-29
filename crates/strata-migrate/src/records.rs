@@ -17,6 +17,7 @@
 //! concept, forever.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use ed25519_dalek::Signer;
 use strata_kernel::checkpoint::Checkpoint;
 use strata_kernel::event::ReviewEvent;
 
@@ -44,15 +45,24 @@ pub const KIND_MIGRATION_RECEIPT: u8 = 46;
 /// Current wire version of every migration record below.
 pub const RECORD_VERSION: u16 = 1;
 
-/// Identity that signs the MIGRATION_RECEIPT. The receipt signature is a
-/// keyed BLAKE3 digest under this domain-separated context: deterministic
-/// across runs (two migrations of one source must produce identical logs)
-/// and tamper-binding over the receipt body. The log's own ed25519 segment
-/// chain is the integrity layer; this digest binds receipt contents.
+/// Identity string recorded in every receipt body (the authorship proof is
+/// the ed25519 signature + in-log verifying key; this names the scheme).
 pub const RECEIPT_SIGNING_KEY_ID: &str = "vestige-migrate-receipt-v1";
 
-/// blake3 derive-key context for the receipt digest.
-const RECEIPT_DIGEST_CONTEXT: &str = "vestige strata migration receipt v1";
+/// The receipt-signing key file, written next to the destination log with
+/// 0600 permissions. It is NOT part of the log: the log itself carries only
+/// the verifying key. Losing it only loses the ability to sign further
+/// receipts for that destination; verification uses the in-log public key.
+pub const RECEIPT_KEY_FILE: &str = "receipt-signing.key";
+
+/// ed25519 signing domain for the MIGRATION_RECEIPT signature.
+const RECEIPT_SIGNATURE_CONTEXT: &[u8] = b"vestige strata migration receipt v1";
+
+/// The blake3 CHECKSUM over the receipt body: tamper-evidence only. It
+/// proves nothing about authorship (anyone can recompute it) — the ed25519
+/// signature is the authorship proof. (Audit finding: a keyed-BLAKE3
+/// "signature" was presented as verification while anyone could re-derive
+/// both the key and the digest.)
 
 /// First frame of a fresh migration log: provenance for everything after it.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -97,6 +107,11 @@ pub struct NodeRecord {
     pub created_ms: i64,
     pub updated_ms: i64,
     pub last_accessed_ms: i64,
+    /// EVERY other source column, verbatim (ints/floats/text as canonical
+    /// strings, blobs hex). FSRS state, scope, source, suppression,
+    /// sentiment, and the rest of the 52 columns ride here (blocker 4):
+    /// nothing a v3 row carried is silently dropped.
+    pub legacy: Vec<(String, String)>,
 }
 
 /// A migrated typed edge. Legacy link types are folded into the 8-type
@@ -121,6 +136,8 @@ pub struct EdgeRecord {
     pub created_ms: i64,
     pub last_activated_ms: i64,
     pub activation_count: i32,
+    /// Every other source column, verbatim (e.g. v39 edge_meta).
+    pub legacy: Vec<(String, String)>,
 }
 
 /// A migrated tombstone row (`sync_tombstones` or `deletion_tombstones`).
@@ -131,6 +148,9 @@ pub struct TombstoneRecord {
     pub record_version: u16,
     /// Source table the tombstone came from.
     pub origin_table: String,
+    /// The table the tombstone targets (sync_tombstones.table_name); None
+    /// where the source has no such column.
+    pub source_table: Option<String>,
     /// Tombstoned row id (memory id for deletion tombstones).
     pub row_id: String,
     pub deleted_ms: i64,
@@ -174,45 +194,114 @@ pub struct ReceiptBody {
     /// `node_embeddings` rows whose vector values were never read (H1:
     /// vectors do not survive into STRATA; this counts what was dropped).
     pub dropped_vectors: u64,
+    /// Source columns that did NOT ride into the log, named (blocker 4:
+    /// the receipt must never present itself as a fuller copy than it is).
+    pub dropped_columns: Vec<String>,
     /// [`RECEIPT_SIGNING_KEY_ID`].
     pub signing_key_id: String,
 }
 
-/// Wire form of frame kind 46: body plus its keyed-BLAKE3 digest.
+/// Wire form of frame kind 46: body, checksum, and an ed25519 signature
+/// made by a non-derivable random key stored OUTSIDE the log (0600). The
+/// log carries only the verifying key.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct MigrationReceipt {
     pub record_version: u16,
     pub body: ReceiptBody,
-    /// blake3 derive_key([`RECEIPT_DIGEST_CONTEXT`], borsh(body)).
-    pub digest: [u8; 32],
+    /// Ed25519 verifying key (the signing key never touches the log).
+    pub verifying_key: [u8; 32],
+    /// Ed25519 signature over borsh(body).
+    pub signature: [u8; 64],
+    /// Plain blake3 checksum of borsh(body): tamper-evidence, not authorship.
+    pub checksum: [u8; 32],
 }
 
 impl MigrationReceipt {
-    /// Seal a body into a signed receipt.
-    pub fn seal(body: ReceiptBody) -> Self {
+    /// Seal a body with a caller-managed ed25519 signing key.
+    pub fn seal(body: ReceiptBody, signing: &ed25519_dalek::SigningKey) -> Self {
         let bytes = borsh::to_vec(&body).expect("borsh encode receipt body");
-        let digest = receipt_digest(&bytes);
+        let checksum = *blake3::hash(&bytes).as_bytes();
+        let mut msg = Vec::with_capacity(bytes.len() + RECEIPT_SIGNATURE_CONTEXT.len());
+        msg.extend_from_slice(RECEIPT_SIGNATURE_CONTEXT);
+        msg.extend_from_slice(&bytes);
+        let signature = signing.sign(&msg).to_bytes();
         Self {
             record_version: RECORD_VERSION,
             body,
-            digest,
+            verifying_key: signing.verifying_key().to_bytes(),
+            signature,
+            checksum,
         }
     }
 
-    /// Verify the receipt's digest binds its body.
-    pub fn verify(&self) -> bool {
+    /// The checksum binds the body (tamper-evidence).
+    pub fn verify_checksum(&self) -> bool {
         match borsh::to_vec(&self.body) {
-            Ok(bytes) => receipt_digest(&bytes) == self.digest,
+            Ok(bytes) => *blake3::hash(&bytes).as_bytes() == self.checksum,
+            Err(_) => false,
+        }
+    }
+
+    /// The signature proves authorship under the in-log verifying key.
+    pub fn verify_signature(&self) -> bool {
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        let Ok(vk) = VerifyingKey::from_bytes(&self.verifying_key) else {
+            return false;
+        };
+        match borsh::to_vec(&self.body) {
+            Ok(bytes) => {
+                let mut msg = Vec::with_capacity(bytes.len() + RECEIPT_SIGNATURE_CONTEXT.len());
+                msg.extend_from_slice(RECEIPT_SIGNATURE_CONTEXT);
+                msg.extend_from_slice(&bytes);
+                vk.verify(&msg, &Signature::from_bytes(&self.signature))
+                    .is_ok()
+            }
             Err(_) => false,
         }
     }
 }
 
-fn receipt_digest(body_bytes: &[u8]) -> [u8; 32] {
-    *blake3::Hasher::new_derive_key(RECEIPT_DIGEST_CONTEXT)
-        .update(body_bytes)
-        .finalize()
-        .as_bytes()
+/// Load the destination's receipt-signing key (0600) or create one from the
+/// OS entropy pool. The key is NEVER derived from public data (audit: the
+/// old seed was blake3 over the source BLAKE3 written into the log, so any
+/// reader could re-derive strata.key and forge segments).
+pub fn load_or_create_receipt_key(
+    dir: &std::path::Path,
+) -> Result<ed25519_dalek::SigningKey, std::io::Error> {
+    let path = dir.join(RECEIPT_KEY_FILE);
+    if path.exists() {
+        let bytes = std::fs::read(&path)?;
+        let seed: [u8; 32] = bytes.try_into().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{RECEIPT_KEY_FILE} is not 32 bytes"),
+            )
+        })?;
+        return Ok(ed25519_dalek::SigningKey::from_bytes(&seed));
+    }
+    let mut seed = [0u8; 32];
+    urandom_fill(&mut seed)?;
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        f.write_all(&seed)?;
+    }
+    #[cfg(not(unix))]
+    std::fs::write(&path, &seed)?;
+    Ok(ed25519_dalek::SigningKey::from_bytes(&seed))
+}
+
+/// Read OS entropy (unix /dev/urandom). No weak fallback: a platform
+/// without urandom fails the migration instead of shipping a derivable key.
+fn urandom_fill(buf: &mut [u8]) -> Result<(), std::io::Error> {
+    use std::io::Read;
+    std::fs::File::open("/dev/urandom")?.read_exact(buf)
 }
 
 /// Decode a `KIND_GENESIS` payload.

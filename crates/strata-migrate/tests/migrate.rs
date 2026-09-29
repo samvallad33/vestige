@@ -99,15 +99,41 @@ const MAPPED: &[&str] = &[
     "deletion_tombstones",
 ];
 
-fn expected_skipped(archive: &vestige_core::PortableArchive) -> Vec<String> {
-    let mut tables: Vec<String> = archive
-        .tables
-        .iter()
-        .filter(|t| !t.rows.is_empty() && !MAPPED.contains(&t.name.as_str()))
-        .map(|t| t.name.clone())
+/// The sqlite_master-driven expectation: every nonempty user table without
+/// a STRATA mapping (mirrors the migrator's own skipped_tables logic — the
+/// audit required skipped_tables to be schema-driven, not hand-listed).
+fn expected_skipped(db: &std::path::Path) -> Vec<String> {
+    let conn = rusqlite::Connection::open_with_flags(
+        format!("file:{}?mode=ro&immutable=1", db.display()),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .expect("readonly open");
+    let mut stmt = conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table'
+             AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'knowledge_fts%'
+             ORDER BY name",
+        )
+        .unwrap();
+    let names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .filter_map(Result::ok)
         .collect();
-    tables.sort();
-    tables
+    let mut out: Vec<String> = names
+        .into_iter()
+        .filter(|name| !MAPPED.contains(&name.as_str()))
+        .filter(|name| {
+            let quoted = format!("\"{name}\"");
+            conn.query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|n| n > 0)
+            .unwrap_or(false)
+        })
+        .collect();
+    out.sort();
+    out
 }
 
 #[test]
@@ -116,7 +142,6 @@ fn path_a_archive_end_to_end() {
     let db = tmp.path().join("vestige.db");
     let archive_path = tmp.path().join("portable.json");
     let ids = build_store(&db, Some(&archive_path));
-
     let archive: vestige_core::PortableArchive =
         serde_json::from_slice(&std::fs::read(&archive_path).expect("read archive"))
             .expect("decode archive");
@@ -128,10 +153,18 @@ fn path_a_archive_end_to_end() {
     assert_eq!(report.edges, 1);
     assert_eq!(report.fsrs_events, 6); // 4 + 2 synthetic reviews
     assert!(report.verify_passed, "kernel verify must pass: {report:?}");
-    let mut expected = expected_skipped(&archive);
+    // Path A input is a portable archive: skipped_tables can only reflect
+    // the archive's own tables (the schema-driven sqlite_master list is the
+    // direct-SQLite path's contract — asserted in path_b).
     let mut got = report.skipped_tables.clone();
-    expected.sort();
     got.sort();
+    let mut expected: Vec<String> = archive
+        .tables
+        .iter()
+        .filter(|t| !t.rows.is_empty() && !MAPPED.contains(&t.name.as_str()))
+        .map(|t| t.name.clone())
+        .collect();
+    expected.sort();
     assert_eq!(got, expected);
 
     // ---- reopen at the log level and assert identity fidelity ------------
@@ -237,6 +270,16 @@ fn path_b_direct_sqlite_matches_path_a() {
     let snapshot = read_snapshot(&log).expect("snapshot");
     assert_eq!(snapshot.nodes.len(), 3);
     assert_eq!(snapshot.edges.len(), 1);
+
+    // Direct-SQLite path: skipped_tables is sqlite_master-driven (audit 17/18).
+    let expected = expected_skipped(&db);
+    assert!(
+        expected.contains(&"schema_version".to_string()),
+        "sanity: the real schema names schema_version"
+    );
+    let mut got = report.skipped_tables.clone();
+    got.sort();
+    assert_eq!(got, expected, "skipped tables must be schema-driven");
 }
 
 #[test]
@@ -286,19 +329,18 @@ fn re_migration_extends_the_log_and_keeps_the_chain() {
     let first = migrate(&archive_path, &strata_dir).expect("first run");
     assert!(first.verify_passed);
 
-    // Re-running is append-only: records duplicate, but the checkpoint chain
-    // extends and verification still passes (strictly increasing log_seq).
-    let second = migrate(&archive_path, &strata_dir).expect("second run");
-    assert_eq!(second.nodes, 3);
-    assert_eq!(second.fsrs_events, 6);
-    assert!(second.verify_passed, "chained verify must pass: {second:?}");
-
+    // A second run into a non-empty destination is refused: a killed run
+    // followed by a re-run must never double the rows (audit finding).
+    let second = migrate(&archive_path, &strata_dir);
+    assert!(
+        matches!(
+            second,
+            Err(strata_migrate::MigrationError::DestinationNotEmpty { .. })
+        ),
+        "non-empty destination must refuse: {second:?}"
+    );
     let log = StrataLog::open(&strata_dir).expect("reopen");
     let snapshot = read_snapshot(&log).expect("snapshot");
-    assert_eq!(snapshot.nodes.len(), 6);
-    assert_eq!(
-        snapshot.checkpoints.len(),
-        2,
-        "each run seals exactly one checkpoint"
-    );
+    assert_eq!(snapshot.nodes.len(), 3, "the refusal wrote nothing");
+    assert_eq!(snapshot.checkpoints.len(), 1);
 }

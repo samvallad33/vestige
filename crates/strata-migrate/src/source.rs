@@ -21,8 +21,13 @@ use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
 use rusqlite::OpenFlags;
-use vestige_core::storage::{PortableTable, PortableValue};
-use vestige_core::{PortableArchive, PORTABLE_ARCHIVE_FORMAT};
+use vestige_core::storage::PortableArchive;
+use vestige_core::storage::PortableTable;
+pub use vestige_core::storage::PortableValue;
+
+/// Portable-archive format identifier (mirrors the ungated constant the v3
+/// engine writes; declared locally so this crate needs no sqlite features).
+pub const PORTABLE_ARCHIVE_FORMAT: &str = "vestige.portable.v1";
 
 use crate::MigrationError;
 
@@ -34,7 +39,10 @@ pub const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
 /// row-decoding contract — without opening a vestige-core storage handle.
 const PORTABLE_TABLES: &[&str] = &[
     "knowledge_nodes",
-    "node_embeddings",
+    // node_embeddings is intentionally NOT selected: its vector blobs are
+    // dropped (H1) and must never enter the snapshot. Only COUNT(*) is read
+    // (dropped_vectors). (Audit finding: SELECT * hex-encoded blobs into
+    // the snapshot while the CLI claimed vector values were never read.)
     "fsrs_cards",
     "memory_states",
     "memory_connections",
@@ -71,6 +79,10 @@ pub struct SourceSnapshot {
     pub walk_receipts: Vec<WalkReceiptRow>,
     /// Row count per snapshot table (sorted by table name).
     pub table_counts: Vec<(String, u64)>,
+    /// EVERY user table with rows, from sqlite_master (audit finding:
+    /// skipped_tables must be driven by the schema, not by a hand list, so
+    /// the receipt never claims a fuller copy than it is).
+    pub all_nonempty_tables: Vec<(String, u64)>,
 }
 
 /// One V40 `walk_receipts` row; becomes a reference node in the log.
@@ -164,12 +176,34 @@ pub fn prepare_source(
                     _ => None,
                 })
             };
+        // Sidecar names MUST line up with the snapshot db name or SQLite
+        // will not associate the copied -wal with it (audit finding: the
+        // first cut copied `snapshot-wal`, so the checkpoint saw nothing).
         let db_copy = scratch.join("snapshot.db");
+        let wal_copy = scratch.join("snapshot.db-wal");
+        let shm_copy = scratch.join("snapshot.db-shm");
         std::fs::copy(&db, &db_copy)?;
+        if let Some(wal) = &wal {
+            std::fs::copy(wal, &wal_copy)?;
+        }
+        if let Some(shm) = &shm {
+            std::fs::copy(shm, &shm_copy)?;
+        }
+        {
+            // immutable=1 does NOT see WAL-resident commits (audit finding:
+            // a row living only in the -wal was silently dropped). The COPY
+            // is checkpointed so its main db is complete; the ORIGINAL is
+            // never opened read-write.
+            let conn = rusqlite::Connection::open(&db_copy)
+                .map_err(|e| MigrationError::Source(format!("checkpoint snapshot copy: {e}")))?;
+            let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                row.get::<_, i64>(0)
+            });
+        }
         let files = SourceFiles {
             db: db_copy,
-            wal: copy(&wal, "-wal")?,
-            shm: copy(&shm, "-shm")?,
+            wal: wal_copy.exists().then_some(wal_copy),
+            shm: shm_copy.exists().then_some(shm_copy),
         };
         Ok((files, true))
     } else {
@@ -193,6 +227,7 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
         let table_counts = archive
             .tables
             .iter()
+            .filter(|t| !t.rows.is_empty())
             .map(|t| (t.name.clone(), t.rows.len() as u64))
             .collect::<Vec<_>>();
         return Ok(SourceSnapshot {
@@ -201,7 +236,8 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
             envelope_head: None,
             dropped_vectors: 0,
             walk_receipts: Vec::new(),
-            table_counts,
+            table_counts: table_counts.clone(),
+            all_nonempty_tables: table_counts,
         });
     }
 
@@ -223,6 +259,25 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
 
     let mut walk_receipts = Vec::new();
     {
+        // Real v3.1.1 stores (schema <= 39) have no walk_receipts table; it
+        // only exists from V40. Missing table = empty vec, same as read_table.
+        let has_walk_receipts: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='walk_receipts'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if !has_walk_receipts {
+            return finish_snapshot(
+                &conn,
+                schema_version,
+                envelope_head,
+                dropped_vectors,
+                walk_receipts,
+            );
+        }
         let mut stmt = conn
             .prepare(
                 "SELECT receipt_id, digest, canonical_json, engine_version, created_at
@@ -246,16 +301,67 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
         }
     }
 
+    finish_snapshot(
+        &conn,
+        schema_version,
+        envelope_head,
+        dropped_vectors,
+        walk_receipts,
+    )
+}
+
+/// Every user table with at least one row, per sqlite_master.
+fn all_nonempty_tables(conn: &rusqlite::Connection) -> Vec<(String, u64)> {
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table'
+         AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'knowledge_fts%'
+         ORDER BY name",
+    ) else {
+        return Vec::new();
+    };
+    let names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default();
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let quoted = format!("\"{name}\"");
+            conn.query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .ok()
+            .filter(|n| *n > 0)
+            .map(|n| (name, n as u64))
+        })
+        .collect()
+}
+
+/// Build the SourceSnapshot from the already-read scalars: the portable
+/// tables (v3 contract list), per-table counts, and the walk receipts.
+fn finish_snapshot(
+    conn: &rusqlite::Connection,
+    schema_version: u32,
+    envelope_head: Option<String>,
+    dropped_vectors: u64,
+    walk_receipts: Vec<WalkReceiptRow>,
+) -> Result<SourceSnapshot, MigrationError> {
+    let all_nonempty = all_nonempty_tables(conn);
     let mut tables = Vec::new();
     let mut table_counts = Vec::new();
     for table_name in PORTABLE_TABLES {
-        let Some(table) = read_table(&conn, table_name)? else {
+        let Some(table) = read_table(conn, table_name)? else {
             continue;
         };
         table_counts.push((table.name.clone(), table.rows.len() as u64));
         tables.push(table);
     }
-    table_counts.sort();
+    // Vectors are dropped (H1) and the blob column is never selected, but
+    // the receipt must still name them.
+    if dropped_vectors > 0 {
+        table_counts.push(("node_embeddings".to_string(), dropped_vectors));
+        table_counts.sort();
+    }
 
     Ok(SourceSnapshot {
         schema_version,
@@ -274,6 +380,7 @@ pub fn load_snapshot(files: &SourceFiles) -> Result<SourceSnapshot, MigrationErr
         dropped_vectors,
         walk_receipts,
         table_counts,
+        all_nonempty_tables: all_nonempty,
     })
 }
 
@@ -591,6 +698,11 @@ impl<'a> Row<'a> {
     /// Wrap row `index` of `table`.
     pub fn new(table: &'a PortableTable, index: usize) -> Self {
         Self { table, index }
+    }
+
+    /// The table's column names, in order.
+    pub fn columns(&self) -> &'a [String] {
+        &self.table.columns
     }
 
     /// Raw value of column `name`.

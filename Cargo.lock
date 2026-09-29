@@ -544,6 +544,7 @@ dependencies = [
  "curve25519-dalek-derive",
  "digest 0.11.3",
  "fiat-crypto",
+ "rand_core 0.10.1",
  "rustc_version",
  "subtle",
  "zeroize",
@@ -643,7 +644,9 @@ checksum = "6ebaa1a2bf1290ab3bfe5a7b771d050ebffab2711c19a81691c683a5144a25de"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
+ "rand_core 0.10.1",
  "sha2",
+ "signature",
  "subtle",
  "zeroize",
 ]
@@ -2236,6 +2239,9 @@ name = "signature"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
+dependencies = [
+ "rand_core 0.10.1",
+]
 
 [[package]]
 name = "simd_cesu8"
@@ -2329,6 +2335,7 @@ dependencies = [
  "blake3",
  "borsh",
  "chrono",
+ "ed25519-dalek",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2360,8 +2367,10 @@ dependencies = [
  "borsh",
  "serde",
  "serde_json",
+ "strata",
  "strata-gate",
  "strata-kernel",
+ "strata-migrate",
 ]
 
 [[package]]

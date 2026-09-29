@@ -2055,6 +2055,12 @@ fn run_upgrade(dry_run: bool) -> anyhow::Result<()> {
         anyhow::bail!("no store at {} (nothing to upgrade)", source.display());
     }
 
+    // PR 0a: a v3 SQLite store is refused before anything opens it — the
+    // 4.0 answer to a v3 store is migrate-to-strata, not upgrade. This path
+    // previously opened the source READ-ONLY but without immutable=1, which
+    // still created -wal/-shm sidecars next to the original (audit finding).
+    vestige_core::ensure_not_v3(&source)?;
+
     if !dry_run {
         println!("{}", "=== Vestige Upgrade ===".cyan().bold());
         let storage = vestige_core::open_storage(Some(source.clone()))?;
@@ -2083,9 +2089,13 @@ fn run_upgrade(dry_run: bool) -> anyhow::Result<()> {
     // migrations we are rehearsing).
     #[cfg(feature = "legacy-sqlite")]
     {
+        let source_uri = format!(
+            "file:{}?mode=ro&immutable=1",
+            source.to_string_lossy().replace('?', "%3f").replace('#', "%23")
+        );
         let snapshot = rusqlite::Connection::open_with_flags(
-            &source,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            source_uri,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )?;
         snapshot.execute_batch(&format!(
             "VACUUM INTO '{}'",

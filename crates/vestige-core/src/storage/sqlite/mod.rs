@@ -2692,6 +2692,10 @@ impl SqliteMemoryStore {}
 // ============================================================================
 
 #[cfg(test)]
+// Reopen-style durability tests: run with the v3-engine harness feature
+// (`cargo test -p vestige-core --features v3-engine`); the guard stays
+// armed for plain test builds (audit: fresh-install create-then-refuse).
+#[cfg(all(test, feature = "v3-engine"))]
 mod tests;
 
 /// Policy lint: every writer transaction in this file must begin IMMEDIATE.

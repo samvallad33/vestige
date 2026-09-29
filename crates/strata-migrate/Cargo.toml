@@ -15,6 +15,9 @@ publish = false
 [dependencies]
 borsh = { version = "1", features = ["derive"] }
 blake3 = "1"
+# MIGRATION_RECEIPT signatures (non-derivable key, verified via the public
+# key recorded in the log).
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "rand_core"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -30,11 +33,17 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 
 strata = { path = "../strata" }
 strata-kernel = { path = "../strata-kernel" }
-# Same dependency shape vestige-mcp uses: no default features so the git2 /
-# OpenSSL-heavy codebase-git feature never enters this build. The migrator
-# reads sources through its own strictly read-only connection; vestige-core
-# supplies the portable types, the DSSE digest functions, and (through
-# bundled-sqlite) the v3 fixture tooling.
-vestige-core = { path = "../vestige-core", default-features = false, features = ["bundled-sqlite"] }
+# NO sqlite features here — deliberately. Enabling bundled-sqlite would
+# unify legacy-sqlite into the vestige-mcp binary build, so a fresh install
+# created a SQLite store and then refused to open it (audit finding 1). The
+# migrator reads sources through its OWN rusqlite connection and declares
+# the portable-format constant locally; vestige-core (ungated) supplies the
+# portable types and the DSSE digest functions.
+vestige-core = { path = "../vestige-core", default-features = false }
 
 # `rusqlite` above is also used by tests to plant synthetic fixture rows.
+
+[dev-dependencies]
+# Fixture tooling builds synthetic v3 stores through the real migration
+# path; test builds only — never unified into the shipped binary.
+vestige-core = { path = "../vestige-core", features = ["bundled-sqlite", "v3-engine"] }
