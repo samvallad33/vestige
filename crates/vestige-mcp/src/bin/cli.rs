@@ -1699,6 +1699,28 @@ fn run_update(
 
 /// Run stats command
 fn run_stats(show_tagging: bool, show_states: bool) -> anyhow::Result<()> {
+    // A migrated log is counted from segment bytes. `StrataStore::open` takes
+    // `strata.lock` and would make two `stats` processes, or stats beside the
+    // server, fail. The count does not link the SQLite reader.
+    let db = cli_db_path()?;
+    if matches!(
+        vestige_mcp::upgrade_launch::ensure_upgraded_or_exit(&db),
+        vestige_mcp::upgrade_launch::UpgradeLaunch::Ready
+    ) && let Some(memories) =
+        migrated_memory_count(&cli_data_dir()?.join(vestige_mcp::upgrade_launch::LOG_DIR_NAME))?
+    {
+        println!("{}", "=== Vestige Memory Statistics ===".cyan().bold());
+        println!();
+        println!("{}: {}", "Total Memories".white().bold(), memories);
+        if show_tagging || show_states {
+            println!(
+                "{}",
+                "Tagging and state breakdowns are not on the strata log yet.".yellow()
+            );
+        }
+        return Ok(());
+    }
+
     let storage = open_storage()?;
     let stats = storage.get_stats()?;
 
@@ -2490,6 +2512,63 @@ fn vestige_upgrade_bin() -> anyhow::Result<PathBuf> {
         "vestige-upgrade is not installed; {}",
         vestige_mcp::upgrade_launch::UPGRADE_HINT
     )
+}
+
+/// Memory count for a migrated log, without `StrataLog::open`.
+///
+/// `None` means the directory is not a migration log (no `KIND_NODE` frames),
+/// so the caller falls through to the live store. Kind `0x20` is
+/// `strata_migrate::records::KIND_NODE`. `node_type` is the fourth borsh
+/// field of that payload (`record_version`, `legacy_id`, `kernel_id`,
+/// `content`, `node_type`). Walk-receipt reference nodes are not memories.
+fn migrated_memory_count(log_dir: &Path) -> anyhow::Result<Option<usize>> {
+    if !log_dir.is_dir() {
+        return Ok(None);
+    }
+    let scan = match strata_verify::scan_log(log_dir) {
+        Ok(scan) => scan,
+        Err(_) => return Ok(None),
+    };
+    const KIND_NODE: u8 = 0x20;
+    let mut memories = 0usize;
+    let mut saw_node = false;
+    for frame in &scan.frames {
+        if frame.kind != KIND_NODE {
+            continue;
+        }
+        saw_node = true;
+        if borsh_node_type(&frame.payload).is_some_and(|kind| kind != "walk_receipt") {
+            memories += 1;
+        }
+    }
+    if saw_node {
+        Ok(Some(memories))
+    } else {
+        Ok(None)
+    }
+}
+
+/// `node_type` from a migration node payload. Borsh strings are a
+/// little-endian `u32` length followed by UTF-8 bytes.
+fn borsh_node_type(payload: &[u8]) -> Option<String> {
+    let mut rest = payload;
+    rest = rest.get(2..)?;
+    skip_borsh_str(&mut rest)?;
+    rest = rest.get(8..)?;
+    skip_borsh_str(&mut rest)?;
+    read_borsh_str(&mut rest)
+}
+
+fn skip_borsh_str(rest: &mut &[u8]) -> Option<()> {
+    read_borsh_str(rest).map(|_| ())
+}
+
+fn read_borsh_str(rest: &mut &[u8]) -> Option<String> {
+    let len = usize::try_from(u32::from_le_bytes(rest.get(..4)?.try_into().ok()?)).ok()?;
+    *rest = rest.get(4..)?;
+    let bytes = rest.get(..len)?;
+    *rest = rest.get(len..)?;
+    String::from_utf8(bytes.to_vec()).ok()
 }
 
 fn open_storage() -> anyhow::Result<std::sync::Arc<Storage>> {
