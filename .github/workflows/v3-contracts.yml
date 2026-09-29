@@ -104,7 +104,9 @@ jobs:
       - name: cargo tree must not show sqlite
         run: |
           set -euo pipefail
-          cargo tree -p vestige-mcp -e features > /tmp/vestige-features.txt
+          # Dev-dependencies may use rusqlite to plant fixtures. The shipped
+          # graph is normal+feature edges only.
+          cargo tree -p vestige-mcp -e 'no-dev,features' > /tmp/vestige-features.txt
           if grep -E -i 'rusqlite|libsqlite|legacy-sqlite|bundled-sqlite|sqlite3_' /tmp/vestige-features.txt; then
             echo "default feature tree still links sqlite"
             exit 1

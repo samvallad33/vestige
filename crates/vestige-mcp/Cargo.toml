@@ -13,11 +13,11 @@ publish = false
 autobins = false
 
 [features]
-# The shipped binaries boot a Strata log and upgrade a v3 file on first open.
-# `migrate-to-strata` is on in the default build. It is the only path that
-# enables `sqlite-reader` (bundled rusqlite). `legacy-sqlite` stays off the
-# shipped graph; unit tests and the v3-engine harness opt into it.
-default = ["connectors", "cloud-sync", "codebase-git", "migrate-to-strata"]
+# The shipped binaries boot a Strata log. `migrate-to-strata` is the only
+# path that enables `sqlite-reader` (bundled rusqlite), so it stays off this
+# default set. `legacy-sqlite` stays off the shipped graph; unit tests and
+# the v3-engine harness opt into it.
+default = ["connectors", "cloud-sync", "codebase-git"]
 # LEGACY SQLITE QUARANTINE (build/t5-legacy-isolation), mirroring
 # vestige-core. Gates every Storage/sqlite-touching module (server, tools,
 # dashboard, cognitive, resources, trace_recorder, autopilot,
@@ -25,9 +25,10 @@ default = ["connectors", "cloud-sync", "codebase-git", "migrate-to-strata"]
 # and forwards to vestige-core's `legacy-sqlite` + `bundled-sqlite`.
 # Off by default. Unit tests and the v3-engine harness opt in.
 legacy-sqlite = ["vestige-core/legacy-sqlite", "vestige-core/bundled-sqlite", "dep:rusqlite"]
-# First-launch upgrade and `vestige migrate-to-strata`. On in the shipped
-# default build. `sqlite-reader` is the edge that links bundled rusqlite.
-# `strata-verify` stays a direct dependency and does not enable that reader.
+# First-launch upgrade and `vestige migrate-to-strata`. Opt-in: the default
+# binary must not link rusqlite. `sqlite-reader` is the edge that links
+# bundled rusqlite. `strata-verify` stays a direct dependency and does not
+# enable that reader.
 migrate-to-strata = ["dep:strata", "dep:strata-migrate", "strata-migrate/sqlite-reader"]
 # Raw engine test harness for THIS crate's own test builds (feature-gated
 # restart/creation tests). Never in default; the shipped binary keeps the
@@ -175,6 +176,10 @@ strata-verify = { path = "../strata-verify" }
 # guard was test-disabled).
 [[test]]
 name = "auto_upgrade"
+required-features = ["migrate-to-strata"]
+
+[[test]]
+name = "reviewed_at_stdio"
 required-features = ["migrate-to-strata"]
 
 [[test]]

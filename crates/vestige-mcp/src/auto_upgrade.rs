@@ -329,7 +329,8 @@ fn free_bytes(dir: &Path) -> Option<u64> {
     if frsize == 0 {
         return None;
     }
-    Some(avail.saturating_mul(frsize))
+    // `statvfs` field widths differ by OS (u32 on macOS, u64 on Linux).
+    Some(u64::from(avail).saturating_mul(u64::from(frsize)))
 }
 
 #[cfg(not(unix))]

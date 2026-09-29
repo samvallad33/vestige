@@ -499,6 +499,7 @@ fn stage_import(
     }
 }
 
+#[cfg(feature = "sqlite-reader")]
 #[allow(clippy::too_many_arguments)]
 fn import_holding_lock(
     lock: std::fs::File,
@@ -1153,6 +1154,7 @@ fn verify_migrated(log: &StrataLog, anchor: [u8; 32]) -> Result<bool, MigrationE
 ///
 /// NULL, `""`, or a table without the column is `None` (the option tag is
 /// still written). A non-empty value that is not RFC3339 is corrupt.
+#[cfg(feature = "sqlite-reader")]
 fn last_review_ms(row: &source::Row<'_>) -> Result<Option<i64>, MigrationError> {
     if !row.columns().iter().any(|column| column == "last_review") {
         return Ok(None);
@@ -1296,6 +1298,7 @@ type NodeSet = (
 );
 
 /// TEXT column, or `None` when the column is absent or empty.
+#[cfg(feature = "sqlite-reader")]
 fn column_text<'a>(row: &source::Row<'a>, name: &str) -> Result<Option<&'a str>, MigrationError> {
     if !row.columns().iter().any(|column| column == name) {
         return Ok(None);
@@ -1311,6 +1314,7 @@ fn column_text<'a>(row: &source::Row<'a>, name: &str) -> Result<Option<&'a str>,
 /// `source_updated_at` column, so a sourced row keeps its `updated_at`
 /// instead. A row with neither a source nor a source timestamp yields
 /// `(None, None)`.
+#[cfg(feature = "sqlite-reader")]
 fn node_provenance(
     row: &source::Row<'_>,
 ) -> Result<(Option<SourceKey>, Option<i64>), MigrationError> {

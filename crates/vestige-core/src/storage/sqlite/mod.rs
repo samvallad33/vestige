@@ -36,7 +36,6 @@ use crate::storage::portable::{
 // Phase 4 wall: types referenced by the MemoryStoreSend forwarding seam below.
 use crate::SchemaIntrospection;
 use crate::actor::{ActorPolicySnapshot, RoleResolution};
-#[cfg(all(feature = "embeddings", feature = "vector-search"))]
 use crate::advanced::reconsolidation::LabileCandidate;
 use crate::advanced::{MergeCandidate, MergeOperation, MergePlan, MergePolicy};
 use crate::codebase::anchor::{AnchorStatus, CodeAnchor};
@@ -2952,7 +2951,17 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         sync_key: &str,
         encryption_key: Option<String>,
     ) -> Result<PortableSyncReport> {
-        SqliteMemoryStore::sync_portable_archive_cloud(self, endpoint, sync_key, encryption_key)
+        #[cfg(feature = "cloud-sync")]
+        {
+            SqliteMemoryStore::sync_portable_archive_cloud(self, endpoint, sync_key, encryption_key)
+        }
+        #[cfg(not(feature = "cloud-sync"))]
+        {
+            let _ = (endpoint, sync_key, encryption_key);
+            Err(StorageError::Init(
+                "sync_portable_archive_cloud requires the cloud-sync feature".into(),
+            ))
+        }
     }
     fn sync_portable_archive_file(&self, path: &Path) -> Result<PortableSyncReport> {
         SqliteMemoryStore::sync_portable_archive_file(self, path)

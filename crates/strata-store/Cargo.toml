@@ -19,6 +19,11 @@ strata-kernel = { path = "../strata-kernel" }
 strata-gate = { path = "../strata-gate" }
 # Migration frames share kind bytes 0x20/0x21 with store writes. Replay
 # decodes the existing migration records; it does not invent a StoreOp.
-strata-migrate = { path = "../strata-migrate" }
+# `sqlite-reader` stays off: this crate never opens the v3 file.
+strata-migrate = { path = "../strata-migrate", default-features = false }
 borsh = { version = "1", features = ["derive"] }
 blake3 = "1"
+
+[dev-dependencies]
+# Tests plant a v3 fixture and call `migrate`. Not inherited by vestige-mcp.
+strata-migrate = { path = "../strata-migrate", features = ["sqlite-reader"] }
