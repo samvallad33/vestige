@@ -9,15 +9,15 @@ use strata::payload_blake3;
 use strata_gate::policy::{ANY_KIND, WILDCARD_PREFIX};
 use strata_gate::record::{RecordKind, Verdict};
 use strata_gate::{Policy, Rule};
-use strata_kernel::fsrs::{ALGO_V2, FsrsFold};
+use strata_kernel::fsrs::{FsrsFold, ALGO_V2};
 
-use crate::op::{KIND_STORE_CHECKPOINT, KIND_STORE_WRITE, StoreOp};
+use crate::op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 use crate::store::{
-    CheckpointPayload, WritePayload, classify_checkpoint_payload, classify_write_payload,
-    decode_exact, handle_of, migration_edge, migration_node,
+    classify_checkpoint_payload, classify_write_payload, decode_exact, handle_of, migration_edge,
+    migration_node, CheckpointPayload, WritePayload,
 };
 use crate::types::{ConnectionRecord, EdgeDirection, EdgeKind, IngestInput};
-use crate::{StoreError, StrataStore, looks_like_failure};
+use crate::{looks_like_failure, StoreError, StrataStore};
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("strata-store-test-{}-{name}", std::process::id()));
@@ -720,18 +720,14 @@ fn replay_store_and_migration_frames_do_not_cross_classify() {
     assert_eq!(store.edges().len(), migration_edges);
     assert_eq!(store.checkpoints().len(), 0);
     assert_eq!(store.orphan_write_count(), 0);
-    assert!(
-        store
-            .get_node("11111111-1111-4111-8111-111111111111")
-            .is_some()
-    );
+    assert!(store
+        .get_node("11111111-1111-4111-8111-111111111111")
+        .is_some());
     assert!(store.edges().iter().any(|edge| edge.link_type == "touched"));
-    assert!(
-        store
-            .edges()
-            .iter()
-            .any(|edge| edge.link_type == "legacy_inferred")
-    );
+    assert!(store
+        .edges()
+        .iter()
+        .any(|edge| edge.link_type == "legacy_inferred"));
     std::fs::remove_dir_all(&imported).ok();
 }
 

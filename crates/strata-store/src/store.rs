@@ -11,18 +11,18 @@ use std::path::{Path, PathBuf};
 use borsh::{BorshDeserialize, BorshSerialize};
 use strata::StrataLog;
 use strata_gate::policy::{ANY_KIND, WILDCARD_PREFIX};
-use strata_gate::record::{EffectRecord, GateRecord, Propose, RecordKind, Verdict, action_kind};
+use strata_gate::record::{action_kind, EffectRecord, GateRecord, Propose, RecordKind, Verdict};
 use strata_gate::{GateRuntime, Policy, Rule, SeqAck};
-use strata_kernel::checkpoint::{Checkpoint, checkpoint_hash};
+use strata_kernel::checkpoint::{checkpoint_hash, Checkpoint};
 use strata_kernel::event::ReviewEvent;
-use strata_kernel::fsrs::{ALGO_V2, FsrsFold};
+use strata_kernel::fsrs::{FsrsFold, ALGO_V2};
 use strata_kernel::kernel::Kernel;
 use strata_kernel::state::State;
 use strata_kernel::verify::verify_with_head;
 
 use crate::error::StoreError;
 use crate::gate_log::StrataEventLog;
-use crate::op::{KIND_STORE_CHECKPOINT, KIND_STORE_WRITE, StoreOp};
+use crate::op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 use crate::types::{
     ConnectionRecord, EdgeDirection, EdgeKind, IngestInput, NodeRecord, VALID_FOREVER_MS,
 };
