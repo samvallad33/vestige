@@ -26,6 +26,10 @@ default = ["legacy-sqlite", "connectors", "cloud-sync", "codebase-git"]
 # and forwards to vestige-core's `legacy-sqlite` + `bundled-sqlite`.
 # Default ON; flips off when the STRATA backend lands.
 legacy-sqlite = ["vestige-core/legacy-sqlite", "vestige-core/bundled-sqlite", "dep:rusqlite"]
+# Raw engine test harness for THIS crate's own test builds (feature-gated
+# restart/creation tests). Never in default; the shipped binary keeps the
+# guard + creation block armed.
+v3-engine = ["legacy-sqlite", "vestige-core/v3-engine"]
 # w1b vector removal: `embeddings` and `vector-search` no longer select any
 # dependencies — they exist only as declared (always-off) stubs so legacy
 # `#[cfg(feature = ...)]` sites in this crate don't trip `unexpected_cfgs`.

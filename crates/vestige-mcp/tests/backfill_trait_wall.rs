@@ -80,7 +80,7 @@ impl MemoryStoreSend for WallMockStore {
     fn get_all_nodes_in_scope(&self, _scope: &str, limit: i32, _offset: i32) -> MockResult<Vec<KnowledgeNode>> {
         let mut nodes = self.nodes.lock().unwrap().clone();
         // newest first, mirroring the reference backend's ordering contract
-        nodes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        nodes.sort_by_key(|n| std::cmp::Reverse(n.created_at));
         nodes.truncate(limit.max(0) as usize);
         Ok(nodes)
     }

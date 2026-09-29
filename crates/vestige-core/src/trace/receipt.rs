@@ -309,6 +309,7 @@ pub struct BackfillCandidateEvidence {
 /// Typed predicate carried by a persisted receipt.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", content = "predicate", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)] // box the large variant when the no-embeddings profile is a first-class target
 pub enum ReceiptEvidence {
     /// A synaptic-tag capture decision and its measured state transition.
     SynapticCapture(SynapticCaptureEvidence),

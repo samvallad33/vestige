@@ -80,6 +80,16 @@ pub fn ensure_not_v3(path: &Path) -> Result<()> {
     }
 }
 
+/// True when the read-write v3 refusal is compiled in.
+///
+/// Workspace tests unify `v3-engine`, which compiles the constructor guard
+/// out. The MCP pre-check must use the same switch or a racing start treats
+/// the in-progress file (schema version 0) as a migration refusal.
+pub fn v3_rw_guard_armed() -> bool {
+    cfg!(all(feature = "legacy-sqlite", not(feature = "v3-engine")))
+}
+
+#[cfg_attr(not(feature = "legacy-sqlite"), allow(unused_variables))]
 fn read_schema_version(path: &Path, header: &[u8; 100]) -> u32 {
     #[cfg(feature = "legacy-sqlite")]
     if let Some(v) = query_schema_version_table(path) {

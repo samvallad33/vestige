@@ -4,9 +4,7 @@
 //! intentionally storage-level: import can keep IDs, FSRS state, graph edges,
 //! suppression state, embeddings, and audit/history rows intact.
 
-use chrono::{DateTime, Utc};
 use rusqlite::types::Value;
-use serde::{Deserialize, Serialize};
 
 /// Current portable archive format identifier.
 pub const PORTABLE_ARCHIVE_FORMAT: &str = "vestige.portable.v1";

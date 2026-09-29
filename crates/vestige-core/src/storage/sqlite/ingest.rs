@@ -339,7 +339,7 @@ impl SqliteMemoryStore {
         }
 
         self.get_node(&id)?
-            .ok_or_else(|| StorageError::NotFound(id))
+            .ok_or(StorageError::NotFound(id))
     }
 
     /// Smart ingest with Prediction Error Gating

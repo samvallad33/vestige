@@ -339,11 +339,11 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn append_mcp_call_outcome(
         &self,
-        run_id: &str,
-        tool: &str,
-        success: bool,
-        error: Option<&str>,
-        at_ms: i64,
+        _run_id: &str,
+        _tool: &str,
+        _success: bool,
+        _error: Option<&str>,
+        _at_ms: i64,
     ) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
@@ -355,7 +355,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Append one trace event.
-    fn append_trace_event(&self, event: &MemoryTraceEvent) -> StoreResult<i64> {
+    fn append_trace_event(&self, _event: &MemoryTraceEvent) -> StoreResult<i64> {
         Err(StorageError::Init(
             concat!(
                 stringify!(append_trace_event),
@@ -368,8 +368,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Apply failure feedback across the lookback window.
     fn apply_failure_feedback(
         &self,
-        failure_id: &str,
-        window: Duration,
+        _failure_id: &str,
+        _window: Duration,
     ) -> StoreResult<FailureFeedbackReport> {
         Err(StorageError::Init(
             concat!(
@@ -383,9 +383,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Apply one intention-graph command in a scope.
     fn apply_intention_graph(
         &self,
-        scope: &str,
-        command: Command,
-        now: DateTime<Utc>,
+        _scope: &str,
+        _command: Command,
+        _now: DateTime<Utc>,
     ) -> Result<Value, String> {
         Err(concat!(
             stringify!(apply_intention_graph),
@@ -397,12 +397,12 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn apply_tag_mutation(
         &self,
-        source_tags: &[String],
-        target_tag: &str,
-        scope: Option<&str>,
-        preview_token: &str,
-        op_type: &str,
-        reason: &str,
+        _source_tags: &[String],
+        _target_tag: &str,
+        _scope: Option<&str>,
+        _preview_token: &str,
+        _op_type: &str,
+        _reason: &str,
     ) -> StoreResult<MergeOperation> {
         Err(StorageError::Init(
             concat!(
@@ -414,14 +414,14 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Write a consistent backup of the whole store.
-    fn backup_to(&self, path: &Path) -> StoreResult<()> {
+    fn backup_to(&self, _path: &Path) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(stringify!(backup_to), " is not implemented by this backend").into(),
         ))
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn blast_radius(&self, root_id: &str, open_only: bool) -> StoreResult<BlastReport> {
+    fn blast_radius(&self, _root_id: &str, _open_only: bool) -> StoreResult<BlastReport> {
         Err(StorageError::Init(
             concat!(
                 stringify!(blast_radius),
@@ -434,9 +434,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn blast_radius_with_link_types(
         &self,
-        root_id: &str,
-        open_only: bool,
-        link_types: &[&str],
+        _root_id: &str,
+        _open_only: bool,
+        _link_types: &[&str],
     ) -> StoreResult<BlastReport> {
         Err(StorageError::Init(
             concat!(
@@ -450,7 +450,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Evaluate and durably commit one synaptic capture.
     fn capture_synaptic_event(
         &self,
-        request: &SynapticCaptureRequest,
+        _request: &SynapticCaptureRequest,
     ) -> StoreResult<DurableSynapticCapture> {
         Err(StorageError::Init(
             concat!(
@@ -462,7 +462,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Checkpoint the write-ahead log.
-    fn checkpoint_wal(&self, mode: WalCheckpointMode) -> StoreResult<WalCheckpointStatus> {
+    fn checkpoint_wal(&self, _mode: WalCheckpointMode) -> StoreResult<WalCheckpointStatus> {
         Err(StorageError::Init(
             concat!(
                 stringify!(checkpoint_wal),
@@ -475,8 +475,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn clear_dream_page_tags(
         &self,
-        ids: &[String],
-        started_at: DateTime<Utc>,
+        _ids: &[String],
+        _started_at: DateTime<Utc>,
     ) -> StoreResult<usize> {
         Err(StorageError::Init(
             concat!(
@@ -490,8 +490,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Closed-issue memories per connector.
     fn closed_issue_nodes(
         &self,
-        source_system: &str,
-        scope: &str,
+        _source_system: &str,
+        _scope: &str,
     ) -> StoreResult<Vec<ClosedIssueNode>> {
         Err(StorageError::Init(
             concat!(
@@ -503,7 +503,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Anchors recorded for one node.
-    fn code_anchors_for_node(&self, node_id: &str) -> StoreResult<Vec<CodeAnchor>> {
+    fn code_anchors_for_node(&self, _node_id: &str) -> StoreResult<Vec<CodeAnchor>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(code_anchors_for_node),
@@ -516,7 +516,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Anchors for a batch of nodes.
     fn code_anchors_for_nodes(
         &self,
-        node_ids: &[String],
+        _node_ids: &[String],
     ) -> StoreResult<HashMap<String, Vec<CodeAnchor>>> {
         Err(StorageError::Init(
             concat!(
@@ -530,7 +530,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Durably commit intention state transitions.
     fn commit_intention_check(
         &self,
-        changes: &[(IntentionRecord, IntentionRecord)],
+        _changes: &[(IntentionRecord, IntentionRecord)],
     ) -> Result<(), String> {
         Err(concat!(
             stringify!(commit_intention_check),
@@ -542,10 +542,10 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn concrete_search_filtered(
         &self,
-        query: &str,
-        limit: i32,
-        include_types: Option<&[String]>,
-        exclude_types: Option<&[String]>,
+        _query: &str,
+        _limit: i32,
+        _include_types: Option<&[String]>,
+        _exclude_types: Option<&[String]>,
     ) -> StoreResult<Vec<crate::memory::SearchResult>> {
         Err(StorageError::Init(
             concat!(
@@ -557,7 +557,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Count nodes under a retention threshold.
-    fn count_memories_below_retention(&self, threshold: f64) -> StoreResult<i64> {
+    fn count_memories_below_retention(&self, _threshold: f64) -> StoreResult<i64> {
         Err(StorageError::Init(
             concat!(
                 stringify!(count_memories_below_retention),
@@ -568,7 +568,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Count nodes created since a timestamp.
-    fn count_memories_since(&self, since: DateTime<Utc>) -> StoreResult<i64> {
+    fn count_memories_since(&self, _since: DateTime<Utc>) -> StoreResult<i64> {
         Err(StorageError::Init(
             concat!(
                 stringify!(count_memories_since),
@@ -614,8 +614,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn create_context_ablation_replay(
         &self,
-        source_receipt_id: &str,
-        withheld_slots: &[String],
+        _source_receipt_id: &str,
+        _withheld_slots: &[String],
     ) -> StoreResult<DurableCounterfactualReplay> {
         Err(StorageError::Init(
             concat!(
@@ -629,10 +629,10 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn current_code_context_nodes(
         &self,
-        node_type: &str,
-        tag: Option<&str>,
-        scope: &str,
-        limit: i32,
+        _node_type: &str,
+        _tag: Option<&str>,
+        _scope: &str,
+        _limit: i32,
     ) -> StoreResult<Vec<KnowledgeNode>> {
         Err(StorageError::Init(
             concat!(
@@ -660,7 +660,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn decide_memory_pr(&self, id: &str, action: MemoryPrAction) -> StoreResult<MemoryPr> {
+    fn decide_memory_pr(&self, _id: &str, _action: MemoryPrAction) -> StoreResult<MemoryPr> {
         Err(StorageError::Init(
             concat!(
                 stringify!(decide_memory_pr),
@@ -673,8 +673,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn decide_pending_memory_mutation(
         &self,
-        id: &str,
-        action: MemoryPrAction,
+        _id: &str,
+        _action: MemoryPrAction,
     ) -> StoreResult<Option<PendingMemoryMutationDecision>> {
         Err(StorageError::Init(
             concat!(
@@ -686,7 +686,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Delete a node; true when a row was removed.
-    fn delete_node(&self, id: &str) -> StoreResult<bool> {
+    fn delete_node(&self, _id: &str) -> StoreResult<bool> {
         Err(StorageError::Init(
             concat!(
                 stringify!(delete_node),
@@ -697,7 +697,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Demote a memory's retrieval strength.
-    fn demote_memory(&self, id: &str) -> StoreResult<KnowledgeNode> {
+    fn demote_memory(&self, _id: &str) -> StoreResult<KnowledgeNode> {
         Err(StorageError::Init(
             concat!(
                 stringify!(demote_memory),
@@ -710,9 +710,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn demote_memory_as_actor(
         &self,
-        id: &str,
-        claimed_role: Option<&str>,
-        tool: &str,
+        _id: &str,
+        _claimed_role: Option<&str>,
+        _tool: &str,
     ) -> StoreResult<ActorMutationOutcome> {
         Err(StorageError::Init(
             concat!(
@@ -724,7 +724,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn due_for_review_node_ids(&self, limit: usize) -> StoreResult<Vec<String>> {
+    fn due_for_review_node_ids(&self, _limit: usize) -> StoreResult<Vec<String>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(due_for_review_node_ids),
@@ -746,7 +746,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Export a portable archive to a path.
-    fn export_portable_archive_to_path(&self, path: &Path) -> StoreResult<PortableArchive> {
+    fn export_portable_archive_to_path(&self, _path: &Path) -> StoreResult<PortableArchive> {
         Err(StorageError::Init(
             concat!(
                 stringify!(export_portable_archive_to_path),
@@ -768,7 +768,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Open intentions inside one scope.
-    fn get_active_intentions_in_scope(&self, scope: &str) -> StoreResult<Vec<IntentionRecord>> {
+    fn get_active_intentions_in_scope(&self, _scope: &str) -> StoreResult<Vec<IntentionRecord>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_active_intentions_in_scope),
@@ -779,7 +779,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// One agent run summary.
-    fn get_agent_run(&self, run_id: &str) -> StoreResult<Option<AgentRunSummary>> {
+    fn get_agent_run(&self, _run_id: &str) -> StoreResult<Option<AgentRunSummary>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_agent_run),
@@ -801,7 +801,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Page through every node in the default scope order.
-    fn get_all_nodes(&self, limit: i32, offset: i32) -> StoreResult<Vec<KnowledgeNode>> {
+    fn get_all_nodes(&self, _limit: i32, _offset: i32) -> StoreResult<Vec<KnowledgeNode>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_all_nodes),
@@ -814,9 +814,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Page through every node in a project scope.
     fn get_all_nodes_in_scope(
         &self,
-        scope: &str,
-        limit: i32,
-        offset: i32,
+        _scope: &str,
+        _limit: i32,
+        _offset: i32,
     ) -> StoreResult<Vec<KnowledgeNode>> {
         Err(StorageError::Init(
             concat!(
@@ -839,7 +839,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn get_composition_event(&self, id: &str) -> StoreResult<Option<CompositionEventRecord>> {
+    fn get_composition_event(&self, _id: &str) -> StoreResult<Option<CompositionEventRecord>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_composition_event),
@@ -850,7 +850,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Members of one composition event.
-    fn get_composition_members(&self, event_id: &str) -> StoreResult<Vec<CompositionMemberRecord>> {
+    fn get_composition_members(&self, _event_id: &str) -> StoreResult<Vec<CompositionMemberRecord>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_composition_members),
@@ -863,8 +863,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_composition_neighbors(
         &self,
-        memory_id: &str,
-        limit: i32,
+        _memory_id: &str,
+        _limit: i32,
     ) -> StoreResult<Vec<CompositionNeighborRecord>> {
         Err(StorageError::Init(
             concat!(
@@ -878,7 +878,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_composition_outcomes(
         &self,
-        event_id: &str,
+        _event_id: &str,
     ) -> StoreResult<Vec<CompositionOutcomeRecord>> {
         Err(StorageError::Init(
             concat!(
@@ -892,8 +892,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_compositions_for_memory(
         &self,
-        memory_id: &str,
-        limit: i32,
+        _memory_id: &str,
+        _limit: i32,
     ) -> StoreResult<Vec<CompositionEventRecord>> {
         Err(StorageError::Init(
             concat!(
@@ -905,7 +905,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Edges touching one memory.
-    fn get_connections_for_memory(&self, memory_id: &str) -> StoreResult<Vec<ConnectionRecord>> {
+    fn get_connections_for_memory(&self, _memory_id: &str) -> StoreResult<Vec<ConnectionRecord>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_connections_for_memory),
@@ -918,7 +918,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_consolidation_history(
         &self,
-        limit: i32,
+        _limit: i32,
     ) -> StoreResult<Vec<ConsolidationHistoryRecord>> {
         Err(StorageError::Init(
             concat!(
@@ -932,7 +932,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_context_ablation_replay(
         &self,
-        replay_id: &str,
+        _replay_id: &str,
     ) -> StoreResult<Option<StoredCounterfactualReplay>> {
         Err(StorageError::Init(
             concat!(
@@ -944,7 +944,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Read recent dream history rows.
-    fn get_dream_history(&self, limit: i32) -> StoreResult<Vec<DreamHistoryRecord>> {
+    fn get_dream_history(&self, _limit: i32) -> StoreResult<Vec<DreamHistoryRecord>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_dream_history),
@@ -955,7 +955,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Read recent insight rows.
-    fn get_insights(&self, limit: i32) -> StoreResult<Vec<InsightRecord>> {
+    fn get_insights(&self, _limit: i32) -> StoreResult<Vec<InsightRecord>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_insights),
@@ -966,7 +966,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Fetch one intention by id.
-    fn get_intention(&self, id: &str) -> StoreResult<Option<IntentionRecord>> {
+    fn get_intention(&self, _id: &str) -> StoreResult<Option<IntentionRecord>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_intention),
@@ -977,7 +977,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn get_intentions_by_status(&self, status: &str) -> StoreResult<Vec<IntentionRecord>> {
+    fn get_intentions_by_status(&self, _status: &str) -> StoreResult<Vec<IntentionRecord>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_intentions_by_status),
@@ -1010,7 +1010,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn get_memory_pr(&self, id: &str) -> StoreResult<Option<MemoryPr>> {
+    fn get_memory_pr(&self, _id: &str) -> StoreResult<Option<MemoryPr>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_memory_pr),
@@ -1023,9 +1023,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_memory_subgraph(
         &self,
-        center_id: &str,
-        depth: u32,
-        max_nodes: usize,
+        _center_id: &str,
+        _depth: u32,
+        _max_nodes: usize,
     ) -> StoreResult<(Vec<KnowledgeNode>, Vec<ConnectionRecord>)> {
         Err(StorageError::Init(
             concat!(
@@ -1037,7 +1037,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn get_merge_operation(&self, operation_id: &str) -> StoreResult<Option<MergeOperation>> {
+    fn get_merge_operation(&self, _operation_id: &str) -> StoreResult<Option<MergeOperation>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_merge_operation),
@@ -1072,8 +1072,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_never_composed_candidates(
         &self,
-        limit: i32,
-        tag_filter: Option<&[String]>,
+        _limit: i32,
+        _tag_filter: Option<&[String]>,
     ) -> StoreResult<Vec<NeverComposedCandidate>> {
         Err(StorageError::Init(
             concat!(
@@ -1087,9 +1087,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_never_composed_candidates_in_scope(
         &self,
-        limit: i32,
-        tag_filter: Option<&[String]>,
-        scope: Option<&str>,
+        _limit: i32,
+        _tag_filter: Option<&[String]>,
+        _scope: Option<&str>,
     ) -> StoreResult<Vec<NeverComposedCandidate>> {
         Err(StorageError::Init(
             concat!(
@@ -1101,7 +1101,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Fetch one memory node by id.
-    fn get_node(&self, id: &str) -> StoreResult<Option<KnowledgeNode>> {
+    fn get_node(&self, _id: &str) -> StoreResult<Option<KnowledgeNode>> {
         Err(StorageError::Init(
             concat!(stringify!(get_node), " is not implemented by this backend").into(),
         ))
@@ -1119,7 +1119,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Fetch one receipt by id.
-    fn get_receipt(&self, receipt_id: &str) -> StoreResult<Option<Receipt>> {
+    fn get_receipt(&self, _receipt_id: &str) -> StoreResult<Option<Receipt>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_receipt),
@@ -1132,7 +1132,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_receipt_attestation_envelope(
         &self,
-        receipt_id: &str,
+        _receipt_id: &str,
     ) -> StoreResult<Option<DsseEnvelope>> {
         Err(StorageError::Init(
             concat!(
@@ -1146,7 +1146,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_recent_composition_events(
         &self,
-        limit: i32,
+        _limit: i32,
     ) -> StoreResult<Vec<CompositionEventRecord>> {
         Err(StorageError::Init(
             concat!(
@@ -1160,8 +1160,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_recent_composition_events_page(
         &self,
-        limit: i32,
-        offset: i32,
+        _limit: i32,
+        _offset: i32,
     ) -> StoreResult<Vec<CompositionEventRecord>> {
         Err(StorageError::Init(
             concat!(
@@ -1173,7 +1173,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn get_recent_connections(&self, limit: usize) -> StoreResult<Vec<ConnectionRecord>> {
+    fn get_recent_connections(&self, _limit: usize) -> StoreResult<Vec<ConnectionRecord>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_recent_connections),
@@ -1184,7 +1184,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn get_recent_state_transitions(&self, limit: i32) -> StoreResult<Vec<StateTransitionRecord>> {
+    fn get_recent_state_transitions(&self, _limit: i32) -> StoreResult<Vec<StateTransitionRecord>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_recent_state_transitions),
@@ -1219,7 +1219,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_retrieval_replay_capsule(
         &self,
-        source_receipt_id: &str,
+        _source_receipt_id: &str,
     ) -> StoreResult<Option<RetrievalReplayCapsuleSummary>> {
         Err(StorageError::Init(
             concat!(
@@ -1231,7 +1231,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Nodes scheduled for review.
-    fn get_review_queue(&self, limit: i32) -> StoreResult<Vec<KnowledgeNode>> {
+    fn get_review_queue(&self, _limit: i32) -> StoreResult<Vec<KnowledgeNode>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_review_queue),
@@ -1244,8 +1244,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn get_state_transitions(
         &self,
-        memory_id: &str,
-        limit: i32,
+        _memory_id: &str,
+        _limit: i32,
     ) -> StoreResult<Vec<StateTransitionRecord>> {
         Err(StorageError::Init(
             concat!(
@@ -1264,14 +1264,14 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Trace events for one agent run.
-    fn get_trace(&self, run_id: &str) -> StoreResult<Vec<MemoryTraceEvent>> {
+    fn get_trace(&self, _run_id: &str) -> StoreResult<Vec<MemoryTraceEvent>> {
         Err(StorageError::Init(
             concat!(stringify!(get_trace), " is not implemented by this backend").into(),
         ))
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn get_walk_receipt(&self, receipt_id: &str) -> StoreResult<Option<StoredWalkReceipt>> {
+    fn get_walk_receipt(&self, _receipt_id: &str) -> StoreResult<Option<StoredWalkReceipt>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(get_walk_receipt),
@@ -1282,7 +1282,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Recent git commit memory nodes.
-    fn git_commit_nodes(&self, limit: usize) -> StoreResult<Vec<GitCommitNode>> {
+    fn git_commit_nodes(&self, _limit: usize) -> StoreResult<Vec<GitCommitNode>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(git_commit_nodes),
@@ -1295,9 +1295,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Grant an actor role; returns grant row id.
     fn grant_actor_role(
         &self,
-        actor_did: &str,
-        role: &str,
-        note: Option<&str>,
+        _actor_did: &str,
+        _role: &str,
+        _note: Option<&str>,
     ) -> StoreResult<u64> {
         Err(StorageError::Init(
             concat!(
@@ -1311,10 +1311,10 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn hybrid_search(
         &self,
-        query: &str,
-        limit: i32,
-        keyword_weight: f32,
-        semantic_weight: f32,
+        _query: &str,
+        _limit: i32,
+        _keyword_weight: f32,
+        _semantic_weight: f32,
     ) -> StoreResult<Vec<crate::memory::SearchResult>> {
         Err(StorageError::Init(
             concat!(
@@ -1328,12 +1328,12 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn hybrid_search_filtered(
         &self,
-        query: &str,
-        limit: i32,
-        keyword_weight: f32,
-        semantic_weight: f32,
-        include_types: Option<&[String]>,
-        exclude_types: Option<&[String]>,
+        _query: &str,
+        _limit: i32,
+        _keyword_weight: f32,
+        _semantic_weight: f32,
+        _include_types: Option<&[String]>,
+        _exclude_types: Option<&[String]>,
     ) -> StoreResult<Vec<crate::memory::SearchResult>> {
         Err(StorageError::Init(
             concat!(
@@ -1345,7 +1345,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn hygiene_snapshot(&self, scope: Option<&str>) -> StoreResult<HygieneSnapshot> {
+    fn hygiene_snapshot(&self, _scope: Option<&str>) -> StoreResult<HygieneSnapshot> {
         Err(StorageError::Init(
             concat!(
                 stringify!(hygiene_snapshot),
@@ -1358,8 +1358,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Import a portable archive in memory.
     fn import_portable_archive(
         &self,
-        archive: &PortableArchive,
-        mode: PortableImportMode,
+        _archive: &PortableArchive,
+        _mode: PortableImportMode,
     ) -> StoreResult<PortableImportReport> {
         Err(StorageError::Init(
             concat!(
@@ -1373,8 +1373,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Import a portable archive from a path.
     fn import_portable_archive_from_path(
         &self,
-        path: &Path,
-        mode: PortableImportMode,
+        _path: &Path,
+        _mode: PortableImportMode,
     ) -> StoreResult<PortableImportReport> {
         Err(StorageError::Init(
             concat!(
@@ -1386,14 +1386,14 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Ingest a memory into the default scope.
-    fn ingest(&self, input: IngestInput) -> StoreResult<KnowledgeNode> {
+    fn ingest(&self, _input: IngestInput) -> StoreResult<KnowledgeNode> {
         Err(StorageError::Init(
             concat!(stringify!(ingest), " is not implemented by this backend").into(),
         ))
     }
 
     /// Ingest a memory into a named project scope.
-    fn ingest_in_scope(&self, input: IngestInput, scope: &str) -> StoreResult<KnowledgeNode> {
+    fn ingest_in_scope(&self, _input: IngestInput, _scope: &str) -> StoreResult<KnowledgeNode> {
         Err(StorageError::Init(
             concat!(
                 stringify!(ingest_in_scope),
@@ -1406,9 +1406,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Ingest into a scope with an explicit secret policy.
     fn ingest_in_scope_with_secret_policy(
         &self,
-        input: IngestInput,
-        scope: &str,
-        policy: SecretPolicy,
+        _input: IngestInput,
+        _scope: &str,
+        _policy: SecretPolicy,
     ) -> StoreResult<KnowledgeNode> {
         Err(StorageError::Init(
             concat!(
@@ -1422,8 +1422,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Ingest into the default scope with an explicit secret policy.
     fn ingest_with_secret_policy(
         &self,
-        input: IngestInput,
-        policy: SecretPolicy,
+        _input: IngestInput,
+        _policy: SecretPolicy,
     ) -> StoreResult<KnowledgeNode> {
         Err(StorageError::Init(
             concat!(
@@ -1437,9 +1437,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Evidence snapshot of one memory inside intention evaluation.
     fn intention_memory_snapshot(
         &self,
-        scope: &str,
-        memory_id: &str,
-        now: DateTime<Utc>,
+        _scope: &str,
+        _memory_id: &str,
+        _now: DateTime<Utc>,
     ) -> Result<Value, String> {
         Err(concat!(
             stringify!(intention_memory_snapshot),
@@ -1457,7 +1457,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Failed tool calls for the session funnel.
-    fn last_session_failed_calls(&self, run_id: Option<&str>) -> StoreResult<Vec<FailedToolCall>> {
+    fn last_session_failed_calls(&self, _run_id: Option<&str>) -> StoreResult<Vec<FailedToolCall>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(last_session_failed_calls),
@@ -1479,7 +1479,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Attach a receipt to a run; true on new link.
-    fn link_receipt_to_run(&self, receipt_id: &str, run_id: &str) -> StoreResult<bool> {
+    fn link_receipt_to_run(&self, _receipt_id: &str, _run_id: &str) -> StoreResult<bool> {
         Err(StorageError::Init(
             concat!(
                 stringify!(link_receipt_to_run),
@@ -1490,7 +1490,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Recent agent run summaries.
-    fn list_agent_runs(&self, limit: usize) -> StoreResult<Vec<AgentRunSummary>> {
+    fn list_agent_runs(&self, _limit: usize) -> StoreResult<Vec<AgentRunSummary>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(list_agent_runs),
@@ -1503,9 +1503,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Endorsement event feed with filters.
     fn list_endorsement_events(
         &self,
-        memory_id: Option<&str>,
-        actor_did: Option<&str>,
-        limit: usize,
+        _memory_id: Option<&str>,
+        _actor_did: Option<&str>,
+        _limit: usize,
     ) -> StoreResult<Vec<EndorsementEventRecord>> {
         Err(StorageError::Init(
             concat!(
@@ -1519,8 +1519,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn list_memory_prs(
         &self,
-        status: Option<MemoryPrStatus>,
-        limit: usize,
+        _status: Option<MemoryPrStatus>,
+        _limit: usize,
     ) -> StoreResult<Vec<MemoryPr>> {
         Err(StorageError::Init(
             concat!(
@@ -1532,7 +1532,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn list_merge_operations(&self, limit: usize) -> StoreResult<Vec<MergeOperation>> {
+    fn list_merge_operations(&self, _limit: usize) -> StoreResult<Vec<MergeOperation>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(list_merge_operations),
@@ -1543,7 +1543,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Recent receipts.
-    fn list_receipts(&self, limit: usize) -> StoreResult<Vec<Receipt>> {
+    fn list_receipts(&self, _limit: usize) -> StoreResult<Vec<Receipt>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(list_receipts),
@@ -1554,7 +1554,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Receipts attached to one run.
-    fn list_receipts_for_run(&self, run_id: &str, limit: usize) -> StoreResult<Vec<Receipt>> {
+    fn list_receipts_for_run(&self, _run_id: &str, _limit: usize) -> StoreResult<Vec<Receipt>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(list_receipts_for_run),
@@ -1565,7 +1565,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Pending reconsolidation plans with reasons.
-    fn list_reconsolidation_plans(&self, limit: usize) -> StoreResult<Vec<(MergePlan, String)>> {
+    fn list_reconsolidation_plans(&self, _limit: usize) -> StoreResult<Vec<(MergePlan, String)>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(list_reconsolidation_plans),
@@ -1578,8 +1578,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn list_tag_operations(
         &self,
-        limit: usize,
-        scope: Option<&str>,
+        _limit: usize,
+        _scope: Option<&str>,
     ) -> StoreResult<Vec<MergeOperation>> {
         Err(StorageError::Init(
             concat!(
@@ -1602,7 +1602,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Weakest nodes by retention strength.
-    fn lowest_retention_nodes(&self, limit: usize) -> StoreResult<Vec<(String, f64)>> {
+    fn lowest_retention_nodes(&self, _limit: usize) -> StoreResult<Vec<(String, f64)>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(lowest_retention_nodes),
@@ -1615,12 +1615,12 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Batched GC maintenance with retention and age gates.
     fn maintain_gc_batch(
         &self,
-        limit: usize,
-        after: Option<&str>,
-        budget_ms: u64,
-        dry_run: bool,
-        min_retention: f64,
-        max_age_days: Option<u64>,
+        _limit: usize,
+        _after: Option<&str>,
+        _budget_ms: u64,
+        _dry_run: bool,
+        _min_retention: f64,
+        _max_age_days: Option<u64>,
     ) -> StoreResult<Value> {
         Err(StorageError::Init(
             concat!(
@@ -1634,10 +1634,10 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Batched lifecycle maintenance with cursor and budget.
     fn maintain_lifecycle_batch(
         &self,
-        limit: usize,
-        after: Option<&str>,
-        budget_ms: u64,
-        dry_run: bool,
+        _limit: usize,
+        _after: Option<&str>,
+        _budget_ms: u64,
+        _dry_run: bool,
     ) -> StoreResult<Value> {
         Err(StorageError::Init(
             concat!(
@@ -1649,7 +1649,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Batched access-log maintenance.
-    fn maintain_log_batch(&self, limit: usize, dry_run: bool) -> StoreResult<Value> {
+    fn maintain_log_batch(&self, _limit: usize, _dry_run: bool) -> StoreResult<Value> {
         Err(StorageError::Init(
             concat!(
                 stringify!(maintain_log_batch),
@@ -1662,9 +1662,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn maintenance_memory_page(
         &self,
-        limit: usize,
-        after: Option<&str>,
-        scope: &str,
+        _limit: usize,
+        _after: Option<&str>,
+        _scope: &str,
     ) -> StoreResult<(Vec<crate::KnowledgeNode>, bool)> {
         Err(StorageError::Init(
             concat!(
@@ -1676,7 +1676,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn mark_reviewed(&self, id: &str, rating: Rating) -> StoreResult<KnowledgeNode> {
+    fn mark_reviewed(&self, _id: &str, _rating: Rating) -> StoreResult<KnowledgeNode> {
         Err(StorageError::Init(
             concat!(
                 stringify!(mark_reviewed),
@@ -1689,9 +1689,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn merge_candidates(
         &self,
-        policy: MergePolicy,
-        limit: usize,
-        tag_filter: &[String],
+        _policy: MergePolicy,
+        _limit: usize,
+        _tag_filter: &[String],
     ) -> StoreResult<Vec<MergeCandidate>> {
         Err(StorageError::Init(
             concat!(
@@ -1703,7 +1703,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Undo one merge operation by id.
-    fn merge_undo(&self, op_id: &str) -> StoreResult<MergeOperation> {
+    fn merge_undo(&self, _op_id: &str) -> StoreResult<MergeOperation> {
         Err(StorageError::Init(
             concat!(
                 stringify!(merge_undo),
@@ -1714,7 +1714,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Check node membership in a project scope.
-    fn node_is_in_scope(&self, id: &str, scope: &str) -> StoreResult<bool> {
+    fn node_is_in_scope(&self, _id: &str, _scope: &str) -> StoreResult<bool> {
         Err(StorageError::Init(
             concat!(
                 stringify!(node_is_in_scope),
@@ -1727,7 +1727,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Open failures touching a file set.
     fn open_failures_touching(
         &self,
-        changed_files: &[String],
+        _changed_files: &[String],
     ) -> StoreResult<Vec<OpenFailureTouching>> {
         Err(StorageError::Init(
             concat!(
@@ -1741,9 +1741,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn preview_tag_mutation(
         &self,
-        source_tags: &[String],
-        target_tag: &str,
-        scope: Option<&str>,
+        _source_tags: &[String],
+        _target_tag: &str,
+        _scope: Option<&str>,
     ) -> StoreResult<serde_json::Value> {
         Err(StorageError::Init(
             concat!(
@@ -1765,7 +1765,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Synaptic-tagging ingest pipeline step.
     fn process_synaptic_ingest(
         &self,
-        request: &SynapticIngestRequest,
+        _request: &SynapticIngestRequest,
     ) -> StoreResult<SynapticIngestOutcome> {
         Err(StorageError::Init(
             concat!(
@@ -1779,9 +1779,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Durable projection candidates in a scope.
     fn projection_candidates(
         &self,
-        scope: &str,
-        min_retention: f64,
-        limit: i32,
+        _scope: &str,
+        _min_retention: f64,
+        _limit: i32,
     ) -> StoreResult<Vec<KnowledgeNode>> {
         Err(StorageError::Init(
             concat!(
@@ -1793,7 +1793,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Promote a memory's retrieval strength and reps.
-    fn promote_memory(&self, id: &str) -> StoreResult<KnowledgeNode> {
+    fn promote_memory(&self, _id: &str) -> StoreResult<KnowledgeNode> {
         Err(StorageError::Init(
             concat!(
                 stringify!(promote_memory),
@@ -1806,9 +1806,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn promote_memory_as_actor(
         &self,
-        id: &str,
-        claimed_role: Option<&str>,
-        tool: &str,
+        _id: &str,
+        _claimed_role: Option<&str>,
+        _tool: &str,
     ) -> StoreResult<ActorMutationOutcome> {
         Err(StorageError::Init(
             concat!(
@@ -1820,7 +1820,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Bounded FSRS promotion used by backfill promotion.
-    fn promote_memory_backfill(&self, id: &str) -> StoreResult<KnowledgeNode> {
+    fn promote_memory_backfill(&self, _id: &str) -> StoreResult<KnowledgeNode> {
         Err(StorageError::Init(
             concat!(
                 stringify!(promote_memory_backfill),
@@ -1842,7 +1842,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn purge_node(&self, id: &str, reason: Option<&str>) -> StoreResult<PurgeReport> {
+    fn purge_node(&self, _id: &str, _reason: Option<&str>) -> StoreResult<PurgeReport> {
         Err(StorageError::Init(
             concat!(
                 stringify!(purge_node),
@@ -1855,11 +1855,11 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn query_time_range(
         &self,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
-        limit: i32,
-        node_type: Option<&str>,
-        tags: Option<&[String]>,
+        _start: Option<DateTime<Utc>>,
+        _end: Option<DateTime<Utc>>,
+        _limit: i32,
+        _node_type: Option<&str>,
+        _tags: Option<&[String]>,
     ) -> StoreResult<Vec<KnowledgeNode>> {
         Err(StorageError::Init(
             concat!(
@@ -1871,7 +1871,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Product recall: hybrid retrieval over KnowledgeNodes.
-    fn recall(&self, input: RecallInput) -> StoreResult<Vec<KnowledgeNode>> {
+    fn recall(&self, _input: RecallInput) -> StoreResult<Vec<KnowledgeNode>> {
         Err(StorageError::Init(
             concat!(stringify!(recall), " is not implemented by this backend").into(),
         ))
@@ -1880,7 +1880,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Attestation status for one receipt.
     fn receipt_attestation_status(
         &self,
-        receipt_id: &str,
+        _receipt_id: &str,
     ) -> StoreResult<Option<ReceiptAttestationStatus>> {
         Err(StorageError::Init(
             concat!(
@@ -1894,9 +1894,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Record one anchor verification result.
     fn record_anchor_verification(
         &self,
-        anchor_id: &str,
-        status: AnchorStatus,
-        checked_at: DateTime<Utc>,
+        _anchor_id: &str,
+        _status: AnchorStatus,
+        _checked_at: DateTime<Utc>,
     ) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
@@ -1908,7 +1908,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Record retrieval provenance for a batch of ids.
-    fn record_batch_retrieval(&self, ids: &[&str]) -> StoreResult<()> {
+    fn record_batch_retrieval(&self, _ids: &[&str]) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(record_batch_retrieval),
@@ -1919,7 +1919,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Persist code anchors for memories.
-    fn record_code_anchors(&self, anchors: &[CodeAnchor]) -> StoreResult<usize> {
+    fn record_code_anchors(&self, _anchors: &[CodeAnchor]) -> StoreResult<usize> {
         Err(StorageError::Init(
             concat!(
                 stringify!(record_code_anchors),
@@ -1930,7 +1930,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn record_composition_outcome(&self, outcome: &CompositionOutcomeRecord) -> StoreResult<()> {
+    fn record_composition_outcome(&self, _outcome: &CompositionOutcomeRecord) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(record_composition_outcome),
@@ -1941,7 +1941,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Record one access-log row for retention math.
-    fn record_memory_access(&self, memory_id: &str) -> StoreResult<()> {
+    fn record_memory_access(&self, _memory_id: &str) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(record_memory_access),
@@ -1954,9 +1954,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Endorse a reinforce mutation with provenance.
     fn record_reinforce_endorsement(
         &self,
-        id: &str,
-        claimed_role: Option<&str>,
-        tool: &str,
+        _id: &str,
+        _claimed_role: Option<&str>,
+        _tool: &str,
     ) -> StoreResult<ActorMutationOutcome> {
         Err(StorageError::Init(
             concat!(
@@ -1970,7 +1970,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn registered_receipt_signing_key(
         &self,
-        key_id: &str,
+        _key_id: &str,
     ) -> StoreResult<Option<TrustedSigningKey>> {
         Err(StorageError::Init(
             concat!(
@@ -1982,7 +1982,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Free a quarantined memory back into retrieval.
-    fn release_quarantine(&self, id: &str) -> StoreResult<KnowledgeNode> {
+    fn release_quarantine(&self, _id: &str) -> StoreResult<KnowledgeNode> {
         Err(StorageError::Init(
             concat!(
                 stringify!(release_quarantine),
@@ -1995,9 +1995,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn replace_code_anchors(
         &self,
-        node_id: &str,
-        scope: &str,
-        anchors: &[CodeAnchor],
+        _node_id: &str,
+        _scope: &str,
+        _anchors: &[CodeAnchor],
     ) -> StoreResult<usize> {
         Err(StorageError::Init(
             concat!(
@@ -2009,7 +2009,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Replay a scope's intention event log into a plan.
-    fn replay_intention_graph(&self, scope: &str) -> Result<Value, String> {
+    fn replay_intention_graph(&self, _scope: &str) -> Result<Value, String> {
         Err(concat!(
             stringify!(replay_intention_graph),
             " is not implemented by this backend"
@@ -2020,7 +2020,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Resolve effective role for the current actor.
     fn resolve_actor_role(
         &self,
-        claimed_role: Option<&str>,
+        _claimed_role: Option<&str>,
     ) -> StoreResult<(String, RoleResolution)> {
         Err(StorageError::Init(
             concat!(
@@ -2032,7 +2032,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn resolve_commit_sha_root(&self, sha_prefix: &str) -> StoreResult<Option<String>> {
+    fn resolve_commit_sha_root(&self, _sha_prefix: &str) -> StoreResult<Option<String>> {
         Err(StorageError::Init(
             concat!(
                 stringify!(resolve_commit_sha_root),
@@ -2043,7 +2043,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Resolve @handle/#tag/^sha memory handles to candidates.
-    fn resolve_handle(&self, query: &str) -> HandleResolution {
+    fn resolve_handle(&self, _query: &str) -> HandleResolution {
         unimplemented!(concat!(
             stringify!(resolve_handle),
             " is not implemented by this backend"
@@ -2051,7 +2051,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Retire blast-affected memories and report outcomes.
-    fn retire_affected(&self, ids: &[&str], reason: &str) -> Vec<RetireOutcome> {
+    fn retire_affected(&self, _ids: &[&str], _reason: &str) -> Vec<RetireOutcome> {
         unimplemented!(concat!(
             stringify!(retire_affected),
             " is not implemented by this backend"
@@ -2059,7 +2059,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Undo a suppression inside the labile window.
-    fn reverse_suppression(&self, id: &str, labile_hours: i64) -> StoreResult<KnowledgeNode> {
+    fn reverse_suppression(&self, _id: &str, _labile_hours: i64) -> StoreResult<KnowledgeNode> {
         Err(StorageError::Init(
             concat!(
                 stringify!(reverse_suppression),
@@ -2083,9 +2083,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn save_composition(
         &self,
-        event: &CompositionEventRecord,
-        members: &[CompositionMemberRecord],
-        outcomes: &[CompositionOutcomeRecord],
+        _event: &CompositionEventRecord,
+        _members: &[CompositionMemberRecord],
+        _outcomes: &[CompositionOutcomeRecord],
     ) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
@@ -2097,7 +2097,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Persist a typed connection edge between memories.
-    fn save_connection(&self, connection: &ConnectionRecord) -> StoreResult<()> {
+    fn save_connection(&self, _connection: &ConnectionRecord) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(save_connection),
@@ -2110,10 +2110,10 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Persist a counterfactual replay receipt.
     fn save_counterfactual_replay_receipt(
         &self,
-        replay_id: &str,
-        receipt: &Receipt,
-        run_id: Option<&str>,
-        tool: Option<&str>,
+        _replay_id: &str,
+        _receipt: &Receipt,
+        _run_id: Option<&str>,
+        _tool: Option<&str>,
     ) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
@@ -2125,7 +2125,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Persist one dream history row.
-    fn save_dream_history(&self, record: &DreamHistoryRecord) -> StoreResult<i64> {
+    fn save_dream_history(&self, _record: &DreamHistoryRecord) -> StoreResult<i64> {
         Err(StorageError::Init(
             concat!(
                 stringify!(save_dream_history),
@@ -2136,7 +2136,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Persist one insight row.
-    fn save_insight(&self, insight: &InsightRecord) -> StoreResult<()> {
+    fn save_insight(&self, _insight: &InsightRecord) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(save_insight),
@@ -2147,7 +2147,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Persist one intention row.
-    fn save_intention(&self, intention: &IntentionRecord) -> StoreResult<()> {
+    fn save_intention(&self, _intention: &IntentionRecord) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(save_intention),
@@ -2158,7 +2158,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Persist a memory PR for review.
-    fn save_memory_pr(&self, pr: &MemoryPr) -> StoreResult<()> {
+    fn save_memory_pr(&self, _pr: &MemoryPr) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(save_memory_pr),
@@ -2171,10 +2171,10 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Persist a retrieval/mutation receipt.
     fn save_receipt(
         &self,
-        receipt: &Receipt,
-        run_id: Option<&str>,
-        tool: Option<&str>,
-        query: Option<&str>,
+        _receipt: &Receipt,
+        _run_id: Option<&str>,
+        _tool: Option<&str>,
+        _query: Option<&str>,
     ) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
@@ -2188,10 +2188,10 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn save_retrieval_receipt_with_replay_capsule(
         &self,
-        receipt: &Receipt,
-        run_id: Option<&str>,
-        tool: Option<&str>,
-        draft: &RetrievalReplayCapsuleDraft,
+        _receipt: &Receipt,
+        _run_id: Option<&str>,
+        _tool: Option<&str>,
+        _draft: &RetrievalReplayCapsuleDraft,
     ) -> StoreResult<DurableRetrievalReplayCapsule> {
         Err(StorageError::Init(
             concat!(
@@ -2205,8 +2205,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn save_signed_retrieval_receipt_with_replay_capsule_atomic(
         &self,
-        write: SignedReceiptWrite<'_>,
-        draft: &RetrievalReplayCapsuleDraft,
+        _write: SignedReceiptWrite<'_>,
+        _draft: &RetrievalReplayCapsuleDraft,
     ) -> StoreResult<DurableSignedRetrievalReceipt> {
         Err(StorageError::Init(
             concat!(
@@ -2218,7 +2218,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Persist a synaptic tag episode; returns its id.
-    fn save_synaptic_tag(&self, tag: &SynapticTag) -> StoreResult<String> {
+    fn save_synaptic_tag(&self, _tag: &SynapticTag) -> StoreResult<String> {
         Err(StorageError::Init(
             concat!(
                 stringify!(save_synaptic_tag),
@@ -2231,8 +2231,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn save_walk_receipt(
         &self,
-        canonical_json: &str,
-        params: &Value,
+        _canonical_json: &str,
+        _params: &Value,
     ) -> StoreResult<WalkReceiptHandle> {
         Err(StorageError::Init(
             concat!(
@@ -2255,14 +2255,14 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// FTS text search returning product nodes.
-    fn search(&self, query: &str, limit: i32) -> StoreResult<Vec<KnowledgeNode>> {
+    fn search(&self, _query: &str, _limit: i32) -> StoreResult<Vec<KnowledgeNode>> {
         Err(StorageError::Init(
             concat!(stringify!(search), " is not implemented by this backend").into(),
         ))
     }
 
     /// Backdate a node for scenario replay and tests.
-    fn set_created_at(&self, id: &str, when: DateTime<Utc>) -> StoreResult<()> {
+    fn set_created_at(&self, _id: &str, _when: DateTime<Utc>) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(set_created_at),
@@ -2273,7 +2273,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn set_merge_policy(&self, policy: crate::advanced::MergePolicy) -> StoreResult<()> {
+    fn set_merge_policy(&self, _policy: crate::advanced::MergePolicy) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(set_merge_policy),
@@ -2284,7 +2284,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Persist the process actor DID.
-    fn set_process_actor(&self, did: &str) -> StoreResult<()> {
+    fn set_process_actor(&self, _did: &str) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(set_process_actor),
@@ -2295,7 +2295,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn set_protected(&self, id: &str, protected: bool) -> StoreResult<()> {
+    fn set_protected(&self, _id: &str, _protected: bool) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(set_protected),
@@ -2306,14 +2306,14 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Named sidecar directory under the data dir.
-    fn sidecar_dir(&self, name: &str) -> PathBuf {
+    fn sidecar_dir(&self, _name: &str) -> PathBuf {
         unimplemented!(concat!(
             stringify!(sidecar_dir),
             " is not implemented by this backend"
         ))
     }
     /// Register a trusted receipt signing key; true on new registration.
-    fn register_receipt_signing_key(&self, key: &TrustedSigningKey) -> StoreResult<bool> {
+    fn register_receipt_signing_key(&self, _key: &TrustedSigningKey) -> StoreResult<bool> {
         Err(StorageError::Init(
             concat!(
                 stringify!(register_receipt_signing_key),
@@ -2335,9 +2335,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Reconcile connector tombstones against live external ids.
     fn reconcile_source_tombstones(
         &self,
-        source_system: &str,
-        scope: &str,
-        live_ids: &[String],
+        _source_system: &str,
+        _scope: &str,
+        _live_ids: &[String],
     ) -> StoreResult<ReconcileReport> {
         Err(StorageError::Init(
             concat!(
@@ -2350,8 +2350,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Fetch the sync cursor for a connector source and scope.
     fn get_connector_cursor(
         &self,
-        source_system: &str,
-        scope: &str,
+        _source_system: &str,
+        _scope: &str,
     ) -> StoreResult<ConnectorCursor> {
         Err(StorageError::Init(
             concat!(
@@ -2362,7 +2362,7 @@ pub trait LocalMemoryStore: Sync + 'static {
         ))
     }
     /// Persist the sync cursor for a connector source.
-    fn save_connector_cursor(&self, cursor: &ConnectorCursor) -> StoreResult<()> {
+    fn save_connector_cursor(&self, _cursor: &ConnectorCursor) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(save_connector_cursor),
@@ -2374,8 +2374,8 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Dream-compile candidate pairs in a scope.
     fn dream_compile_candidates(
         &self,
-        scope: &str,
-        limit: usize,
+        _scope: &str,
+        _limit: usize,
     ) -> StoreResult<Vec<KnowledgeNode>> {
         Err(StorageError::Init(
             concat!(
@@ -2388,9 +2388,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Strengthen a connection edge; true when an edge was updated.
     fn strengthen_connection(
         &self,
-        source_id: &str,
-        target_id: &str,
-        boost: f64,
+        _source_id: &str,
+        _target_id: &str,
+        _boost: f64,
     ) -> StoreResult<bool> {
         Err(StorageError::Init(
             concat!(
@@ -2414,11 +2414,11 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Prediction-error-gated ingest with dedup shield exclusions and labile candidates.
     fn smart_ingest_excluding_in_scope_with_secret_policy_and_labile(
         &self,
-        input: IngestInput,
-        scope: &str,
-        excluded_node_ids: &[String],
-        policy: SecretPolicy,
-        labile: &[LabileCandidate],
+        _input: IngestInput,
+        _scope: &str,
+        _excluded_node_ids: &[String],
+        _policy: SecretPolicy,
+        _labile: &[LabileCandidate],
     ) -> StoreResult<SmartIngestResult> {
         Err(StorageError::Init(
             concat!(
@@ -2430,7 +2430,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn snooze_intention(&self, id: &str, until: DateTime<Utc>) -> StoreResult<bool> {
+    fn snooze_intention(&self, _id: &str, _until: DateTime<Utc>) -> StoreResult<bool> {
         Err(StorageError::Init(
             concat!(
                 stringify!(snooze_intention),
@@ -2474,7 +2474,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Top-down suppression (SIF/Davis Rac1 semantics).
-    fn suppress_memory(&self, id: &str) -> StoreResult<KnowledgeNode> {
+    fn suppress_memory(&self, _id: &str) -> StoreResult<KnowledgeNode> {
         Err(StorageError::Init(
             concat!(
                 stringify!(suppress_memory),
@@ -2487,9 +2487,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// Sync the portable archive against a cloud backend.
     fn sync_portable_archive_cloud(
         &self,
-        endpoint: &str,
-        sync_key: &str,
-        encryption_key: Option<String>,
+        _endpoint: &str,
+        _sync_key: &str,
+        _encryption_key: Option<String>,
     ) -> StoreResult<PortableSyncReport> {
         Err(StorageError::Init(
             concat!(
@@ -2501,7 +2501,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Sync the portable archive against a file backend.
-    fn sync_portable_archive_file(&self, path: &Path) -> StoreResult<PortableSyncReport> {
+    fn sync_portable_archive_file(&self, _path: &Path) -> StoreResult<PortableSyncReport> {
         Err(StorageError::Init(
             concat!(
                 stringify!(sync_portable_archive_file),
@@ -2512,7 +2512,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Tag vocabulary with counts.
-    fn tag_vocabulary(&self, scope: Option<&str>) -> StoreResult<TagVocabulary> {
+    fn tag_vocabulary(&self, _scope: Option<&str>) -> StoreResult<TagVocabulary> {
         Err(StorageError::Init(
             concat!(
                 stringify!(tag_vocabulary),
@@ -2523,7 +2523,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn undo_tag_mutation(&self, operation_id: &str) -> StoreResult<MergeOperation> {
+    fn undo_tag_mutation(&self, _operation_id: &str) -> StoreResult<MergeOperation> {
         Err(StorageError::Init(
             concat!(
                 stringify!(undo_tag_mutation),
@@ -2534,7 +2534,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn update_intention_status(&self, id: &str, status: &str) -> StoreResult<bool> {
+    fn update_intention_status(&self, _id: &str, _status: &str) -> StoreResult<bool> {
         Err(StorageError::Init(
             concat!(
                 stringify!(update_intention_status),
@@ -2547,9 +2547,9 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn update_memory_state(
         &self,
-        memory_id: &str,
-        new_state: &str,
-        reason: &str,
+        _memory_id: &str,
+        _new_state: &str,
+        _reason: &str,
     ) -> StoreResult<bool> {
         Err(StorageError::Init(
             concat!(
@@ -2561,7 +2561,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// See the SQLite reference implementation for semantics.
-    fn update_node_content(&self, id: &str, new_content: &str) -> StoreResult<()> {
+    fn update_node_content(&self, _id: &str, _new_content: &str) -> StoreResult<()> {
         Err(StorageError::Init(
             concat!(
                 stringify!(update_node_content),
@@ -2572,7 +2572,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     }
 
     /// Connector upsert keyed by external source identity.
-    fn upsert_by_source(&self, input: IngestInput) -> StoreResult<SourceUpsertResult> {
+    fn upsert_by_source(&self, _input: IngestInput) -> StoreResult<SourceUpsertResult> {
         Err(StorageError::Init(
             concat!(
                 stringify!(upsert_by_source),
@@ -2585,7 +2585,7 @@ pub trait LocalMemoryStore: Sync + 'static {
     /// See the SQLite reference implementation for semantics.
     fn verify_stored_receipt_attestation(
         &self,
-        receipt_id: &str,
+        _receipt_id: &str,
     ) -> StoreResult<Option<StoredReceiptAttestationVerification>> {
         Err(StorageError::Init(
             concat!(

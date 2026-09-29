@@ -235,44 +235,38 @@ impl SqliteMemoryStore {
             } else {
                 HandleKind::File
             };
-            if let Ok(ids) = self.boundary_match_ids(query) {
-                if !ids.is_empty() {
+            if let Ok(ids) = self.boundary_match_ids(query)
+                && !ids.is_empty() {
                     return HandleResolution::resolved(kind, ids, true);
                 }
-            }
         }
 
         // 4. symbol exact/prefix over extracted entities (Code tier only).
-        if let Some(normalized) = normalize_identifier(query) {
-            if matches!(normalized_tier(&normalized), IdentifierTier::Code) {
-                if let Some(hit) = self.resolve_symbol(&normalized) {
+        if let Some(normalized) = normalize_identifier(query)
+            && matches!(normalized_tier(&normalized), IdentifierTier::Code)
+                && let Some(hit) = self.resolve_symbol(&normalized) {
                     return hit;
                 }
-            }
-        }
 
         // 5. run id / tool-call id over agent_traces (V18). Exact only.
-        if let Ok(found) = self.run_id_exists(query) {
-            if found {
+        if let Ok(found) = self.run_id_exists(query)
+            && found {
                 return HandleResolution::resolved(HandleKind::Run, vec![query.to_string()], true);
             }
-        }
-        if let Ok(found) = self.tool_call_id_exists(query) {
-            if found {
+        if let Ok(found) = self.tool_call_id_exists(query)
+            && found {
                 return HandleResolution::resolved(
                     HandleKind::ToolCall,
                     vec![query.to_string()],
                     true,
                 );
             }
-        }
 
         // 6. tag exact over node tags.
-        if let Ok(ids) = self.tag_match_ids(query) {
-            if !ids.is_empty() {
+        if let Ok(ids) = self.tag_match_ids(query)
+            && !ids.is_empty() {
                 return HandleResolution::resolved(HandleKind::Tag, ids, true);
             }
-        }
 
         HandleResolution::unresolved()
     }

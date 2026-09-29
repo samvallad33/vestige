@@ -18,8 +18,7 @@ use std::path::Path;
 
 use strata::StrataLog;
 use strata_migrate::records::{
-    decode_receipt, KIND_EDGE, KIND_FSRS_REVIEW, KIND_MIGRATION_RECEIPT, KIND_NODE,
-    KIND_SUPERSESSION, KIND_TOMBSTONE,
+    decode_receipt, KIND_EDGE, KIND_MIGRATION_RECEIPT, KIND_NODE, KIND_TOMBSTONE,
 };
 
 /// Outcome of a full migrated-log verification.

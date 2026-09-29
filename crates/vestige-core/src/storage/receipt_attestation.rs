@@ -766,10 +766,12 @@ impl DisclosureMapping {
         &self.evidence_slot
     }
 
+    #[allow(dead_code)] // consumer sits in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
     pub(crate) fn memory_id(&self) -> &str {
         &self.memory_id
     }
 
+    #[allow(dead_code)] // consumer sits in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
     pub(crate) fn nonce(&self) -> &[u8; 32] {
         &self.nonce
     }
@@ -1765,6 +1767,7 @@ impl ChainEntry {
     /// This is crate-visible so the durable store can reconstruct the exact
     /// predecessor selected from its append-only chain state; callers outside
     /// Vestige cannot mint arbitrary predecessor metadata.
+    #[allow(dead_code)] // consumer sits in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
     pub(crate) fn from_verified_parts(
         receipt_id: String,
         chain_id: String,

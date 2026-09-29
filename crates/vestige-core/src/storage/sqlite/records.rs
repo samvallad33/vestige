@@ -3,6 +3,9 @@
 use super::*;
 
 impl SqliteMemoryStore {
+    // NOTE: composition_bridge_score / tag_distance / anchor_summary below
+    // are dead until PR 10 (structural GhostLink) rewires their consumers;
+    // the guard ratchet tracks that work.
     // ========================================================================
     // COMPOSEDGRAPH PERSISTENCE
     // ========================================================================
@@ -448,6 +451,7 @@ impl SqliteMemoryStore {
         tags
     }
 
+    #[allow(dead_code)] // PR 10 GhostLink consumer lands later
     pub(super) fn composition_bridge_score(
         a: &KnowledgeNode,
         b: &KnowledgeNode,
@@ -469,6 +473,7 @@ impl SqliteMemoryStore {
             .clamp(0.0, 1.0)
     }
 
+    #[allow(dead_code)] // PR 10 GhostLink consumer lands later
     pub(super) fn tag_distance(a: &[String], b: &[String]) -> f64 {
         let a_set = a.iter().map(String::as_str).collect::<HashSet<_>>();
         let b_set = b.iter().map(String::as_str).collect::<HashSet<_>>();
@@ -517,6 +522,7 @@ impl SqliteMemoryStore {
             + usize::from(term.contains('_')) * 2
     }
 
+    #[allow(dead_code)] // PR 10 GhostLink consumer lands later
     pub(super) fn anchor_summary(shared_tags: &[String], shared_terms: &[String]) -> String {
         if !shared_tags.is_empty() && !shared_terms.is_empty() {
             format!(

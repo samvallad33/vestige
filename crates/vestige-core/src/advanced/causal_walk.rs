@@ -256,6 +256,7 @@ pub struct WalkRecord {
 
 /// The full sha a commit record carries (first line: `commit <sha> ...`).
 /// Same pattern as the MCP backfill tool so both sides of the wire agree.
+#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 fn commit_sha_of(content: &str) -> Option<String> {
     let mut words = content.split_whitespace();
     if words.next() != Some("commit") {
@@ -268,6 +269,7 @@ fn commit_sha_of(content: &str) -> Option<String> {
 
 /// Parse the `files:` / `symbols:` lines of a `git_records::record_content`
 /// body. `( +N more)` truncation markers are dropped, never parsed as paths.
+#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 fn parse_prefixed_line(content: &str, prefix: &str) -> Vec<String> {
     content
         .lines()
@@ -288,6 +290,7 @@ fn parse_prefixed_line(content: &str, prefix: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 fn walk_record_of(id: &str, content: &str, tags: &[String], created_at: DateTime<Utc>, stability: f64) -> WalkRecord {
     let is_commit = tags.iter().any(|t| t == git_records::COMMIT_TAG);
     WalkRecord {
@@ -452,11 +455,10 @@ impl CausalWalkOptions {
                                 a.time = a.time.max(Some(r.created_at));
                             }
                         }
-                        if let Some(ms) = ev.last_event_at {
-                            if let Some(t) = DateTime::from_timestamp_millis(ms) {
+                        if let Some(ms) = ev.last_event_at
+                            && let Some(t) = DateTime::from_timestamp_millis(ms) {
                                 a.time = a.time.max(Some(t));
                             }
-                        }
                     }
                 },
                 StartPoint::LoggedWrite { node_id } => match by_id.get(node_id.as_str()) {
@@ -930,6 +932,7 @@ impl Default for CausalWalkRequest {
     }
 }
 
+#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 fn git_lines(repo: &str, git_args: &[&str]) -> Option<Vec<String>> {
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -974,8 +977,9 @@ pub fn walk_storage(
         })
         .collect();
 
-    let mut ctx = WalkContext::default();
-    ctx.now = Utc::now();
+    // Wall clock feeds the non-hashed display path only (H6 applies to the
+    // hashed walk state, which is caller-timestamped).
+    let mut ctx = WalkContext { now: Utc::now(), ..WalkContext::default() };
 
     // ci_run evidence: the run's failure channel
     for start in &req.start_points {

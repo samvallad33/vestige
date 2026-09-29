@@ -168,7 +168,7 @@ impl Rng {
 
 /// Generate a seeded script with at least `min_ops` operations (always
 /// >= 20 by construction of the per-class minimums). Contents are unique
-/// (index-stamped), ratings span 1..=4, elapsed gaps are 1..=9 SEQ.
+/// > (index-stamped), ratings span 1..=4, elapsed gaps are 1..=9 SEQ.
 pub fn gen_script(seed: u64, min_ops: usize) -> Script {
     let mut rng = Rng::new(seed);
     let ingests = 8 + rng.below(5); // 8..=12

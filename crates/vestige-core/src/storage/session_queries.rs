@@ -23,10 +23,11 @@
 //!   it and `agent_traces` ordering is preserved.
 //!
 //! `source_sync`'s `closed_by` linking is local-only and deterministic: the
-//! GitHub connector payload does not carry the closing PR (it fetches issues
-//! + comments, no timeline events), so the link is built from what is already
-//! ingested — closed issue nodes and git-commit records. These queries hand
-//! over the raw pairs; the keyword matcher and edge writing live in the tool.
+//! GitHub connector payload does not carry the closing PR (it fetches
+//! issues with their comments but no timeline events), so the link is built
+//! from the rows the store already holds: closed issue nodes and
+//! git-commit records.  These queries hand the raw pairs to the caller;
+//! the keyword matcher and edge writing live in the tool.
 
 use rusqlite::{OptionalExtension, params};
 

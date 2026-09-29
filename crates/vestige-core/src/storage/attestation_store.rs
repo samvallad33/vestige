@@ -17,9 +17,9 @@ use uuid::Uuid;
 
 use super::receipt_attestation::{
     ChainEntry, DisclosureMapping, DisclosureVerification, DsseEnvelope, ExpectedTerminalHead,
-    MAX_TRUSTED_SIGNING_KEYS, PredecessorExpectation, ReceiptAttestationV1,
-    RedactionSafeReceiptBindingV1, SignedReceiptAttestation, SigningKeyStatus,
-    TrustedPredecessorAnchor, TrustedSigningKey, VerificationContext, VerificationReport,
+    MAX_TRUSTED_SIGNING_KEYS, PredecessorExpectation,
+    RedactionSafeReceiptBindingV1, SigningKeyStatus,
+    TrustedPredecessorAnchor, TrustedSigningKey, VerificationContext,
     public_key_fingerprint, validate_receipt_signing_key_id, verify_disclosure,
     verify_envelope_with_keys,
 };
@@ -1143,7 +1143,7 @@ mod tests {
     use crate::IngestInput;
     use crate::storage::receipt_attestation::{
         AttestationChainPosition, CaptureDirection, ProducerIdentity,
-        RedactionSafeDecisionProjectionV1, sign_attestation,
+        RedactionSafeDecisionProjectionV1, sign_attestation, ReceiptAttestationV1,
     };
     use crate::trace::{DecayRisk, Receipt};
     use ed25519_dalek::SigningKey;

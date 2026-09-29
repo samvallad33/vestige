@@ -52,6 +52,7 @@
 //! "we cannot check this", never "this is wrong". Telling someone their
 //! correct memory is stale would be a worse bug than the one being fixed.
 
+#[cfg_attr(not(feature = "legacy-sqlite"), allow(unused_imports))]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

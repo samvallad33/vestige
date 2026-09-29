@@ -821,7 +821,8 @@ mod w1b_search_collapse_tests {
             .expect("store opens")
     }
 
-    fn summary(results: &[SearchResult]) -> Vec<(String, Option<f32>, Option<f32>, f32, MatchType)> {
+    type Row = (String, Option<f32>, Option<f32>, f32, MatchType);
+    fn summary(results: &[SearchResult]) -> Vec<Row> {
         results
             .iter()
             .map(|r| {
