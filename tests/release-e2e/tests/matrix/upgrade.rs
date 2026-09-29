@@ -1761,12 +1761,19 @@ fn resign_log_under_fresh_key(dir: &std::path::Path) {
         let bytes = fs::read(path).unwrap();
         let (mut header, mut frames, trailer) =
             split_segment(&bytes).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+        header.prev_segment_hash = prev_segment;
+        // `seal` rolls a header-only segment after the signed one. It has no
+        // trailer. Keep it unsealed and chain it to the segment we just rewrote.
+        if frames.is_empty() && trailer.is_none() {
+            fs::write(path, borsh::to_vec(&header).unwrap()).unwrap();
+            prev_segment = *blake3::hash(&fs::read(path).unwrap()).as_bytes();
+            continue;
+        }
         assert!(
             trailer.is_some(),
-            "migration segment {} is unsealed",
+            "migration segment {} has frames and no trailer",
             path.display()
         );
-        header.prev_segment_hash = prev_segment;
         for frame in &mut frames {
             if frame.kind == strata_migrate::records::KIND_NODE && !changed_node {
                 let mut node = strata_migrate::records::decode_node(&frame.payload)
