@@ -35,7 +35,7 @@ jobs:
             # generates 0 embeddings, and no model download is ever attempted.
             # usearch builds cleanly on MSVC because vestige-core pins it with
             # features=["fp16lib"] (see crates/vestige-core/Cargo.toml).
-            cargo_flags: "--no-default-features --features embeddings,ort-download,vector-search,connectors"
+            cargo_flags: "--no-default-features --features embeddings,ort-download,vector-search"
             needs_onnxruntime: false
           # Intel Mac uses the ort-dynamic feature to runtime-link against a
           # system libonnxruntime (Homebrew), sidestepping the missing
@@ -45,7 +45,7 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: tar.gz
-            cargo_flags: "--no-default-features --features ort-dynamic,vector-search,connectors"
+            cargo_flags: "--no-default-features --features ort-dynamic,vector-search"
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
@@ -148,6 +148,24 @@ jobs:
             }
           }
           NODE
+
+      - name: Reject reqwest in the release feature set
+        shell: bash
+        run: |
+          set +e
+          out=$(cargo tree -e features -i reqwest --locked ${{ matrix.cargo_flags }} 2>reqwest-tree.err)
+          status=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ -n "$out" ]; then
+            echo "::error::${{ matrix.target }} feature set links reqwest"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ] && ! grep -q 'did not match any packages' reqwest-tree.err; then
+            cat reqwest-tree.err
+            exit "$status"
+          fi
+          echo "reqwest absent from ${{ matrix.target }}"
 
       - name: Build
         run: cargo build --locked --package vestige-mcp --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
@@ -311,6 +329,24 @@ jobs:
             }
           }
           NODE
+
+      - name: Reject reqwest in the release feature set
+        shell: bash
+        run: |
+          set +e
+          out=$(cargo tree -e features -i reqwest --locked 2>reqwest-tree.err)
+          status=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ -n "$out" ]; then
+            echo "::error::x86_64-unknown-linux-gnu feature set links reqwest"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ] && ! grep -q 'did not match any packages' reqwest-tree.err; then
+            cat reqwest-tree.err
+            exit "$status"
+          fi
+          echo "reqwest absent from x86_64-unknown-linux-gnu"
 
       - name: Build
         env:
@@ -515,6 +551,24 @@ jobs:
           }
           NODE
 
+      - name: Reject reqwest in the release feature set
+        shell: bash
+        run: |
+          set +e
+          out=$(cargo tree -e features -i reqwest --locked 2>reqwest-tree.err)
+          status=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ -n "$out" ]; then
+            echo "::error::aarch64-unknown-linux-gnu feature set links reqwest"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ] && ! grep -q 'did not match any packages' reqwest-tree.err; then
+            cat reqwest-tree.err
+            exit "$status"
+          fi
+          echo "reqwest absent from aarch64-unknown-linux-gnu"
+
       - name: Build
         env:
           CXX: g++-13
@@ -716,11 +770,10 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  # Android (#145): the no-embeddings Termux profile Jelloeater is testing on
-  # a Pixel. Build recipe mirrors ci.yml's android-build job so what ships is
-  # byte-for-byte the configuration CI already verifies on every PR: cargo-ndk
-  # against API 24, static C++ runtime, and a hard gate that only bionic's
-  # libc/libm/libdl/liblog appear as runtime dependencies. No npm installer
+  # Android (#145): the no-embeddings Termux profile. cargo-ndk against API 24,
+  # static C++ runtime, and a hard gate that only bionic's libc/libm/libdl/liblog
+  # appear as runtime dependencies. `--no-default-features` leaves connectors
+  # and cloud-sync off, so the asset has no HTTP client. No npm installer
   # mapping yet — on-device Termux users build from source or take the asset.
   build-android:
     name: Build aarch64-linux-android (no embeddings)
@@ -766,6 +819,24 @@ jobs:
           echo "ANDROID_NDK_ROOT=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
           echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
+      - name: Reject reqwest in the release feature set
+        shell: bash
+        run: |
+          set +e
+          out=$(cargo tree -e features -i reqwest --locked --no-default-features 2>reqwest-tree.err)
+          status=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ -n "$out" ]; then
+            echo "::error::aarch64-linux-android feature set links reqwest"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ] && ! grep -q 'did not match any packages' reqwest-tree.err; then
+            cat reqwest-tree.err
+            exit "$status"
+          fi
+          echo "reqwest absent from aarch64-linux-android"
+
       - name: Build (release, no embeddings)
         env:
           CXXSTDLIB: c++_static
@@ -773,7 +844,7 @@ jobs:
           # cargo-ndk 4 takes the API level as --platform; a bare -p is handed
           # to cargo as --package, and "unknown package: 24" is what you get.
           cargo ndk -t arm64-v8a --platform "$ANDROID_API" build --release -p vestige-mcp \
-            --no-default-features --features connectors
+            --no-default-features
 
       - name: Only bionic may be a runtime dependency
         run: |
