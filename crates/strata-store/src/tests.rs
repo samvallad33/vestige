@@ -497,3 +497,51 @@ fn node_ids_are_log_derived_and_handle_is_stable() {
     assert_eq!(store.card_state(&a).map(|c| c.review_count), Some(1));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn rewrite_record_appends_a_compensating_upsert_and_replays() {
+    let dir = temp_dir("undo-rewrite");
+    let (digest, frames_after, id) = {
+        let mut store = StrataStore::open(&dir).expect("open");
+        let id = store
+            .ingest(input("visible fact", &["old"]))
+            .expect("ingest");
+        let frames_before = store.log().head().frames_total;
+        let reviews_before = store.review_event_count();
+        store.set_created_at(&id, 50).expect("change");
+        assert_eq!(store.get_node(&id).expect("node").created_at_ms, 50);
+        let prior = store
+            .upserts()
+            .iter()
+            .find(|(_, record)| record.id == id)
+            .expect("original upsert")
+            .1
+            .clone();
+        let restored = store.rewrite_record(prior).expect("compensating restore");
+        assert!(restored > 0);
+        assert_eq!(
+            store.get_node(&id).expect("restored").created_at_ms,
+            1_700_000_000_000
+        );
+        let mut tomb = store.get_node(&id).expect("live");
+        tomb.superseded_by = Some(id.clone());
+        store.rewrite_record(tomb).expect("tombstone");
+        assert!(store.get_node(&id).expect("tomb").is_undo_tombstone());
+        assert_eq!(store.node_count(), 0, "tombstone leaves the live set");
+        assert_eq!(store.review_event_count(), reviews_before);
+        assert!(store.log().head().frames_total > frames_before);
+        assert_eq!(store.orphan_write_count(), 0);
+        assert_eq!(store.upserts().len(), 4);
+        (store.state_digest(), store.log().head().frames_total, id)
+    };
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(reopened.state_digest(), digest);
+    assert_eq!(reopened.log().head().frames_total, frames_after);
+    assert_eq!(reopened.node_count(), 0);
+    assert!(reopened
+        .get_node(&id)
+        .expect("replayed")
+        .is_undo_tombstone());
+    assert_eq!(reopened.upserts().len(), 4);
+    std::fs::remove_dir_all(&dir).ok();
+}

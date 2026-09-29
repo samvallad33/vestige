@@ -14,15 +14,15 @@ use serde_json::{Value, json};
 use strata_store::VALID_FOREVER_MS;
 use vestige_core::storage::{
     CompositionEventRecord, ConnectionRecord as VestigeEdge, ConsolidationHistoryRecord,
-    CoverageSnapshot, HandleKind, HandleResolution, HealthStatus, HygieneNodeSummary,
-    HygieneSnapshot, MemoryEdge, MemoryRecord, MemoryStoreError, MemoryStoreResult,
-    MemoryStoreSend, ModelSignature, NeverComposedCandidate, ReceiptAttestationStatus,
-    SchedulingState, SearchQuery, StateTransitionRecord, Storage, StorageError, StoreStats,
-    WalCheckpointMode, WalCheckpointStatus, HANDLE_REQUIRED_DETAIL, MAX_CANDIDATES,
+    CoverageSnapshot, HANDLE_REQUIRED_DETAIL, HandleKind, HandleResolution, HealthStatus,
+    HygieneNodeSummary, HygieneSnapshot, MAX_CANDIDATES, MemoryEdge, MemoryRecord,
+    MemoryStoreError, MemoryStoreResult, MemoryStoreSend, ModelSignature, NeverComposedCandidate,
+    ReceiptAttestationStatus, SchedulingState, SearchQuery, StateTransitionRecord, Storage,
+    StorageError, StoreStats, WalCheckpointMode, WalCheckpointStatus,
 };
 use vestige_core::{
-    scan_secrets, ConsolidationResult, DecayRisk, IngestInput, KnowledgeNode, MemoryStats, Receipt,
-    SecretPolicy,
+    ConsolidationResult, DecayRisk, IngestInput, KnowledgeNode, MemoryStats, Receipt, SecretPolicy,
+    scan_secrets,
 };
 
 const Q32_SCALE: f64 = 4294967296.0;
@@ -65,7 +65,11 @@ impl StrataMemory {
     }
 
     fn nodes(&self) -> Vec<strata_store::NodeRecord> {
-        self.lock().nodes()
+        self.lock()
+            .nodes()
+            .into_iter()
+            .filter(|record| !record.is_undo_tombstone())
+            .collect()
     }
 }
 
@@ -150,9 +154,16 @@ fn to_store_input(input: &IngestInput) -> strata_store::IngestInput {
     }
 }
 
-fn project_node(store: &strata_store::StrataStore, record: &strata_store::NodeRecord) -> KnowledgeNode {
+fn project_node(
+    store: &strata_store::StrataStore,
+    record: &strata_store::NodeRecord,
+) -> KnowledgeNode {
     let card = store.card_state(&record.id);
-    let retrieval = store.retrievability(&record.id).ok().flatten().unwrap_or(0.0);
+    let retrieval = store
+        .retrievability(&record.id)
+        .ok()
+        .flatten()
+        .unwrap_or(0.0);
     let mut node = KnowledgeNode::default();
     node.id = record.id.clone();
     node.content = record.content.clone();
@@ -162,7 +173,8 @@ fn project_node(store: &strata_store::StrataStore, record: &strata_store::NodeRe
     node.last_accessed = node.created_at;
     node.tags = record.tags.clone();
     node.valid_from = Some(ms_to_dt(record.valid_from_ms));
-    node.valid_until = (record.valid_until_ms != VALID_FOREVER_MS).then(|| ms_to_dt(record.valid_until_ms));
+    node.valid_until =
+        (record.valid_until_ms != VALID_FOREVER_MS).then(|| ms_to_dt(record.valid_until_ms));
     // Kernel retrievability is the only strength the log can justify.
     node.stability = card.as_ref().map(|c| q32(c.stability_q)).unwrap_or(0.0);
     node.difficulty = card.as_ref().map(|c| q32(c.difficulty_q)).unwrap_or(0.0);
@@ -328,11 +340,7 @@ impl MemoryStoreSend for StrataMemory {
         Err(pending_async("get_edges"))
     }
 
-    async fn remove_edge(
-        &self,
-        _source: uuid::Uuid,
-        _target: uuid::Uuid,
-    ) -> MemoryStoreResult<()> {
+    async fn remove_edge(&self, _source: uuid::Uuid, _target: uuid::Uuid) -> MemoryStoreResult<()> {
         Err(pending_async("remove_edge"))
     }
 
@@ -413,7 +421,8 @@ impl MemoryStoreSend for StrataMemory {
         *self
             .actor
             .lock()
-            .unwrap_or_else(|err| panic!("strata actor lock poisoned: {err}")) = Some(did.to_string());
+            .unwrap_or_else(|err| panic!("strata actor lock poisoned: {err}")) =
+            Some(did.to_string());
         Ok(())
     }
 
@@ -425,7 +434,19 @@ impl MemoryStoreSend for StrataMemory {
 
     fn resolve_handle(&self, query: &str) -> HandleResolution {
         let query = query.trim();
-        let ids: Vec<String> = self.lock().origins().into_iter().map(|(id, _)| id).collect();
+        let store = self.lock();
+        let hidden: HashSet<String> = store
+            .nodes()
+            .into_iter()
+            .filter(|record| record.is_undo_tombstone())
+            .map(|record| record.id)
+            .collect();
+        let ids: Vec<String> = store
+            .origins()
+            .into_iter()
+            .map(|(id, _)| id)
+            .filter(|id| !hidden.contains(id))
+            .collect();
         if query.is_empty() {
             return HandleResolution {
                 kind: HandleKind::Unknown,
@@ -497,7 +518,10 @@ impl MemoryStoreSend for StrataMemory {
         self.lock().backup_to(path).map_err(map_store)
     }
 
-    fn checkpoint_wal(&self, _mode: WalCheckpointMode) -> Result<WalCheckpointStatus, StorageError> {
+    fn checkpoint_wal(
+        &self,
+        _mode: WalCheckpointMode,
+    ) -> Result<WalCheckpointStatus, StorageError> {
         Ok(WalCheckpointStatus {
             busy: 0,
             log_frames: 0,
@@ -518,7 +542,11 @@ impl MemoryStoreSend for StrataMemory {
     }
 
     fn ingest(&self, input: IngestInput) -> Result<KnowledgeNode, StorageError> {
-        self.ingest_in_scope_with_secret_policy(input, vestige_core::DEFAULT_MEMORY_SCOPE, SecretPolicy::Reject)
+        self.ingest_in_scope_with_secret_policy(
+            input,
+            vestige_core::DEFAULT_MEMORY_SCOPE,
+            SecretPolicy::Reject,
+        )
     }
 
     fn ingest_in_scope(
@@ -564,7 +592,11 @@ impl MemoryStoreSend for StrataMemory {
 
     fn get_node(&self, id: &str) -> Result<Option<KnowledgeNode>, StorageError> {
         let store = self.lock();
-        Ok(store.get_node(id).as_ref().map(|record| project_node(&store, record)))
+        Ok(store
+            .get_node(id)
+            .filter(|record| !record.is_undo_tombstone())
+            .as_ref()
+            .map(|record| project_node(&store, record)))
     }
 
     fn get_all_nodes(&self, limit: i32, offset: i32) -> Result<Vec<KnowledgeNode>, StorageError> {
@@ -623,10 +655,20 @@ impl MemoryStoreSend for StrataMemory {
 
     fn get_stats(&self) -> Result<MemoryStats, StorageError> {
         let store = self.lock();
-        let nodes = store.nodes();
+        let nodes: Vec<_> = store
+            .nodes()
+            .into_iter()
+            .filter(|record| !record.is_undo_tombstone())
+            .collect();
         let strengths: Vec<f64> = nodes
             .iter()
-            .map(|record| store.retrievability(&record.id).ok().flatten().unwrap_or(0.0))
+            .map(|record| {
+                store
+                    .retrievability(&record.id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(0.0)
+            })
             .collect();
         let total = strengths.len() as i64;
         let average = if strengths.is_empty() {
@@ -650,6 +692,9 @@ impl MemoryStoreSend for StrataMemory {
         let store = self.lock();
         let mut bands = [0i64; 4];
         for record in store.nodes() {
+            if record.is_undo_tombstone() {
+                continue;
+            }
             let score = store
                 .retrievability(&record.id)
                 .ok()
@@ -677,6 +722,9 @@ impl MemoryStoreSend for StrataMemory {
         let store = self.lock();
         let mut counts: BTreeMap<&'static str, i64> = BTreeMap::new();
         for record in store.nodes() {
+            if record.is_undo_tombstone() {
+                continue;
+            }
             let score = store
                 .retrievability(&record.id)
                 .ok()
@@ -699,6 +747,7 @@ impl MemoryStoreSend for StrataMemory {
         let count = store
             .nodes()
             .iter()
+            .filter(|record| !record.is_undo_tombstone())
             .filter(|record| {
                 store
                     .retrievability(&record.id)
@@ -764,7 +813,8 @@ impl MemoryStoreSend for StrataMemory {
         let mut out = Vec::new();
         let cap = usize::try_from(limit).unwrap_or(0);
         for record in store.nodes() {
-            if record.node_type != node_type || record.scope != scope {
+            if record.is_undo_tombstone() || record.node_type != node_type || record.scope != scope
+            {
                 continue;
             }
             if tag.is_some_and(|wanted| !record.tags.iter().any(|stored| stored == wanted)) {
@@ -781,8 +831,10 @@ impl MemoryStoreSend for StrataMemory {
     fn code_anchors_for_nodes(
         &self,
         _node_ids: &[String],
-    ) -> Result<std::collections::HashMap<String, Vec<vestige_core::codebase::CodeAnchor>>, StorageError>
-    {
+    ) -> Result<
+        std::collections::HashMap<String, Vec<vestige_core::codebase::CodeAnchor>>,
+        StorageError,
+    > {
         // Anchors are not admitted on this log, so the recorded set is empty.
         Ok(std::collections::HashMap::new())
     }
@@ -977,7 +1029,11 @@ impl MemoryStoreSend for StrataMemory {
         tag_filter: Option<&[String]>,
         scope: Option<&str>,
     ) -> Result<Vec<NeverComposedCandidate>, StorageError> {
-        self.never_composed(scope.or(Some(vestige_core::DEFAULT_MEMORY_SCOPE)), limit, tag_filter)
+        self.never_composed(
+            scope.or(Some(vestige_core::DEFAULT_MEMORY_SCOPE)),
+            limit,
+            tag_filter,
+        )
     }
 
     fn get_recent_composition_events(
@@ -1008,13 +1064,18 @@ impl MemoryStoreSend for StrataMemory {
             .nodes()
             .iter()
             .filter(|record| {
+                if record.is_undo_tombstone() {
+                    return false;
+                }
                 let created = ms_to_dt(record.created_at_ms);
                 start.is_none_or(|start| created >= start)
                     && end.is_none_or(|end| created <= end)
                     && node_type.is_none_or(|kind| record.node_type == kind)
                     && tags.is_none_or(|tags| {
                         tags.is_empty()
-                            || tags.iter().any(|tag| record.tags.iter().any(|stored| stored == tag))
+                            || tags
+                                .iter()
+                                .any(|tag| record.tags.iter().any(|stored| stored == tag))
                     })
             })
             .map(|record| project_node(&store, record))
@@ -1031,7 +1092,9 @@ impl MemoryStoreSend for StrataMemory {
         let nodes = store
             .nodes()
             .into_iter()
-            .filter(|record| scope.is_none_or(|scope| record.scope == scope))
+            .filter(|record| {
+                !record.is_undo_tombstone() && scope.is_none_or(|scope| record.scope == scope)
+            })
             .map(|record| {
                 let retrieval = store
                     .retrievability(&record.id)
@@ -1175,6 +1238,97 @@ impl MemoryStoreSend for StrataMemory {
     fn update_node_content(&self, _id: &str, _new_content: &str) -> Result<(), StorageError> {
         Err(pending("update_node_content"))
     }
+
+    fn get_merge_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<vestige_core::advanced::MergeOperation>, StorageError> {
+        let Some(seq) = parse_upsert_op(operation_id) else {
+            return Ok(None);
+        };
+        let store = self.lock();
+        let history = store.upserts();
+        Ok(history
+            .iter()
+            .position(|(frame, _)| *frame == seq)
+            .map(|index| upsert_operation(history, index)))
+    }
+
+    fn list_merge_operations(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<vestige_core::advanced::MergeOperation>, StorageError> {
+        let store = self.lock();
+        let history = store.upserts();
+        let mut ops: Vec<_> = (0..history.len())
+            .map(|index| upsert_operation(history, index))
+            .collect();
+        ops.reverse();
+        ops.truncate(limit);
+        Ok(ops)
+    }
+
+    fn merge_undo(
+        &self,
+        op_id: &str,
+    ) -> Result<vestige_core::advanced::MergeOperation, StorageError> {
+        let seq = parse_upsert_op(op_id)
+            .ok_or_else(|| StorageError::NotFound(format!("operation {op_id}")))?;
+        let mut store = self.lock();
+        let history = store.upserts().to_vec();
+        let index = history
+            .iter()
+            .position(|(frame, _)| *frame == seq)
+            .ok_or_else(|| StorageError::NotFound(format!("operation {op_id}")))?;
+        let record = history[index].1.clone();
+        if record.is_undo_tombstone() {
+            return Err(StorageError::Init("cannot undo an undo operation".into()));
+        }
+        let latest = history
+            .iter()
+            .rev()
+            .find(|(_, item)| item.id == record.id)
+            .map(|(frame, _)| *frame);
+        if latest != Some(seq) {
+            return Err(StorageError::Init(
+                "undo conflicts with later memory changes; no changes applied".into(),
+            ));
+        }
+        let previous = history[..index]
+            .iter()
+            .rev()
+            .find(|(_, item)| item.id == record.id)
+            .map(|(_, item)| item.clone());
+        let compensating = match previous {
+            Some(prior) => prior,
+            None => {
+                let mut tombstone = record.clone();
+                tombstone.superseded_by = Some(record.id.clone());
+                tombstone
+            }
+        };
+        let data_seq = store.rewrite_record(compensating).map_err(map_store)?;
+        let node_id = record.id;
+        Ok(vestige_core::advanced::MergeOperation {
+            id: format!("upsert-{data_seq:016x}"),
+            plan_id: None,
+            op_type: "undo".into(),
+            status: "applied".into(),
+            created_at: ms_to_dt(record.created_at_ms).to_rfc3339(),
+            reverted_at: None,
+            reverts_op_id: Some(op_id.to_string()),
+            survivor_id: Some(node_id.clone()),
+            affected_ids: vec![node_id],
+            confidence: None,
+            signals: Some(json!({
+                "compensating": true,
+                "frameSeq": data_seq
+            })),
+            reason: Some(format!(
+                "appended a compensating upsert for {op_id}; the log was not rewritten"
+            )),
+        })
+    }
 }
 
 impl StrataMemory {
@@ -1188,7 +1342,9 @@ impl StrataMemory {
         let mut nodes: Vec<KnowledgeNode> = store
             .nodes()
             .iter()
-            .filter(|record| scope.is_none_or(|scope| record.scope == scope))
+            .filter(|record| {
+                !record.is_undo_tombstone() && scope.is_none_or(|scope| record.scope == scope)
+            })
             .map(|record| project_node(&store, record))
             .collect();
         nodes.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
@@ -1224,7 +1380,10 @@ impl StrataMemory {
             };
             if let Some(tags) = tag_filter.filter(|tags| !tags.is_empty()) {
                 let has = |record: &strata_store::NodeRecord| {
-                    record.tags.iter().any(|tag| tags.iter().any(|want| want == tag))
+                    record
+                        .tags
+                        .iter()
+                        .any(|tag| tags.iter().any(|want| want == tag))
                 };
                 if !has(a) || !has(b) {
                     continue;
@@ -1258,7 +1417,58 @@ impl StrataMemory {
     }
 }
 
-fn lookup_origin(store: &strata_store::StrataStore, receipt_or_node: &str) -> Option<(String, u64)> {
+fn parse_upsert_op(operation_id: &str) -> Option<u64> {
+    let rest = operation_id.strip_prefix("upsert-")?;
+    u64::from_str_radix(rest, 16).ok()
+}
+
+fn upsert_operation(
+    history: &[(u64, strata_store::NodeRecord)],
+    index: usize,
+) -> vestige_core::advanced::MergeOperation {
+    let (seq, record) = &history[index];
+    let prior = history[..index]
+        .iter()
+        .rev()
+        .find(|(_, item)| item.id == record.id);
+    let later = history[index + 1..]
+        .iter()
+        .any(|(_, item)| item.id == record.id);
+    let tombstone = record.is_undo_tombstone();
+    vestige_core::advanced::MergeOperation {
+        id: format!("upsert-{seq:016x}"),
+        plan_id: None,
+        op_type: if tombstone {
+            "undo"
+        } else if prior.is_none() {
+            "ingest"
+        } else {
+            "upsert"
+        }
+        .into(),
+        status: if later { "reverted" } else { "applied" }.into(),
+        created_at: ms_to_dt(record.created_at_ms).to_rfc3339(),
+        reverted_at: None,
+        reverts_op_id: if tombstone {
+            prior.map(|(frame, _)| format!("upsert-{frame:016x}"))
+        } else {
+            None
+        },
+        survivor_id: Some(record.id.clone()),
+        affected_ids: vec![record.id.clone()],
+        confidence: None,
+        signals: Some(json!({
+            "frameSeq": seq,
+            "compensating": tombstone
+        })),
+        reason: None,
+    }
+}
+
+fn lookup_origin(
+    store: &strata_store::StrataStore,
+    receipt_or_node: &str,
+) -> Option<(String, u64)> {
     if let Some(seq) = parse_receipt_seq(receipt_or_node) {
         return store
             .origins()
@@ -1330,5 +1540,133 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("similarity_disabled"), "{err}");
+    }
+
+    #[test]
+    fn undo_appends_a_compensating_record_and_hides_it_from_reads() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let memory = StrataMemory::open(dir.path()).unwrap();
+        let node = memory
+            .ingest_in_scope(
+                IngestInput {
+                    content: "undo me".into(),
+                    tags: vec!["kept".into()],
+                    ..IngestInput::default()
+                },
+                "user",
+            )
+            .unwrap();
+        let original_created = node.created_at;
+        {
+            let mut store = memory.lock();
+            let frames_before = store.log().head().frames_total;
+            store.set_created_at(&node.id, 50).unwrap();
+            assert!(store.log().head().frames_total > frames_before);
+        }
+        let changed = memory.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(changed.created_at, ms_to_dt(50));
+
+        let ops = memory.list_merge_operations(10).unwrap();
+        let change = ops
+            .iter()
+            .find(|op| op.op_type == "upsert" && op.status == "applied")
+            .expect("the created_at write is the latest upsert");
+        let undone = memory.merge_undo(&change.id).unwrap();
+        assert_eq!(undone.op_type, "undo");
+        assert_eq!(undone.reverts_op_id.as_deref(), Some(change.id.as_str()));
+
+        let restored = memory.get_node(&node.id).unwrap().unwrap();
+        assert_eq!(restored.created_at, original_created);
+        assert_eq!(restored.content, "undo me");
+        assert!(
+            memory
+                .query_time_range(None, None, 10, None, None)
+                .unwrap()
+                .iter()
+                .all(|item| item.created_at != ms_to_dt(50))
+        );
+
+        let create = memory
+            .list_merge_operations(10)
+            .unwrap()
+            .into_iter()
+            .find(|op| op.op_type == "ingest" && op.affected_ids == vec![node.id.clone()])
+            .expect("create stays in the reflog");
+        assert_eq!(create.status, "reverted");
+        assert!(
+            memory.merge_undo(&create.id).is_err(),
+            "a superseded write is not the latest record"
+        );
+
+        let other = memory
+            .ingest_in_scope(
+                IngestInput {
+                    content: "gone marker".into(),
+                    ..IngestInput::default()
+                },
+                "user",
+            )
+            .unwrap();
+        let create = memory
+            .list_merge_operations(10)
+            .unwrap()
+            .into_iter()
+            .find(|op| {
+                op.op_type == "ingest"
+                    && op.status == "applied"
+                    && op.affected_ids == vec![other.id.clone()]
+            })
+            .expect("the second ingest is undoable");
+        let removed = memory.merge_undo(&create.id).unwrap();
+        assert_eq!(removed.op_type, "undo");
+        assert!(memory.get_node(&other.id).unwrap().is_none());
+        assert!(
+            memory
+                .get_all_nodes(20, 0)
+                .unwrap()
+                .iter()
+                .all(|item| item.content != "gone marker")
+        );
+        assert!(
+            memory
+                .query_time_range(None, None, 20, None, None)
+                .unwrap()
+                .iter()
+                .all(|item| item.content != "gone marker")
+        );
+        assert_eq!(
+            memory.resolve_handle(&other.id).kind,
+            vestige_core::storage::HandleKind::Unknown
+        );
+        assert_eq!(
+            memory
+                .get_merge_operation(&removed.id)
+                .unwrap()
+                .unwrap()
+                .op_type,
+            "undo"
+        );
+        assert!(
+            memory
+                .merge_undo(&removed.id)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot undo an undo")
+        );
+        assert_eq!(
+            memory.get_node(&node.id).unwrap().unwrap().content,
+            "undo me"
+        );
+
+        let frames = memory.lock().log().head().frames_total;
+        drop(memory);
+        let reopened = StrataMemory::open(dir.path()).unwrap();
+        assert!(reopened.get_node(&other.id).unwrap().is_none());
+        assert_eq!(
+            reopened.get_node(&node.id).unwrap().unwrap().created_at,
+            original_created
+        );
+        assert_eq!(reopened.lock().log().head().frames_total, frames);
+        assert!(no_sqlite(dir.path()));
     }
 }

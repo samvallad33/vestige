@@ -419,7 +419,24 @@ fn merge_undo(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, Stri
 
             #[cfg(not(all(feature = "embeddings", feature = "vector-search")))]
             {
-                Err("Undoing merge/supersede operations requires embeddings and vector-search features; tag operation undo is available in this build.".into())
+                match storage.merge_undo(op_id) {
+                    Ok(op) => Ok(json!({
+                        "undoOperationId": op.id,
+                        "revertedOperationId": op.reverts_op_id,
+                        "status": "reverted",
+                        "affectedIds": op.affected_ids,
+                        "reason": op.reason,
+                        "note": "The original operation was reversed by appending a compensating record. Earlier log frames were left intact."
+                    })),
+                    Err(error)
+                        if error
+                            .to_string()
+                            .contains("is not implemented by this backend") =>
+                    {
+                        Err("Undoing merge/supersede operations requires embeddings and vector-search features; tag operation undo is available in this build.".into())
+                    }
+                    Err(error) => Err(error.to_string()),
+                }
             }
         }
         None => {

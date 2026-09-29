@@ -130,6 +130,9 @@ pub struct StrataStore {
     checkpoints: Vec<Checkpoint>,
     /// Data frames that had no admitting effect in the log (ignored).
     orphan_writes: u64,
+    /// Every admitted `UpsertNode`, in log order: `(data frame seq, record)`.
+    /// Derived on replay. Not part of [`StrataStore::state_digest`].
+    upserts: Vec<(u64, NodeRecord)>,
 }
 
 impl StrataStore {
@@ -163,6 +166,7 @@ impl StrataStore {
             review_events: Vec::new(),
             checkpoints: Vec::new(),
             orphan_writes: 0,
+            upserts: Vec::new(),
         };
         store.replay()?;
         store.verify_checkpoint_chain()?;
@@ -257,6 +261,7 @@ impl StrataStore {
                 let is_new = !self.fsrs.cards.contains_key(&handle);
                 self.origins.insert(record.id.clone(), gate_effect_seq);
                 self.nodes.insert(record.id.clone(), record.clone());
+                self.upserts.push((frame_seq, record.clone()));
                 if is_new {
                     // Every ingest folds one ReviewEvent ("Good") into the
                     // kernel state under the record's kernel version.
@@ -454,6 +459,25 @@ impl StrataStore {
             .filter(|r| r.scope == scope && r.is_live())
             .cloned()
             .collect()
+    }
+
+    /// Append one `UpsertNode` for an id that already exists.
+    ///
+    /// The log is not rewritten or truncated. Undo uses this to land a
+    /// compensating record: either the prior snapshot, or a self-superseding
+    /// tombstone ([`NodeRecord::is_undo_tombstone`]). A brand-new id is
+    /// refused; creates stay on [`Self::ingest_in_scope`].
+    pub fn rewrite_record(&mut self, record: NodeRecord) -> Result<u64, StoreError> {
+        self.require_node(&record.id)?;
+        let context = self.context_for(&[&record.id]);
+        let (_effect_seq, data_seq) =
+            self.admit_write(StoreOp::UpsertNode { record }, action_kind::WRITE, context)?;
+        Ok(data_seq)
+    }
+
+    /// Admitted upserts in log order: data-frame seq and the record written.
+    pub fn upserts(&self) -> &[(u64, NodeRecord)] {
+        &self.upserts
     }
 
     /// Rewrite a node's creation time (admitted as a WRITE; no new review is

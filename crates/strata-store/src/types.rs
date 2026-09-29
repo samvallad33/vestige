@@ -133,6 +133,13 @@ impl NodeRecord {
     pub fn is_live(&self) -> bool {
         self.superseded_by.is_none()
     }
+
+    /// Append-only undo of a create: the compensating `UpsertNode` points
+    /// `superseded_by` at the record's own id. Reads hide that tombstone.
+    /// A supersession by a different id is not an undo.
+    pub fn is_undo_tombstone(&self) -> bool {
+        self.superseded_by.as_deref() == Some(self.id.as_str())
+    }
 }
 
 /// Input for creating a new memory (store-local mirror of the vestige-core
