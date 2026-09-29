@@ -3521,3 +3521,123 @@ add_edge, classify, count, delete, delete_domain, fts_search, get, get_domain, g
   since the vectorless build; unchanged from base).
 - `tests/e2e` harness holds `Arc<Storage>` via `open_storage`; its suites
   compile but were not run here (not in scope; they drive server binaries).
+
+# SCOPE-HANDOFF — build/wire-strata (STRATA behind the trait wall)
+
+Branch `build/wire-strata` (base main @ 1c9ee5d, "THE SQLITE WIPE").
+Committed locally; nothing pushed. Mission: the STRATA Causal Proof Engine
+is the runtime store behind vestige-core's `LocalMemoryStore`/`MemoryStore`
+trait wall — the default (wiped, no-legacy-sqlite) build boots on
+StrataStore.
+
+## Constructor-hook design (the direction problem, solved)
+
+`vestige-core` must not depend on strata crates, so the engine is INJECTED:
+
+- `vestige_core::storage::STORE_CONSTRUCTOR: Mutex<Option<StoreConstructor>>`
+  (unconditional, every build) + `install_store_constructor(fn)` +
+  `pub type StoreConstructor = fn(PathBuf) -> Result<Arc<dyn MemoryStore>, String>`.
+- The feature-off `open_storage` twin now consults the hook (constructor
+  runs with the caller's path; the constructor owns interpreting it) and
+  returns `OpenStoreError::{NoBackend, Constructor}` — the old
+  always-`LegacySqliteDisabled` behavior is the `NoBackend` arm; the struct
+  itself stays compiled in every build.
+- `strata_bridge::strata_constructor(path)` resolves the store dir:
+  `$VESTIGE_STRATA_DIR` wins; a `vestige.db`-shaped/file-looking path maps
+  to `<parent>/strata`; a directory maps to `<dir>/strata`.
+- `vestige-mcp/src/strata_boot.rs::open_strata_storage(db_path)` installs
+  the hook and opens STRATA; `main.rs` serve() routes on the MCP crate's OWN
+  `legacy-sqlite` feature: off (the default) → STRATA, on → SQLite via
+  `open_storage` unchanged. `bin/cli.rs` and `bin/restore.rs` install the
+  hook at entry under `not(feature = "legacy-sqlite")` so genuinely
+  legacy-free links construct a store instead of exiting.
+
+CRITICAL wiring fact: workspace builds link vestige-core with
+`legacy-sqlite` unified ON (the strata-migrate path dep requests
+`bundled-sqlite`), so core's `open_storage` cfg alone CANNOT decide the
+mode — the mcp crate's own feature is authoritative, which is why the mode
+flip lives in `main.rs`. Consequence: `cargo check -p vestige-core
+--no-default-features` (pure, no unifiers) is broken PRE-EXISTING at this
+base (E0432s: `memory_store.rs` imports sqlite-only types ungated); the
+workspace gates pass via unification. Untouched here; the trait's type
+split is its own wave.
+
+## crates/strata-bridge (new, standalone with empty [workspace])
+
+`StrataBackend` — the `Send + Sync + 'static` handle. StrataStore v1 is
+`!Send` (Rc gate-log cache, one writer per dir via `strata.lock`), so the
+backend owns a DEDICATED OS THREAD that exclusively holds the store; every
+trait call ships one `Send` closure and blocks on a per-call reply channel.
+Jobs run under `catch_unwind` (a panicking job never kills the thread; the
+caller gets a loud `StorageError::Init("... job panicked")`). Open runs
+replay + checkpoint-chain verification fail-closed on the thread; a failed
+open makes every later call fail loudly.
+
+Implements `MemoryStoreSend` (blanket impls yield `LocalMemoryStore` +
+dyn `MemoryStore`; `Arc<StrataBackend>` coerces to `Arc<Storage>`):
+
+- 17 sync-seam overrides (the strata-store v1 surface):
+  ingest, ingest_in_scope, get_node, get_all_nodes_in_scope,
+  set_created_at, save_connection, get_connections_for_memory,
+  supersession_pairs, get_never_composed_candidates_in_scope, backup_to,
+  mark_reviewed, data_dir, db_path (=`<dir>/log`), sidecar_dir,
+  process_actor_did (None — no actor table; set_process_actor warns),
+  last_backup_timestamp (None — truthful; stops session_start's status
+  hint hitting the default `unimplemented!`), resolve_handle (Unknown +
+  `HANDLE_REQUIRED_DETAIL` — the type's own negative answer; stops
+  recall handle-mode panics).
+- 26 async-surface bodies (the trait gives no defaults there):
+  truthful: init, health_check, registered_model(None), count,
+  get_store_stats (node/edge counts), and the trait-sanctioned empty
+  domain answers (list_domains/get_domain/classify); loud
+  `MemoryStoreError::Init("... not implemented by the STRATA backend")`
+  for the Uuid-keyed Phase-1 row/graph surface (insert/get/update/delete/
+  search_records/fts_search/vector_search/scheduling/due/edges/neighbors),
+  register_model, upsert/delete_domain, vacuum.
+- Every other method (≈166 sync) keeps T1's loud-fail defaults. No stubs.
+
+Coercions (KnowledgeNode↔NodeRecord etc.) documented in the crate docs:
+no hidden clock on ingest (created_at 0 unless set_created_at/explicit
+validity — SQLite's Utc::now() stamping is deliberately NOT imitated);
+strength f64↔milli round-trip; `valid_from == created_at` reads as None;
+VALID_FOREVER reads as None; Q32.32 card → stability/difficulty exact
+dequantize; retrievability → retrieval/retention strength; storage
+strength constant 1.0; sentiment/source/source_envelope dropped.
+`ingest` uses `DEFAULT_MEMORY_SCOPE` ("user"). NeverComposed candidates
+carry real shared_tags but zero fusion scores (strata computes none).
+
+## Tests & verification (all live this branch)
+
+- `cargo check --workspace --no-default-features` — 0 errors.
+- `cargo check --workspace` — 0 errors.
+- `cargo check --workspace --no-default-features --all-targets` — 0 errors.
+- `cargo check -p vestige-mcp --features legacy-sqlite` — 0 errors.
+- `cargo clippy -p strata-bridge` — clean.
+- `cargo test -p vestige-mcp --test strata_boot` — 2/2 (no
+  required-features; runs in the default wiped mode): boots the real
+  McpServer handler (initialize + tools/list) over a StrataBackend,
+  ingests one memory over the trait (mem- id, FSRS rep folded), reads it
+  back, saves one `derived_from` edge, reads it (milli strength), pair
+  leaves never-composed, free-form link_type rejected, unimplemented
+  method loud-fails, open failure loud, close/reopen replays the log and
+  both node and edge survive; plus hook-install + path-resolution test.
+- `cargo test -p vestige-mcp --lib` — 712 passed, 0 failed.
+- strata-bridge has NO unit tests of its own: a non-member crate with
+  dev-deps cannot `cargo test -p` from the root, and its own workspace
+  lacks the unification that makes core compile. Its coverage lives in
+  the mcp integration test above (same pattern as this file's earlier
+  strata entries: verify from the root workspace only).
+
+## Known boundaries (documented, deliberate)
+
+- The `memory` MCP tool uuid-gates ids, so STRATA's `mem-<hex>` ids cannot
+  pass it yet; ingests reach STRATA through `smart_ingest`-adjacent store
+  calls or the trait, and `smart_ingest` itself needs
+  `smart_ingest_excluding_...` (loud default) — the tool-layer id/pipeline
+  flip is the next wave, not storage wiring.
+- `suppress`/`blast_radius` reach `retire_affected` (default
+  `unimplemented!`) but fail loudly EARLIER at `suppress_memory`/
+  `blast_radius` defaults, so the panic is unreachable through tools.
+- CLI subcommands against a STRATA store: the store-backed ones loud-fail
+  per method (v1 surface); `vestige` CLI in default builds still talks to
+  unified-link SQLite unless core is genuinely compiled legacy-free.

@@ -79,6 +79,11 @@ vestige-core = { version = "3.0.0", path = "../vestige-core", default-features =
 # rederivation/sweep). Standalone crate by design; path dep only.
 strata-verify = { path = "../strata-verify" }
 
+# STRATA runtime store behind vestige-core's trait wall (build/wire-strata):
+# implements MemoryStoreSend over StrataStore. Standalone crate (empty
+# [workspace]) reached only via this path dep, like strata-verify above.
+strata-bridge = { path = "../strata-bridge" }
+
 # One-shot SQLite -> STRATA migration (standalone crate; `migrate-to-strata` CLI).
 strata-migrate = { path = "../strata-migrate" }
 

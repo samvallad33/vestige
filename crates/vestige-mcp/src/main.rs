@@ -432,6 +432,14 @@ async fn serve() {
 
     // Initialize storage with optional custom data directory.
     // vestige_core::open_storage(Some(...)) expects a DB file path, so map data dirs to vestige.db here.
+    //
+    // build/wire-strata: a legacy-sqlite-free build (the default since the
+    // SQLite wipe) boots on the STRATA Causal Proof Engine behind the same
+    // trait wall. Workspace feature unification compiles vestige-core's
+    // SQLite constructor even in "wiped" builds (via the strata-migrate path
+    // dep), so the mode is decided HERE — this crate's own feature — not by
+    // core's cfg.
+    #[cfg(feature = "legacy-sqlite")]
     let storage = match vestige_core::open_storage(storage_path) {
         Ok(s) => {
             info!("Storage initialized successfully");
@@ -439,6 +447,17 @@ async fn serve() {
         }
         Err(e) => {
             error!("Failed to initialize storage: {}", e);
+            std::process::exit(1);
+        }
+    };
+    #[cfg(not(feature = "legacy-sqlite"))]
+    let storage = match vestige_mcp::strata_boot::open_strata_storage(storage_path.clone()) {
+        Ok(s) => {
+            info!("STRATA storage initialized (gate-admitted causal log)");
+            s
+        }
+        Err(e) => {
+            error!("Failed to initialize STRATA storage: {}", e);
             std::process::exit(1);
         }
     };

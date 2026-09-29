@@ -2,12 +2,11 @@
 //!
 //! Shared modules accessible to all binaries in the crate.
 //!
-//! Every module that touches the legacy SQLite store (`Storage`) is
-//! quarantined behind the `legacy-sqlite` feature (build/t5-legacy-isolation,
-//! mirroring vestige-core). Default ON; flips off with the STRATA backend.
-//! A `legacy-sqlite`-free build still compiles every binary — they open
-//! storage through `vestige_core::open_storage()` and exit with its clear
-//! `LegacySqliteDisabled` error at runtime.
+//! Storage mode (build/wire-strata): builds without this crate's
+//! `legacy-sqlite` feature (the default since the SQLite wipe) boot on the
+//! STRATA Causal Proof Engine behind vestige-core's trait wall — see
+//! [`strata_boot`]. Builds with `legacy-sqlite` keep the SQLite reference
+//! store through `vestige_core::open_storage()`.
 
 pub mod actor_surface;
 
@@ -17,6 +16,7 @@ pub mod dashboard;
 pub mod protocol;
 pub mod resources;
 pub mod server;
+pub mod strata_boot;
 pub mod tools;
 pub mod trace_recorder;
 

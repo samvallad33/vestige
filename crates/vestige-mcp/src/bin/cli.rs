@@ -476,6 +476,12 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
+    // build/wire-strata: in a legacy-sqlite-free link, open_storage consults
+    // the injected STRATA constructor; install it first (no-op for the
+    // SQLite twin that unified workspace builds link).
+    #[cfg(not(feature = "legacy-sqlite"))]
+    vestige_core::storage::install_store_constructor(strata_bridge::strata_constructor);
+
     let cli = Cli::parse();
 
     if let Some(data_dir) = cli.data_dir {

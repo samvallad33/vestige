@@ -2292,6 +2292,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-bridge"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "strata-kernel",
+ "strata-store",
+ "uuid",
+ "vestige-core",
+]
+
+[[package]]
 name = "strata-gate"
 version = "0.1.0"
 dependencies = [
@@ -2321,6 +2332,17 @@ dependencies = [
  "strata-kernel",
  "thiserror",
  "vestige-core",
+]
+
+[[package]]
+name = "strata-store"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "borsh",
+ "strata",
+ "strata-gate",
+ "strata-kernel",
 ]
 
 [[package]]
@@ -2882,6 +2904,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "strata-bridge",
  "strata-migrate",
  "strata-verify",
  "subtle",

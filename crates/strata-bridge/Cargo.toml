@@ -1,0 +1,20 @@
+[package]
+name = "strata-bridge"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "AGPL-3.0-only"
+description = "Implements vestige-core's LocalMemoryStore/MemoryStoreSend seam over the STRATA Causal Proof Engine (strata-store): the runtime store behind the trait wall for legacy-sqlite-free builds"
+publish = false
+
+# Standalone on purpose (same discipline as the sibling strata crates): the
+# empty [workspace] table keeps this crate out of the root vestige workspace;
+# the root reaches it only through vestige-mcp's explicit path dependency.
+[workspace]
+
+[dependencies]
+vestige-core = { path = "../vestige-core", default-features = false }
+strata-store = { path = "../strata-store" }
+strata-kernel = { path = "../strata-kernel" }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }

@@ -67,8 +67,12 @@ fn main() -> anyhow::Result<()> {
 
     println!("Found {} memories to restore", memories.len());
 
-    // Initialize storage (uses default path)
+    // Initialize storage (uses default path). build/wire-strata: in a
+    // legacy-sqlite-free link, open_storage consults the injected STRATA
+    // constructor; install it first (no-op when core's SQLite twin exists).
     println!("Initializing storage...");
+    #[cfg(not(feature = "legacy-sqlite"))]
+    vestige_core::storage::install_store_constructor(strata_bridge::strata_constructor);
     let storage = vestige_core::open_storage(None)?;
 
     println!("Generating embeddings and ingesting memories...\n");

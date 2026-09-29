@@ -195,11 +195,67 @@ pub fn open_storage(path: Option<std::path::PathBuf>) -> Result<std::sync::Arc<d
     Ok(std::sync::Arc::new(SqliteMemoryStore::new(path)?))
 }
 
-/// Feature-off twin of [`open_storage`]: always fails because no legacy
-/// backend exists in this build; the STRATA backend constructs directly.
+/// Feature-off twin of [`open_storage`]: consults the injectable
+/// [`STORE_CONSTRUCTOR`] hook (installed at startup by binary front-ends,
+/// e.g. vestige-mcp installing the STRATA backend via strata-bridge) so a
+/// `legacy-sqlite`-free build boots on whatever engine the host chose.
+/// Without an installed constructor it fails with
+/// [`OpenStoreError::NoBackend`] (the old `LegacySqliteDisabled` state).
 #[cfg(not(feature = "legacy-sqlite"))]
 pub fn open_storage(
-    _path: Option<std::path::PathBuf>,
-) -> std::result::Result<std::sync::Arc<dyn MemoryStore>, LegacySqliteDisabled> {
-    Err(LegacySqliteDisabled)
+    path: Option<std::path::PathBuf>,
+) -> std::result::Result<std::sync::Arc<dyn MemoryStore>, OpenStoreError> {
+    // fn pointers are Copy: read without consuming so repeated opens in one
+    // process (CLI subcommands, tests) keep working.
+    let installed = STORE_CONSTRUCTOR
+        .lock()
+        .map_err(|_| OpenStoreError::NoBackend)?
+        .clone();
+    match installed {
+        Some(constructor) => {
+            // The constructor owns path interpretation (e.g. a DB-file path
+            // resolved to its `<data dir>/strata` directory).
+            let path = path.unwrap_or_else(|| {
+                std::env::var_os("VESTIGE_DATA_DIR")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+            });
+            constructor(path).map_err(OpenStoreError::Constructor)
+        }
+        None => Err(OpenStoreError::NoBackend),
+    }
+}
+
+/// Error returned by the feature-off [`open_storage`].
+#[cfg(not(feature = "legacy-sqlite"))]
+#[derive(Debug, thiserror::Error)]
+pub enum OpenStoreError {
+    /// No backend constructor was installed; this build has no engine.
+    #[error("built without legacy-sqlite and no store constructor installed; install one via storage::install_store_constructor (the STRATA backend lives in strata-bridge)")]
+    NoBackend,
+    /// The installed constructor ran and failed.
+    #[error("store constructor failed: {0}")]
+    Constructor(String),
+}
+
+/// Injectable backend constructor for `legacy-sqlite`-free builds
+/// (build/wire-strata). vestige-core must not depend on strata crates, so
+/// the binary front-end (vestige-mcp) installs the real engine at startup:
+/// `install_store_constructor(strata_bridge::strata_constructor)`. The
+/// function receives the path passed to [`open_storage`] (a DB-file-shaped
+/// path or data dir) and owns interpreting it for its engine.
+pub type StoreConstructor =
+    fn(std::path::PathBuf) -> std::result::Result<std::sync::Arc<dyn MemoryStore>, String>;
+
+/// The installed backend constructor, if any. Read through [`open_storage`]
+/// (feature-off builds) or [`install_store_constructor`] to set it.
+pub static STORE_CONSTRUCTOR: std::sync::Mutex<Option<StoreConstructor>> =
+    std::sync::Mutex::new(None);
+
+/// Install the backend constructor used by feature-off [`open_storage`].
+/// Installing over an existing constructor replaces it (tests rely on this).
+pub fn install_store_constructor(constructor: StoreConstructor) {
+    if let Ok(mut slot) = STORE_CONSTRUCTOR.lock() {
+        *slot = Some(constructor);
+    }
 }
