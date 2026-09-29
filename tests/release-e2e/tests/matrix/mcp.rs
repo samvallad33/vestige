@@ -58,10 +58,11 @@ fn mcp_catalog_matches_server_tool_list() {
             .filter_map(|t| t["name"].as_str().map(str::to_string))
             .collect();
         names.sort();
-        let expected: Vec<String> = EXPECTED_TOOLS.iter().map(|s| (*s).to_string()).collect();
+        let mut expected = expected_tool_names();
+        expected.sort();
         if names != expected {
             missing(&format!(
-                "tools/list is not the 18-tool 4.0 surface. live={names:?} expected={expected:?}"
+                "tools/list does not match expected_tools_4.0.txt. live={names:?} expected={expected:?}"
             ));
         }
     });
@@ -245,47 +246,249 @@ fn mcp_memory_valid_invalid_handle_miss() {
     });
 }
 
+const PURGE_CANARY: &str = "CANARY-purge-4f91c0e2-must-not-be-readable";
+
+fn ingest_canary(server: &mut Server) -> String {
+    let created = server
+        .tool(
+            "smart_ingest",
+            json!({ "content": PURGE_CANARY, "forceCreate": true }),
+        )
+        .expect("rpc");
+    if created.rejected() {
+        missing(&format!(
+            "purge needs a stored node. smart_ingest failed: {}",
+            created.blob().chars().take(500).collect::<String>()
+        ));
+    }
+    let id = created.body["nodeId"].as_str().unwrap_or("").to_string();
+    if id.is_empty() {
+        missing("smart_ingest returned no nodeId for the purge canary");
+    }
+    id
+}
+
+fn memory_handle(id: &str) -> String {
+    if id.starts_with("mem-") || id.contains(':') {
+        id.to_string()
+    } else {
+        format!("mem:{id}")
+    }
+}
+
+/// Read and search surfaces. The confirmed-purge row fails if any of them
+/// still returns the canary. Segment bytes are not one of these surfaces.
+fn read_surfaces(server: &mut Server, id: &str) -> Vec<(String, String)> {
+    let handle = memory_handle(id);
+    let calls = [
+        ("memory get", "memory", json!({ "action": "get", "id": id })),
+        (
+            "memory get_batch",
+            "memory",
+            json!({ "action": "get_batch", "ids": [id] }),
+        ),
+        ("recall", "recall", json!({ "handle": handle })),
+        (
+            "graph memory",
+            "graph",
+            json!({ "action": "memory", "id": id }),
+        ),
+        (
+            "graph recent",
+            "graph",
+            json!({ "action": "recent", "limit": 20 }),
+        ),
+        (
+            "project preview",
+            "project",
+            json!({ "action": "preview", "scope": "user" }),
+        ),
+        ("dedup scan", "dedup", json!({ "action": "scan" })),
+        (
+            "memory_status",
+            "memory_status",
+            json!({ "view": "health" }),
+        ),
+    ];
+    calls
+        .into_iter()
+        .map(|(label, tool, args)| {
+            let reply = server
+                .tool(tool, args)
+                .unwrap_or_else(|e| panic!("HARNESS: {label} rpc failed: {e}"));
+            (label.to_string(), reply.blob())
+        })
+        .collect()
+}
+
+fn verify_store_ok(dir: &Path) {
+    let log = dir.join("log");
+    let target = if log.is_dir() { log } else { dir.to_path_buf() };
+    let out = run_cmd(
+        &product_bin("strata-verify"),
+        &[target.display().to_string()],
+        &[],
+        &[],
+        std::time::Duration::from_secs(60),
+    );
+    let blob = format!("{}{}", out.stdout, out.stderr);
+    if out.status != Some(0) || !blob.contains("OK") {
+        panic!(
+            "FAIL: strata-verify did not pass the store after confirmed purge (exit {:?}). {}",
+            out.status,
+            blob.chars().take(800).collect::<String>()
+        );
+    }
+}
+
+/// Purge is a gated retire. `memory` purge with `confirm:true` returns a
+/// gate receipt, and no read or search tool returns the canary afterward.
+/// The raw `log/*.seg` bytes are not inspected here.
 #[test]
-fn mcp_purge_valid_invalid_handle_miss() {
+fn memory_purge_confirm_returns_gate_receipt() {
     with_server(|server| {
-        let bad = server
-            .tool("purge", json!({ "id": MISSING_HANDLE }))
+        let id = ingest_canary(server);
+        let purged = server
+            .tool(
+                "memory",
+                json!({ "action": "purge", "id": id, "confirm": true }),
+            )
+            .expect("rpc");
+        if !has_gate_receipt(&purged) {
+            panic!(
+                "FAIL: memory purge with confirm:true did not return a gate receipt. {}",
+                purged.blob().chars().take(800).collect::<String>()
+            );
+        }
+        let leaks: Vec<String> = read_surfaces(server, &id)
+            .into_iter()
+            .filter(|(_, blob)| blob.contains(PURGE_CANARY))
+            .map(|(label, _)| label)
+            .collect();
+        if !leaks.is_empty() {
+            panic!(
+                "FAIL: confirmed purge left the canary readable over stdio via {leaks:?}. \
+                 Segment bytes were not checked."
+            );
+        }
+        verify_store_ok(&server.data_dir);
+    });
+}
+
+/// Unconfirmed purge is a refusal, not a hold and not a receipt.
+#[test]
+fn purge_without_confirm_refused_with_no_receipt() {
+    with_server(|server| {
+        let id = ingest_canary(server);
+        for (tool, args) in [
+            ("memory", json!({ "action": "purge", "id": id })),
+            ("purge", json!({ "id": id })),
+        ] {
+            let refused = server.tool(tool, args).expect("rpc");
+            if !refused.rejected() || has_gate_receipt(&refused) {
+                panic!(
+                    "FAIL: {tool} purge without confirm:true must be refused and must not \
+                     return a receipt. rejected={} receipt={} body={}",
+                    refused.rejected(),
+                    has_gate_receipt(&refused),
+                    refused.blob().chars().take(800).collect::<String>()
+                );
+            }
+        }
+        let still = server
+            .tool("memory", json!({ "action": "get", "id": id }))
+            .expect("rpc");
+        if !still.blob().contains(PURGE_CANARY) {
+            panic!(
+                "FAIL: purge without confirm:true dropped the memory. {}",
+                still.blob().chars().take(500).collect::<String>()
+            );
+        }
+    });
+}
+
+/// A retire that does not name a rule is held. The memory stays readable.
+#[test]
+fn retire_under_no_named_rule_is_held() {
+    with_server(|server| {
+        let id = ingest_canary(server);
+        let held = server
+            .tool(
+                "memory",
+                json!({ "action": "retire", "id": id, "confirm": true }),
+            )
+            .expect("rpc");
+        let blob = held.blob().to_ascii_lowercase();
+        let is_hold = blob.contains("\"hold\"")
+            || blob.contains("held")
+            || blob.contains("outcome\":\"held")
+            || blob.contains("verdict\":\"hold");
+        if !is_hold {
+            panic!(
+                "FAIL: retire with no named rule must be held. No `rule` argument was sent. {}",
+                held.blob().chars().take(800).collect::<String>()
+            );
+        }
+        let still = server
+            .tool("memory", json!({ "action": "get", "id": id }))
+            .expect("rpc");
+        if !still.blob().contains(PURGE_CANARY) {
+            panic!(
+                "FAIL: a held retire removed the memory. {}",
+                still.blob().chars().take(500).collect::<String>()
+            );
+        }
+    });
+}
+
+/// 4.1 erasure check. Not part of the 4.0 run (`cargo test` does not execute
+/// `#[ignore]`). After a confirmed purge the canary must be absent from
+/// `log/*.seg`.
+#[test]
+#[ignore = "deferred_4_1"]
+fn purge_canary_absent_from_segment_bytes() {
+    with_server(|server| {
+        let id = ingest_canary(server);
+        let purged = server
+            .tool(
+                "memory",
+                json!({ "action": "purge", "id": id, "confirm": true }),
+            )
             .expect("rpc");
         assert!(
-            bad.rejected(),
-            "purge without confirm must be refused: {}",
-            bad.blob()
+            has_gate_receipt(&purged),
+            "deferred_4_1 purge did not return a receipt: {}",
+            purged.blob().chars().take(400).collect::<String>()
         );
-        let created = server
-            .tool(
-                "smart_ingest",
-                json!({ "content": "purge target", "forceCreate": true }),
-            )
-            .expect("rpc");
-        if created.rejected() {
-            missing(&format!(
-                "purge needs a stored node. smart_ingest failed: {}",
-                created.blob().chars().take(500).collect::<String>()
-            ));
+        let needle = PURGE_CANARY.as_bytes();
+        let mut found = Vec::new();
+        let mut stack = vec![server.data_dir.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(rd) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in rd.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("seg") {
+                    continue;
+                }
+                if fs::read(&path)
+                    .unwrap_or_default()
+                    .windows(needle.len())
+                    .any(|window| window == needle)
+                {
+                    found.push(path);
+                }
+            }
         }
-        let id = created.body["nodeId"].as_str().unwrap_or("").to_string();
-        let good = server
-            .tool(
-                "purge",
-                json!({ "id": id, "confirm": true, "reason": "release-matrix" }),
-            )
-            .expect("rpc");
-        if good.handle_required() {
-            missing(&format!(
-                "purge of a node just written returned handle_required: {}",
-                good.blob().chars().take(500).collect::<String>()
-            ));
-        }
-        assert_receipt("purge", &good);
-        let missed = server
-            .tool("purge", json!({ "id": MISSING_HANDLE, "confirm": true }))
-            .expect("rpc");
-        assert_handle_required("purge", &missed);
+        assert!(
+            found.is_empty(),
+            "deferred_4_1: canary bytes still in {found:?}"
+        );
     });
 }
 

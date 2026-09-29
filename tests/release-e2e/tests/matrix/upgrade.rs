@@ -1,6 +1,10 @@
 //! Fresh install, v3.1.1 auto-upgrade, failed import, SIGKILL, and the
 //! hidden migrate-to-strata fallback.
 //!
+//! Every upgrade is the main binary execing `vestige-upgrade`. The helper
+//! holds the upgrade lock and performs the staging rename. SIGKILL lands on
+//! that process, not on `vestige` / `vestige-mcp`.
+//!
 //! `cli_first_launch_upgrades_v3` is the pass criterion for the CLI path.
 //! PR #310 hooks automatic upgrade from `vestige-mcp` `serve()` only; the
 //! `vestige` binary is a separate row and is expected to fail until that
@@ -9,7 +13,9 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -94,8 +100,16 @@ fn upgrade_v311_auto_upgrade_preserves_memories_fsrs_and_source_sha() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn");
+    let helper = watch_helper(child.id());
     std::thread::sleep(Duration::from_secs(5));
     let status = child.try_wait().expect("poll");
+    require_helper(
+        &helper,
+        "vestige-mcp first launch",
+        &status
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "still running".into()),
+    );
     let after = sha256_file(&db);
     assert_eq!(before, after, "auto-upgrade modified the v3 file");
     if let Some(code) = status {
@@ -191,7 +205,8 @@ fn cli_first_launch_upgrades_v3() {
     assert!(!rows.is_empty(), "fixture has no memories");
     let home = tempfile::tempdir().unwrap();
     // First process: the CLI, on a harmless read. No migrate command.
-    let out = run_vestige(
+    let out = run_upgrade(
+        "vestige",
         &[
             "--data-dir".into(),
             src.display().to_string(),
@@ -296,7 +311,8 @@ fn v311_reopens_untouched_db_after_upgrade() {
     );
 
     let home = tempfile::tempdir().unwrap();
-    let stats = run_vestige(
+    let stats = run_upgrade(
+        "vestige",
         &[
             "--data-dir".into(),
             src.display().to_string(),
@@ -415,7 +431,8 @@ fn cli_first_launch_corrupt_v3_leaves_bytes_and_names_v311() {
     file.set_len(4096).unwrap();
     let before = sha256_file(&db);
     let home = tempfile::tempdir().unwrap();
-    let out = run_vestige(
+    let out = run_upgrade(
+        "vestige",
         &[
             "--data-dir".into(),
             src.display().to_string(),
@@ -494,6 +511,14 @@ fn concurrent_first_launch_upgrades_once() {
         std::thread::sleep(Duration::from_millis(10));
     }
     std::thread::sleep(Duration::from_millis(50));
+    require_helper(&cli.helper, "concurrent `vestige stats`", &cli.output());
+    require_helper(&mcp.helper, "concurrent `vestige-mcp`", &mcp.output());
+    if !cli.helper.locked() && !mcp.helper.locked() {
+        missing(
+            "concurrent first launch: neither vestige-upgrade held the upgrade lock. \
+             The helper must take the lock and perform the staging rename.",
+        );
+    }
     assert_eq!(
         before,
         sha256_file(&db),
@@ -583,7 +608,21 @@ fn stale_staging_after_sigkill_recovers() {
     let mut killed_mid_import = false;
     while started.elapsed() < Duration::from_secs(180) {
         if staging_has_segment(&src) && installed_strata_log(&src).is_none() {
-            // Child::kill is SIGKILL on Unix.
+            let helper = first.helper.pid();
+            if helper == 0 || !first.helper.seen() {
+                missing(&format!(
+                    "stale-staging row: a staging segment existed but {UPGRADE_HELPER} was \
+                     not the importer. SIGKILL must land on the helper, which holds the \
+                     upgrade lock and does the rename. Output: {}",
+                    first.output().chars().take(600).collect::<String>()
+                ));
+            }
+            if !first.helper.locked() && !pid_holds_lock(helper) {
+                missing(&format!(
+                    "stale-staging row: {UPGRADE_HELPER} pid {helper} did not hold the upgrade lock"
+                ));
+            }
+            sigkill(helper);
             let _ = first.child.kill();
             let _ = first.child.wait();
             killed_mid_import = true;
@@ -628,6 +667,7 @@ fn stale_staging_after_sigkill_recovers() {
         let exited = second.child.try_wait().expect("poll relaunch");
         let ready = installed_strata_log(&src).is_some() && !staging_left(&src);
         if ready && exited.is_none() {
+            require_helper(&second.helper, "stale-staging relaunch", &second.output());
             break;
         }
         if let Some(status) = exited {
@@ -693,11 +733,11 @@ fn upgrade_failed_import_leaves_v3_and_names_v311() {
     let file = fs::OpenOptions::new().write(true).open(&db).unwrap();
     file.set_len(4096).unwrap();
     let before = sha256_file(&db);
-    let out = run_cmd(
-        &product_bin("vestige-mcp"),
+    let home = tempfile::tempdir().unwrap();
+    let out = run_upgrade(
+        "vestige-mcp",
         &["--data-dir".into(), src.display().to_string()],
-        &[("HOME", dir.path().to_str().unwrap())],
-        &["VESTIGE_DATA_DIR"],
+        home.path(),
         Duration::from_secs(20),
     );
     let after = sha256_file(&db);
@@ -727,7 +767,8 @@ fn upgrade_migrate_dry_run_writes_nothing_and_keeps_source_sha() {
     let before = source_hashes(&src);
     let dest = work.path().join("strata");
     let home = tempfile::tempdir().unwrap();
-    let out = run_vestige(
+    let out = run_upgrade(
+        "vestige",
         &[
             "migrate-to-strata".into(),
             "--from".into(),
@@ -770,7 +811,8 @@ fn upgrade_real_migrate_keeps_source_sha_and_fsrs() {
     );
     let dest = work.path().join("strata");
     let home = tempfile::tempdir().unwrap();
-    let out = run_vestige(
+    let out = run_upgrade(
+        "vestige",
         &[
             "migrate-to-strata".into(),
             "--from".into(),
@@ -849,7 +891,8 @@ fn upgrade_nonempty_to_is_refused() {
     fs::create_dir_all(&dest).unwrap();
     fs::write(dest.join("already-here"), b"not empty").unwrap();
     let home = tempfile::tempdir().unwrap();
-    let out = run_vestige(
+    let out = run_upgrade(
+        "vestige",
         &[
             "migrate-to-strata".into(),
             "--from".into(),
@@ -885,7 +928,8 @@ fn upgrade_wal_without_flag_refuses_and_source_unchanged() {
     let before = source_hashes(&src);
     let dest = work.path().join("strata");
     let home = tempfile::tempdir().unwrap();
-    let out = run_vestige(
+    let out = run_upgrade(
+        "vestige",
         &[
             "migrate-to-strata".into(),
             "--from".into(),
@@ -906,6 +950,280 @@ fn upgrade_wal_without_flag_refuses_and_source_unchanged() {
         out.status != Some(0) && blob.to_lowercase().contains("wal"),
         "non-empty WAL must be refused without --accept-wal-snapshot: {blob}"
     );
+}
+
+fn isolated_bins(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let bin_dir = dir.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let mut paths = Vec::new();
+    for name in ["vestige", "vestige-mcp"] {
+        let src = product_bin(name);
+        let dest = bin_dir.join(name);
+        fs::copy(&src, &dest).unwrap_or_else(|e| panic!("copy {name}: {e}"));
+        let mut perms = fs::metadata(&dest).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&dest, perms).unwrap();
+        paths.push(dest);
+    }
+    assert!(
+        !bin_dir.join(UPGRADE_HELPER).exists(),
+        "isolated bin dir must not contain {UPGRADE_HELPER}"
+    );
+    (paths.remove(0), paths.remove(0))
+}
+
+/// A v3 store with no `vestige-upgrade` beside the main binaries, and none
+/// on `PATH`. Both binaries refuse, name the helper, and leave the sqlite
+/// family and the directory layout untouched.
+#[test]
+fn upgrade_missing_helper_refuses() {
+    let work = tempfile::tempdir().unwrap();
+    let (vestige, mcp) = isolated_bins(work.path());
+    let bin_dir = vestige.parent().unwrap().to_path_buf();
+    for (label, bin, args) in [
+        ("vestige", vestige, vec!["stats".to_string()]),
+        ("vestige-mcp", mcp, Vec::new()),
+    ] {
+        let src = work.path().join(format!("v3-{label}"));
+        copy_tree(&fixture("fresh-v38-ckpt"), &src);
+        let before = sqlite_family_hashes(&src);
+        let home = work.path().join(format!("home-{label}"));
+        fs::create_dir_all(&home).unwrap();
+        let mut full = vec!["--data-dir".into(), src.display().to_string()];
+        full.extend(args);
+        let out = run_cmd(
+            &bin,
+            &full,
+            &[
+                ("HOME", home.to_str().unwrap()),
+                ("PATH", bin_dir.to_str().unwrap()),
+            ],
+            &["VESTIGE_DATA_DIR"],
+            Duration::from_secs(40),
+        );
+        let after = sqlite_family_hashes(&src);
+        assert_eq!(before, after, "{label} changed the v3 sqlite family");
+        assert!(
+            installed_strata_log(&src).is_none()
+                && !staging_left(&src)
+                && !src.join("log").exists(),
+            "{label} created a log or staging directory"
+        );
+        let blob = format!("{}{}", out.stdout, out.stderr);
+        if out.status == Some(0) || out.status.is_none() || !blob.contains(UPGRADE_HELPER) {
+            panic!(
+                "FAIL: {label} with no {UPGRADE_HELPER} on disk must exit non-zero and name \
+                 the helper. exit {:?} output: {}",
+                out.status,
+                blob.chars().take(800).collect::<String>()
+            );
+        }
+    }
+}
+
+fn opens_vestige_db(trace: &str) -> bool {
+    trace.lines().any(|line| {
+        (line.contains("open(") || line.contains("openat(")) && line.contains("vestige.db")
+    })
+}
+
+fn symbol_hits(bin: &std::path::Path) -> Vec<String> {
+    let output = Command::new("nm")
+        .arg("-a")
+        .arg(bin)
+        .output()
+        .unwrap_or_else(|e| panic!("HARNESS: nm {}: {e}", bin.display()));
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .filter(|line| line.contains("sqlite3_") || line.contains("rusqlite"))
+        .take(24)
+        .map(|line| line.trim().to_string())
+        .collect()
+}
+
+fn rusqlite_tree(bin: &str) -> String {
+    let output = Command::new("cargo")
+        .args([
+            "tree",
+            "-i",
+            "rusqlite",
+            "--locked",
+            "-p",
+            "vestige-mcp",
+            "--bin",
+            bin,
+        ])
+        .current_dir(repo_root())
+        .output()
+        .unwrap_or_else(|e| panic!("HARNESS: cargo tree {bin}: {e}"));
+    format!(
+        "status={}\n{}{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+fn tree_is_empty(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("did not match")
+        || lower.contains("no packages")
+        || !text.lines().any(|line| line.contains("rusqlite"))
+}
+
+/// The main binary detects `vestige.db` without opening it, and the shipped
+/// binaries contain no SQLite.
+#[test]
+fn v3_detected_without_opening() {
+    let mut problems = Vec::new();
+    for bin in ["vestige", "vestige-mcp"] {
+        let hits = symbol_hits(&product_bin(bin));
+        if !hits.is_empty() {
+            problems.push(format!(
+                "{bin} nm still has sqlite3_/rusqlite symbols ({}): {}",
+                hits.len(),
+                hits.join(" | ")
+            ));
+        }
+        let tree = rusqlite_tree(bin);
+        if !tree_is_empty(&tree) {
+            problems.push(format!(
+                "cargo tree -i rusqlite --bin {bin} is not empty: {}",
+                tree.chars().take(400).collect::<String>()
+            ));
+        }
+    }
+
+    let cases = ["chmod", "bytes"];
+    for case in cases {
+        let work = tempfile::tempdir().unwrap();
+        let src = work.path().join("v3");
+        copy_tree(&fixture("fresh-v38-ckpt"), &src);
+        let db = src.join("vestige.db");
+        match case {
+            "chmod" => {
+                let mut perms = fs::metadata(&db).unwrap().permissions();
+                perms.set_mode(0);
+                fs::set_permissions(&db, perms).unwrap();
+            }
+            "bytes" => fs::write(&db, b"this is not a sqlite database").unwrap(),
+            _ => unreachable!(),
+        }
+        let before = sha256_file(&db);
+        let trace_path = work.path().join(format!("{case}.strace"));
+        let home = work.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let out = run_cmd(
+            std::path::Path::new("strace"),
+            &[
+                "-f".into(),
+                "-s".into(),
+                "200".into(),
+                "-o".into(),
+                trace_path.display().to_string(),
+                "-e".into(),
+                "trace=open,openat,execve".into(),
+                "--".into(),
+                product_bin("vestige").display().to_string(),
+                "--data-dir".into(),
+                src.display().to_string(),
+                "stats".into(),
+            ],
+            &[("HOME", home.to_str().unwrap())],
+            &["VESTIGE_DATA_DIR"],
+            Duration::from_secs(40),
+        );
+        let trace = fs::read_to_string(&trace_path).unwrap_or_default();
+        if opens_vestige_db(&trace) {
+            problems.push(format!(
+                "{case}: vestige opened vestige.db. Detection must not read the file."
+            ));
+        }
+        let handed = trace.contains("execve(") && trace.contains(UPGRADE_HELPER);
+        let refused = out.status.is_some() && out.status != Some(0);
+        if !handed && !refused {
+            problems.push(format!(
+                "{case}: vestige neither refused nor handed off to {UPGRADE_HELPER}. exit {:?} {}",
+                out.status,
+                format!("{}{}", out.stdout, out.stderr)
+                    .chars()
+                    .take(400)
+                    .collect::<String>()
+            ));
+        }
+        if sha256_file(&db) != before {
+            problems.push(format!("{case}: vestige.db bytes changed"));
+        }
+        if case == "chmod" {
+            let mut perms = fs::metadata(&db).unwrap().permissions();
+            perms.set_mode(0o644);
+            fs::set_permissions(&db, perms).unwrap();
+        }
+    }
+    if !problems.is_empty() {
+        panic!("FAIL: v3_detected_without_opening\n{}", problems.join("\n"));
+    }
+}
+
+/// Static check. The release workflow is not executed here. Every archive
+/// the workflow builds, and the install scripts that place binaries next to
+/// each other, must ship `vestige-upgrade`.
+#[test]
+fn release_archives_ship_upgrade_helper() {
+    let root = repo_root();
+    let workflow =
+        fs::read_to_string(root.join(".github/workflows/release.yml")).expect("release workflow");
+    let targets = [
+        "x86_64-pc-windows-msvc",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+    ];
+    let package_lines: Vec<&str> = workflow
+        .lines()
+        .filter(|line| line.contains("tar -czf") || line.contains("Compress-Archive"))
+        .collect();
+    let mut missing_bits = Vec::new();
+    if package_lines.len() < targets.len() {
+        missing_bits.push(format!(
+            "release.yml has {} package lines, expected at least one per target {:?}",
+            package_lines.len(),
+            targets
+        ));
+    }
+    for line in &package_lines {
+        let needs_exe = line.contains(".exe") || line.contains("Compress-Archive");
+        let needle = if needs_exe {
+            "vestige-upgrade.exe"
+        } else {
+            "vestige-upgrade"
+        };
+        if !line.contains(needle) {
+            missing_bits.push(format!("archive line lacks {needle}: {}", line.trim()));
+        }
+    }
+    let install_files = [
+        "packages/vestige-mcp-npm/scripts/postinstall.js",
+        "packages/vestige-mcpb/build.sh",
+        "scripts/xcode-setup.sh",
+    ];
+    for rel in install_files {
+        let text = fs::read_to_string(root.join(rel)).unwrap_or_default();
+        if !text.contains("vestige-upgrade") {
+            missing_bits.push(format!(
+                "{rel} does not install vestige-upgrade next to the main binaries"
+            ));
+        }
+    }
+    if !missing_bits.is_empty() {
+        panic!(
+            "FAIL: release archives do not ship {UPGRADE_HELPER}.\n\
+             targets covered: {}\n{}",
+            targets.join(", "),
+            missing_bits.join("\n")
+        );
+    }
 }
 
 /// SIGKILL while staging segments are still growing, before `publish`
@@ -1425,7 +1743,8 @@ fn upgrade_legacy_links_are_not_causal_edges() {
         let before = sha256_file(&src.join("vestige.db"));
         let dest = work.path().join(format!("{fixture_name}-strata"));
         let home = tempfile::tempdir().unwrap();
-        let out = run_vestige(
+        let out = run_upgrade(
+            "vestige",
             &[
                 "migrate-to-strata".into(),
                 "--from".into(),
@@ -1556,6 +1875,254 @@ fn segment_bytes(dir: &std::path::Path) -> u64 {
         .sum()
 }
 
+const UPGRADE_HELPER: &str = "vestige-upgrade";
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Actor {
+    Root,
+    Pid(u32),
+}
+
+fn actor_of(line: &str) -> Actor {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("[pid ") {
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(pid) = digits.parse() {
+            return Actor::Pid(pid);
+        }
+    }
+    let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !digits.is_empty() {
+        let rest = &trimmed[digits.len()..];
+        if rest.starts_with(' ') || rest.starts_with('\t') {
+            if let Ok(pid) = digits.parse() {
+                return Actor::Pid(pid);
+            }
+        }
+    }
+    Actor::Root
+}
+
+fn is_rename_line(line: &str) -> bool {
+    line.contains("rename(") || line.contains("renameat(") || line.contains("renameat2(")
+}
+
+fn is_lock_line(line: &str) -> bool {
+    line.contains("flock(")
+        || (line.contains("fcntl(") && (line.contains("F_SETLK") || line.contains("LOCK_EX")))
+}
+
+fn helper_actors(trace: &str) -> Vec<Actor> {
+    trace
+        .lines()
+        .filter(|line| line.contains("execve(") && line.contains(UPGRADE_HELPER))
+        .map(actor_of)
+        .collect()
+}
+
+/// The helper was exec'd. A staging rename, when one happened, was that
+/// process, and that process took the upgrade lock.
+fn assert_upgrade_helper(trace: &str, bin: &str, out: &CmdOut) {
+    let helpers = helper_actors(trace);
+    if helpers.is_empty() {
+        panic!(
+            "FAIL: `{bin}` did not launch {UPGRADE_HELPER}. First launch and \
+             migrate-to-strata must exec the helper; the helper holds the upgrade \
+             lock and performs the staging rename. The main binary does not import \
+             SQLite itself. output: {} trace: {}",
+            cmd_excerpt(out),
+            trace.chars().take(700).collect::<String>()
+        );
+    }
+    let suffix = strata_migrate::STAGING_SUFFIX;
+    let renames: Vec<Actor> = trace
+        .lines()
+        .filter(|line| is_rename_line(line) && line.contains(suffix))
+        .map(actor_of)
+        .collect();
+    if let Some(actor) = renames.iter().find(|actor| !helpers.contains(actor)) {
+        panic!(
+            "FAIL: `{bin}` staging rename was not performed by {UPGRADE_HELPER} \
+             (actor {actor:?}). helpers={helpers:?}"
+        );
+    }
+    if !renames.is_empty() {
+        let locked = trace
+            .lines()
+            .filter(|line| is_lock_line(line))
+            .map(actor_of)
+            .any(|actor| helpers.contains(&actor));
+        if !locked {
+            panic!(
+                "FAIL: `{bin}` {UPGRADE_HELPER} renamed staging without holding the upgrade lock"
+            );
+        }
+    }
+}
+
+fn run_upgrade(bin: &str, args: &[String], home: &std::path::Path, timeout: Duration) -> CmdOut {
+    let trace_dir = tempfile::tempdir().unwrap();
+    let trace_path = trace_dir.path().join("upgrade.strace");
+    let mut argv = vec![
+        "-f".to_string(),
+        "-s".into(),
+        "240".into(),
+        "-o".into(),
+        trace_path.display().to_string(),
+        "-e".into(),
+        "trace=execve,rename,renameat,renameat2,flock,fcntl".into(),
+        "--".into(),
+        product_bin(bin).display().to_string(),
+    ];
+    argv.extend(args.iter().cloned());
+    let out = run_cmd(
+        std::path::Path::new("strace"),
+        &argv,
+        &[("HOME", home.to_str().unwrap())],
+        &["VESTIGE_DATA_DIR"],
+        timeout,
+    );
+    let trace = fs::read_to_string(&trace_path).unwrap_or_default();
+    assert_upgrade_helper(&trace, bin, &out);
+    out
+}
+
+fn child_pids(parent: u32) -> Vec<u32> {
+    let listed =
+        fs::read_to_string(format!("/proc/{parent}/task/{parent}/children")).unwrap_or_default();
+    let mut out: Vec<u32> = listed
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    if !out.is_empty() {
+        return out;
+    }
+    let Ok(rd) = fs::read_dir("/proc") else {
+        return out;
+    };
+    for entry in rd.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse().ok()) else {
+            continue;
+        };
+        let status = fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+        let is_child = status.lines().any(|line| {
+            line.strip_prefix("PPid:")
+                .is_some_and(|rest| rest.trim() == parent.to_string())
+        });
+        if is_child {
+            out.push(pid);
+        }
+    }
+    out
+}
+
+fn exe_base(pid: u32) -> Option<String> {
+    fs::read_link(format!("/proc/{pid}/exe"))
+        .ok()
+        .and_then(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()))
+}
+
+fn find_helper(root: u32) -> Option<u32> {
+    let mut stack = vec![root];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(pid) = stack.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        if exe_base(pid).as_deref() == Some(UPGRADE_HELPER) {
+            return Some(pid);
+        }
+        stack.extend(child_pids(pid));
+    }
+    None
+}
+
+fn pid_holds_lock(pid: u32) -> bool {
+    let text = fs::read_to_string("/proc/locks").unwrap_or_default();
+    let pid_s = pid.to_string();
+    text.lines().any(|line| {
+        line.split_whitespace().any(|col| col == pid_s)
+            && line.contains("WRITE")
+            && (line.contains("POSIX") || line.contains("FLOCK"))
+    })
+}
+
+fn sigkill(pid: u32) {
+    let _ = Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status();
+}
+
+struct HelperWatch {
+    stop: Arc<AtomicBool>,
+    seen: Arc<AtomicBool>,
+    locked: Arc<AtomicBool>,
+    pid: Arc<AtomicU32>,
+}
+
+fn watch_helper(root: u32) -> HelperWatch {
+    let stop = Arc::new(AtomicBool::new(false));
+    let seen = Arc::new(AtomicBool::new(false));
+    let locked = Arc::new(AtomicBool::new(false));
+    let pid = Arc::new(AtomicU32::new(0));
+    let (stop_t, seen_t, locked_t, pid_t) = (
+        Arc::clone(&stop),
+        Arc::clone(&seen),
+        Arc::clone(&locked),
+        Arc::clone(&pid),
+    );
+    std::thread::spawn(move || {
+        while !stop_t.load(Ordering::Relaxed) {
+            if let Some(helper) = find_helper(root) {
+                seen_t.store(true, Ordering::Relaxed);
+                pid_t.store(helper, Ordering::Relaxed);
+                if pid_holds_lock(helper) {
+                    locked_t.store(true, Ordering::Relaxed);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+    HelperWatch {
+        stop,
+        seen,
+        locked,
+        pid,
+    }
+}
+
+impl HelperWatch {
+    fn seen(&self) -> bool {
+        self.seen.load(Ordering::Relaxed)
+    }
+    fn locked(&self) -> bool {
+        self.locked.load(Ordering::Relaxed)
+    }
+    fn pid(&self) -> u32 {
+        self.pid.load(Ordering::Relaxed)
+    }
+    fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for HelperWatch {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn require_helper(watch: &HelperWatch, what: &str, output: &str) {
+    if !watch.seen() {
+        missing(&format!(
+            "{what}: the main binary did not launch {UPGRADE_HELPER}. First start \
+             must exec the helper; the helper holds the upgrade lock and does the \
+             staging rename. Output: {}",
+            output.chars().take(700).collect::<String>()
+        ));
+    }
+}
+
 fn kill_migrate(point: KillPoint) -> KilledImport {
     let work = tempfile::tempdir().unwrap();
     let src = work.path().join("src");
@@ -1601,7 +2168,19 @@ fn kill_into(src: &std::path::Path, dest: &std::path::Path, point: KillPoint) ->
         };
         let staging = migrate_staging(&dest);
         let home = tempfile::tempdir().unwrap();
-        let mut child = Command::new(product_bin("vestige"))
+        let trace_path = dest.with_extension("strace");
+        let mut child = Command::new("strace")
+            .args([
+                "-f",
+                "-s",
+                "240",
+                "-o",
+                trace_path.to_str().unwrap(),
+                "-e",
+                "trace=execve,rename,renameat,renameat2,flock,fcntl",
+                "--",
+            ])
+            .arg(product_bin("vestige"))
             .args([
                 "migrate-to-strata",
                 "--from",
@@ -1615,11 +2194,51 @@ fn kill_into(src: &std::path::Path, dest: &std::path::Path, point: KillPoint) ->
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn migrate");
+            .expect("spawn migrate under strace");
         let caught = watch_and_kill(&mut child, &dest, &staging, point);
+        if caught.helper != 0 {
+            // The helper is dead. Stop the main binary so strace flushes.
+            for pid in child_pids(child.id()) {
+                sigkill(pid);
+            }
+        }
         let _ = child.wait();
-        if !caught {
+        let trace = fs::read_to_string(&trace_path).unwrap_or_default();
+        let _ = fs::remove_file(&trace_path);
+        if !caught.caught {
             continue;
+        }
+        let helper_actor = Actor::Pid(caught.helper);
+        let helper_did_rename = trace.lines().any(|line| {
+            is_rename_line(line)
+                && line.contains(strata_migrate::STAGING_SUFFIX)
+                && actor_of(line) == helper_actor
+        });
+        if !caught.held_lock {
+            missing(&format!(
+                "SIGKILL at {} hit {UPGRADE_HELPER} pid {} but that process did not hold \
+                 the upgrade lock",
+                dest_name(point),
+                caught.helper
+            ));
+        }
+        match point {
+            KillPoint::BeforePublish => {
+                if helper_did_rename {
+                    panic!(
+                        "pre-rename SIGKILL landed after {UPGRADE_HELPER} had already renamed staging"
+                    );
+                }
+            }
+            KillPoint::AfterPublish => {
+                if !helper_did_rename {
+                    missing(&format!(
+                        "post-rename SIGKILL: the staging rename was not performed by \
+                         {UPGRADE_HELPER}. trace: {}",
+                        trace.chars().take(700).collect::<String>()
+                    ));
+                }
+            }
         }
         let dest_exists = dest.exists();
         let staging_exists = staging.exists();
@@ -1641,12 +2260,19 @@ fn kill_into(src: &std::path::Path, dest: &std::path::Path, point: KillPoint) ->
         };
     }
     missing(&format!(
-        "could not SIGKILL vestige migrate-to-strata at {}. Before the publish \
-         rename the process must be killed while a staging segment is growing. \
-         After the rename it must be killed once <dest> exists and the process \
-         is still alive.",
+        "could not SIGKILL {UPGRADE_HELPER} at {}. The main binary must exec the \
+         helper. Before the publish rename the helper is killed while a staging \
+         segment is growing and while it holds the upgrade lock. After the rename \
+         the helper is killed once <dest> exists and it is still the process that \
+         performed the rename.",
         dest_name(point)
     ));
+}
+
+struct KillCatch {
+    caught: bool,
+    helper: u32,
+    held_lock: bool,
 }
 
 fn watch_and_kill(
@@ -1654,20 +2280,34 @@ fn watch_and_kill(
     dest: &std::path::Path,
     staging: &std::path::Path,
     point: KillPoint,
-) -> bool {
+) -> KillCatch {
     let started = Instant::now();
     let mut previous = 0u64;
+    let miss = KillCatch {
+        caught: false,
+        helper: 0,
+        held_lock: false,
+    };
     while started.elapsed() < Duration::from_secs(180) {
         let exited = child.try_wait().expect("poll").is_some();
+        let helper = find_helper(child.id());
         match point {
             KillPoint::BeforePublish => {
                 if exited || dest.exists() {
-                    return false;
+                    return miss;
                 }
                 let bytes = segment_bytes(staging);
                 if previous > 0 && bytes > previous {
-                    let _ = child.kill();
-                    return true;
+                    let Some(helper) = helper else {
+                        return miss;
+                    };
+                    let held_lock = pid_holds_lock(helper);
+                    sigkill(helper);
+                    return KillCatch {
+                        caught: true,
+                        helper,
+                        held_lock,
+                    };
                 }
                 if bytes > 0 {
                     previous = bytes;
@@ -1676,18 +2316,28 @@ fn watch_and_kill(
             }
             KillPoint::AfterPublish => {
                 if dest.exists() && !exited {
-                    let _ = child.kill();
-                    return true;
+                    let Some(helper) =
+                        helper.filter(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists())
+                    else {
+                        return miss;
+                    };
+                    let held_lock = pid_holds_lock(helper);
+                    sigkill(helper);
+                    return KillCatch {
+                        caught: true,
+                        helper,
+                        held_lock,
+                    };
                 }
                 if exited {
-                    return false;
+                    return miss;
                 }
                 std::thread::yield_now();
             }
         }
     }
     let _ = child.kill();
-    false
+    miss
 }
 
 fn assert_killed_before_publish(killed: &KilledImport) {
@@ -1733,7 +2383,8 @@ fn assert_receipt_key_allowed(dest: &std::path::Path) {
 
 fn migrate_to(src: &std::path::Path, dest: &std::path::Path) -> CmdOut {
     let home = tempfile::tempdir().unwrap();
-    run_vestige(
+    run_upgrade(
+        "vestige",
         &[
             "migrate-to-strata".into(),
             "--from".into(),
@@ -2416,7 +3067,7 @@ fn import_log_edges(work: &std::path::Path, source: &InferredSource) -> Vec<Valu
         args.push("--accept-wal-snapshot".into());
     }
     let home = tempfile::tempdir().unwrap();
-    let migrated = run_vestige(&args, home.path(), Duration::from_secs(180));
+    let migrated = run_upgrade("vestige", &args, home.path(), Duration::from_secs(180));
     assert_eq!(
         migrated.status,
         Some(0),
@@ -2932,6 +3583,7 @@ struct Tracked {
     child: Child,
     stdout: Arc<Mutex<String>>,
     stderr: Arc<Mutex<String>>,
+    helper: HelperWatch,
 }
 
 impl Tracked {
@@ -2944,6 +3596,7 @@ impl Tracked {
 
 impl Drop for Tracked {
     fn drop(&mut self) {
+        self.helper.stop();
         if self.child.try_wait().ok().flatten().is_none() {
             let _ = self.child.kill();
             let _ = self.child.wait();
@@ -2976,6 +3629,7 @@ fn spawn_first_launch(
     let mut child = command
         .spawn()
         .unwrap_or_else(|e| panic!("HARNESS: failed to spawn {bin}: {e}"));
+    let helper = watch_helper(child.id());
     if let Some(stdin) = child.stdin.take() {
         std::mem::forget(stdin);
     }
@@ -2999,6 +3653,7 @@ fn spawn_first_launch(
         child,
         stdout,
         stderr,
+        helper,
     }
 }
 

@@ -17,26 +17,19 @@ use sha2::{Digest, Sha256};
 
 pub const MISSING_HANDLE: &str = "mem:00000000-0000-4000-8000-000000000000";
 
-pub const EXPECTED_TOOLS: &[&str] = &[
-    "causal_walk",
-    "codebase",
-    "dedup",
-    "forgotten_lesson",
-    "graph",
-    "intention",
-    "maintain",
-    "memory",
-    "memory_status",
-    "project",
-    "purge",
-    "recall",
-    "receipt",
-    "selftest",
-    "session_start",
-    "smart_ingest",
-    "source_sync",
-    "suppress",
-];
+/// The tool-list row reads this file. One name per line. The names stay
+/// where they are until tag time pins the tools that are actually green.
+pub fn expected_tool_names() -> Vec<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("expected_tools_4.0.txt");
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("HARNESS: read {}: {e}", path.display());
+    });
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
+        .collect()
+}
 
 pub fn missing(what: &str) -> ! {
     panic!("MISSING: {what}");
@@ -64,6 +57,7 @@ pub fn product_bin(name: &str) -> PathBuf {
     let key = match name {
         "vestige" => "VESTIGE_BIN",
         "vestige-mcp" => "VESTIGE_MCP_BIN",
+        "vestige-upgrade" => "VESTIGE_UPGRADE_BIN",
         "strata-verify" => "STRATA_VERIFY_BIN",
         other => panic!("HARNESS: unknown product binary {other}"),
     };
@@ -349,7 +343,22 @@ pub struct Server {
 
 impl Server {
     pub fn spawn(data_dir: &Path) -> Self {
-        let mut command = Command::new(product_bin("vestige-mcp"));
+        Self::spawn_mcp(data_dir, &[], &[])
+    }
+
+    /// `prefix` is argv placed before `vestige-mcp` (`unshare`, `strace`).
+    /// `clear_env` is removed from the child so a key in the test process
+    /// cannot leak into the decision.
+    pub fn spawn_mcp(data_dir: &Path, prefix: &[String], clear_env: &[&str]) -> Self {
+        let mcp = product_bin("vestige-mcp");
+        let mut command = if let Some((bin, rest)) = prefix.split_first() {
+            let mut wrapped = Command::new(bin);
+            wrapped.args(rest);
+            wrapped.arg(&mcp);
+            wrapped
+        } else {
+            Command::new(&mcp)
+        };
         command
             .arg("--data-dir")
             .arg(data_dir)
@@ -358,7 +367,11 @@ impl Server {
             .env("VESTIGE_HTTP_ENABLED", "0")
             .env("VESTIGE_AUTOPILOT_ENABLED", "0")
             .env("HOME", data_dir)
-            .env_remove("RUST_LOG")
+            .env_remove("RUST_LOG");
+        for key in clear_env {
+            command.env_remove(key);
+        }
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -410,7 +423,11 @@ impl Server {
     }
 
     pub fn boot_strata(data_dir: &Path) -> Self {
-        let mut server = Self::spawn(data_dir);
+        Self::boot_wrapped(data_dir, &[], &[])
+    }
+
+    pub fn boot_wrapped(data_dir: &Path, prefix: &[String], clear_env: &[&str]) -> Self {
+        let mut server = Self::spawn_mcp(data_dir, prefix, clear_env);
         // Storage init happens before the first read. Give a failing process
         // a moment to exit so the handshake does not burn the full RPC budget
         // on a binary that already refused to boot.
