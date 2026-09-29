@@ -1,64 +1,44 @@
 //! # Causal Walk
 //!
-//! The successor to [`super::retroactive_backfill`]. Backfill starts from ONE
-//! failure memory and reaches backward through shared entities; causal_walk
-//! starts from EXPLICIT evidence handles the caller already holds — a failing
-//! test, a stack frame, a CI run, a logged write, a version range — and walks
-//! exact, mechanism-specific edges to the change records behind the failure.
-//! The start point is never guessed: with no start point, or a start point
-//! that anchors to nothing in the store, the walk refuses with a
-//! [`NeedsReport`] instead of inventing a trail (the same no-fabrication rule
-//! that keeps backfill from linking on vocabulary alone).
+//! Follows recorded edges only. The start is an exact `logged_write` node id.
+//! The other start kinds stay in the schema and return [`NeedsReport`]: a
+//! name, a path, a run id, or a tag range is not an edge.
 //!
-//! ## Mechanisms (all exact, all backward-only)
+//! An edge counts when its `link_type` is one of [`RECORDED_EDGE_TYPES`]
+//! (`touched`, `anchored_to`, `derived_from`, `supersedes`, `corrects`,
+//! `closed_by`, `projected_to`, `evidence_of`) and it is not
+//! `legacy_inferred`. Shared names are not a join and are not a score.
 //!
-//! 1. **failing_test** → the test-file record(s) naming the test → the commit
-//!    records touching that file → for each, its OTHER files are the suspects
-//!    (co-touch: the regression rides in on a commit that also touched the
-//!    test).
-//! 2. **stack_frame** (`file:line` or `file`) → commit records whose hunk
-//!    spans (files / path-qualified symbols) cover that file → the LAST commit
-//!    touching the file before the failure anchor is the prime suspect
-//!    (SZZ-lite; sha matching reuses the `commit <sha>` record-header pattern).
-//! 3. **ci_run** → the agent-trace run's failure channel (vetoed claims plus
-//!    the memories the run retrieved/wrote) → their entities → records.
-//! 4. **logged_write** → the node → its persisted connection edges →
-//!    neighbours, plus records sharing its entities.
-//! 5. **version_range** (`worked_in`/`broke_in`/`repo`) → the `git rev-list`
-//!    commit set between the two tags → a RESTRICTION on commit candidates
-//!    (out-of-range commits are rejected with a why-not) plus a second hop for
-//!    in-range commits overlapping the failure anchors.
-//!
-//! ## Ranking
-//!
-//! Ported from `run_trail`: IDF-weighted shared anchors (probabilistic IDF ×
-//! identifier-tier weight — a shared file path is worth ~3x a shared word, and
-//! a name every candidate carries is boilerplate, not a clue), a gentle
-//! recency term, the change-record bonus (the change, not the chatter about
-//! it), and older-first tie-breaks. Embedding similarity is not an input in
-//! either direction, for the same reason as backfill.
-//!
-//! ## MVP bounds
-//!
-//! Single repo per call; at most [`MAX_HOPS`] hops per cause; supersession is
-//! not followed (commit records are upserted idempotently, not superseded).
-//! Trail edges persist ONLY on promote, as `evidence_of` links via the
-//! existing `save_connection` surface.
-//!
-//! Candidates are hypotheses. Nothing here proves causation.
+//! Time is a hard filter: a record at or after the start node is omitted.
+//! Ranking is recorded edge strength, then older-first. At most [`MAX_HOPS`]
+//! hops. Promote persists `evidence_of` through the existing `save_connection`
+//! surface (`SaveEdge`). Candidates are hypotheses.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::git_records;
-use super::retroactive_backfill::{
-    CHANGE_RECORD_BONUS, IdentifierTier, extract_entities, normalized_tier,
-};
 
 /// Link type persisted on promote: cause record → evidence record.
 pub const EVIDENCE_LINK_TYPE: &str = "evidence_of";
+/// Recorded edge vocabulary the walk will follow. `legacy_inferred` is not one of them.
+pub const RECORDED_EDGE_TYPES: &[&str] = &[
+    "touched",
+    "anchored_to",
+    "derived_from",
+    "supersedes",
+    "corrects",
+    "closed_by",
+    "projected_to",
+    "evidence_of",
+];
+
+/// True for a v4 recorded edge. Name overlap is not an edge. `legacy_inferred` is skipped.
+pub fn is_recorded_edge(link_type: &str) -> bool {
+    link_type != "legacy_inferred" && RECORDED_EDGE_TYPES.contains(&link_type)
+}
 /// Hard hop cap per cause (MVP bound).
 pub const MAX_HOPS: usize = 2;
 pub const DEFAULT_LOOKBACK_DAYS: i64 = 30;
@@ -69,11 +49,11 @@ pub const MAX_REJECTIONS: usize = 3;
 
 /// The canonical start-point menu, echoed in every needs_report.
 pub const REQUIRED_START_POINTS: &[&str] = &[
-    "failing_test {name}: a failing test whose file's co-touch commits become suspects",
-    "stack_frame {frame: \"file:line\" or \"file\"}: blame the last pre-failure toucher",
-    "ci_run {run_id}: the failure channel (vetoed claims / touched memories) of an agent-trace run",
-    "logged_write {node_id}: a memory or tool-call record whose edges to walk",
-    "version_range {worked_in, broke_in, repo}: restrict commit suspects to a tag range (pair with a failure start point)",
+    "logged_write {node_id}: the failure record; recorded edges are walked backward from it",
+    "failing_test {name}: not a recorded edge; pass logged_write of the failure record",
+    "stack_frame {frame}: not a recorded edge; pass logged_write of the failure record",
+    "ci_run {run_id}: not a recorded edge; pass logged_write of the failure record",
+    "version_range {worked_in, broke_in, repo}: not a recorded edge; pass logged_write of the failure record",
 ];
 
 // ============================================================================
@@ -92,8 +72,7 @@ pub enum StartPoint {
     StackFrame { frame: String },
     /// An agent-trace run id. Its failure channel seeds the anchor entities.
     CiRun { run_id: String },
-    /// A memory / tool-call record id. Its edges and shared entities are
-    /// walked.
+    /// A memory / tool-call record id. Recorded edges from this node are walked.
     LoggedWrite { node_id: String },
     /// `worked_in..broke_in` tag range in `repo`. Restricts commit suspects
     /// to the rev-list commit set.
@@ -131,6 +110,18 @@ pub struct ResolvedRange {
     pub shas: HashSet<String>,
 }
 
+/// One persisted edge the walk may follow.
+#[derive(Debug, Clone)]
+pub struct RecordedEdge {
+    pub source_id: String,
+    pub target_id: String,
+    pub link_type: String,
+    pub strength: f64,
+    /// Migration flag. The live `SaveEdge` record has no such bit; a link whose
+    /// type is the literal `legacy_inferred` is still skipped.
+    pub legacy_inferred: bool,
+}
+
 /// Failure-channel evidence harvested from one agent-trace run.
 #[derive(Debug, Clone, Default)]
 pub struct RunEvidence {
@@ -148,8 +139,8 @@ pub struct WalkContext {
     pub now: DateTime<Utc>,
     /// run_id → harvested evidence (missing run = absent key).
     pub runs: HashMap<String, RunEvidence>,
-    /// node_id → neighbour node ids (either side of a persisted edge).
-    pub edges: HashMap<String, Vec<String>>,
+    /// Recorded edges. Name overlap is not in this list. `legacy_inferred` is never inserted.
+    pub edges: Vec<RecordedEdge>,
     /// start-point index → resolved rev-list (or the error that blocked it).
     pub ranges: HashMap<usize, Result<ResolvedRange, String>>,
     /// True when more than one distinct repo appeared in version_range starts.
@@ -195,11 +186,12 @@ pub struct CausalCause {
     /// Commit sha when the suspect is a change record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha: Option<String>,
-    /// Ranking score (IDF-weighted anchors + recency + change bonus).
+    /// Recorded edge strength. Names do not contribute.
     pub score: f64,
     /// The trail; at most [`MAX_HOPS`] hops.
     pub path: Vec<PathHop>,
-    /// Entities shared with the start-point anchors (the causal join).
+    /// Always empty. Names are not a join; the field stays so older clients
+    /// still parse the object.
     pub shared_anchors: Vec<String>,
     /// Records this cause should be linked to on promote (start-point
     /// evidence records). Not part of the wire output.
@@ -305,7 +297,7 @@ fn walk_record_of(
     WalkRecord {
         id: id.to_string(),
         content: content.to_string(),
-        entities: extract_entities(content, tags),
+        entities: Vec::new(),
         created_at,
         stability,
         is_commit,
@@ -325,49 +317,6 @@ fn walk_record_of(
             vec![]
         },
     }
-}
-
-/// Normalize a caller-supplied handle (test name, frame file) into entity
-/// form using the SAME extractor the record side uses, so both ends of the
-/// join agree. Returns 0..1 anchors (a single token is 0 or 1 entity).
-fn normalized_anchors(raw: &str) -> Vec<String> {
-    extract_entities(raw, &[])
-}
-
-/// Path-suffix match: `src/auth.rs` matches `src/auth.rs` and either side
-/// being a deeper path of the other (`a/./b` normalization not needed for
-/// repo-relative paths).
-fn path_matches(file: &str, anchor: &str) -> bool {
-    let (f, a) = (file.to_lowercase(), anchor.to_lowercase());
-    f == a || f.ends_with(&format!("/{a}")) || a.ends_with(&format!("/{f}"))
-}
-
-// ============================================================================
-// THE WALK (pure)
-// ============================================================================
-
-#[derive(Debug, Default, Clone)]
-struct Seed {
-    anchors: BTreeSet<String>,
-    hops: Vec<PathHop>,
-    /// Seeded by a persisted edge, not by vocabulary: survives with zero
-    /// shared anchors because the edge itself is the evidence.
-    via_edge: bool,
-}
-
-/// Record one mechanism reaching one record. Multiple mechanisms reaching the
-/// same record merge anchors and hops (capped at [`MAX_HOPS`] at output).
-fn add_seed<'a>(
-    seeds: &mut HashMap<&'a str, Seed>,
-    record: &'a WalkRecord,
-    anchors_shared: Vec<String>,
-    hop: PathHop,
-    via_edge: bool,
-) {
-    let entry = seeds.entry(record.id.as_str()).or_default();
-    entry.anchors.extend(anchors_shared);
-    entry.hops.push(hop);
-    entry.via_edge |= via_edge;
 }
 
 impl CausalWalkOptions {
@@ -410,561 +359,131 @@ impl CausalWalkOptions {
             );
         }
 
-        // ------------------------------------------------------------------
-        // Pass A: anchor records / entities / failure time per start point.
-        // The failure anchor is the NEWEST thing the start points pin down:
-        // after that, the failure is live and nothing newer is a cause.
-        // ------------------------------------------------------------------
-        struct StartAnchors {
-            entities: BTreeSet<String>,
-            record_ids: BTreeSet<String>,
-            time: Option<DateTime<Utc>>,
-        }
+        // The start is an exact handle. Names, file paths, and shared tokens
+        // are not a join. Only `logged_write` names a record; the other
+        // start kinds do not become edges.
         let by_id: HashMap<&str, &WalkRecord> =
             records.iter().map(|r| (r.id.as_str(), r)).collect();
-        let mut anchors: Vec<Option<StartAnchors>> = Vec::with_capacity(starts.len());
+        let mut anchor_ids: Vec<String> = Vec::new();
+        let mut anchor_time: Option<DateTime<Utc>> = None;
         for start in starts {
-            let mut a = StartAnchors {
-                entities: BTreeSet::new(),
-                record_ids: BTreeSet::new(),
-                time: None,
-            };
             match start {
-                StartPoint::FailingTest { name } => {
-                    // test-file records: records naming the test
-                    let name_anchors = normalized_anchors(name);
-                    if name_anchors.is_empty() {
-                        missing.push(format!(
-                            "failing test '{name}' is not identifier-shaped; give the test's exact name"
-                        ));
-                    } else {
-                        a.entities.extend(name_anchors.iter().cloned());
-                    }
-                    for r in records {
-                        if name_anchors
-                            .iter()
-                            .any(|n| r.content.to_lowercase().contains(n))
-                        {
-                            a.entities.extend(r.entities.iter().cloned());
-                            a.record_ids.insert(r.id.clone());
-                            a.time = a.time.max(Some(r.created_at));
-                        }
-                    }
-                    if a.record_ids.is_empty() && !name_anchors.is_empty() {
-                        missing.push(format!(
-                            "no record in scope names failing test '{name}' — ingest the failing run's note or its test-file commits"
-                        ));
-                    }
-                }
-                StartPoint::StackFrame { frame } => {
-                    let file = frame.split(':').next().unwrap_or(frame).trim();
-                    let file_anchors = normalized_anchors(file);
-                    if file_anchors.is_empty() {
-                        missing.push(format!(
-                            "stack frame '{frame}' names no identifier-shaped file"
-                        ));
-                    } else {
-                        a.entities.extend(file_anchors.iter().cloned());
-                    }
-                    // no anchor records of its own: a note naming the file
-                    // (if any) helps date the failure
-                    for r in records {
-                        if file_anchors.iter().any(|f| r.entities.contains(f)) {
-                            a.time = a.time.max(Some(r.created_at));
-                        }
-                    }
-                }
-                StartPoint::CiRun { run_id } => match ctx.runs.get(run_id) {
-                    None => missing.push(format!(
-                        "no agent trace for run '{run_id}' — the run recorded no events"
-                    )),
-                    Some(ev) => {
-                        a.entities.extend(ev.entities.iter().cloned());
-                        for id in &ev.referenced_ids {
-                            if let Some(r) = by_id.get(id.as_str()) {
-                                a.entities.extend(r.entities.iter().cloned());
-                                a.record_ids.insert(r.id.clone());
-                                a.time = a.time.max(Some(r.created_at));
-                            }
-                        }
-                        if let Some(ms) = ev.last_event_at
-                            && let Some(t) = DateTime::from_timestamp_millis(ms)
-                        {
-                            a.time = a.time.max(Some(t));
-                        }
-                    }
-                },
                 StartPoint::LoggedWrite { node_id } => match by_id.get(node_id.as_str()) {
                     None => {
                         missing.push(format!("logged write '{node_id}' not found in this scope"))
                     }
                     Some(r) => {
-                        a.entities.extend(r.entities.iter().cloned());
-                        a.record_ids.insert(r.id.clone());
-                        a.time = Some(r.created_at);
+                        anchor_ids.push(r.id.clone());
+                        anchor_time = Some(r.created_at);
                     }
                 },
-                StartPoint::VersionRange { .. } => {
-                    // restriction only; anchor pool contribution is the
-                    // in-range overlap handled in pass B
-                }
+                other => missing.push(format!(
+                    "{} is not a recorded edge; pass logged_write of the failure record",
+                    other.label()
+                )),
             }
-            anchors.push(if a.entities.is_empty() && a.record_ids.is_empty() {
-                None
-            } else {
-                Some(a)
-            });
         }
+        let failure_time = anchor_time.unwrap_or(now);
+        let anchor_set: HashSet<&str> = anchor_ids.iter().map(|id| id.as_str()).collect();
 
-        let failure_time = anchors
-            .iter()
-            .flatten()
-            .filter_map(|a| a.time)
-            .max()
-            .unwrap_or(now);
-
-        // ------------------------------------------------------------------
-        // Pass B: seeds + rejections per mechanism.
-        // ------------------------------------------------------------------
-        let anchor_pool: HashSet<&str> = anchors
-            .iter()
-            .flatten()
-            .flat_map(|a| a.entities.iter().map(|e| e.as_str()))
-            .collect();
-        let anchor_record_ids: HashSet<&str> = anchors
-            .iter()
-            .flatten()
-            .flat_map(|a| a.record_ids.iter().map(|e| e.as_str()))
-            .collect();
-
-        let mut seeds: HashMap<&str, Seed> = HashMap::new();
+        // Follow recorded edges only, and only to a strictly earlier record.
+        let mut best: HashMap<&str, (f64, Vec<PathHop>)> = HashMap::new();
         let mut rejections: Vec<WalkRejection> = Vec::new();
-
-        for (idx, start) in starts.iter().enumerate() {
-            match start {
-                StartPoint::FailingTest { name } => {
-                    let Some(a) = &anchors[idx] else { continue };
-                    if a.record_ids.is_empty() {
-                        continue; // pass A already reported the dead handle
-                    }
-                    let name_anchors = normalized_anchors(name);
-                    // test files = path-tier anchors of the records naming the test
-                    let test_files: Vec<&String> = a
-                        .entities
-                        .iter()
-                        .filter(|e| normalized_tier(e) == IdentifierTier::Path)
-                        .collect();
-                    if test_files.is_empty() {
-                        missing.push(format!(
-                            "records naming failing test '{name}' carry no file path — ingest the failing run's note or its test-file commits"
-                        ));
-                        continue;
-                    }
-                    for r in records {
-                        if anchor_record_ids.contains(r.id.as_str()) {
-                            continue; // the evidence, not a suspect
-                        }
-                        let touched: Vec<&String> = test_files
-                            .iter()
-                            .filter(|f| r.files.iter().any(|rf| path_matches(rf, f)))
-                            .cloned()
-                            .collect();
-                        if r.is_commit {
-                            if !touched.is_empty() {
-                                let others: Vec<String> = r
-                                    .files
-                                    .iter()
-                                    .filter(|f| !test_files.iter().any(|t| path_matches(f, t)))
-                                    .cloned()
-                                    .collect();
-                                let hop_file = touched[0].clone();
-                                let others_s = if others.is_empty() {
-                                    "no other file".to_string()
-                                } else {
-                                    others.join(", ")
-                                };
-                                add_seed(
-                                    &mut seeds,
-                                    r,
-                                    touched.iter().map(|f| (*f).clone()).collect(),
-                                    PathHop {
-                                        via: "failing_test/co_touch".into(),
-                                        hop: format!("{hop_file} -> {others_s}"),
-                                    },
-                                    false,
-                                );
-                            }
-                        } else if test_files.iter().any(|f| r.entities.contains(f))
-                            || name_anchors.iter().any(|n| r.entities.contains(n))
-                        {
-                            rejections.push(WalkRejection {
-                                id: r.id.clone(),
-                                reason: format!(
-                                    "report about the change, not a commit co-touching the test file(s) {}",
-                                    test_files.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(", ")
-                                ),
-                                shared_anchors: r
-                                    .entities
-                                    .iter()
-                                    .filter(|e| anchor_pool.contains(e.as_str()))
-                                    .count(),
-                            });
-                        }
-                    }
-                }
-                StartPoint::StackFrame { frame } => {
-                    let Some(a) = &anchors[idx] else { continue };
-                    let file = frame.split(':').next().unwrap_or(frame).trim();
-                    let file_anchor = &a.entities.iter().next().cloned().unwrap_or_default();
-                    let touches = |r: &WalkRecord| {
-                        r.files.iter().any(|f| path_matches(f, file))
-                            || r.symbols.iter().any(|s| {
-                                s.rsplit_once('/')
-                                    .is_some_and(|(p, _)| path_matches(p, file))
-                            })
-                    };
-                    let mut touchers: Vec<&WalkRecord> = records
-                        .iter()
-                        .filter(|r| r.is_commit && touches(r))
-                        .collect();
-                    touchers.sort_by_key(|r| r.created_at);
-                    if touchers.is_empty() {
-                        missing.push(format!(
-                            "no commit record's hunk spans cover '{file}' — ingest git history (`vestige ingest-git <repo>`)"
-                        ));
-                        continue;
-                    }
-                    let Some(prime) = touchers
-                        .iter()
-                        .rev()
-                        .find(|r| r.created_at <= failure_time)
-                        .copied()
-                    else {
-                        missing.push(format!(
-                            "every commit touching '{file}' postdates the failure anchor; nothing pre-failure to blame"
-                        ));
-                        continue;
-                    };
-                    add_seed(
-                        &mut seeds,
-                        prime,
-                        vec![file_anchor.clone()],
-                        PathHop {
-                            via: "stack_frame/last_toucher".into(),
-                            hop: frame.clone(),
-                        },
-                        false,
-                    );
-                    for earlier in &touchers {
-                        if earlier.created_at < prime.created_at {
-                            rejections.push(WalkRejection {
-                                id: earlier.id.clone(),
-                                reason: format!(
-                                    "earlier toucher of {file}; the last pre-failure toucher is the prime suspect (SZZ-lite)"
-                                ),
-                                shared_anchors: earlier
-                                    .entities
-                                    .iter()
-                                    .filter(|e| anchor_pool.contains(e.as_str()))
-                                    .count(),
-                            });
-                        }
-                    }
-                }
-                StartPoint::CiRun { run_id } => {
-                    let Some(a) = &anchors[idx] else { continue };
-                    for r in records {
-                        if anchor_record_ids.contains(r.id.as_str()) {
-                            continue;
-                        }
-                        let shared: Vec<String> = r
-                            .entities
-                            .iter()
-                            .filter(|e| a.entities.contains(*e))
-                            .cloned()
-                            .collect();
-                        if shared.is_empty() {
-                            continue;
-                        }
-                        let hop_anchor = shared[0].clone();
-                        add_seed(
-                            &mut seeds,
-                            r,
-                            shared,
-                            PathHop {
-                                via: "ci_run/failed_calls".into(),
-                                hop: format!("run {run_id} via {hop_anchor}"),
-                            },
-                            false,
-                        );
-                    }
-                }
-                StartPoint::LoggedWrite { node_id } => {
-                    let Some(a) = &anchors[idx] else { continue };
-                    let neighbours: Option<&Vec<String>> = ctx.edges.get(node_id);
-                    for r in records {
-                        if r.id == *node_id || anchor_record_ids.contains(r.id.as_str()) {
-                            continue;
-                        }
-                        let is_neighbour =
-                            neighbours.is_some_and(|ns| ns.iter().any(|n| n == &r.id));
-                        let shared: Vec<String> = r
-                            .entities
-                            .iter()
-                            .filter(|e| a.entities.contains(*e))
-                            .cloned()
-                            .collect();
-                        if is_neighbour {
-                            add_seed(
-                                &mut seeds,
-                                r,
-                                shared.clone(),
-                                PathHop {
-                                    via: "logged_write/edge".into(),
-                                    hop: format!("edge {node_id} -> {}", r.id),
-                                },
-                                true,
-                            );
-                        }
-                        if !shared.is_empty() {
-                            let hop_anchor = shared[0].clone();
-                            add_seed(
-                                &mut seeds,
-                                r,
-                                shared,
-                                PathHop {
-                                    via: "logged_write/shared_anchor".into(),
-                                    hop: hop_anchor,
-                                },
-                                false,
-                            );
-                        }
-                    }
-                }
-                StartPoint::VersionRange {
-                    worked_in,
-                    broke_in,
-                    ..
-                } => {
-                    match ctx.ranges.get(&idx) {
-                        Some(Err(msg)) => missing.push(msg.clone()),
-                        Some(Ok(range)) => {
-                            // in-range commits overlapping the anchor pool get a
-                            // rev-list hop (second hop at most: MAX_HOPS caps)
-                            for r in records {
-                                if !r.is_commit {
-                                    continue;
-                                }
-                                let in_range =
-                                    r.sha.as_ref().is_some_and(|s| range.shas.contains(s));
-                                if !in_range {
-                                    continue;
-                                }
-                                let overlapping: Vec<String> = r
-                                    .entities
-                                    .iter()
-                                    .filter(|e| anchor_pool.contains(e.as_str()))
-                                    .cloned()
-                                    .collect();
-                                if overlapping.is_empty() {
-                                    continue; // in range, but no failure overlap to join on
-                                }
-                                let hop_anchor = overlapping[0].clone();
-                                add_seed(
-                                    &mut seeds,
-                                    r,
-                                    overlapping,
-                                    PathHop {
-                                        via: "version_range/rev_list".into(),
-                                        hop: format!(
-                                            "{worked_in}..{broke_in} ({}) via {hop_anchor}",
-                                            range.shas.len()
-                                        ),
-                                    },
-                                    false,
-                                );
-                            }
-                        }
-                        None => {}
-                    }
-                }
-            }
-        }
-
-        // version-range restriction over ALL commit seeds: applied in the
-        // candidate loop below (out-of-range commits are rejected with a
-        // why-not, never silently dropped)
-        let active_ranges: Vec<&ResolvedRange> = ctx
-            .ranges
-            .values()
-            .filter_map(|r| r.as_ref().ok())
-            .collect();
-
-        // ------------------------------------------------------------------
-        // Window + restriction + ranking (ported from run_trail).
-        // ------------------------------------------------------------------
-        let mut candidates: Vec<(&WalkRecord, Seed)> = Vec::new();
-        for (id, s) in &seeds {
-            let Some(r) = by_id.get(id) else { continue };
-            // Strictly earlier than the failure. Later records are omitted.
-            if r.created_at >= failure_time {
+        let mut queue: Vec<(&str, usize)> = anchor_set.iter().copied().map(|id| (id, 0)).collect();
+        let mut queued: HashSet<&str> = anchor_set.clone();
+        let mut qi = 0;
+        while qi < queue.len() {
+            let (id, depth) = queue[qi];
+            qi += 1;
+            if depth >= MAX_HOPS {
                 continue;
             }
-            let age_days = (failure_time - r.created_at).num_seconds() as f64 / 86_400.0;
-            let shared_n = s.anchors.len();
-            if age_days > self.lookback_days as f64 {
-                rejections.push(WalkRejection {
-                    id: r.id.clone(),
-                    reason: format!("outside the {}d lookback window", self.lookback_days),
-                    shared_anchors: shared_n,
-                });
-                continue;
-            }
-            if shared_n == 0 && !s.via_edge {
-                rejections.push(WalkRejection {
-                    id: r.id.clone(),
-                    reason: "shares no anchor with the start points".into(),
-                    shared_anchors: 0,
-                });
-                continue;
-            }
-            if !active_ranges.is_empty() && r.is_commit {
-                let in_any = r
-                    .sha
-                    .as_ref()
-                    .is_some_and(|sha| active_ranges.iter().any(|rg| rg.shas.contains(sha)));
-                if !in_any {
-                    let (w, b) = (&active_ranges[0].worked_in, &active_ranges[0].broke_in);
+            for edge in &ctx.edges {
+                if edge.legacy_inferred || !is_recorded_edge(&edge.link_type) {
+                    continue;
+                }
+                let other = if edge.source_id == id {
+                    edge.target_id.as_str()
+                } else if edge.target_id == id {
+                    edge.source_id.as_str()
+                } else {
+                    continue;
+                };
+                if anchor_set.contains(other) {
+                    continue;
+                }
+                let Some(rec) = by_id.get(other) else {
+                    continue;
+                };
+                if rec.created_at >= failure_time {
+                    continue;
+                }
+                let age_days = (failure_time - rec.created_at).num_seconds() as f64 / 86_400.0;
+                if age_days > self.lookback_days as f64 {
                     rejections.push(WalkRejection {
-                        id: r.id.clone(),
-                        reason: format!("outside version range {w}..{b}"),
-                        shared_anchors: shared_n,
+                        id: rec.id.clone(),
+                        reason: format!("outside the {}d lookback window", self.lookback_days),
+                        shared_anchors: 0,
                     });
                     continue;
                 }
-            }
-            candidates.push((r, s.clone()));
-        }
-
-        // IDF over the in-window candidate pool (probabilistic IDF × tier
-        // weight — ported verbatim in spirit from run_trail).
-        let n = candidates.len();
-        let mut df: HashMap<&str, usize> = HashMap::new();
-        for (_, s) in &candidates {
-            for a in &s.anchors {
-                *df.entry(a.as_str()).or_default() += 1;
-            }
-        }
-        let idf = |e: &str| -> f64 {
-            let d = df.get(e).copied().unwrap_or(0) as f64;
-            ((1.0 + n as f64) / (1.0 + d)).ln().max(0.0) * normalized_tier(e).weight()
-        };
-
-        let mut causes: Vec<CausalCause> = candidates
-            .iter()
-            .map(|(r, s)| {
-                let age_days = (failure_time - r.created_at).num_seconds() as f64 / 86_400.0;
-                let entity_term: f64 = s.anchors.iter().map(|a| idf(a)).sum();
-                let recency_term = 0.3 * (1.0 / (1.0 + age_days / self.lookback_days as f64));
-                let change_term = if r.is_commit {
-                    CHANGE_RECORD_BONUS
-                } else {
-                    0.0
+                let hop = PathHop {
+                    via: format!("edge/{}", edge.link_type),
+                    hop: format!("{id} -> {other}"),
                 };
-                let mut anchors_sorted = s.anchors.iter().cloned().collect::<Vec<_>>();
-                anchors_sorted.sort_by(|a, b| {
-                    idf(b)
-                        .partial_cmp(&idf(a))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-                CausalCause {
-                    id: r.id.clone(),
-                    sha: r.sha.clone(),
-                    score: entity_term + recency_term + change_term,
-                    path: s.hops.iter().take(MAX_HOPS).cloned().collect(),
-                    shared_anchors: anchors_sorted,
-                    evidence_to: anchor_record_ids.iter().map(|s| s.to_string()).collect(),
+                let slot = best.entry(other).or_insert_with(|| (0.0, Vec::new()));
+                if edge.strength >= slot.0 {
+                    slot.0 = edge.strength;
                 }
+                if slot.1.len() < MAX_HOPS {
+                    slot.1.push(hop);
+                }
+                if queued.insert(other) {
+                    queue.push((other, depth + 1));
+                }
+            }
+        }
+
+        let mut causes: Vec<CausalCause> = best
+            .iter()
+            .filter_map(|(id, (strength, hops))| {
+                let rec = by_id.get(id)?;
+                Some(CausalCause {
+                    id: rec.id.clone(),
+                    sha: None,
+                    score: *strength,
+                    path: hops.clone(),
+                    shared_anchors: Vec::new(),
+                    evidence_to: anchor_ids.clone(),
+                })
             })
             .collect();
-
         causes.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                // near-ties: the change, not the newest report about it
-                .then(
-                    by_id
-                        .get(b.id.as_str())
-                        .map(|r| r.is_commit)
-                        .unwrap_or(false)
-                        .cmp(
-                            &by_id
-                                .get(a.id.as_str())
-                                .map(|r| r.is_commit)
-                                .unwrap_or(false),
-                        ),
-                )
-                // older-first ties (the older change had more time to be the origin)
-                .then(
-                    by_id
-                        .get(a.id.as_str())
-                        .map(|r| r.created_at)
-                        .unwrap_or(failure_time)
-                        .cmp(
-                            &by_id
-                                .get(b.id.as_str())
-                                .map(|r| r.created_at)
-                                .unwrap_or(failure_time),
-                        ),
-                )
+                .then_with(|| {
+                    let ta = by_id.get(a.id.as_str()).map(|r| r.created_at);
+                    let tb = by_id.get(b.id.as_str()).map(|r| r.created_at);
+                    ta.cmp(&tb)
+                })
         });
         causes.truncate(self.max_causes);
-
-        rejections.sort_by(|a, b| {
-            b.shared_anchors
-                .cmp(&a.shared_anchors)
-                .then(a.reason.cmp(&b.reason))
-        });
+        rejections.sort_by(|a, b| a.reason.cmp(&b.reason).then(a.id.cmp(&b.id)));
         rejections.truncate(self.max_rejections);
 
         let needs_report = if causes.is_empty() {
-            let required: Vec<String> = if starts.is_empty() {
-                REQUIRED_START_POINTS
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect()
-            } else {
-                let mut req: Vec<String> = starts
-                    .iter()
-                    .map(|s| {
-                        format!(
-                            "an anchor for {} (a record that resolves it in this scope)",
-                            s.label()
-                        )
-                    })
-                    .collect();
-                if starts
-                    .iter()
-                    .all(|s| matches!(s, StartPoint::VersionRange { .. }))
-                {
-                    req = REQUIRED_START_POINTS[..4]
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect();
-                }
-                req.sort();
-                req.dedup();
-                req
-            };
             if missing.is_empty() {
                 missing.push(
-                    "the start points anchored no candidate records in the lookback window".into(),
+                    "no recorded edge leads to an earlier record in the lookback window".into(),
                 );
             }
             Some(NeedsReport {
                 missing,
-                required_start_points: required,
+                required_start_points: REQUIRED_START_POINTS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
             })
         } else {
             None
@@ -1003,27 +522,7 @@ impl Default for CausalWalkRequest {
     }
 }
 
-#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
-fn git_lines(repo: &str, git_args: &[&str]) -> Option<Vec<String>> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(git_args)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-    )
-}
-
-/// Assemble the record pool + out-of-band evidence from `storage`, then run
+/// Assemble the record pool and recorded edges from `storage`, then run
 /// the pure walk. `Err` only for storage/IO failures; refusals are
 /// `needs_report`, not errors.
 pub fn walk_storage(
@@ -1045,97 +544,24 @@ pub fn walk_storage(
         .map(|n| walk_record_of(&n.id, &n.content, &n.tags, n.created_at, n.stability))
         .collect();
 
-    // Wall clock feeds the non-hashed display path only (H6 applies to the
-    // hashed walk state, which is caller-timestamped).
-    let mut ctx = WalkContext {
-        now: Utc::now(),
-        ..WalkContext::default()
-    };
-
-    // ci_run evidence: the run's failure channel
-    for start in &req.start_points {
-        if let StartPoint::CiRun { run_id } = start {
-            let events = storage.get_trace(run_id).map_err(|e| e.to_string())?;
-            let mut ev = RunEvidence::default();
-            for event in &events {
-                use crate::trace::MemoryTraceEvent as E;
-                match event {
-                    E::SanhedrinVeto {
-                        claim,
-                        evidence_ids,
-                        ..
-                    } => {
-                        ev.entities.extend(extract_entities(claim, &[]));
-                        ev.referenced_ids.extend(evidence_ids.iter().cloned());
-                    }
-                    E::MemoryRetrieve { ids, .. } => ev.referenced_ids.extend(ids.iter().cloned()),
-                    E::MemoryWrite { id, .. } => ev.referenced_ids.push(id.clone()),
-                    _ => {}
-                }
-                ev.last_event_at = Some(ev.last_event_at.unwrap_or(i64::MIN).max(event.at()));
-            }
-            ev.entities.sort();
-            ev.entities.dedup();
-            ev.referenced_ids.sort();
-            ev.referenced_ids.dedup();
-            ctx.runs.insert(run_id.clone(), ev);
-        }
-    }
-
-    // logged_write edges: neighbours across persisted connections
-    for start in &req.start_points {
-        if let StartPoint::LoggedWrite { node_id } = start {
-            let conns = storage
-                .get_connections_for_memory(node_id)
-                .map_err(|e| e.to_string())?;
-            let neighbours: Vec<String> = conns
-                .iter()
-                .map(|c| {
-                    if c.source_id == *node_id {
-                        c.target_id.clone()
-                    } else {
-                        c.source_id.clone()
-                    }
-                })
-                .collect();
-            ctx.edges.insert(node_id.clone(), neighbours);
-        }
-    }
-
-    // version ranges: rev-list resolution per start point (index-keyed)
-    let repos: HashSet<&str> = req
-        .start_points
-        .iter()
-        .filter_map(|s| match s {
-            StartPoint::VersionRange { repo, .. } => Some(repo.as_str()),
-            _ => None,
+    let edges = storage
+        .get_all_connections()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|edge| is_recorded_edge(&edge.link_type))
+        .map(|edge| RecordedEdge {
+            source_id: edge.source_id,
+            target_id: edge.target_id,
+            link_type: edge.link_type,
+            strength: edge.strength,
+            legacy_inferred: false,
         })
         .collect();
-    ctx.multiple_repos = repos.len() > 1;
-    for (idx, start) in req.start_points.iter().enumerate() {
-        if let StartPoint::VersionRange {
-            worked_in,
-            broke_in,
-            repo,
-        } = start
-        {
-            let resolved = match git_lines(repo, &["rev-list", &format!("{worked_in}..{broke_in}")])
-            {
-                None => Err(format!(
-                    "could not resolve the version range {worked_in}..{broke_in} in {repo} (tag missing or not fetched?)"
-                )),
-                Some(lines) if lines.is_empty() => Err(format!(
-                    "version range {worked_in}..{broke_in} is empty — broke_in must come after worked_in"
-                )),
-                Some(lines) => Ok(ResolvedRange {
-                    worked_in: worked_in.clone(),
-                    broke_in: broke_in.clone(),
-                    shas: git_records::parse_rev_list(&lines.join("\n")),
-                }),
-            };
-            ctx.ranges.insert(idx, resolved);
-        }
-    }
+    let ctx = WalkContext {
+        now: Utc::now(),
+        edges,
+        ..WalkContext::default()
+    };
 
     Ok(CausalWalkOptions {
         lookback_days: lookback,
@@ -1259,226 +685,130 @@ mod tests {
     }
 
     #[test]
-    fn failing_test_walk_finds_the_cotouch_commit() {
+    fn name_start_points_are_not_edges() {
         let (storage, _dir) = store();
-        // the failure note (test-file record): newest, names test + file
-        let note = seed(
+        let symptom = seed(
             &storage,
-            "test_login_flow failed: auth flow crashed in tests/auth_test.rs",
-            vec!["ci"],
-            0,
-        );
-        // BAD: touched the test file AND src/auth.rs, 5 days ago
-        let bad = commit_record(
-            &storage,
-            &sha_of('a'),
-            "harden login",
-            &["tests/auth_test.rs", "src/auth.rs"],
-            &[],
-            &[],
-            5,
-        );
-        // GOOD: touched the test file 25 days ago (older, loses on recency)
-        let good = commit_record(
-            &storage,
-            &sha_of('b'),
-            "tune session cache",
-            &["tests/auth_test.rs", "src/session.rs"],
-            &[],
-            &[],
-            25,
-        );
-        // chatter: a non-commit report quoting the test file
-        let chatter = seed(
-            &storage,
-            "CI summary: tests/auth_test.rs red on the auth job",
+            "Checkout lane returned 504. Gateway gave up.",
             vec![],
             1,
         );
-        // unrelated commit: shares nothing, must be invisible
-        commit_record(&storage, &sha_of('c'), "docs", &["README.md"], &[], &[], 2);
-
-        let result = walk_storage(
+        let cause = seed(
             &storage,
-            &req(vec![StartPoint::FailingTest {
-                name: "test_login_flow".into(),
-            }]),
-        )
-        .unwrap();
+            "Raised the pool wait inside the billing client before the quiet deploy window.",
+            vec![],
+            5,
+        );
+        storage
+            .save_connection(&crate::ConnectionRecord {
+                source_id: cause.id.clone(),
+                target_id: symptom.id.clone(),
+                strength: 1.0,
+                link_type: "derived_from".into(),
+                created_at: Utc::now(),
+                last_activated: Utc::now(),
+                activation_count: 0,
+            })
+            .unwrap();
 
-        assert!(result.needs_report.is_none(), "{:?}", result.needs_report);
-        assert_eq!(result.causes.len(), 2, "{:?}", result.causes);
-        let top = &result.causes[0];
-        assert_eq!(top.id, bad.id);
-        assert_eq!(top.sha.as_deref(), Some(sha_of('a').as_str()));
-        assert_eq!(top.path[0].via, "failing_test/co_touch");
-        // the hop names the test file AND the co-touched suspect file
-        assert!(
-            top.path[0].hop.contains("tests/auth_test.rs"),
-            "{}",
-            top.path[0].hop
-        );
-        assert!(
-            top.path[0].hop.contains("src/auth.rs"),
-            "{}",
-            top.path[0].hop
-        );
-        assert!(
-            top.shared_anchors
-                .contains(&"tests/auth_test.rs".to_string())
-        );
-        // the runner-up is the older co-touch, not the chatter
-        assert_eq!(result.causes[1].id, good.id);
-        assert_eq!(result.causes[1].sha.as_deref(), Some(sha_of('b').as_str()));
-        // chatter is a why-not, never a cause
-        assert!(
-            !result.causes.iter().any(|c| c.id == chatter.id),
-            "a report quoting the anchor must never outrank the change"
-        );
-        assert!(
-            result
-                .rejected
-                .iter()
-                .any(|r| r.id == chatter.id && r.reason.contains("report about the change")),
-            "{:?}",
-            result.rejected
-        );
-        // the evidence trail points at the failure note
-        assert!(top.evidence_to.contains(&note.id));
-    }
-
-    #[test]
-    fn stack_frame_blames_the_last_pre_failure_toucher() {
-        let (storage, _dir) = store();
-        seed(&storage, "crash at src/auth.rs:88 during login", vec![], 0);
-        let old = commit_record(
-            &storage,
-            &sha_of('c'),
-            "introduce auth",
-            &["src/auth.rs"],
-            &[],
-            &[],
-            10,
-        );
-        let last = commit_record(
-            &storage,
-            &sha_of('d'),
-            "tweak timeout",
-            &["src/auth.rs"],
-            &[],
-            &[],
-            3,
-        );
-
-        let result = walk_storage(
-            &storage,
-            &req(vec![StartPoint::StackFrame {
-                frame: "src/auth.rs:88".into(),
-            }]),
-        )
-        .unwrap();
-
-        assert!(result.needs_report.is_none(), "{:?}", result.needs_report);
-        assert_eq!(result.causes.len(), 1, "{:?}", result.causes);
-        let top = &result.causes[0];
-        assert_eq!(top.id, last.id);
-        assert_eq!(top.sha.as_deref(), Some(sha_of('d').as_str()));
-        assert_eq!(top.path[0].via, "stack_frame/last_toucher");
-        assert_eq!(top.path[0].hop, "src/auth.rs:88");
-        // the earlier toucher is answered in why-not, not surfaced
-        assert!(
-            result
-                .rejected
-                .iter()
-                .any(|r| r.id == old.id && r.reason.contains("earlier toucher")),
-            "{:?}",
-            result.rejected
-        );
-    }
-
-    #[test]
-    fn version_range_restricts_candidates_to_the_rev_list() {
-        // a real repo so rev-list produces a real sha for the in-range record
-        let repo = tempfile::TempDir::new().unwrap();
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .arg("-C")
-                .arg(repo.path())
-                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
-                .args(args)
-                .output()
-                .unwrap();
+        for start in [
+            StartPoint::FailingTest {
+                name: "Checkout".into(),
+            },
+            StartPoint::StackFrame {
+                frame: "lane:12".into(),
+            },
+            StartPoint::CiRun {
+                run_id: "run-1".into(),
+            },
+            StartPoint::VersionRange {
+                worked_in: "w1".into(),
+                broke_in: "b1".into(),
+                repo: "/nonexistent/repo".into(),
+            },
+        ] {
+            let result = walk_storage(&storage, &req(vec![start])).unwrap();
+            assert!(result.causes.is_empty(), "{:?}", result.causes);
+            let report = result.needs_report.expect("a name is not an edge");
             assert!(
-                out.status.success(),
+                report
+                    .missing
+                    .iter()
+                    .any(|m| m.contains("not a recorded edge")),
                 "{:?}",
-                String::from_utf8_lossy(&out.stderr)
+                report.missing
             );
-            String::from_utf8_lossy(&out.stdout).to_string()
-        };
-        git(&["init", "-q"]);
-        git(&["commit", "--allow-empty", "-q", "-m", "one"]);
-        git(&["tag", "w1"]);
-        git(&["commit", "--allow-empty", "-q", "-m", "two"]);
-        git(&["tag", "b1"]);
-        let in_range_sha = git(&["rev-list", "w1..b1"]).trim().to_string();
-        assert_eq!(in_range_sha.len(), 40);
+        }
+    }
 
+    #[test]
+    fn logged_write_follows_recorded_edge_not_shared_names() {
         let (storage, _dir) = store();
-        seed(
+        let cause = seed(
             &storage,
-            "test_login_flow failed in tests/auth_test.rs",
+            "Raised the pool wait inside the billing client before the quiet deploy window.",
+            vec![],
+            5,
+        );
+        let decoy = seed(
+            &storage,
+            "Checkout lane stored spare linen beside the stair.",
+            vec![],
+            4,
+        );
+        let symptom = seed(
+            &storage,
+            "Checkout lane returned 504. Gateway gave up.",
+            vec![],
+            1,
+        );
+        let later = seed(
+            &storage,
+            "Zephyr quilt inventory shifted after the quiet hour.",
             vec![],
             0,
         );
-        // out-of-range but newer + co-touching: would win without the range
-        commit_record(
-            &storage,
-            &sha_of('e'),
-            "harden login",
-            &["tests/auth_test.rs", "src/auth.rs"],
-            &[],
-            &[],
-            5,
-        );
-        // in-range co-touch (the rev-list sha), older
-        let in_range = commit_record(
-            &storage,
-            &in_range_sha,
-            "tune session cache",
-            &["tests/auth_test.rs", "src/session.rs"],
-            &[],
-            &[],
-            8,
-        );
+        let link = |source: &KnowledgeNode, target: &KnowledgeNode, link_type: &str| {
+            storage
+                .save_connection(&crate::ConnectionRecord {
+                    source_id: source.id.clone(),
+                    target_id: target.id.clone(),
+                    strength: 1.0,
+                    link_type: link_type.into(),
+                    created_at: Utc::now(),
+                    last_activated: Utc::now(),
+                    activation_count: 0,
+                })
+                .unwrap();
+        };
+        link(&cause, &symptom, "derived_from");
+        link(&decoy, &symptom, "reports");
+        link(&later, &symptom, "derived_from");
 
         let result = walk_storage(
             &storage,
-            &req(vec![
-                StartPoint::FailingTest {
-                    name: "test_login_flow".into(),
-                },
-                StartPoint::VersionRange {
-                    worked_in: "w1".into(),
-                    broke_in: "b1".into(),
-                    repo: repo.path().display().to_string(),
-                },
-            ]),
+            &req(vec![StartPoint::LoggedWrite {
+                node_id: symptom.id.clone(),
+            }]),
         )
         .unwrap();
 
         assert!(result.needs_report.is_none(), "{:?}", result.needs_report);
-        // the recency winner is rejected by the range; the in-range commit is it
+        assert_eq!(result.causes.len(), 1, "{:?}", result.causes);
+        let top = &result.causes[0];
+        assert_eq!(top.id, cause.id);
+        assert!(top.shared_anchors.is_empty());
+        assert_eq!(top.path[0].via, "edge/derived_from");
+        assert!(top.evidence_to.contains(&symptom.id));
         assert!(
             result
-                .rejected
+                .causes
                 .iter()
-                .any(|r| r.reason == "outside version range w1..b1"),
-            "{:?}",
-            result.rejected
+                .all(|c| c.id != decoy.id && c.id != later.id)
         );
-        assert_eq!(result.causes.len(), 1, "{:?}", result.causes);
-        assert_eq!(result.causes[0].sha.as_deref(), Some(in_range_sha.as_str()));
-        assert!(result.causes[0].id == in_range.id);
+        let rendered = format!("{result:?}");
+        assert!(!rendered.contains(&later.id), "{rendered}");
+        assert!(!rendered.contains(&decoy.id), "{rendered}");
     }
 
     #[test]
@@ -1536,191 +866,111 @@ mod tests {
     }
 
     #[test]
-    fn ci_run_walks_trace_entities_to_records() {
+    fn legacy_inferred_and_freeform_links_are_skipped() {
+        assert!(is_recorded_edge("derived_from"));
+        assert!(!is_recorded_edge("legacy_inferred"));
+        assert!(!is_recorded_edge("reports"));
         let (storage, _dir) = store();
-        // a note the failing run retrieved (referenced evidence)
-        let note = seed(
-            &storage,
-            "API_TIMEOUT was changed in the deploy env",
-            vec!["API_TIMEOUT"],
-            2,
-        );
-        // the quiet change carrying the same env var, older than the run
-        let change = commit_record(
-            &storage,
-            &sha_of('7'),
-            "tweak deploy",
-            &["src/deploy.rs"],
-            &[],
-            &["API_TIMEOUT"],
-            4,
-        );
-
-        let now_ms = Utc::now().timestamp_millis();
-        use crate::trace::MemoryTraceEvent as E;
-        storage
-            .append_trace_event(&E::MemoryRetrieve {
-                run_id: "run-1".into(),
-                ids: vec![note.id.clone()],
-                activation: [("x".to_string(), 1.0)].into_iter().collect(),
-                at: now_ms,
-            })
-            .unwrap();
-        storage
-            .append_trace_event(&E::SanhedrinVeto {
-                run_id: "run-1".into(),
-                claim: "vetoed: claimed the API_TIMEOUT regression was benign".into(),
-                evidence_ids: vec![],
-                confidence: 0.8,
-                at: now_ms,
-            })
-            .unwrap();
-
-        let result = walk_storage(
-            &storage,
-            &req(vec![StartPoint::CiRun {
-                run_id: "run-1".into(),
-            }]),
-        )
-        .unwrap();
-
-        assert!(result.needs_report.is_none(), "{:?}", result.needs_report);
-        assert_eq!(result.causes.len(), 1, "{:?}", result.causes);
-        let top = &result.causes[0];
-        assert_eq!(top.id, change.id);
-        assert_eq!(top.path[0].via, "ci_run/failed_calls");
-        assert!(top.shared_anchors.contains(&"api_timeout".to_string()));
-    }
-
-    #[test]
-    fn logged_write_walks_edges_and_shared_anchors() {
-        let (storage, _dir) = store();
-        // the quiet cause, older, connected to the logged write by an edge
-        let cause = seed(
-            &storage,
-            "Set API_TIMEOUT=2 in the deploy env to speed up cold starts",
-            vec!["API_TIMEOUT"],
-            5,
-        );
-        // the logged write under investigation (the start point)
-        let write = seed(
-            &storage,
-            "deploy job failed after the API_TIMEOUT change",
-            vec![],
-            3,
-        );
+        let cause = seed(&storage, "billing client raised the pool wait", vec![], 3);
+        let symptom = seed(&storage, "gateway gave up on the quiet hour", vec![], 1);
         storage
             .save_connection(&crate::ConnectionRecord {
-                source_id: write.id.clone(),
-                target_id: cause.id.clone(),
-                strength: 0.5,
-                link_type: "reports".into(),
+                source_id: cause.id.clone(),
+                target_id: symptom.id.clone(),
+                strength: 1.0,
+                link_type: "derived_from".into(),
                 created_at: Utc::now(),
                 last_activated: Utc::now(),
                 activation_count: 0,
             })
             .unwrap();
-
-        let result = walk_storage(
-            &storage,
-            &req(vec![StartPoint::LoggedWrite {
-                node_id: write.id.clone(),
-            }]),
-        )
-        .unwrap();
-
-        assert!(result.needs_report.is_none(), "{:?}", result.needs_report);
-        assert_eq!(result.causes.len(), 1, "{:?}", result.causes);
-        let top = &result.causes[0];
-        assert_eq!(top.id, cause.id);
-        // two hops max: the edge plus the shared anchor
-        assert!(top.path.len() <= MAX_HOPS);
-        let vias: Vec<&str> = top.path.iter().map(|h| h.via.as_str()).collect();
-        assert!(vias.contains(&"logged_write/edge"), "{vias:?}");
-        assert!(vias.contains(&"logged_write/shared_anchor"), "{vias:?}");
-        assert!(top.shared_anchors.contains(&"api_timeout".to_string()));
-        assert!(top.evidence_to.contains(&write.id));
+        let records = vec![
+            super::walk_record_of(
+                &cause.id,
+                &cause.content,
+                &cause.tags,
+                cause.created_at,
+                cause.stability,
+            ),
+            super::walk_record_of(
+                &symptom.id,
+                &symptom.content,
+                &symptom.tags,
+                symptom.created_at,
+                symptom.stability,
+            ),
+        ];
+        let mut ctx = WalkContext::default();
+        ctx.edges.push(RecordedEdge {
+            source_id: cause.id.clone(),
+            target_id: symptom.id.clone(),
+            link_type: "derived_from".into(),
+            strength: 1.0,
+            legacy_inferred: true,
+        });
+        let result = CausalWalkOptions::default().walk(
+            &[StartPoint::LoggedWrite {
+                node_id: symptom.id.clone(),
+            }],
+            &records,
+            &ctx,
+        );
+        assert!(result.causes.is_empty(), "{:?}", result.causes);
+        assert!(result.needs_report.is_some());
     }
 
     #[test]
     fn promote_persists_evidence_of_edges_and_preview_does_not() {
         let (storage, _dir) = store();
-        let note = seed(
+        let cause = seed(
             &storage,
-            "test_login_flow failed in tests/auth_test.rs",
+            "Raised the pool wait inside the billing client before the quiet deploy window.",
             vec![],
-            0,
-        );
-        let bad = commit_record(
-            &storage,
-            &sha_of('a'),
-            "harden login",
-            &["tests/auth_test.rs", "src/auth.rs"],
-            &[],
-            &[],
             5,
         );
-
-        let request = req(vec![StartPoint::FailingTest {
-            name: "test_login_flow".into(),
+        let symptom = seed(
+            &storage,
+            "Checkout lane returned 504. Gateway gave up.",
+            vec![],
+            1,
+        );
+        storage
+            .save_connection(&crate::ConnectionRecord {
+                source_id: cause.id.clone(),
+                target_id: symptom.id.clone(),
+                strength: 1.0,
+                link_type: "derived_from".into(),
+                created_at: Utc::now(),
+                last_activated: Utc::now(),
+                activation_count: 0,
+            })
+            .unwrap();
+        let request = req(vec![StartPoint::LoggedWrite {
+            node_id: symptom.id.clone(),
         }]);
-        // preview: nothing written
         let preview = walk_storage(&storage, &request).unwrap();
-        assert!(preview.causes[0].id == bad.id);
+        assert_eq!(preview.causes.len(), 1);
+        assert_eq!(preview.causes[0].id, cause.id);
         assert!(
             storage
-                .get_connections_for_memory(&bad.id)
+                .get_connections_for_memory(&cause.id)
                 .unwrap()
-                .is_empty()
+                .iter()
+                .all(|edge| edge.link_type != EVIDENCE_LINK_TYPE)
         );
 
-        // promote: exactly one evidence_of edge cause -> note
         let written = persist_evidence_edges(&storage, &preview).unwrap();
-        assert_eq!(written, vec![(bad.id.clone(), note.id.clone())]);
-        let edges = storage.get_connections_for_memory(&bad.id).unwrap();
-        assert!(edges.iter().any(|e| {
-            e.source_id == bad.id && e.target_id == note.id && e.link_type == EVIDENCE_LINK_TYPE
+        assert_eq!(written, vec![(cause.id.clone(), symptom.id.clone())]);
+        let edges = storage.get_connections_for_memory(&cause.id).unwrap();
+        assert!(edges.iter().any(|edge| {
+            edge.source_id == cause.id
+                && edge.target_id == symptom.id
+                && edge.link_type == EVIDENCE_LINK_TYPE
         }));
-        // idempotent: a second promote writes nothing new
         assert!(
             persist_evidence_edges(&storage, &preview)
                 .unwrap()
                 .is_empty()
-        );
-    }
-
-    #[test]
-    fn empty_or_unresolvable_ranges_refuse_rather_than_widen() {
-        let (storage, _dir) = store();
-        seed(
-            &storage,
-            "test_login_flow failed in tests/auth_test.rs",
-            vec![],
-            0,
-        );
-        // no repo at all: the range cannot resolve
-        let result = walk_storage(
-            &storage,
-            &req(vec![
-                StartPoint::FailingTest {
-                    name: "test_login_flow".into(),
-                },
-                StartPoint::VersionRange {
-                    worked_in: "w9".into(),
-                    broke_in: "b9".into(),
-                    repo: "/nonexistent/repo".into(),
-                },
-            ]),
-        )
-        .unwrap();
-        let report = result.needs_report.expect("unresolvable range must refuse");
-        assert!(
-            report
-                .missing
-                .iter()
-                .any(|m| m.contains("could not resolve")),
-            "{:?}",
-            report.missing
         );
     }
 

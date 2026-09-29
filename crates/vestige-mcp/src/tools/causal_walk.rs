@@ -1,11 +1,9 @@
 //! # Causal Walk — MCP tool
 //!
-//! The successor to `backfill`: investigate a failure from EXPLICIT start
-//! points (failing test, stack frame, CI run, logged write, version range)
-//! through exact mechanism edges to the change records behind it. Candidates
-//! are investigation hypotheses, not proven causes. The default preview
-//! persists nothing; explicit `promote=true` records `evidence_of` trail
-//! edges through the existing `save_connection` surface.
+//! Investigate a failure by walking recorded edges backward from a
+//! `logged_write` node. Names are not a join. Candidates are hypotheses.
+//! Preview persists nothing; explicit `promote=true` admits an `evidence_of`
+//! `SaveEdge` and returns its receipt.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -28,14 +26,14 @@ pub fn schema() -> Value {
             "start_points": {
                 "type": "array",
                 "minItems": 1,
-                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). version_range restricts commit suspects and pairs best with a failure start point.",
+                "description": "Explicit evidence handles; at least one is required or the walk returns needs_report (it never guesses). Only logged_write names a record. The walk follows recorded edges backward from that record.",
                 "items": {
                     "oneOf": [
                         {
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string", "const": "failing_test"},
-                                "name": {"type": "string", "description": "Failing test name; walked to its file's co-touch commits."}
+                                "name": {"type": "string", "description": "Failing test name. Not a recorded edge; pass logged_write of the failure record."}
                             },
                             "required": ["kind", "name"]
                         },
@@ -43,7 +41,7 @@ pub fn schema() -> Value {
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string", "const": "stack_frame"},
-                                "frame": {"type": "string", "description": "\"file:line\" or \"file\"; the last pre-failure toucher is the prime suspect (SZZ-lite)."}
+                                "frame": {"type": "string", "description": "\"file:line\" or \"file\". Not a recorded edge; pass logged_write of the failure record."}
                             },
                             "required": ["kind", "frame"]
                         },
@@ -51,7 +49,7 @@ pub fn schema() -> Value {
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string", "const": "ci_run"},
-                                "run_id": {"type": "string", "description": "Agent-trace run id; its failure channel (vetoed claims, touched memories) seeds the anchors."}
+                                "run_id": {"type": "string", "description": "Agent-trace run id. Not a recorded edge; pass logged_write of the failure record."}
                             },
                             "required": ["kind", "run_id"]
                         },
@@ -59,7 +57,7 @@ pub fn schema() -> Value {
                             "type": "object",
                             "properties": {
                                 "kind": {"type": "string", "const": "logged_write"},
-                                "node_id": {"type": "string", "description": "Memory / tool-call record id; its edges and shared entities are walked."}
+                                "node_id": {"type": "string", "description": "Memory / tool-call record id. Recorded edges are walked backward from it."}
                             },
                             "required": ["kind", "node_id"]
                         },
@@ -86,7 +84,7 @@ pub fn schema() -> Value {
             "promote": {
                 "type": "boolean",
                 "default": false,
-                "description": "Explicitly persist evidence_of trail edges after review. Default false: preview only, no graph mutation. Promotion does not verify causality."
+                "description": "Admit evidence_of SaveEdge trail edges after review and return their receipts. Default false: preview only, no graph mutation. Promotion does not verify causality."
             },
             "scan_limit": {
                 "type": "integer",
@@ -160,13 +158,23 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         causes.push(v);
     }
 
-    // Strata answers from the log and does not record the overlap as an edge.
-    let (edges_persisted, edge_list) = if promote && !strata && !result.causes.is_empty() {
+    // promote admits evidence_of through SaveEdge (PROPOSE -> GATE -> EFFECT).
+    let (edges_persisted, edge_list) = if promote && !result.causes.is_empty() {
         let written = persist_evidence_edges(&**storage, &result)?;
         (written.len(), written)
     } else {
         (0, vec![])
     };
+    let receipts: Vec<Value> = edge_list
+        .iter()
+        .map(|(source_id, target_id)| {
+            json!({
+                "source_id": source_id,
+                "target_id": target_id,
+                "link_type": core_causal_walk::EVIDENCE_LINK_TYPE,
+            })
+        })
+        .collect();
 
     let needs_report = result
         .needs_report
@@ -188,7 +196,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     Ok(json!({
         "tool": "causal_walk",
         "scope": scope,
-        "preview": !promote || strata,
+        "preview": !promote,
         "evidence_status": "hypothesis",
         "causality_verified": false,
         "headline": headline,
@@ -204,11 +212,12 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             "edges_persisted": edges_persisted,
             "edges": edge_list.iter().map(|(s, t)| json!([s, t])).collect::<Vec<_>>(),
             "link_type": core_causal_walk::EVIDENCE_LINK_TYPE,
+            "receipts": receipts,
         },
         "note": if strata {
-            "causal_walk reads the strata log backward through shared entities. Scores rank shared anchors, not similarity. The walk writes nothing."
+            "causal_walk follows recorded edges backward. promote admits an evidence_of SaveEdge and returns its receipt. Names are not a join."
         } else {
-            "causal_walk replaces backfill (still dispatchable as a hidden alias). Causes rank by IDF-weighted shared anchors, change-record bonus and older-first ties; scores are ranking heuristics, not probabilities of causation. Preview writes nothing; promote records evidence_of edges only."
+            "causal_walk follows recorded edges only. promote records evidence_of edges. Names are not a join."
         },
     }))
 }
@@ -218,17 +227,12 @@ mod tests {
     use super::*;
     use chrono::{Duration, Utc};
     use tempfile::TempDir;
-    use vestige_core::advanced::git_records::{self, GitCommit};
     use vestige_core::{IngestInput, KnowledgeNode};
 
     async fn test_storage() -> (Arc<Storage>, TempDir) {
         let dir = TempDir::new().unwrap();
         let storage = vestige_core::open_storage(Some(dir.path().join("test.db"))).unwrap();
         (storage, dir)
-    }
-
-    fn sha(c: char) -> String {
-        c.to_string().repeat(40)
     }
 
     fn seed(
@@ -248,28 +252,6 @@ mod tests {
             .set_created_at(&node.id, Utc::now() - Duration::days(days_ago))
             .unwrap();
         storage.get_node(&node.id).unwrap().unwrap()
-    }
-
-    fn commit_record(
-        storage: &Arc<Storage>,
-        sha: &str,
-        subject: &str,
-        files: &[&str],
-        days_ago: i64,
-    ) -> KnowledgeNode {
-        let content = git_records::record_content(&GitCommit {
-            sha: sha.to_string(),
-            time: Utc::now() - Duration::days(days_ago),
-            subject: subject.to_string(),
-            files: files.iter().map(|f| f.to_string()).collect(),
-            extra_files: 0,
-            symbols: vec![],
-            mentions: vec![],
-            hunks: vec![],
-            extra_hunks: 0,
-            imports: vec![],
-        });
-        seed(storage, &content, vec![git_records::COMMIT_TAG], days_ago)
     }
 
     #[test]
@@ -295,34 +277,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn causal_walk_finds_cotouch_and_persists_edges_only_on_promote() {
+    async fn causal_walk_follows_recorded_edges_and_persists_only_on_promote() {
         let (storage, _dir) = test_storage().await;
-        let note = seed(
+        let cause = seed(
             &storage,
-            "test_login_flow failed: auth flow crashed in tests/auth_test.rs",
-            vec!["ci"],
-            0,
-        );
-        let bad = commit_record(
-            &storage,
-            &sha('a'),
-            "harden login",
-            &["tests/auth_test.rs", "src/auth.rs"],
+            "Raised the pool wait inside the billing client before the quiet deploy window.",
+            vec![],
             5,
         );
-        let good = commit_record(
+        let decoy = seed(
             &storage,
-            &sha('b'),
-            "tune session cache",
-            &["tests/auth_test.rs", "src/session.rs"],
-            25,
+            "Checkout lane stored spare linen beside the stair.",
+            vec![],
+            4,
         );
+        let symptom = seed(
+            &storage,
+            "Checkout lane returned 504. Gateway gave up.",
+            vec![],
+            1,
+        );
+        storage
+            .save_connection(&vestige_core::ConnectionRecord {
+                source_id: cause.id.clone(),
+                target_id: symptom.id.clone(),
+                strength: 1.0,
+                link_type: "derived_from".into(),
+                created_at: Utc::now(),
+                last_activated: Utc::now(),
+                activation_count: 0,
+            })
+            .unwrap();
+        storage
+            .save_connection(&vestige_core::ConnectionRecord {
+                source_id: decoy.id.clone(),
+                target_id: symptom.id.clone(),
+                strength: 1.0,
+                link_type: "reports".into(),
+                created_at: Utc::now(),
+                last_activated: Utc::now(),
+                activation_count: 0,
+            })
+            .unwrap();
 
-        // 1) no start point -> needs_report, not an error
         let out = execute(&storage, Some(json!({}))).await.unwrap();
         assert!(out["causes"].as_array().unwrap().is_empty());
-        assert!(
-            out["needs_report"]["missing"].as_array().unwrap().len() == 1,
+        assert_eq!(
+            out["needs_report"]["missing"].as_array().unwrap().len(),
+            1,
             "{out}"
         );
         assert_eq!(
@@ -333,79 +335,88 @@ mod tests {
             5
         );
 
-        // 2) failing_test walk: co-touch commits ranked, preview writes nothing
-        let args = json!({"start_points": [{"kind": "failing_test", "name": "test_login_flow"}]});
+        let named = execute(
+            &storage,
+            Some(json!({"start_points": [{"kind": "failing_test", "name": "Checkout"}]})),
+        )
+        .await
+        .unwrap();
+        assert!(named["causes"].as_array().unwrap().is_empty(), "{named}");
+        assert!(
+            named["needs_report"]["missing"]
+                .to_string()
+                .contains("not a recorded edge"),
+            "{named}"
+        );
+
+        let args = json!({"start_points": [{"kind": "logged_write", "node_id": symptom.id}]});
         for _ in 0..2 {
             let preview = execute(&storage, Some(args.clone())).await.unwrap();
             assert_eq!(preview["preview"], json!(true));
             let causes = preview["causes"].as_array().unwrap();
-            assert_eq!(causes.len(), 2);
-            assert_eq!(causes[0]["sha"], json!(sha('a')));
-            assert_eq!(
-                causes[0]["path"][0]["via"], "failing_test/co_touch",
-                "{}",
-                preview
-            );
-            assert!(
-                causes[0]["shared_anchors"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|e| e == "tests/auth_test.rs")
-            );
+            assert_eq!(causes.len(), 1, "{preview}");
+            assert_eq!(causes[0]["id"], json!(cause.id));
+            assert_eq!(causes[0]["shared_anchors"], json!([]));
+            assert_eq!(causes[0]["path"][0]["via"], json!("edge/derived_from"));
             assert_eq!(preview["promote"]["edges_persisted"], json!(0));
+            assert!(!preview.to_string().contains(&decoy.id), "{preview}");
         }
         assert!(
             storage
-                .get_connections_for_memory(&bad.id)
+                .get_connections_for_memory(&cause.id)
                 .unwrap()
-                .is_empty(),
-            "preview must not write graph edges"
-        );
-        let before = storage.get_node(&bad.id).unwrap().unwrap();
-        assert_eq!(
-            before.reps,
-            storage.get_node(&bad.id).unwrap().unwrap().reps
+                .iter()
+                .all(|edge| edge.link_type != "evidence_of"),
+            "preview must not write an evidence edge"
         );
 
-        // 3) promote: exactly one evidence_of edge from the top cause to the note
         let out = execute(
             &storage,
-            Some(json!({"start_points": [{"kind": "failing_test", "name": "test_login_flow"}], "promote": true})),
+            Some(json!({
+                "start_points": [{"kind": "logged_write", "node_id": symptom.id}],
+                "promote": true
+            })),
         )
         .await
         .unwrap();
-        // both surfaced causes link to the same evidence note (the failure note)
-        assert_eq!(out["promote"]["edges_persisted"], json!(2), "{out}");
+        assert_eq!(out["promote"]["edges_persisted"], json!(1), "{out}");
+        assert_eq!(out["promote"]["edges"][0], json!([cause.id, symptom.id]));
         assert_eq!(
-            out["promote"]["edges"][0],
-            json!([bad.id, note.id]),
-            "the trail edge is cause -> evidence record"
+            out["promote"]["receipts"][0],
+            json!({
+                "source_id": cause.id,
+                "target_id": symptom.id,
+                "link_type": "evidence_of",
+            })
         );
-        let edges = storage.get_connections_for_memory(&bad.id).unwrap();
-        assert!(edges.iter().any(|e| {
-            e.source_id == bad.id && e.target_id == note.id && e.link_type == "evidence_of"
+        let edges = storage.get_connections_for_memory(&cause.id).unwrap();
+        assert!(edges.iter().any(|edge| {
+            edge.source_id == cause.id
+                && edge.target_id == symptom.id
+                && edge.link_type == "evidence_of"
         }));
-        // the runner-up commit was not linked (it shares no evidence_to target
-        // other than the same note — one edge per cause is expected too)
-        let good_edges = storage.get_connections_for_memory(&good.id).unwrap();
-        assert_eq!(good_edges.len(), 1, "every surfaced cause gets its edge");
     }
 }
 
 #[cfg(test)]
 mod strata_tests {
     use super::*;
-    use std::collections::BTreeSet;
     use std::path::Path;
     use tempfile::TempDir;
+    use vestige_core::advanced::causal_walk::{
+        CausalWalkOptions, RecordedEdge, StartPoint, WalkContext, WalkRecord,
+    };
     use vestige_core::advanced::retroactive_backfill::extract_entities;
 
     const CAUSE: &str =
-        "Raised POOL_ACQUIRE_MS inside src/billing/pool.rs before the quiet deploy window.";
-    const SYMPTOM: &str = "Checkout lane returned 504. Gateway gave up. POOL_ACQUIRE_MS.";
-    const LATER: &str = "Zephyr quilt inventory lists POOL_ACQUIRE_MS for a different week.";
-    const DECOY: &str = "Oak cupboard stored spare linen beside the stair.";
+        "Raised the pool wait inside the billing client before the quiet deploy window.";
+    const SYMPTOM: &str = "Checkout lane returned 504. Gateway gave up.";
+    const LATER: &str = "Zephyr quilt inventory shifted after the quiet hour.";
+    const DECOY: &str = "Checkout lane stored spare linen beside the stair.";
+
+    fn names(content: &str) -> std::collections::BTreeSet<String> {
+        extract_entities(content, &[]).into_iter().collect()
+    }
 
     fn log_blake3(root: &Path) -> String {
         let mut files = Vec::new();
@@ -445,25 +456,139 @@ mod strata_tests {
             .unwrap()
     }
 
+    fn edge(
+        store: &mut strata_store::StrataStore,
+        source_id: &str,
+        target_id: &str,
+        link_type: &str,
+        at_ms: i64,
+    ) {
+        store
+            .save_connection(&strata_store::ConnectionRecord {
+                source_id: source_id.to_string(),
+                target_id: target_id.to_string(),
+                strength_milli: 1000,
+                link_type: link_type.to_string(),
+                meta_sha: None,
+                created_at_ms: at_ms,
+                activation_count: 0,
+            })
+            .unwrap();
+    }
+
     fn open_empty() -> (Arc<Storage>, TempDir) {
         let dir = TempDir::new().unwrap();
         let storage = crate::strata_memory::open(dir.path()).unwrap();
         (storage, dir)
     }
 
-    #[tokio::test]
-    async fn strata_walk_surfaces_shared_entity_cause_and_drops_later_events() {
-        let cause_entities = extract_entities(CAUSE, &[]);
-        let symptom_entities = extract_entities(SYMPTOM, &[]);
-        let shared: BTreeSet<_> = cause_entities
-            .iter()
-            .filter(|entity| symptom_entities.contains(entity))
-            .cloned()
+    fn record(id: &str, content: &str, at_ms: i64) -> WalkRecord {
+        WalkRecord {
+            id: id.to_string(),
+            content: content.to_string(),
+            entities: Vec::new(),
+            created_at: chrono::DateTime::from_timestamp_millis(at_ms).unwrap(),
+            stability: 0.0,
+            is_commit: false,
+            sha: None,
+            files: Vec::new(),
+            symbols: Vec::new(),
+        }
+    }
+
+    /// Frames in one segment: header is 58 bytes, then
+    /// `len u32 || kind u8 || payload || blake3[32] || prev[32]`.
+    fn segment_frames(bytes: &[u8]) -> Vec<(u8, Vec<u8>)> {
+        let mut off = 58usize;
+        let mut frames = Vec::new();
+        while off + 5 <= bytes.len() {
+            let len = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+            let kind = bytes[off + 4];
+            let start = off + 5;
+            let end = start.saturating_add(len);
+            let frame_end = end.saturating_add(64);
+            if end > bytes.len() || frame_end > bytes.len() {
+                break;
+            }
+            frames.push((kind, bytes[start..end].to_vec()));
+            off = frame_end;
+        }
+        frames
+    }
+
+    fn log_frames(root: &Path) -> Vec<(u8, Vec<u8>)> {
+        let mut segs: Vec<_> = std::fs::read_dir(root.join("log"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "seg"))
             .collect();
-        assert_eq!(
-            shared.into_iter().collect::<Vec<_>>(),
-            vec!["pool_acquire_ms".to_string()],
-            "the cause and symptom must share one entity and no prose"
+        segs.sort();
+        segs.into_iter()
+            .flat_map(|path| segment_frames(&std::fs::read(path).unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn recorded_edge_vocabulary_rejects_names_and_legacy_inferred() {
+        for link_type in [
+            "touched",
+            "anchored_to",
+            "derived_from",
+            "supersedes",
+            "corrects",
+            "closed_by",
+            "projected_to",
+            "evidence_of",
+        ] {
+            assert!(
+                vestige_core::advanced::causal_walk::is_recorded_edge(link_type),
+                "{link_type}"
+            );
+        }
+        assert!(!vestige_core::advanced::causal_walk::is_recorded_edge(
+            "legacy_inferred"
+        ));
+        assert!(!vestige_core::advanced::causal_walk::is_recorded_edge(
+            "reports"
+        ));
+
+        let symptom_ms = 1_700_000_000_000i64;
+        let cause = record("cause", CAUSE, symptom_ms - 1);
+        let symptom = record("symptom", SYMPTOM, symptom_ms);
+        let mut ctx = WalkContext::default();
+        ctx.edges.push(RecordedEdge {
+            source_id: cause.id.clone(),
+            target_id: symptom.id.clone(),
+            link_type: "derived_from".into(),
+            strength: 1.0,
+            legacy_inferred: true,
+        });
+        let result = CausalWalkOptions::default().walk(
+            &[StartPoint::LoggedWrite {
+                node_id: symptom.id.clone(),
+            }],
+            &[cause, symptom],
+            &ctx,
+        );
+        assert!(result.causes.is_empty(), "{:?}", result.causes);
+        assert!(result.needs_report.is_some());
+    }
+
+    #[tokio::test]
+    async fn strata_walk_follows_recorded_edge_and_drops_later_events() {
+        let cause_names = names(CAUSE);
+        let symptom_names = names(SYMPTOM);
+        let shared: Vec<_> = cause_names.intersection(&symptom_names).collect();
+        assert!(
+            shared.is_empty(),
+            "cause and symptom must share no name: {shared:?}"
+        );
+        assert!(
+            !names(DECOY)
+                .intersection(&symptom_names)
+                .collect::<Vec<_>>()
+                .is_empty(),
+            "the name decoy must share a name the walk is forbidden to use"
         );
 
         let dir = TempDir::new().unwrap();
@@ -474,6 +599,20 @@ mod strata_tests {
             let cause_id = seed(&mut store, CAUSE, symptom_ms - 1);
             let symptom_id = seed(&mut store, SYMPTOM, symptom_ms);
             let later_id = seed(&mut store, LATER, symptom_ms + 1);
+            edge(
+                &mut store,
+                &cause_id,
+                &symptom_id,
+                "derived_from",
+                symptom_ms - 1,
+            );
+            edge(
+                &mut store,
+                &later_id,
+                &symptom_id,
+                "derived_from",
+                symptom_ms + 1,
+            );
             (cause_id, symptom_id, later_id, decoy_id)
         };
         let storage = crate::strata_memory::open(dir.path()).unwrap();
@@ -486,11 +625,18 @@ mod strata_tests {
         )
         .await
         .unwrap();
-        let promoted = execute(
+        let again = execute(
             &storage,
             Some(json!({
-                "start_points": [{"kind": "logged_write", "node_id": symptom_id}],
-                "promote": true
+                "start_points": [{"kind": "logged_write", "node_id": symptom_id}]
+            })),
+        )
+        .await
+        .unwrap();
+        let named = execute(
+            &storage,
+            Some(json!({
+                "start_points": [{"kind": "failing_test", "name": "Checkout"}]
             })),
         )
         .await
@@ -498,31 +644,27 @@ mod strata_tests {
         let after = log_blake3(dir.path());
         assert_eq!(
             before, after,
-            "causal_walk must not append to the strata log"
+            "promote:false must not append to the strata log"
         );
 
         assert_eq!(preview["preview"], json!(true));
-        assert_eq!(promoted["preview"], json!(true));
+        assert_eq!(again["preview"], json!(true));
         assert_eq!(preview["promote"]["edges_persisted"], json!(0));
-        assert_eq!(promoted["promote"]["edges_persisted"], json!(0));
-
+        assert_eq!(preview["promote"]["receipts"], json!([]));
         let causes = preview["causes"].as_array().unwrap();
         assert_eq!(causes.len(), 1, "{preview}");
         assert_eq!(causes[0]["id"], json!(cause_id));
+        assert_eq!(causes[0]["shared_anchors"], json!([]));
+        assert_eq!(causes[0]["path"][0]["via"], json!("edge/derived_from"));
+        assert!(named["causes"].as_array().unwrap().is_empty(), "{named}");
         assert!(
-            causes[0]["shared_anchors"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|anchor| anchor == "pool_acquire_ms"),
-            "{preview}"
-        );
-        assert_eq!(
-            causes[0]["path"][0]["via"],
-            json!("logged_write/shared_anchor")
+            named["needs_report"]["missing"]
+                .to_string()
+                .contains("not a recorded edge"),
+            "{named}"
         );
 
-        for body in [&preview, &promoted] {
+        for body in [&preview, &again, &named] {
             let text = body.to_string();
             assert!(
                 !text.contains(&later_id),
@@ -530,6 +672,136 @@ mod strata_tests {
             );
             assert!(!text.contains(&decoy_id), "{text}");
         }
+    }
+
+    #[tokio::test]
+    async fn strata_promote_admits_evidence_edge_and_receipt_verifies() {
+        let dir = TempDir::new().unwrap();
+        let symptom_ms = 1_700_000_000_000i64;
+        let (cause_id, symptom_id) = {
+            let mut store = strata_store::StrataStore::open(dir.path()).unwrap();
+            let cause_id = seed(&mut store, CAUSE, symptom_ms - 1);
+            let symptom_id = seed(&mut store, SYMPTOM, symptom_ms);
+            edge(
+                &mut store,
+                &cause_id,
+                &symptom_id,
+                "derived_from",
+                symptom_ms - 1,
+            );
+            (cause_id, symptom_id)
+        };
+        let promoted = {
+            let storage = crate::strata_memory::open(dir.path()).unwrap();
+            let promoted = execute(
+                &storage,
+                Some(json!({
+                    "start_points": [{"kind": "logged_write", "node_id": symptom_id}],
+                    "promote": true
+                })),
+            )
+            .await
+            .unwrap();
+            let second = execute(
+                &storage,
+                Some(json!({
+                    "start_points": [{"kind": "logged_write", "node_id": symptom_id}],
+                    "promote": true
+                })),
+            )
+            .await
+            .unwrap();
+            assert_eq!(second["promote"]["edges_persisted"], json!(0), "{second}");
+            assert_eq!(second["promote"]["receipts"], json!([]));
+            drop(storage);
+            promoted
+        };
+
+        assert_eq!(promoted["preview"], json!(false));
+        assert_eq!(
+            promoted["promote"]["edges_persisted"],
+            json!(1),
+            "{promoted}"
+        );
+        assert_eq!(
+            promoted["promote"]["receipts"][0],
+            json!({
+                "source_id": cause_id,
+                "target_id": symptom_id,
+                "link_type": "evidence_of",
+            }),
+            "{promoted}"
+        );
+
+        {
+            let mut store = strata_store::StrataStore::open(dir.path()).unwrap();
+            let admitted = store.edges().into_iter().any(|edge| {
+                edge.source_id == cause_id
+                    && edge.target_id == symptom_id
+                    && edge.link_type == "evidence_of"
+            });
+            assert!(
+                admitted,
+                "SaveEdge must land evidence_of in the derived edge list"
+            );
+            let verdicts = store.rederive_verdicts().unwrap();
+            assert!(!verdicts.is_empty());
+            assert!(
+                verdicts
+                    .iter()
+                    .all(|(_, verdict)| format!("{verdict:?}") == "Allow"),
+                "{verdicts:?}"
+            );
+            assert!(store.sweep().is_empty(), "{:?}", store.sweep());
+
+            let frames = log_frames(dir.path());
+            let write = frames.iter().find(|(kind, payload)| {
+                *kind == 32
+                    && payload
+                        .windows(cause_id.len())
+                        .any(|w| w == cause_id.as_bytes())
+                    && payload
+                        .windows(symptom_id.len())
+                        .any(|w| w == symptom_id.as_bytes())
+                    && payload
+                        .windows(b"evidence_of".len())
+                        .any(|w| w == b"evidence_of")
+            });
+            let Some((_, op_bytes)) = write else {
+                panic!("no STORE_WRITE frame carries the evidence_of edge");
+            };
+            let digest = *blake3::hash(op_bytes).as_bytes();
+            assert!(
+                frames.iter().any(|(kind, payload)| {
+                    *kind == 1 && payload.len() >= 32 && payload[..32] == digest
+                }),
+                "PROPOSE.action_hash must be blake3 of the SaveEdge bytes"
+            );
+            assert!(
+                frames.iter().any(|(kind, payload)| {
+                    *kind == 3 && payload.len() == 80 && payload[48..] == digest
+                }),
+                "EFFECT.payload_digest must be blake3 of the SaveEdge bytes"
+            );
+            store.seal_checkpoint().unwrap();
+        }
+
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../strata-verify/Cargo.toml");
+        let output = std::process::Command::new("cargo")
+            .arg("run")
+            .arg("--quiet")
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .arg("--")
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success() && stdout.contains("OK"),
+            "strata-verify failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
     }
 
     #[tokio::test]
