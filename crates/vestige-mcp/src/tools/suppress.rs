@@ -157,7 +157,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             "Memory suppressed"
         );
 
-        Ok(json!({
+        let mut response = json!({
             "success": true,
             "action": "suppress",
             "id": args.id,
@@ -177,7 +177,16 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
                 node.suppression_count, estimated_cascade, DEFAULT_LABILE_HOURS
             ),
             "citation": "Anderson et al. 2025, Nat Rev Neurosci, DOI: 10.1038/s41583-025-00929-y"
-        }))
+        });
+        if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+            let receipt = storage
+                .get_receipt(&node.id)
+                .map_err(|err| err.to_string())?
+                .ok_or_else(|| "suppress admitted but the write receipt is missing".to_string())?;
+            response["receiptId"] = json!(receipt.receipt_id);
+            response["receipt"] = serde_json::to_value(&receipt).unwrap_or(Value::Null);
+        }
+        Ok(response)
     }
 }
 
@@ -192,11 +201,7 @@ async fn derive_and_gate_cascade(
     let report = storage
         .blast_radius_with_link_types(id, false, &["derived_from"])
         .map_err(|e| format!("cascade traversal failed: {}", e))?;
-    let targets: Vec<_> = report
-        .affected
-        .into_iter()
-        .filter(|a| a.id != id)
-        .collect();
+    let targets: Vec<_> = report.affected.into_iter().filter(|a| a.id != id).collect();
 
     let mode = crate::trace_recorder::read_review_mode(storage);
     let mut entries = Vec::with_capacity(targets.len());
@@ -495,7 +500,10 @@ mod tests {
             assert_eq!(node.suppression_count, 1, "{id} must be suppressed");
         }
         let stranger = storage.get_node(&unrelated).unwrap().unwrap();
-        assert_eq!(stranger.suppression_count, 0, "non-derived edges must not cascade");
+        assert_eq!(
+            stranger.suppression_count, 0,
+            "non-derived edges must not cascade"
+        );
     }
 
     #[tokio::test]
@@ -523,7 +531,8 @@ mod tests {
         // Cascade targets were NOT suppressed; each has a pending PR.
         for id in [&child, &grandchild] {
             assert_eq!(
-                storage.get_node(id).unwrap().unwrap().suppression_count, 0,
+                storage.get_node(id).unwrap().unwrap().suppression_count,
+                0,
                 "cascade target must wait for review"
             );
         }
@@ -531,7 +540,10 @@ mod tests {
             .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
             .unwrap();
         assert_eq!(prs.len(), 2, "one PR per derived target");
-        assert!(prs.iter().all(|pr| pr.diff["pendingAction"] == json!("suppress")));
+        assert!(
+            prs.iter()
+                .all(|pr| pr.diff["pendingAction"] == json!("suppress"))
+        );
     }
 
     #[tokio::test]
@@ -545,8 +557,162 @@ mod tests {
             .unwrap();
         assert!(r["cascadeDerivedFrom"].is_null(), "no cascade unless asked");
         assert_eq!(
-            storage.get_node(&child).unwrap().unwrap().suppression_count, 0,
+            storage.get_node(&child).unwrap().unwrap().suppression_count,
+            0,
             "default suppress must not touch derived targets"
         );
+    }
+}
+
+#[cfg(test)]
+mod strata_tests {
+    use super::*;
+    use tempfile::TempDir;
+    use vestige_core::IngestInput;
+
+    fn open() -> (Arc<Storage>, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        (storage, dir)
+    }
+
+    fn ingest(storage: &Arc<Storage>, content: &str) -> String {
+        storage
+            .ingest(IngestInput {
+                content: content.to_string(),
+                ..IngestInput::default()
+            })
+            .unwrap()
+            .id
+    }
+
+    fn effect_seq(receipt_id: &str) -> u64 {
+        let rest = receipt_id
+            .strip_prefix("eff-")
+            .expect("receipt id is an effect seq");
+        u64::from_str_radix(rest, 16).expect("hex effect seq")
+    }
+
+    #[tokio::test]
+    async fn suppress_valid_returns_id_and_receipt() {
+        let (storage, _dir) = open();
+        let id = ingest(&storage, "Jake is my roommate");
+        let result = execute(&storage, Some(json!({"id": id, "reason": "stale"})))
+            .await
+            .unwrap();
+        assert_eq!(result["success"], true);
+        assert_eq!(result["action"], "suppress");
+        assert_eq!(result["id"], id);
+        assert_eq!(result["suppressionCount"], 1);
+        assert_eq!(result["priorCount"], 0);
+        let receipt_id = result["receiptId"].as_str().expect("receipt id");
+        assert!(receipt_id.starts_with("eff-"));
+        assert_eq!(result["receipt"]["receipt_id"], receipt_id);
+        assert_eq!(result["receipt"]["mutations"][0]["kind"], "suppressed");
+        assert_eq!(result["receipt"]["mutations"][0]["id"], id);
+    }
+
+    #[tokio::test]
+    async fn suppress_rejects_invalid_id() {
+        let (storage, _dir) = open();
+        let missing = execute(&storage, None).await.unwrap_err();
+        assert!(missing.contains("Missing arguments"), "{missing}");
+        let empty = execute(&storage, Some(json!({"id": "  "})))
+            .await
+            .unwrap_err();
+        assert!(empty.contains("must not be empty"), "{empty}");
+        let malformed = execute(&storage, Some(json!({"id": "not-a-uuid"})))
+            .await
+            .unwrap_err();
+        assert!(malformed.contains("Invalid memory ID"), "{malformed}");
+    }
+
+    #[tokio::test]
+    async fn suppress_rejects_unknown_handle() {
+        let (storage, _dir) = open();
+        let known = ingest(&storage, "still here");
+        let unknown = "mem-00000000000000ab";
+        let err = execute(&storage, Some(json!({"id": unknown})))
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("not found") || err.contains("Not found"),
+            "{err}"
+        );
+        assert!(storage.get_receipt(unknown).unwrap().is_none());
+        let untouched = storage.get_node(&known).unwrap().unwrap();
+        assert_eq!(untouched.suppression_count, 0);
+        assert_eq!(untouched.content, "still here");
+    }
+
+    #[tokio::test]
+    async fn suppressed_memory_stays_and_is_inhibited() {
+        let (storage, dir) = open();
+        let id = ingest(&storage, "Jake is my roommate");
+        let other = ingest(&storage, "leave this one alone");
+        let before = storage.get_node(&id).unwrap().unwrap();
+        assert_eq!(before.suppression_count, 0);
+
+        let first = execute(&storage, Some(json!({"id": id}))).await.unwrap();
+        assert_eq!(first["suppressionCount"], 1);
+        let after = storage.get_node(&id).unwrap().unwrap();
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.suppression_count, 1);
+        assert!(after.suppressed_at.is_some());
+        assert!(after.retrieval_strength < before.retrieval_strength);
+        assert!(after.retention_strength < before.retention_strength);
+        assert!(after.stability < before.stability);
+        assert!(after.lapses > before.lapses);
+
+        let sibling = storage.get_node(&other).unwrap().unwrap();
+        assert_eq!(sibling.suppression_count, 0);
+        assert_eq!(sibling.content, "leave this one alone");
+
+        let second = execute(&storage, Some(json!({"id": id}))).await.unwrap();
+        assert_eq!(second["suppressionCount"], 2);
+        assert_eq!(second["priorCount"], 1);
+        let compounded = storage.get_node(&id).unwrap().unwrap();
+        assert!(compounded.retrieval_strength < after.retrieval_strength);
+        assert_eq!(compounded.content, before.content);
+
+        let path = dir.path().to_path_buf();
+        drop(storage);
+        let reopened = crate::strata_memory::open(&path).unwrap();
+        let replayed = reopened.get_node(&id).unwrap().unwrap();
+        assert_eq!(replayed.content, "Jake is my roommate");
+        assert_eq!(replayed.suppression_count, 2);
+        assert!(replayed.retrieval_strength < before.retrieval_strength);
+        let still = reopened.get_node(&other).unwrap().unwrap();
+        assert_eq!(still.suppression_count, 0);
+    }
+
+    #[tokio::test]
+    async fn suppress_receipt_verifies_against_the_log() {
+        let (storage, dir) = open();
+        let id = ingest(&storage, "receipt subject");
+        let result = execute(&storage, Some(json!({"id": id}))).await.unwrap();
+        let receipt_id = result["receiptId"].as_str().unwrap().to_string();
+        let seq = effect_seq(&receipt_id);
+        let path = dir.path().to_path_buf();
+        drop(storage);
+
+        let store = strata_store::StrataStore::open(&path).unwrap();
+        let verified = store.verify_effect(seq).unwrap();
+        assert_eq!(verified.kind, "suppress");
+        assert_eq!(verified.node_id, id);
+        assert_eq!(verified.effect_seq, seq);
+        assert_ne!(verified.payload_digest, [0u8; 32]);
+        let frames = store.log().read_frames(1).unwrap();
+        assert!(
+            frames.iter().any(|frame| {
+                frame.kind == strata_store::KIND_STORE_WRITE
+                    && verified.binds_suppress_payload(&frame.payload, &id)
+            }),
+            "the effect digest must bind the suppression frame"
+        );
+        assert!(store.verify_effect(seq + 1).is_err());
+        let (count, _) = store.suppression(&id).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(store.get_node(&id).unwrap().content, "receipt subject");
     }
 }

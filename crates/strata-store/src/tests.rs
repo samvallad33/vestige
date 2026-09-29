@@ -379,6 +379,46 @@ fn backup_roundtrip_opens_and_matches() {
 }
 
 #[test]
+fn suppress_is_an_admitted_event_not_a_deletion() {
+    let dir = temp_dir("suppress");
+    let (id, seq1, seq2, digest) = {
+        let mut store = StrataStore::open(&dir).expect("open");
+        let id = store.ingest(input("keep me", &[])).expect("ingest");
+        let before = store.log().read_frames(1).expect("frames").len();
+        let missing = store.suppress("mem-0000000000000000", 0);
+        assert!(matches!(missing, Err(StoreError::NotFound(_))));
+        assert_eq!(store.log().read_frames(1).expect("frames").len(), before);
+
+        let seq1 = store.suppress(&id, 1_700_000_000_000).expect("suppress");
+        assert_eq!(store.get_node(&id).expect("still there").content, "keep me");
+        assert_eq!(store.suppression(&id), Some((1, 1_700_000_000_000)));
+        let seq2 = store.suppress(&id, 1_700_000_000_100).expect("compound");
+        assert_ne!(seq1, seq2);
+        assert_eq!(store.suppression(&id), Some((2, 1_700_000_000_100)));
+
+        let verified = store.verify_effect(seq2).expect("verify");
+        assert_eq!(verified.kind, "suppress");
+        assert_eq!(verified.node_id, id);
+        let frames = store.log().read_frames(1).expect("frames");
+        assert!(frames.iter().any(|frame| {
+            frame.kind == KIND_STORE_WRITE
+                && *blake3::hash(&frame.payload).as_bytes() == verified.payload_digest
+        }));
+        let digest = store.state_digest();
+        (id, seq1, seq2, digest)
+    };
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(reopened.state_digest(), digest);
+    assert_eq!(reopened.suppression(&id), Some((2, 1_700_000_000_100)));
+    assert_eq!(reopened.get_node(&id).expect("replayed").content, "keep me");
+    let first = reopened.verify_effect(seq1).expect("first effect");
+    assert_eq!(first.kind, "suppress");
+    assert!(reopened.verify_effect(seq2 + 1).is_err());
+    assert!(reopened.sweep().is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn every_store_write_has_an_admitting_effect() {
     let dir = temp_dir("admission");
     let mut store = StrataStore::open_with_policy(&dir, permissive_policy()).expect("open");

@@ -184,7 +184,22 @@ def run(binary, output):
             never = tool("graph", {"action": "never_composed", "limit": 5})
             assert never["scope"] == "user" and never["globalNoveltyVerified"] is False
             typed("session_start", {"queries": [marker], "include_predictions": False, "include_intentions": False}, "similarity_disabled")
-            typed("suppress", {"id": node_id}, "pending_strata")
+            before_state = tool("memory", {"action": "state", "id": node_id})
+            baseline_retrieval = before_state["components"]["retrievalStrength"]
+            suppressed = tool("suppress", {"id": node_id, "reason": "fixture"})
+            assert suppressed["success"] is True and suppressed["id"] == node_id
+            assert suppressed["suppressionCount"] == 1
+            receipt_id = suppressed["receiptId"]
+            assert receipt_id.startswith("eff-")
+            assert suppressed["receipt"]["receipt_id"] == receipt_id
+            assert suppressed["receipt"]["mutations"][0]["kind"] == "suppressed"
+            loaded = tool("receipt", {"action": "get", "receipt_id": receipt_id})
+            assert loaded["receipt"]["receipt_id"] == receipt_id
+            assert loaded["receipt"]["mutations"][0]["id"] == node_id
+            still = tool("memory", {"action": "get", "id": node_id})
+            assert marker in json.dumps(still)
+            after_state = tool("memory", {"action": "state", "id": node_id})
+            assert after_state["components"]["retrievalStrength"] < baseline_retrieval
             typed("causal_walk", {"scope": "user"}, "pending_strata")
             typed("selftest", {}, "pending_strata")
             typed("forgotten_lesson", {"failure_id": node_id}, "pending_strata")
