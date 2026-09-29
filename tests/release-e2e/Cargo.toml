@@ -22,6 +22,7 @@ serde_json = "1"
 sha2 = "0.10"
 strata = { path = "../../crates/strata" }
 strata-gate = { path = "../../crates/strata-gate" }
+strata-kernel = { path = "../../crates/strata-kernel" }
 strata-migrate = { path = "../../crates/strata-migrate" }
 strata-store = { path = "../../crates/strata-store" }
 rusqlite = { version = "0.40", features = ["bundled"] }

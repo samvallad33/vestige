@@ -12,6 +12,12 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use strata::StrataLog;
 use strata_gate::{Policy, Rule, Verdict, ANY_KIND, WILDCARD_PREFIX};
+use strata_kernel::canonical::from_q32_32;
+use strata_kernel::event::ReviewEvent;
+use strata_kernel::fsrs::ALGO_V1;
+use strata_kernel::kernel::Kernel;
+use strata_kernel::state::State;
+use strata_migrate::read_snapshot;
 use strata_migrate::records::{self, decode_edge, decode_node};
 use strata_store::{default_policy, ConnectionRecord, IngestInput, StrataStore};
 
@@ -19,7 +25,7 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() {
         eprintln!(
-            "usage: strata-driver <write-log|open-log|write-store|reopen-store|hold|dump-migration|migrate> ..."
+            "usage: strata-driver <write-log|open-log|write-store|reopen-store|hold|dump-migration|dump-schedule|probe-retrievability|migrate> ..."
         );
         return ExitCode::from(2);
     }
@@ -32,6 +38,8 @@ fn main() -> ExitCode {
         "reopen-store" => reopen_store(&args),
         "hold" => hold(&args),
         "dump-migration" => dump_migration(&args),
+        "dump-schedule" => dump_schedule(&args),
+        "probe-retrievability" => probe_retrievability(&args),
         "migrate" => migrate_cmd(&args),
         other => Err(format!("unknown command {other}")),
     };
@@ -383,6 +391,113 @@ fn dump_migration(args: &[String]) -> Result<ExitCode, String> {
         "kinds": kinds,
         "nodes": nodes,
         "edges": edges,
+    }))
+}
+
+fn dump_schedule(args: &[String]) -> Result<ExitCode, String> {
+    let dir = dir_arg(args)?;
+    let log = StrataLog::open(&dir).map_err(|e| e.to_string())?;
+    let snapshot = read_snapshot(&log).map_err(|e| e.to_string())?;
+    let kernel = Kernel::<ReviewEvent>::for_version(ALGO_V1).map_err(|e| e.to_string())?;
+    let mut state = State::default();
+    kernel.apply_all(&mut state, snapshot.reviews.iter());
+    let mut cards = Vec::new();
+    for node in &snapshot.nodes {
+        let card = state.cards.get(&node.kernel_id);
+        let reviews: Vec<Value> = snapshot
+            .reviews
+            .iter()
+            .filter(|event| event.card_id == node.kernel_id)
+            .map(|event| {
+                json!({
+                    "event_seq": event.event_seq,
+                    "rating": event.rating,
+                    "fields": ["card_id", "rating", "event_seq"],
+                })
+            })
+            .collect();
+        let legacy: serde_json::Map<String, Value> = node
+            .legacy
+            .iter()
+            .filter(|(key, _)| {
+                let name = key.rsplit('.').next().unwrap_or(key);
+                matches!(
+                    name,
+                    "last_review"
+                        | "due"
+                        | "due_date"
+                        | "next_review"
+                        | "stability"
+                        | "difficulty"
+                        | "last_accessed"
+                )
+            })
+            .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+            .collect();
+        cards.push(json!({
+            "legacy_id": node.legacy_id,
+            "kernel_id": node.kernel_id,
+            "created_ms": node.created_ms,
+            "last_accessed_ms": node.last_accessed_ms,
+            "last_seq": card.map(|card| card.last_seq),
+            "stability": card.map(|card| from_q32_32(card.stability_q)),
+            "difficulty": card.map(|card| from_q32_32(card.difficulty_q)),
+            "due": Value::Null,
+            "last_review_source": "CardState.last_seq",
+            "reviews": reviews,
+            "legacy": legacy,
+        }));
+    }
+    emit_ok(json!({
+        "ok": true,
+        "cards": cards,
+        "review_event_fields": ["card_id", "rating", "event_seq"],
+    }))
+}
+
+/// Fresh store: one memory with a caller-supplied `created_at`, one explicit
+/// review, then a second ingest that advances seq and does not review the
+/// first card. Retrievability is read after each step. No clock is consulted.
+fn probe_retrievability(args: &[String]) -> Result<ExitCode, String> {
+    let dir = dir_arg(args)?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let hooks = [
+        "VESTIGE_NOW_MS",
+        "VESTIGE_CLOCK",
+        "STRATA_NOW_MS",
+        "STRATA_TEST_CLOCK",
+    ];
+    let hook_set: Vec<&str> = hooks
+        .into_iter()
+        .filter(|name| std::env::var_os(name).is_some())
+        .collect();
+    let created_at_ms = 1_000_000_000_000_i64;
+    let mut store = StrataStore::open_with_policy(&dir, allow_all()).map_err(|e| e.to_string())?;
+    let id = store
+        .ingest(fixed_input("explicit review clock probe", created_at_ms))
+        .map_err(|e| e.to_string())?;
+    store.review(&id, 3).map_err(|e| e.to_string())?;
+    let after_review = store.retrievability(&id).map_err(|e| e.to_string())?;
+    let last_seq = store.card_state(&id).map(|card| card.last_seq);
+    let _other = store
+        .ingest(fixed_input("seq advance is not a review", created_at_ms))
+        .map_err(|e| e.to_string())?;
+    let after_seq = store.retrievability(&id).map_err(|e| e.to_string())?;
+    let created = store
+        .get_node(&id)
+        .map(|node| node.created_at_ms)
+        .ok_or_else(|| "probe node missing after review".to_string())?;
+    emit_ok(json!({
+        "ok": true,
+        "id": id,
+        "created_at_ms": created,
+        "clock_hooks_checked": hooks,
+        "clock_hooks_set": hook_set,
+        "review_payload_fields": ["card_id", "rating"],
+        "review_has_timestamp": false,
+        "last_seq": last_seq,
+        "retrievability_after_review": after_review,
+        "retrievability_after_seq_advance": after_seq,
     }))
 }
 

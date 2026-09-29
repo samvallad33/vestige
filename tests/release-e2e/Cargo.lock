@@ -1191,6 +1191,7 @@ dependencies = [
  "sha2 0.10.9",
  "strata",
  "strata-gate",
+ "strata-kernel",
  "strata-migrate",
  "strata-store",
  "tempfile",

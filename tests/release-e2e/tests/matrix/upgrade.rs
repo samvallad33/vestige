@@ -1299,6 +1299,118 @@ fn imported_inferred_links_are_legacy_inferred() {
     }
 }
 
+/// v3 `last_review`, `due`, `stability`, and `difficulty` must come back
+/// unchanged for every card. The official fixture keeps them on
+/// `fsrs_cards`. A reachable real store is included too; when that store
+/// has no `fsrs_cards` rows the node columns `last_accessed` and
+/// `next_review` are the schedule. 4.0's review frame has no timestamp, so
+/// the folded card's last review is `last_seq`.
+#[test]
+fn imported_review_schedule_preserved() {
+    let work = tempfile::tempdir().unwrap();
+    let mut sources = vec![official_v311_sample(work.path())];
+    match one_scheduled_real_store(work.path()) {
+        Ok(Some(store)) => sources.push(store),
+        Ok(None) => {}
+        Err(err) => panic!("FAIL: {err}"),
+    }
+    let mut reports = Vec::new();
+    let mut any_differ = false;
+    for source in &sources {
+        let before = sha256_file(&source.db);
+        let (columns, cards) = v3_schedule(&source.db);
+        if source.label == "v3.1.1-sample.sqlite" {
+            assert!(
+                !cards.is_empty(),
+                "official v3.1.1 fixture has no review schedule"
+            );
+        }
+        if cards.is_empty() {
+            reports.push(format!(
+                "{}: no review schedule to compare ({columns})",
+                source.label
+            ));
+            continue;
+        }
+        let _edges = import_log_edges(work.path(), source);
+        assert_eq!(
+            before,
+            sha256_file(&source.db),
+            "{} import modified the source",
+            source.label
+        );
+        let dump = run_driver(&[
+            "dump-schedule",
+            work.path()
+                .join(format!("log-{}", source.label))
+                .to_str()
+                .unwrap(),
+        ]);
+        if dump.get("ok") != Some(&Value::Bool(true)) {
+            panic!("FAIL: schedule read failed for {}: {dump}", source.label);
+        }
+        let (report, differ) = schedule_report(source, &columns, &cards, &dump);
+        any_differ |= differ;
+        reports.push(report);
+    }
+    if any_differ {
+        panic!(
+            "FAIL: imported review schedule was not preserved. \
+             4.0 gets last_review from CardState.last_seq \
+             (crates/strata-kernel/src/fsrs.rs:138), written as \
+             ReviewEvent.event_seq (crates/strata-kernel/src/event.rs:22, \
+             crates/strata-migrate/src/lib.rs:859). The review payload is \
+             card_id and rating only (crates/strata-store/src/op.rs:43). \
+             A v3 timestamp copied into node.legacy is not that seq.\n{}",
+            reports.join("\n")
+        );
+    }
+}
+
+/// Retrievability after an explicit review must follow the review time.
+/// `ReviewNode` has no timestamp, and there is no test clock, so elapsed
+/// days are `last_acked_seq - last_seq`.
+#[test]
+fn retrievability_uses_review_time() {
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("fresh");
+    let probe = run_driver(&["probe-retrievability", dir.to_str().unwrap()]);
+    if probe.get("ok") != Some(&Value::Bool(true)) {
+        panic!("FAIL: retrievability probe failed: {probe}");
+    }
+    let hooks = probe["clock_hooks_set"]
+        .as_array()
+        .map(|items| items.len())
+        .unwrap_or(0);
+    let clock = if hooks == 0 {
+        "no test clock hook (checked VESTIGE_NOW_MS, VESTIGE_CLOCK, STRATA_NOW_MS, STRATA_TEST_CLOCK; none is read)"
+    } else {
+        "a clock env var is set, and the fold still does not read it"
+    };
+    let r0 = probe["retrievability_after_review"].as_f64();
+    let r1 = probe["retrievability_after_seq_advance"].as_f64();
+    let review_time = probe["review_has_timestamp"].as_bool() == Some(true);
+    let stable_across_seq = match (r0, r1) {
+        (Some(a), Some(b)) => (a - b).abs() <= 1e-9,
+        _ => false,
+    };
+    if review_time && stable_across_seq {
+        return;
+    }
+    panic!(
+        "FAIL: retrievability is not computed from the review time. \
+         {clock}. created_at_ms={} is the node created_at. \
+         review payload fields={}. last_seq={}. \
+         R after review={r0:?}; R after a later ingest that did not review \
+         this card={r1:?}. Seq moved and the review time did not, so R \
+         moved with seq.\n{}",
+        probe["created_at_ms"],
+        probe["review_payload_fields"],
+        probe["last_seq"],
+        elapsed_day_paths()
+    );
+}
+
 #[test]
 fn upgrade_legacy_links_are_not_causal_edges() {
     let work = tempfile::tempdir().unwrap();
@@ -2317,6 +2429,209 @@ fn import_log_edges(work: &std::path::Path, source: &InferredSource) -> Vec<Valu
         panic!("edge read failed for {}: {dump}", source.label);
     }
     dump["edges"].as_array().cloned().unwrap_or_default()
+}
+
+struct V3Card {
+    id: String,
+    last_review: String,
+    due: String,
+    stability: String,
+    difficulty: String,
+}
+
+fn one_scheduled_real_store(work: &std::path::Path) -> Result<Option<InferredSource>, String> {
+    let sources = real_store_dbs(work)?;
+    Ok(sources
+        .into_iter()
+        .find(|source| !v3_schedule(&source.db).1.is_empty()))
+}
+
+fn v3_schedule(db: &std::path::Path) -> (String, Vec<V3Card>) {
+    let fsrs = sqlite_text(
+        db,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='fsrs_cards'",
+    );
+    if !fsrs.is_empty() {
+        let rows = sqlite_text(
+            db,
+            "SELECT memory_id, last_review, due_date, stability, difficulty \
+             FROM fsrs_cards ORDER BY memory_id",
+        );
+        if !rows.is_empty() {
+            return (
+                "fsrs_cards.last_review, fsrs_cards.due_date, fsrs_cards.stability, fsrs_cards.difficulty".into(),
+                rows.into_iter().map(card_from_row).collect(),
+            );
+        }
+    }
+    let names: std::collections::BTreeSet<String> =
+        sqlite_text(db, "PRAGMA table_info(knowledge_nodes)")
+            .into_iter()
+            .filter_map(|row| row.get(1).cloned())
+            .collect();
+    if !names.contains("stability") || !names.contains("difficulty") {
+        return (
+            "knowledge_nodes has no stability/difficulty".into(),
+            Vec::new(),
+        );
+    }
+    let last = if names.contains("last_review") {
+        "last_review"
+    } else if names.contains("last_accessed") {
+        "last_accessed"
+    } else {
+        "''"
+    };
+    let due = if names.contains("due_date") {
+        "due_date"
+    } else if names.contains("next_review") {
+        "next_review"
+    } else if names.contains("due") {
+        "due"
+    } else {
+        "''"
+    };
+    let rows = sqlite_text(
+        db,
+        &format!(
+            "SELECT id, {last}, {due}, stability, difficulty FROM knowledge_nodes ORDER BY id"
+        ),
+    );
+    (
+        format!("knowledge_nodes.{last}, knowledge_nodes.{due}, knowledge_nodes.stability, knowledge_nodes.difficulty"),
+        rows.into_iter().map(card_from_row).collect(),
+    )
+}
+
+fn card_from_row(row: Vec<String>) -> V3Card {
+    V3Card {
+        id: row.first().cloned().unwrap_or_default(),
+        last_review: row.get(1).cloned().unwrap_or_default(),
+        due: row.get(2).cloned().unwrap_or_default(),
+        stability: row.get(3).cloned().unwrap_or_default(),
+        difficulty: row.get(4).cloned().unwrap_or_default(),
+    }
+}
+
+fn schedule_report(
+    source: &InferredSource,
+    columns: &str,
+    cards: &[V3Card],
+    dump: &Value,
+) -> (String, bool) {
+    let imported = dump["cards"].as_array().cloned().unwrap_or_default();
+    let mut match_n = [0usize; 4];
+    let mut differ_n = [0usize; 4];
+    let mut example = String::new();
+    for card in cards {
+        let got = imported
+            .iter()
+            .find(|row| row["legacy_id"].as_str() == Some(card.id.as_str()));
+        let last_seq = got
+            .and_then(|row| row["last_seq"].as_u64())
+            .map(|n| n.to_string());
+        let stability = got.and_then(|row| json_number(&row["stability"]));
+        let difficulty = got.and_then(|row| json_number(&row["difficulty"]));
+        let due = got.and_then(|row| row["due"].as_str()).unwrap_or("");
+        let fields = [
+            (
+                "last_review",
+                text_eq(&card.last_review, last_seq.as_deref().unwrap_or("")),
+            ),
+            ("due", text_eq(&card.due, due)),
+            ("stability", number_eq(&card.stability, stability)),
+            ("difficulty", number_eq(&card.difficulty, difficulty)),
+        ];
+        for (index, (_, same)) in fields.iter().enumerate() {
+            if *same {
+                match_n[index] += 1;
+            } else {
+                differ_n[index] += 1;
+            }
+        }
+        if example.is_empty() && fields.iter().any(|(_, same)| !same) {
+            let legacy = got
+                .and_then(|row| row["legacy"].as_object())
+                .map(|map| {
+                    map.iter()
+                        .map(|(key, value)| format!("{key}={value}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            example = format!(
+                "  example {}: v3 last_review={} due={} stability={} difficulty={}; \
+                 4.0 last_seq={} stability={} difficulty={} due=null; legacy [{legacy}]",
+                card.id,
+                card.last_review,
+                card.due,
+                card.stability,
+                card.difficulty,
+                last_seq.unwrap_or_else(|| "absent".into()),
+                got.map(|row| row["stability"].to_string())
+                    .unwrap_or_else(|| "absent".into()),
+                got.map(|row| row["difficulty"].to_string())
+                    .unwrap_or_else(|| "absent".into()),
+            );
+        }
+    }
+    let names = ["last_review", "due", "stability", "difficulty"];
+    let counts = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| format!("{name} match={} differ={}", match_n[index], differ_n[index]))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let differ = differ_n.iter().any(|n| *n > 0);
+    (
+        format!(
+            "{}: cards={} via {columns}; {counts}\n{example}",
+            source.label,
+            cards.len()
+        ),
+        differ,
+    )
+}
+
+fn text_eq(source: &str, got: &str) -> bool {
+    source.is_empty() && got.is_empty() || source == got
+}
+
+fn number_eq(source: &str, got: Option<f64>) -> bool {
+    match (source.parse::<f64>(), got) {
+        (Ok(want), Some(have)) => (want - have).abs() <= 1e-4,
+        (Err(_), None) if source.is_empty() => true,
+        _ => false,
+    }
+}
+
+fn json_number(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_i64().map(|n| n as f64))
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+}
+
+fn elapsed_day_paths() -> String {
+    "\
+elapsed-day paths:
+  search: crates/vestige-core/src/search/temporal.rs:69 uses created_at (age_days = now - created_at). \
+Strata search_records is pending at crates/vestige-mcp/src/strata_memory.rs:279. \
+project_node copies created_at into last_accessed at strata_memory.rs:164 and calls \
+store.retrievability at strata_memory.rs:157.
+  forgetting: crates/vestige-core/src/storage/sqlite/lifecycle.rs:1030 uses last_accessed \
+(days_since = now - last_accessed). mark_reviewed sets last_review from last_accessed at \
+lifecycle.rs:24 and elapsed at lifecycle.rs:32. The strata fold uses \
+current_seq - last_seq at crates/strata-kernel/src/fsrs.rs:196, and store.retrievability \
+passes last_acked_seq at crates/strata-store/src/store.rs:761.
+  project preview floor: crates/vestige-core/src/projection.rs:127 compares stored \
+retention_strength to min_retention and does not read a review timestamp. \
+Strata projection_candidates is pending at crates/vestige-mcp/src/strata_memory.rs:792. \
+The retention project_node would supply is the seq retrievability (strata_memory.rs:175).
+  forgotten_lesson: crates/vestige-mcp/src/tools/forgotten_lesson.rs:126 uses \
+failure_at - node.last_accessed. On a strata node that last_accessed is created_at \
+(crates/vestige-mcp/src/strata_memory.rs:164)."
+        .into()
 }
 
 fn inferred_kind_failure(
