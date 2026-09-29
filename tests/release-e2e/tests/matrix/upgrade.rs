@@ -7,7 +7,9 @@
 //! path backups, imports, verifies, and switches.
 
 use std::fs;
-use std::process::{Command, Stdio};
+use std::io::Read;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -303,6 +305,237 @@ fn cli_first_launch_corrupt_v3_leaves_bytes_and_names_v311() {
              the v3 file byte-identical. The v3 refusal is not that message. PR #310 emits \
              the v3.1.1 failure only from vestige-mcp serve(). Output: {}",
             record.chars().take(900).collect::<String>()
+        ));
+    }
+}
+
+/// Both binaries start a first launch against one v3.1.1 store.
+///
+/// `vestige stats` and `vestige-mcp` are spawned before either is waited on.
+/// Exactly one import and one verify may run. Both must then open that same
+/// verified Strata log with no error, the v3 sha256 stays unchanged, and
+/// `.strata-upgrade-staging` is gone. Expected to fail on this branch.
+#[test]
+fn concurrent_first_launch_upgrades_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("v3");
+    copy_tree(&fixture("fresh-v38-ckpt"), &src);
+    let db = src.join("vestige.db");
+    let before = sha256_file(&db);
+    let home_cli = tempfile::tempdir().unwrap();
+    let home_mcp = tempfile::tempdir().unwrap();
+    // Spawn both before waiting on either.
+    let mut cli = spawn_first_launch("vestige", &src, home_cli.path(), &["stats"]);
+    let mut mcp = spawn_first_launch("vestige-mcp", &src, home_mcp.path(), &[]);
+    let started = Instant::now();
+    let limit = Duration::from_secs(60);
+    let mut cli_status = None;
+    let mut mcp_status = None;
+    loop {
+        if started.elapsed() > limit {
+            let _ = cli.child.kill();
+            let _ = mcp.child.kill();
+            let _ = cli.child.wait();
+            let _ = mcp.child.wait();
+            panic!(
+                "concurrent first launch hung past 60s. staging left: {}",
+                staging_left(&src)
+            );
+        }
+        if cli_status.is_none() {
+            cli_status = cli.child.try_wait().expect("poll vestige");
+        }
+        if mcp_status.is_none() {
+            mcp_status = mcp.child.try_wait().expect("poll vestige-mcp");
+        }
+        let ready = installed_strata_log(&src).is_some() && !staging_left(&src);
+        if cli_status.is_some() && mcp_status.is_none() && ready {
+            break;
+        }
+        if cli_status.is_some() && mcp_status.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        before,
+        sha256_file(&db),
+        "concurrent first launch modified the v3 file"
+    );
+    let cli_blob = cli.output();
+    let mcp_blob = mcp.output();
+    let record = format!(
+        "{cli_blob}{mcp_blob}{}",
+        fs::read_to_string(src.join("upgrade.log")).unwrap_or_default()
+    );
+    if v3_refusal(&record) {
+        missing(&format!(
+            "concurrent first launch failed: `vestige stats` and `vestige-mcp` were spawned \
+             together on a real v3.1.1 store and refused it. Exactly one import and one verify \
+             must run, both processes must open that same verified Strata log with no error, \
+             the v3 sha256 must stay unchanged, and no staging folder may remain. Output: {}",
+            record.chars().take(900).collect::<String>()
+        ));
+    }
+    let (imports, verifies) = import_verify_counts(&src);
+    if imports != 1 || verifies != 1 {
+        missing(&format!(
+            "concurrent first launch recorded {imports} imports and {verifies} verifies; \
+             exactly one of each must happen. upgrade.log: {}",
+            fs::read_to_string(src.join("upgrade.log"))
+                .unwrap_or_default()
+                .chars()
+                .take(700)
+                .collect::<String>()
+        ));
+    }
+    if staging_left(&src) {
+        panic!("concurrent first launch left a staging folder behind");
+    }
+    let Some(log_dir) = installed_strata_log(&src) else {
+        missing("concurrent first launch did not switch onto log/");
+    };
+    let dump = run_driver(&["dump-migration", log_dir.to_str().unwrap()]);
+    if dump.get("ok") != Some(&serde_json::Value::Bool(true)) {
+        missing(&format!(
+            "concurrent first launch log did not reopen verified: {dump}"
+        ));
+    }
+    match cli_status {
+        Some(status) if status.success() => {}
+        other => missing(&format!(
+            "concurrent first launch: `vestige stats` did not open the Strata store (exit {other:?}). \
+             Output: {}",
+            cli_blob.chars().take(600).collect::<String>()
+        )),
+    }
+    if mcp_status.is_some() {
+        missing(&format!(
+            "concurrent first launch: `vestige-mcp` exited {:?} instead of serving the same \
+             Strata log. Output: {}",
+            mcp_status.and_then(|s| s.code()),
+            mcp_blob.chars().take(600).collect::<String>()
+        ));
+    }
+    if record.to_lowercase().contains("upgrade failed") {
+        missing(&format!(
+            "concurrent first launch reported an upgrade error: {}",
+            record.chars().take(600).collect::<String>()
+        ));
+    }
+}
+
+/// A first launch killed mid-import leaves `.strata-upgrade-staging`. The next
+/// process must sweep it and finish the upgrade within 60s, not wait on the
+/// dead pid. The v3 sha256 stays unchanged. Expected to fail on this branch.
+#[test]
+fn stale_staging_after_sigkill_recovers() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("v3");
+    copy_tree(&fixture("fresh-v38-ckpt"), &src);
+    let db = src.join("vestige.db");
+    // Cloned rows widen the import so a real upgrade still has a segment in
+    // staging at the moment of the kill. The bytes under test are this file.
+    inflate_nodes(&db, 4000);
+    let before = sha256_file(&db);
+    let home = tempfile::tempdir().unwrap();
+    let mut first = spawn_first_launch("vestige-mcp", &src, home.path(), &[]);
+    let started = Instant::now();
+    let mut killed_mid_import = false;
+    while started.elapsed() < Duration::from_secs(180) {
+        if staging_has_segment(&src) && installed_strata_log(&src).is_none() {
+            // Child::kill is SIGKILL on Unix.
+            let _ = first.child.kill();
+            let _ = first.child.wait();
+            killed_mid_import = true;
+            break;
+        }
+        if first.child.try_wait().expect("poll first launch").is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        before,
+        sha256_file(&db),
+        "SIGKILL mid-import modified the v3 file"
+    );
+    if !killed_mid_import || !src.join(STAGING_DIR).exists() {
+        missing(&format!(
+            "stale-staging row: the first `vestige-mcp` launch did not leave \
+             `{STAGING_DIR}` behind, so it was not SIGKILLed mid-import. The next \
+             process must be able to sweep that folder and finish. Output: {}",
+            first.output().chars().take(800).collect::<String>()
+        ));
+    }
+
+    let home_again = tempfile::tempdir().unwrap();
+    let mut second = spawn_first_launch("vestige-mcp", &src, home_again.path(), &[]);
+    let started = Instant::now();
+    let limit = Duration::from_secs(60);
+    loop {
+        if started.elapsed() > limit {
+            let _ = second.child.kill();
+            let _ = second.child.wait();
+            panic!(
+                "stale staging relaunch hung past 60s waiting on the dead process. \
+                 staging left: {}",
+                staging_left(&src)
+            );
+        }
+        let exited = second.child.try_wait().expect("poll relaunch");
+        let ready = installed_strata_log(&src).is_some() && !staging_left(&src);
+        if ready && exited.is_none() {
+            break;
+        }
+        if let Some(status) = exited {
+            std::thread::sleep(Duration::from_millis(50));
+            assert_eq!(before, sha256_file(&db), "relaunch modified the v3 file");
+            missing(&format!(
+                "stale-staging relaunch exited {:?} before it swept staging and served the \
+                 verified Strata log. Output: {}",
+                status.code(),
+                second.output().chars().take(800).collect::<String>()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        before,
+        sha256_file(&db),
+        "relaunch after SIGKILL modified the v3 file"
+    );
+    assert!(
+        !staging_left(&src),
+        "relaunch left staging behind: {}",
+        src.join(STAGING_DIR).display()
+    );
+    let log_dir = installed_strata_log(&src).expect("log missing after ready");
+    let record = format!(
+        "{}{}",
+        second.output(),
+        fs::read_to_string(src.join("upgrade.log")).unwrap_or_default()
+    );
+    if v3_refusal(&record) || record.to_lowercase().contains("upgrade failed") {
+        missing(&format!(
+            "stale-staging relaunch opened with an error: {}",
+            record.chars().take(700).collect::<String>()
+        ));
+    }
+    let (imports, verifies) = import_verify_counts(&src);
+    if verifies < 1 {
+        missing(&format!(
+            "stale-staging relaunch did not record a verify after sweeping staging \
+             ({imports} imports, {verifies} verifies)"
+        ));
+    }
+    let dump = run_driver(&["dump-migration", log_dir.to_str().unwrap()]);
+    if dump.get("ok") != Some(&serde_json::Value::Bool(true)) {
+        missing(&format!(
+            "stale-staging relaunch log did not reopen: {dump}"
         ));
     }
 }
@@ -798,6 +1031,103 @@ fn node_count_if_log(dir: &std::path::Path) -> usize {
 
 fn v3_refusal(blob: &str) -> bool {
     blob.contains("cannot be opened by 4.0")
+}
+
+const STAGING_DIR: &str = ".strata-upgrade-staging";
+const VERIFY_DIR: &str = ".strata-upgrade-verify";
+const IMPORT_MARK: &str = "importing into";
+const VERIFY_MARK: &str = "verifying strata log";
+
+struct Tracked {
+    child: Child,
+    stdout: Arc<Mutex<String>>,
+    stderr: Arc<Mutex<String>>,
+}
+
+impl Tracked {
+    fn output(&self) -> String {
+        let stdout = self.stdout.lock().expect("stdout lock").clone();
+        let stderr = self.stderr.lock().expect("stderr lock").clone();
+        format!("{stdout}{stderr}")
+    }
+}
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+/// Spawn a first launch. Stdin is left open: dropping it is EOF, and
+/// `vestige-mcp` would treat that as the client disconnecting.
+fn spawn_first_launch(
+    bin: &str,
+    data_dir: &std::path::Path,
+    home: &std::path::Path,
+    extra_args: &[&str],
+) -> Tracked {
+    let mut command = Command::new(product_bin(bin));
+    command
+        .arg("--data-dir")
+        .arg(data_dir)
+        .args(extra_args)
+        .env("HOME", home)
+        .env("VESTIGE_DASHBOARD_ENABLED", "false")
+        .env("VESTIGE_HTTP_ENABLED", "0")
+        .env("VESTIGE_AUTOPILOT_ENABLED", "0")
+        .env("RUST_LOG", "error")
+        .env_remove("VESTIGE_DATA_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|e| panic!("HARNESS: failed to spawn {bin}: {e}"));
+    if let Some(stdin) = child.stdin.take() {
+        std::mem::forget(stdin);
+    }
+    let stdout = Arc::new(Mutex::new(String::new()));
+    let stderr = Arc::new(Mutex::new(String::new()));
+    let mut out_pipe = child.stdout.take().expect("stdout");
+    let out_buf = Arc::clone(&stdout);
+    std::thread::spawn(move || {
+        let mut tmp = String::new();
+        let _ = out_pipe.read_to_string(&mut tmp);
+        *out_buf.lock().expect("stdout lock") = tmp;
+    });
+    let mut err_pipe = child.stderr.take().expect("stderr");
+    let err_buf = Arc::clone(&stderr);
+    std::thread::spawn(move || {
+        let mut tmp = String::new();
+        let _ = err_pipe.read_to_string(&mut tmp);
+        *err_buf.lock().expect("stderr lock") = tmp;
+    });
+    Tracked {
+        child,
+        stdout,
+        stderr,
+    }
+}
+
+fn staging_left(data_dir: &std::path::Path) -> bool {
+    data_dir.join(STAGING_DIR).exists() || data_dir.join(VERIFY_DIR).exists()
+}
+
+fn staging_has_segment(data_dir: &std::path::Path) -> bool {
+    !seg_files(&data_dir.join(STAGING_DIR)).is_empty()
+}
+
+/// Counts in `upgrade.log` only. Each process also echoes the same line to
+/// stderr, so summing stderr would double-count one import.
+fn import_verify_counts(data_dir: &std::path::Path) -> (usize, usize) {
+    let log = fs::read_to_string(data_dir.join("upgrade.log")).unwrap_or_default();
+    (
+        log.matches(IMPORT_MARK).count(),
+        log.matches(VERIFY_MARK).count(),
+    )
 }
 
 fn cli_upgrade_record(data_dir: &std::path::Path, out: &CmdOut) -> String {
