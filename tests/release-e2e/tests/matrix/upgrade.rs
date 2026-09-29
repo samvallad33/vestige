@@ -314,7 +314,8 @@ fn cli_first_launch_corrupt_v3_leaves_bytes_and_names_v311() {
 /// `vestige stats` and `vestige-mcp` are spawned before either is waited on.
 /// Exactly one import and one verify may run. Both must then open that same
 /// verified Strata log with no error, the v3 sha256 stays unchanged, and
-/// `.strata-upgrade-staging` is gone. Expected to fail on this branch.
+/// the staging directory (`log` plus `strata_migrate::STAGING_SUFFIX`) is
+/// gone. Expected to fail until that path is on this branch.
 #[test]
 fn concurrent_first_launch_upgrades_once() {
     let dir = tempfile::tempdir().unwrap();
@@ -426,9 +427,11 @@ fn concurrent_first_launch_upgrades_once() {
     }
 }
 
-/// A first launch killed mid-import leaves `.strata-upgrade-staging`. The next
+/// A first launch killed mid-import leaves the staging directory
+/// (`<data-dir>/log` plus `strata_migrate::STAGING_SUFFIX`). The next
 /// process must sweep it and finish the upgrade within 60s, not wait on the
-/// dead pid. The v3 sha256 stays unchanged. Expected to fail on this branch.
+/// dead pid. The v3 sha256 stays unchanged. Expected to fail until that
+/// path is on this branch.
 #[test]
 fn stale_staging_after_sigkill_recovers() {
     let dir = tempfile::tempdir().unwrap();
@@ -462,11 +465,13 @@ fn stale_staging_after_sigkill_recovers() {
         sha256_file(&db),
         "SIGKILL mid-import modified the v3 file"
     );
-    if !killed_mid_import || !src.join(STAGING_DIR).exists() {
+    let staging = staging_directory(&src);
+    if !killed_mid_import || !staging.exists() {
         missing(&format!(
             "stale-staging row: the first `vestige-mcp` launch did not leave \
-             `{STAGING_DIR}` behind, so it was not SIGKILLed mid-import. The next \
+             {} behind, so it was not SIGKILLed mid-import. The next \
              process must be able to sweep that folder and finish. Output: {}",
+            staging.display(),
             first.output().chars().take(800).collect::<String>()
         ));
     }
@@ -511,7 +516,7 @@ fn stale_staging_after_sigkill_recovers() {
     assert!(
         !staging_left(&src),
         "relaunch left staging behind: {}",
-        src.join(STAGING_DIR).display()
+        staging_directory(&src).display()
     );
     let log_dir = installed_strata_log(&src).expect("log missing after ready");
     let record = format!(
@@ -1033,8 +1038,6 @@ fn v3_refusal(blob: &str) -> bool {
     blob.contains("cannot be opened by 4.0")
 }
 
-const STAGING_DIR: &str = ".strata-upgrade-staging";
-const VERIFY_DIR: &str = ".strata-upgrade-verify";
 const IMPORT_MARK: &str = "importing into";
 const VERIFY_MARK: &str = "verifying strata log";
 
@@ -1112,12 +1115,24 @@ fn spawn_first_launch(
     }
 }
 
+/// First-launch staging: `<data-dir>/log` plus [`strata_migrate::STAGING_SUFFIX`].
+/// `migrate-to-strata --to <dest>` uses the same suffix on `<dest>`.
+fn staging_directory(data_dir: &std::path::Path) -> std::path::PathBuf {
+    let dest = data_dir.join("log");
+    let mut name = dest
+        .file_name()
+        .unwrap_or(std::ffi::OsStr::new("log"))
+        .to_os_string();
+    name.push(strata_migrate::STAGING_SUFFIX);
+    dest.with_file_name(name)
+}
+
 fn staging_left(data_dir: &std::path::Path) -> bool {
-    data_dir.join(STAGING_DIR).exists() || data_dir.join(VERIFY_DIR).exists()
+    staging_directory(data_dir).exists()
 }
 
 fn staging_has_segment(data_dir: &std::path::Path) -> bool {
-    !seg_files(&data_dir.join(STAGING_DIR)).is_empty()
+    !seg_files(&staging_directory(data_dir)).is_empty()
 }
 
 /// Counts in `upgrade.log` only. Each process also echoes the same line to
