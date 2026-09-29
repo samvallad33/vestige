@@ -187,7 +187,10 @@ def run(binary, output):
             typed("suppress", {"id": node_id}, "pending_strata")
             typed("causal_walk", {"scope": "user"}, "pending_strata")
             typed("selftest", {}, "pending_strata")
-            typed("forgotten_lesson", {"failure_id": node_id}, "pending_strata")
+            lesson = tool("forgotten_lesson", {"failure_id": node_id})
+            assert lesson["tool"] == "forgotten_lesson" and lesson["failure_id"] == node_id
+            assert lesson["count"] == 0 and lesson["forgotten_lessons"] == []
+            typed("forgotten_lesson", {"failure_id": " "}, "failure_id is required")
             called = {row["tool"] for row in coverage}
             missing = [name for name in names if name not in called]
             assert not missing, missing
