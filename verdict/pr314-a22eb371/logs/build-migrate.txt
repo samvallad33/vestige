@@ -1,0 +1,14 @@
+START_FEATURE 2026-09-29T17:15:16+00:00
+   Compiling libsqlite3-sys v0.38.2
+   Compiling foldhash v0.2.0
+   Compiling hashbrown v0.17.1
+   Compiling hashlink v0.12.2
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling fallible-iterator v0.3.0
+   Compiling rusqlite v0.40.2
+   Compiling strata-migrate v0.1.0 (/tmp/pr314/crates/strata-migrate)
+   Compiling strata-verify v0.1.0 (/tmp/pr314/crates/strata-verify)
+   Compiling vestige-mcp v3.1.1 (/tmp/pr314/crates/vestige-mcp)
+    Finished `release` profile [optimized] target(s) in 1m 18s
+MIGRATE_EXIT:0
+END 2026-09-29T17:16:34+00:00
