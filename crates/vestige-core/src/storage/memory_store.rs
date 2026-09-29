@@ -723,6 +723,26 @@ pub trait LocalMemoryStore: Sync + 'static {
         ))
     }
 
+    /// Replay one scoped id page and fold one FSRS review per node that a
+    /// recorded edge touches. The default refuses; only a backend that can
+    /// land `ReviewNode` without a new op kind implements this.
+    fn dream_recorded_consolidation(
+        &self,
+        _scope: &str,
+        _after: Option<&str>,
+        _memory_count: usize,
+        _max_pairs: usize,
+        _min_strength_milli: i64,
+    ) -> StoreResult<Value> {
+        Err(StorageError::Init(
+            concat!(
+                stringify!(dream_recorded_consolidation),
+                " is not implemented by this backend"
+            )
+            .into(),
+        ))
+    }
+
     /// See the SQLite reference implementation for semantics.
     fn due_for_review_node_ids(&self, _limit: usize) -> StoreResult<Vec<String>> {
         Err(StorageError::Init(
@@ -2786,6 +2806,14 @@ pub trait MemoryStore: Send + Sync + 'static {
         claimed_role: Option<&str>,
         tool: &str,
     ) -> StoreResult<ActorMutationOutcome>;
+    fn dream_recorded_consolidation(
+        &self,
+        scope: &str,
+        after: Option<&str>,
+        memory_count: usize,
+        max_pairs: usize,
+        min_strength_milli: i64,
+    ) -> StoreResult<Value>;
     fn due_for_review_node_ids(&self, limit: usize) -> StoreResult<Vec<String>>;
     fn expire_stale_reconsolidation_plans(&self) -> StoreResult<Vec<String>>;
     fn export_portable_archive_to_path(&self, path: &Path) -> StoreResult<PortableArchive>;
@@ -3485,6 +3513,23 @@ where
         tool: &str,
     ) -> StoreResult<ActorMutationOutcome> {
         <T as MemoryStoreSend>::demote_memory_as_actor(self, id, claimed_role, tool)
+    }
+    fn dream_recorded_consolidation(
+        &self,
+        scope: &str,
+        after: Option<&str>,
+        memory_count: usize,
+        max_pairs: usize,
+        min_strength_milli: i64,
+    ) -> StoreResult<Value> {
+        <T as MemoryStoreSend>::dream_recorded_consolidation(
+            self,
+            scope,
+            after,
+            memory_count,
+            max_pairs,
+            min_strength_milli,
+        )
     }
     fn due_for_review_node_ids(&self, limit: usize) -> StoreResult<Vec<String>> {
         <T as MemoryStoreSend>::due_for_review_node_ids(self, limit)

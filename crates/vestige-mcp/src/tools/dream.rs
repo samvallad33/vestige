@@ -46,7 +46,6 @@ pub async fn execute(
     }
     let parsed: Args = serde_json::from_value(args.unwrap_or_else(|| serde_json::json!({})))
         .map_err(|e| e.to_string())?;
-    let dream_started_at = Utc::now();
     let requested = parsed.memory_count.unwrap_or(50);
     let max_pairs = parsed.max_pairs.unwrap_or(1225);
     if !(5..=500).contains(&requested)
@@ -65,6 +64,27 @@ pub async fn execute(
     if scope.trim().is_empty() {
         return Err("scope must not be empty".into());
     }
+    if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+        // Recorded edges and integer FSRS state only. `min_similarity`, when
+        // the caller set it, is a milli-unit floor on those edges — never a
+        // content, keyword, or embedding score.
+        let floor = strength_floor_milli(parsed.min_similarity);
+        let storage = Arc::clone(storage);
+        let after = parsed.after.clone();
+        return tokio::task::spawn_blocking(move || {
+            storage.dream_recorded_consolidation(
+                &scope,
+                after.as_deref(),
+                memory_count,
+                max_pairs,
+                floor,
+            )
+        })
+        .await
+        .map_err(|e| format!("dream task failed: {e}"))?
+        .map_err(|e| e.to_string());
+    }
+    let dream_started_at = Utc::now();
     let (mut all_nodes, has_more) = storage
         .maintenance_memory_page(memory_count, parsed.after.as_deref(), &scope)
         .map_err(|e| e.to_string())?;
@@ -259,6 +279,21 @@ pub async fn execute(
             "duration_ms": dream_result.duration_ms,
         }
     }))
+}
+
+/// Quantize an explicit similarity argument into a recorded-edge strength
+/// floor. Omitted means every recorded edge is eligible. This is not a
+/// matcher: nothing is scored against content, tags, or embeddings.
+fn strength_floor_milli(min_similarity: Option<f64>) -> i64 {
+    let Some(value) = min_similarity else {
+        return 0;
+    };
+    let milli = (value * 1000.0).round();
+    if !milli.is_finite() {
+        return 0;
+    }
+    let clamped = milli.clamp(0.0, 1000.0);
+    clamped as i64
 }
 
 #[cfg(all(test, feature = "legacy-sqlite"))]
@@ -768,5 +803,188 @@ mod tests {
                 assert_eq!(insight.applied_count, 0);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod strata_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    use vestige_core::IngestInput;
+
+    fn cognitive() -> Arc<Mutex<CognitiveEngine>> {
+        Arc::new(Mutex::new(CognitiveEngine::new()))
+    }
+
+    fn ingest(storage: &Storage, content: &str) -> String {
+        storage
+            .ingest(IngestInput {
+                content: content.into(),
+                ..IngestInput::default()
+            })
+            .unwrap()
+            .id
+    }
+
+    fn link(storage: &Storage, source: &str, target: &str, strength: f64) {
+        let now = Utc::now();
+        storage
+            .save_connection(&vestige_core::ConnectionRecord {
+                source_id: source.to_string(),
+                target_id: target.to_string(),
+                strength,
+                link_type: "derived_from".into(),
+                created_at: now,
+                last_activated: now,
+                activation_count: 1,
+            })
+            .unwrap();
+    }
+
+    fn strata_verify_bin() -> PathBuf {
+        if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
+            return PathBuf::from(dir).join("debug").join("strata-verify");
+        }
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/strata-verify")
+    }
+
+    fn assert_strata_verify(dir: &Path) {
+        let bin = strata_verify_bin();
+        assert!(
+            bin.is_file(),
+            "strata-verify binary missing at {}; build it before this test",
+            bin.display()
+        );
+        let output = Command::new(&bin)
+            .arg(dir)
+            .output()
+            .unwrap_or_else(|err| panic!("spawn strata-verify: {err}"));
+        assert!(
+            output.status.success(),
+            "strata-verify failed: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("OK"), "{stdout}");
+    }
+
+    #[tokio::test]
+    async fn strata_dream_completes_from_recorded_edges_and_fsrs_only() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        // Identical text must not become an edge. Only the recorded links move FSRS.
+        let linked = ingest(storage.as_ref(), "alpha quartz ledger entry");
+        let twin = ingest(storage.as_ref(), "alpha quartz ledger entry");
+        let mid = ingest(storage.as_ref(), "boron carbide kiln log");
+        let far = ingest(storage.as_ref(), "delta manifold pressure");
+        let tail = ingest(storage.as_ref(), "epsilon unused isolator");
+        link(storage.as_ref(), &linked, &mid, 1.0);
+        link(storage.as_ref(), &mid, &far, 1.0);
+
+        let edges_before = storage.get_all_connections().unwrap().len();
+        let before = storage.get_node(&linked).unwrap().unwrap().reps;
+        let twin_before = storage.get_node(&twin).unwrap().unwrap().reps;
+
+        let value = execute(&storage, &cognitive(), None).await.unwrap();
+        assert_eq!(value["status"], "completed");
+        assert_eq!(value["basis"], "recorded_edges+fsrs");
+        assert_eq!(value["connectionsPersisted"], 0);
+        assert_eq!(value["connectionsFound"], 0);
+        assert_eq!(value["insights"], serde_json::json!([]));
+        assert_eq!(value["edgesConsidered"], 2);
+        assert_eq!(value["memoriesReviewed"], 3);
+        assert_eq!(storage.get_all_connections().unwrap().len(), edges_before);
+
+        let reviewed: HashSet<String> = value["reviews"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap().to_string())
+            .collect();
+        assert!(reviewed.contains(&linked));
+        assert!(reviewed.contains(&mid));
+        assert!(reviewed.contains(&far));
+        assert!(!reviewed.contains(&twin), "identical text is not an edge");
+        assert!(
+            !reviewed.contains(&tail),
+            "an unlinked memory is not reviewed"
+        );
+        for row in value["reviews"].as_array().unwrap() {
+            assert_eq!(row["rating"], 4);
+            assert_eq!(row["reviewCount"], 2);
+        }
+
+        let after = storage.get_node(&linked).unwrap().unwrap().reps;
+        assert!(after > before);
+        assert_eq!(storage.get_node(&twin).unwrap().unwrap().reps, twin_before);
+        drop(storage);
+
+        assert_strata_verify(dir.path());
+        let reopened = crate::strata_memory::open(dir.path()).unwrap();
+        assert_eq!(reopened.get_node(&linked).unwrap().unwrap().reps, after);
+        let again = execute(&reopened, &cognitive(), None).await.unwrap();
+        assert_eq!(again["status"], "completed");
+        assert_eq!(reopened.get_node(&linked).unwrap().unwrap().reps, after + 1);
+        assert_eq!(reopened.get_node(&twin).unwrap().unwrap().reps, twin_before);
+    }
+
+    #[tokio::test]
+    async fn strata_dream_below_five_does_not_review() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let id = ingest(storage.as_ref(), "only one");
+        let value = execute(&storage, &cognitive(), None).await.unwrap();
+        assert_eq!(value["status"], "insufficient_memories");
+        assert_eq!(value["count"], 1);
+        assert!(value["message"].as_str().unwrap().contains('5'));
+        assert_eq!(storage.get_node(&id).unwrap().unwrap().reps, 1);
+    }
+
+    #[tokio::test]
+    async fn strata_dream_strength_floor_ignores_weak_edges() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let mut ids = Vec::new();
+        for i in 0..5 {
+            ids.push(ingest(storage.as_ref(), &format!("floor fixture {i}")));
+        }
+        link(storage.as_ref(), &ids[0], &ids[1], 0.4);
+        let before = storage.get_node(&ids[0]).unwrap().unwrap().reps;
+        let value = execute(
+            &storage,
+            &cognitive(),
+            Some(serde_json::json!({ "min_similarity": 0.5 })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["status"], "completed");
+        assert_eq!(value["edgesConsidered"], 0);
+        assert_eq!(value["memoriesReviewed"], 0);
+        assert_eq!(storage.get_node(&ids[0]).unwrap().unwrap().reps, before);
+    }
+
+    #[tokio::test]
+    async fn strata_dream_rejects_bad_bounds_and_cursors() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let err = execute(
+            &storage,
+            &cognitive(),
+            Some(serde_json::json!({ "memory_count": 1 })),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("invalid"), "{err}");
+        let err = execute(
+            &storage,
+            &cognitive(),
+            Some(serde_json::json!({ "after": "not-an-id" })),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("after must be a memory id"), "{err}");
     }
 }

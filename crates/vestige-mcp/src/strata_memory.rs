@@ -1175,6 +1175,146 @@ impl MemoryStoreSend for StrataMemory {
     fn update_node_content(&self, _id: &str, _new_content: &str) -> Result<(), StorageError> {
         Err(pending("update_node_content"))
     }
+
+    fn dream_recorded_consolidation(
+        &self,
+        scope: &str,
+        after: Option<&str>,
+        memory_count: usize,
+        max_pairs: usize,
+        min_strength_milli: i64,
+    ) -> Result<Value, StorageError> {
+        if after.is_some_and(|id| !is_memory_id(id)) {
+            return Err(StorageError::Init("after must be a memory id".into()));
+        }
+        let floor = min_strength_milli.max(0);
+        let now_ms = Utc::now().timestamp_millis();
+        let started = std::time::Instant::now();
+        let mut store = self.lock();
+        let mut ids: Vec<String> = store
+            .nodes()
+            .iter()
+            .filter(|record| {
+                record.scope == scope
+                    && record.is_live()
+                    && (record.valid_until_ms == VALID_FOREVER_MS
+                        || record.valid_until_ms > now_ms)
+                    && after.is_none_or(|cursor| record.id.as_str() > cursor)
+            })
+            .map(|record| record.id.clone())
+            .collect();
+        ids.sort();
+        let has_more = ids.len() > memory_count;
+        ids.truncate(memory_count);
+        let next_cursor = ids.last().cloned();
+        if ids.len() < 5 {
+            return Ok(json!({
+                "hasMore": has_more,
+                "nextCursor": next_cursor,
+                "scope": scope,
+                "maxPairs": max_pairs,
+                "status": "insufficient_memories",
+                "message": format!(
+                    "Need at least 5 memories to dream. Current count: {}",
+                    ids.len()
+                ),
+                "count": ids.len(),
+                "basis": "recorded_edges+fsrs"
+            }));
+        }
+
+        let page: HashSet<String> = ids.iter().cloned().collect();
+        let mut strength: BTreeMap<String, i64> = BTreeMap::new();
+        let mut edges_considered = 0i64;
+        for edge in store.edges() {
+            if edge.strength_milli < floor {
+                continue;
+            }
+            let source_in = page.contains(&edge.source_id);
+            let target_in = page.contains(&edge.target_id);
+            if !source_in && !target_in {
+                continue;
+            }
+            edges_considered += 1;
+            if source_in {
+                let slot = strength.entry(edge.source_id.clone()).or_insert(0);
+                *slot = slot.saturating_add(edge.strength_milli.max(0));
+            }
+            if target_in && edge.target_id != edge.source_id {
+                let slot = strength.entry(edge.target_id.clone()).or_insert(0);
+                *slot = slot.saturating_add(edge.strength_milli.max(0));
+            }
+        }
+
+        let mut planned: Vec<(String, u8)> = Vec::with_capacity(strength.len());
+        for (id, total) in &strength {
+            let (stability_q, lapse_count, review_count) = match store.card_state(id) {
+                Some(card) => (card.stability_q, card.lapse_count, card.review_count),
+                None => (0, 0, 0),
+            };
+            planned.push((
+                id.clone(),
+                consolidate_rating(*total, stability_q, lapse_count, review_count),
+            ));
+        }
+        planned.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut reviews = Vec::with_capacity(planned.len());
+        let mut strengthened = 0i64;
+        let mut compressed = 0i64;
+        for (id, rating) in &planned {
+            store.review(id, *rating).map_err(map_store)?;
+            let card = store.card_state(id);
+            let review_count = card.as_ref().map(|card| card.review_count).unwrap_or(0);
+            let lapse_count = card.as_ref().map(|card| card.lapse_count).unwrap_or(0);
+            if *rating >= 3 {
+                strengthened += 1;
+            } else if *rating == 1 {
+                compressed += 1;
+            }
+            reviews.push(json!({
+                "id": id,
+                "rating": rating,
+                "reviewCount": review_count,
+                "lapseCount": lapse_count
+            }));
+        }
+        if !planned.is_empty() {
+            store.seal_checkpoint().map_err(map_store)?;
+        }
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let unlinked = i64::try_from(ids.len()).unwrap_or(i64::MAX)
+            - i64::try_from(strength.len()).unwrap_or(0);
+        Ok(json!({
+            "hasMore": has_more,
+            "nextCursor": next_cursor,
+            "scope": scope,
+            "maxPairs": max_pairs,
+            "status": "completed",
+            "basis": "recorded_edges+fsrs",
+            "selection": "scoped_id_page",
+            "memoriesReplayed": ids.len(),
+            "edgesConsidered": edges_considered,
+            "edgeStrengthFloorMilli": floor,
+            "unlinked": unlinked,
+            "memoriesReviewed": planned.len(),
+            "reviews": reviews,
+            "connectionsFound": 0,
+            "connectionsPersisted": 0,
+            "insightsPersisted": 0,
+            "insights": [],
+            "dreamHistoryRecorded": false,
+            "stats": {
+                "new_connections_found": 0,
+                "connections_persisted": 0,
+                "insights_persisted": 0,
+                "memories_strengthened": strengthened,
+                "memories_compressed": compressed,
+                "insights_generated": 0,
+                "duration_ms": duration_ms
+            }
+        }))
+    }
 }
 
 impl StrataMemory {
@@ -1256,6 +1396,30 @@ impl StrataMemory {
         }
         Ok(out)
     }
+}
+
+/// One FSRS rating from recorded-edge strength and integer card state.
+///
+/// No content, tag, or embedding term enters this function. A recorded edge
+/// consolidates at least as Hard; lapses that outnumber successful reviews
+/// fold Again; a strong, stable, lapse-free card folds Easy.
+fn consolidate_rating(
+    strength_milli: i64,
+    stability_q: i64,
+    lapse_count: u32,
+    review_count: u32,
+) -> u8 {
+    if lapse_count > 0 && u64::from(lapse_count).saturating_mul(2) > u64::from(review_count) {
+        return 1;
+    }
+    const DAY_Q: i64 = 1 << 32;
+    if strength_milli >= 1000 && stability_q >= DAY_Q && lapse_count == 0 {
+        return 4;
+    }
+    if strength_milli >= 500 && stability_q > 0 {
+        return 3;
+    }
+    2
 }
 
 fn lookup_origin(store: &strata_store::StrataStore, receipt_or_node: &str) -> Option<(String, u64)> {

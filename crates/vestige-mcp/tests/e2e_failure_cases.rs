@@ -719,6 +719,94 @@ fn dream_below_the_minimum_reports_insufficient_memories() {
     server.shutdown();
 }
 
+/// `dream` on Strata consolidates recorded edges and FSRS state. Identical
+/// text with no edge is left untouched; a linked card's review count moves.
+#[test]
+fn dream_over_stdio_completes_from_recorded_edges_and_fsrs() {
+    let dir = data_dir();
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    let linked = server.ingest_keyword_only("alpha quartz ledger entry", &[]);
+    let twin = server.ingest_keyword_only("alpha quartz ledger entry", &[]);
+    let mid = server.ingest_keyword_only("boron carbide kiln log", &[]);
+    let far = server.ingest_keyword_only("delta manifold pressure", &[]);
+    let _tail = server.ingest_keyword_only("epsilon unused isolator", &[]);
+    server.shutdown();
+
+    {
+        let mut store = strata_store::StrataStore::open(dir.path()).expect("open strata log");
+        let now = chrono::Utc::now().timestamp_millis();
+        for (source, target) in [(&linked, &mid), (&mid, &far)] {
+            store
+                .save_connection(&strata_store::ConnectionRecord {
+                    source_id: source.clone(),
+                    target_id: target.clone(),
+                    strength_milli: 1000,
+                    link_type: "derived_from".into(),
+                    meta_sha: None,
+                    created_at_ms: now,
+                    activation_count: 1,
+                })
+                .expect("record edge");
+        }
+    }
+
+    let mut server = Server::spawn(dir.path());
+    server.handshake();
+    let before = server.call_tool_ok("memory", json!({ "action": "get", "id": linked }));
+    let twin_before = server.call_tool_ok("memory", json!({ "action": "get", "id": twin }));
+    let value = server.call_tool_ok("maintain", json!({ "action": "dream" }));
+    assert_eq!(value["status"], json!("completed"), "{value}");
+    assert_eq!(value["basis"], json!("recorded_edges+fsrs"), "{value}");
+    assert_eq!(value["connectionsPersisted"], json!(0), "{value}");
+    assert_eq!(value["memoriesReviewed"], json!(3), "{value}");
+    let reviewed: Vec<String> = value["reviews"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(reviewed.contains(&linked), "{value}");
+    assert!(reviewed.contains(&mid), "{value}");
+    assert!(reviewed.contains(&far), "{value}");
+    assert!(
+        !reviewed.contains(&twin),
+        "identical text is not an edge: {value}"
+    );
+    let after = server.call_tool_ok("memory", json!({ "action": "get", "id": linked }));
+    let twin_after = server.call_tool_ok("memory", json!({ "action": "get", "id": twin }));
+    assert!(
+        after["node"]["reps"].as_i64().unwrap() > before["node"]["reps"].as_i64().unwrap(),
+        "linked card must be reviewed: before {before} after {after}"
+    );
+    assert_eq!(
+        twin_after["node"]["reps"], twin_before["node"]["reps"],
+        "unlinked twin must keep its FSRS reps"
+    );
+    server.shutdown();
+
+    let bin = if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
+        std::path::PathBuf::from(target).join("debug/strata-verify")
+    } else {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/debug/strata-verify")
+    };
+    assert!(
+        bin.is_file(),
+        "build strata-verify before this test: {}",
+        bin.display()
+    );
+    let output = std::process::Command::new(&bin)
+        .arg(dir.path())
+        .output()
+        .expect("spawn strata-verify");
+    assert!(
+        output.status.success(),
+        "strata-verify failed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
 /// `gc` never deletes without an explicit opt-in: the default is a dry run,
 /// and even a wet run on a healthy store processes nothing and leaves every
 /// memory in place.
