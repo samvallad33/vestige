@@ -217,14 +217,21 @@ fn imported_graph_chain_over_stdio() {
     )
     .unwrap();
 
-    // `search` was removed; `recall` is the concrete lookup.
-    let found = server.tool("recall", json!({ "query": LEFT }));
-    let results = found["results"]
-        .as_array()
-        .unwrap_or_else(|| panic!("recall results: {found}"));
+    // Query recall is not a scan. The imported node is readable by exact handle.
+    let refused = server.tool("recall", json!({ "query": LEFT }));
     assert!(
-        results.iter().any(|row| row["id"] == json!(LEFT)),
-        "search missed the imported node: {found}"
+        refused["error"]
+            .as_str()
+            .is_some_and(|err| err.contains("similarity_disabled")),
+        "query recall must stay off the imported log: {refused}"
+    );
+    let found = server.tool("recall", json!({ "handle": LEFT }));
+    let nodes = found["nodes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("handle recall nodes: {found}"));
+    assert!(
+        nodes.iter().any(|row| row["id"] == json!(LEFT)),
+        "handle recall missed the imported node: {found}"
     );
     let got = server.tool("memory", json!({ "action": "get", "id": LEFT }));
     assert_eq!(got["found"], json!(true), "{got}");

@@ -894,6 +894,17 @@ impl MemoryStoreSend for StrataMemory {
     fn resolve_handle(&self, query: &str) -> HandleResolution {
         let query = query.trim();
         let store = self.lock();
+        // Imported nodes sit in the node map and have no gate origin. An exact
+        // id still resolves; prefix scans stay on origins.
+        if !query.is_empty() && store.get_node(query).as_ref().is_some_and(retrievable) {
+            return HandleResolution {
+                kind: HandleKind::Memory,
+                ids: vec![query.to_string()],
+                exact: true,
+                candidates: Vec::new(),
+                handle_required: None,
+            };
+        }
         // Origins keep retired ids. Handle recall only sees nodes with no successor.
         let ids: Vec<String> = store
             .origins()
