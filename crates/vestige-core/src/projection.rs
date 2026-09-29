@@ -12,6 +12,8 @@
 //! a retention floor, in the requested scope. A projection that carried every
 //! memory would be the "prompt sludge" the roadmap warns about.
 
+#[cfg_attr(not(feature = "legacy-sqlite"), allow(unused_imports))]
+use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +21,6 @@ use serde::{Deserialize, Serialize};
 use crate::Storage;
 #[cfg(feature = "legacy-sqlite")]
 use crate::storage::Result;
-use std::sync::Arc;
 
 /// Which client file shape to render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,10 +97,13 @@ pub const BEGIN_MARKER: &str = "<!-- vestige:projection:begin";
 pub const END_MARKER: &str = "<!-- vestige:projection:end -->";
 
 /// Node types projected regardless of tags, in output order.
+#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 const DURABLE_TYPES: [&str; 2] = ["decision", "pattern"];
 /// Tags that make a fact or note durable enough to project.
+#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 const DURABLE_TAGS: [&str; 3] = ["rule", "preference", "convention"];
 /// How many candidates to pull per query before filtering.
+#[allow(dead_code)] // callers sit in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
 const CANDIDATE_LIMIT: i32 = 500;
 /// Longest single projected line before it is cut.
 const MAX_LINE_CHARS: usize = 400;

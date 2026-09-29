@@ -164,11 +164,13 @@ pub const CURSOR_OVERLAP_SECS: i64 = 120;
 /// that long inside an MCP request is hostile to the caller, so anything
 /// longer than this aborts the run with a `RateLimited` error that names the
 /// wait, and the saved per-page checkpoints make the retry a cheap resume.
+#[allow(dead_code)] // used by the github test/legacy-sqlite profile; dead only in the no-embeddings build
 const MAX_RATE_LIMIT_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// One page fetch with rate-limit respect: a single bounded retry after the
 /// server's `Retry-After` when that wait is short enough to sleep through.
 /// Anything longer (or a second consecutive 429) aborts so the caller decides.
+#[allow(dead_code)] // same profile note as MAX_RATE_LIMIT_BACKOFF
 async fn fetch_page_with_retry<C: Connector>(
     connector: &C,
     since: Option<DateTime<Utc>>,
@@ -386,6 +388,7 @@ pub async fn run_sync<C: Connector>(
 /// Highest cursor value it is safe to persist: never past the oldest record
 /// that failed this run (minus one second so the next inclusive-`since` run
 /// re-fetches it).
+#[allow(dead_code)] // same profile note as MAX_RATE_LIMIT_BACKOFF
 fn clamp_cursor(
     max_seen: Option<DateTime<Utc>>,
     oldest_failure: Option<DateTime<Utc>>,

@@ -17,7 +17,10 @@
 mod attestation_store;
 #[cfg(feature = "legacy-sqlite")]
 mod blast;
-#[cfg(feature = "cloud-sync")]
+// cloud_crypto's only consumer is cloud_sync, which needs the legacy
+// engine; ungating it made the whole module dead code in the
+// no-embeddings profile.
+#[cfg(all(feature = "cloud-sync", feature = "legacy-sqlite"))]
 mod cloud_crypto;
 #[cfg(all(feature = "cloud-sync", feature = "legacy-sqlite"))]
 mod cloud_sync;

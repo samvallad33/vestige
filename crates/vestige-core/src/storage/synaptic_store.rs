@@ -8,7 +8,6 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{OptionalExtension, Transaction, params};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
@@ -36,7 +35,7 @@ pub const SYNAPTIC_CAPTURE_CLAIM_BOUNDARY: &str = "Evidence-backed temporal asso
 // `DurableSynapticPairReceipt`, and `SynapticIngestOutcome` are defined in
 // (and re-exported from) `crate::storage::types`.
 pub use crate::storage::types::{
-    DurableSynapticCapture, DurableSynapticPairReceipt, SynapticCapturePolicy,
+    DurableSynapticCapture, DurableSynapticPairReceipt,
     SynapticCaptureRequest, SynapticImportanceEvent, SynapticIngestOutcome, SynapticIngestRequest,
     SynapticSignalSnapshot,
 };
@@ -2167,6 +2166,7 @@ fn disposition_label(value: SynapticCaptureDisposition) -> &'static str {
 mod tests {
     use super::*;
     use crate::IngestInput;
+    use crate::storage::types::SynapticCapturePolicy;
     use crate::storage::SqliteMemoryStore as Storage;
     // Only the blocker fixture drives a transaction by hand; production
     // writers go through SqliteMemoryStore::begin_write_transaction.

@@ -498,6 +498,6 @@ mod tests {
         assert!(outcomes[0].suppressed);
         assert_eq!(outcomes[0].suppression_count, 1);
         assert!(!outcomes[1].suppressed);
-        assert!(outcomes[1].error.as_deref().unwrap().contains(&missing));
+        assert!(outcomes[1].error.as_deref().unwrap().contains(missing));
     }
 }

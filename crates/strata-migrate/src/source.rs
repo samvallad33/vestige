@@ -165,17 +165,6 @@ pub fn prepare_source(
         // the immutable read sees a consistent image. The originals are
         // only ever read (std::fs::copy opens for reading).
         std::fs::create_dir_all(scratch)?;
-        let copy =
-            |src: &Option<PathBuf>, suffix: &str| -> Result<Option<PathBuf>, MigrationError> {
-                Ok(match src {
-                    Some(p) if p.exists() => {
-                        let dst = scratch.join(format!("snapshot{suffix}"));
-                        std::fs::copy(p, &dst)?;
-                        Some(dst)
-                    }
-                    _ => None,
-                })
-            };
         // Sidecar names MUST line up with the snapshot db name or SQLite
         // will not associate the copied -wal with it (audit finding: the
         // first cut copied `snapshot-wal`, so the checkpoint saw nothing).

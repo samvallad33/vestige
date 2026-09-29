@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn test_create_memory() {
-        let mut storage = create_test_storage();
+        let storage = create_test_storage();
         let node = TestDataFactory::create_memory(&*storage, "test content");
 
         assert!(node.is_some());
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_create_decay_scenario() {
-        let mut storage = create_test_storage();
+        let storage = create_test_storage();
         let scenario = TestDataFactory::create_decay_scenario(&*storage);
 
         assert!(!scenario.node_ids.is_empty());
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn test_create_scheduling_scenario() {
-        let mut storage = create_test_storage();
+        let storage = create_test_storage();
         let scenario = TestDataFactory::create_scheduling_scenario(&*storage);
 
         assert!(!scenario.node_ids.is_empty());

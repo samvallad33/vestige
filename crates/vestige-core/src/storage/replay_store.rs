@@ -17,7 +17,6 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::sqlite::SqliteMemoryStore;

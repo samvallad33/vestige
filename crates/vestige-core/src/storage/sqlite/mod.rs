@@ -429,6 +429,7 @@ pub struct EmbeddingProfileMigrationNodeCheckpoint {
     pub updated_at: DateTime<Utc>,
 }
 
+#[allow(dead_code)] // read by the embedding_profile migration path; PR 10 sweeps it
 type EmbeddingProfileMigrationRow = (
     String,
     String,
@@ -2457,7 +2458,13 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
         SqliteMemoryStore::merge_candidates(self, policy, limit, tag_filter)
     }
     fn merge_undo(&self, op_id: &str) -> Result<MergeOperation> {
-        SqliteMemoryStore::merge_undo(self, op_id)
+        // The inherent implementation was embedding-gated and is gone with
+        // the vector wipe; the delegation below resolved to THIS trait method
+        // (infinite recursion, clippy-found). Fail loud instead.
+        let _ = op_id;
+        Err(StorageError::Init(
+            "merge_undo requires the embedding runtime, which 4.0 removed; supersede/correct via admission instead".to_string(),
+        ))
     }
     fn node_is_in_scope(&self, id: &str, scope: &str) -> Result<bool> {
         SqliteMemoryStore::node_is_in_scope(self, id, scope)
@@ -2630,8 +2637,13 @@ impl crate::storage::memory_store::MemoryStoreSend for SqliteMemoryStore {
     fn run_rac1_cascade_sweep(&self) -> Result<(usize, usize)> {
         SqliteMemoryStore::run_rac1_cascade_sweep(self)
     }
-    fn smart_ingest_excluding_in_scope_with_secret_policy_and_labile(&self, input: IngestInput, scope: &str, excluded_node_ids: &[String], policy: SecretPolicy, labile: &[LabileCandidate]) -> Result<SmartIngestResult> {
-        SqliteMemoryStore::smart_ingest_excluding_in_scope_with_secret_policy_and_labile(self, input, scope, excluded_node_ids, policy, labile)
+    fn smart_ingest_excluding_in_scope_with_secret_policy_and_labile(&self, _input: IngestInput, scope: &str, excluded_node_ids: &[String], policy: SecretPolicy, labile: &[LabileCandidate]) -> Result<SmartIngestResult> {
+        // Same embedding-gated wipe as merge_undo: the delegation recursed
+        // into itself. The plain (non-excluding) smart_ingest path is live.
+        let _ = (scope, excluded_node_ids, policy, labile);
+        Err(StorageError::Init(
+            "smart_ingest with exclusions required the embedding runtime, which 4.0 removed; use smart_ingest".to_string(),
+        ))
     }
     fn snooze_intention(&self, id: &str, until: DateTime<Utc>) -> Result<bool> {
         SqliteMemoryStore::snooze_intention(self, id, until)

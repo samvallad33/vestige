@@ -335,8 +335,8 @@ impl SqliteMemoryStore {
             if depth >= max_depth {
                 continue;
             }
-            let mut targets = stmt.query_map(params![node], |row| row.get::<_, String>(0))?;
-            while let Some(row) = targets.next() {
+            let targets = stmt.query_map(params![node], |row| row.get::<_, String>(0))?;
+            for row in targets {
                 let target = row?;
                 if !visited.contains(&target) {
                     queue.push_back((target, depth + 1));

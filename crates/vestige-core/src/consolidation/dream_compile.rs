@@ -534,7 +534,7 @@ mod tests {
         let mut ids = Vec::new();
         for i in 0..10 {
             ids.push(ingest(
-                &*storage,
+                &storage,
                 &format!("Dream compile test memory number {i} about the deploy pipeline"),
                 &["dream-compile-test"],
             ));
@@ -633,19 +633,19 @@ mod tests {
         let (storage, _dir) = test_storage();
         // Shared substantive vocabulary + a ("never", "always") polarity flip.
         let _a = ingest(
-            &*storage,
+            &storage,
             "Deployments to production always use the blue pipeline on friday",
             &["deploys"],
         );
         let _b = ingest(
-            &*storage,
+            &storage,
             "Deployments to production never use the blue pipeline on friday",
             &["deploys"],
         );
         // Corpus padding so the 5-memory floor passes.
         for i in 0..4 {
             ingest(
-                &*storage,
+                &storage,
                 &format!("Deployment pipeline note {i} about staging checks"),
                 &["deploys"],
             );
@@ -780,18 +780,18 @@ mod tests {
     fn max_prs_budget_is_respected() {
         let (storage, _dir) = test_storage();
         let _a = ingest(
-            &*storage,
+            &storage,
             "Deployments to production always use the blue pipeline on friday",
             &["deploys"],
         );
         let _b = ingest(
-            &*storage,
+            &storage,
             "Deployments to production never use the blue pipeline on friday",
             &["deploys"],
         );
         for i in 0..4 {
             ingest(
-                &*storage,
+                &storage,
                 &format!("Deployment pipeline note {i} about staging checks"),
                 &["deploys"],
             );
@@ -851,7 +851,7 @@ mod tests {
             .unwrap();
         for i in 0..10 {
             ingest(
-                &*storage,
+                &storage,
                 &format!("Current dream note {i} about the deploy pipeline"),
                 &["current"],
             );

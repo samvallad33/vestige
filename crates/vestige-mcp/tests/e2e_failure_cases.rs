@@ -161,6 +161,10 @@ fn redmine_issue_body(id: u64, subject: &str, detail: bool) -> String {
 
 /// Credential-shaped content is refused outright, the error never echoes the
 /// secret bytes, and nothing reaches the store.
+/// Re-lands with the strata runtime boot: the scenario boots the server on
+/// an EMPTY data dir, and a guard-armed 4.0 binary creates no SQLite store
+/// (audit blocker 1). The refusal itself is still unit-tested in core.
+#[ignore = "needs a live store: 4.0 creates no SQLite; re-lands with build/wire-strata"]
 #[test]
 fn credential_shaped_content_is_refused_without_echoing_the_secret() {
     let dir = data_dir();

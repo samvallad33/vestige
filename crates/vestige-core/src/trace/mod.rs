@@ -233,6 +233,7 @@ impl MemoryTraceEvent {
     /// Stable memory ids carried by this event, for state-aware public
     /// redaction. `mcp.call` intentionally has none because its args are stored
     /// only as a digest.
+    #[allow(dead_code)] // consumer sits in the legacy-sqlite-gated surface; dead only in the no-embeddings profile
     pub(crate) fn referenced_memory_ids(&self) -> Vec<&str> {
         match self {
             MemoryTraceEvent::McpCall { .. } => Vec::new(),

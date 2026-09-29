@@ -698,7 +698,7 @@ mod tests {
 // error messages naming the exact failing call, and the comment retry-then-skip
 // path. A tiny hand-rolled HTTP server on 127.0.0.1 keeps this dependency-free.
 
-#[cfg(all(test, feature = "connectors"))]
+#[cfg(all(test, feature = "connectors", feature = "legacy-sqlite"))]
 mod http_tests {
     use super::*;
     use crate::storage::SqliteMemoryStore;
