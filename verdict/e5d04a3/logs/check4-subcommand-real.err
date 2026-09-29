@@ -1,0 +1,7 @@
+error: unrecognized subcommand 'strata-verify'
+
+  tip: some similar subcommands exist: 'stats', 'serve'
+
+Usage: vestige [OPTIONS] <COMMAND>
+
+For more information, try '--help'.

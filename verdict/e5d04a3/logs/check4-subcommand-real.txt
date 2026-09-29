@@ -1,0 +1,9 @@
+==== subcommand real exit 2026-09-29T13:09:49+00:00 ====
+SUBCOMMAND_REAL_EXIT:2
+error: unrecognized subcommand 'strata-verify'
+
+  tip: some similar subcommands exist: 'stats', 'serve'
+
+Usage: vestige [OPTIONS] <COMMAND>
+
+For more information, try '--help'.

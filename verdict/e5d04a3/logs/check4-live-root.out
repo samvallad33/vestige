@@ -1,0 +1,23 @@
+{
+  "log_tail_ok": false,
+  "checkpoint_chain_ok": false,
+  "state_root_matches": false,
+  "gate_verdicts_rederived": true,
+  "gaps": [],
+  "duration_ms": 0,
+  "failures": [
+    "kernel.log: read failed: No such file or directory (os error 2)",
+    "kernel.log: malformed: missing framing magic",
+    "kernel.checkpoints: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input",
+    "kernel.head: read failed: No such file or directory (os error 2)",
+    "gate.log: read failed: No such file or directory (os error 2)",
+    "gate.log: malformed: missing framing magic",
+    "gate.policy: read failed: No such file or directory (os error 2)",
+    "gate.policy: malformed: borsh Policy: Unexpected length of input",
+    "gate.head: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)"
+  ]
+}
+FAILED
+LIVE_ROOT_EXIT:1

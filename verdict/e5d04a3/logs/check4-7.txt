@@ -1,0 +1,27 @@
+CHECK4-7 START 2026-09-29T12:56:55+00:00
+==== full migrate timing ====
+full_migrate_ms:3 exit:EXIT:127
+EXIT:127
+==== SIGKILL mid-import ====
+==== rerun into killed dest ====
+rerun exit:EXIT:127
+EXIT:127
+-- stderr --
+env: ‘--data-dir’: No such file or directory
+KILL_SOURCE_UNCHANGED
+==== non-empty --to ====
+foreign exit:EXIT:127
+env: ‘--data-dir’: No such file or directory
+second-store exit:EXIT:127
+env: ‘--data-dir’: No such file or directory
+same-source exit:EXIT:127
+EXIT:127
+env: ‘--data-dir’: No such file or directory
+kill_dest kinds {'CHECKPOINT': 1, 'EDGE': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 10, 'PARAMS': 1, 'SUPERSESSION': 1, 'TOMBSTONE': 2} frames 18 nodes 10
+==== CHECK7 harden ====
+harden_exit:0
+missing_key_unsealed refused=False truncated=None regen=True err=None
+missing_store_meta refused=False truncated=None regen=None err=None
+sealed_segment_head_deleted refused=True truncated=False regen=None err=log error: strata halt: sealed segment damaged: payload blake3 mismatch (segment 0, offset 10651, last_acked_seq 0) — damage at/below the acked watermark, refusing to truncate history
+unsealed_segment_head_deleted refused=True truncated=True regen=None err=verification failed: store.meta exists but the log carries no checkpoint
+STRATA_VERIFY_MISSING /tmp/verdict-target/release/strata-verify

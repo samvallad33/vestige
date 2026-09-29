@@ -1,0 +1,169 @@
+===== cargo tree rusqlite =====
+rusqlite v0.40.2
+├── rusqlite feature "bundled"
+│   ├── strata-migrate v0.1.0 (/workspace/crates/strata-migrate)
+│   │   └── strata-migrate feature "default"
+│   │       ├── strata-verify v0.1.0 (/workspace/crates/strata-verify)
+│   │       │   └── strata-verify feature "default"
+│   │       │       └── vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp)
+│   │       │           ├── vestige-mcp feature "cloud-sync"
+│   │       │           │   └── vestige-mcp feature "default" (command-line)
+│   │       │           ├── vestige-mcp feature "codebase-git"
+│   │       │           │   └── vestige-mcp feature "default" (command-line)
+│   │       │           ├── vestige-mcp feature "connectors"
+│   │       │           │   └── vestige-mcp feature "default" (command-line)
+│   │       │           ├── vestige-mcp feature "default" (command-line)
+│   │       │           └── vestige-mcp feature "legacy-sqlite"
+│   │       │               └── vestige-mcp feature "default" (command-line)
+│   │       └── vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp) (*)
+│   └── vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp) (*)
+│   └── vestige-core feature "bundled-sqlite"
+│       └── vestige-mcp feature "legacy-sqlite" (*)
+├── rusqlite feature "cache"
+│   └── rusqlite feature "default"
+│       ├── strata-migrate v0.1.0 (/workspace/crates/strata-migrate) (*)
+│       ├── vestige-core v3.1.1 (/workspace/crates/vestige-core)
+│       │   ├── strata-migrate v0.1.0 (/workspace/crates/strata-migrate) (*)
+│       │   └── vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp) (*)
+│       │   ├── vestige-core feature "bundled-sqlite" (*)
+│       │   ├── vestige-core feature "cloud-sync"
+│       │   │   └── vestige-mcp feature "cloud-sync" (*)
+│       │   ├── vestige-core feature "codebase-git"
+│       │   │   └── vestige-mcp feature "codebase-git" (*)
+│       │   ├── vestige-core feature "connectors"
+│       │   │   └── vestige-mcp feature "connectors" (*)
+│       │   ├── vestige-core feature "legacy-sqlite"
+│       │   │   ├── vestige-mcp feature "legacy-sqlite" (*)
+│       │   │   └── vestige-core feature "bundled-sqlite" (*)
+│       │   ├── vestige-core feature "reqwest"
+│       │   │   └── vestige-core feature "cloud-sync" (*)
+│       │   └── vestige-core feature "rusqlite"
+│       │       └── vestige-core feature "bundled-sqlite" (*)
+│       └── vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp) (*)
+├── rusqlite feature "chrono"
+│   └── vestige-core v3.1.1 (/workspace/crates/vestige-core) (*)
+├── rusqlite feature "default" (*)
+├── rusqlite feature "ffi-sqlite-wasm-rs"
+│   └── rusqlite feature "default" (*)
+├── rusqlite feature "hashlink"
+│   └── rusqlite feature "cache" (*)
+├── rusqlite feature "modern_sqlite"
+│   └── rusqlite feature "bundled" (*)
+└── rusqlite feature "serde_json"
+    └── vestige-core v3.1.1 (/workspace/crates/vestige-core) (*)
+===== cargo tree libsqlite3-sys =====
+    Blocking waiting for file lock on package cache
+libsqlite3-sys v0.38.2
+├── libsqlite3-sys feature "bundled"
+│   └── rusqlite feature "bundled"
+│       ├── strata-migrate v0.1.0 (/workspace/crates/strata-migrate)
+│       │   └── strata-migrate feature "default"
+│       │       ├── strata-verify v0.1.0 (/workspace/crates/strata-verify)
+│       │       │   └── strata-verify feature "default"
+│       │       │       └── vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp)
+│       │       │           ├── vestige-mcp feature "cloud-sync"
+│       │       │           │   └── vestige-mcp feature "default" (command-line)
+│       │       │           ├── vestige-mcp feature "codebase-git"
+│       │       │           │   └── vestige-mcp feature "default" (command-line)
+│       │       │           ├── vestige-mcp feature "connectors"
+│       │       │           │   └── vestige-mcp feature "default" (command-line)
+│       │       │           ├── vestige-mcp feature "default" (command-line)
+│       │       │           └── vestige-mcp feature "legacy-sqlite"
+│       │       │               └── vestige-mcp feature "default" (command-line)
+│       │       └── vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp) (*)
+│       └── vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp) (*)
+│       └── vestige-core feature "bundled-sqlite"
+│           └── vestige-mcp feature "legacy-sqlite" (*)
+├── libsqlite3-sys feature "bundled_bindings"
+│   ├── rusqlite feature "modern_sqlite"
+│   │   └── rusqlite feature "bundled" (*)
+│   └── libsqlite3-sys feature "bundled" (*)
+├── libsqlite3-sys feature "cc"
+│   └── libsqlite3-sys feature "bundled" (*)
+├── libsqlite3-sys feature "default"
+│   └── rusqlite v0.40.2
+│       ├── rusqlite feature "bundled" (*)
+│       ├── rusqlite feature "cache"
+│       │   └── rusqlite feature "default"
+│       │       ├── strata-migrate v0.1.0 (/workspace/crates/strata-migrate) (*)
+│       │       ├── vestige-core v3.1.1 (/workspace/crates/vestige-core)
+│       │       │   ├── strata-migrate v0.1.0 (/workspace/crates/strata-migrate) (*)
+│       │       │   └── vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp) (*)
+│       │       │   ├── vestige-core feature "bundled-sqlite" (*)
+│       │       │   ├── vestige-core feature "cloud-sync"
+│       │       │   │   └── vestige-mcp feature "cloud-sync" (*)
+│       │       │   ├── vestige-core feature "codebase-git"
+│       │       │   │   └── vestige-mcp feature "codebase-git" (*)
+│       │       │   ├── vestige-core feature "connectors"
+│       │       │   │   └── vestige-mcp feature "connectors" (*)
+│       │       │   ├── vestige-core feature "legacy-sqlite"
+│       │       │   │   ├── vestige-mcp feature "legacy-sqlite" (*)
+│       │       │   │   └── vestige-core feature "bundled-sqlite" (*)
+│       │       │   ├── vestige-core feature "reqwest"
+│       │       │   │   └── vestige-core feature "cloud-sync" (*)
+│       │       │   └── vestige-core feature "rusqlite"
+│       │       │       └── vestige-core feature "bundled-sqlite" (*)
+│       │       └── vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp) (*)
+│       ├── rusqlite feature "chrono"
+│       │   └── vestige-core v3.1.1 (/workspace/crates/vestige-core) (*)
+│       ├── rusqlite feature "default" (*)
+│       ├── rusqlite feature "ffi-sqlite-wasm-rs"
+│       │   └── rusqlite feature "default" (*)
+│       ├── rusqlite feature "hashlink"
+│       │   └── rusqlite feature "cache" (*)
+│       ├── rusqlite feature "modern_sqlite" (*)
+│       └── rusqlite feature "serde_json"
+│           └── vestige-core v3.1.1 (/workspace/crates/vestige-core) (*)
+├── libsqlite3-sys feature "min_sqlite_version_3_34_1"
+│   └── libsqlite3-sys feature "default" (*)
+├── libsqlite3-sys feature "pkg-config"
+│   └── libsqlite3-sys feature "min_sqlite_version_3_34_1" (*)
+└── libsqlite3-sys feature "vcpkg"
+    └── libsqlite3-sys feature "min_sqlite_version_3_34_1" (*)
+===== default features =====
+vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp)
+├── vestige-core v3.1.1 (/workspace/crates/vestige-core)
+├── anyhow feature "default"
+├── axum feature "http1"
+├── axum feature "json"
+├── axum feature "query"
+├── axum feature "tokio"
+├── axum feature "ws"
+├── futures-util feature "default"
+├── tokio feature "default"
+├── tokio feature "full"
+├── tokio feature "io-std"
+├── tracing feature "default"
+├── serde_json feature "default"
+├── serde feature "default"
+├── serde feature "derive"
+├── thiserror feature "default"
+├── tower feature "default"
+├── tower feature "limit"
+├── chrono feature "default"
+├── chrono feature "serde"
+├── clap feature "default"
+├── clap feature "derive"
+├── colored feature "default"
+├── directories feature "default"
+├── ed25519-dalek feature "default"
+├── subtle feature "default"
+├── sha2 feature "default"
+├── include_dir feature "default"
+├── mime_guess feature "default"
+├── open feature "default"
+├── rusqlite feature "bundled"
+├── rusqlite feature "default"
+├── strata-migrate feature "default"
+├── tempfile feature "default"
+├── uuid feature "default"
+├── uuid feature "serde"
+├── uuid feature "v4"
+├── strata-verify feature "default"
+├── tower-http feature "cors"
+├── tower-http feature "default"
+├── tower-http feature "set-header"
+├── tracing-subscriber feature "default"
+├── tracing-subscriber feature "env-filter"
+├── tracing-subscriber feature "json"
+└── unicode-normalization feature "default"

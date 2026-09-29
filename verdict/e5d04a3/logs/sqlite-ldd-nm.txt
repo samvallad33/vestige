@@ -1,0 +1,55 @@
+===== ldd vestige =====
+	linux-vdso.so.1 (0x00007f8ff80c6000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f8ff8089000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f8ff6917000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f8ff6600000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007f8ff80c8000)
+===== ldd vestige-mcp =====
+	linux-vdso.so.1 (0x00007f7530a76000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f7530a39000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f7530950000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f752ec00000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007f7530a78000)
+===== nm sqlite vestige =====
+000000000056afe4 r reltable.sqlite3Savepoint
+0000000000566e68 r reltable.sqlite3_step
+0000000000566e78 r reltable.sqlite3_step.1907
+0000000000567178 r reltable.sqlite3VdbeExec
+0000000000567230 r reltable.sqlite3VdbeExec.1908
+0000000000867070 t <anyhow::Error>::construct::<rusqlite::error::Error>
+0000000000cf5600 t <[usize]>::sort_by::<<vestige_core::storage::sqlite::SqliteMemoryStore>::merge_candidates::{closure#9}>
+0000000000cf5490 t <[vestige_core::memory::SearchResult]>::sort_by::<<vestige_core::storage::sqlite::SqliteMemoryStore>::concrete_search_filtered::{closure#5}>
+0000000000cf54f0 t <[vestige_core::storage::synaptic_store::CandidateRow]>::sort_by::<<vestige_core::storage::sqlite::SqliteMemoryStore>::capture_synaptic_event::{closure#6}>
+0000000000cf5560 t <[vestige_core::storage::types::NeverComposedCandidate]>::sort_by::<<vestige_core::storage::sqlite::SqliteMemoryStore>::get_never_composed_candidates_in_scope::{closure#2}>
+0000000000cf55b0 t <[vestige_core::advanced::merge_supersede::MergeCandidate]>::sort_by::<<vestige_core::storage::sqlite::SqliteMemoryStore>::merge_candidates::{closure#13}>
+0000000000f0f950 t <rusqlite::statement::Statement>::bind_parameter::<rusqlite::types::value::Value>
+0000000000f0fa60 t <rusqlite::statement::Statement>::bind_parameter::<&&dyn rusqlite::types::to_sql::ToSql>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<f64, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::endorsement_aggregate::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::node_ids_where<&[&dyn rusqlite::types::to_sql::ToSql]>::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::list_receipts::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::list_receipts_for_run::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::get_trace::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::maintain_gc_batch::{closure#2}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::maintenance_memory_page::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::dream_compile_candidates::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::maintain_lifecycle_batch::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::maintain_lifecycle_batch::{closure#5}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::due_for_review_node_ids::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::gc_below_retention::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::get_memories_by_state::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::compute_act_r_activations::{closure#3}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::auto_promote_frequent_access::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::edge_reachability::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::invalidate_replay_evidence_for_memory_in_transaction::{closure#0}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::process_synaptic_ingest::{closure#3}>
+0000000000f0fd30 t <rusqlite::statement::Statement>::query_map::<alloc::string::String, &[&dyn rusqlite::types::to_sql::ToSql], vestige_core::storage::synaptic_store::reconcile_forward_tag_tx::{closure#2}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<vestige_core::neuroscience::synaptic_tagging::SynapticTag, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::load_active_synaptic_tags::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<vestige_core::trace::review::MemoryPr, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::row_to_memory_pr>
+0000000000f0fed0 t <rusqlite::statement::Statement>::query_map::<vestige_core::memory::node::KnowledgeNode, rusqlite::params::ParamsFromIter<alloc::vec::Vec<rusqlite::types::value::Value>>, <vestige_core::storage::sqlite::SqliteMemoryStore>::row_to_node>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<vestige_core::memory::node::KnowledgeNode, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::keyword_search::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<vestige_core::memory::node::KnowledgeNode, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::get_nodes_by_type_and_tag::{closure#1}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<vestige_core::memory::node::KnowledgeNode, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::row_to_node>
+0000000000f101b0 t <rusqlite::statement::Statement>::query_map::<vestige_core::storage::synaptic_store::CandidateRow, &[&dyn rusqlite::types::to_sql::ToSql], <vestige_core::storage::sqlite::SqliteMemoryStore>::capture_synaptic_event::{closure#5}>
+0000000000f0fc00 t <rusqlite::statement::Statement>::query_map::<vestige_core::storage::edges::TypedEdge, &[&dyn rusqlite::types::to_sql::ToSql], vestige_core::storage::edges::row_to_typed_edge>
+===== nm count =====
+2364

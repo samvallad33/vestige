@@ -1,0 +1,3 @@
+2026-09-29T12:56:15.372982Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.374076Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)

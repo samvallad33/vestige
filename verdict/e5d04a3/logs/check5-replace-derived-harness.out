@@ -1,0 +1,3 @@
+replaced strata.key with derive_key("vestige strata migrate log seed v1", source_blake3)
+OPEN_FAIL strata halt: sealed segment trailer: trailer signature invalid (segment 0, offset 23112, last_acked_seq 18) — damage at/below the acked watermark, refusing to truncate history
+HARNESS_replace-derived:1

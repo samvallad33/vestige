@@ -1,0 +1,50 @@
+CHECK2 2026-09-29T12:56:15+00:00
+==== backfill-v31 hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/backfill-v31/vestige.db (schema version 31) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.224824Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.226495Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/backfill-v31/vestige.db (schema version 31) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/backfill-v31/vestige.db (schema version 31) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== demo-v38 hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/demo-v38/vestige.db (schema version 38) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.250227Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.251476Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/demo-v38/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/demo-v38/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== fresh-v38-ckpt hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.276689Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.278123Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== fresh-v38-wal hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.312728Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.314252Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== probe-v38-ckpt hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.343041Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.344271Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== probe-v38-wal hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.372982Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.374076Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== vnc-v36 hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/vnc-v36/vestige.db (schema version 36) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.400165Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.401313Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/vnc-v36/vestige.db (schema version 36) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/vnc-v36/vestige.db (schema version 36) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)

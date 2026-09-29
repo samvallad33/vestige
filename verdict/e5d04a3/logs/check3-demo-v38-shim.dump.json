@@ -1,0 +1,585 @@
+{
+  "decode_errors": [],
+  "dir": "/tmp/verdict-run/work/check3/dump-demo-v38-shim/log",
+  "edges": [],
+  "files_after_open": [
+    {
+      "bytes": 6092,
+      "mode": 420,
+      "path": "00000000-0dcbfe4c72c804460ed71a772351054e.seg",
+      "sha256": "cdfd1db57497ab09521e791244143cf7e5052911fcf31ef88fea78dfff0b0fe3"
+    },
+    {
+      "bytes": 58,
+      "mode": 420,
+      "path": "00000001-a88e2c0a6cb8fcb94685678d2da105f4.seg",
+      "sha256": "5029a21e46c064674b5b4af6ba12baf9c9e6e70f96b794ea23390a320d08f904"
+    },
+    {
+      "bytes": 8,
+      "mode": 420,
+      "path": "head.state",
+      "sha256": "6cc16abd70eefb90dc0ba0d14fb088630873b2c6ad943f7442356735984c35a3"
+    },
+    {
+      "bytes": 32,
+      "mode": 384,
+      "path": "strata.key",
+      "sha256": "0709012048c0c7cd0436729c1cccd2f9a406d359ad5bab676cdf627de1b674c6"
+    }
+  ],
+  "files_before_open": [
+    {
+      "bytes": 6092,
+      "mode": 420,
+      "path": "00000000-0dcbfe4c72c804460ed71a772351054e.seg",
+      "sha256": "cdfd1db57497ab09521e791244143cf7e5052911fcf31ef88fea78dfff0b0fe3"
+    },
+    {
+      "bytes": 58,
+      "mode": 420,
+      "path": "00000001-a88e2c0a6cb8fcb94685678d2da105f4.seg",
+      "sha256": "5029a21e46c064674b5b4af6ba12baf9c9e6e70f96b794ea23390a320d08f904"
+    },
+    {
+      "bytes": 8,
+      "mode": 420,
+      "path": "head.state",
+      "sha256": "6cc16abd70eefb90dc0ba0d14fb088630873b2c6ad943f7442356735984c35a3"
+    },
+    {
+      "bytes": 32,
+      "mode": 384,
+      "path": "strata.key",
+      "sha256": "0709012048c0c7cd0436729c1cccd2f9a406d359ad5bab676cdf627de1b674c6"
+    }
+  ],
+  "frames_total": 8,
+  "kind_counts": {
+    "CHECKPOINT": 1,
+    "GENESIS": 1,
+    "MIGRATION_RECEIPT": 1,
+    "NODE": 2,
+    "PARAMS": 1,
+    "TOMBSTONE": 2
+  },
+  "nodes": [
+    {
+      "content": "Deploys use blue-green; never deploy on Fridays.",
+      "created_ms": 1790623896611,
+      "kernel_id": 1,
+      "last_accessed_ms": 1790623896611,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.759150625"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0.39249999999999996"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-28T19:31:36.611859908+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          ""
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "1"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          "nomic-ai/nomic-embed-text-v1.5"
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          ""
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ],
+        [
+          "knowledge_nodes.author_actor_did",
+          "did:key:z6MkoqM9tgomjhoe9B34AKoZ3tpLtSi2hXVuYBHDE16WGe3t"
+        ]
+      ],
+      "legacy_id": "25b183d0-a242-498c-99ca-87243dfebdd2",
+      "node_type": "fact",
+      "tags": [
+        "demo"
+      ],
+      "updated_ms": 1790623896611
+    },
+    {
+      "content": "Customer Acme needs SSO before renewal.",
+      "created_ms": 1790623897668,
+      "kernel_id": 2,
+      "last_accessed_ms": 1790623897668,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.759150625"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0.39249999999999996"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-28T19:31:37.668492787+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          ""
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "1"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          "nomic-ai/nomic-embed-text-v1.5"
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          ""
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ],
+        [
+          "knowledge_nodes.author_actor_did",
+          "did:key:z6MkoqM9tgomjhoe9B34AKoZ3tpLtSi2hXVuYBHDE16WGe3t"
+        ]
+      ],
+      "legacy_id": "8d075290-4263-431d-9a13-e2510e3b18ac",
+      "node_type": "fact",
+      "tags": [
+        "demo"
+      ],
+      "updated_ms": 1790623897668
+    }
+  ],
+  "params": {
+    "envelope_head": "",
+    "params_id": "v4-migrate/1",
+    "schema_version": 38,
+    "source_blake3": "38561d2df8f78b85371d3e15daaa9908b77ba7fa29036465b481d3606826cd8a"
+  },
+  "receipt": {
+    "checksum_ok": true,
+    "counts": [
+      [
+        "composition_events",
+        0
+      ],
+      [
+        "composition_members",
+        0
+      ],
+      [
+        "composition_outcomes",
+        0
+      ],
+      [
+        "consolidation_history",
+        1
+      ],
+      [
+        "deletion_tombstones",
+        1
+      ],
+      [
+        "dream_history",
+        0
+      ],
+      [
+        "fsrs_cards",
+        0
+      ],
+      [
+        "fsrs_config",
+        1
+      ],
+      [
+        "insights",
+        0
+      ],
+      [
+        "intentions",
+        0
+      ],
+      [
+        "knowledge_nodes",
+        2
+      ],
+      [
+        "memory_access_log",
+        0
+      ],
+      [
+        "memory_connections",
+        0
+      ],
+      [
+        "memory_states",
+        0
+      ],
+      [
+        "node_embeddings",
+        2
+      ],
+      [
+        "retention_snapshots",
+        1
+      ],
+      [
+        "sessions",
+        0
+      ],
+      [
+        "state_transitions",
+        0
+      ],
+      [
+        "sync_tombstones",
+        1
+      ]
+    ],
+    "dropped_columns": [
+      "node_embeddings.embedding (H1: vector values are dropped and counted)",
+      "schema_version.applied_at",
+      "receipt_envelopes.receipt_id/projection_json/issued_at/stored_at"
+    ],
+    "dropped_vectors": 2,
+    "envelope_head": "",
+    "old_derived_seed": "e5480875360ec318a4ef30a95d0cb39eca8fa1f27423b2f0aaa308526105f16a",
+    "schema_version": 38,
+    "signature_ok": true,
+    "signing_key_id": "vestige-migrate-receipt-v1",
+    "source_blake3_after": "38561d2df8f78b85371d3e15daaa9908b77ba7fa29036465b481d3606826cd8a",
+    "source_blake3_before": "38561d2df8f78b85371d3e15daaa9908b77ba7fa29036465b481d3606826cd8a",
+    "verifying_key": "544ac226d76bb24f6f05f8544d48dbd0fbc5ef98ea857d77b579dde4c4a82ac8"
+  },
+  "receipt_key": {
+    "bytes": 32,
+    "exists": true,
+    "inside_to": false,
+    "mode": 384,
+    "path": "/tmp/verdict-run/work/check3/dump-demo-v38-shim/receipt-signing.key"
+  },
+  "strata_key": {
+    "equals_old_source_hash_derivation": false,
+    "exists": true,
+    "hex": "9a6984b21763e0ca457a089f931a2331981c0c9bcf90afce94ae34ba0e853eeb",
+    "mode": 384,
+    "path": "/tmp/verdict-run/work/check3/dump-demo-v38-shim/log/strata.key",
+    "sha256": "0709012048c0c7cd0436729c1cccd2f9a406d359ad5bab676cdf627de1b674c6"
+  },
+  "supersessions": [],
+  "tombstones": [
+    {
+      "deleted_ms": 1790623940824,
+      "node_type": null,
+      "origin_table": "sync_tombstones",
+      "reason": null,
+      "row_id": "opaque:62e6f414cbac90edaec5b1d680df7d7688dc73057ba093143ae017217c84d955",
+      "source_table": "knowledge_nodes",
+      "tags": []
+    },
+    {
+      "deleted_ms": 1790623939085,
+      "node_type": "fact",
+      "origin_table": "deletion_tombstones",
+      "reason": null,
+      "row_id": "opaque:62e6f414cbac90edaec5b1d680df7d7688dc73057ba093143ae017217c84d955",
+      "source_table": null,
+      "tags": []
+    }
+  ]
+}

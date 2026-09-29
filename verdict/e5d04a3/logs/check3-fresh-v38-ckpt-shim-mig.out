@@ -1,0 +1,9 @@
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check3/src-fresh-v38-ckpt-shim (keep this file; it is your pre-migration record)
+Source BLAKE3: 11f4b890801379895df3748374e6f0455d2ebb366bb7fd89e2273590100001de
+Destination: /tmp/verdict-run/work/check3/to-fresh-v38-ckpt-shim
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: 8b3840e3e0c088fba76362b3f0fd04202efdbf26ae0cc7321831afcedfae9542 (signature verified: true)
+Replay verification: true
+EXIT:0

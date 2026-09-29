@@ -1,0 +1,6 @@
+attempt1 killed=True code=0
+dest_listing:
+        58 /tmp/verdict-run/work/check6/to-kill/00000001-bf03f87e003678f08a6bea9e9bf11530.seg
+     23216 /tmp/verdict-run/work/check6/to-kill/00000000-b5acebf6b7a6df0df8b81311bd4b666a.seg
+        32 /tmp/verdict-run/work/check6/to-kill/strata.key
+         8 /tmp/verdict-run/work/check6/to-kill/head.state

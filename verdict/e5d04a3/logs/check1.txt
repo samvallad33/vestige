@@ -1,0 +1,19 @@
+CHECK1 2026-09-29T12:56:15+00:00
+cli run1 exit EXIT:1
+--- stderr ---
+Error: Initialization error: SQLite store creation is disabled: SQLite is a read-only migration source in 4.0. hint: the Strata backend owns new stores (run: vestige migrate-to-strata --from <path> for existing v3 stores)
+cli run2 exit EXIT:1
+Error: Initialization error: SQLite store creation is disabled: SQLite is a read-only migration source in 4.0. hint: the Strata backend owns new stores (run: vestige migrate-to-strata --from <path> for existing v3 stores)
+mcp run1 exit EXIT:1
+2026-09-29T12:56:15.190572Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.190729Z ERROR Failed to initialize storage: Initialization error: SQLite store creation is disabled: SQLite is a read-only migration source in 4.0. hint: the Strata backend owns new stores (run: vestige migrate-to-strata --from <path> for existing v3 stores)
+mcp run2 exit EXIT:1
+2026-09-29T12:56:15.196337Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.196390Z ERROR Failed to initialize storage: Initialization error: SQLite store creation is disabled: SQLite is a read-only migration source in 4.0. hint: the Strata backend owns new stores (run: vestige migrate-to-strata --from <path> for existing v3 stores)
+FILES under check1:
+/tmp/verdict-run/work/check1
+/tmp/verdict-run/work/check1/home-mcp
+/tmp/verdict-run/work/check1/empty-cli
+/tmp/verdict-run/work/check1/empty-mcp
+/tmp/verdict-run/work/check1/home-cli
+SQLITE-LIKE:

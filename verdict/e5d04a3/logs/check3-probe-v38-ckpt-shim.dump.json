@@ -1,0 +1,581 @@
+{
+  "decode_errors": [],
+  "dir": "/tmp/verdict-run/work/check3/dump-probe-v38-ckpt-shim/log",
+  "edges": [],
+  "files_after_open": [
+    {
+      "bytes": 5964,
+      "mode": 420,
+      "path": "00000000-b148daf7371d1272458671c77cb429d1.seg",
+      "sha256": "b147ba0affd06a9586a10d3cbe5836e9a0d1b53f033bd27d669389804a78968d"
+    },
+    {
+      "bytes": 58,
+      "mode": 420,
+      "path": "00000001-f91d17e8081f627faf2fceee31925d4d.seg",
+      "sha256": "a8a09c8129e40d8964fb2703afc21e98b796c06509c8386cacf48922fa99343d"
+    },
+    {
+      "bytes": 8,
+      "mode": 420,
+      "path": "head.state",
+      "sha256": "6cc16abd70eefb90dc0ba0d14fb088630873b2c6ad943f7442356735984c35a3"
+    },
+    {
+      "bytes": 32,
+      "mode": 384,
+      "path": "strata.key",
+      "sha256": "b31809b7900cdc5b0c379d024dad55e6a5f2d1c85ccda49027e679c3ffcca65b"
+    }
+  ],
+  "files_before_open": [
+    {
+      "bytes": 5964,
+      "mode": 420,
+      "path": "00000000-b148daf7371d1272458671c77cb429d1.seg",
+      "sha256": "b147ba0affd06a9586a10d3cbe5836e9a0d1b53f033bd27d669389804a78968d"
+    },
+    {
+      "bytes": 58,
+      "mode": 420,
+      "path": "00000001-f91d17e8081f627faf2fceee31925d4d.seg",
+      "sha256": "a8a09c8129e40d8964fb2703afc21e98b796c06509c8386cacf48922fa99343d"
+    },
+    {
+      "bytes": 8,
+      "mode": 420,
+      "path": "head.state",
+      "sha256": "6cc16abd70eefb90dc0ba0d14fb088630873b2c6ad943f7442356735984c35a3"
+    },
+    {
+      "bytes": 32,
+      "mode": 384,
+      "path": "strata.key",
+      "sha256": "b31809b7900cdc5b0c379d024dad55e6a5f2d1c85ccda49027e679c3ffcca65b"
+    }
+  ],
+  "frames_total": 8,
+  "kind_counts": {
+    "CHECKPOINT": 1,
+    "GENESIS": 1,
+    "MIGRATION_RECEIPT": 1,
+    "NODE": 2,
+    "PARAMS": 1,
+    "TOMBSTONE": 2
+  },
+  "nodes": [
+    {
+      "content": "B: API timeout is 15s",
+      "created_ms": 1790623827713,
+      "kernel_id": 1,
+      "last_accessed_ms": 1790623827713,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.759150625"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0.39249999999999996"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-28T19:30:27.713390247+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          ""
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "0"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ],
+        [
+          "knowledge_nodes.author_actor_did",
+          "did:key:z6MknV7LPEY3muMbBDvXrxZfdfW1ieac74PqqonJjAvVV6jn"
+        ]
+      ],
+      "legacy_id": "9e024edb-d97d-40ab-b6e0-cedea299852f",
+      "node_type": "fact",
+      "tags": [
+        "demo"
+      ],
+      "updated_ms": 1790623827713
+    },
+    {
+      "content": "C: customer X needs SSO",
+      "created_ms": 1790623827717,
+      "kernel_id": 2,
+      "last_accessed_ms": 1790623827717,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.759150625"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0.39249999999999996"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-28T19:30:27.717261210+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          ""
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "0"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ],
+        [
+          "knowledge_nodes.author_actor_did",
+          "did:key:z6MknV7LPEY3muMbBDvXrxZfdfW1ieac74PqqonJjAvVV6jn"
+        ]
+      ],
+      "legacy_id": "02e56e8a-842e-40a5-a850-c5a3301b2f1f",
+      "node_type": "fact",
+      "tags": [
+        "demo"
+      ],
+      "updated_ms": 1790623827717
+    }
+  ],
+  "params": {
+    "envelope_head": "",
+    "params_id": "v4-migrate/1",
+    "schema_version": 38,
+    "source_blake3": "ccb1f6e437c195b64db6d9a08d3e51669512f8309e08c8b00961413dcadb5cda"
+  },
+  "receipt": {
+    "checksum_ok": true,
+    "counts": [
+      [
+        "knowledge_nodes",
+        2
+      ],
+      [
+        "fsrs_cards",
+        0
+      ],
+      [
+        "memory_states",
+        0
+      ],
+      [
+        "memory_connections",
+        0
+      ],
+      [
+        "memory_access_log",
+        0
+      ],
+      [
+        "state_transitions",
+        0
+      ],
+      [
+        "intentions",
+        0
+      ],
+      [
+        "insights",
+        0
+      ],
+      [
+        "sessions",
+        0
+      ],
+      [
+        "fsrs_config",
+        1
+      ],
+      [
+        "consolidation_history",
+        1
+      ],
+      [
+        "dream_history",
+        0
+      ],
+      [
+        "retention_snapshots",
+        1
+      ],
+      [
+        "sync_tombstones",
+        1
+      ],
+      [
+        "deletion_tombstones",
+        1
+      ],
+      [
+        "composition_events",
+        0
+      ],
+      [
+        "composition_members",
+        0
+      ],
+      [
+        "composition_outcomes",
+        0
+      ]
+    ],
+    "dropped_columns": [
+      "node_embeddings.embedding (H1: vector values are dropped and counted)",
+      "schema_version.applied_at",
+      "receipt_envelopes.receipt_id/projection_json/issued_at/stored_at"
+    ],
+    "dropped_vectors": 0,
+    "envelope_head": "",
+    "old_derived_seed": "412f12c87ed9c1e7b3ac1da01a5dd889d4821bab41098f6502c29eb08179caa8",
+    "schema_version": 38,
+    "signature_ok": true,
+    "signing_key_id": "vestige-migrate-receipt-v1",
+    "source_blake3_after": "ccb1f6e437c195b64db6d9a08d3e51669512f8309e08c8b00961413dcadb5cda",
+    "source_blake3_before": "ccb1f6e437c195b64db6d9a08d3e51669512f8309e08c8b00961413dcadb5cda",
+    "verifying_key": "544ac226d76bb24f6f05f8544d48dbd0fbc5ef98ea857d77b579dde4c4a82ac8"
+  },
+  "receipt_key": {
+    "bytes": 32,
+    "exists": true,
+    "inside_to": false,
+    "mode": 384,
+    "path": "/tmp/verdict-run/work/check3/dump-probe-v38-ckpt-shim/receipt-signing.key"
+  },
+  "strata_key": {
+    "equals_old_source_hash_derivation": false,
+    "exists": true,
+    "hex": "16b02de9544e839b41fae510ff95cb8b664ee741484cf48b171649097e73ad72",
+    "mode": 384,
+    "path": "/tmp/verdict-run/work/check3/dump-probe-v38-ckpt-shim/log/strata.key",
+    "sha256": "b31809b7900cdc5b0c379d024dad55e6a5f2d1c85ccda49027e679c3ffcca65b"
+  },
+  "supersessions": [],
+  "tombstones": [
+    {
+      "deleted_ms": 1790623827723,
+      "node_type": null,
+      "origin_table": "sync_tombstones",
+      "reason": null,
+      "row_id": "opaque:785e8c5c7614e49bd2d3ed9428e681f0cb4a23e026e069d8f8dac39166215aa9",
+      "source_table": "knowledge_nodes",
+      "tags": []
+    },
+    {
+      "deleted_ms": 1790623827722,
+      "node_type": "fact",
+      "origin_table": "deletion_tombstones",
+      "reason": null,
+      "row_id": "opaque:785e8c5c7614e49bd2d3ed9428e681f0cb4a23e026e069d8f8dac39166215aa9",
+      "source_table": null,
+      "tags": []
+    }
+  ]
+}

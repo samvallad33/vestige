@@ -1,0 +1,201 @@
+CHECK SCRIPT START 2026-09-29T12:56:15+00:00
+CHECK1 2026-09-29T12:56:15+00:00
+cli run1 exit EXIT:1
+cli run2 exit EXIT:1
+mcp run1 exit EXIT:1
+mcp run2 exit EXIT:1
+FILES under check1:
+/tmp/verdict-run/work/check1
+/tmp/verdict-run/work/check1/home-mcp
+/tmp/verdict-run/work/check1/empty-cli
+/tmp/verdict-run/work/check1/empty-mcp
+/tmp/verdict-run/work/check1/home-cli
+SQLITE-LIKE:
+CHECK2 2026-09-29T12:56:15+00:00
+==== backfill-v31 hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/backfill-v31/vestige.db (schema version 31) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.224824Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.226495Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/backfill-v31/vestige.db (schema version 31) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/backfill-v31/vestige.db (schema version 31) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== demo-v38 hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/demo-v38/vestige.db (schema version 38) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.250227Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.251476Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/demo-v38/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/demo-v38/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== fresh-v38-ckpt hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.276689Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.278123Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== fresh-v38-wal hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.312728Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.314252Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/fresh-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== probe-v38-ckpt hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.343041Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.344271Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-ckpt/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== probe-v38-wal hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.372982Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.374076Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/probe-v38-wal/vestige.db (schema version 38) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+==== vnc-v36 hash:UNCHANGED cli:EXIT:1 mcp:EXIT:1
+-- cli stderr --
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/vnc-v36/vestige.db (schema version 36) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)
+-- mcp stderr --
+2026-09-29T12:56:15.400165Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T12:56:15.401313Z ERROR v3 SQLite store at /tmp/verdict-run/work/check2/vnc-v36/vestige.db (schema version 36) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-run/work/check2/vnc-v36/vestige.db (schema version 36) cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+CHECK3 2026-09-29T12:56:15+00:00
+==== backfill-v31 hash:UNCHANGED exit:EXIT:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check3/src-backfill-v31 (keep this file; it is your pre-migration record)
+Source BLAKE3: 02e4a9d62217f29883d3a682fe37a0b64ea8fcac8fdefa1465df878c853c976e
+Destination: /tmp/verdict-run/work/check3/to-backfill-v31
+Migrated: 7 nodes, 1 edges, 0 fsrs events
+Dropped vectors: 7 (vector values were never read)
+Skipped tables (counted, not mapped): embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, schema_version
+MIGRATION_RECEIPT: 5346d881b2acc3c02b9861ac7ef4db16594b8d785b8f653137890b84df39a958 (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+skipped 8
+compare_exit:0
+==== demo-v38 hash:UNCHANGED exit:EXIT:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check3/src-demo-v38 (keep this file; it is your pre-migration record)
+Source BLAKE3: f36592605fa813ea8349cac2cf02acb40430253ecd3daf0f254dc86258b92982
+Destination: /tmp/verdict-run/work/check3/to-demo-v38
+Migrated: 2 nodes, 0 edges, 0 fsrs events
+Dropped vectors: 2 (vector values were never read)
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, agent_runs, agent_traces, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, retention_snapshots, schema_version, synaptic_tags, vector_journal
+MIGRATION_RECEIPT: e59a6dfe3d201b42ee807d259368fa07454a7d2fd0fdc0df51f7921a6f3aefec (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+skipped 16
+compare_exit:0
+==== demo-v38-shim hash:UNCHANGED exit:EXIT:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check3/src-demo-v38-shim (keep this file; it is your pre-migration record)
+Source BLAKE3: 38561d2df8f78b85371d3e15daaa9908b77ba7fa29036465b481d3606826cd8a
+Destination: /tmp/verdict-run/work/check3/to-demo-v38-shim
+Migrated: 2 nodes, 0 edges, 0 fsrs events
+Dropped vectors: 2 (vector values were never read)
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, agent_runs, agent_traces, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, retention_snapshots, schema_version, synaptic_tags, vector_journal
+MIGRATION_RECEIPT: e43f920ee93bda6b6e438ee84cc42637f0591797094aa7e00dbb509f1d0e2071 (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+skipped 16
+compare_exit:0
+==== fresh-v38-ckpt hash:UNCHANGED exit:EXIT:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check3/src-fresh-v38-ckpt (keep this file; it is your pre-migration record)
+Source BLAKE3: b2874018caca6771caf01a47e650b34d68ac9863ca48212f7bcd86f27db31cb7
+Destination: /tmp/verdict-run/work/check3/to-fresh-v38-ckpt
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: f1b14fda472361fc7ad7262674db47c79397959668c56c650cd3726f01738612 (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+skipped 27
+compare_exit:0
+==== fresh-v38-ckpt-shim hash:UNCHANGED exit:EXIT:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check3/src-fresh-v38-ckpt-shim (keep this file; it is your pre-migration record)
+Source BLAKE3: 11f4b890801379895df3748374e6f0455d2ebb366bb7fd89e2273590100001de
+Destination: /tmp/verdict-run/work/check3/to-fresh-v38-ckpt-shim
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: 8b3840e3e0c088fba76362b3f0fd04202efdbf26ae0cc7321831afcedfae9542 (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+skipped 27
+compare_exit:0
+==== fresh-v38-wal hash:UNCHANGED exit:EXIT:0 wal:--accept-wal-snapshot
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check3/src-fresh-v38-wal (keep this file; it is your pre-migration record)
+Source BLAKE3: 371dbbdc55b7d1bcd33c9b19d63900a58318cb2489c4dfc0ff3bce2780ceb633
+Destination: /tmp/verdict-run/work/check3/to-fresh-v38-wal
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: 4ad00d82df211bd7aaa80337c55269b1d8bdf161a516fea389e95d3d2a3a33b9 (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+skipped 27
+compare_exit:0
+==== probe-v38-ckpt hash:UNCHANGED exit:EXIT:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check3/src-probe-v38-ckpt (keep this file; it is your pre-migration record)
+Source BLAKE3: c7ad0723b3ad6f0826d3e675d079566f822bebd93a9f9a053d816bc409e09eba
+Destination: /tmp/verdict-run/work/check3/to-probe-v38-ckpt
+Migrated: 2 nodes, 0 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, agent_runs, agent_traces, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, memory_prs, retention_snapshots, schema_version, synaptic_tags
+MIGRATION_RECEIPT: 2423d8c999c707f53870b36643e4694f3057576de2e89780e4d3df708a6a7101 (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+skipped 14
+compare_exit:0
+==== probe-v38-ckpt-shim hash:UNCHANGED exit:EXIT:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check3/src-probe-v38-ckpt-shim (keep this file; it is your pre-migration record)
+Source BLAKE3: ccb1f6e437c195b64db6d9a08d3e51669512f8309e08c8b00961413dcadb5cda
+Destination: /tmp/verdict-run/work/check3/to-probe-v38-ckpt-shim
+Migrated: 2 nodes, 0 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, agent_runs, agent_traces, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, memory_prs, retention_snapshots, schema_version, synaptic_tags
+MIGRATION_RECEIPT: f0aca25b56013d6c511ea37b4873b426483948b8519a6c3e4c1ff9e28fc8327c (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+skipped 14
+compare_exit:0
+==== probe-v38-wal hash:UNCHANGED exit:EXIT:0 wal:--accept-wal-snapshot
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check3/src-probe-v38-wal (keep this file; it is your pre-migration record)
+Source BLAKE3: 94169858b17a0ffe0689548432d29902995f84394c60c8c9cd76f0fd1a26d9e4
+Destination: /tmp/verdict-run/work/check3/to-probe-v38-wal
+Migrated: 2 nodes, 0 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, agent_runs, agent_traces, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, memory_prs, retention_snapshots, schema_version, synaptic_tags
+MIGRATION_RECEIPT: 6ff3b478513e40f5123a5749d672c6d03c183d636be70640e802e1846e2f230d (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+skipped 14
+compare_exit:0
+==== vnc-v36 hash:UNCHANGED exit:EXIT:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check3/src-vnc-v36 (keep this file; it is your pre-migration record)
+Source BLAKE3: fa6da9721878c257afb5857e502100501fd217a0ab3e33f5a53d4aec0ac628f9
+Destination: /tmp/verdict-run/work/check3/to-vnc-v36
+Migrated: 12 nodes, 2 edges, 0 fsrs events
+Dropped vectors: 12 (vector values were never read)
+Skipped tables (counted, not mapped): embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, schema_version, vector_journal
+MIGRATION_RECEIPT: c101f5099441c9a6ecb01b419e6117d2c36b9bb14a68ee49801a00586824601c (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+skipped 9
+compare_exit:0
+ORIGINAL_STORES_UNCHANGED
+CHECK SCRIPT FUNCTIONAL DONE 2026-09-29T12:56:16+00:00
+SCRIPT_EXIT:0

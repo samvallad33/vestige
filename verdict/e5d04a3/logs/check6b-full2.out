@@ -1,0 +1,9 @@
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check6b/src (keep this file; it is your pre-migration record)
+Source BLAKE3: b2874018caca6771caf01a47e650b34d68ac9863ca48212f7bcd86f27db31cb7
+Destination: /tmp/verdict-run/work/check6b/to-full2
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: f1b14fda472361fc7ad7262674db47c79397959668c56c650cd3726f01738612 (signature verified: true)
+Replay verification: true
+EXIT:0

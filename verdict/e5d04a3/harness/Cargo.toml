@@ -1,0 +1,17 @@
+[package]
+name = "verdict-harness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "verdict-harness"
+path = "src/main.rs"
+
+[dependencies]
+borsh = { version = "1", features = ["derive"] }
+blake3 = "1"
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "rand_core"] }
+serde_json = "1"
+strata = { path = "/workspace/crates/strata" }
+strata-store = { path = "/workspace/crates/strata-store" }

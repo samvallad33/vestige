@@ -1,0 +1,1 @@
+Error: v3 SQLite store at /tmp/verdict-run/work/check2/vnc-v36/vestige.db (schema version 36) cannot be opened by 4.0. hint: run: vestige migrate-to-strata --from <path>  (the original is never modified)

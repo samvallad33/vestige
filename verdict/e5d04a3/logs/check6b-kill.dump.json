@@ -1,0 +1,447 @@
+{
+  "decode_errors": [],
+  "dir": "/tmp/verdict-run/work/check6b/to-kill",
+  "edges": [],
+  "files_after_open": [
+    {
+      "bytes": 4491,
+      "mode": 420,
+      "path": "00000000-d02ed0960ac61548afc240902c764b92.seg",
+      "sha256": "9938e46554000215d0dcd63af751f07e9330b24fa4ff53f790adced274bd62db"
+    },
+    {
+      "bytes": 32,
+      "mode": 384,
+      "path": "strata.key",
+      "sha256": "2d49a0483f96a7ce8638c7a2e5efdfcc34d76e9d5adee72fe0ca2f8d8beda097"
+    }
+  ],
+  "files_before_open": [
+    {
+      "bytes": 4491,
+      "mode": 420,
+      "path": "00000000-d02ed0960ac61548afc240902c764b92.seg",
+      "sha256": "9938e46554000215d0dcd63af751f07e9330b24fa4ff53f790adced274bd62db"
+    },
+    {
+      "bytes": 32,
+      "mode": 384,
+      "path": "strata.key",
+      "sha256": "2d49a0483f96a7ce8638c7a2e5efdfcc34d76e9d5adee72fe0ca2f8d8beda097"
+    }
+  ],
+  "frames_total": 4,
+  "kind_counts": {
+    "GENESIS": 1,
+    "NODE": 2,
+    "PARAMS": 1
+  },
+  "nodes": [
+    {
+      "content": "Deploys use blue-green behind the ALB; cutover is a target-group swap.",
+      "created_ms": 1790665771396,
+      "kernel_id": 1,
+      "last_accessed_ms": 1790665771396,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.759150625"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "0.9999994699070732"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "0.7299996289349513"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0.39249999999999996"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-29T07:09:31.396615310+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          ""
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "0"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ],
+        [
+          "knowledge_nodes.author_actor_did",
+          "did:key:z6Mktdqs3BNBzurgrQNQxNmroznnuR17UYno1fu8V3VRqfjV"
+        ]
+      ],
+      "legacy_id": "22558332-6c82-4b43-a61a-03af50498cc4",
+      "node_type": "fact",
+      "tags": [
+        "deploy",
+        "infra"
+      ],
+      "updated_ms": 1790665771396
+    },
+    {
+      "content": "Payments API timeout is 15s; retries are idempotent via Idempotency-Key.",
+      "created_ms": 1790665771400,
+      "kernel_id": 2,
+      "last_accessed_ms": 1790665771400,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.759150625"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "0.9999994699070732"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "0.7299996289349513"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0.39249999999999996"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-29T07:09:31.400139737+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          ""
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "0"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          "2026-09-29T07:09:31.443434255+00:00"
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ],
+        [
+          "knowledge_nodes.author_actor_did",
+          "did:key:z6Mktdqs3BNBzurgrQNQxNmroznnuR17UYno1fu8V3VRqfjV"
+        ]
+      ],
+      "legacy_id": "8d315dc1-e25e-43c1-afd3-08d28bdddebf",
+      "node_type": "fact",
+      "tags": [
+        "payments",
+        "api"
+      ],
+      "updated_ms": 1790665771443
+    }
+  ],
+  "params": {
+    "envelope_head": "",
+    "params_id": "v4-migrate/1",
+    "schema_version": 38,
+    "source_blake3": "b2874018caca6771caf01a47e650b34d68ac9863ca48212f7bcd86f27db31cb7"
+  },
+  "receipt": null,
+  "receipt_key": {
+    "bytes": 32,
+    "exists": true,
+    "inside_to": false,
+    "mode": 384,
+    "path": "/tmp/verdict-run/work/check6b/receipt-signing.key"
+  },
+  "strata_key": {
+    "equals_old_source_hash_derivation": null,
+    "exists": true,
+    "hex": "5bfa1859d62b4ab01180a0c23f1c071c7c3ee6458d47a1cfa8527b268947222d",
+    "mode": 384,
+    "path": "/tmp/verdict-run/work/check6b/to-kill/strata.key",
+    "sha256": "2d49a0483f96a7ce8638c7a2e5efdfcc34d76e9d5adee72fe0ca2f8d8beda097"
+  },
+  "supersessions": [],
+  "tombstones": []
+}

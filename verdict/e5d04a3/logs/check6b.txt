@@ -1,0 +1,200 @@
+CHECK3B 2026-09-29T12:58:29+00:00
+EXIT:0
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check6b/src (keep this file; it is your pre-migration record)
+Source BLAKE3: b2874018caca6771caf01a47e650b34d68ac9863ca48212f7bcd86f27db31cb7
+Destination: /tmp/verdict-run/work/check6b/to-full
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: f1b14fda472361fc7ad7262674db47c79397959668c56c650cd3726f01738612 (signature verified: true)
+Replay verification: true
+EXIT:0
+key1 70e7a4708e367fffd5bd12872420f2b33c2f46b018d5c1b285b0ab9ed03840fa  /tmp/verdict-run/work/check6b/to-full/strata.key
+key2 093c19ae2c9bc34cf9c2bb6e0c0c64441ac1dbf986e53e88a24da6a9e49897aa  /tmp/verdict-run/work/check6b/to-full2/strata.key
+receipt-key mode 600 path-parent-of-to
+strata.key mode 600 /tmp/verdict-run/work/check6b/to-full/strata.key
+preload 0 
+killed=True code=-9 size_at_kill=4491 elapsed=0.05s
+dest:
+      4491 00000000-d02ed0960ac61548afc240902c764b92.seg
+        32 strata.key
+         8 strata.lock
+==== rerun ====
+RERUN_EXIT:1
+RERUN_EXIT:1
+-- stderr --
+Error: destination /tmp/verdict-run/work/check6b/to-kill is not empty; a killed run must be removed by hand, never extended
+SOURCE_UNCHANGED
+==== non-empty ====
+FOREIGN_EXIT:1
+Error: destination /tmp/verdict-run/work/check6b/to-foreign is not empty; a killed run must be removed by hand, never extended
+SECOND_EXIT:1
+Error: destination /tmp/verdict-run/work/check6b/to-full is not empty; a killed run must be removed by hand, never extended
+SAME_EXIT:0
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-run/work/check6b/src (keep this file; it is your pre-migration record)
+Source BLAKE3: b2874018caca6771caf01a47e650b34d68ac9863ca48212f7bcd86f27db31cb7
+Destination: /tmp/verdict-run/work/check6b/to-full
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: f1b14fda472361fc7ad7262674db47c79397959668c56c650cd3726f01738612 (signature verified: true)
+Replay verification: true
+SAME_EXIT:0
+after_rerun_or_partial kinds {'GENESIS': 1, 'NODE': 2, 'PARAMS': 1} frames 4 nodes 2
+==== CHECK4/5 ====
+VERIFY_IMPORT_EXIT:1
+IMPORT_VERIFY_FILES_UNCHANGED
+-- verify stdout --
+{
+  "frames_total": 18,
+  "checksum_ok": true,
+  "signature_ok": true,
+  "counts_match": true,
+  "failures": [],
+  "ok": true
+}
+OK
+{
+  "log_tail_ok": false,
+  "checkpoint_chain_ok": false,
+  "state_root_matches": false,
+  "gate_verdicts_rederived": true,
+  "gaps": [],
+  "duration_ms": 0,
+  "failures": [
+    "kernel.log: read failed: No such file or directory (os error 2)",
+    "kernel.log: malformed: missing framing magic",
+    "kernel.checkpoints: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input",
+    "kernel.head: read failed: No such file or directory (os error 2)",
+    "gate.log: read failed: No such file or directory (os error 2)",
+    "gate.log: malformed: missing framing magic",
+    "gate.policy: read failed: No such file or directory (os error 2)",
+    "gate.policy: malformed: borsh Policy: Unexpected length of input",
+    "gate.head: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)"
+  ]
+}
+FAILED
+VERIFY_IMPORT_EXIT:1
+-- verify stderr --
+  kernel.log: read failed: No such file or directory (os error 2)
+  kernel.log: malformed: missing framing magic
+  kernel.checkpoints: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input
+  kernel.head: read failed: No such file or directory (os error 2)
+  gate.log: read failed: No such file or directory (os error 2)
+  gate.log: malformed: missing framing magic
+  gate.policy: read failed: No such file or directory (os error 2)
+  gate.policy: malformed: borsh Policy: Unexpected length of input
+  gate.head: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)
+LIVE_ROOT_EXIT:1
+LIVE_LOG_EXIT:1
+-- live root stderr --
+  kernel.log: read failed: No such file or directory (os error 2)
+  kernel.log: malformed: missing framing magic
+  kernel.checkpoints: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input
+  kernel.head: read failed: No such file or directory (os error 2)
+  gate.log: read failed: No such file or directory (os error 2)
+  gate.log: malformed: missing framing magic
+  gate.policy: read failed: No such file or directory (os error 2)
+  gate.policy: malformed: borsh Policy: Unexpected length of input
+  gate.head: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)
+-- live log stderr --
+  kernel.log: read failed: No such file or directory (os error 2)
+  kernel.log: malformed: missing framing magic
+  kernel.checkpoints: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input
+  kernel.head: read failed: No such file or directory (os error 2)
+  gate.log: read failed: No such file or directory (os error 2)
+  gate.log: malformed: missing framing magic
+  gate.policy: read failed: No such file or directory (os error 2)
+  gate.policy: malformed: borsh Policy: Unexpected length of input
+  gate.head: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)
+-- live root stdout --
+{
+  "log_tail_ok": false,
+  "checkpoint_chain_ok": false,
+  "state_root_matches": false,
+  "gate_verdicts_rederived": true,
+  "gaps": [],
+  "duration_ms": 0,
+  "failures": [
+    "kernel.log: read failed: No such file or directory (os error 2)",
+    "kernel.log: malformed: missing framing magic",
+    "kernel.checkpoints: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input",
+    "kernel.head: read failed: No such file or directory (os error 2)",
+    "gate.log: read failed: No such file or directory (os error 2)",
+    "gate.log: malformed: missing framing magic",
+    "gate.policy: read failed: No such file or directory (os error 2)",
+    "gate.policy: malformed: borsh Policy: Unexpected length of input",
+    "gate.head: read failed: No such file or directory (os error 2)",
+    "kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)"
+  ]
+}
+FAILED
+LIVE_ROOT_EXIT:1
+HARNESS_flip:1
+VERIFY_flip:1
+-- flip stderr --
+  kernel.log: read failed: No such file or directory (os error 2)
+  kernel.log: malformed: missing framing magic
+  kernel.checkpoints: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input
+  kernel.head: read failed: No such file or directory (os error 2)
+  gate.log: read failed: No such file or directory (os error 2)
+  gate.log: malformed: missing framing magic
+  gate.policy: read failed: No such file or directory (os error 2)
+  gate.policy: malformed: borsh Policy: Unexpected length of input
+  gate.head: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)
+flipped /tmp/verdict-run/work/tamper-flip/00000000-18371e50fcf55b39126e21dddff4935b.seg at 11608
+OPEN_FAIL strata halt: sealed segment damaged: payload blake3 mismatch (segment 0, offset 10750, last_acked_seq 18) — damage at/below the acked watermark, refusing to truncate history
+HARNESS_flip:1
+HARNESS_replace-derived:1
+VERIFY_replace-derived:1
+-- replace-derived stderr --
+  kernel.log: read failed: No such file or directory (os error 2)
+  kernel.log: malformed: missing framing magic
+  kernel.checkpoints: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input
+  kernel.head: read failed: No such file or directory (os error 2)
+  gate.log: read failed: No such file or directory (os error 2)
+  gate.log: malformed: missing framing magic
+  gate.policy: read failed: No such file or directory (os error 2)
+  gate.policy: malformed: borsh Policy: Unexpected length of input
+  gate.head: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)
+replaced strata.key with derive_key("vestige strata migrate log seed v1", source_blake3)
+OPEN_FAIL strata halt: sealed segment trailer: trailer signature invalid (segment 0, offset 23112, last_acked_seq 18) — damage at/below the acked watermark, refusing to truncate history
+HARNESS_replace-derived:1
+HARNESS_replace-random:1
+VERIFY_replace-random:1
+-- replace-random stderr --
+  kernel.log: read failed: No such file or directory (os error 2)
+  kernel.log: malformed: missing framing magic
+  kernel.checkpoints: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input
+  kernel.head: read failed: No such file or directory (os error 2)
+  gate.log: read failed: No such file or directory (os error 2)
+  gate.log: malformed: missing framing magic
+  gate.policy: read failed: No such file or directory (os error 2)
+  gate.policy: malformed: borsh Policy: Unexpected length of input
+  gate.head: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)
+replaced strata.key with a fixed non-matching seed
+OPEN_FAIL strata halt: sealed segment trailer: trailer signature invalid (segment 0, offset 23112, last_acked_seq 18) — damage at/below the acked watermark, refusing to truncate history
+HARNESS_replace-random:1
+==== nometa probe ====
+SUBCOMMAND_EXIT:0
+error: unrecognized subcommand 'strata-verify'
+
+  tip: some similar subcommands exist: 'stats', 'serve'
+
+Usage: vestige [OPTIONS] <COMMAND>
+DONE 2026-09-29T12:58:30+00:00

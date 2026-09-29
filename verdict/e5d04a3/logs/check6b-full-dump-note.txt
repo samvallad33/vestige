@@ -1,0 +1,3 @@
+==== to-full dump ====
+to-full kinds {'CHECKPOINT': 1, 'EDGE': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 10, 'PARAMS': 1, 'SUPERSESSION': 1, 'TOMBSTONE': 2} frames 18 nodes 10 edges 1
+receipt_keys ['decode_errors', 'dir', 'edges', 'files_after_open', 'files_before_open', 'frames_total', 'kind_counts', 'nodes', 'params', 'receipt', 'receipt_key', 'strata_key', 'supersessions', 'tombstones']

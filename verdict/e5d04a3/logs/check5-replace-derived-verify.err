@@ -1,0 +1,11 @@
+  kernel.log: read failed: No such file or directory (os error 2)
+  kernel.log: malformed: missing framing magic
+  kernel.checkpoints: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: borsh Vec<Checkpoint>: Unexpected length of input
+  kernel.head: read failed: No such file or directory (os error 2)
+  gate.log: read failed: No such file or directory (os error 2)
+  gate.log: malformed: missing framing magic
+  gate.policy: read failed: No such file or directory (os error 2)
+  gate.policy: malformed: borsh Policy: Unexpected length of input
+  gate.head: read failed: No such file or directory (os error 2)
+  kernel.checkpoints: malformed: no checkpoints (at least a genesis checkpoint is required)
