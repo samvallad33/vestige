@@ -1,5 +1,6 @@
-//! Read-only check of a live strata-store directory: `log/*.seg` plus
-//! `store.meta` at the root. The root is not opened as a log, so this
+//! Read-only check of a live strata-store directory: `log/*.seg` at the
+//! root. `store.meta` is present only after a checkpoint seal. An unsealed
+//! head is still a live store. The root is not opened as a log, so this
 //! never mints `strata.key` or a segment beside `store.meta`.
 
 use std::fs;
@@ -22,7 +23,7 @@ pub(crate) struct LiveVerifyReport {
 }
 
 pub(crate) fn is_live_store(dir: &Path) -> bool {
-    dir.join(META_NAME).is_file() && readonly::dir_has_segments(&dir.join(LOG_DIR))
+    readonly::dir_has_segments(&dir.join(LOG_DIR))
 }
 
 pub(crate) fn verify_live_store(dir: &Path) -> LiveVerifyReport {
@@ -34,13 +35,16 @@ pub(crate) fn verify_live_store(dir: &Path) -> LiveVerifyReport {
             None
         }
     };
-    match fs::read(dir.join(META_NAME)) {
-        Ok(bytes) => {
-            if bytes.len() < META_MAGIC.len() || bytes[..META_MAGIC.len()] != META_MAGIC {
-                failures.push("store.meta magic is not STRSTME1".into());
+    let meta = dir.join(META_NAME);
+    if meta.is_file() {
+        match fs::read(&meta) {
+            Ok(bytes) => {
+                if bytes.len() < META_MAGIC.len() || bytes[..META_MAGIC.len()] != META_MAGIC {
+                    failures.push("store.meta magic is not STRSTME1".into());
+                }
             }
+            Err(err) => failures.push(format!("read store.meta: {err}")),
         }
-        Err(err) => failures.push(format!("read store.meta: {err}")),
     }
     let (frames_total, segments) = scan
         .map(|scan| (scan.frames.len() as u64, scan.segments))

@@ -682,7 +682,7 @@ pub struct PathReport {
 /// Layout detection, in order:
 /// * segment files in `dir` — a migrated log when a receipt frame is
 ///   present, otherwise a raw strata log (chain only);
-/// * `log/*.seg` plus `store.meta` — a live strata-store;
+/// * `log/*.seg` — a live strata-store (`store.meta` only after a seal);
 /// * otherwise the kernel.log / gate.log layout.
 ///
 /// A successful migrated-log check does not continue into the kernel

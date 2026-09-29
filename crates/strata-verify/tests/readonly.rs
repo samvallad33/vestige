@@ -145,6 +145,31 @@ fn live_store_root_is_unchanged_and_passes() {
     );
     assert_eq!(snapshot(&dir), before, "the binary wrote the store root");
 
+    // An unsealed stdio store has `log/*.seg` and no `store.meta`.
+    let unsealed = tmp.path().join("unsealed");
+    {
+        let mut store = StrataStore::open(&unsealed).expect("open unsealed");
+        store
+            .ingest(IngestInput {
+                content: "fresh stdio store has no checkpoint yet".into(),
+                node_type: String::new(),
+                tags: Vec::new(),
+                created_at_ms: Some(1_700_000_000_000),
+                valid_from_ms: None,
+                valid_until_ms: None,
+            })
+            .expect("ingest");
+    }
+    assert!(!unsealed.join("store.meta").exists());
+    let unsealed_before = snapshot(&unsealed);
+    let unsealed_report = strata_verify::verify_path(&unsealed);
+    assert!(
+        unsealed_report.ok,
+        "unsealed live store must verify: {}",
+        unsealed_report.json
+    );
+    assert_eq!(snapshot(&unsealed), unsealed_before);
+
     // The log directory itself is also a check target (no kernel.log).
     let log_dir = dir.join("log");
     let log_before = snapshot(&log_dir);

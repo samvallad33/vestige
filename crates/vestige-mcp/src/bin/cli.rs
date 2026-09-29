@@ -198,8 +198,8 @@ enum Commands {
 
     /// Verify a STRATA directory. Read-only: creates no files.
     ///
-    /// Accepts a migrated log (no `kernel.log`), a live store (`log/` plus
-    /// `store.meta`), or the kernel/gate layout.
+    /// Accepts a migrated log (no `kernel.log`), a live store (`log/*.seg`,
+    /// `store.meta` only after a seal), or the kernel/gate layout.
     StrataVerify {
         /// Directory to verify
         dir: PathBuf,

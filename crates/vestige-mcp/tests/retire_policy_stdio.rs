@@ -3,7 +3,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio as ProcessStdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,9 +31,9 @@ fn spawn(bin: &str, data_dir: &Path) -> Stdio {
     cmd.env("VESTIGE_DASHBOARD_ENABLED", "false");
     cmd.env("VESTIGE_HTTP_ENABLED", "false");
     cmd.env("RUST_LOG", "error");
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.stdin(ProcessStdio::piped())
+        .stdout(ProcessStdio::piped())
+        .stderr(ProcessStdio::piped());
     let mut child = cmd.spawn().expect("spawn vestige-mcp");
     let stdout = child.stdout.take().expect("stdout");
     let stderr = child.stderr.take().expect("stderr");
@@ -173,6 +173,7 @@ fn stdio_allows_one_retire_and_holds_another_then_strata_verify() {
         );
         writeln!(
             mcp.stdin,
+            "{}",
             r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#
         )
         .unwrap();
