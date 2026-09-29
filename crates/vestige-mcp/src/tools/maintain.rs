@@ -176,8 +176,6 @@ mod tests {
     async fn bounded_phases_preview_by_default_and_reject_misapplied_controls() {
         let storage = test_storage();
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        // w1b: the "embeddings" phase was removed with the vector runtime;
-        // lifecycle is the remaining bounded preview phase.
         let result = execute(
             &storage,
             &cognitive,
@@ -188,9 +186,21 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result["dryRun"], true);
+        let embeddings = execute(
+            &storage,
+            &cognitive,
+            Some(serde_json::json!({
+                "action": "consolidate", "phase": "embeddings", "batchSize": 2
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(embeddings["dryRun"], true);
+        assert_eq!(embeddings["selected"], 0);
+        assert_eq!(embeddings["hasMore"], false);
         for args in [
             serde_json::json!({"action":"consolidate", "batchSize":2}),
-            serde_json::json!({"action":"consolidate", "phase":"embeddings", "batchSize":2}),
+            serde_json::json!({"action":"consolidate", "phase":"embeddings", "batchSize":101}),
             serde_json::json!({"action":"consolidate", "phase":"invalid"}),
         ] {
             assert!(execute(&storage, &cognitive, Some(args)).await.is_err());
