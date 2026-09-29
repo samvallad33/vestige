@@ -12,6 +12,7 @@
 //! tools layer is engine-agnostic: a second backend (STRATA) that implements
 //! the same trait can serve the same tool.
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -31,6 +32,7 @@ struct WallMockStore {
     connections: Mutex<Vec<ConnectionRecord>>,
     promoted: Mutex<Vec<String>>,
     saved_edges: Mutex<Vec<String>>,
+    db_path: PathBuf,
 }
 
 impl WallMockStore {
@@ -40,6 +42,7 @@ impl WallMockStore {
             connections: Mutex::new(Vec::new()),
             promoted: Mutex::new(Vec::new()),
             saved_edges: Mutex::new(Vec::new()),
+            db_path: PathBuf::from("wall-mock.db"),
         }
     }
 
@@ -61,6 +64,11 @@ fn node(id: &str, content: &str, tags: &[&str], days_ago: i64) -> KnowledgeNode 
 }
 
 impl MemoryStoreSend for WallMockStore {
+    // Backfill probes this to tell a Strata log from any other backend.
+    fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
     // ---- the seven methods the backfill tool actually touches ----
 
     fn get_node(&self, id: &str) -> MockResult<Option<KnowledgeNode>> {

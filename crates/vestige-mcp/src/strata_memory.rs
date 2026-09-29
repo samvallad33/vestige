@@ -103,6 +103,51 @@ fn pending_async(op: &str) -> MemoryStoreError {
     MemoryStoreError::Init(pending(op).to_string())
 }
 
+/// RETIRE `id` under an existing named rule.
+///
+/// `SupersedeNode` requires a successor, so this admits a content-free anchor
+/// and retires that anchor in the same call. Both records stay on the log.
+/// The returned receipt is the one that retires `id`.
+fn retire_live(
+    store: &mut strata_store::StrataStore,
+    id: &str,
+    rule_id: &'static str,
+    confirm: bool,
+) -> Result<strata_store::RetireReceipt, StorageError> {
+    let record = store
+        .get_node(id)
+        .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+    if !record.is_live() {
+        return Err(StorageError::Init(format!("node {id} is already retired")));
+    }
+    let scope = record.scope.clone();
+    let anchor = store
+        .ingest_in_scope(
+            strata_store::IngestInput {
+                content: ".".into(),
+                node_type: "fact".into(),
+                tags: Vec::new(),
+                created_at_ms: Some(0),
+                valid_from_ms: None,
+                valid_until_ms: None,
+            },
+            &scope,
+        )
+        .map_err(map_store)?;
+    let ctx = strata_store::AdmissionContext {
+        rule_id: Some(rule_id.to_string()),
+        confirm,
+    };
+    let receipt = store.retire(id, &anchor, &ctx).map_err(map_store)?;
+    if receipt.rule_id != Some(rule_id) {
+        return Err(StorageError::Init(format!(
+            "{rule_id} retire was not admitted under {rule_id}"
+        )));
+    }
+    store.retire(&anchor, id, &ctx).map_err(map_store)?;
+    Ok(receipt)
+}
+
 fn purge_report(
     id: &str,
     deleted: bool,
@@ -1208,32 +1253,7 @@ impl MemoryStoreSend for StrataMemory {
         if !record.is_live() {
             return Ok(purge_report(id, false, None));
         }
-        let scope = record.scope.clone();
-        // SupersedeNode needs a successor. This anchor is retired in the same call.
-        let anchor = store
-            .ingest_in_scope(
-                strata_store::IngestInput {
-                    content: ".".into(),
-                    node_type: "fact".into(),
-                    tags: Vec::new(),
-                    created_at_ms: Some(0),
-                    valid_from_ms: None,
-                    valid_until_ms: None,
-                },
-                &scope,
-            )
-            .map_err(map_store)?;
-        let ctx = strata_store::AdmissionContext {
-            rule_id: Some(strata_store::RULE_PURGE.to_string()),
-            confirm: true,
-        };
-        let receipt = store.retire(id, &anchor, &ctx).map_err(map_store)?;
-        if receipt.rule_id != Some(strata_store::RULE_PURGE) {
-            return Err(StorageError::Init(
-                "purge retire was not admitted under purge".into(),
-            ));
-        }
-        store.retire(&anchor, id, &ctx).map_err(map_store)?;
+        let receipt = retire_live(&mut store, id, strata_store::RULE_PURGE, true)?;
         Ok(purge_report(id, true, Some(receipt.receipt_id)))
     }
 
@@ -1261,8 +1281,17 @@ impl MemoryStoreSend for StrataMemory {
         Err(pending("save_intention"))
     }
 
-    fn suppress_memory(&self, _id: &str) -> Result<KnowledgeNode, StorageError> {
-        Err(pending("suppress_memory"))
+    fn suppress_memory(&self, id: &str) -> Result<KnowledgeNode, StorageError> {
+        let mut store = self.lock();
+        let receipt = retire_live(&mut store, id, strata_store::RULE_SUPPRESS, false)?;
+        // The receipt is an in-memory handoff for the tool. It is not a node field
+        // on the log. The record stays, with superseded_by set, and reads drop it.
+        let mut node = KnowledgeNode::default();
+        node.id = id.to_string();
+        node.suppression_count = 1;
+        node.suppressed_at = Some(Utc::now());
+        node.source = Some(receipt.receipt_id);
+        Ok(node)
     }
 
     fn update_node_content(&self, _id: &str, _new_content: &str) -> Result<(), StorageError> {
@@ -1552,6 +1581,120 @@ mod tests {
         let stored = reopened.get_node(&node.id).unwrap();
         assert!(stored.superseded_by.is_some());
         assert_eq!(stored.content, marker);
+    }
+
+    #[tokio::test]
+    async fn suppress_returns_a_receipt_and_hides_content() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = open(dir.path()).unwrap();
+        let marker = "SUPPRESS_MARKER_SECRET";
+        let node = storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: marker.into(),
+                    ..IngestInput::default()
+                },
+                "user",
+            )
+            .unwrap();
+        let kept = storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "KEEP_VISIBLE".into(),
+                    ..IngestInput::default()
+                },
+                "user",
+            )
+            .unwrap();
+        storage
+            .save_connection(&vestige_core::ConnectionRecord {
+                source_id: kept.id.clone(),
+                target_id: node.id.clone(),
+                strength: 1.0,
+                link_type: "derived_from".into(),
+                created_at: Utc::now(),
+                last_activated: Utc::now(),
+                activation_count: 0,
+            })
+            .unwrap();
+        let cognitive = std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::cognitive::CognitiveEngine::new(),
+        ));
+        cognitive.lock().await.hydrate(&storage);
+        let before = log_files(dir.path());
+        let missing = crate::tools::suppress::execute(
+            &storage,
+            &cognitive,
+            Some(serde_json::json!({ "id": "mem-00000000000000ab" })),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            missing.contains("not found") || missing.contains("Not found"),
+            "{missing}"
+        );
+        assert_eq!(log_files(dir.path()), before, "unknown id wrote the log");
+
+        let suppressed = crate::tools::suppress::execute(
+            &storage,
+            &cognitive,
+            Some(serde_json::json!({ "id": node.id, "reason": "fixture" })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(suppressed["success"], true);
+        assert_eq!(suppressed["rule"], "suppress");
+        assert_eq!(suppressed["id"], node.id);
+        let receipt_id = suppressed["receiptId"].as_str().unwrap();
+        assert!(receipt_id.starts_with("eff-"), "{receipt_id}");
+        assert!(!suppressed.to_string().contains(marker));
+        assert!(storage.get_node(&node.id).unwrap().is_none());
+        assert!(
+            storage
+                .get_connections_for_memory(&kept.id)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            storage.get_node(&kept.id).unwrap().unwrap().content,
+            "KEEP_VISIBLE"
+        );
+
+        let after = log_files(dir.path());
+        let associations = crate::tools::graph_unified::execute(
+            &storage,
+            &cognitive,
+            Some(serde_json::json!({ "action": "associations", "from": kept.id })),
+        )
+        .await
+        .unwrap();
+        assert!(!associations.to_string().contains(&node.id), "{associations}");
+        assert!(!associations.to_string().contains(marker), "{associations}");
+
+        let second = crate::tools::suppress::execute(
+            &storage,
+            &cognitive,
+            Some(serde_json::json!({ "id": node.id })),
+        )
+        .await
+        .unwrap_err();
+        assert!(second.contains("already retired"), "{second}");
+        assert_eq!(log_files(dir.path()), after, "second suppress wrote the log");
+
+        let seq = u64::from_str_radix(receipt_id.trim_start_matches("eff-"), 16).unwrap();
+        drop(storage);
+        let reopened = strata_store::StrataStore::open(dir.path()).unwrap();
+        let again = reopened.retire_receipt(seq).unwrap();
+        assert_eq!(again.rule_id, Some(strata_store::RULE_SUPPRESS));
+        assert_eq!(again.receipt_id, receipt_id);
+        assert_eq!(reopened.get_node(&node.id).unwrap().content, marker);
+        drop(reopened);
+        let memory = open(dir.path()).unwrap();
+        assert!(memory.get_node(&node.id).unwrap().is_none());
+        assert_eq!(
+            memory.get_node(&kept.id).unwrap().unwrap().content,
+            "KEEP_VISIBLE"
+        );
     }
 
     #[tokio::test]

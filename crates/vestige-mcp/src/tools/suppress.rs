@@ -17,7 +17,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
+use crate::cognitive::CognitiveEngine;
 use vestige_core::Storage;
 use vestige_core::neuroscience::active_forgetting::{ActiveForgettingSystem, DEFAULT_LABILE_HOURS};
 
@@ -64,7 +66,11 @@ struct SuppressArgs {
     cascade_derived_from: bool,
 }
 
-pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
+pub async fn execute(
+    storage: &Arc<Storage>,
+    cognitive: &Arc<Mutex<CognitiveEngine>>,
+    args: Option<Value>,
+) -> Result<Value, String> {
     let args: SuppressArgs = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid arguments: {}", e))?,
         None => return Err("Missing arguments".to_string()),
@@ -76,6 +82,10 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     // Basic UUID sanity check — don't reject if missing, but warn
     if !crate::tools::memory_unified::is_memory_id(&args.id) {
         return Err(format!("Invalid memory ID format: {}", args.id));
+    }
+
+    if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+        return execute_strata(storage, cognitive, &args).await;
     }
 
     let sys = ActiveForgettingSystem::new();
@@ -181,6 +191,51 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     }
 }
 
+/// Strata suppress is one allowed RETIRE under the named `suppress` rule.
+/// The node stays on the log and drops out of retrieval. Compounding counts
+/// and reversal are not recorded ops.
+async fn execute_strata(
+    storage: &Arc<Storage>,
+    cognitive: &Arc<Mutex<CognitiveEngine>>,
+    args: &SuppressArgs,
+) -> Result<Value, String> {
+    if args.reverse {
+        return Err(
+            "reverse is not admitted on the Strata log; suppression is one RETIRE".into(),
+        );
+    }
+    if args.cascade_derived_from {
+        return Err("cascade_derived_from is not admitted on the Strata log".into());
+    }
+    let node = storage
+        .suppress_memory(&args.id)
+        .map_err(|e| format!("Suppress failed: {}", e))?;
+    let receipt_id = node.source.clone().unwrap_or_default();
+    if !receipt_id.starts_with("eff-") {
+        return Err("Suppress failed: retire returned no effect receipt".into());
+    }
+    tracing::info!(
+        id = %args.id,
+        receipt = %receipt_id,
+        reason = args.reason.as_deref().unwrap_or(""),
+        "Memory suppressed"
+    );
+    // Same drop as purge: the process graph was hydrated before the RETIRE.
+    let mut rebuilt = CognitiveEngine::new();
+    rebuilt.hydrate(storage);
+    *cognitive.lock().await = rebuilt;
+    Ok(json!({
+        "success": true,
+        "action": "suppress",
+        "id": args.id,
+        "nodeId": args.id,
+        "receiptId": receipt_id,
+        "rule": "suppress",
+        "reason": args.reason,
+        "message": "Suppressed; can't be retrieved.",
+    }))
+}
+
 /// Exact derived_from blast from `id`, each target gated like a direct
 /// suppress. Returns a JSON summary for the tool response; suppression of
 /// held targets does NOT happen until their Memory PR is approved.
@@ -282,6 +337,11 @@ mod tests {
     use tempfile::TempDir;
     use vestige_core::IngestInput;
 
+    async fn run(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        execute(storage, &cognitive, args).await
+    }
+
     fn test_storage() -> (Arc<Storage>, TempDir) {
         let dir = TempDir::new().unwrap();
         let storage = vestige_core::open_storage(Some(dir.path().join("test.db"))).unwrap();
@@ -318,7 +378,7 @@ mod tests {
     #[tokio::test]
     async fn test_suppress_missing_args() {
         let (storage, _dir) = test_storage();
-        let result = execute(&storage, None).await;
+        let result = run(&storage, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing arguments"));
     }
@@ -327,7 +387,7 @@ mod tests {
     async fn test_suppress_invalid_uuid() {
         let (storage, _dir) = test_storage();
         let args = json!({"id": "not-a-uuid"});
-        let result = execute(&storage, Some(args)).await;
+        let result = run(&storage, Some(args)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid memory ID"));
     }
@@ -338,14 +398,14 @@ mod tests {
         let id = ingest(&storage, "Jake is my roommate");
 
         // First call
-        let r1 = execute(&storage, Some(json!({"id": id.clone()})))
+        let r1 = run(&storage, Some(json!({"id": id.clone()})))
             .await
             .unwrap();
         assert_eq!(r1["suppressionCount"], 1);
         assert_eq!(r1["priorCount"], 0);
 
         // Second call — compounds
-        let r2 = execute(&storage, Some(json!({"id": id.clone()})))
+        let r2 = run(&storage, Some(json!({"id": id.clone()})))
             .await
             .unwrap();
         assert_eq!(r2["suppressionCount"], 2);
@@ -358,7 +418,7 @@ mod tests {
         let id = ingest(&storage, "Jake");
 
         let before = storage.get_node(&id).unwrap().unwrap();
-        let result = execute(&storage, Some(json!({"id": id.clone()})))
+        let result = run(&storage, Some(json!({"id": id.clone()})))
             .await
             .unwrap();
 
@@ -375,7 +435,7 @@ mod tests {
         let (storage, _dir) = test_storage();
         let id = ingest(&storage, "Jake");
 
-        execute(&storage, Some(json!({"id": id.clone()})))
+        run(&storage, Some(json!({"id": id.clone()})))
             .await
             .unwrap();
 
@@ -390,22 +450,22 @@ mod tests {
         let (storage, _dir) = test_storage();
         let id = ingest(&storage, "Jake");
 
-        execute(&storage, Some(json!({"id": id.clone()})))
+        run(&storage, Some(json!({"id": id.clone()})))
             .await
             .unwrap();
-        execute(&storage, Some(json!({"id": id.clone()})))
+        run(&storage, Some(json!({"id": id.clone()})))
             .await
             .unwrap();
 
         // Now reverse — count should drop from 2 to 1
-        let r = execute(&storage, Some(json!({"id": id.clone(), "reverse": true})))
+        let r = run(&storage, Some(json!({"id": id.clone(), "reverse": true})))
             .await
             .unwrap();
         assert_eq!(r["suppressionCount"], 1);
         assert_eq!(r["stillSuppressed"], true);
 
         // Reverse again — should go to 0
-        let r = execute(&storage, Some(json!({"id": id.clone(), "reverse": true})))
+        let r = run(&storage, Some(json!({"id": id.clone(), "reverse": true})))
             .await
             .unwrap();
         assert_eq!(r["suppressionCount"], 0);
@@ -417,7 +477,7 @@ mod tests {
         let (storage, _dir) = test_storage();
         let id = ingest(&storage, "Fresh memory");
 
-        let result = execute(&storage, Some(json!({"id": id.clone(), "reverse": true}))).await;
+        let result = run(&storage, Some(json!({"id": id.clone(), "reverse": true}))).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("no active suppression"));
     }
@@ -427,7 +487,7 @@ mod tests {
         let (storage, _dir) = test_storage();
         let id = ingest(&storage, "Jake");
 
-        execute(&storage, Some(json!({"id": id.clone()})))
+        run(&storage, Some(json!({"id": id.clone()})))
             .await
             .unwrap();
 
@@ -479,7 +539,7 @@ mod tests {
         set_mode(&storage, "fast");
         let (root, child, grandchild, unrelated) = seed_derived_chain(&storage);
 
-        let r = execute(
+        let r = run(
             &storage,
             Some(json!({"id": root.clone(), "cascade_derived_from": true, "reason": "bad derivation"})),
         )
@@ -509,7 +569,7 @@ mod tests {
         // Direct execute() call: the server pre-gate would normally hold the
         // primary suppress itself; here we verify the per-id gate on the
         // cascade targets.
-        let r = execute(
+        let r = run(
             &storage,
             Some(json!({"id": root.clone(), "cascade_derived_from": true, "reason": "review me"})),
         )
@@ -540,7 +600,7 @@ mod tests {
         set_mode(&storage, "fast");
         let (root, child, _grandchild, _unrelated) = seed_derived_chain(&storage);
 
-        let r = execute(&storage, Some(json!({"id": root.clone()})))
+        let r = run(&storage, Some(json!({"id": root.clone()})))
             .await
             .unwrap();
         assert!(r["cascadeDerivedFrom"].is_null(), "no cascade unless asked");

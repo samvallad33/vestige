@@ -2266,7 +2266,9 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
             // ================================================================
             // ACTIVE FORGETTING (v2.0.5) — top-down suppression
             // ================================================================
-            "suppress" => tools::suppress::execute(&self.storage, request.arguments).await,
+            "suppress" => {
+                tools::suppress::execute(&self.storage, &self.cognitive, request.arguments).await
+            }
 
             // ================================================================
             // BLAST RADIUS — exact downstream reach of a cause/source record.
