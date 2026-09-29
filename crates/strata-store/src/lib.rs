@@ -50,9 +50,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod admission;
+pub mod claim_slots;
 mod error;
 mod gate_log;
-pub mod admission;
 pub mod kinds;
 mod op;
 mod store;
