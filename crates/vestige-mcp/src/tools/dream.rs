@@ -65,6 +65,16 @@ pub async fn execute(
     if scope.trim().is_empty() {
         return Err("scope must not be empty".into());
     }
+    if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+        let storage = Arc::clone(storage);
+        let scope = scope.clone();
+        let after = parsed.after.clone();
+        return tokio::task::spawn_blocking(move || {
+            execute_strata(&storage, &scope, memory_count, max_pairs, after.as_deref())
+        })
+        .await
+        .map_err(|e| format!("dream task failed: {e}"))?;
+    }
     let (mut all_nodes, has_more) = storage
         .maintenance_memory_page(memory_count, parsed.after.as_deref(), &scope)
         .map_err(|e| e.to_string())?;
@@ -259,6 +269,145 @@ pub async fn execute(
             "duration_ms": dream_result.duration_ms,
         }
     }))
+}
+
+/// Replay edges already on the log and fold one FSRS review per endpoint.
+/// Content, tags, names, and `min_similarity` are not inputs.
+fn execute_strata(
+    storage: &Arc<Storage>,
+    scope: &str,
+    memory_count: usize,
+    max_pairs: usize,
+    after: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let started = std::time::Instant::now();
+    let (page, has_more) = storage
+        .maintenance_memory_page(memory_count, after, scope)
+        .map_err(|e| e.to_string())?;
+    let next_cursor = page.last().map(|node| node.id.clone());
+    let live: Vec<vestige_core::KnowledgeNode> = page
+        .into_iter()
+        .filter(|node| node.suppression_count == 0 && node.is_currently_valid())
+        .collect();
+    if live.len() < 5 {
+        return Ok(serde_json::json!({
+            "hasMore": has_more,
+            "nextCursor": next_cursor,
+            "scope": scope,
+            "maxPairs": max_pairs,
+            "status": "insufficient_memories",
+            "message": format!("Need at least 5 memories to dream. Current count: {}", live.len()),
+            "count": live.len()
+        }));
+    }
+
+    let page_ids: std::collections::BTreeSet<&str> =
+        live.iter().map(|node| node.id.as_str()).collect();
+    let mut edges: Vec<vestige_core::ConnectionRecord> = storage
+        .get_all_connections()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|edge| {
+            page_ids.contains(edge.source_id.as_str()) && page_ids.contains(edge.target_id.as_str())
+        })
+        .collect();
+    edges.sort_by(|left, right| {
+        (&left.source_id, &left.target_id, &left.link_type).cmp(&(
+            &right.source_id,
+            &right.target_id,
+            &right.link_type,
+        ))
+    });
+
+    let mut pairs = std::collections::BTreeSet::new();
+    let mut endpoints = std::collections::BTreeSet::new();
+    for edge in &edges {
+        let (first, second) = if edge.source_id <= edge.target_id {
+            (edge.source_id.clone(), edge.target_id.clone())
+        } else {
+            (edge.target_id.clone(), edge.source_id.clone())
+        };
+        pairs.insert((first, second, edge.link_type.clone()));
+        endpoints.insert(edge.source_id.clone());
+        endpoints.insert(edge.target_id.clone());
+    }
+
+    let by_id: std::collections::HashMap<&str, &vestige_core::KnowledgeNode> =
+        live.iter().map(|node| (node.id.as_str(), node)).collect();
+    let mut reviews = Vec::with_capacity(endpoints.len());
+    let mut memories_strengthened = 0u64;
+    let mut memories_compressed = 0u64;
+    for id in &endpoints {
+        let node = by_id
+            .get(id.as_str())
+            .ok_or_else(|| format!("recorded edge endpoint {id} left the page"))?;
+        let rating = fsrs_replay_rating(node);
+        if rating.as_i32() >= 3 {
+            memories_strengthened += 1;
+        } else if rating.as_i32() == 1 {
+            memories_compressed += 1;
+        }
+        reviews.push(serde_json::json!({
+            "id": id,
+            "rating": rating.as_i32(),
+            "retention": node.retention_strength,
+            "stability": node.stability,
+            "repsBefore": node.reps,
+            "lapses": node.lapses,
+        }));
+        storage
+            .mark_reviewed(id, rating)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let duration_ms = started.elapsed().as_millis() as u64;
+    Ok(serde_json::json!({
+        "hasMore": has_more,
+        "nextCursor": next_cursor,
+        "scope": scope,
+        "maxPairs": max_pairs,
+        "status": "completed",
+        "basis": "recorded_edges_fsrs",
+        "selection": "recorded_edges_fsrs",
+        "memoriesReplayed": reviews.len(),
+        "edgesConsidered": edges.len(),
+        "edgesConsolidated": pairs.len(),
+        "memoriesReviewed": reviews.len(),
+        "memoriesStrengthened": memories_strengthened,
+        "connectionsFound": pairs.len(),
+        "insights": [],
+        "connectionsPersisted": 0,
+        "insightsPersisted": 0,
+        "wakingTagsProcessed": 0,
+        "wakingTagsCleared": 0,
+        "reviews": reviews,
+        "durationMs": duration_ms,
+        "stats": {
+            "new_connections_found": 0,
+            "connections_persisted": 0,
+            "insights_persisted": 0,
+            "memories_strengthened": memories_strengthened,
+            "memories_compressed": memories_compressed,
+            "insights_generated": 0,
+            "duration_ms": duration_ms,
+        }
+    }))
+}
+
+/// Replay rating from FSRS fields already on the node.
+fn fsrs_replay_rating(node: &vestige_core::KnowledgeNode) -> vestige_core::Rating {
+    let score = if node.lapses > node.reps {
+        1
+    } else if node.retention_strength >= 0.9 && node.stability >= 1.0 {
+        4
+    } else if node.retention_strength >= 0.5 {
+        3
+    } else if node.retention_strength >= 0.2 {
+        2
+    } else {
+        1
+    };
+    vestige_core::Rating::from_i32(score).expect("replay rating is 1..=4")
 }
 
 #[cfg(all(test, feature = "legacy-sqlite"))]
@@ -768,5 +917,103 @@ mod tests {
                 assert_eq!(insight.applied_count, 0);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod strata_dream {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::cognitive::CognitiveEngine;
+    use tokio::sync::Mutex;
+    use vestige_core::{ConnectionRecord, IngestInput, Storage};
+
+    fn engine() -> Arc<Mutex<CognitiveEngine>> {
+        Arc::new(Mutex::new(CognitiveEngine::new()))
+    }
+
+    fn ingest(storage: &Arc<Storage>, content: &str) -> String {
+        storage
+            .ingest(IngestInput {
+                content: content.into(),
+                ..IngestInput::default()
+            })
+            .unwrap()
+            .id
+    }
+
+    #[tokio::test]
+    async fn below_five_is_insufficient() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        for i in 0..4 {
+            ingest(&storage, &format!("page {i}"));
+        }
+        let value = execute(&storage, &engine(), None).await.unwrap();
+        assert_eq!(value["status"], "insufficient_memories");
+        assert_eq!(value["count"], 4);
+    }
+
+    #[tokio::test]
+    async fn recorded_edges_replay_and_similarity_is_not_a_gate() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let mut ids = Vec::new();
+        for content in ["aa", "bb", "cc", "dd", "ee", "ff"] {
+            ids.push(ingest(&storage, content));
+        }
+        let created = storage.get_node(&ids[0]).unwrap().unwrap().created_at;
+        let link = |source: &str, target: &str, kind: &str, strength: f64| {
+            storage
+                .save_connection(&ConnectionRecord {
+                    source_id: source.to_string(),
+                    target_id: target.to_string(),
+                    strength,
+                    link_type: kind.to_string(),
+                    created_at: created,
+                    last_activated: created,
+                    activation_count: 1,
+                })
+                .unwrap();
+        };
+        link(&ids[0], &ids[1], "derived_from", 1.0);
+        link(&ids[1], &ids[2], "evidence_of", 0.8);
+        link(&ids[3], &ids[4], "touched", 0.1);
+        let reps_before = storage.get_node(&ids[0]).unwrap().unwrap().reps;
+
+        let value = execute(
+            &storage,
+            &engine(),
+            Some(serde_json::json!({ "min_similarity": 0.99 })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["status"], "completed");
+        assert_eq!(value["basis"], "recorded_edges_fsrs");
+        assert_eq!(value["edgesConsolidated"], 3);
+        assert_eq!(value["connectionsPersisted"], 0);
+        assert!(value["insights"].as_array().unwrap().is_empty());
+        let text = serde_json::to_string(&value).unwrap();
+        assert!(!text.contains("pending_strata"), "{text}");
+        assert!(!text.contains("aa"), "{text}");
+
+        let mut reviewed: Vec<String> = value["reviews"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|review| review["id"].as_str().unwrap().to_string())
+            .collect();
+        reviewed.sort();
+        let mut expected = ids[..5].to_vec();
+        expected.sort();
+        assert_eq!(reviewed, expected, "{value}");
+        for id in &ids[..5] {
+            assert_eq!(storage.get_node(id).unwrap().unwrap().reps, reps_before + 1);
+        }
+        assert_eq!(
+            storage.get_node(&ids[5]).unwrap().unwrap().reps,
+            reps_before
+        );
     }
 }

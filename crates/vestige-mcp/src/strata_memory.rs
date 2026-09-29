@@ -21,8 +21,8 @@ use vestige_core::storage::{
     WalCheckpointMode, WalCheckpointStatus, HANDLE_REQUIRED_DETAIL, MAX_CANDIDATES,
 };
 use vestige_core::{
-    scan_secrets, ConsolidationResult, DecayRisk, IngestInput, KnowledgeNode, MemoryStats, Receipt,
-    SecretPolicy,
+    ConsolidationResult, DecayRisk, IngestInput, KnowledgeNode, MemoryStats, Rating, Receipt,
+    SecretPolicy, scan_secrets,
 };
 
 const Q32_SCALE: f64 = 4294967296.0;
@@ -606,6 +606,43 @@ impl MemoryStoreSend for StrataMemory {
     fn save_connection(&self, connection: &VestigeEdge) -> Result<(), StorageError> {
         let edge = to_strata_edge(connection);
         self.lock().save_connection(&edge).map_err(map_store)
+    }
+
+    fn maintenance_memory_page(
+        &self,
+        limit: usize,
+        after: Option<&str>,
+        scope: &str,
+    ) -> Result<(Vec<KnowledgeNode>, bool), StorageError> {
+        page_bounds(limit, after, 10_000)?;
+        let store = self.lock();
+        let mut records: Vec<strata_store::NodeRecord> = store
+            .nodes()
+            .into_iter()
+            .filter(|record| record.scope == scope && record.is_live())
+            .filter(|record| after.is_none_or(|cursor| record.id.as_str() > cursor))
+            .collect();
+        records.sort_by(|left, right| left.id.cmp(&right.id));
+        let has_more = records.len() > limit;
+        records.truncate(limit);
+        let nodes = records
+            .iter()
+            .map(|record| project_node(&store, record))
+            .collect();
+        Ok((nodes, has_more))
+    }
+
+    fn mark_reviewed(&self, id: &str, rating: Rating) -> Result<KnowledgeNode, StorageError> {
+        let score = u8::try_from(rating.as_i32())
+            .map_err(|_| StorageError::Init("rating must be 1..=4".into()))?;
+        let mut store = self.lock();
+        store.review(id, score).map_err(map_store)?;
+        // Anchor the fold so strata-verify can see the live store after dream.
+        store.seal_checkpoint().map_err(map_store)?;
+        let record = store
+            .get_node(id)
+            .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+        Ok(project_node(&store, &record))
     }
 
     fn superseded_node_ids(&self) -> Result<HashSet<String>, StorageError> {
