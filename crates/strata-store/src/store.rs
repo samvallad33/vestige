@@ -12,7 +12,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use strata::StrataLog;
 use strata_gate::policy::{ANY_KIND, WILDCARD_PREFIX};
 use strata_gate::record::{action_kind, EffectRecord, GateRecord, Propose, RecordKind, Verdict};
-use strata_gate::{EventLog, GateRuntime, Policy, Rule, SeqAck};
+use strata_gate::{GateRuntime, Policy, Rule, SeqAck};
 use strata_kernel::checkpoint::{checkpoint_hash, Checkpoint};
 use strata_kernel::event::ReviewEvent;
 use strata_kernel::fsrs::{FsrsFold, ALGO_V2};
@@ -100,21 +100,6 @@ struct StateDigest<'a> {
     fsrs_root: [u8; 32],
     checkpoints: Vec<[u8; 32]>,
     orphan_writes: u64,
-    suppressions: Vec<(&'a str, i64, i64)>,
-    suppress_effects: Vec<(u64, &'a str)>,
-}
-
-/// One effect re-checked against the log: Allow gate, digest, decoded op.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifiedEffect {
-    /// Gate-space seq of the EFFECT frame.
-    pub effect_seq: u64,
-    /// Subject id carried by the data frame (`card_id` decimal for a review).
-    pub node_id: String,
-    /// `ingest`, `edge`, `supersede`, `review`, or `suppress`.
-    pub kind: &'static str,
-    /// `EFFECT.payload_digest`, equal to blake3 of the data-frame payload.
-    pub payload_digest: [u8; 32],
 }
 
 /// The STRATA-native memory store.
@@ -145,10 +130,6 @@ pub struct StrataStore {
     checkpoints: Vec<Checkpoint>,
     /// Data frames that had no admitting effect in the log (ignored).
     orphan_writes: u64,
-    /// node id -> (compounded count, latest suppression time).
-    suppressions: BTreeMap<String, (i64, i64)>,
-    /// Gate-space effect seq -> suppressed node id.
-    suppress_effects: BTreeMap<u64, String>,
 }
 
 impl StrataStore {
@@ -182,8 +163,6 @@ impl StrataStore {
             review_events: Vec::new(),
             checkpoints: Vec::new(),
             orphan_writes: 0,
-            suppressions: BTreeMap::new(),
-            suppress_effects: BTreeMap::new(),
         };
         store.replay()?;
         store.verify_checkpoint_chain()?;
@@ -303,18 +282,6 @@ impl StrataStore {
             }
             StoreOp::ReviewNode { card_id, rating } => {
                 self.fold_review(*card_id, *rating, ALGO_V2, frame_seq)?;
-            }
-            StoreOp::SuppressNode { id, at_ms } => {
-                if !self.nodes.contains_key(id) {
-                    return Err(StoreError::NotFound(id.clone()));
-                }
-                // Rating 1 is the FSRS lapse. The count is what readers
-                // inhibit with; the node is not removed.
-                self.fold_review(handle_of(id), 1, ALGO_V2, frame_seq)?;
-                let entry = self.suppressions.entry(id.clone()).or_insert((0, 0));
-                entry.0 = entry.0.saturating_add(1);
-                entry.1 = *at_ms;
-                self.suppress_effects.insert(gate_effect_seq, id.clone());
             }
         }
         Ok(())
@@ -619,90 +586,6 @@ impl StrataStore {
         Ok(())
     }
 
-    /// Admit one top-down suppression of `id`.
-    ///
-    /// The node stays in the registry. Returns the gate-space effect seq.
-    /// `at_ms` is caller data; this store does not read a clock. A missing id
-    /// is refused before any propose is appended.
-    pub fn suppress(&mut self, id: &str, at_ms: i64) -> Result<u64, StoreError> {
-        self.require_node(id)?;
-        let context = self.context_for(&[id]);
-        let (effect_seq, _) = self.admit_write(
-            StoreOp::SuppressNode {
-                id: id.to_string(),
-                at_ms,
-            },
-            action_kind::WRITE,
-            context,
-        )?;
-        Ok(effect_seq)
-    }
-
-    /// Compounded suppression count and the latest `at_ms`, if any.
-    pub fn suppression(&self, id: &str) -> Option<(i64, i64)> {
-        self.suppressions.get(id).copied()
-    }
-
-    /// Node suppressed by the effect at `effect_seq`, if that effect is a suppression.
-    pub fn suppress_effect_node(&self, effect_seq: u64) -> Option<&str> {
-        self.suppress_effects.get(&effect_seq).map(String::as_str)
-    }
-
-    /// Latest suppression effect seq for `id`.
-    pub fn latest_suppress_effect(&self, id: &str) -> Option<u64> {
-        self.suppress_effects
-            .iter()
-            .rev()
-            .find(|(_, node)| *node == id)
-            .map(|(seq, _)| *seq)
-    }
-
-    /// Re-check one admitted effect: covering propose, Allow gate, payload digest.
-    pub fn verify_effect(&self, effect_seq: u64) -> Result<VerifiedEffect, StoreError> {
-        let runtime = GateRuntime::new(self.gate_log.clone(), self.policy.clone());
-        let events = runtime.log().events_before(u64::MAX);
-        let effect = events
-            .iter()
-            .find(|event| event.seq == effect_seq && event.kind == RecordKind::Effect)
-            .and_then(|event| event.effect())
-            .ok_or_else(|| StoreError::NotFound(format!("effect {effect_seq}")))?;
-        runtime
-            .admit(&effect)
-            .map_err(|err| StoreError::Verify(err.to_string()))?;
-        if effect.action_hash != effect.payload_digest {
-            return Err(StoreError::Verify(
-                "effect action_hash does not match payload_digest".into(),
-            ));
-        }
-        let frames = self.log.read_frames(1)?;
-        let data = frames
-            .iter()
-            .find(|frame| {
-                frame.kind == KIND_STORE_WRITE && hash32(&frame.payload) == effect.payload_digest
-            })
-            .ok_or_else(|| StoreError::Verify("effect payload has no data frame".into()))?;
-        if data.payload_blake3 != strata::payload_blake3(data.kind, &data.payload) {
-            return Err(StoreError::Verify(
-                "store frame payload hash does not match".into(),
-            ));
-        }
-        let op = StoreOp::try_from_slice(&data.payload)
-            .map_err(|err| StoreError::Verify(err.to_string()))?;
-        let (kind, node_id) = match &op {
-            StoreOp::UpsertNode { record } => ("ingest", record.id.clone()),
-            StoreOp::SaveEdge { edge } => ("edge", edge.source_id.clone()),
-            StoreOp::SupersedeNode { id, .. } => ("supersede", id.clone()),
-            StoreOp::ReviewNode { card_id, .. } => ("review", card_id.to_string()),
-            StoreOp::SuppressNode { id, .. } => ("suppress", id.clone()),
-        };
-        Ok(VerifiedEffect {
-            effect_seq,
-            node_id,
-            kind,
-            payload_digest: effect.payload_digest,
-        })
-    }
-
     /// Current FSRS scheduling card for a node (derived state, cloned).
     pub fn card_state(&self, id: &str) -> Option<strata_kernel::fsrs::CardState> {
         self.fsrs.cards.get(&handle_of(id)).cloned()
@@ -894,16 +777,6 @@ impl StrataStore {
             fsrs_root: strata_kernel::checkpoint::state_root(&self.fsrs),
             checkpoints: self.checkpoints.iter().map(checkpoint_hash).collect(),
             orphan_writes: self.orphan_writes,
-            suppressions: self
-                .suppressions
-                .iter()
-                .map(|(id, (count, at_ms))| (id.as_str(), *count, *at_ms))
-                .collect(),
-            suppress_effects: self
-                .suppress_effects
-                .iter()
-                .map(|(seq, id)| (*seq, id.as_str()))
-                .collect(),
         };
         hash32(&borsh_vec(&digest).expect("state digest serialization is infallible"))
     }
@@ -951,15 +824,5 @@ impl StrataStore {
     /// Review events retained for verification, in fold order.
     pub fn review_event_count(&self) -> usize {
         self.review_events.len()
-    }
-}
-
-impl VerifiedEffect {
-    /// True when `payload` hashes to this effect's digest and suppresses `id`.
-    pub fn binds_suppress_payload(&self, payload: &[u8], id: &str) -> bool {
-        hash32(payload) == self.payload_digest
-            && StoreOp::try_from_slice(payload).ok().is_some_and(
-                |op| matches!(op, StoreOp::SuppressNode { id: ref got, .. } if got == id),
-            )
     }
 }

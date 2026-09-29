@@ -46,11 +46,4 @@ pub enum StoreOp {
         /// Rating 1..=4 (clamped by the kernel fold if outside).
         rating: u8,
     },
-    /// Top-down suppression. The node stays; `count` compounds on replay.
-    SuppressNode {
-        /// Existing node id.
-        id: String,
-        /// Caller-supplied unix milliseconds. The store does not read a clock.
-        at_ms: i64,
-    },
 }
