@@ -11,11 +11,14 @@ publish = false
 # it does NOT join the vestige root workspace while the sibling strata crates
 # are being integrated by parallel agents. Re-parent deliberately, never
 # implicitly.
-[workspace]
 
 [dependencies]
 strata = { path = "../strata" }
 strata-kernel = { path = "../strata-kernel" }
 strata-gate = { path = "../strata-gate" }
-borsh = { version = "1", features = ["derive"] }
-blake3 = "1"
+borsh.workspace = true
+blake3.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+borsh.workspace = true

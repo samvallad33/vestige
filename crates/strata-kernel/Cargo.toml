@@ -11,7 +11,6 @@ publish = false
 # does NOT join the root vestige workspace while crates/strata is being built by
 # a parallel agent. Drop this table (and move deps to the root Cargo.toml) when
 # the integration lands.
-[workspace]
 
 [features]
 default = ["std"]
@@ -21,6 +20,6 @@ default = ["std"]
 std = []
 
 [dependencies]
-borsh = { version = "1", features = ["derive"] }
-blake3 = "1"
-libm = "0.2"
+borsh.workspace = true
+blake3.workspace = true
+libm.workspace = true

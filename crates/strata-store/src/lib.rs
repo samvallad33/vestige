@@ -52,6 +52,7 @@
 
 mod error;
 mod gate_log;
+pub mod kinds;
 mod op;
 mod store;
 mod types;
