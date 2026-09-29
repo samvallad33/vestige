@@ -151,6 +151,9 @@ tempfile = "3"
 
 [dev-dependencies]
 
+# Forbidden-mechanisms guard scanner (PR-0c).
+regex = "1"
+
 # Integration tests drive the Storage-backed server/tools; the e2e binary
 # test also reads the SQLite file directly (backup WAL). Skipped in a
 # legacy-sqlite-free build (build/t5-legacy-isolation). NO v3-engine here:

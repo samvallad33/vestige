@@ -410,15 +410,12 @@ enum Commands {
         json: bool,
     },
 
-    /// Recall + reason across memories (deep_reference): hybrid search, FSRS-6 trust,
-    /// spreading activation, supersession + contradiction analysis. Returns the
-    /// synthesized answer, evidence, and confidence.
+    /// Look up by exact handle (mem:, sha:, path:, sym:, test:, run:, call:, session:…).
+    /// Free text returns handle_required; free text is never searched.
     Recall {
-        /// The query / claim to reason about
-        query: String,
-        /// How many memories to analyze (candidate depth)
-        #[arg(long, default_value = "20")]
-        depth: i64,
+        /// Exact handle to look up
+        #[arg(long)]
+        handle: String,
         /// Output raw JSON instead of the human-readable summary
         #[arg(long)]
         json: bool,
@@ -635,7 +632,7 @@ fn main() -> anyhow::Result<()> {
             scope,
             json,
         ),
-        Commands::Recall { query, depth, json } => run_recall(query, depth, json),
+        Commands::Recall { handle, json } => run_recall(handle, json),
         Commands::Compose { limit, tags, json } => run_compose(limit, tags, json),
         Commands::Project {
             out,
@@ -3825,7 +3822,7 @@ fn run_ingest_git(
 }
 
 /// Recall + reason across memories using the real deep_reference engine.
-fn run_recall(query: String, depth: i64, json: bool) -> anyhow::Result<()> {
+fn run_recall(handle: String, json: bool) -> anyhow::Result<()> {
     use vestige_mcp::cognitive::CognitiveEngine;
 
     let storage = open_storage()?;
@@ -3833,12 +3830,14 @@ fn run_recall(query: String, depth: i64, json: bool) -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let result = rt.block_on(async move {
         let cognitive = Arc::new(tokio::sync::Mutex::new(CognitiveEngine::new()));
-        {
-            let mut cog = cognitive.lock().await;
-            cog.hydrate(&storage);
-        }
-        let args = serde_json::json!({ "query": query, "depth": depth });
-        vestige_mcp::tools::cross_reference::execute(&storage, &cognitive, Some(args)).await
+        let args = serde_json::json!({ "handle": handle });
+        vestige_mcp::tools::recall::execute(
+            &storage,
+            &cognitive,
+            &vestige_core::OutputConfig::default(),
+            Some(args),
+        )
+        .await
     });
 
     let value = result.map_err(|e| anyhow::anyhow!("recall error: {}", e))?;
@@ -3846,6 +3845,10 @@ fn run_recall(query: String, depth: i64, json: bool) -> anyhow::Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&value)?);
         return Ok(());
+    }
+
+    if value.get("error").and_then(|v| v.as_str()) == Some("handle_required") {
+        anyhow::bail!("{}", serde_json::to_string_pretty(&value)?);
     }
 
     // Human-readable summary of the real engine output.

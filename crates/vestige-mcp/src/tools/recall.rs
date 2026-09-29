@@ -1,358 +1,383 @@
-//! Unified `recall` Tool (v2.2 — Tool Consolidation, HOT PATH)
+//! Unified `recall` Tool (4.0 — handle-only, H5/H2/H8)
 //!
-//! Folds the four retrieval/reasoning tools into one mode-dispatched surface:
+//! `recall` accepts ONLY exact handles. Free text is never searched: any
+//! input that is not a byte-exact handle — or a handle that resolves to
+//! zero nodes — returns the `handle_required` payload. There is no mode
+//! dispatch, no FTS path, no token mining, no candidates field.
 //!
-//!   mode = lookup (DEFAULT) | reason | contradictions
+//! Handle grammar (byte-exact; no trimming, case folding or globbing):
+//! `mem:<uuid-v4 lowercase>|mem-<seq>`, `sha:<repo>@<40|64 hex>`,
+//! `path:<repo>@<full sha>:<path>`, `line:…#L<n>[-L<m>]`,
+//! `sym:…::<parser symbol path>`, `test:<framework>:<id>`,
+//! `run:<forge>:<run>[/<job>]`, `call:<session>/<call>`, `issue:<repo>#<n>`,
+//! `pr:<repo>!<n>`, `purl:…`, `node:<64hex>`, `receipt:<64hex>`,
+//! `tag:` (filter only), `session:`; `repo := <forge>/<numeric id>`.
 //!
-//! - `lookup` (default) → hybrid search (the former `search`). This is the hot
-//!   path: with no `mode` set, `recall` is a ZERO-overhead pass-through to
-//!   `search_unified::execute` — it must never pay the cost of the reasoning
-//!   path. (`deep_reference`/`reason` runs spreading activation + FSRS trust
-//!   scoring + contradiction analysis and is 5–10× slower.)
-//! - `reason` → deep cognitive reasoning across memories (former
-//!   `deep_reference` / `cross_reference`).
-//! - `contradictions` → trust-weighted disagreement pairs (former
-//!   `contradictions`).
-//!
-//! ## Handle mode (handle-based recall — EXACT/PREFIX only, no fuzzy)
-//!
-//! When the args contain a `handle` key (even empty), the tool switches to the
-//! handle flow BEFORE any mode dispatch: the handle (memory id, commit sha,
-//! file path, symbol, test name, run id, tool-call id, or tag) is resolved
-//! exactly (or by unique sha/symbol prefix) and the response is the resolved
-//! node payloads plus one-hop `memory_connections` neighbors. Free text with
-//! no handle inside handle mode returns the `handle_required` error payload
-//! with top exact/prefix candidates. Args without a `handle` key keep the
-//! legacy mode dispatch untouched — this is the flip point for making recall
-//! handle-only by default later.
-//!
-//! The schema is derived from `search_unified::schema()` (so every lookup
-//! parameter stays available and documented) plus the `mode` discriminator and
-//! the reason/contradictions fields. `query` is NOT globally required because
-//! the contradictions mode is scoped by `topic`; per-mode requirements are
-//! validated at runtime.
+//! The real handle walk (strata-store, signed RECALL receipt) lands in PR 1;
+//! this PR only flips the default and removes the text paths.
 
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use vestige_core::storage::{HandleKind, HandleResolution, MAX_CANDIDATES};
 use vestige_core::{KnowledgeNode, OutputConfig, Storage};
 
 use crate::cognitive::CognitiveEngine;
 
-/// Discriminated-union schema for the unified `recall` tool.
-///
-/// Built on top of `search_unified::schema()` so all lookup parameters carry
-/// through verbatim; the `required: ["query"]` constraint is dropped (validated
-/// per-mode at runtime) and the mode/reason/contradictions fields are added.
+/// Handle schemes accepted by `recall`, in the order reported by
+/// `handle_required`.
+pub const ACCEPTED_PREFIXES: [&str; 15] = [
+    "mem:", "sha:", "line:", "sym:", "path:", "test:", "run:", "call:", "issue:", "pr:", "purl:",
+    "node:", "receipt:", "tag:", "session:",
+];
+
+/// The 8-type STRATA edge vocabulary (H4); `edge_types` must be a subset.
+pub const EDGE_TYPES: [&str; 8] = [
+    "touched",
+    "anchored_to",
+    "derived_from",
+    "supersedes",
+    "corrects",
+    "closed_by",
+    "projected_to",
+    "evidence_of",
+];
+
+/// Maximum number of handles accepted in one call.
+pub const MAX_HANDLES: usize = 16;
+
+/// Maximum walk breadth accepted by this tool (the walk itself lands in PR 1).
+pub const MAX_K: u32 = 3;
+
+/// Discriminated schema for the handle-only `recall` tool.
 pub fn schema() -> Value {
-    let mut schema = super::search_unified::schema();
-
-    if let Some(obj) = schema.as_object_mut() {
-        obj.insert(
-            "description".to_string(),
-            serde_json::json!(
-                "Mode-specific retrieval. lookup supports the lookup schema. reason supports query, depth, limit, scope/includeCrossScope, retention/similarity/type/tag/validAt/source filters, and token_budget, while rejecting lookup-only controls. contradictions supports topic, since, min_trust, limit, and scope/includeCrossScope; it rejects token_budget and lookup/reason filters instead of silently ignoring them."
-            ),
-        );
-        // Drop the global `query` requirement — contradictions uses `topic`.
-        obj.remove("required");
-
-        if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
-            // Handle mode (handle-based recall). Presence of the key — even
-            // empty — activates the handle flow at entry, before mode dispatch.
-            props.insert(
-                "handle".to_string(),
-                serde_json::json!({
-                    "type": "string",
-                    "description": "[handle mode] Exact or unique-prefix handle: memory id (uuid), commit sha (40-hex or >=7-char prefix), file path, symbol (snake/camel), test name, run id, tool-call id, or tag. No fuzzy or lexical matching. Passing this key (even empty) switches recall to handle mode: a resolvable handle returns the node payloads plus one-hop connection neighbors; anything else returns the handle_required error with exact/prefix candidates."
-                }),
-            );
-            props.insert(
-                "mode".to_string(),
-                serde_json::json!({
-                    "type": "string",
-                    "enum": ["lookup", "reason", "contradictions"],
-                    "default": "lookup",
-                    "description": "'lookup' (default): fast hybrid search. 'reason': scoped deep pass with heuristic ranking, spreading activation, supersession, and contradiction analysis; its text is assembled from computed values; needs 'query' and requires current-source verification for material claims. 'contradictions': trust-weighted disagreement pairs for a 'topic', or recent memories."
-                }),
-            );
-            // reason (deep_reference) extra field.
-            props.insert(
-                "depth".to_string(),
-                serde_json::json!({
-                    "type": "integer",
-                    "description": "[reason mode] How many memories to analyze (default 20, max 50).",
-                    "minimum": 5, "maximum": 50
-                }),
-            );
-            // contradictions extra fields.
-            props.insert(
-                "topic".to_string(),
-                serde_json::json!({
-                    "type": "string",
-                    "description": "[contradictions mode] Topic to scope contradiction detection. If omitted, scans recent memories."
-                }),
-            );
-            props.insert(
-                "since".to_string(),
-                serde_json::json!({
-                    "type": "string",
-                    "description": "[contradictions mode] RFC3339 timestamp; only memories updated after this are considered."
-                }),
-            );
-            props.insert(
-                "min_trust".to_string(),
-                serde_json::json!({
-                    "type": "number",
-                    "minimum": 0.0, "maximum": 1.0,
-                    "description": "[contradictions mode] Minimum trust for both sides of a contradiction (default 0.3)."
-                }),
-            );
-
-            // These lookup-pipeline controls have no honest equivalent in the
-            // reason pipeline. Mark them mode-specific in the model-facing
-            // schema; runtime validation returns a precise error if supplied.
-            for field in [
-                "detail_level",
-                "context_topics",
-                "retrieval_mode",
-                "concrete",
-                "rank_native_fusion",
-            ] {
-                if let Some(property) = props.get_mut(field).and_then(Value::as_object_mut) {
-                    let prior = property
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    property.insert(
-                        "description".to_string(),
-                        serde_json::json!(format!(
-                            "[lookup mode only; reason returns an unsupported-field error] {prior}"
-                        )),
-                    );
-                }
-            }
-
-            for field in [
-                "query",
-                "min_retention",
-                "min_similarity",
-                "exclude_types",
-                "include_types",
-                "token_budget",
-                "tag_prefix",
-                "validAt",
-                "source_system",
-                "source_project",
-                "source_id",
-                "source_type",
-                "source_author",
-                "source_updated_after",
-                "source_updated_before",
-                "source_status",
-            ] {
-                if let Some(property) = props.get_mut(field).and_then(Value::as_object_mut) {
-                    let prior = property
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    property.insert(
-                        "description".to_string(),
-                        serde_json::json!(format!(
-                            "[lookup and reason modes; contradictions returns an unsupported-field error] {prior}"
-                        )),
-                    );
-                }
+    serde_json::json!({
+        "type": "object",
+        "description": "Look up by exact handle (mem:, sha:, path:, sym:, test:, run:, call:, session:…). Returns the causal neighborhood with a signed RECALL receipt. Free text returns handle_required.",
+        "required": ["handle"],
+        "properties": {
+            "handle": {
+                "oneOf": [
+                    { "type": "string" },
+                    { "type": "array", "items": { "type": "string" }, "maxItems": MAX_HANDLES }
+                ],
+                "description": "Exact handle(s). Byte-exact grammar: mem:<uuid-v4>|mem-<seq>, sha:<forge>/<id>@<40|64hex>, path:<forge>/<id>@<sha>:<path>, line:…#L<n>[-L<m>], sym:…::<symbol>, test:<framework>:<id>, run:<forge>:<run>[/<job>], call:<session>/<call>, issue:<repo>#<n>, pr:<repo>!<n>, purl:…, node:<64hex>, receipt:<64hex>, tag:<name> (filter only), session:<id>. No prefix, case fold, glob, or free text."
+            },
+            "as_of": {
+                "type": "string",
+                "description": "Caller-supplied as-of point for the causal neighborhood (RFC3339). Defaults to the store head."
+            },
+            "k": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_K,
+                "description": "Maximum causal neighborhood breadth (default 1, at most 3)."
+            },
+            "edge_types": {
+                "type": "array",
+                "items": { "type": "string", "enum": EDGE_TYPES },
+                "description": "Optional subset of the 8 typed edges to walk (default: all 8)."
             }
         }
-    }
-
-    schema
+    })
 }
 
-/// Unified dispatcher for `recall`. Routes on `mode` (default `lookup`).
-///
-/// HOT-PATH INVARIANT: `mode` absent ⇒ `lookup` ⇒ direct pass-through to
-/// `search_unified::execute`, no extra work.
-///
-/// HANDLE INVARIANT: a `handle` key in the args short-circuits every mode at
-/// entry (see the module docs). This gate is the single flip point for making
-/// recall handle-only by default: route the no-handle branch through
-/// [`handle_required_payload`] instead of the mode match.
+/// Unified dispatcher for `recall`. Handle-only: no mode, no text path.
 pub async fn execute(
     storage: &Arc<Storage>,
-    cognitive: &Arc<Mutex<CognitiveEngine>>,
-    output_config: &OutputConfig,
+    _cognitive: &Arc<Mutex<CognitiveEngine>>,
+    _output_config: &OutputConfig,
     args: Option<Value>,
 ) -> Result<Value, String> {
-    if let Some(handled) = handle_flow(storage, &args) {
-        return handled;
+    let object = match args.as_ref().and_then(Value::as_object) {
+        Some(object) => object,
+        None => return Ok(handle_required_payload("")),
+    };
+    if !object.contains_key("handle") {
+        // No handle at all: free text (or nothing) is never searched.
+        return Ok(handle_required_payload(
+            object.get("query").and_then(Value::as_str).unwrap_or(""),
+        ));
     }
 
-    let mode = args
-        .as_ref()
-        .and_then(|a| a.get("mode"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("lookup");
+    // Optional controls (validated, unused until the PR 1 walk).
+    if let Some(k) = object.get("k").and_then(Value::as_u64) {
+        if k > MAX_K as u64 {
+            return Err(format!("recall k must be at most {MAX_K}"));
+        }
+    }
+    if let Some(types) = object.get("edge_types").and_then(Value::as_array) {
+        for t in types {
+            match t.as_str() {
+                Some(name) if EDGE_TYPES.contains(&name) => {}
+                _ => return Err("recall edge_types must be a subset of the 8 typed edges".into()),
+            }
+        }
+    }
 
-    match mode {
-        // Zero-overhead default: straight to hybrid search.
-        "lookup" => {
-            if let Some(object) = args.as_ref().and_then(Value::as_object) {
-                let wrong_mode_fields: Vec<&str> =
-                    ["depth", "topic", "since", "min_trust", "minTrust"]
-                        .into_iter()
-                        .filter(|field| object.contains_key(*field))
-                        .collect();
-                if !wrong_mode_fields.is_empty() {
-                    return Err(format!(
-                        "Unsupported recall lookup-mode field(s): {}.",
-                        wrong_mode_fields.join(", ")
-                    ));
+    let handles: Vec<String> = match object.get("handle") {
+        Some(Value::String(one)) => vec![one.clone()],
+        Some(Value::Array(many)) => many
+            .iter()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect(),
+        Some(_) => return Ok(handle_required_payload("")),
+        None => return Ok(handle_required_payload("")),
+    };
+    if handles.len() > MAX_HANDLES {
+        return Ok(handle_required_payload(&handles.join(" ")));
+    }
+
+    let mut resolved: Vec<Value> = Vec::new();
+    for raw in &handles {
+        match resolve_one(storage, raw) {
+            Some(payload) => resolved.push(payload),
+            // Parse failure or zero resolved nodes: fail closed.
+            None => return Ok(handle_required_payload(raw)),
+        }
+    }
+    Ok(serde_json::json!({ "handles": resolved }))
+}
+
+// ============================================================================
+// Handle grammar — byte-exact, no trimming, case folding, or globbing.
+// ============================================================================
+
+fn is_lower_hex(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn is_sha(s: &str) -> bool {
+    (s.len() == 40 || s.len() == 64) && is_lower_hex(s)
+}
+
+fn is_uuid_v4_lower(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    for (i, b) in bytes.iter().enumerate() {
+        match i {
+            8 | 13 | 18 | 23 => {
+                if *b != b'-' {
+                    return false;
                 }
             }
-            super::search_unified::execute(storage, cognitive, output_config, args).await
+            14 => {
+                if *b != b'4' {
+                    return false;
+                }
+            }
+            19 => {
+                if !matches!(b, b'8' | b'9' | b'a' | b'b') {
+                    return false;
+                }
+            }
+            _ => {
+                if !b.is_ascii_hexdigit() || bytes[i].is_ascii_uppercase() {
+                    return false;
+                }
+            }
         }
-        // Deep reasoning (deep_reference / cross_reference share this handler).
-        "reason" => super::cross_reference::execute(storage, cognitive, args).await,
-        // Trust-weighted contradiction pairs (storage-only).
-        "contradictions" => super::contradictions::execute(storage, args).await,
-        other => Err(format!(
-            "Unknown recall mode '{other}'. Use lookup|reason|contradictions."
-        )),
     }
+    true
 }
 
-// ============================================================================
-// HANDLE MODE — exact/prefix handle resolution, no fuzzy, no ranking.
-// ============================================================================
+fn is_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
 
-/// Max one-hop neighbor edges reported per handle resolution.
-const MAX_NEIGHBOR_EDGES: usize = 20;
+fn is_forge(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.' || b == b'_'
+        })
+}
 
-/// Entry gate for handle mode. Returns `None` when the args carry no `handle`
-/// key (legacy mode dispatch proceeds unchanged); otherwise the complete
-/// handle-mode response.
-fn handle_flow(storage: &Arc<Storage>, args: &Option<Value>) -> Option<Result<Value, String>> {
-    let object = args.as_ref()?.as_object()?;
-    if !object.contains_key("handle") {
+/// `repo := <forge>/<numeric id>`
+fn is_repo(s: &str) -> bool {
+    let (forge, id) = match s.split_once('/') {
+        Some(parts) => parts,
+        None => return false,
+    };
+    is_forge(forge) && is_digits(id)
+}
+
+fn is_plain(s: &str) -> bool {
+    !s.is_empty() && !s.chars().any(char::is_whitespace) && !s.contains('#')
+}
+
+/// Like [`is_plain`] but `#` is allowed (test ids, run/job ids).
+fn no_ws(s: &str) -> bool {
+    !s.is_empty() && !s.chars().any(char::is_whitespace)
+}
+
+/// Validate `raw` against the handle grammar. Returns the scheme on success.
+pub fn handle_scheme(raw: &str) -> Option<&'static str> {
+    // `mem-<seq>` carries no colon: the strata sequence id IS the handle.
+    if let Some(seq) = raw.strip_prefix("mem-") {
+        return is_digits(seq).then_some("mem:");
+    }
+
+    let (scheme, rest) = raw.split_once(':')?;
+
+    let ok = match scheme {
+        "mem" => is_uuid_v4_lower(rest) || (rest.starts_with("mem-") && is_digits(&rest[4..])),
+        "sha" => {
+            let (repo, sha) = rest.split_once('@')?;
+            is_repo(repo) && is_sha(sha)
+        }
+        "path" => {
+            let (repo_sha, path) = rest.split_once(':')?;
+            let (repo, sha) = repo_sha.split_once('@')?;
+            is_repo(repo) && is_sha(sha) && is_plain(path)
+        }
+        "line" => {
+            let (repo_sha_path, lines) = rest.split_once("#L")?;
+            let (repo_sha, path) = repo_sha_path.split_once(':')?;
+            let (repo, sha) = repo_sha.split_once('@')?;
+            is_repo(repo) && is_sha(sha) && is_plain(path) && {
+                let (n, m) = match lines.split_once("-L") {
+                    Some((n, m)) => (n, Some(m)),
+                    None => (lines, None),
+                };
+                is_digits(n) && m.map(is_digits).unwrap_or(true)
+            }
+        }
+        "sym" => {
+            let (repo_sha, symbol) = rest.split_once("::")?;
+            let (repo, sha) = repo_sha.split_once('@')?;
+            is_repo(repo) && is_sha(sha) && is_plain(symbol)
+        }
+        "test" => {
+            let (framework, id) = rest.split_once(':')?;
+            is_plain(framework) && no_ws(id)
+        }
+        "run" => {
+            let (forge, rest) = rest.split_once(':')?;
+            is_forge(forge)
+                && match rest.split_once('/') {
+                    Some((run, job)) => is_plain(run) && is_plain(job),
+                    None => is_plain(rest),
+                }
+        }
+        "call" => {
+            let (session, call) = rest.split_once('/')?;
+            is_plain(session) && is_plain(call)
+        }
+        "issue" => {
+            let (repo, n) = rest.split_once('#')?;
+            is_repo(repo) && is_digits(n)
+        }
+        "pr" => {
+            let (repo, n) = rest.split_once('!')?;
+            is_repo(repo) && is_digits(n)
+        }
+        "purl" => is_plain(rest),
+        "node" | "receipt" => is_sha(rest),
+        "tag" => is_plain(rest),
+        "session" => is_plain(rest),
+        _ => false,
+    };
+    if !ok {
         return None;
     }
-    let handle = object
-        .get("handle")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .unwrap_or("");
-    if !handle.is_empty() {
-        let resolution = storage.resolve_handle(handle);
-        return Some(Ok(handle_resolution_payload(storage, handle, resolution)));
-    }
-    // `handle` present but empty/non-string: free text with no handle — the
-    // handle_required payload, with candidates mined from the free text.
-    let free_text = object
-        .get("query")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    Some(Ok(handle_required_payload(storage, free_text)))
-}
-
-/// Response payload for a resolved (or ambiguous, or unresolved) handle.
-fn handle_resolution_payload(
-    storage: &Arc<Storage>,
-    handle: &str,
-    resolution: HandleResolution,
-) -> Value {
-    if !resolution.ids.is_empty() {
-        let nodes: Vec<Value> = resolution
-            .ids
-            .iter()
-            .filter_map(|id| storage.get_node(id).ok().flatten())
-            .map(node_payload)
-            .collect();
-        let neighbors = one_hop_neighbors(storage, &resolution.ids);
-        return serde_json::json!({
-            "handle": handle,
-            "kind": resolution.kind.as_str(),
-            "exact": resolution.exact,
-            "nodes": nodes,
-            "neighbors": neighbors,
-        });
-    }
-    if !resolution.candidates.is_empty() {
-        return serde_json::json!({
-            "error": "ambiguous",
-            "detail": format!(
-                "handle prefix matched {} record(s); pass a longer prefix or the full id",
-                resolution.candidates.len()
-            ),
-            "handle": handle,
-            "kind": resolution.kind.as_str(),
-            "candidates": candidate_json(&resolution),
-        });
-    }
-    // Nothing matched. The resolver's own message is more specific than the
-    // generic detail when it was a too-short sha, so prefer it when present.
-    let detail = resolution.handle_required.unwrap_or_else(|| {
-        vestige_core::storage::HANDLE_REQUIRED_DETAIL.to_string()
-    });
-    serde_json::json!({
-        "error": "handle_required",
-        "detail": detail,
-        "candidates": [],
+    Some(match scheme {
+        "mem" => "mem:",
+        "sha" => "sha:",
+        "line" => "line:",
+        "sym" => "sym:",
+        "path" => "path:",
+        "test" => "test:",
+        "run" => "run:",
+        "call" => "call:",
+        "issue" => "issue:",
+        "pr" => "pr:",
+        "purl" => "purl:",
+        "node" => "node:",
+        "receipt" => "receipt:",
+        "tag" => "tag:",
+        "session" => "session:",
+        _ => unreachable!("scheme matched above"),
     })
 }
 
-/// The `handle_required` payload for free text: candidates mined from the
-/// text's identifier-shaped tokens via the resolver (exact/prefix only).
-fn handle_required_payload(storage: &Arc<Storage>, free_text: &str) -> Value {
-    let mut candidates: Vec<(String, HandleKind)> = Vec::new();
-    let text = free_text.trim();
-    if !text.is_empty() {
-        // Whole string first, then each identifier-shaped token (bounded).
-        let mut queries: Vec<&str> = vec![text];
-        queries.extend(
-            text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.' || c == '/' || c == '-'))
-                .filter(|t| t.len() >= 3)
-                .take(8),
-        );
-        for q in queries {
-            let r = storage.resolve_handle(q);
-            for id in &r.ids {
-                push_candidate(&mut candidates, id.clone(), r.kind);
-            }
-            for (id, kind) in &r.candidates {
-                push_candidate(&mut candidates, id.clone(), *kind);
-            }
-            if candidates.len() >= MAX_CANDIDATES {
-                break;
-            }
+/// Resolve one grammar-valid handle to a payload, or `None` when the input
+/// is not a handle or resolves to zero nodes (both fail closed to
+/// `handle_required`).
+fn resolve_one(storage: &Arc<Storage>, raw: &str) -> Option<Value> {
+    let scheme = handle_scheme(raw)?;
+
+    // `mem:`/`mem-<seq>` resolve by exact id against the store. Every other
+    // scheme goes through the byte-exact resolver and must return exactly one
+    // exact hit; prefixes, ambiguity, and misses all fail closed.
+    let mem_id: Option<String> = if let Some(seq) = raw.strip_prefix("mem-") {
+        is_digits(seq).then(|| raw.to_string())
+    } else {
+        let rest = raw.split_once(':')?.1;
+        (scheme == "mem:").then(|| rest.to_string())
+    };
+
+    let ids: Vec<String> = if let Some(id) = mem_id {
+        match storage.get_node(&id) {
+            Ok(Some(_)) => vec![id],
+            _ => Vec::new(),
         }
-        candidates.truncate(MAX_CANDIDATES);
+    } else {
+        let rest = raw.split_once(':')?.1;
+        let inner = match scheme {
+            "sha:" | "path:" | "sym:" | "test:" | "run:" | "call:" | "tag:" => {
+                // Strip repo@/framework/forge decorations: the resolver wants
+                // the bare sha/path/symbol/id bytes.
+                match rest.split_once('@') {
+                    Some((_, tail)) => match tail.split_once(':') {
+                        Some((_, bare)) => bare,
+                        None => tail,
+                    },
+                    None => rest,
+                }
+            }
+            _ => rest,
+        };
+        let resolution = storage.resolve_handle(inner);
+        if resolution.exact && resolution.ids.len() == 1 {
+            resolution.ids
+        } else {
+            Vec::new()
+        }
+    };
+
+    if ids.is_empty() {
+        return None;
+    }
+    let nodes: Vec<Value> = ids
+        .iter()
+        .filter_map(|id| storage.get_node(id).ok().flatten())
+        .map(node_payload)
+        .collect();
+    Some(serde_json::json!({
+        "handle": raw,
+        "kind": scheme,
+        "nodes": nodes,
+    }))
+}
+
+/// The single fail-closed payload for every non-handle input.
+fn handle_required_payload(got: &str) -> Value {
+    let mut echo = got.to_string();
+    if echo.len() > 200 {
+        echo = echo.chars().take(200).collect();
     }
     serde_json::json!({
         "error": "handle_required",
-        "detail": vestige_core::storage::HANDLE_REQUIRED_DETAIL,
-        "candidates": candidates
-            .iter()
-            .map(|(id, kind)| serde_json::json!({"id": id, "kind": kind.as_str()}))
-            .collect::<Vec<_>>(),
+        "got": echo,
+        "accepted": ACCEPTED_PREFIXES,
+        "session_handles": [],
+        "hint": "pass an exact handle; free text is never searched",
     })
-}
-
-fn push_candidate(candidates: &mut Vec<(String, HandleKind)>, id: String, kind: HandleKind) {
-    if !candidates.iter().any(|(existing, _)| *existing == id) {
-        candidates.push((id, kind));
-    }
-}
-
-fn candidate_json(resolution: &HandleResolution) -> Vec<Value> {
-    resolution
-        .candidates
-        .iter()
-        .map(|(id, kind)| serde_json::json!({"id": id, "kind": kind.as_str()}))
-        .collect()
 }
 
 /// Lean node payload for handle responses.
@@ -365,112 +390,12 @@ fn node_payload(node: KnowledgeNode) -> Value {
     })
 }
 
-/// One hop over `memory_connections` typed edges, strongest first, deduped,
-/// capped. Each neighbor entry carries the edge (link_type + strength +
-/// direction) and the neighbor node payload.
-fn one_hop_neighbors(storage: &Arc<Storage>, ids: &[String]) -> Vec<Value> {
-    let mut out: Vec<Value> = Vec::new();
-    let mut seen_edges: Vec<(String, String)> = Vec::new();
-    for id in ids {
-        let connections = match storage.get_connections_for_memory(id) {
-            Ok(conns) => conns,
-            Err(_) => continue,
-        };
-        for edge in connections {
-            if out.len() >= MAX_NEIGHBOR_EDGES {
-                return out;
-            }
-            let key = (edge.source_id.clone(), edge.target_id.clone());
-            if seen_edges.contains(&key) {
-                continue;
-            }
-            seen_edges.push(key);
-            let other = if edge.source_id == *id {
-                edge.target_id.clone()
-            } else {
-                edge.source_id.clone()
-            };
-            let node = storage.get_node(&other).ok().flatten().map(node_payload);
-            out.push(serde_json::json!({
-                "from": edge.source_id,
-                "to": edge.target_id,
-                "link_type": edge.link_type,
-                "strength": edge.strength,
-                "direction": if edge.source_id == *id { "outgoing" } else { "incoming" },
-                "node": node,
-            }));
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vestige_core::IngestInput;
 
-    #[test]
-    fn test_schema_has_mode_and_no_required() {
-        let s = schema();
-        let modes = s["properties"]["mode"]["enum"].as_array().unwrap();
-        assert_eq!(modes.len(), 3);
-        assert_eq!(s["properties"]["mode"]["default"], "lookup");
-        // query must NOT be globally required (contradictions uses topic).
-        assert!(
-            s.get("required").is_none(),
-            "recall must not globally require 'query'"
-        );
-        // lookup params carried over from search schema.
-        assert!(s["properties"]["limit"].is_object());
-        assert!(s["properties"]["detail_level"].is_object());
-    }
-
-    #[tokio::test]
-    async fn test_lookup_is_default_and_resolves() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let storage = vestige_core::open_storage(Some(dir.path().join("test.db"))).unwrap();
-        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let oc = OutputConfig::default();
-        // No mode → lookup → behaves like search (query required by search).
-        let args = Some(serde_json::json!({ "query": "anything" }));
-        let r = execute(&storage, &cognitive, &oc, args).await;
-        assert!(r.is_ok(), "default lookup should resolve: {r:?}");
-    }
-
-    #[tokio::test]
-    async fn test_contradictions_mode_resolves_without_query() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let storage = vestige_core::open_storage(Some(dir.path().join("test.db"))).unwrap();
-        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let oc = OutputConfig::default();
-        // contradictions uses topic, not query — must resolve with no query.
-        let args = Some(serde_json::json!({ "mode": "contradictions" }));
-        let r = execute(&storage, &cognitive, &oc, args).await;
-        assert!(r.is_ok(), "contradictions mode should resolve: {r:?}");
-    }
-
-    // ---- handle mode ----
-
-    use vestige_core::{ConnectionRecord, IngestInput};
-
-    fn connect(storage: &Arc<Storage>, from: &str, to: &str, link_type: &str, strength: f64) {
-        let now = chrono::Utc::now();
-        storage
-            .save_connection(&ConnectionRecord {
-                source_id: from.to_string(),
-                target_id: to.to_string(),
-                strength,
-                link_type: link_type.to_string(),
-                created_at: now,
-                last_activated: now,
-                activation_count: 0,
-            })
-            .unwrap();
-    }
-
-    const SHA_A: &str = "0123456789abcdef0123456789abcdef01234567";
-    const SHA_B: &str = "0123456789fffffffedcba9876543210fedcba98";
-
-    async fn handle_store() -> (Arc<Storage>, tempfile::TempDir, String) {
+    async fn store() -> (Arc<Storage>, tempfile::TempDir, String) {
         let dir = tempfile::TempDir::new().unwrap();
         let storage = vestige_core::open_storage(Some(dir.path().join("handle.db"))).unwrap();
         let memory = storage
@@ -480,149 +405,232 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        let cause = storage
-            .ingest(IngestInput {
-                content: "commit flipping API_TIMEOUT default".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        let commit_a = storage
-            .ingest(IngestInput {
-                content: format!("commit {SHA_A} speed up cold starts\nfiles: src/main.rs"),
-                tags: vec!["git-commit".into()],
-                ..Default::default()
-            })
-            .unwrap();
-        let _commit_b = storage
-            .ingest(IngestInput {
-                content: format!("commit {SHA_B} fix the thing"),
-                tags: vec!["git-commit".into()],
-                ..Default::default()
-            })
-            .unwrap();
-        connect(&storage, &memory.id, &cause.id, "causal", 0.9);
-        connect(&storage, &commit_a.id, &memory.id, "temporal", 0.4);
         let memory_id = memory.id.clone();
         (storage, dir, memory_id)
     }
 
-    #[tokio::test]
-    async fn handle_resolves_uuid_and_returns_one_hop_neighbors() {
-        let (storage, _dir, memory_id) = handle_store().await;
+    async fn run(storage: &Arc<Storage>, args: Value) -> Result<Value, String> {
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
         let oc = OutputConfig::default();
-        let out = execute(
-            &storage,
-            &cognitive,
-            &oc,
-            Some(serde_json::json!({ "handle": memory_id })),
-        )
-        .await
-        .unwrap();
-        assert_eq!(out["kind"], "memory");
-        assert_eq!(out["exact"], true);
-        assert_eq!(out["nodes"][0]["id"], serde_json::json!(memory_id));
-        let neighbors = out["neighbors"].as_array().unwrap();
-        assert_eq!(neighbors.len(), 2, "one hop, both directions: {out}");
-        // Strongest edge first (causal 0.9 before temporal 0.4).
-        assert_eq!(neighbors[0]["link_type"], "causal");
-        assert_eq!(neighbors[0]["direction"], "outgoing");
-        assert!(neighbors[0]["node"].is_object(), "neighbor node payload included");
-        assert_eq!(neighbors[1]["link_type"], "temporal");
-        assert_eq!(neighbors[1]["direction"], "incoming");
+        execute(storage, &cognitive, &oc, Some(args)).await
     }
 
+    // Spec: recall_free_text_returns_handle_required
     #[tokio::test]
-    async fn handle_commit_sha_prefix_and_ambiguity() {
-        let (storage, _dir, _memory_id) = handle_store().await;
-        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let oc = OutputConfig::default();
-        // Full sha: exact commit resolution.
-        let out = execute(
+    async fn recall_free_text_returns_handle_required() {
+        let (storage, _dir, _id) = store().await;
+        let out = run(
             &storage,
-            &cognitive,
-            &oc,
-            Some(serde_json::json!({ "handle": SHA_A })),
-        )
-        .await
-        .unwrap();
-        assert_eq!(out["kind"], "commit");
-        assert_eq!(out["exact"], true);
-        // Shared 7-char prefix across both commits: ambiguous candidates.
-        let out = execute(
-            &storage,
-            &cognitive,
-            &oc,
-            Some(serde_json::json!({ "handle": &SHA_A[..7] })),
-        )
-        .await
-        .unwrap();
-        assert_eq!(out["error"], "ambiguous");
-        assert_eq!(out["candidates"].as_array().unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn free_text_without_handle_returns_handle_required_with_candidates() {
-        let (storage, _dir, _memory_id) = handle_store().await;
-        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let oc = OutputConfig::default();
-        // `handle` key present but empty: free text -> handle_required, with
-        // candidates mined from the text (API_TIMEOUT resolves the memory).
-        let out = execute(
-            &storage,
-            &cognitive,
-            &oc,
-            Some(serde_json::json!({ "handle": "", "query": "what did API_TIMEOUT change" })),
+            serde_json::json!({ "query": "what did API_TIMEOUT change" }),
         )
         .await
         .unwrap();
         assert_eq!(out["error"], "handle_required");
-        assert!(
-            out["detail"]
-                .as_str()
-                .unwrap()
-                .contains("recall is handle-based"),
-            "detail must be the canonical guidance: {out}"
+        assert_eq!(out["got"], "what did API_TIMEOUT change");
+        assert_eq!(out["accepted"].as_array().unwrap().len(), 15);
+        assert_eq!(out["session_handles"].as_array().unwrap().len(), 0);
+        assert!(out["hint"].as_str().unwrap().contains("never searched"));
+        assert!(out.get("candidates").is_none(), "no candidates field");
+    }
+
+    // Spec: recall_empty_handle_returns_handle_required
+    #[tokio::test]
+    async fn recall_empty_handle_returns_handle_required() {
+        let (storage, _dir, _id) = store().await;
+        let out = run(&storage, serde_json::json!({ "handle": "" }))
+            .await
+            .unwrap();
+        assert_eq!(out["error"], "handle_required");
+        assert!(out.get("candidates").is_none());
+    }
+
+    // Spec: recall_handle_required_never_mines_tokens — a sentence containing
+    // an existing memory's exact id still returns handle_required, with no
+    // candidates field.
+    #[tokio::test]
+    async fn recall_handle_required_never_mines_tokens() {
+        let (storage, _dir, id) = store().await;
+        let sentence = format!("please look at {id} and tell me what changed");
+        let out = run(&storage, serde_json::json!({ "query": sentence }))
+            .await
+            .unwrap();
+        assert_eq!(out["error"], "handle_required");
+        assert!(out.get("candidates").is_none(), "token mining must be gone");
+        assert!(out["nodes"].is_null(), "nothing may resolve from prose");
+    }
+
+    // Spec: recall_short_sha_returns_handle_required_with_hint
+    #[tokio::test]
+    async fn recall_short_sha_returns_handle_required_with_hint() {
+        let (storage, _dir, _id) = store().await;
+        let out = run(&storage, serde_json::json!({ "handle": "0123456" }))
+            .await
+            .unwrap();
+        assert_eq!(out["error"], "handle_required");
+        assert_eq!(out["got"], "0123456");
+        assert!(out["hint"].as_str().unwrap().contains("exact handle"));
+        // A bare full sha is also outside the grammar (sha: needs repo@).
+        let out = run(
+            &storage,
+            serde_json::json!({ "handle": "0123456789abcdef0123456789abcdef01234567" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["error"], "handle_required");
+    }
+
+    // Spec: recall_search_alias_removed
+    #[tokio::test]
+    async fn recall_search_alias_removed() {
+        let (storage, _dir, _id) = store().await;
+        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
+        let oc = OutputConfig::default();
+        // The `mode` field is no longer part of recall at all.
+        let out = execute(
+            &storage,
+            &cognitive,
+            &oc,
+            Some(serde_json::json!({ "mode": "lookup", "query": "anything" })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            out["error"], "handle_required",
+            "mode/query are ignored: free text is never searched"
         );
-        let candidates = out["candidates"].as_array().unwrap();
-        assert!(!candidates.is_empty(), "identifier token must yield candidates: {out}");
-        assert!(candidates.iter().all(|c| c["kind"] == "symbol" || c["kind"] == "memory"));
-        // Pure prose with no identifiers: the same error, empty candidates.
-        let out = execute(
-            &storage,
-            &cognitive,
-            &oc,
-            Some(serde_json::json!({ "handle": "", "query": "how did the build break" })),
-        )
-        .await
-        .unwrap();
-        assert_eq!(out["error"], "handle_required");
-        assert_eq!(out["candidates"].as_array().unwrap().len(), 0);
-        // An unresolvable non-empty handle: same payload shape.
-        let out = execute(
-            &storage,
-            &cognitive,
-            &oc,
-            Some(serde_json::json!({ "handle": "no_such_symbol_anywhere" })),
-        )
-        .await
-        .unwrap();
-        assert_eq!(out["error"], "handle_required");
     }
 
+    // Spec: recall_never_touches_fts — works on a store with no knowledge_fts.
     #[tokio::test]
-    async fn no_handle_key_keeps_legacy_mode_dispatch() {
-        let (storage, _dir, _memory_id) = handle_store().await;
-        let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
-        let oc = OutputConfig::default();
-        // No `handle` key: the legacy hot path still answers a plain query.
-        let out = execute(
+    async fn recall_never_touches_fts() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("nofts.db");
+        let storage = vestige_core::open_storage(Some(db.clone())).unwrap();
+        let memory = storage
+            .ingest(IngestInput {
+                content: "handle-only recall target".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        drop(storage);
+        // Strip the FTS table entirely.
+        #[cfg(feature = "legacy-sqlite")]
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            for suffix in ["", "_data", "_idx", "_docsize", "_config"] {
+                conn.execute_batch(&format!("DROP TABLE IF EXISTS knowledge_fts{suffix};"))
+                    .unwrap();
+            }
+        }
+        let storage = vestige_core::open_storage(Some(db)).unwrap();
+        let out = run(
             &storage,
-            &cognitive,
-            &oc,
-            Some(serde_json::json!({ "query": "API_TIMEOUT" })),
+            serde_json::json!({ "handle": format!("mem:{}", memory.id) }),
         )
-        .await;
-        assert!(out.is_ok(), "legacy lookup must keep working: {out:?}");
+        .await
+        .unwrap();
+        assert!(
+            out["handles"].is_array(),
+            "handle resolution works without FTS: {out}"
+        );
+    }
+
+    // Exact mem: handle resolves; grammar-valid but unknown handles fail closed.
+    #[tokio::test]
+    async fn mem_handle_resolves_and_unknown_fails_closed() {
+        let (storage, _dir, id) = store().await;
+        // A bare uuid is free text; the handle form is mem:<uuid>.
+        let bare = run(&storage, serde_json::json!({ "handle": id }))
+            .await
+            .unwrap();
+        assert_eq!(
+            bare["error"], "handle_required",
+            "bare uuid without mem: must fail closed"
+        );
+        let out = run(
+            &storage,
+            serde_json::json!({ "handle": format!("mem:{id}") }),
+        )
+        .await
+        .unwrap();
+        let handles = out["handles"].as_array().unwrap();
+        assert_eq!(handles[0]["kind"], "mem:");
+        assert_eq!(handles[0]["nodes"][0]["id"], serde_json::json!(id));
+
+        let out = run(
+            &storage,
+            serde_json::json!({ "handle": "mem-000000000001" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            out["error"], "handle_required",
+            "grammar-valid but unresolved fails closed"
+        );
+    }
+
+    // Grammar unit tests: byte-exact acceptance.
+    #[test]
+    fn handle_grammar_is_byte_exact() {
+        assert_eq!(
+            handle_scheme("mem:3d2f0e1a-7b8c-4d9e-a1b2-c3d4e5f60718"),
+            Some("mem:")
+        );
+        assert_eq!(handle_scheme("mem-000000000042"), Some("mem:"));
+        assert!(
+            handle_scheme("mem:3D2F0E1A-7B8C-4D9E-A1B2-C3D4E5F60718").is_none(),
+            "no case fold"
+        );
+        assert_eq!(
+            handle_scheme("sha:github/1234@0123456789abcdef0123456789abcdef01234567"),
+            Some("sha:")
+        );
+        assert!(
+            handle_scheme("sha:github/1234@0123456").is_none(),
+            "no short sha"
+        );
+        assert!(
+            handle_scheme("sha:github/abc@0123456789abcdef0123456789abcdef01234567").is_none(),
+            "repo id is numeric"
+        );
+        assert_eq!(
+            handle_scheme("path:github/1@0123456789abcdef0123456789abcdef01234567:src/main.rs"),
+            Some("path:")
+        );
+        assert_eq!(
+            handle_scheme(
+                "line:github/1@0123456789abcdef0123456789abcdef01234567:src/main.rs#L40-L52"
+            ),
+            Some("line:")
+        );
+        assert_eq!(
+            handle_scheme(
+                "sym:github/1@0123456789abcdef0123456789abcdef01234567::vestige::core::ingest"
+            ),
+            Some("sym:")
+        );
+        assert_eq!(handle_scheme("test:junit:com.x.YTest#run"), Some("test:"));
+        assert_eq!(handle_scheme("run:github:998877/1234"), Some("run:"));
+        assert_eq!(handle_scheme("call:sess-01/call-09"), Some("call:"));
+        assert_eq!(handle_scheme("issue:github/42#17"), Some("issue:"));
+        assert_eq!(handle_scheme("pr:github/42!9"), Some("pr:"));
+        assert_eq!(
+            handle_scheme("node:0011223344556677889900112233445566778899001122334455667788990011"),
+            Some("node:")
+        );
+        assert_eq!(
+            handle_scheme(
+                "receipt:0011223344556677889900112233445566778899001122334455667788990011"
+            ),
+            Some("receipt:")
+        );
+        assert_eq!(handle_scheme("tag:deploy-env"), Some("tag:"));
+        assert_eq!(handle_scheme("session:s-123"), Some("session:"));
+        assert!(handle_scheme("free text with spaces").is_none());
+        assert!(handle_scheme("mem:hello").is_none());
+        assert!(
+            handle_scheme("SHA:github/1@0123456789abcdef0123456789abcdef01234567").is_none(),
+            "scheme is case-sensitive"
+        );
     }
 }

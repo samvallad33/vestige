@@ -18,8 +18,8 @@ use crate::protocol::messages::{
     ServerCapabilities, ServerInfo, ToolAnnotations, ToolDescription,
 };
 use crate::protocol::types::{
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, LEGACY_PROTOCOL_VERSIONS,
-    SUPPORTED_PROTOCOL_VERSIONS, MCP_VERSION,
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, LEGACY_PROTOCOL_VERSIONS, MCP_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
 };
 use crate::resources;
 use crate::tools;
@@ -225,14 +225,12 @@ fn decorate_modern_result(result: &mut serde_json::Value) {
         // id comes from the structured payload the receipt attach step wrote;
         // no additional lookup, no memory content added to the wire.
         if let Some(receipt_id) = receipt_id {
-            meta_object
-                .entry("ui".to_string())
-                .or_insert_with(|| {
-                    serde_json::json!({
-                        "resourceUri":
-                            crate::resources::receipt_card::resource_uri(&receipt_id),
-                    })
-                });
+            meta_object.entry("ui".to_string()).or_insert_with(|| {
+                serde_json::json!({
+                    "resourceUri":
+                        crate::resources::receipt_card::resource_uri(&receipt_id),
+                })
+            });
         }
     }
 }
@@ -427,8 +425,7 @@ impl McpServer {
     /// claims provenance.
     fn bound_actor_did(&self) -> Option<String> {
         let did = self.actor.did();
-        (self.storage.process_actor_did().as_deref() == Some(did))
-            .then(|| did.to_string())
+        (self.storage.process_actor_did().as_deref() == Some(did)).then(|| did.to_string())
     }
 
     /// Resolve the actor provenance for one tool call: the process identity
@@ -541,7 +538,10 @@ impl McpServer {
             )),
             "tools/list" => self.handle_tools_list(request.params.as_ref(), era).await,
             "tools/call" => self.handle_tools_call(request.params).await,
-            "resources/list" => self.handle_resources_list(request.params.as_ref(), era).await,
+            "resources/list" => {
+                self.handle_resources_list(request.params.as_ref(), era)
+                    .await
+            }
             "resources/templates/list" => {
                 self.handle_resources_templates_list(request.params.as_ref(), era)
             }
@@ -732,13 +732,13 @@ impl McpServer {
         self.initialized.load(Ordering::Acquire)
     }
 
-/// The advertised tool catalog. Single source of the full schemas:
-/// `handle_tools_list` compacts it for the wire (#212), and
-/// `tools::compact::full_schema` serves the same schemas in full through
-/// `memory_status` `view='tools'`. The parity guard test keeps this
-/// function and that registry name-for-name identical.
-fn tool_catalog() -> Vec<ToolDescription> {
-    vec![
+    /// The advertised tool catalog. Single source of the full schemas:
+    /// `handle_tools_list` compacts it for the wire (#212), and
+    /// `tools::compact::full_schema` serves the same schemas in full through
+    /// `memory_status` `view='tools'`. The parity guard test keeps this
+    /// function and that registry name-for-name identical.
+    fn tool_catalog() -> Vec<ToolDescription> {
+        vec![
             // ================================================================
             // RECALL — unified retrieval tool (v2.2). HOT PATH.
             // Folds search + deep_reference + cross_reference + contradictions.
@@ -753,7 +753,7 @@ fn tool_catalog() -> Vec<ToolDescription> {
                     idempotent_hint: false,
                     open_world_hint: false,
                 }),
-description: Some("Retrieve from memory. mode 'lookup': keyword search. 'reason': deep pass: trust scoring, spreading activation, supersession, contradictions. 'contradictions': disagreement pairs for a 'topic'. Reason mode records composition evidence; retrieval never changes strength; promote what helped via memory.".to_string()),
+description: Some("Look up by exact handle (mem:, sha:, path:, sym:, test:, run:, call:, session:…). Returns the causal neighborhood with a signed RECALL receipt. Free text returns handle_required.".to_string()),
                 input_schema: tools::compact::of(&tools::recall::schema()),
                 output_schema: Some(serde_json::json!({
                     "type": "object",
@@ -1104,8 +1104,7 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
                 ..Default::default()
             },
             ]
-
-}
+    }
 
     /// Handle tools/list request
     async fn handle_tools_list(
@@ -1349,11 +1348,11 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
                             .map(str::trim)
                             .filter(|role| !role.is_empty())
                     });
-                let actor_provenance = self
-                    .resolve_actor_provenance(claimed_role)
-                    .map(|(did, resolution)| {
-                        vestige_core::trace::ActorProvenance::from_resolution(&did, &resolution)
-                    });
+                let actor_provenance =
+                    self.resolve_actor_provenance(claimed_role)
+                        .map(|(did, resolution)| {
+                            vestige_core::trace::ActorProvenance::from_resolution(&did, &resolution)
+                        });
                 if let Some(receipt) = crate::trace_recorder::build_and_save_receipt(
                     &self.storage,
                     &trace_run_id,
@@ -1587,7 +1586,7 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
             // REMOVED (2026-09-28): vector search is not the product.
             // Keyword + structural retrieval lives in `recall`.
             "search" => Err(
-                "tool 'search' is removed: vector search is not part of Vestige; use 'recall' (keyword + structural retrieval)".to_string(),
+                "tool 'search' is removed: free text is never searched; use 'recall' with an exact handle (mem:, sha:, path:, sym:, test:, run:, call:, session:…)".to_string(),
             ),
             "memory" => {
                 tools::memory_unified::execute(&self.storage, &self.cognitive, request.arguments)
@@ -1787,7 +1786,7 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
             // ================================================================
             "semantic_search" | "hybrid_search" => {
                 Err(
-                    "tool 'semantic_search'/'hybrid_search' is removed: vector search is not part of Vestige; use 'recall' (keyword + structural retrieval)".to_string(),
+                    "tool 'semantic_search'/'hybrid_search' is removed: free text is never searched; use 'recall' with an exact handle".to_string(),
                 )
             }
 
@@ -2376,8 +2375,8 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
         ];
 
         let result = ListResourcesResult { resources };
-        let mut value =
-            serde_json::to_value(result).map_err(|e| JsonRpcError::internal_error(&e.to_string()))?;
+        let mut value = serde_json::to_value(result)
+            .map_err(|e| JsonRpcError::internal_error(&e.to_string()))?;
         // Cache hints (`CacheableResult`): the list of advertised resources is
         // compile-time constant per binary, an hour is conservative;
         // `private` because feature flags can differ per install. Suppressed
@@ -2479,8 +2478,8 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
                         blob: None,
                     }],
                 };
-                let mut value =
-                    serde_json::to_value(result).map_err(|e| JsonRpcError::internal_error(&e.to_string()))?;
+                let mut value = serde_json::to_value(result)
+                    .map_err(|e| JsonRpcError::internal_error(&e.to_string()))?;
                 // Cache hints (`CacheableResult`). Resource content is
                 // user-data backed and can change on any write, so the honest
                 // hint is one second and `private` — the field pair is
@@ -2711,8 +2710,8 @@ description: Some("Decayed fix/lesson memories sharing an exact anchor with a fa
                 }
             }
 
-            // -- search --
-            "search" | "recall" | "semantic_search" | "hybrid_search" => {
+            // -- recall (handle-only; the text aliases are removed) --
+            "recall" => {
                 let query = args
                     .as_ref()
                     .and_then(|a| a.get("query"))
@@ -2969,10 +2968,7 @@ mod tests {
     /// `method_params` must be an object (or null); `_meta` is inserted into
     /// it alongside the caller's own fields.
     fn modern_params(method_params: serde_json::Value) -> serde_json::Value {
-        let mut map = method_params
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
+        let mut map = method_params.as_object().cloned().unwrap_or_default();
         map.insert(
             "_meta".to_string(),
             serde_json::json!({
@@ -3004,8 +3000,14 @@ mod tests {
         let versions = result["supportedVersions"].as_array().unwrap();
         let versions: Vec<&str> = versions.iter().map(|v| v.as_str().unwrap()).collect();
         assert_eq!(versions.first(), Some(&MODERN_PROTOCOL_VERSION));
-        assert!(versions.contains(&MCP_VERSION), "legacy clients negotiate down to {MCP_VERSION}");
-        assert_eq!(result["capabilities"]["tools"], serde_json::json!({ "listChanged": false }));
+        assert!(
+            versions.contains(&MCP_VERSION),
+            "legacy clients negotiate down to {MCP_VERSION}"
+        );
+        assert_eq!(
+            result["capabilities"]["tools"],
+            serde_json::json!({ "listChanged": false })
+        );
     }
 
     /// A modern client never shakes hands. A `ping` with per-request `_meta`
@@ -3015,7 +3017,10 @@ mod tests {
     async fn modern_ping_serves_statelessly_with_result_type() {
         let (server, _dir) = test_server().await;
         let response = server
-            .handle_request(make_request("ping", Some(modern_params(serde_json::json!({})))))
+            .handle_request(make_request(
+                "ping",
+                Some(modern_params(serde_json::json!({}))),
+            ))
             .await
             .unwrap();
         assert!(response.error.is_none(), "{:?}", response.error);
@@ -3130,7 +3135,10 @@ mod tests {
             .await
             .unwrap();
         let error = response.error.expect("must reject");
-        assert_eq!(error.code, -32022, "spec-defined UnsupportedProtocolVersion");
+        assert_eq!(
+            error.code, -32022,
+            "spec-defined UnsupportedProtocolVersion"
+        );
         let error_data = error.data.expect("-32022 carries data");
         assert_eq!(error_data["requested"], "1900-01-01");
         let supported = error_data["supported"].as_array().unwrap();
@@ -3152,7 +3160,10 @@ mod tests {
             .await
             .unwrap();
         let result = response.result.unwrap();
-        assert!(result.get("resultType").is_none(), "legacy envelope must not grow");
+        assert!(
+            result.get("resultType").is_none(),
+            "legacy envelope must not grow"
+        );
         assert_eq!(result["ttlMs"], 3_600_000);
     }
 
@@ -3242,9 +3253,10 @@ mod tests {
         // Legacy era: handshake first, no modern _meta.
         let legacy_server = make_server(true).await;
         let legacy_result = legacy_server
-            .handle_request(
-                make_request("resources/read", Some(serde_json::json!({ "uri": uri }))),
-            )
+            .handle_request(make_request(
+                "resources/read",
+                Some(serde_json::json!({ "uri": uri })),
+            ))
             .await
             .unwrap()
             .result
@@ -3325,10 +3337,7 @@ mod tests {
             .find(|t| t.name == "recall")
             .expect("recall in catalog");
         let meta = recall.meta.expect("recall carries _meta");
-        assert_eq!(
-            meta["ui"]["resourceUri"],
-            "ui://vestige/receipt/{id}"
-        );
+        assert_eq!(meta["ui"]["resourceUri"], "ui://vestige/receipt/{id}");
     }
 
     // ========================================================================
@@ -4218,7 +4227,11 @@ mod tests {
     #[test]
     fn full_schema_registry_matches_the_advertised_catalog() {
         let catalog = McpServer::tool_catalog();
-        assert_eq!(catalog.len(), 18, "catalog size changed; update the registry");
+        assert_eq!(
+            catalog.len(),
+            18,
+            "catalog size changed; update the registry"
+        );
         for tool in &catalog {
             assert!(
                 tools::compact::full_schema(&tool.name).is_some(),
@@ -4322,7 +4335,9 @@ mod tests {
                 serde_json::to_value(&full).unwrap()
             );
             assert!(
-                detail["structuredContent"]["tools"][0]["inputSchema"].to_string().len()
+                detail["structuredContent"]["tools"][0]["inputSchema"]
+                    .to_string()
+                    .len()
                     >= definition["inputSchema"].to_string().len(),
                 "full schema must not be smaller than the compact catalog schema"
             );
@@ -4450,13 +4465,25 @@ mod tests {
         // (pure query) join the read-only set.
         assert_eq!(
             read_only,
-            ["forgotten_lesson", "memory_status", "selftest", "session_start"]
+            [
+                "forgotten_lesson",
+                "memory_status",
+                "selftest",
+                "session_start"
+            ]
         );
         // Reanchoring replaces existing evidence, so the mixed codebase tool
         // must advertise its destructive action conservatively.
         assert_eq!(
             destructive,
-            ["codebase", "dedup", "intention", "maintain", "memory", "purge"]
+            [
+                "codebase",
+                "dedup",
+                "intention",
+                "maintain",
+                "memory",
+                "purge"
+            ]
         );
         assert_eq!(
             open_world,
@@ -4731,8 +4758,9 @@ mod tests {
         }
     }
 
-    /// A real retrieval must create one durable receipt that the Black Box can
-    /// fetch by the caller-supplied run id, and return that same receipt inline.
+    /// 4.0: free text can no longer produce a retrieval (or a receipt); it
+    /// fails closed with handle_required. The signed RECALL receipt returns
+    /// with the PR 1 handle walk.
     #[tokio::test]
     async fn recall_run_produces_fetchable_decision_receipt() {
         let (server, _dir) = test_server().await;
@@ -4740,7 +4768,7 @@ mod tests {
             .handle_request(make_request("initialize", Some(init_params())))
             .await;
 
-        let seeded = server
+        server
             .storage
             .ingest(vestige_core::IngestInput {
                 content: "The dashboard development server runs on port 5199.".to_string(),
@@ -4762,20 +4790,17 @@ mod tests {
 
         assert!(response.error.is_none(), "recall should succeed");
         let receipts = server.storage.list_receipts_for_run(run_id, 10).unwrap();
-        assert_eq!(receipts.len(), 1, "one retrieval produces one receipt");
-        assert!(receipts[0].retrieved.contains(&seeded.id));
-
+        assert_eq!(
+            receipts.len(),
+            0,
+            "free text must not produce a retrieval receipt"
+        );
         let structured = response
             .result
             .as_ref()
             .and_then(|result| result.get("structuredContent"))
             .expect("structured content");
-        assert_eq!(structured["runId"], run_id);
-        assert_eq!(
-            structured["receiptId"],
-            serde_json::json!(receipts[0].receipt_id)
-        );
-        assert!(structured.get("receipt").is_some());
+        assert_eq!(structured["error"], "handle_required");
     }
 
     /// v2.2: the 7 tools folded into `maintain` must still dispatch, the new
@@ -4888,6 +4913,8 @@ mod tests {
             assert_ne!(result["isError"], true, "ingest failed: {result}");
         }
 
+        // 4.0: text ranking is gone — free text fails closed with
+        // handle_required. Structural ranking returns with the PR 1 walk.
         let recall = server
             .handle_tools_call(Some(serde_json::json!({
                 "name": "recall",
@@ -4897,15 +4924,13 @@ mod tests {
             .unwrap();
         assert_ne!(recall["isError"], true, "recall failed: {recall}");
         let text = recall.to_string();
-        let fact_pos = text.find("\"nodeType\":\"fact\"").unwrap_or(usize::MAX);
-        let insight_pos = text.find("\"nodeType\":\"insight\"").unwrap_or(usize::MAX);
         assert!(
-            insight_pos != usize::MAX,
-            "the fresh insight must appear in recall results: {text}"
+            text.contains("handle_required"),
+            "free text must fail closed: {text}"
         );
         assert!(
-            insight_pos < fact_pos,
-            "fresh insight (pos {insight_pos}) must rank above the fact (pos {fact_pos})"
+            !text.contains("nodeType"),
+            "free text must return no records at all: {text}"
         );
     }
 
@@ -4951,11 +4976,9 @@ mod tests {
         }
     }
 
-    /// v2.2: `recall` mode='lookup' (the default) must produce the same result
-    /// as an explicit mode='lookup' call — i.e. the no-mode default is a
-    /// faithful pass-through, not a reasoning call. (The former standalone
-    /// `search` tool was removed with the vector runtime; the byte-for-byte
-    /// comparison now runs between the two `recall` spellings.)
+    /// 4.0: `recall` is handle-only. Free text must return the
+    /// `handle_required` payload (never a search), through both the no-args
+    /// and the legacy `mode`/`query` spellings, byte-for-byte identical.
     #[tokio::test]
     async fn test_recall_lookup_matches_search_shape() {
         let (server, _dir) = test_server().await;
@@ -4976,11 +4999,22 @@ mod tests {
         let r1 = server.handle_request(via_default).await.unwrap();
         let r2 = server.handle_request(via_explicit).await.unwrap();
         assert!(r1.error.is_none() && r2.error.is_none());
-        // The default mode and the explicit lookup mode must be identical.
+        // Free text is never searched: both spellings return the identical
+        // handle_required payload (no mode dispatch remains at all).
+        let text1 = r1.result.unwrap()["content"][0]["text"].clone();
+        let text2 = r2.result.unwrap()["content"][0]["text"].clone();
         assert_eq!(
-            r1.result.unwrap()["content"][0]["text"],
-            r2.result.unwrap()["content"][0]["text"],
-            "recall(default) must equal recall(mode=lookup) byte-for-byte"
+            text1, text2,
+            "recall(free text) must equal recall(mode=lookup, free text) byte-for-byte"
+        );
+        let text = text1.as_str().unwrap();
+        assert!(
+            text.contains("handle_required"),
+            "free text must fail closed: {text}"
+        );
+        assert!(
+            !text.contains("candidates"),
+            "no candidates field may exist: {text}"
         );
     }
 
@@ -5373,11 +5407,15 @@ mod tests {
         // Construction loads-or-mints the did:key from <data_dir>/actor.key
         // and binds it to the store.
         let did = server.bound_actor_did().expect("process actor bound");
-        assert!(did.starts_with("did:key:z6Mk"), "Ed25519 did:key shape: {did}");
+        assert!(
+            did.starts_with("did:key:z6Mk"),
+            "Ed25519 did:key shape: {did}"
+        );
 
         // Gate 1: a claimed privileged role never self-grants authority.
-        let (resolved_did, resolution) =
-            server.resolve_actor_provenance(Some("operator")).expect("resolve");
+        let (resolved_did, resolution) = server
+            .resolve_actor_provenance(Some("operator"))
+            .expect("resolve");
         assert_eq!(resolved_did, did, "identity comes from the process");
         assert_eq!(resolution.effective_role, "unattributed");
         assert_eq!(resolution.resolved_weight, 1.0);
@@ -5399,11 +5437,12 @@ mod tests {
         let cognitive = Arc::new(Mutex::new(CognitiveEngine::new()));
         let server = McpServer::new(storage.clone(), cognitive);
         let claimed = "operator";
-        let actor_provenance = server
-            .resolve_actor_provenance(Some(claimed))
-            .map(|(did, resolution)| {
-                vestige_core::trace::ActorProvenance::from_resolution(&did, &resolution)
-            });
+        let actor_provenance =
+            server
+                .resolve_actor_provenance(Some(claimed))
+                .map(|(did, resolution)| {
+                    vestige_core::trace::ActorProvenance::from_resolution(&did, &resolution)
+                });
         let result = serde_json::json!({
             "results": [
                 { "id": "mem-1", "trustScore": 0.9 },
@@ -5419,7 +5458,12 @@ mod tests {
         )
         .expect("receipt built");
         let actor = receipt["actor"].as_object().expect("provenance block");
-        assert!(actor["actor_id"].as_str().unwrap().starts_with("did:key:z6Mk"));
+        assert!(
+            actor["actor_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("did:key:z6Mk")
+        );
         assert_eq!(actor["claimed_role"], "operator");
         assert_eq!(actor["effective_role"], "unattributed");
         assert_eq!(actor["resolved_weight"], 1.0);
@@ -5427,10 +5471,7 @@ mod tests {
         assert_eq!(actor["policy_version"], 1);
         // The persisted row round-trips the provenance.
         let receipt_id = receipt["receipt_id"].as_str().unwrap();
-        let stored = storage
-            .get_receipt(receipt_id)
-            .unwrap()
-            .expect("persisted");
+        let stored = storage.get_receipt(receipt_id).unwrap().expect("persisted");
         let stored_actor = stored.actor.expect("persisted provenance");
         assert_eq!(stored_actor.claimed_role.as_deref(), Some("operator"));
         assert_eq!(stored_actor.resolution_disposition, "unregistered_claim");

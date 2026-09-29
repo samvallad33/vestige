@@ -6,16 +6,11 @@ description = "Strata: append-only, fail-stop write-ahead log with hash-chained,
 license = "AGPL-3.0-only"
 publish = false
 
-# Intentionally standalone: the empty [workspace] table keeps this crate out of
-# the repository root workspace so it builds and tests on its own. Integration
-# wiring removes this table (and adds the crate to the root members) later.
-[workspace]
-
 [dependencies]
 # borsh >= 1.6 ships derive macros behind an opt-in feature.
-borsh = { version = "1", features = ["derive"] }
-blake3 = "1.8"
-ed25519-dalek = "3"
+borsh.workspace = true
+blake3.workspace = true
+ed25519-dalek.workspace = true
 
 # Unix-only: libc provides fcntl(F_FULLFSYNC) on macOS and kill(pid, 0) for the
 # stale single-writer lock probe; neither is reachable from std.

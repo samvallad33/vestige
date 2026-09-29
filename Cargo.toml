@@ -4,23 +4,23 @@ members = [
     "crates/vestige-core",
     "crates/vestige-spacetime",
     "crates/vestige-mcp",
+    "crates/strata",
+    "crates/strata-kernel",
+    "crates/strata-gate",
+    "crates/strata-store",
     "tests/e2e",
     "tests/phase_1",
     "tests/differential",
 ]
 exclude = [
     "fastembed-rs",
-    # Strata Causal Proof Engine crates: standalone with empty [workspace]
-    # tables by design (parallel-agent construction). Excluded so root members
-    # can path-depend without cargo seeing multiple workspace roots;
-    # re-parent deliberately at integration time.
-    "crates/strata",
-    "crates/strata-gate",
-    "crates/strata-kernel",
+    # strata-migrate stays OUT of the workspace on purpose: its acceptance
+    # tests verify the v3 guard through its OWN vestige-core build. Joining
+    # it would let cargo feature unification (tests/e2e requests v3-engine)
+    # disable the guard in unified builds — loosening a guard to make a
+    # build pass (H8). strata-verify remains excluded until it is mergeable.
     "crates/strata-migrate",
-    "crates/strata-store",
     "crates/strata-verify",
-
 ]
 
 [workspace.package]
@@ -32,6 +32,10 @@ authors = ["Sam Valladares"]
 
 [workspace.dependencies]
 # Share deps across workspace
+borsh = { version = "1", features = ["derive"] }
+blake3 = "1"
+ed25519-dalek = "3"
+libm = "0.2"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

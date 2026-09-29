@@ -22,6 +22,7 @@ use strata_kernel::verify::verify_with_head;
 
 use crate::error::StoreError;
 use crate::gate_log::StrataEventLog;
+use crate::kinds::{AsOf, ParamsRecord, ReceiptHeader};
 use crate::op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 use crate::types::{
     ConnectionRecord, EdgeDirection, EdgeKind, IngestInput, NodeRecord, VALID_FOREVER_MS,
@@ -112,7 +113,7 @@ pub struct StrataStore {
     gate_log: StrataEventLog,
     policy: Policy,
     /// Node registry (derived).
-    nodes: BTreeMap<String, NodeRecord>,
+    pub(crate) nodes: BTreeMap<String, NodeRecord>,
     /// node id -> gate-space effect seq of the WRITE that created it (gate
     /// context ids; keeps the gate's `ReadNoReceipt` duty clean).
     origins: BTreeMap<String, u64>,
@@ -128,6 +129,8 @@ pub struct StrataStore {
     review_events: Vec<(u64, [u8; 32], ReviewEvent)>,
     /// Sealed checkpoints in log order.
     checkpoints: Vec<Checkpoint>,
+    /// Latest PARAMS set per params_id (rebuilt on replay).
+    params: std::collections::BTreeMap<String, ParamsRecord>,
     /// Data frames that had no admitting effect in the log (ignored).
     orphan_writes: u64,
 }
@@ -162,6 +165,7 @@ impl StrataStore {
             fsrs: State::default(),
             review_events: Vec::new(),
             checkpoints: Vec::new(),
+            params: std::collections::BTreeMap::new(),
             orphan_writes: 0,
         };
         store.replay()?;
@@ -233,6 +237,10 @@ impl StrataStore {
                 if let Ok(cp) = Checkpoint::try_from_slice(&frame.payload) {
                     self.checkpoints.push(cp);
                 }
+            } else if frame.kind == crate::kinds::KIND_PARAMS {
+                if let Ok(record) = ParamsRecord::try_from_slice(&frame.payload) {
+                    self.params.insert(record.params_id.clone(), record);
+                }
             }
             // Unknown kinds are ignored: forward compatibility.
         }
@@ -283,6 +291,35 @@ impl StrataStore {
             StoreOp::ReviewNode { card_id, rating } => {
                 self.fold_review(*card_id, *rating, ALGO_V2, frame_seq)?;
             }
+            StoreOp::ReplaceBySource {
+                new_record,
+                old_id,
+                edge,
+            } => {
+                // Land the three parts in one transaction: node, edge, retire
+                // mark (same order as the non-transactional path, so digests
+                // match either way).
+                let handle = handle_of(&new_record.id);
+                let is_new = !self.fsrs.cards.contains_key(&handle);
+                self.origins.insert(new_record.id.clone(), gate_effect_seq);
+                self.nodes.insert(new_record.id.clone(), new_record.clone());
+                if is_new {
+                    self.fold_review(handle, INGEST_RATING, new_record.kernel_id, frame_seq)?;
+                }
+                let idx = self.edges.len();
+                self.edges.push(edge.clone());
+                self.forward
+                    .entry(edge.source_id.clone())
+                    .or_default()
+                    .push(idx);
+                self.reverse
+                    .entry(edge.target_id.clone())
+                    .or_default()
+                    .push(idx);
+                if let Some(record) = self.nodes.get_mut(old_id) {
+                    record.superseded_by = Some(new_record.id.clone());
+                }
+            }
         }
         Ok(())
     }
@@ -311,7 +348,7 @@ impl StrataStore {
     // Admission: every mutation passes PROPOSE -> GATE -> EFFECT -> data
     // ------------------------------------------------------------------
 
-    fn admit_write(
+    pub(crate) fn admit_write(
         &mut self,
         op: StoreOp,
         action_kind_code: u8,
@@ -364,6 +401,128 @@ impl StrataStore {
 
         self.apply_op(&op, effect_ack.seq, data_seq)?;
         Ok((effect_ack.seq, data_seq))
+    }
+
+    /// Generalized gate-admitted append: PROPOSE -> GATE -> EFFECT -> data
+    /// frame of `kind`. `admit_write` is this plus `apply_op`; receipts and
+    /// PARAMS land through here so `rederive_verdicts()` covers them too.
+    fn admit_frame(
+        &mut self,
+        kind: u8,
+        payload: Vec<u8>,
+        action_kind_code: u8,
+        context: Vec<u64>,
+    ) -> Result<(u64, u64), StoreError> {
+        let action_hash = hash32(&payload);
+
+        let mut runtime = GateRuntime::new(self.gate_log.clone(), self.policy.clone());
+        let propose = Propose {
+            action_hash,
+            action_kind: action_kind_code,
+            params_hash: action_hash,
+            context,
+        };
+        let propose_ack = runtime.commit_propose(propose);
+        let gate_ack = runtime
+            .commit_gate(propose_ack.seq)
+            .map_err(|e| StoreError::Gate(e.to_string()))?;
+        let (_, verdict) = runtime
+            .latest_gate(propose_ack.seq)
+            .expect("commit_gate just appended the gate");
+        match verdict {
+            Verdict::Allow => {}
+            Verdict::Deny => {
+                return Err(StoreError::Denied {
+                    propose_seq: propose_ack.seq,
+                });
+            }
+            Verdict::Hold => {
+                return Err(StoreError::Held {
+                    propose_seq: propose_ack.seq,
+                });
+            }
+        }
+
+        let effect = EffectRecord {
+            propose_seq: propose_ack.seq,
+            gate_seq: gate_ack.seq,
+            action_hash,
+            payload_digest: hash32(&payload),
+        };
+        let effect_ack: SeqAck = runtime
+            .commit_effect(effect)
+            .map_err(|r| StoreError::Rejected(r.to_string()))?;
+
+        let data_acks = self.log.append_batch(vec![(kind, payload)])?;
+        let data_seq = data_acks[0].seq;
+        Ok((effect_ack.seq, data_seq))
+    }
+
+    /// Append one gate-admitted receipt frame (`kinds.rs` kinds 34..=52).
+    /// The caller builds the payload (borsh, with a `ReceiptHeader`); the
+    /// store runs PROPOSE -> GATE -> EFFECT and lands the frame only on
+    /// `Allow`. Returns `(effect gate-seq, frame log-seq)`.
+    pub fn append_receipt(
+        &mut self,
+        kind: u8,
+        payload: &[u8],
+        context: Vec<u64>,
+    ) -> Result<(u64, u64), StoreError> {
+        self.admit_frame(kind, payload.to_vec(), action_kind::EFFECT, context)
+    }
+
+    /// Append a signed PARAMS set (gate-admitted) and make it current for
+    /// `params_id`. Returns the canonical `params_hash` callers cite in
+    /// receipt headers.
+    pub fn append_params(
+        &mut self,
+        params_id: &str,
+        knobs: Vec<(String, i64)>,
+    ) -> Result<[u8; 32], StoreError> {
+        let record = ParamsRecord {
+            header: ReceiptHeader {
+                params_hash: [0u8; 32],
+                as_of: self.head_as_of(),
+            },
+            params_id: params_id.to_string(),
+            knobs,
+        };
+        let hash = record.hash();
+        let bytes = borsh_vec(&record)?;
+        self.admit_frame(
+            crate::kinds::KIND_PARAMS,
+            bytes,
+            action_kind::EFFECT,
+            Vec::new(),
+        )?;
+        self.params.insert(params_id.to_string(), record);
+        Ok(hash)
+    }
+
+    /// The caller-supplied decision point for right-now appends: the log
+    /// head seq and valid time 0 (the MCP handler supplies real valid time).
+    fn head_as_of(&self) -> AsOf {
+        AsOf {
+            seq: self.log.head().next_seq,
+            valid_time_us: 0,
+        }
+    }
+
+    /// Canonical hash of the ACTIVE parameter sets: blake3 over
+    /// `(params_id, set_hash)` pairs sorted by id. This is the
+    /// `params_hash` every receipt header carries.
+    pub fn current_params_hash(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("vestige strata active params v1");
+        for (id, record) in &self.params {
+            hasher.update(id.as_bytes());
+            hasher.update(&record.hash());
+        }
+        *hasher.finalize().as_bytes()
+    }
+
+    /// The latest PARAMS set for `params_id`, when one was appended.
+    pub fn params(&self, params_id: &str) -> Option<&ParamsRecord> {
+        self.params.get(params_id)
     }
 
     fn context_for(&self, ids: &[&str]) -> Vec<u64> {
@@ -419,6 +578,8 @@ impl StrataStore {
             valid_from_ms: input.valid_from_ms.unwrap_or(created_at_ms),
             valid_until_ms: input.valid_until_ms.unwrap_or(VALID_FOREVER_MS),
             superseded_by: None,
+            source: input.source.clone(),
+            source_updated_at_ms: input.source_updated_at_ms,
         };
         // A brand-new fact references nothing yet: empty context.
         self.admit_write(
