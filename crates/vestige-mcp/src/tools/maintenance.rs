@@ -529,8 +529,24 @@ pub async fn execute_consolidate(
     let parsed: Args = serde_json::from_value(args.unwrap_or_else(|| serde_json::json!({})))
         .map_err(|error| error.to_string())?;
     match parsed.phase.as_deref().unwrap_or("all") {
-        // w1b: the "embeddings" phase was removed with the vector runtime;
-        // only lifecycle/log row batches and the full sweep remain.
+        // Vector runtime is gone. Keep a bounded empty page so callers still
+        // see dryRun/selected/hasMore; nothing is embedded.
+        "embeddings" => {
+            if parsed.budget_ms.is_some() {
+                return Err("embedding inference supports a row bound, not budgetMs".into());
+            }
+            let batch = parsed.batch_size.unwrap_or(10);
+            if !(1..=100).contains(&batch) {
+                return Err("embeddings batchSize must be 1..=100".into());
+            }
+            return Ok(serde_json::json!({
+                "phase": "embeddings",
+                "dryRun": parsed.dry_run.unwrap_or(true),
+                "selected": 0,
+                "processed": 0,
+                "hasMore": false,
+            }));
+        }
         "lifecycle" | "logs" => {
             let storage = Arc::clone(storage);
             return tokio::task::spawn_blocking(move || {
