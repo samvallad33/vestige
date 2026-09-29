@@ -139,6 +139,8 @@ pub async fn execute(
         .unwrap_or(50)
         .min(200) as usize;
 
+    let strata = crate::strata_memory::is_strata_backend(storage.as_ref());
+
     // Determine center node
     let center_id = if let Some(id) = args
         .as_ref()
@@ -151,6 +153,13 @@ pub async fn execute(
         .and_then(|a| a.get("query"))
         .and_then(|v| v.as_str())
     {
+        if strata {
+            // Query would be keyword/FTS search. Strata has no such op.
+            return Err(
+                "similarity_disabled: memory_graph query is keyword search, not a recorded edge; pass center_id"
+                    .to_string(),
+            );
+        }
         // Search for center node
         let results = storage
             .search(query, 1)
@@ -170,10 +179,14 @@ pub async fn execute(
             .ok_or_else(|| "No memories in database".to_string())?
     };
 
-    // Get subgraph
-    let (nodes, edges) = storage
-        .get_memory_subgraph(&center_id, depth, max_nodes)
-        .map_err(|e| format!("Failed to get subgraph: {}", e))?;
+    // Recorded edges on Strata. The SQLite path keeps its own subgraph.
+    let (nodes, edges) = if strata {
+        recorded_subgraph(storage.as_ref(), &center_id, depth, max_nodes)?
+    } else {
+        storage
+            .get_memory_subgraph(&center_id, depth, max_nodes)
+            .map_err(|e| format!("Failed to get subgraph: {}", e))?
+    };
 
     if nodes.is_empty() || !nodes.iter().any(|n| n.id == center_id) {
         return Err(format!(
@@ -247,6 +260,114 @@ pub async fn execute(
         "nodeCount": nodes.len(),
         "edgeCount": edges.len(),
     }))
+}
+
+/// BFS over logged edges. Superseded ids are dropped when the store can name them.
+fn recorded_subgraph(
+    storage: &vestige_core::Storage,
+    center_id: &str,
+    depth: u32,
+    max_nodes: usize,
+) -> Result<
+    (
+        Vec<vestige_core::KnowledgeNode>,
+        Vec<vestige_core::ConnectionRecord>,
+    ),
+    String,
+> {
+    let superseded = storage.superseded_node_ids().unwrap_or_default();
+    if superseded.contains(center_id) {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let Some(center) = storage
+        .get_node(center_id)
+        .map_err(|e| format!("Failed to get subgraph: {}", e))?
+    else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+
+    let mut ids = vec![center_id.to_string()];
+    let mut seen = std::collections::BTreeSet::from([center_id.to_string()]);
+    let mut frontier = vec![center_id.to_string()];
+
+    for _ in 0..depth {
+        let mut next = std::collections::BTreeSet::new();
+        for id in &frontier {
+            let mut conns = storage
+                .get_connections_for_memory(id)
+                .map_err(|e| format!("Failed to get subgraph: {}", e))?;
+            conns.sort_by(|a, b| {
+                other_end(a, id)
+                    .cmp(other_end(b, id))
+                    .then(a.source_id.cmp(&b.source_id))
+                    .then(a.target_id.cmp(&b.target_id))
+                    .then(a.link_type.cmp(&b.link_type))
+            });
+            for edge in &conns {
+                let other = other_end(edge, id);
+                if other == id
+                    || seen.contains(other)
+                    || superseded.contains(other)
+                    || next.contains(other)
+                {
+                    continue;
+                }
+                let live = storage
+                    .get_node(other)
+                    .map_err(|e| format!("Failed to get subgraph: {}", e))?
+                    .is_some();
+                if live {
+                    next.insert(other.to_string());
+                }
+            }
+        }
+        let mut added = Vec::new();
+        for id in next {
+            if ids.len() >= max_nodes {
+                break;
+            }
+            seen.insert(id.clone());
+            ids.push(id.clone());
+            added.push(id);
+        }
+        if added.is_empty() || ids.len() >= max_nodes {
+            break;
+        }
+        frontier = added;
+    }
+
+    let mut nodes = Vec::with_capacity(ids.len());
+    nodes.push(center);
+    for id in ids.iter().skip(1) {
+        if let Some(node) = storage
+            .get_node(id)
+            .map_err(|e| format!("Failed to get subgraph: {}", e))?
+        {
+            nodes.push(node);
+        }
+    }
+    nodes.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut edges = storage
+        .get_all_connections()
+        .map_err(|e| format!("Failed to get subgraph: {}", e))?;
+    edges.retain(|edge| seen.contains(&edge.source_id) && seen.contains(&edge.target_id));
+    edges.sort_by(|a, b| {
+        a.source_id
+            .cmp(&b.source_id)
+            .then(a.target_id.cmp(&b.target_id))
+            .then(a.link_type.cmp(&b.link_type))
+            .then(a.created_at.cmp(&b.created_at))
+    });
+    Ok((nodes, edges))
+}
+
+fn other_end<'a>(edge: &'a vestige_core::ConnectionRecord, id: &str) -> &'a str {
+    if edge.source_id == id {
+        edge.target_id.as_str()
+    } else {
+        edge.source_id.as_str()
+    }
 }
 
 #[cfg(all(test, feature = "legacy-sqlite"))]
@@ -392,5 +513,166 @@ mod tests {
         let nodes = result["nodes"].as_array().unwrap();
         assert!(nodes[0]["x"].is_number());
         assert!(nodes[0]["y"].is_number());
+    }
+}
+
+#[cfg(test)]
+mod strata_stdio {
+    use super::*;
+    use crate::cognitive::CognitiveEngine;
+    use crate::server::McpServer;
+    use serde_json::{Value, json};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::sync::Mutex;
+
+    fn plant() -> (
+        tempfile::TempDir,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Default policy holds RETIRE. Copy the allow verdict onto that rule so
+        // the planted supersession is a real admitted log record.
+        let mut policy = strata_store::default_policy();
+        let allow = policy.rules[1].verdict;
+        policy.rules[0].verdict = allow;
+        let mut store = strata_store::StrataStore::open_with_policy(dir.path(), policy).unwrap();
+        let ingest = |store: &mut strata_store::StrataStore, content: &str| {
+            store
+                .ingest(strata_store::IngestInput {
+                    content: content.into(),
+                    ..strata_store::IngestInput::default()
+                })
+                .unwrap()
+        };
+        let a = ingest(&mut store, "alpha");
+        let b = ingest(&mut store, "beta");
+        let c = ingest(&mut store, "gamma");
+        let superseded = ingest(&mut store, "superseded");
+        let beyond = ingest(&mut store, "beyond superseded");
+        let isolated = ingest(&mut store, "isolated");
+        let edge =
+            |source: &str, target: &str, kind: &str, milli: i64| strata_store::ConnectionRecord {
+                source_id: source.to_string(),
+                target_id: target.to_string(),
+                strength_milli: milli,
+                link_type: kind.to_string(),
+                created_at_ms: 1,
+                ..strata_store::ConnectionRecord::default()
+            };
+        store
+            .save_connection(&edge(&a, &b, "derived_from", 800))
+            .unwrap();
+        store
+            .save_connection(&edge(&b, &c, "touched", 500))
+            .unwrap();
+        store
+            .save_connection(&edge(&a, &superseded, "evidence_of", 1000))
+            .unwrap();
+        store
+            .save_connection(&edge(&superseded, &beyond, "touched", 1000))
+            .unwrap();
+        store.supersede(&superseded, &b).unwrap();
+        (dir, a, b, c, superseded, beyond, isolated)
+    }
+
+    async fn drive(storage: Arc<Storage>, input: &str) -> Vec<Value> {
+        let server = McpServer::new(storage, Arc::new(Mutex::new(CognitiveEngine::new())));
+        let (mut client_w, server_r) = tokio::io::duplex(1 << 16);
+        let (server_w, mut client_r) = tokio::io::duplex(1 << 20);
+        let handle = tokio::spawn(async move {
+            crate::protocol::stdio::run_io(server, None, BufReader::new(server_r), server_w).await
+        });
+        client_w.write_all(input.as_bytes()).await.unwrap();
+        drop(client_w);
+        let mut buf = String::new();
+        client_r.read_to_string(&mut buf).await.unwrap();
+        handle.await.unwrap().unwrap();
+        buf.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("stdio line is JSON"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn memory_graph_stdio_returns_planted_recorded_edges() {
+        let (dir, a, b, c, superseded, beyond, isolated) = plant();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let init = json!({
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "memory-graph", "version": "1"}
+            }
+        });
+        let list = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+        let call = json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "graph",
+                "arguments": {"action": "memory_graph", "center_id": a, "depth": 2}
+            }
+        });
+        let input = format!(
+            "{init}\n{}\n{list}\n{call}\n",
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        );
+        let out = drive(storage, &input).await;
+        let listed = out
+            .iter()
+            .find(|v| v["id"] == json!(1))
+            .expect("tools/list");
+        let graph_tool = listed["result"]["tools"]
+            .as_array()
+            .expect("tools")
+            .iter()
+            .find(|tool| tool["name"] == "graph")
+            .expect("graph advertises memory_graph");
+        let advertised = graph_tool.to_string();
+        assert!(
+            advertised.contains("memory_graph"),
+            "graph schema must advertise memory_graph: {graph_tool}"
+        );
+
+        let response = out
+            .iter()
+            .find(|v| v["id"] == json!(2))
+            .expect("tools/call");
+        assert!(
+            response.get("error").is_none(),
+            "protocol error: {response}"
+        );
+        let body = &response["result"];
+        assert_eq!(body["isError"], json!(false), "{body}");
+        let graph = &body["structuredContent"];
+        assert_eq!(graph["center_id"], json!(a));
+        assert_eq!(graph["nodeCount"], json!(3));
+        assert_eq!(graph["edgeCount"], json!(2));
+        let node_ids: Vec<&str> = graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(node_ids, vec![a.as_str(), b.as_str(), c.as_str()]);
+        let edges = graph["edges"].as_array().unwrap();
+        assert_eq!(edges[0]["source"], json!(a));
+        assert_eq!(edges[0]["target"], json!(b));
+        assert_eq!(edges[0]["type"], json!("derived_from"));
+        assert_eq!(edges[0]["weight"], json!(0.8));
+        assert_eq!(edges[1]["source"], json!(b));
+        assert_eq!(edges[1]["target"], json!(c));
+        assert_eq!(edges[1]["type"], json!("touched"));
+        assert_eq!(edges[1]["weight"], json!(0.5));
+        let blob = graph.to_string();
+        assert!(!blob.contains(&superseded), "{graph}");
+        assert!(!blob.contains(&beyond), "{graph}");
+        assert!(!blob.contains(&isolated), "{graph}");
     }
 }
