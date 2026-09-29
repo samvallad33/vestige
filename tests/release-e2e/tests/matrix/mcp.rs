@@ -51,19 +51,18 @@ fn exercise(tool: &str, invalid: Value, valid: Value, miss: Value, write: bool) 
 fn mcp_catalog_matches_server_tool_list() {
     with_server(|server| {
         let listed = server.call("tools/list", None).expect("tools/list");
-        let mut names: Vec<String> = listed["result"]["tools"]
+        let names: Vec<String> = listed["result"]["tools"]
             .as_array()
             .unwrap_or(&Vec::new())
             .iter()
             .filter_map(|t| t["name"].as_str().map(str::to_string))
             .collect();
-        names.sort();
-        let mut expected = expected_tool_names();
-        expected.sort();
+        let expected = expected_tool_names();
         if names != expected {
-            missing(&format!(
-                "tools/list does not match expected_tools_4.0.txt. live={names:?} expected={expected:?}"
-            ));
+            panic!(
+                "FAIL: tools/list does not equal expected_tools_4.0.txt exactly. \
+                 live={names:?} expected={expected:?}"
+            );
         }
     });
 }

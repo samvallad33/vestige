@@ -17,8 +17,11 @@ use sha2::{Digest, Sha256};
 
 pub const MISSING_HANDLE: &str = "mem:00000000-0000-4000-8000-000000000000";
 
-/// The tool-list row reads this file. One name per line. The names stay
-/// where they are until tag time pins the tools that are actually green.
+/// Names from `expected_tools_4.0.txt`, in file order.
+///
+/// Lingxi's PR generates that file from a stdio sweep that drops tools
+/// answering `pending_strata`. This matrix does not edit the names. The
+/// catalog row requires live `tools/list` to equal this sequence exactly.
 pub fn expected_tool_names() -> Vec<String> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("expected_tools_4.0.txt");
     let text = fs::read_to_string(&path).unwrap_or_else(|e| {

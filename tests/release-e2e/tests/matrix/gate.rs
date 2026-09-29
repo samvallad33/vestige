@@ -1,15 +1,14 @@
-//! Whole-session network ban.
+//! Whole-session network ban on the default build.
 //!
-//! `no_network_whole_session` replaced `gate_decides_without_llm`. It boots
-//! the default-feature `vestige-mcp`, calls every advertised tool once, and
-//! runs `vestige sync --cloud`, all inside a network namespace under
-//! `strace -f`. A pass is zero `connect()` (and zero DNS send/recv) to
-//! anything other than a local `AF_UNIX` socket.
+//! `cloud-sync` and `connectors` are opt-in. The default session does not
+//! call `source_sync` and does not run `vestige sync --cloud`. `source_sync`
+//! must be absent from `tools/list`. Pass is an empty default `reqwest`
+//! inverse tree (`hyper` via the axum dashboard server is allowed) and zero
+//! `connect()` or DNS to anything other than `AF_UNIX`.
 
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -155,31 +154,27 @@ fn feature_lines(path: &Path) -> Vec<String> {
         .collect()
 }
 
+fn reqwest_absent(text: &str) -> bool {
+    text.contains("did not match any package")
+}
+
 fn http_feature_report(trees: &[(String, String)]) -> String {
-    let pulled = trees.iter().any(|(spec, text)| {
-        *spec != "ureq" && !text.contains("did not match") && !text.contains("failed to spawn")
-    });
-    if !pulled {
-        return "no reqwest, hyper, or hyper-util edge on the default vestige-mcp package graph"
-            .to_string();
-    }
+    let reqwest = trees
+        .iter()
+        .find(|(spec, _)| spec == "reqwest")
+        .map(|(_, text)| text.as_str())
+        .unwrap_or("");
     let root = repo_root();
     let mut lines = feature_lines(&root.join("crates/vestige-mcp/Cargo.toml"));
     lines.extend(feature_lines(&root.join("crates/vestige-core/Cargo.toml")));
     format!(
-        "HTTP client is on the default build.\n\
-         reqwest is optional on vestige-core and is enabled by two vestige-mcp \
-         default features:\n\
-         - connectors → vestige-core feature connectors = [\"dep:reqwest\"] \
-           (crates/vestige-core/Cargo.toml). Crate path: vestige-mcp → vestige-core → reqwest.\n\
-         - cloud-sync → vestige-core feature cloud-sync = [\"dep:reqwest\", \
-           \"reqwest/blocking\", ...] (crates/vestige-core/Cargo.toml). \
-           Crate path: vestige-mcp → vestige-core → reqwest.\n\
-         hyper and hyper-util also arrive through unconditional axum \
-         (crates/vestige-mcp/Cargo.toml, the dashboard server) and through \
-         reqwest → hyper-rustls.\n\
-         ureq is not in the graph.\n\
+        "default reqwest tree is empty: {}\n\
+         hyper and hyper-util may remain through unconditional axum \
+         (crates/vestige-mcp/Cargo.toml, the dashboard server).\n\
+         connectors and cloud-sync are opt-in; either one forwards to \
+         vestige-core `dep:reqwest` (crates/vestige-core/Cargo.toml).\n\
          manifest lines:\n{}",
+        reqwest_absent(reqwest),
         if lines.is_empty() {
             "(none)".to_string()
         } else {
@@ -359,11 +354,6 @@ fn tool_args(name: &str, id: &str) -> Option<Value> {
         "codebase" => json!({ "action": "get_context" }),
         "project" => json!({ "action": "preview" }),
         "intention" => json!({ "action": "list" }),
-        "source_sync" => json!({
-            "source": "github",
-            "repo": "octocat/Hello-World",
-            "max_pages": 1
-        }),
         "maintain" => json!({ "action": "gc", "dry_run": true }),
         "dedup" => json!({ "action": "scan" }),
         "graph" => json!({ "action": "recent" }),
@@ -378,44 +368,20 @@ fn tool_args(name: &str, id: &str) -> Option<Value> {
     })
 }
 
-fn trace_vestige_cloud(trace: &Path, data_dir: &Path, clear: &[&str]) {
-    let prefix = namespace_prefix(trace);
-    let bin = product_bin("vestige");
-    let mut command = Command::new(&prefix[0]);
-    command.args(&prefix[1..]);
-    command
-        .arg(&bin)
-        .arg("--data-dir")
-        .arg(data_dir)
-        .arg("sync")
-        .arg("--cloud")
-        .env("VESTIGE_DATA_DIR", data_dir)
-        .env("HOME", data_dir)
-        .env_remove("RUST_LOG");
-    for key in clear {
-        command.env_remove(key);
-    }
-    let mut child = command
-        .spawn()
-        .unwrap_or_else(|err| panic!("HARNESS: spawn vestige sync --cloud: {err}"));
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        if child.try_wait().ok().flatten().is_some() {
-            break;
-        }
-        if std::time::Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
 #[test]
 fn no_network_whole_session() {
     let report = link_report();
     println!("{report}");
+
+    let reqwest_tree = cargo_tree("reqwest");
+    let mut problems = Vec::new();
+    if !reqwest_absent(&reqwest_tree) {
+        problems.push(format!(
+            "cargo tree -p vestige-mcp -e normal -i reqwest must print \
+             'did not match any package' on the default build. hyper via axum \
+             is allowed; reqwest is not.\n{reqwest_tree}"
+        ));
+    }
 
     let clear_owned = clear_network_env();
     let clear: Vec<&str> = clear_owned.iter().map(String::as_str).collect();
@@ -423,14 +389,10 @@ fn no_network_whole_session() {
     let dir = tempfile::tempdir().unwrap();
     let mcp_trace =
         std::env::temp_dir().join(format!("vestige-session-mcp-{}.strace", std::process::id()));
-    let cli_trace =
-        std::env::temp_dir().join(format!("vestige-session-cli-{}.strace", std::process::id()));
     let _ = fs::remove_file(&mcp_trace);
-    let _ = fs::remove_file(&cli_trace);
 
     let prefix = namespace_prefix(&mcp_trace);
     let mut server = Server::boot_wrapped(dir.path(), &prefix, &clear);
-    let mut problems = Vec::new();
 
     let listed = match server.call("tools/list", None) {
         Ok(value) => value,
@@ -439,6 +401,13 @@ fn no_network_whole_session() {
     let names = tool_names(&listed);
     if names.is_empty() {
         problems.push("tools/list advertised no tools".to_string());
+    }
+    if names.iter().any(|name| name == "source_sync") {
+        problems.push(
+            "source_sync is in the default tools/list. connectors are opt-in and \
+             the default build must not advertise it"
+                .to_string(),
+        );
     }
 
     let created = server
@@ -459,7 +428,7 @@ fn no_network_whole_session() {
 
     let mut called = vec!["smart_ingest".to_string()];
     for name in &names {
-        if name == "smart_ingest" {
+        if name == "smart_ingest" || name == "source_sync" {
             continue;
         }
         let Some(args) = tool_args(name, &id) else {
@@ -495,20 +464,19 @@ fn no_network_whole_session() {
     }
 
     drop(server);
-    trace_vestige_cloud(&cli_trace, dir.path(), &clear);
 
     let mut sockets = Vec::new();
-    for (label, path) in [("vestige-mcp", &mcp_trace), ("vestige", &cli_trace)] {
-        let text = fs::read_to_string(path).unwrap_or_default();
-        let hits = non_unix_network(&text);
-        if text.is_empty() {
-            problems.push(format!("{label} strace is empty ({})", path.display()));
-        }
-        for hit in hits {
-            sockets.push(format!("{label}: {hit}"));
-        }
-        let _ = fs::remove_file(path);
+    let text = fs::read_to_string(&mcp_trace).unwrap_or_default();
+    if text.is_empty() {
+        problems.push(format!(
+            "vestige-mcp strace is empty ({})",
+            mcp_trace.display()
+        ));
     }
+    for hit in non_unix_network(&text) {
+        sockets.push(format!("vestige-mcp: {hit}"));
+    }
+    let _ = fs::remove_file(&mcp_trace);
     if !sockets.is_empty() {
         problems.push(format!(
             "a process connected to something other than a local unix socket:\n{}",
