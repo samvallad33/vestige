@@ -192,7 +192,20 @@ def run(binary, output):
             never = tool("graph", {"action": "never_composed", "limit": 5})
             assert never["scope"] == "user" and never["globalNoveltyVerified"] is False
             typed("session_start", {"queries": [marker], "include_predictions": False, "include_intentions": False}, "similarity_disabled")
-            typed("suppress", {"id": node_id}, "pending_strata")
+            doomed_suppress = tool("smart_ingest", {"content": "STRATA_SUPPRESS_DOOMED", "forceCreate": True})
+            suppress_id = doomed_suppress["nodeId"]
+            suppressed = tool("suppress", {"id": suppress_id, "reason": "fixture"})
+            assert suppressed["success"] is True and suppressed["rule"] == "suppress"
+            assert suppressed["id"] == suppress_id
+            assert str(suppressed["receiptId"]).startswith("eff-")
+            assert "STRATA_SUPPRESS_DOOMED" not in json.dumps(suppressed)
+            hidden_suppress = tool("memory", {"action": "get", "id": suppress_id})
+            assert "STRATA_SUPPRESS_DOOMED" not in json.dumps(hidden_suppress)
+            assert hidden_suppress["message"] == "retired, can't be retrieved"
+            hidden_recall = tool("recall", {"handle": suppress_id})
+            assert "STRATA_SUPPRESS_DOOMED" not in json.dumps(hidden_recall)
+            hidden_graph = tool("graph", {"action": "associations", "from": node_id})
+            assert "STRATA_SUPPRESS_DOOMED" not in json.dumps(hidden_graph)
             typed("causal_walk", {"scope": "user"}, "pending_strata")
             typed("selftest", {}, "pending_strata")
             typed("forgotten_lesson", {"failure_id": node_id}, "pending_strata")
