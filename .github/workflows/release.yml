@@ -16,9 +16,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Every shipped feature set must resolve without reqwest. Runs before the
+  # matrix builds so a regression cannot upload an artifact.
+  no-http-client:
+    name: Release feature sets do not link reqwest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Reject reqwest in every release feature set
+        run: bash scripts/check-release-no-reqwest.sh
+
   build:
     # Benchmark evidence releases must not build or publish product binaries.
     if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    needs: [no-http-client]
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -149,24 +167,6 @@ jobs:
           }
           NODE
 
-      - name: Reject reqwest in the release feature set
-        shell: bash
-        run: |
-          set +e
-          out=$(cargo tree -e features -i reqwest --locked -p vestige-mcp ${{ matrix.cargo_flags }} 2>reqwest-tree.err)
-          status=$?
-          set -e
-          printf '%s\n' "$out"
-          if [ -n "$out" ]; then
-            echo "::error::${{ matrix.target }} feature set links reqwest"
-            exit 1
-          fi
-          if [ "$status" -ne 0 ] && ! grep -q 'did not match any packages' reqwest-tree.err; then
-            cat reqwest-tree.err
-            exit "$status"
-          fi
-          echo "reqwest absent from ${{ matrix.target }}"
-
       - name: Build
         run: cargo build --locked --package vestige-mcp --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
 
@@ -214,6 +214,7 @@ jobs:
   # runner label begins deprecation in 2026; a container keeps this floor.
   build-linux:
     if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
+    needs: [no-http-client]
     name: Build x86_64-unknown-linux-gnu (glibc 2.35)
     runs-on: ubuntu-latest
     container: ubuntu:22.04
@@ -330,24 +331,6 @@ jobs:
           }
           NODE
 
-      - name: Reject reqwest in the release feature set
-        shell: bash
-        run: |
-          set +e
-          out=$(cargo tree -e features -i reqwest --locked -p vestige-mcp 2>reqwest-tree.err)
-          status=$?
-          set -e
-          printf '%s\n' "$out"
-          if [ -n "$out" ]; then
-            echo "::error::x86_64-unknown-linux-gnu feature set links reqwest"
-            exit 1
-          fi
-          if [ "$status" -ne 0 ] && ! grep -q 'did not match any packages' reqwest-tree.err; then
-            cat reqwest-tree.err
-            exit "$status"
-          fi
-          echo "reqwest absent from x86_64-unknown-linux-gnu"
-
       - name: Build
         env:
           CXX: g++-13
@@ -435,6 +418,7 @@ jobs:
   # aarch64 Linux asset (#240): the x86_64 job on GitHub's arm64 runner, same
   # Ubuntu 22.04 container for the glibc 2.35 floor, same checks and smokes.
   build-linux-arm64:
+    needs: [no-http-client]
     name: Build aarch64-unknown-linux-gnu (glibc 2.35)
     runs-on: ubuntu-24.04-arm
     container: ubuntu:22.04
@@ -550,24 +534,6 @@ jobs:
             }
           }
           NODE
-
-      - name: Reject reqwest in the release feature set
-        shell: bash
-        run: |
-          set +e
-          out=$(cargo tree -e features -i reqwest --locked -p vestige-mcp 2>reqwest-tree.err)
-          status=$?
-          set -e
-          printf '%s\n' "$out"
-          if [ -n "$out" ]; then
-            echo "::error::aarch64-unknown-linux-gnu feature set links reqwest"
-            exit 1
-          fi
-          if [ "$status" -ne 0 ] && ! grep -q 'did not match any packages' reqwest-tree.err; then
-            cat reqwest-tree.err
-            exit "$status"
-          fi
-          echo "reqwest absent from aarch64-unknown-linux-gnu"
 
       - name: Build
         env:
@@ -770,12 +736,14 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  # Android (#145): the no-embeddings Termux profile. cargo-ndk against API 24,
-  # static C++ runtime, and a hard gate that only bionic's libc/libm/libdl/liblog
-  # appear as runtime dependencies. `--no-default-features` leaves connectors
-  # and cloud-sync off, so the asset has no HTTP client. No npm installer
+  # Android (#145): the no-embeddings Termux profile Jelloeater is testing on
+  # a Pixel. Build recipe mirrors ci.yml's android-build job so what ships is
+  # byte-for-byte the configuration CI already verifies on every PR: cargo-ndk
+  # against API 24, static C++ runtime, and a hard gate that only bionic's
+  # libc/libm/libdl/liblog appear as runtime dependencies. No npm installer
   # mapping yet — on-device Termux users build from source or take the asset.
   build-android:
+    needs: [no-http-client]
     name: Build aarch64-linux-android (no embeddings)
     if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'benchmark-') && !startsWith(github.event.release.tag_name || inputs.tag, 'launch-') && !startsWith(github.event.release.tag_name || inputs.tag, 'vestige-') }}
     runs-on: ubuntu-latest
@@ -818,24 +786,6 @@ jobs:
         run: |
           echo "ANDROID_NDK_ROOT=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
           echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
-
-      - name: Reject reqwest in the release feature set
-        shell: bash
-        run: |
-          set +e
-          out=$(cargo tree -e features -i reqwest --locked -p vestige-mcp --no-default-features 2>reqwest-tree.err)
-          status=$?
-          set -e
-          printf '%s\n' "$out"
-          if [ -n "$out" ]; then
-            echo "::error::aarch64-linux-android feature set links reqwest"
-            exit 1
-          fi
-          if [ "$status" -ne 0 ] && ! grep -q 'did not match any packages' reqwest-tree.err; then
-            cat reqwest-tree.err
-            exit "$status"
-          fi
-          echo "reqwest absent from aarch64-linux-android"
 
       - name: Build (release, no embeddings)
         env:

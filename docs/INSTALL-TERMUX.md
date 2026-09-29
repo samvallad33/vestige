@@ -35,7 +35,7 @@ compiler is needed.
 pkg install rust clang cmake make pkg-config git
 git clone https://github.com/samvallad33/vestige.git
 cd vestige
-cargo build --release -p vestige-mcp --no-default-features --features connectors
+cargo build --release -p vestige-mcp --no-default-features
 ```
 
 The binaries land in `target/release/`: `vestige-mcp`, `vestige` and
@@ -66,7 +66,7 @@ Then connect an MCP client with the usual config:
 
 | Feature | State | Why |
 | --- | --- | --- |
-| `connectors` | on | GitHub Issues and Redmine connectors; the HTTP client is rustls, no OpenSSL |
+| `connectors` | off | Not a 4.0 default. Add `--features connectors` to opt in |
 | `cloud-sync` | off | Not a 4.0 default. Add `--features cloud-sync` to opt in |
 | `embeddings`, `vector-search` | off | this build leaves them out on purpose; the pinned `ort-sys` does ship an `aarch64-linux-android` ONNX Runtime prebuilt (NDK-built), and whether it links in a native Termux build is untested, so the embeddings build is the next step rather than part of this one |
 | `codebase-git` | off | libgit2 needs OpenSSL and libssh2 |
