@@ -1,0 +1,49 @@
+CHECK6 2026-09-29T16:09:20+00:00
+FULL_EXIT:0
+FULL2_EXIT:0
+key1 20ce2d0627a339729fc815d74bb6e2e2bd464ad9e8cb21f4438565ef8034a2c4  /tmp/verdict-fix/work/a-check6/to-full/strata.key
+key2 eb96725cd576b5a81de1d586c7794f59d4f556077b33c312092ac8e9a862faf0  /tmp/verdict-fix/work/a-check6/to-full2/strata.key
+receipt-key mode 600 /tmp/verdict-fix/work/a-check6/receipt-signing.key
+strata.key mode 600 /tmp/verdict-fix/work/a-check6/to-full/strata.key
+preload 0 
+killed=True where=staging code=-9 size_at_kill=4491 elapsed=0.05s
+dest:
+  (absent)
+staging:
+      4491 00000000-2120b951ef8abe168b08dee63d476ccf.seg
+        32 strata.key
+         8 strata.lock
+==== rerun ====
+RERUN_EXIT:0
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check6/src (keep this file; it is your pre-migration record)
+Source BLAKE3: b2874018caca6771caf01a47e650b34d68ac9863ca48212f7bcd86f27db31cb7
+Destination: /tmp/verdict-fix/work/a-check6/to-kill
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: f1b14fda472361fc7ad7262674db47c79397959668c56c650cd3726f01738612 (signature verified: true)
+Replay verification: true
+-- stderr --
+staging_after_rerun ABSENT
+SOURCE_UNCHANGED
+rerun kinds {'CHECKPOINT': 1, 'EDGE': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 10, 'PARAMS': 1, 'SUPERSESSION': 1, 'TOMBSTONE': 2} frames 18 nodes 10 unique 10 receipts 1
+==== non-empty ====
+FOREIGN_EXIT:1
+-- foreign stderr --
+Error: destination /tmp/verdict-fix/work/a-check6/to-foreign is not empty and is not a completed migration of this source
+-- foreign files --
+4096 /tmp/verdict-fix/work/a-check6/to-foreign
+5 /tmp/verdict-fix/work/a-check6/to-foreign/note.txt
+FOREIGN_STAGING_ABSENT
+FOREIGN_BYTES_UNCHANGED
+SECOND_EXIT:1
+Error: destination /tmp/verdict-fix/work/a-check6/to-full is not empty and is not a completed migration of this source
+SAME_EXIT:0
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check6/src (keep this file; it is your pre-migration record)
+Source BLAKE3: b2874018caca6771caf01a47e650b34d68ac9863ca48212f7bcd86f27db31cb7
+Destination: /tmp/verdict-fix/work/a-check6/to-full
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: f1b14fda472361fc7ad7262674db47c79397959668c56c650cd3726f01738612 (signature verified: true)
+Replay verification: true

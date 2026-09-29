@@ -1,0 +1,41 @@
+CHECK4 2026-09-29T16:09:20+00:00
+VERIFY_BIN_EXIT:0
+VERIFY_CLI_EXIT:0
+IMPORT_VERIFY_FILES_UNCHANGED
+-- bin stdout --
+{
+  "frames_total": 18,
+  "checksum_ok": true,
+  "signature_ok": true,
+  "counts_match": true,
+  "failures": [],
+  "ok": true
+}
+OK
+-- bin stderr --
+-- cli stdout head --
+{
+  "frames_total": 18,
+  "checksum_ok": true,
+  "signature_ok": true,
+  "counts_match": true,
+  "failures": [],
+  "ok": true
+}
+OK
+-- cli stderr --
+LIVE_STORE /tmp/verdict-fix/work/a-live-store
+LIVE_ROOT_EXIT:0
+LIVE_LOG_EXIT:0
+LIVE_CLI_EXIT:0
+LIVE_VERIFY_FILES_UNCHANGED
+-- live root stderr --
+-- live log stderr --
+-- live root stdout head --
+{
+  "ok": true,
+  "frames_total": 65,
+  "segments": 2,
+  "failures": []
+}
+OK

@@ -1,0 +1,82 @@
+{
+  "schema": 31,
+  "source_nodes": 7,
+  "source_edges": 1,
+  "source_link_types": [
+    "backfill_candidate"
+  ],
+  "walk_receipts_table": null,
+  "kind_counts": {
+    "CHECKPOINT": 1,
+    "EDGE": 1,
+    "GENESIS": 1,
+    "MIGRATION_RECEIPT": 1,
+    "NODE": 7,
+    "PARAMS": 1
+  },
+  "receipt_counts": {
+    "composition_events": 0,
+    "composition_members": 0,
+    "composition_outcomes": 0,
+    "consolidation_history": 0,
+    "deletion_tombstones": 0,
+    "dream_history": 0,
+    "fsrs_cards": 0,
+    "fsrs_config": 1,
+    "insights": 0,
+    "intentions": 0,
+    "knowledge_nodes": 7,
+    "memory_access_log": 0,
+    "memory_connections": 1,
+    "memory_states": 0,
+    "node_embeddings": 7,
+    "retention_snapshots": 0,
+    "sessions": 0,
+    "state_transitions": 0,
+    "sync_tombstones": 0
+  },
+  "skipped": [
+    "embedding_profile_manifests",
+    "embedding_profile_state",
+    "embedding_profile_vectors",
+    "embedding_profiles",
+    "erasure_generation_counter",
+    "fsrs_config",
+    "node_embeddings",
+    "schema_version"
+  ],
+  "fsrs_columns_checked": [
+    "stability",
+    "difficulty",
+    "reps",
+    "lapses",
+    "next_review",
+    "retention_strength",
+    "storage_strength",
+    "retrieval_strength",
+    "valid_from",
+    "valid_until",
+    "scope",
+    "suppression_count",
+    "suppressed_at",
+    "protected",
+    "content_hash",
+    "source_system",
+    "source_id",
+    "source_url",
+    "source_updated_at",
+    "source_project",
+    "source_type",
+    "source_author"
+  ],
+  "suppressed_nodes": [],
+  "problems": [],
+  "examples": [],
+  "edges_out": [
+    {
+      "legacy_link_type": "backfill_candidate",
+      "link_type": "derived_from",
+      "legacy_inferred": true
+    }
+  ]
+}

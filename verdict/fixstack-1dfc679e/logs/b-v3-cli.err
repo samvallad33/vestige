@@ -1,0 +1,1 @@
+Error: v3 SQLite store at /tmp/verdict-fix/work/boot-b/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)

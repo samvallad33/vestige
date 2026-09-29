@@ -1,0 +1,135 @@
+CHECK3 2026-09-29T16:09:18+00:00
+600 /tmp/verdict-fix/work/a-check3/keys/backfill-v31.receipt-signing.key
+==== backfill-v31 hash:UNCHANGED exit:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check3/src-backfill-v31 (keep this file; it is your pre-migration record)
+Source BLAKE3: 78eace8e822b7ddf1ae9c7b0b6276284d4eddb38f3cf5d8ffb0983b47cfb3ea7
+Destination: /tmp/verdict-fix/work/a-check3/to-backfill-v31
+Migrated: 7 nodes, 1 edges, 0 fsrs events
+Dropped vectors: 7 (vector values were never read)
+Skipped tables (counted, not mapped): embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, schema_version
+MIGRATION_RECEIPT: 63c805d2e68661a691abb39fbe5d74d89ac06d1c65841ff7261e4d0f564487eb (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+COMPARE backfill-v31 exit:0
+600 /tmp/verdict-fix/work/a-check3/keys/demo-v38.receipt-signing.key
+==== demo-v38 hash:UNCHANGED exit:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check3/src-demo-v38 (keep this file; it is your pre-migration record)
+Source BLAKE3: eb1e02a9f550e1e483f6308d96e0ddc4800914f312e61ad4b96ab33e87e1d1ad
+Destination: /tmp/verdict-fix/work/a-check3/to-demo-v38
+Migrated: 2 nodes, 0 edges, 0 fsrs events
+Dropped vectors: 2 (vector values were never read)
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, agent_runs, agent_traces, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, retention_snapshots, schema_version, synaptic_tags, vector_journal
+MIGRATION_RECEIPT: 24ac7bdd5bbe297f625e4ce7bc8445ff112081b41c3796830dbf7e7f49705c3a (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+COMPARE demo-v38 exit:0
+600 /tmp/verdict-fix/work/a-check3/keys/demo-v38-shim.receipt-signing.key
+==== demo-v38-shim hash:UNCHANGED exit:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check3/src-demo-v38-shim (keep this file; it is your pre-migration record)
+Source BLAKE3: 38561d2df8f78b85371d3e15daaa9908b77ba7fa29036465b481d3606826cd8a
+Destination: /tmp/verdict-fix/work/a-check3/to-demo-v38-shim
+Migrated: 2 nodes, 0 edges, 0 fsrs events
+Dropped vectors: 2 (vector values were never read)
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, agent_runs, agent_traces, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, retention_snapshots, schema_version, synaptic_tags, vector_journal
+MIGRATION_RECEIPT: e43f920ee93bda6b6e438ee84cc42637f0591797094aa7e00dbb509f1d0e2071 (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+COMPARE demo-v38-shim exit:0
+600 /tmp/verdict-fix/work/a-check3/keys/fresh-v38-ckpt.receipt-signing.key
+==== fresh-v38-ckpt hash:UNCHANGED exit:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check3/src-fresh-v38-ckpt (keep this file; it is your pre-migration record)
+Source BLAKE3: b2874018caca6771caf01a47e650b34d68ac9863ca48212f7bcd86f27db31cb7
+Destination: /tmp/verdict-fix/work/a-check3/to-fresh-v38-ckpt
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: f1b14fda472361fc7ad7262674db47c79397959668c56c650cd3726f01738612 (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+COMPARE fresh-v38-ckpt exit:0
+600 /tmp/verdict-fix/work/a-check3/keys/fresh-v38-ckpt-shim.receipt-signing.key
+==== fresh-v38-ckpt-shim hash:UNCHANGED exit:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check3/src-fresh-v38-ckpt-shim (keep this file; it is your pre-migration record)
+Source BLAKE3: 11f4b890801379895df3748374e6f0455d2ebb366bb7fd89e2273590100001de
+Destination: /tmp/verdict-fix/work/a-check3/to-fresh-v38-ckpt-shim
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: 8b3840e3e0c088fba76362b3f0fd04202efdbf26ae0cc7321831afcedfae9542 (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+COMPARE fresh-v38-ckpt-shim exit:0
+600 /tmp/verdict-fix/work/a-check3/keys/fresh-v38-wal.receipt-signing.key
+==== fresh-v38-wal hash:UNCHANGED exit:0 wal:--accept-wal-snapshot
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check3/src-fresh-v38-wal (keep this file; it is your pre-migration record)
+Source BLAKE3: 371dbbdc55b7d1bcd33c9b19d63900a58318cb2489c4dfc0ff3bce2780ceb633
+Destination: /tmp/verdict-fix/work/a-check3/to-fresh-v38-wal
+Migrated: 10 nodes, 1 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_endorsement_events, actor_policy_state, actor_role_weights, agent_runs, agent_traces, composition_events, composition_members, composition_outcomes, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, insights, intentions, memory_access_log, memory_prs, memory_receipts, merge_operations, merge_plans, retention_snapshots, retrieval_replay_capsules, retrieval_replay_items, schema_version, suppression_operations, synaptic_tags
+MIGRATION_RECEIPT: 4ad00d82df211bd7aaa80337c55269b1d8bdf161a516fea389e95d3d2a3a33b9 (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+COMPARE fresh-v38-wal exit:0
+600 /tmp/verdict-fix/work/a-check3/keys/probe-v38-ckpt.receipt-signing.key
+==== probe-v38-ckpt hash:UNCHANGED exit:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check3/src-probe-v38-ckpt (keep this file; it is your pre-migration record)
+Source BLAKE3: c7ad0723b3ad6f0826d3e675d079566f822bebd93a9f9a053d816bc409e09eba
+Destination: /tmp/verdict-fix/work/a-check3/to-probe-v38-ckpt
+Migrated: 2 nodes, 0 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, agent_runs, agent_traces, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, memory_prs, retention_snapshots, schema_version, synaptic_tags
+MIGRATION_RECEIPT: 2423d8c999c707f53870b36643e4694f3057576de2e89780e4d3df708a6a7101 (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+COMPARE probe-v38-ckpt exit:0
+600 /tmp/verdict-fix/work/a-check3/keys/probe-v38-ckpt-shim.receipt-signing.key
+==== probe-v38-ckpt-shim hash:UNCHANGED exit:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check3/src-probe-v38-ckpt-shim (keep this file; it is your pre-migration record)
+Source BLAKE3: ccb1f6e437c195b64db6d9a08d3e51669512f8309e08c8b00961413dcadb5cda
+Destination: /tmp/verdict-fix/work/a-check3/to-probe-v38-ckpt-shim
+Migrated: 2 nodes, 0 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, agent_runs, agent_traces, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, memory_prs, retention_snapshots, schema_version, synaptic_tags
+MIGRATION_RECEIPT: f0aca25b56013d6c511ea37b4873b426483948b8519a6c3e4c1ff9e28fc8327c (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+COMPARE probe-v38-ckpt-shim exit:0
+600 /tmp/verdict-fix/work/a-check3/keys/probe-v38-wal.receipt-signing.key
+==== probe-v38-wal hash:UNCHANGED exit:0 wal:--accept-wal-snapshot
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check3/src-probe-v38-wal (keep this file; it is your pre-migration record)
+Source BLAKE3: 94169858b17a0ffe0689548432d29902995f84394c60c8c9cd76f0fd1a26d9e4
+Destination: /tmp/verdict-fix/work/a-check3/to-probe-v38-wal
+Migrated: 2 nodes, 0 edges, 0 fsrs events
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, agent_runs, agent_traces, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profiles, erasure_generation_counter, fsrs_config, memory_prs, retention_snapshots, schema_version, synaptic_tags
+MIGRATION_RECEIPT: 6ff3b478513e40f5123a5749d672c6d03c183d636be70640e802e1846e2f230d (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+COMPARE probe-v38-wal exit:0
+600 /tmp/verdict-fix/work/a-check3/keys/vnc-v36.receipt-signing.key
+==== vnc-v36 hash:UNCHANGED exit:0 wal:no
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check3/src-vnc-v36 (keep this file; it is your pre-migration record)
+Source BLAKE3: 6e778707cea5f310c3fbcf9b71b3c188b1bff380e4d1b7f0995915d23b517fcc
+Destination: /tmp/verdict-fix/work/a-check3/to-vnc-v36
+Migrated: 12 nodes, 2 edges, 0 fsrs events
+Dropped vectors: 12 (vector values were never read)
+Skipped tables (counted, not mapped): embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, schema_version, vector_journal
+MIGRATION_RECEIPT: 5ff4c41afe17258f19666149f09c62c4df2780e6fb50e075d7867ab4114e844d (signature verified: true)
+Replay verification: true
+EXIT:0
+-- stderr --
+COMPARE vnc-v36 exit:0

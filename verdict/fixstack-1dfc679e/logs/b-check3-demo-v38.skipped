@@ -1,0 +1,16 @@
+actor_policy_state
+actor_role_weights
+agent_runs
+agent_traces
+consolidation_history
+embedding_profile_manifests
+embedding_profile_state
+embedding_profile_vectors
+embedding_profiles
+erasure_generation_counter
+fsrs_config
+node_embeddings
+retention_snapshots
+schema_version
+synaptic_tags
+vector_journal

@@ -1,0 +1,603 @@
+Diff in /tmp/stack-b/crates/strata-gate/src/admit.rs:166:
+ /// effect will occupy) and `frame_hash` is blake3(borsh(EffectRecord)).
+ /// [`crate::GateRuntime::commit_effect`] calls this, then appends and
+ /// returns the log's real `SeqAck`.
+[31m-pub fn admit(log: &dyn EventLog, effect: &EffectRecord, pinned: &Policy) -> Result<SeqAck, Rejected> {
+[m[32m+pub fn admit(
+[m[32m+    log: &dyn EventLog,
+[m[32m+    effect: &EffectRecord,
+[m[32m+    pinned: &Policy,
+[m[32m+) -> Result<SeqAck, Rejected> {
+[m     admission_check(log, effect, u64::MAX, Some(pinned))?;
+     let bytes = borsh::to_vec(effect).expect("borsh EffectRecord is infallible");
+[31m-    Ok(SeqAck { seq: log.tip(), frame_hash: hash32(&bytes) })
+[m[32m+    Ok(SeqAck {
+[m[32m+        seq: log.tip(),
+[m[32m+        frame_hash: hash32(&bytes),
+[m[32m+    })
+[m }
+ 
+Diff in /tmp/stack-b/crates/strata-gate/src/inputs.rs:8:
+ use borsh::{BorshDeserialize, BorshSerialize};
+ 
+ use crate::log::{EventLog, hash32};
+[31m-use crate::record::{
+[m[31m-    ActionKindCode, EffectRecord, GateError, Propose, RecordKind,
+[m[31m-};
+[m[32m+use crate::record::{ActionKindCode, EffectRecord, GateError, Propose, RecordKind};
+[m 
+ /// Lessons with retention (ms) below this floor count as forgotten and enter
+ /// `GateInputs.forgotten_lessons` (30 days in milliseconds).
+Diff in /tmp/stack-b/crates/strata-gate/src/inputs.rs:96:
+     Ok(GateInputs {
+         live_facts_digest: digest_ids(&live_ids),
+         retired_facts_digest: digest_ids(&retired_ids),
+[31m-        blast_radius: BlastRadius { closure_size, tiers },
+[m[32m+        blast_radius: BlastRadius {
+[m[32m+            closure_size,
+[m[32m+            tiers,
+[m[32m+        },
+[m         forgotten_lessons: lessons.into_iter().collect(),
+         canary_hits,
+     })
+Diff in /tmp/stack-b/crates/strata-gate/src/log.rs:58:
+ 
+ impl EventLog for MemLog {
+     fn events_before(&self, bound: u64) -> Vec<GateEvent> {
+[31m-        self.events.iter().take_while(|e| e.seq < bound).cloned().collect()
+[m[32m+        self.events
+[m[32m+            .iter()
+[m[32m+            .take_while(|e| e.seq < bound)
+[m[32m+            .cloned()
+[m[32m+            .collect()
+[m     }
+ 
+     fn append(&mut self, kind: RecordKind, payload: Vec<u8>) -> SeqAck {
+Diff in /tmp/stack-b/crates/strata-gate/src/policy.rs:81:
+     (rule.verdict, None)
+ }
+ 
+[31m-fn matches(rule: &Rule, kind: Option<u8>, params_hash: Option<&[u8; 32]>, inputs: &GateInputs) -> bool {
+[m[32m+fn matches(
+[m[32m+    rule: &Rule,
+[m[32m+    kind: Option<u8>,
+[m[32m+    params_hash: Option<&[u8; 32]>,
+[m[32m+    inputs: &GateInputs,
+[m[32m+) -> bool {
+[m     if let Some(k) = kind
+         && rule.match_kind != ANY_KIND
+         && rule.match_kind != k
+Diff in /tmp/stack-b/crates/strata-gate/src/policy.rs:118:
+     propose: &Propose,
+     inputs: &GateInputs,
+ ) -> Option<&'a Rule> {
+[31m-    policy
+[m[31m-        .rules
+[m[31m-        .iter()
+[m[31m-        .find(|r| matches(r, Some(propose.action_kind), Some(&propose.params_hash), inputs))
+[m[32m+    policy.rules.iter().find(|r| {
+[m[32m+        matches(
+[m[32m+            r,
+[m[32m+            Some(propose.action_kind),
+[m[32m+            Some(&propose.params_hash),
+[m[32m+            inputs,
+[m[32m+        )
+[m[32m+    })
+[m }
+ 
+ /// Subject-aware evaluation without the canary clamp. Returns the verdict and
+Diff in /tmp/stack-b/crates/strata-gate/src/policy.rs:128:
+ /// the veto cause when a modifier fired.
+[31m-pub fn evaluate_detailed(policy: &Policy, propose: &Propose, inputs: &GateInputs) -> (Verdict, Option<Veto>) {
+[m[32m+pub fn evaluate_detailed(
+[m[32m+    policy: &Policy,
+[m[32m+    propose: &Propose,
+[m[32m+    inputs: &GateInputs,
+[m[32m+) -> (Verdict, Option<Veto>) {
+[m     for rule in &policy.rules {
+[31m-        if matches(rule, Some(propose.action_kind), Some(&propose.params_hash), inputs) {
+[m[32m+        if matches(
+[m[32m+            rule,
+[m[32m+            Some(propose.action_kind),
+[m[32m+            Some(&propose.params_hash),
+[m[32m+            inputs,
+[m[32m+        ) {
+[m             return effective(rule, inputs);
+         }
+     }
+Diff in /tmp/stack-b/crates/strata-gate/src/record.rs:202:
+ 
+     /// Typed PROPOSE, or `None` if this frame is not a well-formed PROPOSE.
+     pub fn propose(&self) -> Option<Propose> {
+[31m-        (self.kind == RecordKind::Propose).then(|| self.decode().ok()).flatten()
+[m[32m+        (self.kind == RecordKind::Propose)
+[m[32m+            .then(|| self.decode().ok())
+[m[32m+            .flatten()
+[m     }
+ 
+     pub fn gate(&self) -> Option<GateRecord> {
+Diff in /tmp/stack-b/crates/strata-gate/src/record.rs:209:
+[31m-        (self.kind == RecordKind::Gate).then(|| self.decode().ok()).flatten()
+[m[32m+        (self.kind == RecordKind::Gate)
+[m[32m+            .then(|| self.decode().ok())
+[m[32m+            .flatten()
+[m     }
+ 
+     pub fn effect(&self) -> Option<EffectRecord> {
+Diff in /tmp/stack-b/crates/strata-gate/src/record.rs:213:
+[31m-        (self.kind == RecordKind::Effect).then(|| self.decode().ok()).flatten()
+[m[32m+        (self.kind == RecordKind::Effect)
+[m[32m+            .then(|| self.decode().ok())
+[m[32m+            .flatten()
+[m     }
+ 
+     pub fn lesson_alarm(&self) -> Option<LessonAlarmRecord> {
+Diff in /tmp/stack-b/crates/strata-gate/src/record.rs:217:
+[31m-        (self.kind == RecordKind::LessonAlarm).then(|| self.decode().ok()).flatten()
+[m[32m+        (self.kind == RecordKind::LessonAlarm)
+[m[32m+            .then(|| self.decode().ok())
+[m[32m+            .flatten()
+[m     }
+ 
+     pub fn canary(&self) -> Option<CanaryRecord> {
+Diff in /tmp/stack-b/crates/strata-gate/src/record.rs:221:
+[31m-        (self.kind == RecordKind::Canary).then(|| self.decode().ok()).flatten()
+[m[32m+        (self.kind == RecordKind::Canary)
+[m[32m+            .then(|| self.decode().ok())
+[m[32m+            .flatten()
+[m     }
+ 
+     pub fn alert(&self) -> Option<AlertRecord> {
+Diff in /tmp/stack-b/crates/strata-gate/src/record.rs:225:
+[31m-        (self.kind == RecordKind::Alert).then(|| self.decode().ok()).flatten()
+[m[32m+        (self.kind == RecordKind::Alert)
+[m[32m+            .then(|| self.decode().ok())
+[m[32m+            .flatten()
+[m     }
+ 
+     pub fn gap(&self) -> Option<GapRecord> {
+Diff in /tmp/stack-b/crates/strata-gate/src/record.rs:229:
+[31m-        (self.kind == RecordKind::Gap).then(|| self.decode().ok()).flatten()
+[m[32m+        (self.kind == RecordKind::Gap)
+[m[32m+            .then(|| self.decode().ok())
+[m[32m+            .flatten()
+[m     }
+ }
+ 
+Diff in /tmp/stack-b/crates/strata-gate/src/rederive.rs:18:
+ impl core::fmt::Display for RederiveError {
+     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+         match self {
+[31m-            RederiveError::UnknownProposal { gate_seq, propose_seq } => {
+[m[31m-                write!(f, "GATE at seq {gate_seq} cites missing proposal {propose_seq}")
+[m[32m+            RederiveError::UnknownProposal {
+[m[32m+                gate_seq,
+[m[32m+                propose_seq,
+[m[32m+            } => {
+[m[32m+                write!(
+[m[32m+                    f,
+[m[32m+                    "GATE at seq {gate_seq} cites missing proposal {propose_seq}"
+[m[32m+                )
+[m             }
+             RederiveError::Malformed(e) => write!(f, "malformed record: {e}"),
+         }
+Diff in /tmp/stack-b/crates/strata-gate/src/rederive.rs:48:
+     let all = log.events_before(u64::MAX);
+     let mut out = Vec::new();
+     for ev in all.iter().filter(|e| e.kind == RecordKind::Gate) {
+[31m-        let gate = ev.gate().ok_or(RederiveError::Malformed(GateError::MalformedRecord {
+[m[31m-            seq: ev.seq,
+[m[31m-        }))?;
+[m[32m+        let gate = ev
+[m[32m+            .gate()
+[m[32m+            .ok_or(RederiveError::Malformed(GateError::MalformedRecord {
+[m[32m+                seq: ev.seq,
+[m[32m+            }))?;
+[m         let propose_ev = all
+             .iter()
+             .find(|e| e.seq == gate.propose_seq && e.kind == RecordKind::Propose)
+Diff in /tmp/stack-b/crates/strata-gate/src/rederive.rs:58:
+                 gate_seq: ev.seq,
+                 propose_seq: gate.propose_seq,
+             })?;
+[31m-        let propose = propose_ev
+[m[31m-            .propose()
+[m[31m-            .ok_or(RederiveError::Malformed(GateError::MalformedRecord { seq: propose_ev.seq }))?;
+[m[32m+        let propose =
+[m[32m+            propose_ev
+[m[32m+                .propose()
+[m[32m+                .ok_or(RederiveError::Malformed(GateError::MalformedRecord {
+[m[32m+                    seq: propose_ev.seq,
+[m[32m+                }))?;
+[m         let inputs = compute_inputs(log, gate.propose_seq).map_err(RederiveError::Malformed)?;
+         out.push((ev.seq, gate_verdict(pinned, &propose, &inputs)));
+     }
+Diff in /tmp/stack-b/crates/strata-gate/src/runtime.rs:10:
+ use crate::log::{EventLog, SeqAck};
+ use crate::policy::{Policy, gate_verdict};
+ use crate::record::{
+[31m-    CanaryRecord, EffectRecord, GateError, GateRecord, GateEvent, LessonAlarmRecord, Propose,
+[m[32m+    CanaryRecord, EffectRecord, GateError, GateEvent, GateRecord, LessonAlarmRecord, Propose,
+[m     RecordKind, Verdict,
+ };
+ 
+Diff in /tmp/stack-b/crates/strata-gate/src/runtime.rs:66:
+             .filter(|e| e.kind == RecordKind::Canary)
+             .filter_map(|e| e.canary().map(|c| c.canary_id))
+             .collect();
+[31m-        let tripped: BTreeSet<u64> =
+[m[31m-            propose.context.iter().copied().filter(|id| planted.contains(id)).collect();
+[m[32m+        let tripped: BTreeSet<u64> = propose
+[m[32m+            .context
+[m[32m+            .iter()
+[m[32m+            .copied()
+[m[32m+            .filter(|id| planted.contains(id))
+[m[32m+            .collect();
+[m 
+         let ack = self.log.append(RecordKind::Propose, to_vec(&propose));
+         for canary_id in tripped {
+Diff in /tmp/stack-b/crates/strata-gate/src/runtime.rs:74:
+[31m-            let alert = crate::record::AlertRecord { canary_id, reader_seq: ack.seq };
+[m[32m+            let alert = crate::record::AlertRecord {
+[m[32m+                canary_id,
+[m[32m+                reader_seq: ack.seq,
+[m[32m+            };
+[m             self.log.append(RecordKind::Alert, to_vec(&alert));
+         }
+         ack
+Diff in /tmp/stack-b/crates/strata-gate/src/runtime.rs:122:
+ 
+     /// Convenience: the latest recorded gate verdict for a proposal, if any.
+     pub fn latest_gate(&self, propose_seq: u64) -> Option<(u64, Verdict)> {
+[31m-        self.log
+[m[31m-            .events_before(u64::MAX)
+[m[31m-            .iter()
+[m[31m-            .rev()
+[m[31m-            .find_map(|e| e.gate().filter(|g| g.propose_seq == propose_seq).map(|g| (e.seq, g.verdict)))
+[m[32m+        self.log.events_before(u64::MAX).iter().rev().find_map(|e| {
+[m[32m+            e.gate()
+[m[32m+                .filter(|g| g.propose_seq == propose_seq)
+[m[32m+                .map(|g| (e.seq, g.verdict))
+[m[32m+        })
+[m     }
+ 
+     /// Re-derive every GATE's verdict under the pinned policy (see
+Diff in /tmp/stack-b/crates/strata-gate/src/sweep.rs:5:
+ 
+ use crate::admit::admission_check;
+ use crate::log::EventLog;
+[31m-use crate::record::{
+[m[31m-    ActionKindCode, DutyKind, GapDetail, GapRecord, Propose, RecordKind,
+[m[31m-};
+[m[32m+use crate::record::{ActionKindCode, DutyKind, GapDetail, GapRecord, Propose, RecordKind};
+[m 
+ /// Sweep the log for structural violations:
+ ///
+Diff in /tmp/stack-b/crates/strata-gate/src/sweep.rs:32:
+         if ev.seq != expected {
+             gaps.push(GapRecord {
+                 duty: DutyKind::DutySeqGap,
+[31m-                detail: GapDetail::DutySeqGap { source: 0, expected, found: ev.seq },
+[m[32m+                detail: GapDetail::DutySeqGap {
+[m[32m+                    source: 0,
+[m[32m+                    expected,
+[m[32m+                    found: ev.seq,
+[m[32m+                },
+[m             });
+         }
+         expected = ev.seq.saturating_add(1);
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:77:
+     let p_ack = rt.commit_propose(propose.clone());
+     let g_ack = rt.commit_gate(p_ack.seq).expect("gate commits");
+ 
+[31m-    let stored_gate = rt.log().all()[g_ack.seq as usize].gate().expect("gate record");
+[m[32m+    let stored_gate = rt.log().all()[g_ack.seq as usize]
+[m[32m+        .gate()
+[m[32m+        .expect("gate record");
+[m     assert_eq!(stored_gate.verdict, Verdict::Allow);
+     assert_eq!(stored_gate.propose_seq, p_ack.seq);
+     assert_eq!(stored_gate.policy_hash, rt.pinned().policy_hash());
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:84:
+ 
+     let effect = effect_for(&propose, p_ack.seq, g_ack.seq);
+[31m-    let ticket = rt.admit(&effect).expect("admission ticket projects the slot");
+[m[32m+    let ticket = rt
+[m[32m+        .admit(&effect)
+[m[32m+        .expect("admission ticket projects the slot");
+[m     let e_ack = rt.commit_effect(effect).expect("admitted");
+     assert_eq!(ticket.seq, e_ack.seq);
+[31m-    assert_eq!(rt.log().all().last().expect("tail").kind, RecordKind::Effect);
+[m[32m+    assert_eq!(
+[m[32m+        rt.log().all().last().expect("tail").kind,
+[m[32m+        RecordKind::Effect
+[m[32m+    );
+[m     assert_eq!(rt.log().tip(), 3);
+ }
+ 
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:110:
+     let propose = write_propose(vec![]);
+     let p_ack = rt.commit_propose(propose.clone());
+     let g_ack = rt.commit_gate(p_ack.seq).expect("gate commits");
+[31m-    assert_eq!(rt.log().all()[g_ack.seq as usize].gate().unwrap().verdict, Verdict::Deny);
+[m[32m+    assert_eq!(
+[m[32m+        rt.log().all()[g_ack.seq as usize].gate().unwrap().verdict,
+[m[32m+        Verdict::Deny
+[m[32m+    );
+[m 
+     let err = rt
+         .commit_effect(effect_for(&propose, p_ack.seq, g_ack.seq))
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:179:
+     assert_eq!(inputs.forgotten_lessons, vec![(7, FORGET_FLOOR_MILLI - 1)]);
+ 
+     let g_ack = rt.commit_gate(p_ack.seq).expect("gate commits");
+[31m-    assert_eq!(rt.log().all()[g_ack.seq as usize].gate().unwrap().verdict, Verdict::Deny);
+[m     assert_eq!(
+[32m+        rt.log().all()[g_ack.seq as usize].gate().unwrap().verdict,
+[m[32m+        Verdict::Deny
+[m[32m+    );
+[m[32m+    assert_eq!(
+[m         rt.commit_effect(effect_for(&propose, p_ack.seq, g_ack.seq)),
+         Err(Rejected::GateDenied),
+         "no Allow gate exists, so the effect cannot land"
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:199:
+     append_raw(
+         &mut log,
+         RecordKind::LessonAlarm,
+[31m-        &LessonAlarmRecord { propose_seq: 1, lesson_id: 42, retention_milli: -1 },
+[m[32m+        &LessonAlarmRecord {
+[m[32m+            propose_seq: 1,
+[m[32m+            lesson_id: 42,
+[m[32m+            retention_milli: -1,
+[m[32m+        },
+[m     );
+     let propose = write_propose(vec![2]);
+     let p0 = append_raw(&mut log, RecordKind::Propose, &propose); // seq 1, matches the alarm
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:223:
+     let mut rt = GateRuntime::new(MemLog::new(), policy);
+     let p1 = rt.commit_propose(propose.clone());
+     let g1 = rt.commit_gate(p1.seq).expect("gate");
+[31m-    assert_eq!(rt.log().all()[g1.seq as usize].gate().unwrap().verdict, Verdict::Allow);
+[m[32m+    assert_eq!(
+[m[32m+        rt.log().all()[g1.seq as usize].gate().unwrap().verdict,
+[m[32m+        Verdict::Allow
+[m[32m+    );
+[m     rt.commit_lesson_alarm(LessonAlarmRecord {
+         propose_seq: p1.seq,
+         lesson_id: 43,
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:246:
+     let ok_ack = rt.commit_propose(propose_ok.clone());
+     rt.commit_gate(ok_ack.seq).expect("gate commits");
+     assert_eq!(
+[31m-        rt.log().all().last().and_then(|e| e.gate()).map(|g| g.verdict),
+[m[32m+        rt.log()
+[m[32m+            .all()
+[m[32m+            .last()
+[m[32m+            .and_then(|e| e.gate())
+[m[32m+            .map(|g| g.verdict),
+[m         Some(Verdict::Allow)
+     );
+ 
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:255:
+     let big_ack = rt.commit_propose(propose_big.clone());
+     rt.commit_gate(big_ack.seq).expect("gate commits");
+     assert_eq!(
+[31m-        rt.log().all().last().and_then(|e| e.gate()).map(|g| g.verdict),
+[m[32m+        rt.log()
+[m[32m+            .all()
+[m[32m+            .last()
+[m[32m+            .and_then(|e| e.gate())
+[m[32m+            .map(|g| g.verdict),
+[m         Some(Verdict::Deny)
+     );
+ 
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:268:
+     let hub_propose = write_propose(vec![hub]);
+     let h_ack = rt.commit_propose(hub_propose.clone());
+     let inputs = compute_inputs(rt.log(), h_ack.seq).expect("inputs");
+[31m-    assert!(inputs.blast_radius.closure_size >= 61, "closure pulls spokes: {}", inputs.blast_radius.closure_size);
+[m[32m+    assert!(
+[m[32m+        inputs.blast_radius.closure_size >= 61,
+[m[32m+        "closure pulls spokes: {}",
+[m[32m+        inputs.blast_radius.closure_size
+[m[32m+    );
+[m     assert!(inputs.blast_radius.tiers >= 1);
+     rt.commit_gate(h_ack.seq).expect("gate commits");
+     assert_eq!(
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:275:
+[31m-        rt.log().all().last().and_then(|e| e.gate()).map(|g| g.verdict),
+[m[32m+        rt.log()
+[m[32m+            .all()
+[m[32m+            .last()
+[m[32m+            .and_then(|e| e.gate())
+[m[32m+            .map(|g| g.verdict),
+[m         Some(Verdict::Deny)
+     );
+ }
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:299:
+     let inputs = compute_inputs(rt.log(), c_ack.seq).expect("inputs");
+     assert_eq!(inputs.canary_hits, 1);
+     let cg_ack = rt.commit_gate(c_ack.seq).expect("gate commits");
+[31m-    assert_eq!(rt.log().all()[cg_ack.seq as usize].gate().unwrap().verdict, Verdict::Hold);
+[m     assert_eq!(
+[32m+        rt.log().all()[cg_ack.seq as usize].gate().unwrap().verdict,
+[m[32m+        Verdict::Hold
+[m[32m+    );
+[m[32m+    assert_eq!(
+[m         rt.commit_effect(effect_for(&clean, c_ack.seq, cg_ack.seq)),
+         Err(Rejected::GateDenied),
+         "Hold is not an approving verdict"
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:335:
+             0..=39 => {
+                 let n = (rng.next() % 4) as usize;
+                 let context: Vec<u64> = (0..n).map(|_| rng.next() % 32).collect();
+[31m-                let kind = [ActionKindCode::WRITE, ActionKindCode::RETIRE, ActionKindCode::GRANT, ActionKindCode::EFFECT]
+[m[31m-                    [(rng.next() % 4) as usize];
+[m[32m+                let kind = [
+[m[32m+                    ActionKindCode::WRITE,
+[m[32m+                    ActionKindCode::RETIRE,
+[m[32m+                    ActionKindCode::GRANT,
+[m[32m+                    ActionKindCode::EFFECT,
+[m[32m+                ][(rng.next() % 4) as usize];
+[m                 let propose = Propose {
+                     action_hash: h32(rng.next()),
+                     action_kind: kind,
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:359:
+                     continue;
+                 }
+                 let seq = order[(rng.next() as usize) % order.len()];
+[31m-                let Some(propose) = proposes.get(&seq) else { continue };
+[m[32m+                let Some(propose) = proposes.get(&seq) else {
+[m[32m+                    continue;
+[m[32m+                };
+[m                 // Cite the latest gate when there is one; sometimes cite a
+                 // stale seq to exercise the rejection paths.
+                 let gate_seq = rt
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:395:
+     assert!(stored.len() > 50, "fixture produced {} gates", stored.len());
+ 
+     let rederived = rt.rederive_verdicts().expect("rederive succeeds");
+[31m-    assert_eq!(rederived, stored, "re-derived verdicts must match bit-for-bit");
+[m[32m+    assert_eq!(
+[m[32m+        rederived, stored,
+[m[32m+        "re-derived verdicts must match bit-for-bit"
+[m[32m+    );
+[m 
+     // Everything the runtime appended as an effect passed admission, so the
+     // sweep must report no orphan effects (reads/duty gaps may exist).
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:416:
+ 
+ impl EventLog for HoleLog {
+     fn events_before(&self, bound: u64) -> Vec<GateEvent> {
+[31m-        self.events.iter().take_while(|e| e.seq < bound).cloned().collect()
+[m[32m+        self.events
+[m[32m+            .iter()
+[m[32m+            .take_while(|e| e.seq < bound)
+[m[32m+            .cloned()
+[m[32m+            .collect()
+[m     }
+     fn append(&mut self, kind: RecordKind, payload: Vec<u8>) -> SeqAck {
+         let seq = self.next;
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:433:
+     let mut log = MemLog::new();
+     let propose = write_propose(vec![999]); // 999 is also a dangling read
+     let p_ack = append_raw(&mut log, RecordKind::Propose, &propose);
+[31m-    append_raw(&mut log, RecordKind::Effect, &effect_for(&propose, p_ack.seq, p_ack.seq + 1));
+[m[32m+    append_raw(
+[m[32m+        &mut log,
+[m[32m+        RecordKind::Effect,
+[m[32m+        &effect_for(&propose, p_ack.seq, p_ack.seq + 1),
+[m[32m+    );
+[m 
+     let gaps = sweep(&log);
+     assert!(
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:440:
+         gaps.iter().any(|g| matches!(
+             &g.detail,
+[31m-            GapDetail::OrphanEffect { effect_seq: 1, propose_seq: 0, reason: 2 } // NoGate
+[m[32m+            GapDetail::OrphanEffect {
+[m[32m+                effect_seq: 1,
+[m[32m+                propose_seq: 0,
+[m[32m+                reason: 2
+[m[32m+            } // NoGate
+[m         )),
+         "orphan effect flagged: {gaps:?}"
+     );
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:446:
+     assert!(
+         gaps.iter().any(|g| matches!(
+             &g.detail,
+[31m-            GapDetail::ReadNoReceipt { reader_seq: 0, dangling_id: 999 }
+[m[32m+            GapDetail::ReadNoReceipt {
+[m[32m+                reader_seq: 0,
+[m[32m+                dangling_id: 999
+[m[32m+            }
+[m         )),
+         "dangling read flagged: {gaps:?}"
+     );
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:453:
+ 
+     // Duty sequence hole.
+[31m-    let mut holey = HoleLog { events: Vec::new(), next: 0 };
+[m[32m+    let mut holey = HoleLog {
+[m[32m+        events: Vec::new(),
+[m[32m+        next: 0,
+[m[32m+    };
+[m     holey.append(RecordKind::Canary, vec![]);
+     holey.append(RecordKind::Canary, vec![]);
+     let gaps = sweep(&holey);
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:459:
+     assert!(
+         gaps.iter().any(|g| matches!(
+             &g.detail,
+[31m-            GapDetail::DutySeqGap { source: 0, expected: 1, found: 2 }
+[m[32m+            GapDetail::DutySeqGap {
+[m[32m+                source: 0,
+[m[32m+                expected: 1,
+[m[32m+                found: 2
+[m[32m+            }
+[m         )),
+         "duty gap flagged: {gaps:?}"
+     );
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:472:
+     let inputs = crate::GateInputs {
+         live_facts_digest: [0; 32],
+         retired_facts_digest: [0; 32],
+[31m-        blast_radius: crate::BlastRadius { closure_size: 10, tiers: 1 },
+[m[32m+        blast_radius: crate::BlastRadius {
+[m[32m+            closure_size: 10,
+[m[32m+            tiers: 1,
+[m[32m+        },
+[m         forgotten_lessons: vec![],
+         canary_hits: 0,
+     };
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:521:
+         len(&effect_for(&write_propose(vec![]), 1, 2)),
+         80 // 8+8+32+32
+     );
+[31m-    assert_eq!(len(&LessonAlarmRecord { propose_seq: 1, lesson_id: 2, retention_milli: 3 }), 24);
+[m[32m+    assert_eq!(
+[m[32m+        len(&LessonAlarmRecord {
+[m[32m+            propose_seq: 1,
+[m[32m+            lesson_id: 2,
+[m[32m+            retention_milli: 3
+[m[32m+        }),
+[m[32m+        24
+[m[32m+    );
+[m     assert_eq!(len(&crate::record::CanaryRecord { canary_id: 1 }), 8);
+[31m-    assert_eq!(len(&AlertRecord { canary_id: 1, reader_seq: 2 }), 16);
+[m[32m+    assert_eq!(
+[m[32m+        len(&AlertRecord {
+[m[32m+            canary_id: 1,
+[m[32m+            reader_seq: 2
+[m[32m+        }),
+[m[32m+        16
+[m[32m+    );
+[m     assert_eq!(len(&allow_writes(50).rules[0]), 16); // 1+8+4+1+1+1
+     assert_eq!(len(&allow_writes(50)), 4 + 16); // u32 len + 1 rule
+     // GateInputs with no forgotten lessons: 32+32+(4+2)+4+4 = 78.
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:530:
+     let inputs = crate::GateInputs {
+         live_facts_digest: [1; 32],
+         retired_facts_digest: [2; 32],
+[31m-        blast_radius: crate::BlastRadius { closure_size: 7, tiers: 3 },
+[m[32m+        blast_radius: crate::BlastRadius {
+[m[32m+            closure_size: 7,
+[m[32m+            tiers: 3,
+[m[32m+        },
+[m         forgotten_lessons: vec![],
+         canary_hits: 9,
+     };
+Diff in /tmp/stack-b/crates/strata-gate/src/tests.rs:537:
+     assert_eq!(len(&inputs), 78);
+     // GateRecord with those inputs: 8+1+32+78 = 119.
+     assert_eq!(
+[31m-        len(&GateRecord { propose_seq: 1, verdict: Verdict::Hold, policy_hash: [3; 32], inputs }),
+[m[32m+        len(&GateRecord {
+[m[32m+            propose_seq: 1,
+[m[32m+            verdict: Verdict::Hold,
+[m[32m+            policy_hash: [3; 32],
+[m[32m+            inputs
+[m[32m+        }),
+[m         119
+     );
+ 

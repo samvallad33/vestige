@@ -1,0 +1,64 @@
+release-e2e e47796755648dfc0fd13592dc5019968ad97828e
+against STACK-A default vestige + vestige-mcp and migrate-feature strata-verify
+driver compiled from tests/release-e2e placed in the STACK-A tree so path deps are 1dfc679e
+83 tests. 36 passed. 47 failed.
+pending_strata-only failures: 10
+upgrade failures expected until #310: 13
+upgrade rows that passed: 2 (upgrade_failed_import_leaves_v3_and_names_v311, upgrade_fresh_install_started_twice_creates_no_sqlite_and_stays_up)
+real failures: 24
+
+cli_dashboard and cli_serve stayed up. The harness blocked in read_to_string on the live stderr pipe. Those two processes were killed externally; both tests then recorded ok (no sqlite artifacts).
+
+pending_strata-only:
+- cli::cli_backfill_on_fresh_store
+- cli::cli_forgotten_lesson_on_fresh_store
+- cli::cli_project_on_fresh_store
+- cli::cli_selftest_on_fresh_store
+- mcp::mcp_causal_walk_valid_invalid_handle_miss
+- mcp::mcp_forgotten_lesson_valid_invalid_handle_miss
+- mcp::mcp_project_valid_invalid_handle_miss
+- mcp::mcp_purge_valid_invalid_handle_miss
+- mcp::mcp_selftest_valid_invalid_handle_miss
+- mcp::mcp_suppress_valid_invalid_handle_miss
+
+upgrade expected until #310:
+- cli::cli_upgrade_on_fresh_store
+- upgrade::cli_first_launch_corrupt_v3_leaves_bytes_and_names_v311
+- upgrade::cli_first_launch_upgrades_v3
+- upgrade::concurrent_first_launch_upgrades_once
+- upgrade::stale_staging_after_sigkill_recovers
+- upgrade::upgrade_legacy_links_are_not_causal_edges
+- upgrade::upgrade_migrate_dry_run_writes_nothing_and_keeps_source_sha
+- upgrade::upgrade_nonempty_to_is_refused
+- upgrade::upgrade_real_migrate_keeps_source_sha_and_fsrs
+- upgrade::upgrade_rollback_undoes_a_partial_import
+- upgrade::upgrade_sigkill_mid_import_then_rerun_does_not_duplicate
+- upgrade::upgrade_wal_without_flag_refuses_and_source_unchanged
+- upgrade::upgrade_v311_auto_upgrade_preserves_memories_fsrs_and_source_sha
+
+real:
+- cli::cli_backup_on_fresh_store — Database not found at vestige.db
+- cli::cli_help_lists_every_command_and_flag — help missing recall --handle
+- cli::cli_ingest_git_on_fresh_store — upsert_by_source is not implemented
+- cli::cli_migrate_to_strata_advertises_dry_run_and_rollback — --rollback absent
+- cli::cli_portable_export_on_fresh_store — portable export did not complete
+- cli::cli_recall_on_fresh_store — unexpected argument --handle
+- cli::cli_sync_on_fresh_store — sync_portable_archive_file is not implemented
+- engine::tamper_missing_head_state_and_damaged_segment_refuses_without_truncate — lane E, STACK-A
+- engine::tamper_missing_key_on_unsealed_log_is_not_regenerated — lane E, STACK-A
+- engine::tamper_missing_store_meta_refuses — lane E, STACK-A
+- mcp::mcp_codebase_valid_invalid_handle_miss — no gate receipt
+- mcp::mcp_dedup_valid_invalid_handle_miss — set_protected not implemented
+- mcp::mcp_graph_valid_invalid_handle_miss — memory_id is required
+- mcp::mcp_intention_valid_invalid_handle_miss — get_intentions_by_status not implemented
+- mcp::mcp_maintain_valid_invalid_handle_miss — gc does not support handle
+- mcp::mcp_memory_status_valid_invalid_handle_miss — accepted invalid input
+- mcp::mcp_memory_valid_invalid_handle_miss — Invalid memory ID format
+- mcp::mcp_recall_free_text_is_not_a_search — similarity_disabled, not handle_required
+- mcp::mcp_recall_valid_invalid_handle_miss — no gate receipt
+- mcp::mcp_receipt_valid_invalid_handle_miss — receipt not found, not handle_required
+- mcp::mcp_session_start_valid_invalid_handle_miss — similarity_disabled
+- mcp::mcp_smart_ingest_valid_invalid_handle_miss — no gate receipt
+- mcp::mcp_source_sync_valid_invalid_handle_miss — get_connector_cursor not implemented
+- mcp::mcp_writes_and_destructive_actions_carry_gate_receipts — smart_ingest no gate receipt
+

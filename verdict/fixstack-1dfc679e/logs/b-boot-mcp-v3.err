@@ -1,0 +1,3 @@
+2026-09-29T16:37:53.681095Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T16:37:53.681143Z ERROR v3 SQLite store at /tmp/verdict-fix/work/boot-b/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/verdict-fix/work/boot-b/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)

@@ -1,0 +1,85 @@
+{
+  "missing_key_unsealed": {
+    "key_bytes_changed": false,
+    "key_deleted": true,
+    "key_existed": 32,
+    "key_reappeared": false,
+    "open_err": "log error: strata metadata corrupt: signing key missing for an existing log; refusing to mint a new key",
+    "open_ok": null,
+    "refused": true,
+    "requirement": "missing key on an unsealed log must refuse, not mint a new key",
+    "silently_regenerated": false
+  },
+  "missing_store_meta": {
+    "open_err": "verification failed: store.meta is missing but the log has frames",
+    "open_ok": null,
+    "refused": true,
+    "requirement": "missing store.meta on a populated store must error",
+    "store_meta_bytes": 48,
+    "store_meta_existed": true
+  },
+  "sealed_segment_head_deleted": {
+    "flip_error": null,
+    "flip_offset": 10657,
+    "flipped": "00000000-3797ac0b120a6fc47ca2a08c39e05e4e.seg",
+    "head_state_existed": true,
+    "name": "sealed-damage",
+    "open_err": "log error: strata halt: sealed segment damaged: payload blake3 mismatch (segment 0, offset 10651, last_acked_seq 0) — damage at/below the acked watermark, refusing to truncate history",
+    "open_ok": null,
+    "refused": true,
+    "requirement": "open must fail and segment bytes must not be truncated",
+    "seal_log": true,
+    "segments_after": [
+      {
+        "bytes": 21314,
+        "name": "00000000-3797ac0b120a6fc47ca2a08c39e05e4e.seg",
+        "sha256": "db2a202dc234e9c371d19ff84361125b7bcd04b032f787f580d6f7d1a09f3073"
+      },
+      {
+        "bytes": 58,
+        "name": "00000001-ab086afd71f380b11019051b3fec4c54.seg",
+        "sha256": "52856031cbeff5fe7ff273e6b7d4d52bbf76ca851ccd546aaaa5eb3e868d3e51"
+      }
+    ],
+    "segments_before": [
+      {
+        "bytes": 21314,
+        "name": "00000000-3797ac0b120a6fc47ca2a08c39e05e4e.seg",
+        "sha256": "ad90bce39e3cc46db7e39d8206fcdbee009101810b059f1201b8ad5eb0825c0e"
+      },
+      {
+        "bytes": 58,
+        "name": "00000001-ab086afd71f380b11019051b3fec4c54.seg",
+        "sha256": "52856031cbeff5fe7ff273e6b7d4d52bbf76ca851ccd546aaaa5eb3e868d3e51"
+      }
+    ],
+    "truncated": false
+  },
+  "unsealed_segment_head_deleted": {
+    "flip_error": null,
+    "flip_offset": 10605,
+    "flipped": "00000000-cb37844706cec17be7a916139ab1abc7.seg",
+    "head_state_existed": true,
+    "name": "unsealed-damage",
+    "open_err": "log error: strata halt: sealed segment damaged: payload blake3 mismatch (segment 0, offset 10513, last_acked_seq 0) — damage at/below the acked watermark, refusing to truncate history",
+    "open_ok": null,
+    "refused": true,
+    "requirement": "open must fail and segment bytes must not be truncated",
+    "seal_log": false,
+    "segments_after": [
+      {
+        "bytes": 21210,
+        "name": "00000000-cb37844706cec17be7a916139ab1abc7.seg",
+        "sha256": "afbe9ea764d9718c8ef80658105d11a72a45d5f06750eddb8516504fac5fba58"
+      }
+    ],
+    "segments_before": [
+      {
+        "bytes": 21210,
+        "name": "00000000-cb37844706cec17be7a916139ab1abc7.seg",
+        "sha256": "947f2e8963f8448fecdbc06afa373357d19641a9df2f59880b77458aea9d9136"
+      }
+    ],
+    "truncated": false
+  }
+}

@@ -1,0 +1,1510 @@
+{
+  "decode_errors": [],
+  "dir": "/tmp/verdict-fix/work/b-check3/dump-backfill-v31",
+  "edges": [
+    {
+      "activation_count": 0,
+      "created_ms": 1789972977518,
+      "last_activated_ms": 1789972977518,
+      "legacy": [],
+      "legacy_inferred": true,
+      "legacy_link_type": "backfill_candidate",
+      "link_type": "derived_from",
+      "source_kernel_id": 1,
+      "source_legacy_id": "f871f50d-b440-4611-ae36-6ba4e4be6a5f",
+      "strength_q32": 4294967296,
+      "target_kernel_id": 7,
+      "target_legacy_id": "e6f23fe6-4024-458a-a1e0-3afe59b1e5e3"
+    }
+  ],
+  "files_after_open": [
+    {
+      "bytes": 15827,
+      "mode": 420,
+      "path": "00000000-f9bfb1c57d651c5c194cf98a08bd6fd6.seg",
+      "sha256": "2a21df203b65adecc6fb13fe7722a354a25acac17b007452c025053eb8691fed"
+    },
+    {
+      "bytes": 58,
+      "mode": 420,
+      "path": "00000001-d177323e9abf1b7a177d2a93401ae072.seg",
+      "sha256": "1cf33b9d4e6665f039d322a83bfafcf22ac8ce4d4ac9e4c007cd6a8ddc2b2de5"
+    },
+    {
+      "bytes": 8,
+      "mode": 420,
+      "path": "head.state",
+      "sha256": "220dde27afee4d537cac96d85d6546f825153b90e828931b74e103807541bc42"
+    },
+    {
+      "bytes": 32,
+      "mode": 384,
+      "path": "strata.key",
+      "sha256": "54f7fab9e9c72c108a70df52cf9b2531f1ff8c8d79061f5b4acc00ddfa72a284"
+    }
+  ],
+  "files_before_open": [
+    {
+      "bytes": 15827,
+      "mode": 420,
+      "path": "00000000-f9bfb1c57d651c5c194cf98a08bd6fd6.seg",
+      "sha256": "2a21df203b65adecc6fb13fe7722a354a25acac17b007452c025053eb8691fed"
+    },
+    {
+      "bytes": 58,
+      "mode": 420,
+      "path": "00000001-d177323e9abf1b7a177d2a93401ae072.seg",
+      "sha256": "1cf33b9d4e6665f039d322a83bfafcf22ac8ce4d4ac9e4c007cd6a8ddc2b2de5"
+    },
+    {
+      "bytes": 8,
+      "mode": 420,
+      "path": "head.state",
+      "sha256": "220dde27afee4d537cac96d85d6546f825153b90e828931b74e103807541bc42"
+    },
+    {
+      "bytes": 32,
+      "mode": 384,
+      "path": "strata.key",
+      "sha256": "54f7fab9e9c72c108a70df52cf9b2531f1ff8c8d79061f5b4acc00ddfa72a284"
+    }
+  ],
+  "frames_total": 12,
+  "kind_counts": {
+    "CHECKPOINT": 1,
+    "EDGE": 1,
+    "GENESIS": 1,
+    "MIGRATION_RECEIPT": 1,
+    "NODE": 7,
+    "PARAMS": 1
+  },
+  "nodes": [
+    {
+      "content": "CONFIG only. Enabled operational binding for billing workflow. Join key Redis.BugJoin063. No crash.",
+      "created_ms": 1788936169286,
+      "kernel_id": 1,
+      "last_accessed_ms": 1789972969257,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.3065"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-21T06:42:49.257756887+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          "synthetic-mirror"
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "1"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          "nomic-ai/nomic-embed-text-v1.5"
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          ""
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ]
+      ],
+      "legacy_id": "f871f50d-b440-4611-ae36-6ba4e4be6a5f",
+      "node_type": "decision",
+      "tags": [
+        "quiet-cause",
+        "synthetic"
+      ],
+      "updated_ms": 1789972969257
+    },
+    {
+      "content": "Dark mode preference for Orion. Join Ui.OrionTheme063.",
+      "created_ms": 1789195370439,
+      "kernel_id": 2,
+      "last_accessed_ms": 1789972970419,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.3065"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-21T06:42:50.419823710+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          "synthetic-mirror"
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "1"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          "nomic-ai/nomic-embed-text-v1.5"
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          ""
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ]
+      ],
+      "legacy_id": "2484bbeb-4865-4f00-94d1-a75aecb1e486",
+      "node_type": "fact",
+      "tags": [
+        "filler",
+        "synthetic"
+      ],
+      "updated_ms": 1789972970419
+    },
+    {
+      "content": "Payment canary at five percent. Join Deploy.PayCanary063.",
+      "created_ms": 1789281771583,
+      "kernel_id": 3,
+      "last_accessed_ms": 1789972971562,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.3065"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-21T06:42:51.562282065+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          "synthetic-mirror"
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "1"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          "nomic-ai/nomic-embed-text-v1.5"
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          ""
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ]
+      ],
+      "legacy_id": "dd7a256d-7fc7-4ef6-ab12-2559a9900b1f",
+      "node_type": "fact",
+      "tags": [
+        "filler",
+        "synthetic"
+      ],
+      "updated_ms": 1789972971562
+    },
+    {
+      "content": "LOOKALIKE: agent crashed with context_length_exceeded after PDF dump into chatHistory. Memory pollution. Noise-63a.",
+      "created_ms": 1789540972798,
+      "kernel_id": 4,
+      "last_accessed_ms": 1789972972772,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.3065"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-21T06:42:52.772877600+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          "synthetic-mirror"
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "1"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          "nomic-ai/nomic-embed-text-v1.5"
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          ""
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ]
+      ],
+      "legacy_id": "fd4b722a-3688-43e3-af06-e238cc6db48a",
+      "node_type": "event",
+      "tags": [
+        "distractor",
+        "synthetic"
+      ],
+      "updated_ms": 1789972972772
+    },
+    {
+      "content": "LOOKALIKE: Redis chat bloat aborted mid-tool for a different session. Token limit. Noise-63b.",
+      "created_ms": 1789627374001,
+      "kernel_id": 5,
+      "last_accessed_ms": 1789972973973,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.3065"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-21T06:42:53.973602616+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          "synthetic-mirror"
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "1"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          "nomic-ai/nomic-embed-text-v1.5"
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          ""
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ]
+      ],
+      "legacy_id": "581e6f29-5793-49b2-9e24-d40b7c1289c3",
+      "node_type": "event",
+      "tags": [
+        "distractor",
+        "synthetic"
+      ],
+      "updated_ms": 1789972973973
+    },
+    {
+      "content": "LOOKALIKE: intermediate tool steps filled buffer; agent aborted. Unrelated ticket. Noise-63c.",
+      "created_ms": 1789713775147,
+      "kernel_id": 6,
+      "last_accessed_ms": 1789972975123,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.3065"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-21T06:42:55.123652826+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          "synthetic-mirror"
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "1"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          "nomic-ai/nomic-embed-text-v1.5"
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          ""
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ]
+      ],
+      "legacy_id": "02c0c94a-a186-4e35-8eae-81f90e4f7181",
+      "node_type": "event",
+      "tags": [
+        "distractor",
+        "synthetic"
+      ],
+      "updated_ms": 1789972975123
+    },
+    {
+      "content": "CRASH FAILURE ANCHOR. Production agent aborted. context_length_exceeded. Symptom theme: Sailor has no notion of context: it watches a compaction happen and does nothing with it. Join key Redis.BugJoin063.",
+      "created_ms": 1789972976382,
+      "kernel_id": 7,
+      "last_accessed_ms": 1789972976343,
+      "legacy": [
+        [
+          "knowledge_nodes.stability",
+          "2.3065"
+        ],
+        [
+          "knowledge_nodes.difficulty",
+          "2.118103970459015"
+        ],
+        [
+          "knowledge_nodes.reps",
+          "0"
+        ],
+        [
+          "knowledge_nodes.lapses",
+          "0"
+        ],
+        [
+          "knowledge_nodes.learning_state",
+          "new"
+        ],
+        [
+          "knowledge_nodes.storage_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retrieval_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.retention_strength",
+          "1"
+        ],
+        [
+          "knowledge_nodes.sentiment_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.sentiment_magnitude",
+          "0"
+        ],
+        [
+          "knowledge_nodes.next_review",
+          "2026-09-21T06:42:56.343963792+00:00"
+        ],
+        [
+          "knowledge_nodes.scheduled_days",
+          "0"
+        ],
+        [
+          "knowledge_nodes.source",
+          "synthetic-mirror"
+        ],
+        [
+          "knowledge_nodes.has_embedding",
+          "1"
+        ],
+        [
+          "knowledge_nodes.embedding_model",
+          "nomic-ai/nomic-embed-text-v1.5"
+        ],
+        [
+          "knowledge_nodes.valid_from",
+          ""
+        ],
+        [
+          "knowledge_nodes.valid_until",
+          ""
+        ],
+        [
+          "knowledge_nodes.scope",
+          "user"
+        ],
+        [
+          "knowledge_nodes.memory_system",
+          "semantic"
+        ],
+        [
+          "knowledge_nodes.activation",
+          ""
+        ],
+        [
+          "knowledge_nodes.waking_tag",
+          "0"
+        ],
+        [
+          "knowledge_nodes.waking_tag_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.utility_score",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_retrieved",
+          "0"
+        ],
+        [
+          "knowledge_nodes.times_useful",
+          "0"
+        ],
+        [
+          "knowledge_nodes.emotional_valence",
+          "0"
+        ],
+        [
+          "knowledge_nodes.flashbulb",
+          "0"
+        ],
+        [
+          "knowledge_nodes.temporal_level",
+          ""
+        ],
+        [
+          "knowledge_nodes.summary_parent_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.suppression_count",
+          "0"
+        ],
+        [
+          "knowledge_nodes.suppressed_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.protected",
+          "0"
+        ],
+        [
+          "knowledge_nodes.domains",
+          "[]"
+        ],
+        [
+          "knowledge_nodes.domain_scores",
+          "{}"
+        ],
+        [
+          "knowledge_nodes.source_system",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_id",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_url",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_updated_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.content_hash",
+          ""
+        ],
+        [
+          "knowledge_nodes.synced_at",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_project",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_type",
+          ""
+        ],
+        [
+          "knowledge_nodes.source_author",
+          ""
+        ]
+      ],
+      "legacy_id": "e6f23fe6-4024-458a-a1e0-3afe59b1e5e3",
+      "node_type": "event",
+      "tags": [
+        "failure",
+        "synthetic"
+      ],
+      "updated_ms": 1789972976343
+    }
+  ],
+  "params": {
+    "envelope_head": "",
+    "params_id": "v4-migrate/1",
+    "schema_version": 31,
+    "source_blake3": "78eace8e822b7ddf1ae9c7b0b6276284d4eddb38f3cf5d8ffb0983b47cfb3ea7"
+  },
+  "receipt": {
+    "checksum_ok": true,
+    "counts": [
+      [
+        "composition_events",
+        0
+      ],
+      [
+        "composition_members",
+        0
+      ],
+      [
+        "composition_outcomes",
+        0
+      ],
+      [
+        "consolidation_history",
+        0
+      ],
+      [
+        "deletion_tombstones",
+        0
+      ],
+      [
+        "dream_history",
+        0
+      ],
+      [
+        "fsrs_cards",
+        0
+      ],
+      [
+        "fsrs_config",
+        1
+      ],
+      [
+        "insights",
+        0
+      ],
+      [
+        "intentions",
+        0
+      ],
+      [
+        "knowledge_nodes",
+        7
+      ],
+      [
+        "memory_access_log",
+        0
+      ],
+      [
+        "memory_connections",
+        1
+      ],
+      [
+        "memory_states",
+        0
+      ],
+      [
+        "node_embeddings",
+        7
+      ],
+      [
+        "retention_snapshots",
+        0
+      ],
+      [
+        "sessions",
+        0
+      ],
+      [
+        "state_transitions",
+        0
+      ],
+      [
+        "sync_tombstones",
+        0
+      ]
+    ],
+    "dropped_columns": [
+      "node_embeddings.embedding (H1: vector values are dropped and counted)",
+      "schema_version.applied_at",
+      "receipt_envelopes.receipt_id/projection_json/issued_at/stored_at"
+    ],
+    "dropped_vectors": 7,
+    "envelope_head": "",
+    "old_derived_seed": "081da552f37b527822823e33f135b50761f376e683be6a808e002692a7259da2",
+    "schema_version": 31,
+    "signature_ok": true,
+    "signing_key_id": "vestige-migrate-receipt-v1",
+    "source_blake3_after": "78eace8e822b7ddf1ae9c7b0b6276284d4eddb38f3cf5d8ffb0983b47cfb3ea7",
+    "source_blake3_before": "78eace8e822b7ddf1ae9c7b0b6276284d4eddb38f3cf5d8ffb0983b47cfb3ea7",
+    "verifying_key": "f5a0ede1ee406abcbd21c2fcde436678810bfdd079e723bcce2cc7b6db3036e5"
+  },
+  "receipt_key": {
+    "bytes": 32,
+    "exists": true,
+    "inside_to": false,
+    "mode": 384,
+    "path": "/tmp/verdict-fix/work/b-check3/receipt-signing.key"
+  },
+  "strata_key": {
+    "equals_old_source_hash_derivation": false,
+    "exists": true,
+    "hex": "dc1fea48e345a706768f7d7cb7f49ea9c5e64e4166fcc99c55507306a22a8a73",
+    "mode": 384,
+    "path": "/tmp/verdict-fix/work/b-check3/dump-backfill-v31/strata.key",
+    "sha256": "54f7fab9e9c72c108a70df52cf9b2531f1ff8c8d79061f5b4acc00ddfa72a284"
+  },
+  "supersessions": [],
+  "tombstones": []
+}

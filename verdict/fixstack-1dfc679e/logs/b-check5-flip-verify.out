@@ -1,0 +1,7 @@
+{
+  "failures": [
+    "segment 0: damaged at offset 10750: payload blake3 mismatch"
+  ],
+  "ok": false
+}
+FAILED

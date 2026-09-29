@@ -1,0 +1,10 @@
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/b-check3/src-vnc-v36 (keep this file; it is your pre-migration record)
+Source BLAKE3: 6e778707cea5f310c3fbcf9b71b3c188b1bff380e4d1b7f0995915d23b517fcc
+Destination: /tmp/verdict-fix/work/b-check3/to-vnc-v36
+Migrated: 12 nodes, 2 edges, 0 fsrs events
+Dropped vectors: 12 (vector values were never read)
+Skipped tables (counted, not mapped): embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, schema_version, vector_journal
+MIGRATION_RECEIPT: 5ff4c41afe17258f19666149f09c62c4df2780e6fb50e075d7867ab4114e844d (signature verified: true)
+Replay verification: true
+EXIT:0

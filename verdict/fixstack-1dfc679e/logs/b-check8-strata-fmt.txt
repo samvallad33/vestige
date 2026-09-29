@@ -1,0 +1,87 @@
+Diff in /tmp/stack-b/crates/strata/src/error.rs:23:
+     /// Corruption at or below the acked watermark. Never truncated.
+     Halt(HaltDetail),
+     /// The directory lock is held by a live writer.
+[31m-    Locked { pid: u64 },
+[m[32m+    Locked {
+[m[32m+        pid: u64,
+[m[32m+    },
+[m     /// On-disk metadata (key file, head.state, segment names) is unusable.
+     Corrupt(String),
+     Io(io::Error),
+Diff in /tmp/stack-b/crates/strata/src/lib.rs:68:
+ 
+ pub use error::{HaltDetail, StrataError};
+ pub use format::{
+[31m-    FRAME_FIXED_WIRE_SIZE, Frame, FrameRecord, GENESIS_PREV_SEGMENT_HASH, HEADER_WIRE_SIZE,
+[m[31m-    SEGMENT_MAGIC, SEGMENT_VERSION, SegmentHeader, SegmentTrailer, TRAILER_WIRE_SIZE, frame_hash,
+[m[31m-    header_hash, merkle_root, parse_frame, payload_blake3, signature_message,
+[m[32m+    frame_hash, header_hash, merkle_root, parse_frame, payload_blake3, signature_message, Frame,
+[m[32m+    FrameRecord, SegmentHeader, SegmentTrailer, FRAME_FIXED_WIRE_SIZE, GENESIS_PREV_SEGMENT_HASH,
+[m[32m+    HEADER_WIRE_SIZE, SEGMENT_MAGIC, SEGMENT_VERSION, TRAILER_WIRE_SIZE,
+[m };
+ pub use log::{
+     HeadInfo, SealInfo, SeqAck, StrataLog, TailReport, TrailerCheck, GROUP_COMMIT_WINDOW_MS,
+Diff in /tmp/stack-b/crates/strata/src/tests.rs:344:
+         handles.push(std::thread::spawn(move || {
+             barrier.wait();
+             (0..PER_THREAD)
+[31m-                .map(|i| log.append(t as u8, format!("t{t}-i{i}").as_bytes()).unwrap())
+[m[32m+                .map(|i| {
+[m[32m+                    log.append(t as u8, format!("t{t}-i{i}").as_bytes())
+[m[32m+                        .unwrap()
+[m[32m+                })
+[m                 .collect::<Vec<_>>()
+         }));
+     }
+Diff in /tmp/stack-b/crates/strata/src/tests.rs:355:
+     assert_eq!(all.len() as u64, total);
+     let mut seqs: Vec<u64> = all.iter().map(|a| a.seq).collect();
+     seqs.sort_unstable();
+[31m-    assert_eq!(seqs, (1..=total).collect::<Vec<_>>(), "seqs are unique and dense");
+[m[32m+    assert_eq!(
+[m[32m+        seqs,
+[m[32m+        (1..=total).collect::<Vec<_>>(),
+[m[32m+        "seqs are unique and dense"
+[m[32m+    );
+[m     assert_eq!(log.head().last_acked_seq, total);
+ 
+     let syncs = SYNC_COUNT.load(Ordering::SeqCst);
+Diff in /tmp/stack-b/crates/strata/src/tests.rs:400:
+     // continues past it.
+     drop(log);
+     let log = StrataLog::open(&dir).unwrap();
+[31m-    assert_eq!(log.head().last_acked_seq, 2, "failed commit must not advance the watermark");
+[m[32m+    assert_eq!(
+[m[32m+        log.head().last_acked_seq,
+[m[32m+        2,
+[m[32m+        "failed commit must not advance the watermark"
+[m[32m+    );
+[m     assert_eq!(log.read_frames(1).unwrap().len(), 3);
+     assert_eq!(log.append(4, b"four").unwrap().seq, 4);
+     fs::remove_dir_all(&dir).unwrap();
+Diff in /tmp/stack-b/crates/strata/src/tests.rs:422:
+     drop(log2);
+ 
+     // A stale lock (pid that cannot exist) is detected and taken over.
+[31m-    fs::write(dir.join(crate::lockfile::LOCK_NAME), 4_000_000u64.to_le_bytes()).unwrap();
+[m[32m+    fs::write(
+[m[32m+        dir.join(crate::lockfile::LOCK_NAME),
+[m[32m+        4_000_000u64.to_le_bytes(),
+[m[32m+    )
+[m[32m+    .unwrap();
+[m     let log3 = StrataLog::open(&dir).unwrap();
+     log3.append(2, b"y").unwrap();
+     assert_eq!(log3.read_frames(1).unwrap().len(), 2);
+Diff in /tmp/stack-b/crates/strata/src/tests.rs:467:
+     let empty_root: [u8; 32] = blake3::hash(&[]).into();
+     assert_eq!(format::merkle_root(&[]), empty_root);
+     assert_eq!(format::merkle_root(&l[..1]), leaf(&l[0]));
+[31m-    assert_eq!(format::merkle_root(&l[..2]), node(&leaf(&l[0]), &leaf(&l[1])));
+[m[32m+    assert_eq!(
+[m[32m+        format::merkle_root(&l[..2]),
+[m[32m+        node(&leaf(&l[0]), &leaf(&l[1]))
+[m[32m+    );
+[m     assert_eq!(format::merkle_root(&l[..3]), reference(&leaves[..3]));
+     assert_eq!(format::merkle_root(&l), reference(&leaves));
+     assert_ne!(format::merkle_root(&l[..2]), format::merkle_root(&l[..3]));

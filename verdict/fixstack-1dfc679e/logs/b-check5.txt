@@ -1,0 +1,46 @@
+CHECK5 2026-09-29T16:42:07+00:00
+HARNESS_flip:1
+VERIFY_flip:1
+-- flip harness --
+flipped /tmp/verdict-fix/work/a-tamper-flip/00000000-66f159c95005146f7f0c88bb547c0de1.seg at 11608
+OPEN_FAIL strata halt: sealed segment damaged: payload blake3 mismatch (segment 0, offset 10750, last_acked_seq 18) — damage at/below the acked watermark, refusing to truncate history
+-- flip verify stderr --
+  segment 0: damaged at offset 10750: payload blake3 mismatch
+-- flip verify stdout tail --
+{
+  "failures": [
+    "segment 0: damaged at offset 10750: payload blake3 mismatch"
+  ],
+  "ok": false
+}
+FAILED
+HARNESS_replace-derived:1
+VERIFY_replace-derived:1
+-- replace-derived harness --
+replaced strata.key with derive_key("vestige strata migrate log seed v1", source_blake3)
+OPEN_FAIL strata halt: sealed segment trailer: trailer signature invalid (segment 0, offset 23112, last_acked_seq 18) — damage at/below the acked watermark, refusing to truncate history
+-- replace-derived verify stderr --
+  segment 0: trailer signature invalid
+-- replace-derived verify stdout tail --
+{
+  "failures": [
+    "segment 0: trailer signature invalid"
+  ],
+  "ok": false
+}
+FAILED
+HARNESS_replace-random:1
+VERIFY_replace-random:1
+-- replace-random harness --
+replaced strata.key with a fixed non-matching seed
+OPEN_FAIL strata halt: sealed segment trailer: trailer signature invalid (segment 0, offset 23112, last_acked_seq 18) — damage at/below the acked watermark, refusing to truncate history
+-- replace-random verify stderr --
+  segment 0: trailer signature invalid
+-- replace-random verify stdout tail --
+{
+  "failures": [
+    "segment 0: trailer signature invalid"
+  ],
+  "ok": false
+}
+FAILED

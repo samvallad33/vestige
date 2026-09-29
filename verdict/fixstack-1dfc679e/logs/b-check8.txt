@@ -1,0 +1,169 @@
+CHECK8 START 2026-09-29T16:42:45+00:00 rustc rustc 1.98.1 (48a229cea 2026-09-01)
+==== workspace test ====
+WORKSPACE_TEST_EXIT:101
+   Compiling dtor v0.0.6
+   Compiling ctor-proc-macro v0.0.6
+   Compiling ctor v0.4.3
+   Compiling byteorder v1.5.0
+   Compiling bytemuck v1.25.2
+   Compiling roaring v0.11.5
+   Compiling vestige-e2e-tests v0.1.0 (/tmp/stack-b/tests/e2e)
+   Compiling vestige-mcp v3.1.1 (/tmp/stack-b/crates/vestige-mcp)
+   Compiling strata-migrate v0.1.0 (/tmp/stack-b/crates/strata-migrate)
+   Compiling strata-verify v0.1.0 (/tmp/stack-b/crates/strata-verify)
+   Compiling vestige-differential-tests v0.1.0 (/tmp/stack-b/tests/differential)
+   Compiling vestige-spacetime v0.1.0 (/tmp/stack-b/crates/vestige-spacetime)
+   Compiling vestige-phase-1-tests v0.0.1 (/tmp/stack-b/tests/phase_1)
+error[E0425]: cannot find function `install_open_storage_hook` in crate `vestige_core`
+   --> crates/vestige-mcp/src/protocol_stdio_store.rs:13:19
+    |
+ 13 |     vestige_core::install_open_storage_hook(open_strata);
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `vestige_core`
+    |
+note: found an item that was configured out
+   --> crates/vestige-core/src/lib.rs:200:18
+    |
+199 | #[cfg(not(feature = "legacy-sqlite"))]
+    |          --------------------------- the item is gated here
+200 | pub use storage::install_open_storage_hook;
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `vestige-mcp` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+==== excluded crate tests ====
+-- strata --
+strata_TEST_EXIT:0
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+   Doc-tests strata
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+-- strata-gate --
+strata-gate_TEST_EXIT:0
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+   Doc-tests strata_gate
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+-- strata-kernel --
+strata-kernel_TEST_EXIT:0
+
+   Doc-tests strata_kernel
+
+running 1 test
+test src/canonical.rs - canonical::lint_state_type (line 95) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+-- strata-migrate --
+strata-migrate_TEST_EXIT:0
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+   Doc-tests strata_migrate
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+-- strata-store --
+strata-store_TEST_EXIT:0
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+   Doc-tests strata_store
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+-- strata-verify --
+strata-verify_TEST_EXIT:0
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests strata_verify
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+==== clippy workspace ====
+CLIPPY_EXIT:101
+    Checking open v5.4.4
+    Checking clap v4.6.7
+    Checking strata-store v0.1.0 (/tmp/stack-b/crates/strata-store)
+    Checking tower-http v0.7.1
+    Checking colored v3.1.1
+    Checking byteorder v1.5.0
+    Checking bytemuck v1.25.2
+    Checking roaring v0.11.5
+    Checking vestige-spacetime v0.1.0 (/tmp/stack-b/crates/vestige-spacetime)
+error: redundant closure
+   --> crates/vestige-core/src/storage/sqlite/actors.rs:592:13
+    |
+592 |             |row| Self::row_to_node(row),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the associated function itself: `Self::row_to_node`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure
+    = note: `-D clippy::redundant-closure` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_closure)]`
+
+error: could not compile `vestige-core` (lib) due to 1 previous error
+==== clippy excluded ====
+strata_CLIPPY_EXIT:0
+    Checking curve25519-dalek v5.0.0
+    Checking sha2 v0.11.0
+    Checking ed25519-dalek v3.0.0
+    Checking strata v0.1.0 (/tmp/stack-b/crates/strata)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.76s
+strata-gate_CLIPPY_EXIT:0
+    Checking constant_time_eq v0.4.2
+    Checking borsh v1.8.1
+    Checking blake3 v1.8.7
+    Checking strata-gate v0.1.0 (/tmp/stack-b/crates/strata-gate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.43s
+strata-kernel_CLIPPY_EXIT:0
+    Checking borsh v1.8.1
+    Checking blake3 v1.8.7
+    Checking libm v0.2.16
+    Checking strata-kernel v0.1.0 (/tmp/stack-b/crates/strata-kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.70s
+strata-migrate_CLIPPY_EXIT:0
+    Checking anyhow v1.0.104
+    Checking strata v0.1.0 (/tmp/stack-b/crates/strata)
+    Checking base64 v0.22.1
+    Checking strata-migrate v0.1.0 (/tmp/stack-b/crates/strata-migrate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.63s
+strata-store_CLIPPY_EXIT:0
+    Checking strata-gate v0.1.0 (/tmp/stack-b/crates/strata-gate)
+    Checking ed25519-dalek v3.0.0
+    Checking strata v0.1.0 (/tmp/stack-b/crates/strata)
+    Checking strata-store v0.1.0 (/tmp/stack-b/crates/strata-store)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.05s
+strata-verify_CLIPPY_EXIT:0
+    Checking base64 v0.22.1
+    Checking strata-gate v0.1.0 (/tmp/stack-b/crates/strata-gate)
+    Checking strata-migrate v0.1.0 (/tmp/stack-b/crates/strata-migrate)
+    Checking strata-verify v0.1.0 (/tmp/stack-b/crates/strata-verify)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.55s
+==== fmt ====
+FMT_EXIT:1
+fmt diff files: 428
+strata_FMT_EXIT:1
+strata fmt files: 7
+strata-gate_FMT_EXIT:1
+strata-gate fmt files: 47
+strata-kernel_FMT_EXIT:0
+strata-kernel fmt files: 0
+strata-migrate_FMT_EXIT:1
+strata-migrate fmt files: 428
+strata-store_FMT_EXIT:1
+strata-store fmt files: 54
+strata-verify_FMT_EXIT:1
+strata-verify fmt files: 428
+CHECK8 END 2026-09-29T16:54:03+00:00

@@ -1,0 +1,156 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling libc v0.2.189
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.14
+   Compiling cc v1.5.1
+   Compiling syn v3.0.6
+   Compiling cfg-if v1.0.5
+   Compiling rand_core v0.10.1
+   Compiling typenum v1.20.1
+   Compiling once_cell v1.21.4
+   Compiling hybrid-array v0.4.15
+   Compiling syn v2.0.119
+   Compiling hashbrown v0.17.1
+   Compiling cpufeatures v0.3.1
+   Compiling winnow v1.0.4
+   Compiling equivalent v1.0.2
+   Compiling indexmap v2.14.2
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_core v1.0.229
+   Compiling semver v1.0.28
+   Compiling rustc_version v0.4.1
+   Compiling toml_edit v0.25.15+spec-1.1.0
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling blake3 v1.8.7
+   Compiling const-oid v0.10.2
+   Compiling cfg_aliases v0.2.2
+   Compiling bitflags v2.13.2
+   Compiling borsh v1.8.1
+   Compiling digest v0.11.3
+   Compiling proc-macro-crate v3.5.0
+   Compiling curve25519-dalek v5.0.0
+   Compiling arrayvec v0.7.8
+   Compiling constant_time_eq v0.4.2
+   Compiling borsh-derive v1.8.1
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling signature v3.0.0
+   Compiling getrandom v0.4.3
+   Compiling serde v1.0.229
+   Compiling zmij v1.0.23
+   Compiling autocfg v1.5.1
+   Compiling inotify-sys v0.1.8
+   Compiling subtle v2.6.1
+   Compiling zeroize v1.9.0
+   Compiling num-traits v0.2.19
+   Compiling ed25519 v3.0.0
+   Compiling sha2 v0.11.0
+   Compiling serde_derive v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling vcpkg v0.2.15
+   Compiling pkg-config v0.3.34
+   Compiling libm v0.2.16
+   Compiling libsqlite3-sys v0.38.2
+   Compiling ed25519-dalek v3.0.0
+   Compiling option-ext v0.2.0
+   Compiling log v0.4.34
+   Compiling memchr v2.8.3
+   Compiling pin-project-lite v0.2.17
+   Compiling same-file v1.0.6
+   Compiling rustix v1.1.5
+   Compiling foldhash v0.2.0
+   Compiling itoa v1.0.18
+   Compiling thiserror v2.0.21
+   Compiling walkdir v2.5.0
+   Compiling mio v1.2.3
+   Compiling dirs-sys v0.5.0
+   Compiling inotify v0.11.5
+   Compiling notify-types v2.1.0
+   Compiling tracing-attributes v0.1.31
+   Compiling thiserror-impl v2.0.21
+   Compiling tokio-macros v2.7.2
+   Compiling tracing-core v0.1.36
+   Compiling anyhow v1.0.104
+   Compiling iana-time-zone v0.1.65
+   Compiling ryu-js v1.0.3
+   Compiling linux-raw-sys v0.12.1
+   Compiling serde_json_canonicalizer v0.3.2
+   Compiling chrono v0.4.45
+   Compiling tracing v0.1.44
+   Compiling tokio v1.53.1
+   Compiling notify v8.2.0
+   Compiling strata-kernel v0.1.0 (/tmp/stack-b/crates/strata-kernel)
+   Compiling directories v6.0.0
+   Compiling hashlink v0.12.2
+   Compiling uuid v1.26.1
+   Compiling strata v0.1.0 (/tmp/stack-b/crates/strata)
+   Compiling trait-variant v0.1.3
+   Compiling smallvec v1.16.2
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling fastrand v2.5.0
+   Compiling fallible-iterator v0.3.0
+   Compiling base64 v0.23.1
+   Compiling rusqlite v0.40.2
+   Compiling vestige-core v3.1.1 (/tmp/stack-b/crates/vestige-core)
+   Compiling tempfile v3.27.0
+   Compiling strata-gate v0.1.0 (/tmp/stack-b/crates/strata-gate)
+   Compiling base64 v0.22.1
+   Compiling strata-store v0.1.0 (/tmp/stack-b/crates/strata-store)
+   Compiling strata-migrate v0.1.0 (/tmp/stack-b/crates/strata-migrate)
+   Compiling strata-verify v0.1.0 (/tmp/stack-b/crates/strata-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.48s
+     Running unittests src/lib.rs (/tmp/verdict-fix/b-test-target-strata-verify/debug/deps/strata_verify-3d7346c968fefde5)
+
+running 1 test
+test migration::tests::counts_match_detects_duplicate_rows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/strata_verify.rs (/tmp/verdict-fix/b-test-target-strata-verify/debug/deps/strata_verify-cecda7a5f53303a3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/migration.rs (/tmp/verdict-fix/b-test-target-strata-verify/debug/deps/migration-edb1236e29abaa36)
+
+running 4 tests
+test migrated_log_truncated_fails ... ok
+test migrated_log_flipped_byte_fails ... ok
+test migrated_log_wrong_receipt_key_fails ... ok
+test migrated_log_untouched_passes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests/readonly.rs (/tmp/verdict-fix/b-test-target-strata-verify/debug/deps/readonly-c5670185ddb47fbc)
+
+running 4 tests
+test foreign_directory_is_not_initialized ... ok
+test live_store_root_is_unchanged_and_passes ... ok
+test wrong_key_fails_without_replacing_it ... ok
+test good_import_is_unchanged_and_exits_zero ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/tamper.rs (/tmp/verdict-fix/b-test-target-strata-verify/debug/deps/tamper-14181808bad4ac59)
+
+running 7 tests
+test forged_effect_without_gate_is_flagged_by_rederive_and_sweep ... ok
+test clean_store_verifies_green ... ok
+test tampered_gate_verdict_is_caught_by_rederivation ... ok
+test flipping_one_byte_in_a_sealed_kernel_segment_fails_naming_the_seq ... ok
+test flipping_one_byte_in_a_stored_checkpoint_breaks_the_chain ... ok
+test trailing_kernel_event_past_head_checkpoint_fails_naming_seq ... ok
+test missing_artifact_fails_with_io_error ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests strata_verify
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

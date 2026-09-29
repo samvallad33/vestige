@@ -1,0 +1,598 @@
+{
+  "row": {
+    "store": "fresh-v38-wal",
+    "six_real": true,
+    "log_nodes": 10,
+    "legacy_inferred_edges": [
+      {
+        "source": "8050935f-79d7-45c9-afb0-375c09d086af",
+        "target": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e",
+        "legacy_link_type": "narrative"
+      }
+    ],
+    "mcp_exit": 0,
+    "open_ok": true,
+    "open_fail": false,
+    "init_ok": true,
+    "calls": 19,
+    "follows": [],
+    "stderr_tail": " WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.204960Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.205027Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.205070Z  INFO stdin closed (EOF), shutting down\n2026-09-29T16:11:23.205097Z  INFO Vestige MCP Server shutting down\n"
+  },
+  "calls": [
+    {
+      "tool": "memory_status",
+      "args": {
+        "view": "stats"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"accessUnknownPrunedLog\": {\n    \"limit\": 50,\n    \"memoryIds\": [],\n    \"returned\": 0,\n    \"total\": 0,\n    \"truncated\": false\n  },\n  \"computedAt\": \"2026-09-29T16:11:23.203304227+00:00\",\n  \"counts\": {\n    \"byAge\": {\n      \"0-7d\": 0,\n      \"181d+\": 0,\n      \"31-90d\": 0,\n      \"8-30d\": 0,\n      \"91-180d\": 0,\n      \"futureDated\": 0\n    },\n    \"byMemoryType\": {},\n    \"byTag\": {},\n    \"byTagTruncated\": false,\n    \"distinctTagTotal\": 0,\n    \"untagged\": 0\n  },\n  \"dataQuality\": {\n    \"malformedTagRows\": {\n      \"count\": 0,\n      \"memoryIds\": [],\n      \"memoryIdsTruncated\": false\n    },\n    \"retentionDefaultedRows\": 0\n  },\n  \"largestNodes\": {\n    \"limit\": 50,\n    \"memories\": [],\n    \"returned\": 0,\n    \"total\": 0,\n    \"truncated\": false\n  },\n  \"lifecycle\": {\n    \"expired\": 0,\n    \"invalidTemporalBounds\": 0,\n    \"notYetValid\": 0,\n    \"superseded\": 0,\n    \"withinValidityWindow\": 0\n  },\n  \"neverAccessed\": {\n    \"limit\": 50,\n    \"memories\": [],\n    \"returned\": 0,\n    \"total\": 0,\n    \"truncated\": false\n  },\n  \"population\": {\n    \"includesInvalid\": true,\n    \"includesSuperseded\": true,\n    \"total\": 0\n  },\n  \"recentTagOperations\": {\n    \"note\": \"Tag rename/merge operations are read directly from merge_operations so unrelated merge/supersede activity cannot bury them. Single-scope stats expose operations recorded for that exact scope plus every all-scopes operation (flagged allScopes=true), because an all-scopes mutation rewrote this scope's tags too; all-scopes stats expose every tag scope. A reverted operation remains visible with status and revertedAt.\",\n    \"operations\": [],\n    \"returned\": 0,\n    \"scannedOperations\": 0,\n    \"source\": \"merge_operations memory reflog\",\n    \"truncated\": false,\n    \"windowLimit\": 50\n  },\n  \"recommendedActions\": {\n    \"actions\": [],\n    \"note\": \"Only non-zero problems appear. memoryIds are bounded examples, not the full set; the matching count field is authoritative.\"\n  },\n  \"retentionDistribution\": {\n    \"buckets\": {\n      \"0-20%\": 0,\n      \">20-40%\": 0,\n      \">40-60%\": 0,\n      \">60-80%\": 0,\n      \">80-100%\": 0,\n      \"above100%\": 0,\n      \"below0\": 0,\n      \"nonFinite\": 0\n    }\n  },\n  \"scope\": {\n    \"mode\": \"single\",\n    \"value\": \"user\"\n  },\n  \"semantics\": {\n    \"accessUnknownPrunedLog\": \"Created before the retained 90-day access-log window with zero durable retrieval counters. Their pre-prune access history is unknowable, so they are reported here and never claimed as never-accessed. Do not suppress or purge them on access grounds.\",\n    \"age\": \"Whole elapsed days from createdAt to computedAt. Future-created rows are reported separately.\",\n    \"contentSize\": \"UTF-8 bytes. Returned content is a bounded preview, never the full body. Blocking credential shapes are redacted without echoing the matched bytes.\",\n    \"dataQuality\": \"malformedTagRows counts rows whose stored tags column is NULL or unparseable JSON (treated as untagged in aggregates); retentionDefaultedRows counts rows whose NULL retention_strength was reported at the schema default 1.0.\",\n    \"neverAccessed\": \"No access recorded in the retained 90-day access log, durable retrieval counters (times_retrieved/times_useful) are zero, AND the memory was created inside that window \u2014 so the absence of evidence is meaningful. Access-log rows are pruned after 90 days; they are not durable.\",\n    \"population\": \"Every stored knowledge_nodes row in the selected scope, including expired, not-yet-valid, invalid-bound, and superseded rows.\",\n    \"tagCounts\": \"Number of memories carrying each exact tag; duplicate entries within one memory count once. byTag is bounded to the top 200 tags by count (ties by tag name); distinctTagTotal and byTagTruncated report the full vocabulary size.\",\n    \"validity\": \"Temporal buckets are mutually exclusive: expired first, then not-yet-valid, then within-window. Superseded and invalid-bound counts are independent overlays.\"\n  },\n  \"success\": true,\n  \"view\": \"stats\"\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "accessUnknownPrunedLog": {
+              "limit": 50,
+              "memoryIds": [],
+              "returned": 0,
+              "total": 0,
+              "truncated": false
+            },
+            "computedAt": "2026-09-29T16:11:23.203304227+00:00",
+            "counts": {
+              "byAge": {
+                "0-7d": 0,
+                "181d+": 0,
+                "31-90d": 0,
+                "8-30d": 0,
+                "91-180d": 0,
+                "futureDated": 0
+              },
+              "byMemoryType": {},
+              "byTag": {},
+              "byTagTruncated": false,
+              "distinctTagTotal": 0,
+              "untagged": 0
+            },
+            "dataQuality": {
+              "malformedTagRows": {
+                "count": 0,
+                "memoryIds": [],
+                "memoryIdsTruncated": false
+              },
+              "retentionDefaultedRows": 0
+            },
+            "largestNodes": {
+              "limit": 50,
+              "memories": [],
+              "returned": 0,
+              "total": 0,
+              "truncated": false
+            },
+            "lifecycle": {
+              "expired": 0,
+              "invalidTemporalBounds": 0,
+              "notYetValid": 0,
+              "superseded": 0,
+              "withinValidityWindow": 0
+            },
+            "neverAccessed": {
+              "limit": 50,
+              "memories": [],
+              "returned": 0,
+              "total": 0,
+              "truncated": false
+            },
+            "population": {
+              "includesInvalid": true,
+              "includesSuperseded": true,
+              "total": 0
+            },
+            "recentTagOperations": {
+              "note": "Tag rename/merge operations are read directly from merge_operations so unrelated merge/supersede activity cannot bury them. Single-scope stats expose operations recorded for that exact scope plus every all-scopes operation (flagged allScopes=true), because an all-scopes mutation rewrote this scope's tags too; all-scopes stats expose every tag scope. A reverted operation remains visible with status and revertedAt.",
+              "operations": [],
+              "returned": 0,
+              "scannedOperations": 0,
+              "source": "merge_operations memory reflog",
+              "truncated": false,
+              "windowLimit": 50
+            },
+            "recommendedActions": {
+              "actions": [],
+              "note": "Only non-zero problems appear. memoryIds are bounded examples, not the full set; the matching count field is authoritative."
+            },
+            "retentionDistribution": {
+              "buckets": {
+                "0-20%": 0,
+                ">20-40%": 0,
+                ">40-60%": 0,
+                ">60-80%": 0,
+                ">80-100%": 0,
+                "above100%": 0,
+                "below0": 0,
+                "nonFinite": 0
+              }
+            },
+            "scope": {
+              "mode": "single",
+              "value": "user"
+            },
+            "semantics": {
+              "accessUnknownPrunedLog": "Created before the retained 90-day access-log window with zero durable retrieval counters. Their pre-prune access history is unknowable, so they are reported here and never claimed as never-accessed. Do not suppress or purge them on access grounds.",
+              "age": "Whole elapsed days from createdAt to computedAt. Future-created rows are reported separately.",
+              "contentSize": "UTF-8 bytes. Returned content is a bounded preview, never the full body. Blocking credential shapes are redacted without echoing the matched bytes.",
+              "dataQuality": "malformedTagRows counts rows whose stored tags column is NULL or unparseable JSON (treated as untagged in aggregates); retentionDefaultedRows counts rows whose NULL retention_strength was reported at the schema default 1.0.",
+              "neverAccessed": "No access recorded in the retained 90-day access log, durable retrieval counters (times_retrieved/times_useful) are zero, AND the memory was created inside that window \u2014 so the absence of evidence is meaningful. Access-log rows are pruned after 90 days; they are not durable.",
+              "population": "Every stored knowledge_nodes row in the selected scope, including expired, not-yet-valid, invalid-bound, and superseded rows.",
+              "tagCounts": "Number of memories carrying each exact tag; duplicate entries within one memory count once. byTag is bounded to the top 200 tags by count (ties by tag name); distinctTagTotal and byTagTruncated report the full vocabulary size.",
+              "validity": "Temporal buckets are mutually exclusive: expired first, then not-yet-valid, then within-window. Superseded and invalid-bound counts are independent overlays."
+            },
+            "success": true,
+            "view": "stats"
+          }
+        }
+      }
+    },
+    {
+      "tool": "causal_walk",
+      "args": {
+        "start_points": [
+          {
+            "kind": "logged_write",
+            "node_id": "22558332-6c82-4b43-a61a-03af50498cc4"
+          }
+        ]
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "content": [
+            {
+              "text": "{\"error\":\"pending_strata: causal_walk entity overlap is not a recorded edge\"}",
+              "type": "text"
+            }
+          ],
+          "isError": true,
+          "structuredContent": {
+            "error": "pending_strata: causal_walk entity overlap is not a recorded edge"
+          }
+        }
+      }
+    },
+    {
+      "tool": "backfill",
+      "args": {
+        "promote": false
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "content": [
+            {
+              "text": "{\"error\":\"pending_strata: backfill entity overlap is not a recorded edge\"}",
+              "type": "text"
+            }
+          ],
+          "isError": true,
+          "structuredContent": {
+            "error": "pending_strata: backfill entity overlap is not a recorded edge"
+          }
+        }
+      }
+    },
+    {
+      "tool": "maintain",
+      "args": {
+        "action": "gc"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"atomic\": true,\n  \"candidateCount\": 0,\n  \"deleted\": 0,\n  \"dryRun\": true,\n  \"errors\": 0,\n  \"hasMore\": false,\n  \"nextCursor\": null,\n  \"processed\": 0,\n  \"tool\": \"gc\"\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "atomic": true,
+            "candidateCount": 0,
+            "deleted": 0,
+            "dryRun": true,
+            "errors": 0,
+            "hasMore": false,
+            "nextCursor": null,
+            "processed": 0,
+            "tool": "gc"
+          }
+        }
+      }
+    },
+    {
+      "tool": "maintain",
+      "args": {
+        "action": "consolidate"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"activationsComputed\": 0,\n  \"decayApplied\": 0,\n  \"duplicatesMerged\": 0,\n  \"durationMs\": 0,\n  \"embeddingsGenerated\": 0,\n  \"nodesProcessed\": 0,\n  \"nodesPromoted\": 0,\n  \"nodesPruned\": 0,\n  \"tool\": \"consolidate\",\n  \"w20Optimized\": null\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "activationsComputed": 0,
+            "decayApplied": 0,
+            "duplicatesMerged": 0,
+            "durationMs": 0,
+            "embeddingsGenerated": 0,
+            "nodesProcessed": 0,
+            "nodesPromoted": 0,
+            "nodesPruned": 0,
+            "tool": "consolidate",
+            "w20Optimized": null
+          }
+        }
+      }
+    },
+    {
+      "tool": "maintain",
+      "args": {
+        "action": "dream"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "content": [
+            {
+              "text": "{\"error\":\"Initialization error: maintenance_memory_page is not implemented by this backend\"}",
+              "type": "text"
+            }
+          ],
+          "isError": true,
+          "structuredContent": {
+            "error": "Initialization error: maintenance_memory_page is not implemented by this backend"
+          }
+        }
+      }
+    },
+    {
+      "tool": "graph",
+      "args": {
+        "action": "memory_graph",
+        "center_id": "8050935f-79d7-45c9-afb0-375c09d086af",
+        "depth": 2
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "result": {
+          "content": [
+            {
+              "text": "{\"error\":\"Failed to get subgraph: Initialization error: get_memory_subgraph is not implemented by this backend\"}",
+              "type": "text"
+            }
+          ],
+          "isError": true,
+          "structuredContent": {
+            "error": "Failed to get subgraph: Initialization error: get_memory_subgraph is not implemented by this backend"
+          }
+        }
+      }
+    },
+    {
+      "tool": "graph",
+      "args": {
+        "action": "neighbors",
+        "memory_id": "8050935f-79d7-45c9-afb0-375c09d086af"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "result": {
+          "content": [
+            {
+              "text": "{\"error\":\"Initialization error: get_composition_neighbors is not implemented by this backend\"}",
+              "type": "text"
+            }
+          ],
+          "isError": true,
+          "structuredContent": {
+            "error": "Initialization error: get_composition_neighbors is not implemented by this backend"
+          }
+        }
+      }
+    },
+    {
+      "tool": "graph",
+      "args": {
+        "action": "associations",
+        "from": "8050935f-79d7-45c9-afb0-375c09d086af"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"action\": \"associations\",\n  \"associations\": [],\n  \"count\": 0,\n  \"from\": \"8050935f-79d7-45c9-afb0-375c09d086af\"\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "action": "associations",
+            "associations": [],
+            "count": 0,
+            "from": "8050935f-79d7-45c9-afb0-375c09d086af"
+          }
+        }
+      }
+    },
+    {
+      "tool": "memory",
+      "args": {
+        "action": "purge",
+        "id": "8050935f-79d7-45c9-afb0-375c09d086af",
+        "confirm": false
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "result": {
+          "content": [
+            {
+              "text": "{\"error\":\"Purge is irreversible. Pass confirm=true to permanently remove memory content and embeddings.\"}",
+              "type": "text"
+            }
+          ],
+          "isError": true,
+          "structuredContent": {
+            "error": "Purge is irreversible. Pass confirm=true to permanently remove memory content and embeddings."
+          }
+        }
+      }
+    },
+    {
+      "tool": "memory",
+      "args": {
+        "action": "get",
+        "id": "8050935f-79d7-45c9-afb0-375c09d086af"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 13,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"action\": \"get\",\n  \"found\": false,\n  \"message\": \"Memory not found\",\n  \"nodeId\": \"8050935f-79d7-45c9-afb0-375c09d086af\"\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "action": "get",
+            "found": false,
+            "message": "Memory not found",
+            "nodeId": "8050935f-79d7-45c9-afb0-375c09d086af"
+          }
+        }
+      }
+    },
+    {
+      "tool": "graph",
+      "args": {
+        "action": "memory_graph",
+        "center_id": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e",
+        "depth": 2
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "result": {
+          "content": [
+            {
+              "text": "{\"error\":\"Failed to get subgraph: Initialization error: get_memory_subgraph is not implemented by this backend\"}",
+              "type": "text"
+            }
+          ],
+          "isError": true,
+          "structuredContent": {
+            "error": "Failed to get subgraph: Initialization error: get_memory_subgraph is not implemented by this backend"
+          }
+        }
+      }
+    },
+    {
+      "tool": "graph",
+      "args": {
+        "action": "neighbors",
+        "memory_id": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 15,
+        "result": {
+          "content": [
+            {
+              "text": "{\"error\":\"Initialization error: get_composition_neighbors is not implemented by this backend\"}",
+              "type": "text"
+            }
+          ],
+          "isError": true,
+          "structuredContent": {
+            "error": "Initialization error: get_composition_neighbors is not implemented by this backend"
+          }
+        }
+      }
+    },
+    {
+      "tool": "graph",
+      "args": {
+        "action": "associations",
+        "from": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 16,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"action\": \"associations\",\n  \"associations\": [],\n  \"count\": 0,\n  \"from\": \"d3f91107-3ff7-4cb0-b12d-a596f3ebe58e\"\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "action": "associations",
+            "associations": [],
+            "count": 0,
+            "from": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e"
+          }
+        }
+      }
+    },
+    {
+      "tool": "memory",
+      "args": {
+        "action": "purge",
+        "id": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e",
+        "confirm": false
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 17,
+        "result": {
+          "content": [
+            {
+              "text": "{\"error\":\"Purge is irreversible. Pass confirm=true to permanently remove memory content and embeddings.\"}",
+              "type": "text"
+            }
+          ],
+          "isError": true,
+          "structuredContent": {
+            "error": "Purge is irreversible. Pass confirm=true to permanently remove memory content and embeddings."
+          }
+        }
+      }
+    },
+    {
+      "tool": "memory",
+      "args": {
+        "action": "get",
+        "id": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 18,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"action\": \"get\",\n  \"found\": false,\n  \"message\": \"Memory not found\",\n  \"nodeId\": \"d3f91107-3ff7-4cb0-b12d-a596f3ebe58e\"\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "action": "get",
+            "found": false,
+            "message": "Memory not found",
+            "nodeId": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e"
+          }
+        }
+      }
+    },
+    {
+      "tool": "graph",
+      "args": {
+        "action": "chain",
+        "from": "8050935f-79d7-45c9-afb0-375c09d086af",
+        "to": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 19,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"action\": \"chain\",\n  \"from\": \"8050935f-79d7-45c9-afb0-375c09d086af\",\n  \"message\": \"No chain found between these memories\",\n  \"steps\": [],\n  \"to\": \"d3f91107-3ff7-4cb0-b12d-a596f3ebe58e\"\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "action": "chain",
+            "from": "8050935f-79d7-45c9-afb0-375c09d086af",
+            "message": "No chain found between these memories",
+            "steps": [],
+            "to": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e"
+          }
+        }
+      }
+    },
+    {
+      "tool": "graph",
+      "args": {
+        "action": "predict"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"predict_degraded\": false,\n  \"prediction_accuracy\": 0.0,\n  \"predictions\": [],\n  \"speculative\": [],\n  \"suggestions\": [],\n  \"top_interests\": []\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "predict_degraded": false,
+            "prediction_accuracy": 0.0,
+            "predictions": [],
+            "speculative": [],
+            "suggestions": [],
+            "top_interests": []
+          }
+        }
+      }
+    },
+    {
+      "tool": "graph",
+      "args": {
+        "action": "recent"
+      },
+      "resp": {
+        "jsonrpc": "2.0",
+        "id": 21,
+        "result": {
+          "content": [
+            {
+              "text": "{\n  \"action\": \"recent\",\n  \"events\": []\n}",
+              "type": "text"
+            }
+          ],
+          "isError": false,
+          "structuredContent": {
+            "action": "recent",
+            "events": []
+          }
+        }
+      }
+    }
+  ]
+}

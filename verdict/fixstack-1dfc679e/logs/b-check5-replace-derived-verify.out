@@ -1,0 +1,7 @@
+{
+  "failures": [
+    "segment 0: trailer signature invalid"
+  ],
+  "ok": false
+}
+FAILED

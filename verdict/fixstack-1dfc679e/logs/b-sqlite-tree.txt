@@ -1,0 +1,31 @@
+==== default tree ====
+error: package ID specification `rusqlite` did not match any packages
+EXIT:101
+==== feature tree ====
+rusqlite v0.40.2
+├── rusqlite feature "bundled"
+│   └── strata-migrate v0.1.0 (/tmp/stack-b/crates/strata-migrate)
+│       └── strata-migrate feature "default"
+│           ├── strata-verify v0.1.0 (/tmp/stack-b/crates/strata-verify)
+│           │   └── strata-verify feature "default"
+│           │       └── vestige-mcp v3.1.1 (/tmp/stack-b/crates/vestige-mcp)
+│           │           ├── vestige-mcp feature "cloud-sync"
+│           │           │   └── vestige-mcp feature "default" (command-line)
+│           │           ├── vestige-mcp feature "codebase-git"
+│           │           │   └── vestige-mcp feature "default" (command-line)
+│           │           ├── vestige-mcp feature "connectors"
+│           │           │   └── vestige-mcp feature "default" (command-line)
+│           │           ├── vestige-mcp feature "default" (command-line)
+│           │           └── vestige-mcp feature "migrate-to-strata" (command-line)
+│           └── vestige-mcp v3.1.1 (/tmp/stack-b/crates/vestige-mcp) (*)
+├── rusqlite feature "cache"
+│   └── rusqlite feature "default"
+│       └── strata-migrate v0.1.0 (/tmp/stack-b/crates/strata-migrate) (*)
+├── rusqlite feature "default" (*)
+├── rusqlite feature "ffi-sqlite-wasm-rs"
+│   └── rusqlite feature "default" (*)
+├── rusqlite feature "hashlink"
+│   └── rusqlite feature "cache" (*)
+└── rusqlite feature "modern_sqlite"
+    └── rusqlite feature "bundled" (*)
+EXIT:0

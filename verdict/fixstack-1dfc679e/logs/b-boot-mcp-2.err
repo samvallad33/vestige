@@ -1,0 +1,13 @@
+2026-09-29T16:37:53.656903Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T16:37:53.657975Z  INFO Strata log initialized at /tmp/verdict-fix/work/boot-b/empty-mcp
+2026-09-29T16:37:53.661503Z  INFO Hydrated cognitive modules from persisted connections count=0
+2026-09-29T16:37:53.661518Z  INFO Hydrated active synaptic tags from durable storage count=0
+2026-09-29T16:37:53.661520Z  INFO CognitiveEngine initialized and hydrated
+2026-09-29T16:37:53.661910Z  INFO Autopilot spawned (event-subscriber + prospective poller, supervised)
+2026-09-29T16:37:53.661912Z  INFO Dashboard disabled by VESTIGE_DASHBOARD_ENABLED=false
+2026-09-29T16:37:53.661914Z  INFO HTTP MCP transport disabled; set VESTIGE_HTTP_ENABLED=1 or pass --http to enable
+2026-09-29T16:37:53.661982Z  INFO Starting MCP server on stdio...
+2026-09-29T16:37:53.662217Z  INFO Client requested supported protocol version 2024-11-05, using it
+2026-09-29T16:37:53.662225Z  INFO MCP session initialized with protocol version 2024-11-05
+2026-09-29T16:37:53.662394Z  INFO stdin closed (EOF), shutting down
+2026-09-29T16:37:53.662413Z  INFO Vestige MCP Server shutting down

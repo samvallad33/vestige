@@ -1,0 +1,1 @@
+{"after":12788,"before":12788,"flip_offset":6394,"open_err":"log error: strata halt: sealed segment damaged: frame chain link mismatch (segment 0, offset 6257, last_acked_seq 0) — damage at/below the acked watermark, refusing to truncate history","open_ok":null,"truncated":false}

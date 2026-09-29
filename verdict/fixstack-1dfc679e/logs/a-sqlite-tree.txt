@@ -1,0 +1,36 @@
+===== tree default =====
+ Downloading crates ...
+  Downloaded ctor v0.4.3
+  Downloaded dtor v0.0.6
+  Downloaded ctor-proc-macro v0.0.6
+  Downloaded dtor-proc-macro v0.0.5
+error: package ID specification `rusqlite` did not match any packages
+TREE_DEFAULT:101
+===== tree migrate-to-strata =====
+rusqlite v0.40.2
+├── rusqlite feature "bundled"
+│   └── strata-migrate v0.1.0 (/tmp/stack-a/crates/strata-migrate)
+│       └── strata-migrate feature "default"
+│           ├── strata-verify v0.1.0 (/tmp/stack-a/crates/strata-verify)
+│           │   └── strata-verify feature "default"
+│           │       └── vestige-mcp v3.1.1 (/tmp/stack-a/crates/vestige-mcp)
+│           │           ├── vestige-mcp feature "cloud-sync"
+│           │           │   └── vestige-mcp feature "default" (command-line)
+│           │           ├── vestige-mcp feature "codebase-git"
+│           │           │   └── vestige-mcp feature "default" (command-line)
+│           │           ├── vestige-mcp feature "connectors"
+│           │           │   └── vestige-mcp feature "default" (command-line)
+│           │           ├── vestige-mcp feature "default" (command-line)
+│           │           └── vestige-mcp feature "migrate-to-strata" (command-line)
+│           └── vestige-mcp v3.1.1 (/tmp/stack-a/crates/vestige-mcp) (*)
+├── rusqlite feature "cache"
+│   └── rusqlite feature "default"
+│       └── strata-migrate v0.1.0 (/tmp/stack-a/crates/strata-migrate) (*)
+├── rusqlite feature "default" (*)
+├── rusqlite feature "ffi-sqlite-wasm-rs"
+│   └── rusqlite feature "default" (*)
+├── rusqlite feature "hashlink"
+│   └── rusqlite feature "cache" (*)
+└── rusqlite feature "modern_sqlite"
+    └── rusqlite feature "bundled" (*)
+TREE_MIGRATE:0

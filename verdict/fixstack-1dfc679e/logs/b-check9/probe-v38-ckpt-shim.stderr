@@ -1,0 +1,26 @@
+2026-09-29T16:42:30.907661Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T16:42:30.911125Z  INFO Strata log initialized at /tmp/verdict-fix/work/b-check9/probe-v38-ckpt-shim
+2026-09-29T16:42:30.911244Z  INFO Hydrated cognitive modules from persisted connections count=0
+2026-09-29T16:42:30.911251Z  INFO Hydrated active synaptic tags from durable storage count=0
+2026-09-29T16:42:30.911252Z  INFO CognitiveEngine initialized and hydrated
+2026-09-29T16:42:30.911516Z  INFO Autopilot spawned (event-subscriber + prospective poller, supervised)
+2026-09-29T16:42:30.911518Z  INFO Dashboard disabled by VESTIGE_DASHBOARD_ENABLED=false
+2026-09-29T16:42:30.911519Z  INFO HTTP MCP transport disabled; set VESTIGE_HTTP_ENABLED=1 or pass --http to enable
+2026-09-29T16:42:30.915303Z  INFO Starting MCP server on stdio...
+2026-09-29T16:42:30.915675Z  INFO Client requested supported protocol version 2024-11-05, using it
+2026-09-29T16:42:30.915686Z  INFO MCP session initialized with protocol version 2024-11-05
+2026-09-29T16:42:30.916083Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.916403Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.916526Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.916581Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.916678Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.916746Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.916815Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.916878Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.916934Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.917006Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.917067Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.917121Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.917188Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend
+2026-09-29T16:42:30.917232Z  INFO stdin closed (EOF), shutting down
+2026-09-29T16:42:30.917259Z  INFO Vestige MCP Server shutting down

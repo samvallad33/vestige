@@ -1,0 +1,87 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling winnow v1.0.4
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.1
+   Compiling unicode-ident v1.0.26
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling indexmap v2.14.2
+   Compiling shlex v2.0.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling find-msvc-tools v0.1.14
+   Compiling toml_edit v0.25.15+spec-1.1.0
+   Compiling cc v1.5.1
+   Compiling cfg_aliases v0.2.2
+   Compiling borsh v1.8.1
+   Compiling syn v3.0.6
+   Compiling blake3 v1.8.7
+   Compiling proc-macro-crate v3.5.0
+   Compiling once_cell v1.21.4
+   Compiling libm v0.2.16
+   Compiling cpufeatures v0.3.1
+   Compiling constant_time_eq v0.4.2
+   Compiling cfg-if v1.0.5
+   Compiling arrayvec v0.7.8
+   Compiling borsh-derive v1.8.1
+   Compiling strata-kernel v0.1.0 (/tmp/stack-a/crates/strata-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.41s
+     Running unittests src/lib.rs (/tmp/verdict-fix/a-test-target-strata-kernel/debug/deps/strata_kernel-7d8fc8769000d825)
+
+running 19 tests
+test canonical::tests::q32_32_roundtrip_error_bound ... ok
+test canonical::tests::q32_32_exact_values ... ok
+test canonical::tests::q32_32_ties_to_even ... ok
+test checkpoint::tests::checkpoint_hash_is_borsh_blake3 ... ok
+test checkpoint::tests::genesis_matches_spec ... ok
+test canonical::tests::q32_32_saturation_and_nan ... ok
+test checkpoint::tests::seq_trait_agrees_with_field ... ok
+test checkpoint::tests::weights_are_referenced_not_duplicated ... ok
+test checkpoint::tests::subhash_is_incremental_per_card ... ok
+test checkpoint::tests::empty_state_root_is_blake3_of_nothing ... ok
+test fsrs::tests::first_review_matches_d0_s0_shapes ... ok
+test kernel::tests::dispatch_resolves_distinct_kernels ... ok
+test fsrs::tests::recall_grows_stability_and_review_phase_resumes ... ok
+test fsrs::tests::retrievability_across_both_versions_decays ... ok
+test fsrs::tests::forgetting_never_increases_stability ... ok
+test fsrs::tests::retrievability_is_monotone_decreasing_in_seq ... ok
+test canonical::tests::q32_32_monotone_nondecreasing ... ok
+test fsrs::tests::unknown_version_is_rejected ... ok
+test kernel::tests::kernel_struct_applies ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/kernel_tests.rs (/tmp/verdict-fix/a-test-target-strata-kernel/debug/deps/kernel_tests-340c7ace341ce9d5)
+
+running 22 tests
+test checkpoint_borsh_layout_is_fixed ... ok
+test bad_magic_rejected_naming_seq ... ok
+test mixed_version_log_upgrades_at_checkpoint_boundary ... ok
+test empty_log_verifies ... ok
+test out_of_order_events_rejected ... ok
+test retrievability_decreases_between_reviews ... ok
+test short_term_zero_elapsed_fold_is_deterministic ... ok
+test card_state_is_quantized_and_bounded ... ok
+test tampered_event_payload_fails_naming_seq ... ok
+test state_bytes_are_btree_ordered ... ok
+test algo_versions_dispatch_v1_v2_differ_but_both_replay ... ok
+test tampered_checkpoint_root_fails_naming_its_own_seq ... ok
+test tampered_head_log_seq_caught_by_anchored_hash ... ok
+test tampered_event_bytes_fail_naming_seq ... ok
+test tampered_head_state_root_fails_on_root ... ok
+test tampered_prev_link_fails_as_chain_break_naming_seq ... ok
+test trailing_events_rejected_naming_first_extra_seq ... ok
+test unknown_algo_version_rejected_naming_seq ... ok
+test verify_accepts_well_formed_log ... ok
+test state_survives_serialize_deserialize_bit_for_bit ... ok
+test fold_determinism_10k_two_runs_identical ... ok
+test cross_thread_smoke_identical_root ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests strata_kernel
+
+running 1 test
+test src/canonical.rs - canonical::lint_state_type (line 95) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

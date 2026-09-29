@@ -1,0 +1,18 @@
+===== nm sqlite3_ vestige =====
+===== nm sqlite3_ vestige-mcp =====
+===== nm rusqlite vestige =====
+===== nm rusqlite vestige-mcp =====
+===== strings sqlite3_ vestige =====
+===== strings sqlite3_ vestige-mcp =====
+===== ldd vestige =====
+	linux-vdso.so.1 (0x00007f496698f000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f49657d2000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f49656e9000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f4965400000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007f4966991000)
+===== ldd vestige-mcp =====
+	linux-vdso.so.1 (0x00007fbce97dc000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007fbce979f000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fbce8117000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fbce7e00000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007fbce97de000)

@@ -1,0 +1,25 @@
+    Checking typenum v1.20.1
+    Checking cpufeatures v0.3.1
+    Checking cfg-if v1.0.5
+    Checking arrayvec v0.7.8
+    Checking constant_time_eq v0.4.2
+    Checking blake3 v1.8.7
+    Checking borsh v1.8.1
+    Checking hybrid-array v0.4.15
+    Checking zeroize v1.9.0
+    Checking subtle v2.6.1
+    Checking signature v3.0.0
+    Checking ed25519 v3.0.0
+    Checking libc v0.2.189
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking digest v0.11.3
+    Checking libm v0.2.16
+    Checking sha2 v0.11.0
+    Checking curve25519-dalek v5.0.0
+    Checking strata-kernel v0.1.0 (/tmp/stack-a/crates/strata-kernel)
+    Checking strata-gate v0.1.0 (/tmp/stack-a/crates/strata-gate)
+    Checking ed25519-dalek v3.0.0
+    Checking strata v0.1.0 (/tmp/stack-a/crates/strata)
+    Checking strata-store v0.1.0 (/tmp/stack-a/crates/strata-store)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.01s

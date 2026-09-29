@@ -1,0 +1,582 @@
+ Downloading crates ...
+  Downloaded sha2 v0.10.9
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.26
+   Compiling typenum v1.20.1
+   Compiling syn v3.0.6
+   Compiling libc v0.2.189
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.14
+   Compiling cfg-if v1.0.5
+   Compiling cc v1.5.1
+   Compiling rand_core v0.10.1
+   Compiling once_cell v1.21.4
+   Compiling hybrid-array v0.4.15
+   Compiling syn v2.0.119
+   Compiling cpufeatures v0.3.1
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.1
+   Compiling winnow v1.0.4
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling indexmap v2.14.2
+   Compiling semver v1.0.28
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_core v1.0.229
+   Compiling toml_edit v0.25.15+spec-1.1.0
+   Compiling rustc_version v0.4.1
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling blake3 v1.8.7
+   Compiling bitflags v2.13.2
+   Compiling cfg_aliases v0.2.2
+   Compiling const-oid v0.10.2
+   Compiling digest v0.11.3
+   Compiling borsh v1.8.1
+   Compiling curve25519-dalek v5.0.0
+   Compiling proc-macro-crate v3.5.0
+   Compiling arrayvec v0.7.8
+   Compiling version_check v0.9.5
+   Compiling constant_time_eq v0.4.2
+   Compiling generic-array v0.14.7
+   Compiling borsh-derive v1.8.1
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling signature v3.0.0
+   Compiling autocfg v1.5.1
+   Compiling inotify-sys v0.1.8
+   Compiling getrandom v0.4.3
+   Compiling zmij v1.0.23
+   Compiling subtle v2.6.1
+   Compiling zeroize v1.9.0
+   Compiling serde v1.0.229
+   Compiling num-traits v0.2.19
+   Compiling ed25519 v3.0.0
+   Compiling sha2 v0.11.0
+   Compiling serde_derive v1.0.229
+   Compiling libm v0.2.16
+   Compiling pkg-config v0.3.34
+   Compiling vcpkg v0.2.15
+   Compiling serde_json v1.0.151
+   Compiling libsqlite3-sys v0.38.2
+   Compiling ed25519-dalek v3.0.0
+   Compiling memchr v2.8.3
+   Compiling foldhash v0.2.0
+   Compiling pin-project-lite v0.2.17
+   Compiling option-ext v0.2.0
+   Compiling itoa v1.0.18
+   Compiling log v0.4.34
+   Compiling thiserror v2.0.21
+   Compiling same-file v1.0.6
+   Compiling rustix v1.1.5
+   Compiling walkdir v2.5.0
+   Compiling mio v1.2.3
+   Compiling dirs-sys v0.5.0
+   Compiling inotify v0.11.5
+   Compiling notify-types v2.1.0
+   Compiling tracing-attributes v0.1.31
+   Compiling tokio-macros v2.7.2
+   Compiling thiserror-impl v2.0.21
+   Compiling tracing-core v0.1.36
+   Compiling linux-raw-sys v0.12.1
+   Compiling ryu-js v1.0.3
+   Compiling anyhow v1.0.104
+   Compiling iana-time-zone v0.1.65
+   Compiling chrono v0.4.45
+   Compiling serde_json_canonicalizer v0.3.2
+   Compiling tracing v0.1.44
+   Compiling tokio v1.53.1
+   Compiling notify v8.2.0
+   Compiling strata-kernel v0.1.0 (/tmp/stack-a/crates/strata-kernel)
+   Compiling hashlink v0.12.2
+   Compiling directories v6.0.0
+   Compiling uuid v1.26.1
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling strata v0.1.0 (/tmp/stack-a/crates/strata)
+   Compiling trait-variant v0.1.3
+   Compiling smallvec v1.16.2
+   Compiling fallible-iterator v0.3.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling base64 v0.23.1
+   Compiling fastrand v2.5.0
+   Compiling vestige-core v3.1.1 (/tmp/stack-a/crates/vestige-core)
+   Compiling tempfile v3.27.0
+   Compiling rusqlite v0.40.2
+   Compiling digest v0.10.7
+   Compiling strata-gate v0.1.0 (/tmp/stack-a/crates/strata-gate)
+   Compiling cpufeatures v0.2.17
+   Compiling base64 v0.22.1
+   Compiling sha2 v0.10.9
+   Compiling strata-store v0.1.0 (/tmp/stack-a/crates/strata-store)
+   Compiling strata-migrate v0.1.0 (/tmp/stack-a/crates/strata-migrate)
+   Compiling vestige-release-e2e v0.0.0 (/tmp/stack-a/tests/release-e2e)
+warning: field `signal` is never read
+  --> tests/matrix/support.rs:96:9
+   |
+94 | pub struct CmdOut {
+   |            ------ field in this struct
+95 |     pub status: Option<i32>,
+96 |     pub signal: bool,
+   |         ^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `data_dir` is never read
+   --> tests/matrix/support.rs:347:9
+    |
+341 | pub struct Server {
+    |            ------ field in this struct
+...
+347 |     pub data_dir: PathBuf,
+    |         ^^^^^^^^
+
+warning: `vestige-release-e2e` (test "matrix") generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.40s
+     Running unittests src/lib.rs (/tmp/verdict-fix/matrix-target/debug/deps/vestige_release_e2e-3804bc4b6d814107)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/strata_driver.rs (/tmp/verdict-fix/matrix-target/debug/deps/strata_driver-a61f741466d9da75)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/matrix/main.rs (/tmp/verdict-fix/matrix-target/debug/deps/matrix-7768cc3234076982)
+
+running 83 tests
+test cli::cli_backup_on_fresh_store ... FAILED
+test cli::cli_backfill_on_fresh_store ... FAILED
+test cli::cli_causal_walk_on_fresh_store ... ok
+test cli::cli_compose_on_fresh_store ... ok
+test cli::cli_consolidate_on_fresh_store ... ok
+test cli::cli_forgotten_lesson_on_fresh_store ... FAILED
+test cli::cli_export_on_fresh_store ... ok
+test cli::cli_gc_on_fresh_store ... ok
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Initialized empty Git repository in /tmp/.tmpCZx0XB/.git/
+test cli::cli_health_on_fresh_store ... ok
+test cli::cli_ingest_on_fresh_store ... ok
+test cli::cli_migrate_to_strata_advertises_dry_run_and_rollback ... FAILED
+[master (root-commit) 4a67dc3] release matrix
+ 1 file changed, 1 insertion(+)
+ create mode 100644 README.md
+test cli::cli_portable_export_on_fresh_store ... FAILED
+test cli::cli_ingest_git_on_fresh_store ... FAILED
+test cli::cli_portable_import_on_fresh_store ... ok
+test cli::cli_project_on_fresh_store ... FAILED
+test cli::cli_recall_on_fresh_store ... FAILED
+test cli::cli_restore_on_fresh_store ... ok
+test cli::cli_scan_secrets_on_fresh_store ... ok
+test cli::cli_selftest_on_fresh_store ... FAILED
+test cli::cli_stats_on_fresh_store ... ok
+test cli::cli_sync_on_fresh_store ... FAILED
+test cli::cli_update_dry_run_creates_no_sqlite ... ok
+test cli::cli_upgrade_on_fresh_store ... FAILED
+test engine::concurrent_refused_writer_does_not_change_digest ... ok
+test cli::cli_help_lists_every_command_and_flag ... FAILED
+test engine::concurrent_second_writer_is_refused ... ok
+test engine::crash_sigkill_after_ack_reopens_same_digest ... ok
+test engine::crash_torn_tail_above_watermark_recovers_acked_frames ... ok
+test engine::determinism_seeded_log_bytes_identical ... ok
+test engine::determinism_migrate_data_frames_match_and_keys_differ ... ok
+test engine::gate_destructive_allow_policy_receipt_applies ... ok
+test engine::determinism_store_digest_identical_across_processes ... ok
+test engine::gate_destructive_hold_receipt_does_not_apply ... ok
+test engine::gate_write_allow_receipt ... ok
+test engine::rebuild_digest_matches_after_reopen ... ok
+test engine::rebuild_from_segments_key_and_head_only ... ok
+test engine::tamper_forged_key_refuses ... ok
+test engine::tamper_missing_head_state_and_damaged_segment_refuses_without_truncate ... FAILED
+test engine::tamper_missing_head_state_intact_does_not_truncate ... ok
+test engine::shipped_binary_links_no_sqlite ... ok
+test engine::tamper_missing_key_on_unsealed_log_is_not_regenerated ... FAILED
+test engine::tamper_sealed_byte_flip_refuses ... ok
+test engine::tamper_missing_store_meta_refuses ... FAILED
+test engine::tamper_truncated_sealed_segment_refuses ... ok
+test engine::verify_byte_flip_exits_nonzero ... ok
+test engine::verify_untampered_migrated_log_exits_0 ... ok
+test mcp::mcp_catalog_matches_server_tool_list ... ok
+test mcp::mcp_causal_walk_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_dedup_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_codebase_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_graph_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_forgotten_lesson_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_intention_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_maintain_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_memory_status_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_memory_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_project_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_purge_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_recall_free_text_is_not_a_search ... FAILED
+test mcp::mcp_recall_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_receipt_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_selftest_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_session_start_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_smart_ingest_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_source_sync_valid_invalid_handle_miss ... FAILED
+test mcp::mcp_suppress_valid_invalid_handle_miss ... FAILED
+test upgrade::cli_first_launch_corrupt_v3_leaves_bytes_and_names_v311 ... FAILED
+test upgrade::cli_first_launch_upgrades_v3 ... FAILED
+test upgrade::concurrent_first_launch_upgrades_once ... FAILED
+test upgrade::stale_staging_after_sigkill_recovers ... FAILED
+test upgrade::upgrade_failed_import_leaves_v3_and_names_v311 ... ok
+test mcp::mcp_writes_and_destructive_actions_carry_gate_receipts ... FAILED
+test upgrade::upgrade_legacy_links_are_not_causal_edges ... FAILED
+test upgrade::upgrade_migrate_dry_run_writes_nothing_and_keeps_source_sha ... FAILED
+test upgrade::upgrade_nonempty_to_is_refused ... FAILED
+test upgrade::upgrade_real_migrate_keeps_source_sha_and_fsrs ... FAILED
+test upgrade::upgrade_rollback_undoes_a_partial_import ... FAILED
+test upgrade::upgrade_sigkill_mid_import_then_rerun_does_not_duplicate ... FAILED
+test upgrade::upgrade_fresh_install_started_twice_creates_no_sqlite_and_stays_up ... ok
+test upgrade::upgrade_wal_without_flag_refuses_and_source_unchanged ... FAILED
+test upgrade::upgrade_v311_auto_upgrade_preserves_memories_fsrs_and_source_sha ... FAILED
+test cli::cli_dashboard_on_fresh_store has been running for over 60 seconds
+test cli::cli_serve_on_fresh_store has been running for over 60 seconds
+test cli::cli_dashboard_on_fresh_store ... ok
+test cli::cli_serve_on_fresh_store ... ok
+
+failures:
+
+---- cli::cli_backup_on_fresh_store stdout ----
+
+thread 'cli::cli_backup_on_fresh_store' (184364) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige backup` did not run against a strata store. Output: === Vestige Backup ===
+
+Error: Database not found at: /tmp/.tmp2WOQ4f/vestige.db
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- cli::cli_backfill_on_fresh_store stdout ----
+
+thread 'cli::cli_backfill_on_fresh_store' (184363) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige backfill` did not complete on an empty strata store (exit Some(1)). Output: Error: pending_strata: backfill entity overlap is not a recorded edge
+
+
+---- cli::cli_forgotten_lesson_on_fresh_store stdout ----
+
+thread 'cli::cli_forgotten_lesson_on_fresh_store' (184389) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige forgotten-lesson` on an unknown id did not return handle_required. Output: Error: pending_strata: forgotten_lesson entity overlap is not a recorded edge
+
+
+---- cli::cli_migrate_to_strata_advertises_dry_run_and_rollback stdout ----
+
+thread 'cli::cli_migrate_to_strata_advertises_dry_run_and_rollback' (184435) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige migrate-to-strata --rollback` is not on this head. The hidden fallback must support --dry-run (present) and --rollback (absent from help). A partial import has to be reversible without appending a second copy.
+
+---- cli::cli_portable_export_on_fresh_store stdout ----
+
+thread 'cli::cli_portable_export_on_fresh_store' (184442) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige portable-export` did not complete on an empty strata store (exit Some(1)). Output: === Vestige Portable Export ===
+
+Error: Initialization error: export_portable_archive_to_path is not implemented by this backend
+
+
+---- cli::cli_ingest_git_on_fresh_store stdout ----
+
+thread 'cli::cli_ingest_git_on_fresh_store' (184417) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige ingest-git` did not complete on an empty strata store (exit Some(1)). Output: Error: Initialization error: upsert_by_source is not implemented by this backend
+
+
+---- cli::cli_project_on_fresh_store stdout ----
+
+thread 'cli::cli_project_on_fresh_store' (184460) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige project` did not complete on an empty strata store (exit Some(1)). Output: Error: Initialization error: pending_strata: projection_candidates is not admitted on the Strata log yet
+
+
+---- cli::cli_recall_on_fresh_store stdout ----
+
+thread 'cli::cli_recall_on_fresh_store' (184467) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige recall --handle mem:00000000-0000-4000-8000-000000000000` did not return handle_required. Output: error: unexpected argument '--handle' found
+
+  tip: to pass '--handle' as a value, use '-- --handle'
+
+Usage: vestige recall [OPTIONS] <QUERY>
+
+For more information, try '--help'.
+
+
+---- cli::cli_selftest_on_fresh_store stdout ----
+
+thread 'cli::cli_selftest_on_fresh_store' (184482) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige selftest` did not complete on an empty strata store (exit Some(1)). Output: === Planted-Cause Selftest ===
+
+Error: pending_strata: selftest plants causes and scores entity overlap; that is not a recorded edge
+
+
+---- cli::cli_sync_on_fresh_store stdout ----
+
+thread 'cli::cli_sync_on_fresh_store' (184506) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige sync` did not complete on an empty strata store (exit Some(1)). Output: === Vestige File Sync ===
+
+Archive: /tmp/.tmp0Iw7Dy/sync.json
+Error: Initialization error: sync_portable_archive_file is not implemented by this backend
+
+
+---- cli::cli_upgrade_on_fresh_store stdout ----
+
+thread 'cli::cli_upgrade_on_fresh_store' (184520) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige upgrade --dry-run` did not complete on an empty strata store (exit Some(1)). Output: Error: no store at /tmp/.tmpQHznYz/vestige.db (nothing to upgrade)
+
+
+---- cli::cli_help_lists_every_command_and_flag stdout ----
+
+thread 'cli::cli_help_lists_every_command_and_flag' (184410) panicked at tests/matrix/cli.rs:180:5:
+CLI help is missing: recall --handle
+
+---- engine::tamper_missing_head_state_and_damaged_segment_refuses_without_truncate stdout ----
+
+thread 'engine::tamper_missing_head_state_and_damaged_segment_refuses_without_truncate' (184643) panicked at tests/matrix/support.rs:42:5:
+MISSING: deleting head.state and damaging the active segment did not refuse. Open treated the watermark as 0 and truncated or recreated the segment (prompt 8). A missing head.state plus a damaged segment must halt and leave the bytes untouched.
+
+---- engine::tamper_missing_key_on_unsealed_log_is_not_regenerated stdout ----
+
+thread 'engine::tamper_missing_key_on_unsealed_log_is_not_regenerated' (184658) panicked at tests/matrix/support.rs:42:5:
+MISSING: strata.key was missing on an unsealed log and open minted a new one (prompt 9). A missing key must refuse; it must not be regenerated, or the new key can sign a rewritten tail.
+
+---- engine::tamper_missing_store_meta_refuses stdout ----
+
+thread 'engine::tamper_missing_store_meta_refuses' (184662) panicked at tests/matrix/support.rs:42:5:
+MISSING: a store with checkpoints opened after store.meta was deleted. The anchor file is part of the chain; its absence must be an error (prompt 10), not an unanchored accept.
+
+---- mcp::mcp_causal_walk_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_causal_walk_valid_invalid_handle_miss' (184710) panicked at tests/matrix/support.rs:42:5:
+MISSING: `causal_walk` rejected a schema-valid call. The strata tool dispatch is incomplete on this head. Got: {"content":[{"text":"{\"error\":\"pending_strata: causal_walk entity overlap is not a recorded edge\"}","type":"text"}],"isError":true,"structuredContent":{"error":"pending_strata: causal_walk entity overlap is not a recorded edge"}} {"error":"pending_strata: causal_walk entity overlap is not a recorded edge"}
+
+---- mcp::mcp_dedup_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_dedup_valid_invalid_handle_miss' (184730) panicked at tests/matrix/support.rs:42:5:
+MISSING: `dedup` exact-handle miss must return error "handle_required" (no keyword, BM25, name, or cosine fallback). Got: {"content":[{"text":"{\"error\":\"Initialization error: set_protected is not implemented by this backend\"}","type":"text"}],"isError":true,"structuredContent":{"error":"Initialization error: set_protected is not implemented by this backend"}} {"error":"Initialization error: set_protected is not implemented by this backend"}
+
+---- mcp::mcp_codebase_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_codebase_valid_invalid_handle_miss' (184720) panicked at tests/matrix/support.rs:42:5:
+MISSING: `codebase` write/destructive result has no gate verdict or receipt. Every write and destructive action must carry one. Got: {"content":[{"text":"{\n  \"action\": \"remember_decision\",\n  \"anchors\": {\n    \"count\": 0,\n    \"items\": [],\n    \"note\": \"No files were anchored, so this memory cannot self-check. Pass `files: [\\\"src/x.rs#my_symbol\\\"]` or `anchors` to make it verifiable.\",\n    \"verifiable\": 0\n  },\n  \"message\": \"Architectural decision remembered successfully\",\n  \"nodeId\": \"mem-0000000000000001\",\n  \"success\": true\n}","type":"text"}],"isError":false,"structuredContent":{"action":"remember_decision","anchors":{"count":0,"items":[],"note":"No files were anchored, so this memory cannot self-check. Pass `files: [\"src/x.rs#my_symbol\"]` or `anchors` to make it verifiable.","verifiable":0},"message":"Architectural decision remembered successfully","nodeId":"mem-0000000000000001"
+
+---- mcp::mcp_graph_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_graph_valid_invalid_handle_miss' (184748) panicked at tests/matrix/support.rs:42:5:
+MISSING: `graph` exact-handle miss must return error "handle_required" (no keyword, BM25, name, or cosine fallback). Got: {"content":[{"text":"{\"error\":\"memory_id is required for memory\"}","type":"text"}],"isError":true,"structuredContent":{"error":"memory_id is required for memory"}} {"error":"memory_id is required for memory"}
+
+---- mcp::mcp_forgotten_lesson_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_forgotten_lesson_valid_invalid_handle_miss' (184740) panicked at tests/matrix/support.rs:42:5:
+MISSING: forgotten_lesson rejected the failure id just written: {"content":[{"text":"{\"error\":\"pending_strata: forgotten_lesson entity overlap is not a recorded edge\"}","type":"text"}],"isError":true,"structuredContent":{"error":"pending_strata: forgotten_lesson entity overlap is not a recorded edge"}} {"error":"pending_strata: forgotten_lesson entity overlap is not a recorded edge"}
+
+---- mcp::mcp_intention_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_intention_valid_invalid_handle_miss' (184760) panicked at tests/matrix/support.rs:42:5:
+MISSING: `intention` exact-handle miss must return error "handle_required" (no keyword, BM25, name, or cosine fallback). Got: {"content":[{"text":"{\"error\":\"Initialization error: get_intentions_by_status is not implemented by this backend\"}","type":"text"}],"isError":true,"structuredContent":{"error":"Initialization error: get_intentions_by_status is not implemented by this backend"}} {"error":"Initialization error: get_intentions_by_status is not implemented by this backend"}
+
+---- mcp::mcp_maintain_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_maintain_valid_invalid_handle_miss' (184770) panicked at tests/matrix/support.rs:42:5:
+MISSING: `maintain` exact-handle miss must return error "handle_required" (no keyword, BM25, name, or cosine fallback). Got: {"content":[{"text":"{\"error\":\"maintain action 'gc' does not support 'handle'; inspect memory_status(view='tools', tool='maintain')\"}","type":"text"}],"isError":true,"structuredContent":{"error":"maintain action 'gc' does not support 'handle'; inspect memory_status(view='tools', tool='maintain')"}} {"error":"maintain action 'gc' does not support 'handle'; inspect memory_status(view='tools', tool='maintain')"}
+
+---- mcp::mcp_memory_status_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_memory_status_valid_invalid_handle_miss' (184780) panicked at tests/matrix/mcp.rs:25:9:
+memory_status accepted invalid input: {"content":[{"text":"{\n  \"activeEmbeddingModel\": null,\n  \"automationTriggers\": {\n    \"lastBackupTimestamp\": null,\n    \"lastConsolidationTimestamp\": null,\n    \"lastDreamTimestamp\": null,\n    \"savesSinceLastDream\": 0\n  },\n  \"averageRetention\": 0.0,\n  \"averageRetrievalStrength\": 0.0,\n  \"averageStorageStrength\": 0.0,\n  \"cognitiveHealth\": {\n    \"activationNetworkSize\": 0,\n    \"modulesActive\": 26,\n    \"predictionAccuracy\": \"0.00\",\n    \"schedulerStats\": {\n      \"eventsPerMinute\": 0.2,\n      \"isIdle\": false,\n      \"timeUntilNextConsolidation\": \"TimeDelta { secs: 0, nanos: 0 }\",\n      \"totalEvents\": 1\n    }\n  },\n  \"diagnostics\": [],\n  \"dueForReview\": 0,\n  \"embeddingCoverage\": \"0.0%\",\n  \"embeddingModel\": null,\n  \"embeddingReady\": false,\n  \"embeddingsCompiledIn\": false,\n  \"fsrsPreview\": null,\n  \"mismatchedEmbeddings\": 0,\n  \"newestMemory\": null,\n  \"oldestMemory\": null,\n  \"recommendations\": [],\n  \"stateDistribution\": {\n    \"active\": 0,\n    \"basis\": \"full\",\n    \"dormant\": 0,\n    \"sampled\": 0,\n    \"silent\": 0,\n    \"unavailable\": 0\n  },\n  \"status\": \"empty\",\n  \"tool\": \"system_status\",\n  \"totalMemories\": 0,\n  \"warnings\": [\n    \"Built without embeddings - semantic recall and the prediction-error gate are unavailable in this build (keyword search only)\"\n  ],\n  \"withActiveEmbeddings\": 0,\n  \"withEmbeddings\": 0\n}","type":"text"}],"isError":false,"structuredContent":{"activeEmbeddingModel":null,"automationTriggers":{"lastBackupTimestamp":null,"lastConsolidationTimestamp":null,"lastDreamTimestamp":null,"savesSinceLastDream":0},"averageRetention":0.0,"averageRetrievalStrength":0.0,"averageStorageStrength":0.0,"cognitiveHealth":{"activationNetworkSize":0,"modulesActive":26,"predictionAccuracy":"0.00","schedulerStats":{"eventsPerMinute":0.2,"isIdle":false,"timeUntilNextConsolidation":"TimeDelta { secs: 0, nanos: 0 }","totalEvents":1}},"diagnostics":[],"dueForReview":0,"embeddingCoverage":"0.0%","embeddingModel":null,"embeddingReady":false,"embeddingsCompiledIn":false,"fsrsPreview":null,"mismatchedEmbeddings":0,"newestMemory":null,"oldestMemory":null,"recommendations":[],"stateDistribution":{"active":0,"basis":"full","dormant":0,"sampled":0,"silent":0,"unavailable":0},"status":"empty","tool":"system_status","totalMemories":0,"warnings":["Built without embeddings - semantic recall and the prediction-error gate are unavailable in this build (keyword search only)"],"withActiveEmbeddings":0,"withEmbeddings":0}} {"activeEmbeddingModel":null,"automationTriggers":{"lastBackupTimestamp":null,"lastConsolidationTimestamp":null,"lastDreamTimestamp":null,"savesSinceLastDream":0},"averageRetention":0.0,"averageRetrievalStrength":0.0,"averageStorageStrength":0.0,"cognitiveHealth":{"activationNetworkSize":0,"modulesActive":26,"predictionAccuracy":"0.00","schedulerStats":{"eventsPerMinute":0.2,"isIdle":false,"timeUntilNextConsolidation":"TimeDelta { secs: 0, nanos: 0 }","totalEvents":1}},"diagnostics":[],"dueForReview":0,"embeddingCoverage":"0.0%","embeddingModel":null,"embeddingReady":false,"embeddingsCompiledIn":false,"fsrsPreview":null,"mismatchedEmbeddings":0,"newestMemory":null,"oldestMemory":null,"recommendations":[],"stateDistribution":{"active":0,"basis":"full","dormant":0,"sampled":0,"silent":0,"unavailable":0},"status":"empty","tool":"system_status","totalMemories":0,"warnings":["Built without embeddings - semantic recall and the prediction-error gate are unavailable in this build (keyword search only)"],"withActiveEmbeddings":0,"withEmbeddings":0}
+
+---- mcp::mcp_memory_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_memory_valid_invalid_handle_miss' (184791) panicked at tests/matrix/support.rs:42:5:
+MISSING: `memory` exact-handle miss must return error "handle_required" (no keyword, BM25, name, or cosine fallback). Got: {"content":[{"text":"{\"error\":\"Invalid memory ID format\"}","type":"text"}],"isError":true,"structuredContent":{"error":"Invalid memory ID format"}} {"error":"Invalid memory ID format"}
+
+---- mcp::mcp_project_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_project_valid_invalid_handle_miss' (184801) panicked at tests/matrix/support.rs:42:5:
+MISSING: `project` rejected a schema-valid call. The strata tool dispatch is incomplete on this head. Got: {"content":[{"text":"{\"error\":\"Initialization error: pending_strata: projection_candidates is not admitted on the Strata log yet\"}","type":"text"}],"isError":true,"structuredContent":{"error":"Initialization error: pending_strata: projection_candidates is not admitted on the Strata log yet"}} {"error":"Initialization error: pending_strata: projection_candidates is not admitted on the Strata log yet"}
+
+---- mcp::mcp_purge_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_purge_valid_invalid_handle_miss' (184812) panicked at tests/matrix/support.rs:42:5:
+MISSING: `purge` write/destructive result has no gate verdict or receipt. Every write and destructive action must carry one. Got: {"content":[{"text":"{\"error\":\"Initialization error: pending_strata: purge_node is not admitted on the Strata log yet\"}","type":"text"}],"isError":true,"structuredContent":{"error":"Initialization error: pending_strata: purge_node is not admitted on the Strata log yet"}} {"error":"Initialization error: pending_strata: purge_node is not admitted on the Strata log yet"}
+
+---- mcp::mcp_recall_free_text_is_not_a_search stdout ----
+
+thread 'mcp::mcp_recall_free_text_is_not_a_search' (184823) panicked at tests/matrix/support.rs:42:5:
+MISSING: `recall` exact-handle miss must return error "handle_required" (no keyword, BM25, name, or cosine fallback). Got: {"content":[{"text":"{\"error\":\"Initialization error: similarity_disabled: hybrid_search_filtered: embeddings, cosine, BM25, FTS, Jaccard, and keyword or name matching are not Strata operations; pass an exact handle\"}","type":"text"}],"isError":true,"structuredContent":{"error":"Initialization error: similarity_disabled: hybrid_search_filtered: embeddings, cosine, BM25, FTS, Jaccard, and keyword or name matching are not Strata operations; pass an exact handle"}} {"error":"Initialization error: similarity_disabled: hybrid_search_filtered: embeddings, cosine, BM25, FTS, Jaccard, and keyword or name matching are not Strata operations; pass an exact handle"}
+
+---- mcp::mcp_recall_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_recall_valid_invalid_handle_miss' (184833) panicked at tests/matrix/support.rs:42:5:
+MISSING: `recall` write/destructive result has no gate verdict or receipt. Every write and destructive action must carry one. Got: {"content":[{"text":"{\n  \"exact\": true,\n  \"handle\": \"mem-0000000000000001\",\n  \"kind\": \"memory\",\n  \"neighbors\": [],\n  \"nodes\": [\n    {\n      \"content\": \"release matrix recall anchor\",\n      \"id\": \"mem-0000000000000001\",\n      \"tags\": [],\n      \"type\": \"fact\"\n    }\n  ]\n}","type":"text"}],"isError":false,"structuredContent":{"exact":true,"handle":"mem-0000000000000001","kind":"memory","neighbors":[],"nodes":[{"content":"release matrix recall anchor","id":"mem-0000000000000001","tags":[],"type":"fact"}]}} {"exact":true,"handle":"mem-0000000000000001","kind":"memory","neighbors":[],"nodes":[{"content":"release matrix recall anchor","id":"mem-0000000000000001","tags":[],"type":"fact"}]}
+
+---- mcp::mcp_receipt_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_receipt_valid_invalid_handle_miss' (184844) panicked at tests/matrix/support.rs:42:5:
+MISSING: `receipt` exact-handle miss must return error "handle_required" (no keyword, BM25, name, or cosine fallback). Got: {"content":[{"text":"{\"error\":\"Receipt 'mem:00000000-0000-4000-8000-000000000000' was not found\"}","type":"text"}],"isError":true,"structuredContent":{"error":"Receipt 'mem:00000000-0000-4000-8000-000000000000' was not found"}} {"error":"Receipt 'mem:00000000-0000-4000-8000-000000000000' was not found"}
+
+---- mcp::mcp_selftest_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_selftest_valid_invalid_handle_miss' (184854) panicked at tests/matrix/support.rs:42:5:
+MISSING: `selftest` rejected a schema-valid call. The strata tool dispatch is incomplete on this head. Got: {"content":[{"text":"{\"error\":\"pending_strata: selftest plants causes and scores entity overlap; that is not a recorded edge\"}","type":"text"}],"isError":true,"structuredContent":{"error":"pending_strata: selftest plants causes and scores entity overlap; that is not a recorded edge"}} {"error":"pending_strata: selftest plants causes and scores entity overlap; that is not a recorded edge"}
+
+---- mcp::mcp_session_start_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_session_start_valid_invalid_handle_miss' (184864) panicked at tests/matrix/support.rs:42:5:
+MISSING: `session_start` rejected a schema-valid call. The strata tool dispatch is incomplete on this head. Got: {"content":[{"text":"{\"error\":\"Initialization error: similarity_disabled: hybrid_search: embeddings, cosine, BM25, FTS, Jaccard, and keyword or name matching are not Strata operations; pass an exact handle\"}","type":"text"}],"isError":true,"structuredContent":{"error":"Initialization error: similarity_disabled: hybrid_search: embeddings, cosine, BM25, FTS, Jaccard, and keyword or name matching are not Strata operations; pass an exact handle"}} {"error":"Initialization error: similarity_disabled: hybrid_search: embeddings, cosine, BM25, FTS, Jaccard, and keyword or name matching are not Strata operations; pass an exact handle"}
+
+---- mcp::mcp_smart_ingest_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_smart_ingest_valid_invalid_handle_miss' (184874) panicked at tests/matrix/support.rs:42:5:
+MISSING: `smart_ingest` write/destructive result has no gate verdict or receipt. Every write and destructive action must carry one. Got: {"content":[{"text":"{\n  \"decision\": \"create\",\n  \"hasEmbedding\": false,\n  \"importanceScore\": 0.39249999999999996,\n  \"message\": \"Memory created (force_create=true)\",\n  \"nodeId\": \"mem-0000000000000001\",\n  \"predictionError\": 1.0,\n  \"reason\": \"Forced creation - skipped similarity check\",\n  \"scope\": \"user\",\n  \"success\": true,\n  \"synapticCapture\": {\n    \"algorithmVersion\": \"vestige.synaptic_capture.v2\",\n    \"durable\": false,\n    \"error\": \"Synaptic event/tag transaction was not committed; no capture or restart-safe tag is claimed.\",\n    \"tagPersisted\": false\n  }\n}","type":"text"}],"isError":false,"structuredContent":{"decision":"create","hasEmbedding":false,"importanceScore":0.39249999999999996,"message":"Memory created (force_create=true)
+
+---- mcp::mcp_source_sync_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_source_sync_valid_invalid_handle_miss' (184884) panicked at tests/matrix/support.rs:42:5:
+MISSING: `source_sync` exact-handle miss must return error "handle_required" (no keyword, BM25, name, or cosine fallback). Got: {"content":[{"text":"{\"error\":\"sync failed: transport error: Initialization error: get_connector_cursor is not implemented by this backend\"}","type":"text"}],"isError":true,"structuredContent":{"error":"sync failed: transport error: Initialization error: get_connector_cursor is not implemented by this backend"}} {"error":"sync failed: transport error: Initialization error: get_connector_cursor is not implemented by this backend"}
+
+---- mcp::mcp_suppress_valid_invalid_handle_miss stdout ----
+
+thread 'mcp::mcp_suppress_valid_invalid_handle_miss' (184894) panicked at tests/matrix/support.rs:42:5:
+MISSING: suppress of a node just written failed without a gate receipt: {"content":[{"text":"{\"error\":\"Suppress failed: Initialization error: pending_strata: suppress_memory is not admitted on the Strata log yet\"}","type":"text"}],"isError":true,"structuredContent":{"error":"Suppress failed: Initialization error: pending_strata: suppress_memory is not admitted on the Strata log yet"}} {"error":"Suppress failed: Initialization error: pending_strata: suppress_memory is not admitted on the Strata log yet"}
+
+---- upgrade::cli_first_launch_corrupt_v3_leaves_bytes_and_names_v311 stdout ----
+
+thread 'upgrade::cli_first_launch_corrupt_v3_leaves_bytes_and_names_v311' (184916) panicked at tests/matrix/support.rs:42:5:
+MISSING: CLI pass criterion (failure mirror) failed: a corrupted v3 store run through `vestige stats` must exit non-zero with a message naming v3.1.1 and must leave the v3 file byte-identical. The v3 refusal is not that message. PR #310 emits the v3.1.1 failure only from vestige-mcp serve(). Output: Error: v3 SQLite store at /tmp/.tmp41vYft/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+
+
+---- upgrade::cli_first_launch_upgrades_v3 stdout ----
+
+thread 'upgrade::cli_first_launch_upgrades_v3' (184920) panicked at tests/matrix/support.rs:42:5:
+MISSING: CLI pass criterion failed: `vestige stats` refused a real v3.1.1 store (schema 38, 10 memories) with the v3 refusal. The first process was the CLI, not vestige-mcp, and the user issued no migrate command. Automatic upgrade must run on that read: backup the sqlite family, import, verify, and switch to Strata, leaving the v3 sha256 unchanged. PR #310 hooks this only from vestige-mcp serve(). Output: Error: v3 SQLite store at /tmp/.tmpmv7zsI/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+
+
+---- upgrade::concurrent_first_launch_upgrades_once stdout ----
+
+thread 'upgrade::concurrent_first_launch_upgrades_once' (184924) panicked at tests/matrix/support.rs:42:5:
+MISSING: concurrent first launch failed: `vestige stats` and `vestige-mcp` were spawned together on a real v3.1.1 store and refused it. Exactly one import and one verify must run, both processes must open that same verified Strata log with no error, the v3 sha256 must stay unchanged, and no staging folder may remain. Output: Error: v3 SQLite store at /tmp/.tmprG2mVz/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+2026-09-29T16:56:38.628268Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T16:56:38.628308Z ERROR v3 SQLite store at /tmp/.tmprG2mVz/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/.tmprG2mVz/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+
+
+---- upgrade::stale_staging_after_sigkill_recovers stdout ----
+
+thread 'upgrade::stale_staging_after_sigkill_recovers' (184935) panicked at tests/matrix/support.rs:42:5:
+MISSING: stale-staging row: the first `vestige-mcp` launch did not leave `.strata-upgrade-staging` behind, so it was not SIGKILLed mid-import. The next process must be able to sweep that folder and finish. Output: 2026-09-29T16:56:39.516135Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T16:56:39.516178Z ERROR v3 SQLite store at /tmp/.tmp7buXHi/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/.tmp7buXHi/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+
+
+---- mcp::mcp_writes_and_destructive_actions_carry_gate_receipts stdout ----
+
+thread 'mcp::mcp_writes_and_destructive_actions_carry_gate_receipts' (184905) panicked at tests/matrix/support.rs:42:5:
+MISSING: `smart_ingest` write/destructive result has no gate verdict or receipt. Every write and destructive action must carry one. Got: {"content":[{"text":"{\n  \"decision\": \"create\",\n  \"hasEmbedding\": false,\n  \"importanceScore\": 0.39249999999999996,\n  \"message\": \"Memory created (force_create=true)\",\n  \"nodeId\": \"mem-0000000000000001\",\n  \"predictionError\": 1.0,\n  \"reason\": \"Forced creation - skipped similarity check\",\n  \"scope\": \"user\",\n  \"success\": true,\n  \"synapticCapture\": {\n    \"algorithmVersion\": \"vestige.synaptic_capture.v2\",\n    \"durable\": false,\n    \"error\": \"Synaptic event/tag transaction was not committed; no capture or restart-safe tag is claimed.\",\n    \"tagPersisted\": false\n  }\n}","type":"text"}],"isError":false,"structuredContent":{"decision":"create","hasEmbedding":false,"importanceScore":0.39249999999999996,"message":"Memory created (force_create=true)
+
+---- upgrade::upgrade_legacy_links_are_not_causal_edges stdout ----
+
+thread 'upgrade::upgrade_legacy_links_are_not_causal_edges' (184959) panicked at tests/matrix/support.rs:42:5:
+MISSING: migrate of fresh-v38-ckpt failed, so legacy link narrative could not be checked: Error: migrate-to-strata is not linked into this binary; rebuild with --features migrate-to-strata
+
+
+---- upgrade::upgrade_migrate_dry_run_writes_nothing_and_keeps_source_sha stdout ----
+
+thread 'upgrade::upgrade_migrate_dry_run_writes_nothing_and_keeps_source_sha' (184963) panicked at tests/matrix/support.rs:42:5:
+MISSING: migrate-to-strata --dry-run did not report counts without writing (exit Some(1), dest written false). Output: Error: migrate-to-strata is not linked into this binary; rebuild with --features migrate-to-strata
+
+
+---- upgrade::upgrade_nonempty_to_is_refused stdout ----
+
+thread 'upgrade::upgrade_nonempty_to_is_refused' (184967) panicked at tests/matrix/support.rs:42:5:
+MISSING: non-empty --to was not refused. exit Some(1) output: Error: migrate-to-strata is not linked into this binary; rebuild with --features migrate-to-strata
+
+
+---- upgrade::upgrade_real_migrate_keeps_source_sha_and_fsrs stdout ----
+
+thread 'upgrade::upgrade_real_migrate_keeps_source_sha_and_fsrs' (184971) panicked at tests/matrix/support.rs:42:5:
+MISSING: migrate-to-strata failed on the real v3.1.1 fixture (schema 38). Output: Error: migrate-to-strata is not linked into this binary; rebuild with --features migrate-to-strata
+
+
+---- upgrade::upgrade_rollback_undoes_a_partial_import stdout ----
+
+thread 'upgrade::upgrade_rollback_undoes_a_partial_import' (184975) panicked at tests/matrix/support.rs:42:5:
+MISSING: `vestige migrate-to-strata --rollback` is not implemented. A SIGKILL mid-import must be undoable with --rollback, leaving --to empty and the v3 file untouched.
+
+---- upgrade::upgrade_sigkill_mid_import_then_rerun_does_not_duplicate stdout ----
+
+thread 'upgrade::upgrade_sigkill_mid_import_then_rerun_does_not_duplicate' (184979) panicked at tests/matrix/support.rs:42:5:
+MISSING: could not SIGKILL vestige migrate-to-strata mid-import: the process finished before any destination file appeared, even after the source was inflated. The gate needs a real mid-import kill.
+
+---- upgrade::upgrade_wal_without_flag_refuses_and_source_unchanged stdout ----
+
+thread 'upgrade::upgrade_wal_without_flag_refuses_and_source_unchanged' (184994) panicked at tests/matrix/upgrade.rs:765:5:
+non-empty WAL must be refused without --accept-wal-snapshot: Error: migrate-to-strata is not linked into this binary; rebuild with --features migrate-to-strata
+
+
+---- upgrade::upgrade_v311_auto_upgrade_preserves_memories_fsrs_and_source_sha stdout ----
+
+thread 'upgrade::upgrade_v311_auto_upgrade_preserves_memories_fsrs_and_source_sha' (184981) panicked at tests/matrix/support.rs:42:5:
+MISSING: auto-upgrade on first launch is not wired. vestige-mcp exited exit status: 1 on a real v3.1.1 store (schema 38, 10 memories) instead of backup + import + verify + switch. The v3 file sha256 was unchanged. stderr: 2026-09-29T16:56:41.675452Z  INFO Vestige MCP Server v3.1.1 starting...
+2026-09-29T16:56:41.675496Z ERROR v3 SQLite store at /tmp/.tmplq3M9L/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+v3 SQLite store at /tmp/.tmplq3M9L/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)
+
+
+
+failures:
+    cli::cli_backfill_on_fresh_store
+    cli::cli_backup_on_fresh_store
+    cli::cli_forgotten_lesson_on_fresh_store
+    cli::cli_help_lists_every_command_and_flag
+    cli::cli_ingest_git_on_fresh_store
+    cli::cli_migrate_to_strata_advertises_dry_run_and_rollback
+    cli::cli_portable_export_on_fresh_store
+    cli::cli_project_on_fresh_store
+    cli::cli_recall_on_fresh_store
+    cli::cli_selftest_on_fresh_store
+    cli::cli_sync_on_fresh_store
+    cli::cli_upgrade_on_fresh_store
+    engine::tamper_missing_head_state_and_damaged_segment_refuses_without_truncate
+    engine::tamper_missing_key_on_unsealed_log_is_not_regenerated
+    engine::tamper_missing_store_meta_refuses
+    mcp::mcp_causal_walk_valid_invalid_handle_miss
+    mcp::mcp_codebase_valid_invalid_handle_miss
+    mcp::mcp_dedup_valid_invalid_handle_miss
+    mcp::mcp_forgotten_lesson_valid_invalid_handle_miss
+    mcp::mcp_graph_valid_invalid_handle_miss
+    mcp::mcp_intention_valid_invalid_handle_miss
+    mcp::mcp_maintain_valid_invalid_handle_miss
+    mcp::mcp_memory_status_valid_invalid_handle_miss
+    mcp::mcp_memory_valid_invalid_handle_miss
+    mcp::mcp_project_valid_invalid_handle_miss
+    mcp::mcp_purge_valid_invalid_handle_miss
+    mcp::mcp_recall_free_text_is_not_a_search
+    mcp::mcp_recall_valid_invalid_handle_miss
+    mcp::mcp_receipt_valid_invalid_handle_miss
+    mcp::mcp_selftest_valid_invalid_handle_miss
+    mcp::mcp_session_start_valid_invalid_handle_miss
+    mcp::mcp_smart_ingest_valid_invalid_handle_miss
+    mcp::mcp_source_sync_valid_invalid_handle_miss
+    mcp::mcp_suppress_valid_invalid_handle_miss
+    mcp::mcp_writes_and_destructive_actions_carry_gate_receipts
+    upgrade::cli_first_launch_corrupt_v3_leaves_bytes_and_names_v311
+    upgrade::cli_first_launch_upgrades_v3
+    upgrade::concurrent_first_launch_upgrades_once
+    upgrade::stale_staging_after_sigkill_recovers
+    upgrade::upgrade_legacy_links_are_not_causal_edges
+    upgrade::upgrade_migrate_dry_run_writes_nothing_and_keeps_source_sha
+    upgrade::upgrade_nonempty_to_is_refused
+    upgrade::upgrade_real_migrate_keeps_source_sha_and_fsrs
+    upgrade::upgrade_rollback_undoes_a_partial_import
+    upgrade::upgrade_sigkill_mid_import_then_rerun_does_not_duplicate
+    upgrade::upgrade_v311_auto_upgrade_preserves_memories_fsrs_and_source_sha
+    upgrade::upgrade_wal_without_flag_refuses_and_source_unchanged
+
+test result: FAILED. 36 passed; 47 failed; 0 ignored; 0 measured; 0 filtered out; finished in 513.45s
+
+error: test failed, to rerun pass `--test matrix`

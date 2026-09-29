@@ -1,0 +1,10 @@
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/b-check3/src-demo-v38 (keep this file; it is your pre-migration record)
+Source BLAKE3: eb1e02a9f550e1e483f6308d96e0ddc4800914f312e61ad4b96ab33e87e1d1ad
+Destination: /tmp/verdict-fix/work/b-check3/to-demo-v38
+Migrated: 2 nodes, 0 edges, 0 fsrs events
+Dropped vectors: 2 (vector values were never read)
+Skipped tables (counted, not mapped): actor_policy_state, actor_role_weights, agent_runs, agent_traces, consolidation_history, embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, retention_snapshots, schema_version, synaptic_tags, vector_journal
+MIGRATION_RECEIPT: 24ac7bdd5bbe297f625e4ce7bc8445ff112081b41c3796830dbf7e7f49705c3a (signature verified: true)
+Replay verification: true
+EXIT:0

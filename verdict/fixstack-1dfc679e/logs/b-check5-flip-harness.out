@@ -1,0 +1,2 @@
+flipped /tmp/verdict-fix/work/a-tamper-flip/00000000-66f159c95005146f7f0c88bb547c0de1.seg at 11608
+OPEN_FAIL strata halt: sealed segment damaged: payload blake3 mismatch (segment 0, offset 10750, last_acked_seq 18) — damage at/below the acked watermark, refusing to truncate history

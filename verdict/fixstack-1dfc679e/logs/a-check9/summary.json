@@ -1,0 +1,167 @@
+[
+  {
+    "store": "backfill-v31",
+    "six_real": true,
+    "log_nodes": 7,
+    "legacy_inferred_edges": [
+      {
+        "source": "f871f50d-b440-4611-ae36-6ba4e4be6a5f",
+        "target": "e6f23fe6-4024-458a-a1e0-3afe59b1e5e3",
+        "legacy_link_type": "backfill_candidate"
+      }
+    ],
+    "mcp_exit": 0,
+    "open_ok": true,
+    "open_fail": false,
+    "init_ok": true,
+    "calls": 19,
+    "follows": [],
+    "stderr_tail": " WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.104938Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.105093Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.105139Z  INFO stdin closed (EOF), shutting down\n2026-09-29T16:11:23.105186Z  INFO Vestige MCP Server shutting down\n"
+  },
+  {
+    "store": "demo-v38",
+    "six_real": true,
+    "log_nodes": 2,
+    "legacy_inferred_edges": [],
+    "mcp_exit": 0,
+    "open_ok": true,
+    "open_fail": false,
+    "init_ok": true,
+    "calls": 13,
+    "follows": [],
+    "stderr_tail": " WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.128471Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.128648Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.128710Z  INFO stdin closed (EOF), shutting down\n2026-09-29T16:11:23.128742Z  INFO Vestige MCP Server shutting down\n"
+  },
+  {
+    "store": "demo-v38-shim",
+    "six_real": false,
+    "log_nodes": 2,
+    "legacy_inferred_edges": [],
+    "mcp_exit": 0,
+    "open_ok": true,
+    "open_fail": false,
+    "init_ok": true,
+    "calls": 13,
+    "follows": [],
+    "stderr_tail": " WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.145771Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.145854Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.145901Z  INFO stdin closed (EOF), shutting down\n2026-09-29T16:11:23.145927Z  INFO Vestige MCP Server shutting down\n"
+  },
+  {
+    "store": "fresh-v38-ckpt",
+    "six_real": true,
+    "log_nodes": 10,
+    "legacy_inferred_edges": [
+      {
+        "source": "8050935f-79d7-45c9-afb0-375c09d086af",
+        "target": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e",
+        "legacy_link_type": "narrative"
+      }
+    ],
+    "mcp_exit": 0,
+    "open_ok": true,
+    "open_fail": false,
+    "init_ok": true,
+    "calls": 19,
+    "follows": [],
+    "stderr_tail": " WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.166897Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.166990Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.167048Z  INFO stdin closed (EOF), shutting down\n2026-09-29T16:11:23.167074Z  INFO Vestige MCP Server shutting down\n"
+  },
+  {
+    "store": "fresh-v38-ckpt-shim",
+    "six_real": false,
+    "log_nodes": 10,
+    "legacy_inferred_edges": [
+      {
+        "source": "8050935f-79d7-45c9-afb0-375c09d086af",
+        "target": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e",
+        "legacy_link_type": "narrative"
+      }
+    ],
+    "mcp_exit": 0,
+    "open_ok": true,
+    "open_fail": false,
+    "init_ok": true,
+    "calls": 19,
+    "follows": [],
+    "stderr_tail": " WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.189206Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.189273Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.189324Z  INFO stdin closed (EOF), shutting down\n2026-09-29T16:11:23.189353Z  INFO Vestige MCP Server shutting down\n"
+  },
+  {
+    "store": "fresh-v38-wal",
+    "six_real": true,
+    "log_nodes": 10,
+    "legacy_inferred_edges": [
+      {
+        "source": "8050935f-79d7-45c9-afb0-375c09d086af",
+        "target": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e",
+        "legacy_link_type": "narrative"
+      }
+    ],
+    "mcp_exit": 0,
+    "open_ok": true,
+    "open_fail": false,
+    "init_ok": true,
+    "calls": 19,
+    "follows": [],
+    "stderr_tail": " WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.204960Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.205027Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.205070Z  INFO stdin closed (EOF), shutting down\n2026-09-29T16:11:23.205097Z  INFO Vestige MCP Server shutting down\n"
+  },
+  {
+    "store": "probe-v38-ckpt",
+    "six_real": true,
+    "log_nodes": 2,
+    "legacy_inferred_edges": [],
+    "mcp_exit": 0,
+    "open_ok": true,
+    "open_fail": false,
+    "init_ok": true,
+    "calls": 13,
+    "follows": [],
+    "stderr_tail": " WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.223240Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.223341Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.223399Z  INFO stdin closed (EOF), shutting down\n2026-09-29T16:11:23.223429Z  INFO Vestige MCP Server shutting down\n"
+  },
+  {
+    "store": "probe-v38-ckpt-shim",
+    "six_real": false,
+    "log_nodes": 2,
+    "legacy_inferred_edges": [],
+    "mcp_exit": 0,
+    "open_ok": true,
+    "open_fail": false,
+    "init_ok": true,
+    "calls": 13,
+    "follows": [],
+    "stderr_tail": " WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.240620Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.240709Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.240764Z  INFO stdin closed (EOF), shutting down\n2026-09-29T16:11:23.240785Z  INFO Vestige MCP Server shutting down\n"
+  },
+  {
+    "store": "probe-v38-wal",
+    "six_real": false,
+    "log_nodes": 2,
+    "legacy_inferred_edges": [],
+    "mcp_exit": 0,
+    "open_ok": true,
+    "open_fail": false,
+    "init_ok": true,
+    "calls": 13,
+    "follows": [],
+    "stderr_tail": " WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.249004Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.249122Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.249175Z  INFO stdin closed (EOF), shutting down\n2026-09-29T16:11:23.249198Z  INFO Vestige MCP Server shutting down\n"
+  },
+  {
+    "store": "vnc-v36",
+    "six_real": true,
+    "log_nodes": 12,
+    "legacy_inferred_edges": [
+      {
+        "source": "8beda6cc-f076-4144-9c20-b9915c5d93d1",
+        "target": "26d2b43c-b2b0-4bff-9a0d-79f649ee5d1c",
+        "legacy_link_type": "semantic"
+      },
+      {
+        "source": "5d17da3b-76c0-4798-9937-5d79f863e612",
+        "target": "a18129e6-f133-48c2-aa27-335e66d03bed",
+        "legacy_link_type": "semantic"
+      }
+    ],
+    "mcp_exit": 0,
+    "open_ok": true,
+    "open_fail": false,
+    "init_ok": true,
+    "calls": 29,
+    "follows": [],
+    "stderr_tail": " WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.261538Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.261611Z  WARN trace append failed: Initialization error: append_trace_event is not implemented by this backend\n2026-09-29T16:11:23.261668Z  INFO stdin closed (EOF), shutting down\n2026-09-29T16:11:23.261694Z  INFO Vestige MCP Server shutting down\n"
+  }
+]

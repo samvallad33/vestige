@@ -1,0 +1,71 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling winnow v1.0.4
+   Compiling hashbrown v0.17.1
+   Compiling equivalent v1.0.2
+   Compiling typenum v1.20.1
+   Compiling indexmap v2.14.2
+   Compiling hybrid-array v0.4.15
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.14
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling cpufeatures v0.3.1
+   Compiling cfg-if v1.0.5
+   Compiling toml_edit v0.25.15+spec-1.1.0
+   Compiling cc v1.5.1
+   Compiling cfg_aliases v0.2.2
+   Compiling semver v1.0.28
+   Compiling rustc_version v0.4.1
+   Compiling borsh v1.8.1
+   Compiling blake3 v1.8.7
+   Compiling proc-macro-crate v3.5.0
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling syn v3.0.6
+   Compiling once_cell v1.21.4
+   Compiling digest v0.11.3
+   Compiling curve25519-dalek v5.0.0
+   Compiling syn v2.0.119
+   Compiling borsh-derive v1.8.1
+   Compiling constant_time_eq v0.4.2
+   Compiling arrayvec v0.7.8
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling subtle v2.6.1
+   Compiling libc v0.2.189
+   Compiling signature v3.0.0
+   Compiling zeroize v1.9.0
+   Compiling libm v0.2.16
+   Compiling ed25519 v3.0.0
+   Compiling sha2 v0.11.0
+   Compiling ed25519-dalek v3.0.0
+   Compiling strata v0.1.0 (/tmp/stack-b/crates/strata)
+   Compiling strata-kernel v0.1.0 (/tmp/stack-b/crates/strata-kernel)
+   Compiling strata-gate v0.1.0 (/tmp/stack-b/crates/strata-gate)
+   Compiling strata-store v0.1.0 (/tmp/stack-b/crates/strata-store)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.24s
+     Running unittests src/lib.rs (/tmp/verdict-fix/b-test-target-strata-store/debug/deps/strata_store-6258287d1c2954d9)
+
+running 12 tests
+test tests::deny_policy_blocks_effect ... ok
+test tests::ingest_read_roundtrip ... ok
+test tests::failure_marker_port_matches_vestige_semantics ... ok
+test tests::missing_store_meta_on_populated_store_fails_open ... ok
+test tests::reads_append_nothing ... ok
+test tests::default_policy_holds_retire_permissive_lands_it ... ok
+test tests::checkpoint_chain_verifies_and_tamper_detected ... ok
+test tests::edge_write_and_reverse_query ... ok
+test tests::node_ids_are_log_derived_and_handle_is_stable ... ok
+test tests::backup_roundtrip_opens_and_matches ... ok
+test tests::every_store_write_has_an_admitting_effect ... ok
+test tests::reopen_rebuilds_bit_identically ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+   Doc-tests strata_store
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

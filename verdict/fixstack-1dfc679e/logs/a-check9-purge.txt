@@ -1,0 +1,119 @@
+[
+  [
+    {
+      "name": "memory",
+      "arguments": {
+        "action": "purge",
+        "id": "8050935f-79d7-45c9-afb0-375c09d086af",
+        "confirm": true
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+        "content": [
+          {
+            "text": "{\"error\":\"Initialization error: pending_strata: purge_node is not admitted on the Strata log yet\"}",
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "error": "Initialization error: pending_strata: purge_node is not admitted on the Strata log yet"
+        }
+      }
+    }
+  ],
+  [
+    {
+      "name": "maintain",
+      "arguments": {
+        "action": "gc",
+        "dry_run": false
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"atomic\": true,\n  \"candidateCount\": 0,\n  \"deleted\": 0,\n  \"dryRun\": false,\n  \"errors\": 0,\n  \"hasMore\": false,\n  \"nextCursor\": null,\n  \"processed\": 0,\n  \"tool\": \"gc\"\n}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "atomic": true,
+          "candidateCount": 0,
+          "deleted": 0,
+          "dryRun": false,
+          "errors": 0,
+          "hasMore": false,
+          "nextCursor": null,
+          "processed": 0,
+          "tool": "gc"
+        }
+      }
+    }
+  ],
+  [
+    {
+      "name": "graph",
+      "arguments": {
+        "action": "associations",
+        "from": "8050935f-79d7-45c9-afb0-375c09d086af"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"action\": \"associations\",\n  \"associations\": [],\n  \"count\": 0,\n  \"from\": \"8050935f-79d7-45c9-afb0-375c09d086af\"\n}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "action": "associations",
+          "associations": [],
+          "count": 0,
+          "from": "8050935f-79d7-45c9-afb0-375c09d086af"
+        }
+      }
+    }
+  ],
+  [
+    {
+      "name": "graph",
+      "arguments": {
+        "action": "chain",
+        "from": "8050935f-79d7-45c9-afb0-375c09d086af",
+        "to": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"action\": \"chain\",\n  \"from\": \"8050935f-79d7-45c9-afb0-375c09d086af\",\n  \"message\": \"No chain found between these memories\",\n  \"steps\": [],\n  \"to\": \"d3f91107-3ff7-4cb0-b12d-a596f3ebe58e\"\n}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "action": "chain",
+          "from": "8050935f-79d7-45c9-afb0-375c09d086af",
+          "message": "No chain found between these memories",
+          "steps": [],
+          "to": "d3f91107-3ff7-4cb0-b12d-a596f3ebe58e"
+        }
+      }
+    }
+  ]
+]

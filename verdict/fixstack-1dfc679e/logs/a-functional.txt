@@ -1,0 +1,56 @@
+A-FUNCTIONAL START 2026-09-29T16:09:18+00:00
+==== backfill-v31 hash:UNCHANGED exit:0 wal:no
+COMPARE backfill-v31 exit:0
+problems []
+kinds {'CHECKPOINT': 1, 'EDGE': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 7, 'PARAMS': 1}
+edges [{'legacy_link_type': 'backfill_candidate', 'link_type': 'derived_from', 'legacy_inferred': True}]
+==== demo-v38 hash:UNCHANGED exit:0 wal:no
+COMPARE demo-v38 exit:0
+problems []
+kinds {'CHECKPOINT': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 2, 'PARAMS': 1, 'TOMBSTONE': 2}
+edges []
+==== demo-v38-shim hash:UNCHANGED exit:0 wal:no
+COMPARE demo-v38-shim exit:0
+problems []
+kinds {'CHECKPOINT': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 2, 'PARAMS': 1, 'TOMBSTONE': 2}
+edges []
+==== fresh-v38-ckpt hash:UNCHANGED exit:0 wal:no
+COMPARE fresh-v38-ckpt exit:0
+problems []
+kinds {'CHECKPOINT': 1, 'EDGE': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 10, 'PARAMS': 1, 'SUPERSESSION': 1, 'TOMBSTONE': 2}
+edges [{'legacy_link_type': 'narrative', 'link_type': 'derived_from', 'legacy_inferred': True}]
+==== fresh-v38-ckpt-shim hash:UNCHANGED exit:0 wal:no
+COMPARE fresh-v38-ckpt-shim exit:0
+problems []
+kinds {'CHECKPOINT': 1, 'EDGE': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 10, 'PARAMS': 1, 'SUPERSESSION': 1, 'TOMBSTONE': 2}
+edges [{'legacy_link_type': 'narrative', 'link_type': 'derived_from', 'legacy_inferred': True}]
+==== fresh-v38-wal hash:UNCHANGED exit:0 wal:--accept-wal-snapshot
+COMPARE fresh-v38-wal exit:0
+problems []
+kinds {'CHECKPOINT': 1, 'EDGE': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 10, 'PARAMS': 1, 'SUPERSESSION': 1, 'TOMBSTONE': 2}
+edges [{'legacy_link_type': 'narrative', 'link_type': 'derived_from', 'legacy_inferred': True}]
+==== probe-v38-ckpt hash:UNCHANGED exit:0 wal:no
+COMPARE probe-v38-ckpt exit:0
+problems []
+kinds {'CHECKPOINT': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 2, 'PARAMS': 1, 'TOMBSTONE': 2}
+edges []
+==== probe-v38-ckpt-shim hash:UNCHANGED exit:0 wal:no
+COMPARE probe-v38-ckpt-shim exit:0
+problems []
+kinds {'CHECKPOINT': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 2, 'PARAMS': 1, 'TOMBSTONE': 2}
+edges []
+==== probe-v38-wal hash:UNCHANGED exit:0 wal:--accept-wal-snapshot
+COMPARE probe-v38-wal exit:0
+problems []
+kinds {'CHECKPOINT': 1, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 2, 'PARAMS': 1, 'TOMBSTONE': 2}
+edges []
+==== vnc-v36 hash:UNCHANGED exit:0 wal:no
+COMPARE vnc-v36 exit:0
+problems []
+kinds {'CHECKPOINT': 1, 'EDGE': 2, 'GENESIS': 1, 'MIGRATION_RECEIPT': 1, 'NODE': 12, 'PARAMS': 1}
+edges [{'legacy_link_type': 'semantic', 'link_type': 'derived_from', 'legacy_inferred': True}, {'legacy_link_type': 'semantic', 'link_type': 'derived_from', 'legacy_inferred': True}]
+CHECK6 2026-09-29T16:09:20+00:00
+CHECK4 2026-09-29T16:09:20+00:00
+CHECK5 2026-09-29T16:09:21+00:00
+CHECK7 2026-09-29T16:09:21+00:00
+A-FUNCTIONAL END 2026-09-29T16:09:24+00:00

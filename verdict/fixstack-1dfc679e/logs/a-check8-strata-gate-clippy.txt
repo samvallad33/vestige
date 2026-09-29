@@ -1,0 +1,8 @@
+    Checking arrayvec v0.7.8
+    Checking cpufeatures v0.3.1
+    Checking cfg-if v1.0.5
+    Checking constant_time_eq v0.4.2
+    Checking borsh v1.8.1
+    Checking blake3 v1.8.7
+    Checking strata-gate v0.1.0 (/tmp/stack-a/crates/strata-gate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.45s

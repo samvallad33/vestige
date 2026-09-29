@@ -1,0 +1,8 @@
+CHECK7 2026-09-29T16:09:21+00:00
+HARDEN_EXIT:0
+NOMETA_EXIT:0
+missing_key_unsealed refused False truncated None open_ok {'checkpoints': 1, 'digest': 'ba5e2bdd20b9b1f959f139990029b01aecba5e46ead15551acc16d9fdfaabd53', 'edges': 1, 'nodes': 8, 'opened': True, 'reviews': 10} open_err None silently_regenerated True key_reappeared True
+missing_store_meta refused False truncated None open_ok {'checkpoints': 1, 'digest': 'ba5e2bdd20b9b1f959f139990029b01aecba5e46ead15551acc16d9fdfaabd53', 'edges': 1, 'nodes': 8, 'opened': True, 'reviews': 10} open_err None silently_regenerated None key_reappeared None
+sealed_segment_head_deleted refused True truncated False open_ok None open_err log error: strata halt: sealed segment damaged: payload blake3 mismatch (segment 0, offset 10651, last_acked_seq 0) — damage at/below the acked watermark, refusing to truncate hist silently_regenerated None key_reappeared None
+unsealed_segment_head_deleted refused True truncated True open_ok None open_err verification failed: store.meta exists but the log carries no checkpoint silently_regenerated None key_reappeared None
+nometa {"after": 6257, "before": 12788, "flip_offset": 6394, "open_err": null, "open_ok": {"checkpoints": 0, "digest": "d3858bb65af282e99ef929be1296d8e8d69bbb59208a6ab34702f0a3a68783b8", "edges": 0, "nodes": 9, "opened": true, "reviews": 9}, "truncated": true}

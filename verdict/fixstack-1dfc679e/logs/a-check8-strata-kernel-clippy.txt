@@ -1,0 +1,9 @@
+    Checking constant_time_eq v0.4.2
+    Checking cfg-if v1.0.5
+    Checking cpufeatures v0.3.1
+    Checking arrayvec v0.7.8
+    Checking borsh v1.8.1
+    Checking blake3 v1.8.7
+    Checking libm v0.2.16
+    Checking strata-kernel v0.1.0 (/tmp/stack-a/crates/strata-kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.74s

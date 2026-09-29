@@ -1,0 +1,17 @@
+CLI1 exit=0 stderr='' stdout='=== Vestige Memory Statistics ===\n\nTotal Memories: 0\nDue for Review: 0\nAverage Retention: 0.0%\nAverage Storage Strength: 0.00\nAverage Retrieval Strength: 0.00\nWith Embeddings: 0\nAc'
+CLI2 exit=0 stderr='' stdout='=== Vestige Memory Statistics ===\n\nTotal Memories: 0\nDue for Review: 0\nAverage Retention: 0.0%\nAverage Storage Strength: 0.00\nAverage Retrieval Strength: 0.00\nWith Embeddings: 0\nAc'
+CLI files:
+      32 log/strata.key
+      58 log/00000000-bf82573591f33689e7148e52e1397132.seg
+CLI sqlite-like: []
+MCP1 code=0 stdout='{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"logging":{},"resources":{"listChanged":false},"tools":{"listChanged":false}},"instructions":"Vestige is your long-term memory system. Compose retrievals into recommendations rather than lis' stderr='2026-09-29T16:37:53.635141Z  INFO Vestige MCP Server v3.1.1 starting...\n2026-09-29T16:37:53.637291Z  INFO Strata log initialized at /tmp/verdict-fix/work/boot-b/empty-mcp\n2026-09-29T16:37:53.637485Z  INFO Hydrated cognitive modules from persisted connections count=0\n2026-09-29T16:37:53.637495Z  INFO'
+MCP2 code=0 stdout='{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"logging":{},"resources":{"listChanged":false},"tools":{"listChanged":false}},"instructions":"Vestige is your long-term memory system. Compose retrievals into recommendations rather than lis' stderr='2026-09-29T16:37:53.656903Z  INFO Vestige MCP Server v3.1.1 starting...\n2026-09-29T16:37:53.657975Z  INFO Strata log initialized at /tmp/verdict-fix/work/boot-b/empty-mcp\n2026-09-29T16:37:53.661503Z  INFO Hydrated cognitive modules from persisted connections count=0\n2026-09-29T16:37:53.661518Z  INFO'
+MCP files:
+      32 actor.key
+      32 log/strata.key
+      58 log/00000000-17a8be8867ecb9b2289bf3645e982c07.seg
+MCP sqlite-like: []
+DEFAULT strata-verify exit=1 stdout='' stderr='Error: strata-verify is not linked into this binary; rebuild with --features migrate-to-strata\n'
+V3 CLI exit=1 stdout='' stderr='Error: v3 SQLite store at /tmp/verdict-fix/work/boot-b/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)\n'
+V3 MCP code=1 stdout='' stderr='2026-09-29T16:37:53.681095Z  INFO Vestige MCP Server v3.1.1 starting...\n2026-09-29T16:37:53.681143Z ERROR v3 SQLite store at /tmp/verdict-fix/work/boot-b/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)\nv3 SQLite store at /tmp/verdict-fix/work/boot-b/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)\n'
+V3 hash UNCHANGED 81c261d5f6f27a70be669d5c389cca6e811d29b819f8fb0404cc4ca6e8e0f272 81c261d5f6f27a70be669d5c389cca6e811d29b819f8fb0404cc4ca6e8e0f272

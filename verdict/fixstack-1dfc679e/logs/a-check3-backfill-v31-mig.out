@@ -1,0 +1,10 @@
+=== Vestige migrate-to-strata ===
+Source (never modified): /tmp/verdict-fix/work/a-check3/src-backfill-v31 (keep this file; it is your pre-migration record)
+Source BLAKE3: 78eace8e822b7ddf1ae9c7b0b6276284d4eddb38f3cf5d8ffb0983b47cfb3ea7
+Destination: /tmp/verdict-fix/work/a-check3/to-backfill-v31
+Migrated: 7 nodes, 1 edges, 0 fsrs events
+Dropped vectors: 7 (vector values were never read)
+Skipped tables (counted, not mapped): embedding_profile_manifests, embedding_profile_state, embedding_profile_vectors, embedding_profiles, erasure_generation_counter, fsrs_config, node_embeddings, schema_version
+MIGRATION_RECEIPT: 63c805d2e68661a691abb39fbe5d74d89ac06d1c65841ff7261e4d0f564487eb (signature verified: true)
+Replay verification: true
+EXIT:0

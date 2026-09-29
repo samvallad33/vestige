@@ -1,0 +1,11 @@
+PREFIX 1567046c4cac6020f7dd9144e7c50ec562f10dfa tree af94967b4ecf63200e9adebde4eb552a4eefddd6
+b304bfd1 missing locally: fatal: Not a valid object name b304bfd1
+STACK-A 1dfc679e944dfb89d58ae21de5fa47e649a08dd5 tree 1c44b19e78ce3f9256631a3291105d308adf932d
+STACK-B f0c01028e81355dc27c77e03d86b4e5bab2d3d66 tree f4eaf968624ff199e2e72dbb99e5139fe0436b54
+merge-tree prefix vs 1dfc679e:
+1c44b19e78ce3f9256631a3291105d308adf932d
+EXIT:0
+1dfc679e tree 1c44b19e78ce3f9256631a3291105d308adf932d
+merge-tree 1dfc679e vs 00c982b1:
+f4eaf968624ff199e2e72dbb99e5139fe0436b54
+EXIT:0

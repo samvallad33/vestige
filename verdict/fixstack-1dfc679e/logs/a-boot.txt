@@ -1,0 +1,17 @@
+CLI1 exit=0 stderr='' stdout='=== Vestige Memory Statistics ===\n\nTotal Memories: 0\nDue for Review: 0\nAverage Retention: 0.0%\nAverage Storage Strength: 0.00\nAverage Retrieval Strength: 0.00\nWith Embeddings: 0\nActive Embedding Cover'
+CLI2 exit=0 stderr='' stdout='=== Vestige Memory Statistics ===\n\nTotal Memories: 0\nDue for Review: 0\nAverage Retention: 0.0%\nAverage Storage Strength: 0.00\nAverage Retrieval Strength: 0.00\nWith Embeddings: 0\nActive Embedding Cover'
+CLI files:
+58 log/00000000-f0aea55df8cd6b1e328467954dda33b5.seg
+32 log/strata.key
+CLI sqlite-like: []
+MCP1 code=0 stdout='{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"logging":{},"resources":{"listChanged":false},"tools":{"listChanged":false}},"instructions":"Vestige is your long-term memory system. Compose retrievals into recommendations rather than listing their contents when the user is making a decision. On user feedback, call memory(action=\'promote\') for helpful retrievals and memory(action=\'demote\') for w' stderr='2026-09-29T16:00:00.601506Z  INFO Vestige MCP Server v3.1.1 starting...\n2026-09-29T16:00:00.609752Z  INFO Strata log initialized at /tmp/verdict-fix/work/boot-a/empty-mcp\n2026-09-29T16:00:00.609937Z  INFO Hydrated cognitive modules from persisted connections count=0\n2026-09-29T16:00:00.609947Z  INFO Hydrated active synaptic tags from durable storage count=0\n2026-09-29T16:00:00.609948Z  INFO Cognit'
+MCP2 code=0 stdout='{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"logging":{},"resources":{"listChanged":false},"tools":{"listChanged":false}},"instructions":"Vestige is your long-term memory system. Compose retrievals into recommendations rather than listing their contents when the user is making a decision. On user feedback, call memory(action=\'promote\') for helpful retrievals and memory(action=\'demote\') for w' stderr='2026-09-29T16:00:00.620386Z  INFO Vestige MCP Server v3.1.1 starting...\n2026-09-29T16:00:00.622118Z  INFO Strata log initialized at /tmp/verdict-fix/work/boot-a/empty-mcp\n2026-09-29T16:00:00.622809Z  INFO Hydrated cognitive modules from persisted connections count=0\n2026-09-29T16:00:00.622825Z  INFO Hydrated active synaptic tags from durable storage count=0\n2026-09-29T16:00:00.622827Z  INFO Cognit'
+MCP files:
+32 actor.key
+58 log/00000000-3a8b20c6bf9f09cc19f6730f885837f9.seg
+32 log/strata.key
+MCP sqlite-like: []
+DEFAULT strata-verify exit=1 stdout='' stderr='Error: strata-verify is not linked into this binary; rebuild with --features migrate-to-strata'
+V3 CLI exit=1 stdout='' stderr='Error: v3 SQLite store at /tmp/verdict-fix/work/boot-a/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)'
+V3 MCP code=1 stdout='' stderr='2026-09-29T16:00:00.648400Z  INFO Vestige MCP Server v3.1.1 starting...\n2026-09-29T16:00:00.648437Z ERROR v3 SQLite store at /tmp/verdict-fix/work/boot-a/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)\nv3 SQLite store at /tmp/verdict-fix/work/boot-a/v3/vestige.db cannot be opened by 4.0. run: vestige migrate-to-strata --from <path>  (the original is never modified)\n'
+V3 hash UNCHANGED 81c261d5f6f27a70be669d5c389cca6e811d29b819f8fb0404cc4ca6e8e0f272 81c261d5f6f27a70be669d5c389cca6e811d29b819f8fb0404cc4ca6e8e0f272
