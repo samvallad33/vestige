@@ -1154,72 +1154,87 @@ fn import_never_overwrites_existing_receipt_key() {
     );
 }
 
-/// A log rewritten under a fresh key, with that key embedded so the receipt
-/// and the segment trailer agree, must still be rejected. The pin is the
-/// on-disk `receipt-signing.key` left beside the store. Expected to fail:
-/// `strata-verify` trusts `strata.key` (`crates/strata-verify/src/readonly.rs:89`)
-/// and the receipt's own embedded key
-/// (`crates/strata-verify/src/migration.rs:89`).
+/// Case (a) of `verify_rejects_resigned_log_with_new_embedded_key`.
+/// One node is rewritten and the receipt is sealed under a fresh key. The
+/// segment trailer stays under the log's `strata.key`. `receipt-signing.key`
+/// beside the log is not touched. Verify must exit non-zero and print that
+/// pin's fingerprint. Current binaries trust `strata.key`
+/// (`crates/strata-verify/src/readonly.rs:89`) and the embedded receipt key
+/// (`crates/strata-verify/src/migration.rs:89`), so this is a real failure
+/// until the pin check at `crates/strata-verify/src/pin.rs:48` lands.
 #[test]
 fn verify_rejects_resigned_log_with_new_embedded_key() {
     let work = tempfile::tempdir().unwrap();
-    let src = work.path().join("src");
-    copy_tree(&fixture("fresh-v38-ckpt"), &src);
-    let store = work.path().join("store");
-    let migrated = migrate_to(&src, &store);
-    assert_eq!(
-        migrated.status,
-        Some(0),
-        "could not build the store to resign: {}",
-        cmd_excerpt(&migrated)
-    );
-    let pin = work.path().join(strata_migrate::records::RECEIPT_KEY_FILE);
-    assert!(pin.is_file(), "store published no receipt key to pin");
-    let pinned_public = public_key_of_seed(&fs::read(&pin).unwrap());
-    resign_log_under_fresh_key(&store);
-    let embedded = embedded_receipt_key(&store);
-    assert_ne!(
-        embedded, pinned_public,
-        "resigned log still embeds the pinned receipt key"
-    );
+    let (store, pin, original_fp, fresh) = resigned_store_with_untouched_pin(work.path());
     let pin_sha = sha256_file(&pin);
-
-    let help = run_cmd(
-        &product_bin("strata-verify"),
-        &[],
-        &[],
-        &[],
-        Duration::from_secs(20),
-    );
-    let help_blob = format!("{}{}", help.stdout, help.stderr);
-    let pin_flag = key_pin_flag(&help_blob);
-    let plain = run_cmd(
-        &product_bin("strata-verify"),
-        &[store.display().to_string()],
-        &[],
-        &[],
-        Duration::from_secs(60),
-    );
-    let home = tempfile::tempdir().unwrap();
-    let via_vestige = run_vestige(
-        &["strata-verify".into(), store.display().to_string()],
-        home.path(),
-        Duration::from_secs(60),
-    );
-    let pinned = pin_flag.map(|flag| {
-        run_cmd(
-            &product_bin("strata-verify"),
-            &[flag, pin.display().to_string(), store.display().to_string()],
-            &[],
-            &[],
-            Duration::from_secs(60),
-        )
-    });
+    let runs = verify_both(&store, None);
     assert_eq!(pin_sha, sha256_file(&pin), "verify rewrote the pinned key");
-    assert_verify_rejects_foreign_key(&plain, "strata-verify");
-    assert_verify_rejects_foreign_key(&via_vestige, "vestige strata-verify");
-    if let Some(pinned_run) = pinned.as_ref() {
-        assert_verify_rejects_foreign_key(pinned_run, "strata-verify with the pinned key");
+    assert_eq!(
+        embedded_receipt_key(&store),
+        public_key_of_seed(&fresh),
+        "embedded receipt key is not the fresh signer"
+    );
+    for (label, out) in &runs {
+        assert_case_a_rejects(out, label, &original_fp);
+    }
+}
+
+/// Case (b). The attacker also replaces `receipt-signing.key` with the key
+/// that signed the new receipt. `--expect-key` of the original fingerprint
+/// must still exit non-zero, and verify must print the fingerprint of the
+/// key it actually used. A missing flag is a real failure: the swapped pin
+/// would otherwise be trusted. It is not blocked.
+#[test]
+fn verify_rejects_swapped_pin_with_original_expect_key() {
+    let work = tempfile::tempdir().unwrap();
+    let (store, pin, original_fp, fresh) = resigned_store_with_untouched_pin(work.path());
+    fs::write(&pin, fresh).unwrap();
+    let inside = store.join(strata_migrate::records::RECEIPT_KEY_FILE);
+    if inside.is_file() {
+        fs::write(&inside, fresh).unwrap();
+    }
+    let fresh_fp = signing_fingerprint(&fresh);
+    if !expect_key_supported() {
+        let plain = verify_both(&store, None);
+        let accepted_swap = plain.iter().all(|(_, out)| accepted(out));
+        let printed = plain
+            .iter()
+            .any(|(_, out)| prints_fingerprint(out, &fresh_fp));
+        panic!(
+            "FAIL: case (b) cannot pin the original fingerprint. `--expect-key` \
+             is not implemented (crates/strata-verify/src/bin/strata_verify.rs:10 \
+             takes one positional directory). Replacing receipt-signing.key with \
+             the attacker's seed is not checked against {original_fp}. Plain \
+             verify accepted the swapped pin: {accepted_swap}. It printed \
+             `key fingerprint: {fresh_fp}`: {printed}. The comparison that must \
+             fail this is crates/strata-verify/src/pin.rs:48. This is a real \
+             failure, not blocked and not pending_strata."
+        );
+    }
+    for (label, out) in &verify_both(&store, Some(&original_fp)) {
+        assert_case_b_rejects(out, label, &original_fp, &fresh_fp);
+    }
+}
+
+/// Case (c). An untampered store with `--expect-key` of its own fingerprint
+/// must exit 0 and print that fingerprint. Until the flag exists this case
+/// is blocked, not a pin-check failure.
+#[test]
+fn verify_accepts_untampered_store_with_expect_key() {
+    let work = tempfile::tempdir().unwrap();
+    let (store, pin) = migrated_store(work.path());
+    let fingerprint = signing_fingerprint(&fs::read(&pin).unwrap());
+    if !expect_key_supported() {
+        panic!(
+            "BLOCKED: case (c) needs `--expect-key` and a printed signing-key \
+             fingerprint (`key fingerprint: {fingerprint}`). \
+             crates/strata-verify/src/bin/strata_verify.rs:10 has no such flag \
+             yet. This waits on the strata-verify pin fix stacked on #314. \
+             It is not a failure of the untouched-pin or swapped-pin cases."
+        );
+    }
+    for (label, out) in &verify_both(&store, Some(&fingerprint)) {
+        assert_case_c_accepts(out, label, &fingerprint);
     }
 }
 
@@ -1741,17 +1756,12 @@ fn reseal(
     body
 }
 
-/// Rewrite one node, re-sign the receipt and every segment trailer under a
-/// fresh key, and store that seed as `strata.key`. The parent
-/// `receipt-signing.key` is left untouched, so the log is internally
-/// consistent under a key the pin file does not authorize.
-fn resign_log_under_fresh_key(dir: &std::path::Path) {
-    let mut seed = [0u8; 32];
-    fs::File::open("/dev/urandom")
-        .unwrap()
-        .read_exact(&mut seed)
-        .unwrap();
-    let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+/// Rewrite one node and seal the receipt under `fresh`. Segment trailers
+/// stay under the on-disk `strata.key`. `receipt-signing.key` is not written.
+fn resign_embedded_receipt(dir: &std::path::Path, fresh: &ed25519_dalek::SigningKey) {
+    let strata_seed =
+        seed_array(&fs::read(dir.join("strata.key")).unwrap()).expect("strata.key is 32 bytes");
+    let trailer_key = ed25519_dalek::SigningKey::from_bytes(&strata_seed);
     let paths = segment_paths(dir);
     assert!(!paths.is_empty(), "store has no segment to resign");
     let mut prev_segment = strata::GENESIS_PREV_SEGMENT_HASH;
@@ -1785,19 +1795,17 @@ fn resign_log_under_fresh_key(dir: &std::path::Path) {
             if frame.kind == strata_migrate::records::KIND_MIGRATION_RECEIPT {
                 let receipt = strata_migrate::records::decode_receipt(&frame.payload)
                     .unwrap_or_else(|err| panic!("receipt decode: {err}"));
-                let resealed =
-                    strata_migrate::records::MigrationReceipt::seal(receipt.body, &signing);
+                let resealed = strata_migrate::records::MigrationReceipt::seal(receipt.body, fresh);
                 frame.payload = borsh::to_vec(&resealed).unwrap();
                 changed_receipt = true;
             }
         }
-        let encoded = reseal(&header, &frames, &signing);
+        let encoded = reseal(&header, &frames, &trailer_key);
         prev_segment = *blake3::hash(&encoded).as_bytes();
         fs::write(path, &encoded).unwrap();
     }
     assert!(changed_node, "resign found no node frame");
     assert!(changed_receipt, "resign found no receipt frame");
-    fs::write(dir.join("strata.key"), seed).unwrap();
 }
 
 fn newest_trailer_verifies(dir: &std::path::Path, seed: &[u8]) -> bool {
@@ -1906,53 +1914,192 @@ fn marker_in_sealed_segment(dir: &std::path::Path, marker: &str) -> bool {
     })
 }
 
-fn key_pin_flag(help: &str) -> Option<String> {
-    for token in [
-        "--receipt-key",
-        "--signing-key",
-        "--key-pin",
-        "--pinned-key",
-        "--public-key",
-    ] {
-        if help
-            .split_whitespace()
-            .any(|word| word == token || word.starts_with(token))
-        {
-            return Some(token.to_string());
-        }
-    }
-    None
+fn migrated_store(work: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let src = work.join("src");
+    copy_tree(&fixture("fresh-v38-ckpt"), &src);
+    let store = work.join("store");
+    let migrated = migrate_to(&src, &store);
+    assert_eq!(
+        migrated.status,
+        Some(0),
+        "could not build the store: {}",
+        cmd_excerpt(&migrated)
+    );
+    let pin = work.join(strata_migrate::records::RECEIPT_KEY_FILE);
+    assert!(pin.is_file(), "store published no receipt key to pin");
+    (store, pin)
 }
 
-fn assert_verify_rejects_foreign_key(out: &CmdOut, label: &str) {
+fn resigned_store_with_untouched_pin(
+    work: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf, String, [u8; 32]) {
+    let (store, pin) = migrated_store(work);
+    let original_fp = signing_fingerprint(&fs::read(&pin).unwrap());
+    let pin_sha = sha256_file(&pin);
+    let strata_sha = sha256_file(&store.join("strata.key"));
+    let mut fresh = [0u8; 32];
+    fs::File::open("/dev/urandom")
+        .unwrap()
+        .read_exact(&mut fresh)
+        .unwrap();
+    resign_embedded_receipt(&store, &ed25519_dalek::SigningKey::from_bytes(&fresh));
+    assert_eq!(
+        pin_sha,
+        sha256_file(&pin),
+        "resign rewrote receipt-signing.key"
+    );
+    assert_eq!(
+        strata_sha,
+        sha256_file(&store.join("strata.key")),
+        "resign rewrote strata.key"
+    );
+    assert_ne!(
+        embedded_receipt_key(&store),
+        public_key_of_seed(&fs::read(&pin).unwrap()),
+        "resigned log still embeds the pinned receipt key"
+    );
+    (store, pin, original_fp, fresh)
+}
+
+/// blake3 hex of the 32-byte ed25519 verifying key. That is the fingerprint
+/// `--expect-key` compares, and the line verify must print.
+fn signing_fingerprint(seed: &[u8]) -> String {
+    let public = public_key_of_seed(seed);
+    blake3::hash(&public).to_hex().to_string()
+}
+
+fn expect_key_supported() -> bool {
+    let bare = run_cmd(
+        &product_bin("strata-verify"),
+        &["--help".to_string()],
+        &[],
+        &[],
+        Duration::from_secs(20),
+    );
+    let none = run_cmd(
+        &product_bin("strata-verify"),
+        &[],
+        &[],
+        &[],
+        Duration::from_secs(20),
+    );
+    let home = tempfile::tempdir().unwrap();
+    let via = run_vestige(
+        &["strata-verify".into(), "--help".into()],
+        home.path(),
+        Duration::from_secs(20),
+    );
+    format!(
+        "{}{}{}{}{}{}",
+        bare.stdout, bare.stderr, none.stdout, none.stderr, via.stdout, via.stderr
+    )
+    .contains("--expect-key")
+}
+
+fn verify_both(dir: &std::path::Path, expect: Option<&str>) -> Vec<(&'static str, CmdOut)> {
+    let mut args = Vec::new();
+    if let Some(fingerprint) = expect {
+        args.push("--expect-key".to_string());
+        args.push(fingerprint.to_string());
+    }
+    args.push(dir.display().to_string());
+    let plain = run_cmd(
+        &product_bin("strata-verify"),
+        &args,
+        &[],
+        &[],
+        Duration::from_secs(60),
+    );
+    let mut vestige_args = vec!["strata-verify".to_string()];
+    vestige_args.extend(args);
+    let home = tempfile::tempdir().unwrap();
+    let via = run_vestige(&vestige_args, home.path(), Duration::from_secs(60));
+    vec![("strata-verify", plain), ("vestige strata-verify", via)]
+}
+
+fn prints_fingerprint(out: &CmdOut, fingerprint: &str) -> bool {
+    format!("{}{}", out.stdout, out.stderr).contains(&format!("key fingerprint: {fingerprint}"))
+}
+
+fn accepted(out: &CmdOut) -> bool {
     let blob = format!("{}{}", out.stdout, out.stderr);
-    let accepted = out.status == Some(0) || blob.lines().any(|line| line.trim() == "OK");
-    if accepted {
+    out.status == Some(0) || blob.lines().any(|line| line.trim() == "OK")
+}
+
+fn assert_case_a_rejects(out: &CmdOut, label: &str, original_fp: &str) {
+    let blob = format!("{}{}", out.stdout, out.stderr);
+    if accepted(out) {
         panic!(
-            "FAIL: {label} accepted a log re-signed under a fresh key. The embedded \
-             verifying key does not match the pinned receipt-signing.key. Verify loads \
-             the key it trusts at crates/strata-verify/src/readonly.rs:89 \
-             (read_verifying_key reads strata.key) and checks the receipt against the \
-             key embedded in the receipt at crates/strata-verify/src/migration.rs:89 \
-             (verify_signature). The default binaries take no key-pin option \
-             (`strata-verify <dir>`). This is a real failure, not pending_strata. \
-             output: {}",
+            "FAIL: case (a) {label} accepted a re-signed log while receipt-signing.key \
+             was untouched. The embedded verifying key does not match that pin. \
+             Verify loads strata.key at crates/strata-verify/src/readonly.rs:89 and \
+             checks the receipt against its embedded key at \
+             crates/strata-verify/src/migration.rs:89. The comparison that must \
+             reject this is crates/strata-verify/src/pin.rs:48. This is a real \
+             failure, not pending_strata. output: {}",
             blob.chars().take(800).collect::<String>()
         );
     }
-    let lower = blob.to_lowercase();
-    let names_mismatch = lower.contains("embedded")
-        || (lower.contains("key") && (lower.contains("pin") || lower.contains("match")));
-    if !names_mismatch {
+    if !prints_fingerprint(out, original_fp) {
         panic!(
-            "FAIL: {label} exited {:?} without naming an embedded-key mismatch against \
-             the pinned key. The key choice is crates/strata-verify/src/readonly.rs:89 \
-             and crates/strata-verify/src/migration.rs:89. This is a real failure, not \
-             pending_strata. output: {}",
+            "FAIL: case (a) {label} exited {:?} without printing `key fingerprint: \
+             {original_fp}`. The pin file's fingerprint is the signing key verify \
+             must name. crates/strata-verify/src/readonly.rs:89 and \
+             crates/strata-verify/src/migration.rs:89 still choose the key. This \
+             is a real failure, not pending_strata. output: {}",
             out.status,
             blob.chars().take(800).collect::<String>()
         );
     }
+    let lower = blob.to_lowercase();
+    if !lower.contains("receipt-signing.key") || !lower.contains("match") {
+        panic!(
+            "FAIL: case (a) {label} exited {:?} without naming an embedded-key \
+             mismatch against receipt-signing.key. A torn trailer is not this \
+             check. The decision is crates/strata-verify/src/pin.rs:48. This is \
+             a real failure, not pending_strata. output: {}",
+            out.status,
+            blob.chars().take(800).collect::<String>()
+        );
+    }
+}
+
+fn assert_case_b_rejects(out: &CmdOut, label: &str, original_fp: &str, fresh_fp: &str) {
+    let blob = format!("{}{}", out.stdout, out.stderr);
+    if accepted(out) || !blob.to_lowercase().contains("does not match --expect-key") {
+        panic!(
+            "FAIL: case (b) {label} did not reject `--expect-key {original_fp}` after \
+             receipt-signing.key was replaced. Exit {:?}. The comparison is \
+             crates/strata-verify/src/pin.rs:48. This is a real failure, not \
+             blocked and not pending_strata. output: {}",
+            out.status,
+            blob.chars().take(800).collect::<String>()
+        );
+    }
+    if !prints_fingerprint(out, fresh_fp) {
+        panic!(
+            "FAIL: case (b) {label} exited {:?} without printing `key fingerprint: \
+             {fresh_fp}`, the key now in the folder. output: {}",
+            out.status,
+            blob.chars().take(800).collect::<String>()
+        );
+    }
+}
+
+fn assert_case_c_accepts(out: &CmdOut, label: &str, fingerprint: &str) {
+    let blob = format!("{}{}", out.stdout, out.stderr);
+    assert!(
+        out.status == Some(0) && blob.lines().any(|line| line.trim() == "OK"),
+        "case (c) {label} rejected an untampered store with `--expect-key` of \
+         its own fingerprint (exit {:?}): {}",
+        out.status,
+        blob.chars().take(800).collect::<String>()
+    );
+    assert!(
+        prints_fingerprint(out, fingerprint),
+        "case (c) {label} exited 0 without printing `key fingerprint: {fingerprint}`: {}",
+        blob.chars().take(800).collect::<String>()
+    );
 }
 
 fn assert_strata_verify_ok(dir: &std::path::Path) {
