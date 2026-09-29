@@ -156,6 +156,7 @@ tempfile = "3"
 
 [dev-dependencies]
 ctor = "0.4"
+strata-store = { path = "../strata-store" }
 
 # Integration tests drive the Storage-backed server/tools; the e2e binary
 # test also reads the SQLite file directly (backup WAL). Skipped in a
