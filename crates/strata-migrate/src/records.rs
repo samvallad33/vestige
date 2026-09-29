@@ -30,6 +30,9 @@ pub const KIND_PARAMS: u8 = 0x26;
 pub const KIND_NODE: u8 = 0x20;
 /// One `memory_connections` row mapped into the 8-type STRATA vocabulary.
 pub const KIND_EDGE: u8 = 0x21;
+/// A v3 association row (`semantic` / `similarity`). Not an EDGE: causal
+/// walks and Backfill do not traverse this kind.
+pub const KIND_LEGACY_LINK: u8 = 0x27;
 /// One synthesized review event (payload = kernel `ReviewEvent`).
 pub const KIND_FSRS_REVIEW: u8 = 0x22;
 /// One `sync_tombstones` or `deletion_tombstones` row.
@@ -90,6 +93,9 @@ pub struct ParamsRecord {
     /// `entry_digest` of the last verified `receipt_envelopes` row
     /// (empty string when the source kept no envelopes).
     pub envelope_head: String,
+    /// Ed25519 verifying key for the log segments. The private key is not
+    /// in the log directory.
+    pub log_verifying_key: [u8; 32],
 }
 
 /// A migrated knowledge node. `kernel_id` is the dense 1-based STRATA
@@ -137,6 +143,23 @@ pub struct EdgeRecord {
     pub last_activated_ms: i64,
     pub activation_count: i32,
     /// Every other source column, verbatim (e.g. v39 edge_meta).
+    pub legacy: Vec<(String, String)>,
+}
+
+/// A v3 association row kept for provenance. It is not a causal edge.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct LegacyLinkRecord {
+    pub record_version: u16,
+    pub source_kernel_id: u64,
+    pub target_kernel_id: u64,
+    pub source_legacy_id: String,
+    pub target_legacy_id: String,
+    /// Original v3 link type (`semantic` or `similarity`).
+    pub legacy_link_type: String,
+    pub strength_q32: i64,
+    pub created_ms: i64,
+    pub last_activated_ms: i64,
+    pub activation_count: i32,
     pub legacy: Vec<(String, String)>,
 }
 
@@ -322,6 +345,11 @@ pub fn decode_node(payload: &[u8]) -> Result<NodeRecord, borsh::io::Error> {
 /// Decode a `KIND_EDGE` payload.
 pub fn decode_edge(payload: &[u8]) -> Result<EdgeRecord, borsh::io::Error> {
     EdgeRecord::try_from_slice(payload)
+}
+
+/// Decode a `KIND_LEGACY_LINK` payload.
+pub fn decode_legacy_link(payload: &[u8]) -> Result<LegacyLinkRecord, borsh::io::Error> {
+    LegacyLinkRecord::try_from_slice(payload)
 }
 
 /// Decode a `KIND_FSRS_REVIEW` payload (kernel wire type).

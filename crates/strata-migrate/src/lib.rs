@@ -15,8 +15,11 @@
 //! | `knowledge_nodes` rows           | `NODE` frames (kernel_id v1 + legacy UUID)      |
 //! | V40 `walk_receipts` rows         | reference `NODE` frames tagged migrated_from_v4 |
 //! | `knowledge_nodes.superseded_by`  | `SUPERSESSION` frames                           |
-//! | `memory_connections` rows        | `EDGE` frames (8-type vocabulary; legacy types  |
-//! |                                  | become `derived_from{legacy_inferred=1}`)       |
+//! | `memory_connections` rows        | `EDGE` frames for the 8-type vocabulary;        |
+//! |                                  | lookalike legacy types become                   |
+//! |                                  | `derived_from{legacy_inferred=1}`;              |
+//! |                                  | `semantic` / `similarity` are `LEGACY_LINK`     |
+//! |                                  | frames and are not causal edges                 |
 //! | `fsrs_cards` rows                | `FSRS_REVIEW` frames (kernel `ReviewEvent`)     |
 //! | `sync_tombstones` / `deletion_tombstones` | `TOMBSTONE` frames                     |
 //! | everything else with rows        | counted in `MigrationReport::skipped_tables`    |
@@ -79,6 +82,67 @@ pub use records::{
 pub use snapshot::{read_snapshot, Snapshot};
 pub use verify::{verify_migrated_dir, LogVerify};
 
+/// Private log key, stored next to `--to` rather than inside it.
+pub fn log_signing_key_path(strata_dir: &Path) -> std::path::PathBuf {
+    let parent = strata_dir.parent().unwrap_or_else(|| Path::new("."));
+    let mut name = strata_dir.file_name().unwrap_or_default().to_os_string();
+    name.push(".strata.key");
+    parent.join(name)
+}
+
+/// Copies the external log key into `dir` for `StrataLog::open`, and removes
+/// that copy when dropped.
+pub struct StagedLogKey {
+    staged: Option<std::path::PathBuf>,
+}
+
+impl Drop for StagedLogKey {
+    fn drop(&mut self) {
+        if let Some(path) = self.staged.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// Place the external log key where `StrataLog::open` expects it.
+pub fn stage_log_key(dir: &Path) -> Result<StagedLogKey, MigrationError> {
+    let internal = dir.join("strata.key");
+    if internal.exists() {
+        return Ok(StagedLogKey { staged: None });
+    }
+    let external = log_signing_key_path(dir);
+    std::fs::copy(&external, &internal).map_err(|e| {
+        MigrationError::Strata(format!("log signing key {}: {e}", external.display()))
+    })?;
+    set_mode_0600(&internal)?;
+    Ok(StagedLogKey {
+        staged: Some(internal),
+    })
+}
+
+fn set_mode_0600(path: &Path) -> Result<(), MigrationError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+/// Open a migrated log, staging the external key for the duration.
+pub struct OpenedLog {
+    /// The opened log. Dropped before the staged key file is removed.
+    pub log: StrataLog,
+    _key: StagedLogKey,
+}
+
+/// Open `dir` using the key stored outside it.
+pub fn open_migrated(dir: &Path) -> Result<OpenedLog, MigrationError> {
+    let key = stage_log_key(dir)?;
+    let log = StrataLog::open(dir).map_err(|e| MigrationError::Strata(e.to_string()))?;
+    Ok(OpenedLog { log, _key: key })
+}
+
 /// Parameter set implemented by this migrator. Written as the `PARAMS`
 /// frame on a fresh log.
 pub const PARAMS_ID: &str = "v4-migrate/1";
@@ -97,8 +161,10 @@ const MAPPED_TABLES: &[&str] = &[
     "deletion_tombstones",
 ];
 
-/// The only edge vocabulary STRATA carries (H4). Any legacy `link_type`
-/// outside this set migrates as `derived_from` with `legacy_inferred = 1`.
+/// The only edge vocabulary STRATA carries (H4). A legacy `link_type`
+/// outside this set migrates as `derived_from` with `legacy_inferred = 1`,
+/// except association rows ([`is_noncausal_association`]), which are not
+/// edges at all.
 pub const STRATA_EDGE_VOCABULARY: [&str; 8] = [
     "touched",
     "anchored_to",
@@ -109,6 +175,12 @@ pub const STRATA_EDGE_VOCABULARY: [&str; 8] = [
     "projected_to",
     "evidence_of",
 ];
+
+/// v3 association rows. They must not become EDGE frames: a causal walk
+/// and Backfill only follow `KIND_EDGE`.
+pub fn is_noncausal_association(link_type: &str) -> bool {
+    link_type.eq_ignore_ascii_case("semantic") || link_type.eq_ignore_ascii_case("similarity")
+}
 
 /// Options for one migration run.
 #[derive(Debug, Clone, Default)]
@@ -265,8 +337,8 @@ pub fn migrate_with_options(
                 path: strata_dir.display().to_string(),
             });
         }
-        let log = open_log(strata_dir, options.seed, "")?;
-        let outcome = migrate_snapshot_into(&snapshot, &log, "")?;
+        let (log, verifying_key) = open_log(strata_dir, options.seed)?;
+        let outcome = migrate_snapshot_into(&snapshot, &log, "", verifying_key)?;
         return finish(log, strata_dir, outcome, snapshot, "", started);
     }
 
@@ -294,10 +366,10 @@ pub fn migrate_with_options(
         })
         .unwrap_or(false);
     if destination_has_content {
-        let existing =
-            StrataLog::open(strata_dir).map_err(|e| MigrationError::Strata(e.to_string()))?;
-        if let Some(receipt) = existing_receipt_for(&existing, &blake3_before) {
-            return Ok(idempotent_report(&snapshot, &receipt, started));
+        if let Ok(opened) = open_migrated(strata_dir) {
+            if let Some(receipt) = existing_receipt_for(&opened.log, &blake3_before) {
+                return Ok(idempotent_report(&snapshot, &receipt, started));
+            }
         }
         return Err(MigrationError::DestinationNotEmpty {
             path: strata_dir.display().to_string(),
@@ -305,8 +377,8 @@ pub fn migrate_with_options(
     }
 
     // ---- replay ----------------------------------------------------------
-    let log = open_log(strata_dir, options.seed, &blake3_before)?;
-    let outcome = migrate_snapshot_into(&snapshot, &log, &blake3_before)?;
+    let (log, verifying_key) = open_log(strata_dir, options.seed)?;
+    let outcome = migrate_snapshot_into(&snapshot, &log, &blake3_before, verifying_key)?;
 
     // ---- re-hash the source: a single changed byte stops the seal -------
     let blake3_after = files.blake3_hex()?;
@@ -360,12 +432,9 @@ fn idempotent_report(
 fn open_log(
     strata_dir: &Path,
     pinned_seed: Option<[u8; 32]>,
-    _source_blake3: &str,
-) -> Result<StrataLog, MigrationError> {
-    // The log signing seed comes from OS entropy unless a test pins it.
-    // Deriving it from the source BLAKE3 put the seed inside the log itself
-    // (the PARAMS frame), so any reader could re-derive strata.key and forge
-    // segments (audit finding (a): CONFIRMED forge).
+) -> Result<(StrataLog, [u8; 32]), MigrationError> {
+    // OS entropy unless a test pins the seed. The seed is not derived from
+    // the source hash: that hash is published in PARAMS.
     let seed = match pinned_seed {
         Some(seed) => seed,
         None => {
@@ -385,7 +454,12 @@ fn open_log(
             seed
         }
     };
-    StrataLog::open_seeded(strata_dir, seed).map_err(|e| MigrationError::Strata(e.to_string()))
+    let verifying_key = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes();
+    let log = StrataLog::open_seeded(strata_dir, seed)
+        .map_err(|e| MigrationError::Strata(e.to_string()))?;
+    Ok((log, verifying_key))
 }
 
 fn dry_run_report(
@@ -449,11 +523,12 @@ fn migrate_snapshot_into(
     snapshot: &source::SourceSnapshot,
     log: &StrataLog,
     source_blake3: &str,
+    log_verifying_key: [u8; 32],
 ) -> Result<ReplayOutcome, MigrationError> {
     let archive = &snapshot.archive;
 
     let (mut node_records, kernel_ids, supersessions) = extract_nodes(archive)?;
-    let edge_records = extract_edges(archive, &kernel_ids)?;
+    let (edge_records, legacy_links) = extract_edges(archive, &kernel_ids)?;
     let tombstones = extract_tombstones(archive)?;
     let walk_nodes = extract_walk_receipts(snapshot, &kernel_ids)?;
     attach_fsrs_legacy(archive, &kernel_ids, &mut node_records)?;
@@ -481,6 +556,7 @@ fn migrate_snapshot_into(
                 schema_version: snapshot.schema_version,
                 source_blake3: source_blake3.to_string(),
                 envelope_head: snapshot.envelope_head.clone().unwrap_or_default(),
+                log_verifying_key,
             }),
         )?;
     }
@@ -491,6 +567,9 @@ fn migrate_snapshot_into(
     for record in &edge_records {
         writer.push(records::KIND_EDGE, borsh::to_vec(record))?;
         edges += 1;
+    }
+    for record in &legacy_links {
+        writer.push(records::KIND_LEGACY_LINK, borsh::to_vec(record))?;
     }
     for record in &tombstones {
         writer.push(records::KIND_TOMBSTONE, borsh::to_vec(record))?;
@@ -615,6 +694,7 @@ fn finish(
         .map_err(|e| MigrationError::Strata(e.to_string()))?;
 
     let verified = verify::verify_open_log(&log, strata_dir, outcome.anchor)?;
+    relocate_log_key(strata_dir)?;
 
     Ok(MigrationReport {
         nodes: outcome.nodes,
@@ -632,6 +712,18 @@ fn finish(
         idempotent_reuse: false,
         duration: started.elapsed(),
     })
+}
+
+/// Move `<dest>/strata.key` to [`log_signing_key_path`] and force mode 0600.
+fn relocate_log_key(strata_dir: &Path) -> Result<(), MigrationError> {
+    let src = strata_dir.join("strata.key");
+    let dst = log_signing_key_path(strata_dir);
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::rename(&src, &dst)?;
+    set_mode_0600(&dst)?;
+    Ok(())
 }
 
 /// The receipt-signing key lives NEXT TO the destination log, never inside
@@ -897,15 +989,17 @@ fn extract_nodes(archive: &PortableArchive) -> Result<NodeSet, MigrationError> {
 ///
 /// Legacy link types are folded into the 8-type STRATA vocabulary: anything
 /// outside [`STRATA_EDGE_VOCABULARY`] becomes `derived_from` with
-/// `legacy_inferred = 1` and the original type kept for provenance.
+/// `legacy_inferred = 1`, except association rows, which are returned as
+/// legacy-link records and never as edges.
 fn extract_edges(
     archive: &PortableArchive,
     kernel_ids: &HashMap<String, u64>,
-) -> Result<Vec<EdgeRecord>, MigrationError> {
+) -> Result<(Vec<EdgeRecord>, Vec<records::LegacyLinkRecord>), MigrationError> {
     let Some(table) = source::table(archive, "memory_connections") else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let mut records = Vec::with_capacity(table.rows.len());
+    let mut legacy_links = Vec::new();
     for index in 0..table.rows.len() {
         let row = source::Row::new(table, index);
         let source_legacy_id = row.text("source_id")?.to_string();
@@ -921,12 +1015,6 @@ fn extract_edges(
             ))
         })?;
         let legacy_link_type = row.text("link_type")?.to_string();
-        let (link_type, legacy_inferred) =
-            if STRATA_EDGE_VOCABULARY.contains(&legacy_link_type.as_str()) {
-                (legacy_link_type.clone(), false)
-            } else {
-                ("derived_from".to_string(), true)
-            };
         let legacy = capture_legacy(
             "memory_connections",
             &row,
@@ -940,23 +1028,49 @@ fn extract_edges(
                 "activation_count",
             ],
         )?;
+        let strength_q32 = strata_kernel::canonical::to_q32_32(row.real("strength")?);
+        let created_ms = source::timestamp_ms(row.text("created_at")?)?;
+        let last_activated_ms = source::timestamp_ms(row.text("last_activated")?)?;
+        let activation_count = row.integer_or("activation_count", 0)? as i32;
+        if is_noncausal_association(&legacy_link_type) {
+            legacy_links.push(records::LegacyLinkRecord {
+                record_version: RECORD_VERSION,
+                source_kernel_id,
+                target_kernel_id,
+                source_legacy_id,
+                target_legacy_id,
+                legacy_link_type,
+                strength_q32,
+                created_ms,
+                last_activated_ms,
+                activation_count,
+                legacy,
+            });
+            continue;
+        }
+        let (link_type, legacy_inferred) =
+            if STRATA_EDGE_VOCABULARY.contains(&legacy_link_type.as_str()) {
+                (legacy_link_type.clone(), false)
+            } else {
+                ("derived_from".to_string(), true)
+            };
         records.push(EdgeRecord {
             record_version: RECORD_VERSION,
             source_kernel_id,
             target_kernel_id,
-            strength_q32: strata_kernel::canonical::to_q32_32(row.real("strength")?),
+            strength_q32,
             link_type,
             legacy_inferred,
             legacy_link_type,
-            created_ms: source::timestamp_ms(row.text("created_at")?)?,
-            last_activated_ms: source::timestamp_ms(row.text("last_activated")?)?,
-            activation_count: row.integer_or("activation_count", 0)? as i32,
+            created_ms,
+            last_activated_ms,
+            activation_count,
             legacy,
             source_legacy_id,
             target_legacy_id,
         });
     }
-    Ok(records)
+    Ok((records, legacy_links))
 }
 
 /// Decode `sync_tombstones` and `deletion_tombstones`.
@@ -1075,11 +1189,13 @@ mod tests {
 
     #[test]
     fn legacy_link_types_fold_into_derived_from() {
-        // Out-of-vocabulary legacy types rewrite to derived_from + flag.
-        for legacy in ["causal", "semantic", "temporal", "user_defined", "pattern"] {
+        for legacy in ["causal", "temporal", "user_defined", "pattern"] {
             assert!(!STRATA_EDGE_VOCABULARY.contains(&legacy));
+            assert!(!is_noncausal_association(legacy));
         }
-        // The 8 vocabulary types pass through untouched.
+        assert!(is_noncausal_association("semantic"));
+        assert!(is_noncausal_association("similarity"));
+        assert!(is_noncausal_association("Similarity"));
         assert_eq!(STRATA_EDGE_VOCABULARY.len(), 8);
     }
 

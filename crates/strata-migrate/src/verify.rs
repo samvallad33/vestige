@@ -15,8 +15,9 @@ use strata_kernel::checkpoint::checkpoint_hash;
 use strata_kernel::verify::verify_with_head;
 
 use crate::records::{
-    MigrationReceipt, KIND_CHECKPOINT, KIND_EDGE, KIND_FSRS_REVIEW, KIND_GENESIS,
-    KIND_MIGRATION_RECEIPT, KIND_NODE, KIND_PARAMS, KIND_SUPERSESSION, KIND_TOMBSTONE,
+    decode_edge, MigrationReceipt, KIND_CHECKPOINT, KIND_EDGE, KIND_FSRS_REVIEW, KIND_GENESIS,
+    KIND_LEGACY_LINK, KIND_MIGRATION_RECEIPT, KIND_NODE, KIND_PARAMS, KIND_SUPERSESSION,
+    KIND_TOMBSTONE,
 };
 use crate::{read_snapshot, MigrationError};
 
@@ -34,13 +35,14 @@ pub struct LogVerify {
 
 /// Re-open `dir` and run the full check. The log lock must not be held.
 pub fn verify_migrated_dir(dir: &Path) -> Result<LogVerify, MigrationError> {
-    let log = StrataLog::open(dir).map_err(|e| MigrationError::Verify(format!("log open: {e}")))?;
-    let anchor = read_snapshot(&log)?
+    let opened =
+        crate::open_migrated(dir).map_err(|e| MigrationError::Verify(format!("log open: {e}")))?;
+    let anchor = read_snapshot(&opened.log)?
         .checkpoints
         .last()
         .map(checkpoint_hash)
         .unwrap_or([0u8; 32]);
-    verify_open_log(&log, dir, anchor)
+    verify_open_log(&opened.log, dir, anchor)
 }
 
 pub(crate) fn verify_open_log(
@@ -338,7 +340,6 @@ fn check_kind_counts(
             KIND_NODE,
             count_of("knowledge_nodes") + count_of("walk_receipts"),
         ),
-        ("KIND_EDGE", KIND_EDGE, count_of("memory_connections")),
         (
             "KIND_TOMBSTONE",
             KIND_TOMBSTONE,
@@ -357,10 +358,29 @@ fn check_kind_counts(
             )));
         }
     }
-    // Every review frame must be one the kernel replay already folded.
+    let edges = counts.get(&KIND_EDGE).copied().unwrap_or(0);
+    let legacy_links = counts.get(&KIND_LEGACY_LINK).copied().unwrap_or(0);
+    let connections = count_of("memory_connections");
+    if edges + legacy_links != connections {
+        return Err(MigrationError::Verify(format!(
+            "KIND_EDGE ({edges}) + KIND_LEGACY_LINK ({legacy_links}) != memory_connections ({connections})"
+        )));
+    }
+    for frame in frames.iter().filter(|f| f.kind == KIND_EDGE) {
+        let edge = decode_edge(&frame.payload).map_err(|e| {
+            MigrationError::Verify(format!("edge decode at seq {}: {e}", frame.seq))
+        })?;
+        if crate::is_noncausal_association(&edge.legacy_link_type) {
+            return Err(MigrationError::Verify(format!(
+                "seq {}: association link '{}' was written as a causal EDGE",
+                frame.seq, edge.legacy_link_type
+            )));
+        }
+    }
     let reviews = counts.get(&KIND_FSRS_REVIEW).copied().unwrap_or(0);
     let supers = counts.get(&KIND_SUPERSESSION).copied().unwrap_or(0);
-    let accounted: u64 = expect.iter().map(|(_, _, n)| n).sum::<u64>() + reviews + supers;
+    let accounted: u64 =
+        expect.iter().map(|(_, _, n)| n).sum::<u64>() + edges + legacy_links + reviews + supers;
     if accounted != frames.len() as u64 {
         return Err(MigrationError::Verify(format!(
             "per-kind accounting covers {accounted} frame(s), log has {}",

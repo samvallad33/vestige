@@ -9,13 +9,29 @@
 use std::collections::HashSet;
 
 use chrono::Utc;
-use strata::StrataLog;
 use strata_kernel::event::ReviewEvent;
 use strata_kernel::fsrs::{CardPhase, ALGO_V1};
 use strata_kernel::kernel::Kernel;
 use vestige_core::{ConnectionRecord, IngestInput, SqliteMemoryStore};
 
+use strata_migrate::records::EdgeRecord;
 use strata_migrate::{migrate, read_snapshot};
+
+fn causal_reaches(edges: &[EdgeRecord], start: u64, target: u64) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![start];
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        for edge in edges {
+            if edge.source_kernel_id == id {
+                stack.push(edge.target_kernel_id);
+            }
+        }
+    }
+    seen.contains(&target)
+}
 
 /// Build a small populated store at `db`, optionally exporting its portable
 /// archive to `archive_out` while the (single, legitimate) read-write
@@ -150,7 +166,10 @@ fn path_a_archive_end_to_end() {
     let report = migrate(&archive_path, &strata_dir).expect("migrate");
 
     assert_eq!(report.nodes, 3);
-    assert_eq!(report.edges, 1);
+    assert_eq!(
+        report.edges, 0,
+        "the only v3 row is semantic and is not an edge"
+    );
     assert_eq!(report.fsrs_events, 6); // 4 + 2 synthetic reviews
     assert!(report.verify_passed, "kernel verify must pass: {report:?}");
     // Path A input is a portable archive: skipped_tables can only reflect
@@ -168,7 +187,8 @@ fn path_a_archive_end_to_end() {
     assert_eq!(got, expected);
 
     // ---- reopen at the log level and assert identity fidelity ------------
-    let log = StrataLog::open(&strata_dir).expect("reopen strata log");
+    let opened = strata_migrate::open_migrated(&strata_dir).expect("reopen strata log");
+    let log = &opened.log;
     let snapshot = read_snapshot(&log).expect("read snapshot");
 
     assert!(snapshot.genesis.is_some());
@@ -198,24 +218,32 @@ fn path_a_archive_end_to_end() {
         .expect("node 0");
     assert_eq!(tagged.tags, vec!["rust".to_string(), "wire".to_string()]);
 
-    assert_eq!(snapshot.edges.len(), 1);
-    let edge = &snapshot.edges[0];
-    assert_eq!(edge.source_legacy_id, ids[0]);
-    assert_eq!(edge.target_legacy_id, ids[1]);
-    // `semantic` is legacy vocabulary: it folds to derived_from with the
-    // legacy type kept for provenance only.
-    assert_eq!(edge.link_type, "derived_from");
-    assert!(edge.legacy_inferred);
-    assert_eq!(edge.legacy_link_type, "semantic");
-    assert_eq!(edge.activation_count, 3);
-    assert_eq!(
-        edge.source_kernel_id,
-        snapshot
-            .nodes
-            .iter()
-            .find(|n| n.legacy_id == ids[0])
-            .unwrap()
-            .kernel_id
+    assert!(
+        snapshot.edges.is_empty(),
+        "semantic must not be a causal edge"
+    );
+    assert_eq!(snapshot.legacy_links.len(), 1);
+    let link = &snapshot.legacy_links[0];
+    assert_eq!(link.source_legacy_id, ids[0]);
+    assert_eq!(link.target_legacy_id, ids[1]);
+    assert_eq!(link.legacy_link_type, "semantic");
+    assert_eq!(link.activation_count, 3);
+    let src = snapshot
+        .nodes
+        .iter()
+        .find(|n| n.legacy_id == ids[0])
+        .unwrap()
+        .kernel_id;
+    let dst = snapshot
+        .nodes
+        .iter()
+        .find(|n| n.legacy_id == ids[1])
+        .unwrap()
+        .kernel_id;
+    assert_eq!(link.source_kernel_id, src);
+    assert!(
+        !causal_reaches(&snapshot.edges, src, dst),
+        "a causal walk must not traverse the semantic row"
     );
 
     // ---- fsrs folds reproduce the counters exactly ------------------------
@@ -262,14 +290,16 @@ fn path_b_direct_sqlite_matches_path_a() {
     let report = migrate(&db, &strata_dir).expect("migrate direct sqlite");
 
     assert_eq!(report.nodes, 3);
-    assert_eq!(report.edges, 1);
+    assert_eq!(report.edges, 0);
     assert_eq!(report.fsrs_events, 6);
     assert!(report.verify_passed);
 
-    let log = StrataLog::open(&strata_dir).expect("reopen");
+    let opened = strata_migrate::open_migrated(&strata_dir).expect("reopen");
+    let log = &opened.log;
     let snapshot = read_snapshot(&log).expect("snapshot");
     assert_eq!(snapshot.nodes.len(), 3);
-    assert_eq!(snapshot.edges.len(), 1);
+    assert_eq!(snapshot.legacy_links.len(), 1);
+    assert!(snapshot.edges.is_empty());
 
     // Direct-SQLite path: skipped_tables is sqlite_master-driven (audit 17/18).
     let expected = expected_skipped(&db);
@@ -310,7 +340,8 @@ fn empty_store_migrates_to_verifying_log() {
     assert_eq!(report.fsrs_events, 0);
     assert!(report.verify_passed, "empty fold must verify: {report:?}");
 
-    let log = StrataLog::open(tmp.path().join("strata")).expect("reopen");
+    let opened = strata_migrate::open_migrated(&tmp.path().join("strata")).expect("reopen");
+    let log = &opened.log;
     let snapshot = read_snapshot(&log).expect("snapshot");
     assert_eq!(snapshot.checkpoints.len(), 1);
     assert!(snapshot.reviews.is_empty());
@@ -339,7 +370,8 @@ fn re_migration_extends_the_log_and_keeps_the_chain() {
         ),
         "non-empty destination must refuse: {second:?}"
     );
-    let log = StrataLog::open(&strata_dir).expect("reopen");
+    let opened = strata_migrate::open_migrated(&strata_dir).expect("reopen");
+    let log = &opened.log;
     let snapshot = read_snapshot(&log).expect("snapshot");
     assert_eq!(snapshot.nodes.len(), 3, "the refusal wrote nothing");
     assert_eq!(snapshot.checkpoints.len(), 1);

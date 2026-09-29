@@ -308,10 +308,12 @@ fn migrate_to_strata_counts_match() {
 
     // 4 knowledge_nodes + 1 walk_receipt reference node.
     assert_eq!(report.nodes, 5);
-    assert_eq!(report.edges, 3);
+    // causal lookalike + touched. The semantic row is not an edge.
+    assert_eq!(report.edges, 2);
     assert_eq!(report.dropped_vectors, 2);
 
-    let snapshot = read_snapshot(&strata::StrataLog::open(&dest).unwrap()).unwrap();
+    let opened = strata_migrate::open_migrated(&dest).unwrap();
+    let snapshot = read_snapshot(&opened.log).unwrap();
     assert_eq!(snapshot.supersessions.len(), 1);
     assert_eq!(snapshot.genesis.as_ref().unwrap().schema_version, 38);
     let receipt = snapshot.receipt.as_ref().expect("receipt present");
@@ -327,10 +329,23 @@ fn migrate_to_strata_counts_match() {
 /// Spec: `migrate_to_strata_legacy_links_are_legacy_inferred` — a v3
 /// `causal` row (lookalike name-match provenance) migrates as
 /// `derived_from{legacy_inferred=1}`, an in-vocabulary row passes through
-/// untouched, and the legacy type survives only as provenance.
+/// untouched, and `semantic` / `similarity` are not causal edges.
 #[test]
 fn migrate_to_strata_legacy_links_are_legacy_inferred() {
     let (dir, db) = copy_fixture("legacy");
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO memory_connections
+             (source_id, target_id, strength, link_type, created_at, last_activated, activation_count)
+             VALUES ('33333333-3333-4333-8333-333333333333',
+                     '44444444-4444-4444-8444-444444444444',
+                     0.2, 'similarity',
+                     '2026-01-16T08:00:00+00:00', '2026-03-02T08:00:00+00:00', 1)",
+            [],
+        )
+        .unwrap();
+    }
     let dest = dir.path().join("strata");
     migrate_with_options(
         &db,
@@ -342,7 +357,8 @@ fn migrate_to_strata_legacy_links_are_legacy_inferred() {
     )
     .expect("migration succeeds");
 
-    let snapshot = read_snapshot(&strata::StrataLog::open(&dest).unwrap()).unwrap();
+    let opened = strata_migrate::open_migrated(&dest).unwrap();
+    let snapshot = read_snapshot(&opened.log).unwrap();
     let by_legacy = |legacy: &str| {
         snapshot
             .edges
@@ -358,10 +374,6 @@ fn migrate_to_strata_legacy_links_are_legacy_inferred() {
         "causal lookalike must be legacy_inferred"
     );
 
-    let semantic = by_legacy("semantic");
-    assert_eq!(semantic.link_type, "derived_from");
-    assert!(semantic.legacy_inferred);
-
     let touched = by_legacy("touched");
     assert_eq!(touched.link_type, "touched");
     assert!(
@@ -369,10 +381,44 @@ fn migrate_to_strata_legacy_links_are_legacy_inferred() {
         "in-vocabulary type passes through"
     );
 
-    // Default-walk semantics: only the 8-type vocabulary participates, and
-    // every rewritten edge is flagged so a default walk can exclude it.
-    assert!(snapshot.edges.iter().all(|e| !e.legacy_inferred
-        || strata_migrate::STRATA_EDGE_VOCABULARY.contains(&e.link_type.as_str())));
+    for kind in ["semantic", "similarity"] {
+        let link = snapshot
+            .legacy_links
+            .iter()
+            .find(|e| e.legacy_link_type == kind)
+            .unwrap_or_else(|| panic!("no legacy link {kind}"));
+        assert!(
+            snapshot.edges.iter().all(|e| {
+                e.source_kernel_id != link.source_kernel_id
+                    || e.target_kernel_id != link.target_kernel_id
+            }),
+            "{kind} must not be stored as an EDGE"
+        );
+        assert!(
+            !causal_reaches(
+                &snapshot.edges,
+                link.source_kernel_id,
+                link.target_kernel_id
+            ),
+            "causal walk traversed {kind}"
+        );
+    }
+}
+
+fn causal_reaches(edges: &[strata_migrate::records::EdgeRecord], start: u64, target: u64) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![start];
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        for edge in edges {
+            if edge.source_kernel_id == id {
+                stack.push(edge.target_kernel_id);
+            }
+        }
+    }
+    seen.contains(&target)
 }
 
 // ---------------------------------------------------------------------------
@@ -465,7 +511,8 @@ fn migration_receipt_verifies_on_replay() {
     assert!(report.receipt_verified);
     assert!(report.verify_passed, "kernel replay + tail verification");
 
-    let snapshot = read_snapshot(&strata::StrataLog::open(&dest).unwrap()).unwrap();
+    let opened = strata_migrate::open_migrated(&dest).unwrap();
+    let snapshot = read_snapshot(&opened.log).unwrap();
     let receipt = snapshot.receipt.as_ref().expect("kind-46 receipt frame");
     assert!(receipt.verify_checksum(), "checksum binds the body");
     assert!(
@@ -492,15 +539,13 @@ fn migration_receipt_verifies_on_replay() {
     };
     assert_eq!(count_of("knowledge_nodes"), 4);
     assert_eq!(count_of("memory_connections"), 3);
+    assert_eq!(snapshot.edges.len(), 2);
+    assert_eq!(snapshot.legacy_links.len(), 1);
     assert_eq!(count_of("fsrs_cards"), 1);
     assert_eq!(count_of("walk_receipts"), 1);
     assert_eq!(snapshot.nodes.len(), 5);
-    assert_eq!(snapshot.edges.len(), 3);
     // The receipt is the last frame in the log.
-    let frames = strata::StrataLog::open(&dest)
-        .unwrap()
-        .read_frames(1)
-        .unwrap();
+    let frames = opened.log.read_frames(1).unwrap();
     let last = frames.last().expect("frames");
     assert_eq!(last.kind, KIND_MIGRATION_RECEIPT);
 }
@@ -543,7 +588,8 @@ fn migrate_wal_snapshot_includes_wal_only_rows() {
 
     // The WAL-only row is in the log: 2 fixture nodes + 1 wal row + 1 walk
     // receipt reference.
-    let snapshot = read_snapshot(&strata::StrataLog::open(&dest).unwrap()).unwrap();
+    let opened = strata_migrate::open_migrated(&dest).unwrap();
+    let snapshot = read_snapshot(&opened.log).unwrap();
     let contents: Vec<&str> = snapshot.nodes.iter().map(|n| n.content.as_str()).collect();
     assert!(
         contents.contains(&"WAL_ONLY_ROW_NOT_IN_MAIN"),

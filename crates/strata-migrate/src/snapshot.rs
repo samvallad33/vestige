@@ -18,6 +18,8 @@ pub struct Snapshot {
     pub params: Option<ParamsRecord>,
     pub nodes: Vec<NodeRecord>,
     pub edges: Vec<EdgeRecord>,
+    /// Association rows (`semantic` / `similarity`). Not causal edges.
+    pub legacy_links: Vec<LegacyLinkRecord>,
     pub reviews: Vec<ReviewEvent>,
     pub tombstones: Vec<TombstoneRecord>,
     pub supersessions: Vec<SupersessionRecord>,
@@ -54,6 +56,9 @@ pub fn read_snapshot(log: &StrataLog) -> Result<Snapshot, MigrationError> {
             KIND_EDGE => snapshot
                 .edges
                 .push(decode_edge(&frame.payload).map_err(decode)?),
+            KIND_LEGACY_LINK => snapshot
+                .legacy_links
+                .push(decode_legacy_link(&frame.payload).map_err(decode)?),
             KIND_FSRS_REVIEW => snapshot
                 .reviews
                 .push(decode_review(&frame.payload).map_err(decode)?),
