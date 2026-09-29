@@ -175,6 +175,9 @@ sha2 = "0.11"
 tempfile = "3"
 serde_json = "1"
 strata-store = { path = "../strata-store" }
+# Test-only: plant a superseded node under a permissive gate so memory_graph
+# can prove retired records stay out of the recorded subgraph.
+strata-gate = { path = "../strata-gate" }
 
 # Integration tests drive the Storage-backed server/tools; the e2e binary
 # test also reads the SQLite file directly (backup WAL). Skipped in a
@@ -193,6 +196,9 @@ required-features = ["legacy-sqlite"]
 [[test]]
 name = "e2e_real_binary"
 required-features = ["legacy-sqlite"]
+
+[[test]]
+name = "forgotten_lesson_stdio"
 
 [[test]]
 name = "stdio_shutdown"

@@ -5,7 +5,7 @@
 //! keyword or name match) is refused; a link exists only when the log
 //! recorded an edge.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -71,6 +71,10 @@ fn node_field_mismatches(
 const PROMOTE_RATING: u8 = 4;
 /// FSRS-6 Again. Explicit "this failed" review; the kernel's forget update.
 const DEMOTE_RATING: u8 = 1;
+
+/// Side file for the Fellegi-Sunter thresholds. Not a log frame: `StoreOp`
+/// has no policy variant, and this file is not read by replay.
+const MERGE_POLICY_FILE: &str = "merge-policy.json";
 
 /// The durable directory this process opened is a Strata log, not a SQLite file.
 pub fn is_strata_backend(storage: &Storage) -> bool {
@@ -194,6 +198,9 @@ pub struct StrataMemory {
     log_dir: PathBuf,
     store: Mutex<strata_store::StrataStore>,
     actor: Mutex<Option<String>>,
+    /// `Some` only after `set_merge_policy`. A get with `None` reads the side
+    /// file, then env, then the built-in defaults.
+    merge_policy: Mutex<Option<vestige_core::MergePolicy>>,
 }
 
 impl StrataMemory {
@@ -214,6 +221,7 @@ impl StrataMemory {
             data_dir,
             store: Mutex::new(store),
             actor: Mutex::new(None),
+            merge_policy: Mutex::new(None),
         })
     }
 
@@ -224,7 +232,11 @@ impl StrataMemory {
     }
 
     fn nodes(&self) -> Vec<strata_store::NodeRecord> {
-        self.lock().nodes()
+        self.lock()
+            .nodes()
+            .into_iter()
+            .filter(|record| record.is_live())
+            .collect()
     }
 }
 
@@ -885,6 +897,36 @@ impl MemoryStoreSend for StrataMemory {
         Ok(())
     }
 
+    fn get_merge_policy(&self) -> Result<vestige_core::MergePolicy, StorageError> {
+        let mut slot = self
+            .merge_policy
+            .lock()
+            .unwrap_or_else(|err| panic!("strata merge policy lock poisoned: {err}"));
+        if let Some(policy) = *slot {
+            return Ok(policy);
+        }
+        if let Some(policy) = read_merge_policy_file(&self.data_dir)? {
+            *slot = Some(policy);
+            return Ok(policy);
+        }
+        Ok(merge_policy_from_env())
+    }
+
+    fn set_merge_policy(&self, policy: vestige_core::MergePolicy) -> Result<(), StorageError> {
+        let policy = vestige_core::MergePolicy::new(
+            policy.match_threshold,
+            policy.possible_threshold,
+            policy.auto_apply,
+        );
+        write_merge_policy_file(&self.data_dir, &policy)?;
+        *self
+            .merge_policy
+            .lock()
+            .unwrap_or_else(|err| panic!("strata merge policy lock poisoned: {err}")) =
+            Some(policy);
+        Ok(())
+    }
+
     fn sidecar_dir(&self, name: &str) -> PathBuf {
         let path = self.data_dir.join(name);
         let _ = std::fs::create_dir_all(&path);
@@ -1190,6 +1232,89 @@ impl MemoryStoreSend for StrataMemory {
             .into_iter()
             .map(|(id, _)| id)
             .collect())
+    }
+
+    /// Recorded-edge subgraph for `graph` action `memory_graph`.
+    ///
+    /// Walks only edges the log admitted. Superseded nodes are omitted when
+    /// that trail exists, so a retired record cannot stay in the picture or
+    /// bridge two live ones. Node order is BFS by hop, each hop sorted by id;
+    /// edges are sorted by source, target, link type, then creation time.
+    fn get_memory_subgraph(
+        &self,
+        center_id: &str,
+        depth: u32,
+        max_nodes: usize,
+    ) -> Result<(Vec<KnowledgeNode>, Vec<VestigeEdge>), StorageError> {
+        let store = self.lock();
+        let superseded: HashSet<String> = store
+            .supersession_pairs()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        let live = |id: &str| {
+            !superseded.contains(id) && store.get_node(id).is_some_and(|record| record.is_live())
+        };
+        if !live(center_id) {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        let mut visited = vec![center_id.to_string()];
+        let mut seen = HashSet::from([center_id.to_string()]);
+        let mut frontier = vec![center_id.to_string()];
+        for _ in 0..depth {
+            if visited.len() >= max_nodes {
+                break;
+            }
+            let mut next = BTreeSet::new();
+            for id in &frontier {
+                for edge in store.get_connections_for_memory(id) {
+                    let other = if edge.source_id == *id {
+                        edge.target_id
+                    } else {
+                        edge.source_id
+                    };
+                    if !seen.contains(&other) && live(&other) {
+                        next.insert(other);
+                    }
+                }
+            }
+            let room = max_nodes.saturating_sub(visited.len());
+            let taken: Vec<String> = next.into_iter().take(room).collect();
+            if taken.is_empty() {
+                break;
+            }
+            for id in &taken {
+                seen.insert(id.clone());
+                visited.push(id.clone());
+            }
+            frontier = taken;
+        }
+
+        let mut edges: Vec<VestigeEdge> = store
+            .edges()
+            .iter()
+            .filter(|edge| seen.contains(&edge.source_id) && seen.contains(&edge.target_id))
+            .map(project_edge)
+            .collect();
+        edges.sort_by(|a, b| {
+            (&a.source_id, &a.target_id, &a.link_type, a.created_at).cmp(&(
+                &b.source_id,
+                &b.target_id,
+                &b.link_type,
+                b.created_at,
+            ))
+        });
+        let nodes = visited
+            .iter()
+            .filter_map(|id| {
+                store
+                    .get_node(id)
+                    .filter(|record| record.is_live())
+                    .map(|record| project_node(&store, &record))
+            })
+            .collect();
+        Ok((nodes, edges))
     }
 
     fn supersession_pairs(&self) -> Result<Vec<(String, String)>, StorageError> {
@@ -1782,6 +1907,7 @@ impl MemoryStoreSend for StrataMemory {
         let mut nodes: Vec<KnowledgeNode> = store
             .nodes()
             .iter()
+            .filter(|record| record.is_live())
             .filter(|record| {
                 if !retrievable(record) {
                     return false;
@@ -1850,6 +1976,47 @@ impl MemoryStoreSend for StrataMemory {
         _scope: Option<&str>,
     ) -> Result<Vec<vestige_core::advanced::MergeOperation>, StorageError> {
         Ok(Vec::new())
+    }
+
+    fn list_merge_operations(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<vestige_core::advanced::MergeOperation>, StorageError> {
+        let mut writes = self.lock().node_writes();
+        writes.sort_by_key(|write| std::cmp::Reverse(write.frame_seq));
+        writes.truncate(limit);
+        Ok(writes.into_iter().map(merge_operation).collect())
+    }
+
+    fn get_merge_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<vestige_core::advanced::MergeOperation>, StorageError> {
+        let Some(frame) = parse_op_frame(operation_id) else {
+            return Ok(None);
+        };
+        Ok(self
+            .lock()
+            .node_writes()
+            .into_iter()
+            .find(|write| write.frame_seq == frame)
+            .map(merge_operation))
+    }
+
+    fn merge_undo(
+        &self,
+        op_id: &str,
+    ) -> Result<vestige_core::advanced::MergeOperation, StorageError> {
+        let frame = parse_op_frame(op_id)
+            .ok_or_else(|| StorageError::NotFound(format!("operation {op_id}")))?;
+        let mut store = self.lock();
+        let new_seq = store.undo_node_write(frame).map_err(map_store)?;
+        store
+            .node_writes()
+            .into_iter()
+            .find(|write| write.frame_seq == new_seq)
+            .map(merge_operation)
+            .ok_or_else(|| StorageError::Init("compensating record vanished after append".into()))
     }
 
     fn get_consolidation_history(
@@ -2297,7 +2464,11 @@ impl StrataMemory {
         };
         let limit = usize::try_from(limit).unwrap_or(0);
         let store = self.lock();
-        let records = store.nodes();
+        let records: Vec<_> = store
+            .nodes()
+            .into_iter()
+            .filter(|record| record.is_live())
+            .collect();
         let pairs = store.get_never_composed(scope, limit.saturating_mul(4).max(limit));
         let mut out = Vec::new();
         for (first, second) in pairs {
@@ -2346,6 +2517,101 @@ impl StrataMemory {
             }
         }
         Ok(out)
+    }
+}
+
+fn merge_policy_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(MERGE_POLICY_FILE)
+}
+
+/// Same precedence as the SQLite `fsrs_config` read when no row is stored:
+/// env, then [`vestige_core::MergePolicy::default`], then `MergePolicy::new`
+/// (clamp, and `possible <= match`).
+fn merge_policy_from_env() -> vestige_core::MergePolicy {
+    let default = vestige_core::MergePolicy::default();
+    let env_f32 = |name: &str, fallback: f32| -> f32 {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(fallback)
+    };
+    let auto_apply = std::env::var("VESTIGE_MERGE_AUTO_APPLY")
+        .ok()
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(default.auto_apply);
+    vestige_core::MergePolicy::new(
+        env_f32("VESTIGE_MERGE_MATCH_THRESHOLD", default.match_threshold),
+        env_f32(
+            "VESTIGE_MERGE_POSSIBLE_THRESHOLD",
+            default.possible_threshold,
+        ),
+        auto_apply,
+    )
+}
+
+fn read_merge_policy_file(
+    data_dir: &Path,
+) -> Result<Option<vestige_core::MergePolicy>, StorageError> {
+    let path = merge_policy_path(data_dir);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(StorageError::Io(err)),
+    };
+    let policy: vestige_core::MergePolicy = serde_json::from_slice(&bytes)
+        .map_err(|err| StorageError::Init(format!("merge policy file is not readable: {err}")))?;
+    Ok(Some(vestige_core::MergePolicy::new(
+        policy.match_threshold,
+        policy.possible_threshold,
+        policy.auto_apply,
+    )))
+}
+
+fn write_merge_policy_file(
+    data_dir: &Path,
+    policy: &vestige_core::MergePolicy,
+) -> Result<(), StorageError> {
+    let bytes = serde_json::to_vec(policy)
+        .map_err(|err| StorageError::Init(format!("merge policy encode failed: {err}")))?;
+    let path = merge_policy_path(data_dir);
+    let tmp = data_dir.join(format!("{MERGE_POLICY_FILE}.tmp"));
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+fn parse_op_frame(operation_id: &str) -> Option<u64> {
+    let rest = operation_id.strip_prefix("op-")?;
+    if rest.len() != 16 || !rest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    u64::from_str_radix(rest, 16).ok()
+}
+
+fn merge_operation(write: strata_store::NodeWrite) -> vestige_core::advanced::MergeOperation {
+    let reverts = write.reverts_frame_seq.map(|seq| format!("op-{seq:016x}"));
+    let created_at = ms_to_dt(write.record.created_at_ms).to_rfc3339();
+    let reason = if write.op_type == "undo" {
+        Some(format!(
+            "Reverted {} by appending a compensating record",
+            reverts.as_deref().unwrap_or("the prior write")
+        ))
+    } else {
+        Some("admitted node write".into())
+    };
+    vestige_core::advanced::MergeOperation {
+        id: format!("op-{:016x}", write.frame_seq),
+        plan_id: None,
+        op_type: write.op_type.to_string(),
+        status: write.status.to_string(),
+        created_at: created_at.clone(),
+        reverted_at: (write.status == "reverted").then_some(created_at),
+        reverts_op_id: reverts,
+        survivor_id: Some(write.record.id.clone()),
+        affected_ids: vec![write.record.id],
+        confidence: None,
+        signals: None,
+        reason,
     }
 }
 
@@ -3205,5 +3471,70 @@ mod tests {
             ),
             marker,
         );
+    }
+
+    #[test]
+    fn merge_policy_roundtrip_survives_reopen_without_sqlite() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let first = StrataMemory::open(dir.path()).unwrap();
+        let unset = first.get_merge_policy().unwrap();
+        assert!(unset.possible_threshold <= unset.match_threshold);
+        assert!(!merge_policy_path(dir.path()).exists());
+        let saved = vestige_core::MergePolicy::new(0.91, 0.99, true);
+        first.set_merge_policy(saved).unwrap();
+        let got = first.get_merge_policy().unwrap();
+        assert!((got.match_threshold - 0.91).abs() < 1e-6);
+        assert!((got.possible_threshold - 0.91).abs() < 1e-6);
+        assert!(got.auto_apply);
+        drop(first);
+
+        let second = StrataMemory::open(dir.path()).unwrap();
+        let again = second.get_merge_policy().unwrap();
+        assert!((again.match_threshold - got.match_threshold).abs() < 1e-6);
+        assert!((again.possible_threshold - got.possible_threshold).abs() < 1e-6);
+        assert!(again.auto_apply);
+        assert!(no_sqlite(dir.path()));
+        assert_eq!(second.lock().node_count(), 0);
+    }
+
+    #[test]
+    fn undo_appends_a_compensating_record_and_hides_it_from_reads() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = super::open(dir.path()).unwrap();
+        let node = storage
+            .ingest_in_scope(
+                IngestInput {
+                    content: "undo me please".into(),
+                    ..IngestInput::default()
+                },
+                "user",
+            )
+            .unwrap();
+        assert_eq!(
+            storage.get_node(&node.id).unwrap().unwrap().content,
+            "undo me please"
+        );
+        let ops = storage.list_merge_operations(10).unwrap();
+        let op = ops
+            .iter()
+            .find(|op| op.survivor_id.as_deref() == Some(node.id.as_str()))
+            .expect("ingest is an undoable write");
+        assert_eq!(op.op_type, "write");
+        assert_eq!(op.status, "applied");
+        let undone = storage.merge_undo(&op.id).unwrap();
+        assert_eq!(undone.op_type, "undo");
+        assert_eq!(undone.reverts_op_id.as_deref(), Some(op.id.as_str()));
+        assert!(storage.get_node(&node.id).unwrap().is_none());
+        assert!(
+            storage
+                .get_all_nodes(50, 0)
+                .unwrap()
+                .iter()
+                .all(|listed| listed.content != "undo me please")
+        );
+        drop(storage);
+        let reopened = super::open(dir.path()).unwrap();
+        assert!(reopened.get_node(&node.id).unwrap().is_none());
+        assert!(no_sqlite(dir.path()));
     }
 }

@@ -121,6 +121,41 @@ fn fruchterman_reingold(
     positions
 }
 
+/// Exact center for a Strata `memory_graph`. `query` is refused: picking a
+/// center by text would be keyword or semantic search, which this log does
+/// not admit.
+fn strata_center(
+    storage: &Arc<Storage>,
+    args: Option<&serde_json::Value>,
+) -> Result<String, String> {
+    if let Some(id) = args
+        .and_then(|a| a.get("center_id"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        return Ok(id.to_string());
+    }
+    if args
+        .and_then(|a| a.get("query"))
+        .and_then(|v| v.as_str())
+        .is_some_and(|query| !query.trim().is_empty())
+    {
+        return Err(
+            "similarity_disabled: memory_graph: embeddings, cosine, BM25, FTS, Jaccard, and keyword or name matching are not Strata operations; pass center_id"
+                .into(),
+        );
+    }
+    let superseded = storage.superseded_node_ids().map_err(|e| e.to_string())?;
+    storage
+        .get_all_nodes(i32::MAX, 0)
+        .map_err(|e| format!("Failed to get recent node: {e}"))?
+        .into_iter()
+        .find(|node| !superseded.contains(&node.id))
+        .map(|node| node.id)
+        .ok_or_else(|| "No memories in database".to_string())
+}
+
 pub async fn execute(
     storage: &Arc<Storage>,
     args: Option<serde_json::Value>,
@@ -139,8 +174,11 @@ pub async fn execute(
         .unwrap_or(50)
         .min(200) as usize;
 
-    // Determine center node
-    let center_id = if let Some(id) = args
+    // Determine center node. On Strata the center is an exact handle or the
+    // newest live record — a query is not a search.
+    let center_id = if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+        strata_center(storage, args.as_ref())?
+    } else if let Some(id) = args
         .as_ref()
         .and_then(|a| a.get("center_id"))
         .and_then(|v| v.as_str())

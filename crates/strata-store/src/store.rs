@@ -403,6 +403,10 @@ pub struct StrataStore {
     call_admitted: BTreeSet<String>,
     /// Admitting effect seq -> named rule, for RETIREs the context authorized.
     retire_rules: BTreeMap<u64, &'static str>,
+    /// Admitted `UpsertNode` frames per node id, in log order. Derived: replay
+    /// rebuilds it. Undo reads it to append a compensating record; it never
+    /// rewrites or truncates the log.
+    upserts: BTreeMap<String, Vec<(u64, NodeRecord)>>,
 }
 
 impl StrataStore {
@@ -441,6 +445,7 @@ impl StrataStore {
             tool_call_open: false,
             call_admitted: BTreeSet::new(),
             retire_rules: BTreeMap::new(),
+            upserts: BTreeMap::new(),
         };
         store.replay()?;
         store.verify_checkpoint_chain()?;
@@ -550,6 +555,10 @@ impl StrataStore {
                 let handle = handle_of(&record.id);
                 let is_new = !self.fsrs.cards.contains_key(&handle);
                 self.origins.insert(record.id.clone(), gate_effect_seq);
+                self.upserts
+                    .entry(record.id.clone())
+                    .or_default()
+                    .push((frame_seq, record.clone()));
                 self.nodes.insert(record.id.clone(), record.clone());
                 if is_new {
                     // Every ingest folds one ReviewEvent ("Good") into the
@@ -1696,6 +1705,7 @@ impl StrataStore {
             tool_call_open: false,
             call_admitted: BTreeSet::new(),
             retire_rules: BTreeMap::new(),
+            upserts: BTreeMap::new(),
         };
         scratch.replay()?;
         let mut retrievability = BTreeMap::new();
@@ -1802,6 +1812,130 @@ impl StrataStore {
     pub fn review_event_count(&self) -> usize {
         self.review_events.len()
     }
+
+    /// Every admitted node upsert, oldest first.
+    ///
+    /// Rebuilt by replay. A compensating undo is itself an upsert (`write`
+    /// restored, or `superseded_by = undo:<seq>` for a create), so the
+    /// classification survives reopen without a new op kind.
+    pub fn node_writes(&self) -> Vec<NodeWrite> {
+        let mut out = Vec::new();
+        for versions in self.upserts.values() {
+            for (idx, (frame_seq, record)) in versions.iter().enumerate() {
+                let (op_type, reverts_frame_seq) = classify_upsert(versions, idx);
+                let status = if idx + 1 == versions.len() {
+                    "applied"
+                } else {
+                    "reverted"
+                };
+                out.push(NodeWrite {
+                    frame_seq: *frame_seq,
+                    record: record.clone(),
+                    op_type,
+                    status,
+                    reverts_frame_seq,
+                });
+            }
+        }
+        out.sort_by_key(|write| write.frame_seq);
+        out
+    }
+
+    /// Append a compensating `UpsertNode` that reverses the admitted upsert at
+    /// `frame_seq`.
+    ///
+    /// The target must be that node's latest upsert and must not itself be an
+    /// undo. A later `SupersedeNode` (the map record diverges from the upsert
+    /// history) is a conflict and appends nothing. The returned seq is the new
+    /// data frame. The prior frames stay in the log.
+    pub fn undo_node_write(&mut self, frame_seq: u64) -> Result<u64, StoreError> {
+        let (id, idx) = self
+            .upserts
+            .iter()
+            .find_map(|(id, versions)| {
+                versions
+                    .iter()
+                    .position(|(seq, _)| *seq == frame_seq)
+                    .map(|idx| (id.clone(), idx))
+            })
+            .ok_or_else(|| StoreError::NotFound(format!("operation op-{frame_seq:016x}")))?;
+        let versions = self
+            .upserts
+            .get(&id)
+            .expect("node id was just found in upserts")
+            .clone();
+        if idx + 1 != versions.len() {
+            return Err(StoreError::InvalidInput(
+                "undo conflicts with later memory changes; no changes applied".into(),
+            ));
+        }
+        let (op_type, _) = classify_upsert(&versions, idx);
+        if op_type == "undo" {
+            return Err(StoreError::InvalidInput(
+                "cannot undo an undo operation".into(),
+            ));
+        }
+        let history_tip = versions[idx].1.clone();
+        let current = self.require_node(&id)?.clone();
+        if current != history_tip {
+            return Err(StoreError::InvalidInput(
+                "undo conflicts with later memory changes; no changes applied".into(),
+            ));
+        }
+        let record = if idx == 0 {
+            let mut tomb = history_tip;
+            tomb.superseded_by = Some(format!("undo:{frame_seq:016x}"));
+            tomb
+        } else {
+            versions[idx - 1].1.clone()
+        };
+        let context = self.context_for(&[&id]);
+        let (_effect_seq, data_seq) =
+            self.admit_write(StoreOp::UpsertNode { record }, action_kind::WRITE, context)?;
+        Ok(data_seq)
+    }
+}
+
+/// Marker prefix on `superseded_by` for an undo of a node's first upsert.
+///
+/// The node stays in the log and in the derived map, and [`NodeRecord::is_live`]
+/// is false, so reads that honor liveness do not return it.
+const UNDO_MARKER_PREFIX: &str = "undo:";
+
+/// One admitted `UpsertNode`, classified for the reversible operation log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeWrite {
+    /// Log sequence of the data frame.
+    pub frame_seq: u64,
+    /// Record exactly as that frame admitted it.
+    pub record: NodeRecord,
+    /// `write` for a caller mutation, `undo` for a compensating record.
+    pub op_type: &'static str,
+    /// `applied` when this frame is the node's latest upsert, otherwise `reverted`.
+    pub status: &'static str,
+    /// Data-frame seq this undo reverses, when [`Self::op_type`] is `undo`.
+    pub reverts_frame_seq: Option<u64>,
+}
+
+fn undo_marker(record: &NodeRecord) -> Option<u64> {
+    let marker = record.superseded_by.as_deref()?;
+    let rest = marker.strip_prefix(UNDO_MARKER_PREFIX)?;
+    u64::from_str_radix(rest, 16).ok()
+}
+
+fn classify_upsert(versions: &[(u64, NodeRecord)], idx: usize) -> (&'static str, Option<u64>) {
+    let record = &versions[idx].1;
+    if let Some(seq) = undo_marker(record) {
+        return ("undo", Some(seq));
+    }
+    // A compensating restore is an exact copy of the version before the one
+    // it reverses. Caller edits that happen to land on an older body are
+    // indistinguishable and treated as undo; the only writer of an exact
+    // prior body today is `undo_node_write`.
+    if idx >= 2 && record == &versions[idx - 2].1 && record != &versions[idx - 1].1 {
+        return ("undo", Some(versions[idx - 1].0));
+    }
+    ("write", None)
 }
 
 /// Hops in the undirected supersession component of `id`, in log order.

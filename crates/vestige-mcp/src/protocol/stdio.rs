@@ -1611,4 +1611,262 @@ mod tests {
         assert_eq!(first["params"]["data"]["n"], 1);
         assert_eq!(second["params"]["data"]["n"], 2);
     }
+
+    /// `graph` action `memory_graph` over the real stdio loop: planted
+    /// recorded edges come back as a completed result, in a stable order,
+    /// without superseded nodes, keyword neighbors, or inferred links.
+    #[tokio::test]
+    async fn memory_graph_over_stdio_returns_recorded_edges_only() {
+        let dir = TempDir::new().unwrap();
+        let (center, near_b, near_a, hop, isolated, doomed, beyond) = {
+            let storage = crate::strata_memory::open(dir.path()).unwrap();
+            let ingest = |content: &str| {
+                storage
+                    .ingest(vestige_core::IngestInput {
+                        content: content.to_string(),
+                        ..vestige_core::IngestInput::default()
+                    })
+                    .unwrap()
+                    .id
+            };
+            let center = ingest("deploy widget center");
+            let near_b = ingest("deploy widget near-b");
+            let near_a = ingest("deploy widget near-a");
+            let hop = ingest("deploy widget hop");
+            let isolated = ingest("deploy widget isolated");
+            let doomed = ingest("deploy widget superseded");
+            let beyond = ingest("deploy widget beyond superseded");
+            let connect = |source: &str, target: &str| {
+                let now = chrono::Utc::now();
+                storage
+                    .save_connection(&vestige_core::ConnectionRecord {
+                        source_id: source.to_string(),
+                        target_id: target.to_string(),
+                        strength: 1.0,
+                        link_type: "derived_from".to_string(),
+                        created_at: now,
+                        last_activated: now,
+                        activation_count: 0,
+                    })
+                    .unwrap();
+            };
+            // Landing order is intentionally not id order.
+            connect(&center, &near_a);
+            connect(&center, &doomed);
+            connect(&doomed, &beyond);
+            connect(&near_b, &hop);
+            connect(&center, &near_b);
+            assert!(near_b < near_a, "ingest order must match mem-id order");
+            (center, near_b, near_a, hop, isolated, doomed, beyond)
+        };
+        {
+            let policy = strata_gate::Policy {
+                rules: vec![strata_gate::Rule {
+                    match_kind: strata_gate::ANY_KIND,
+                    match_params_hash_prefix: strata_gate::WILDCARD_PREFIX,
+                    max_blast_radius: u32::MAX,
+                    forbid_forgotten_lessons: false,
+                    require_human: false,
+                    verdict: strata_gate::Verdict::Allow,
+                }],
+            };
+            let mut store =
+                strata_store::StrataStore::open_with_policy(dir.path(), policy).unwrap();
+            store.supersede(&doomed, &center).unwrap();
+        }
+
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        assert!(
+            storage.superseded_node_ids().unwrap().contains(&doomed),
+            "the retired node must be on the log before the stdio call"
+        );
+        let server = McpServer::new(storage, Arc::new(Mutex::new(CognitiveEngine::new())));
+
+        let call = |id: i64, arguments: Value| {
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": "graph",
+                    "arguments": arguments,
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": super::super::types::MODERN_PROTOCOL_VERSION,
+                        "io.modelcontextprotocol/clientInfo": {"name": "memory-graph", "version": "1"},
+                        "io.modelcontextprotocol/clientCapabilities": {}
+                    }
+                }
+            })
+            .to_string()
+                + "\n"
+        };
+        let input = call(
+            1,
+            json!({
+                "action": "memory_graph",
+                "center_id": center,
+                "depth": 2,
+                "max_nodes": 50
+            }),
+        ) + &call(
+            2,
+            json!({
+                "action": "memory_graph",
+                "center_id": center,
+                "depth": 2,
+                "max_nodes": 50
+            }),
+        ) + &call(
+            3,
+            json!({
+                "action": "memory_graph",
+                "center_id": center,
+                "depth": 1,
+                "max_nodes": 50
+            }),
+        ) + &call(
+            4,
+            json!({
+                "action": "memory_graph",
+                "center_id": center,
+                "depth": 2,
+                "max_nodes": 2
+            }),
+        ) + &call(
+            5,
+            json!({
+                "action": "memory_graph",
+                "query": "deploy widget"
+            }),
+        );
+
+        let (mut client_w, server_r) = tokio::io::duplex(1 << 16);
+        let (server_w, mut client_r) = tokio::io::duplex(1 << 20);
+        let handle = tokio::spawn(async move {
+            run_io(server, None, tokio::io::BufReader::new(server_r), server_w).await
+        });
+        client_w.write_all(input.as_bytes()).await.unwrap();
+        drop(client_w);
+        let mut buf = String::new();
+        client_r.read_to_string(&mut buf).await.unwrap();
+        handle.await.unwrap().unwrap();
+        let out: Vec<Value> = buf
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("stdio line is one JSON document"))
+            .collect();
+
+        let by_id = |id: i64| {
+            out.iter()
+                .find(|value| value["id"] == json!(id))
+                .unwrap_or_else(|| panic!("missing response {id}: {out:?}"))
+                .clone()
+        };
+        let graph = |response: &Value| {
+            assert!(response.get("error").is_none(), "{response}");
+            assert_eq!(
+                response["result"]["resultType"],
+                json!("complete"),
+                "{response}"
+            );
+            assert_eq!(response["result"]["isError"], json!(false), "{response}");
+            let text = response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or("");
+            assert!(!text.contains("pending_strata"), "{text}");
+            assert!(!text.contains("not implemented"), "{text}");
+            response["result"]["structuredContent"].clone()
+        };
+        let ids_of = |body: &Value| -> Vec<String> {
+            body["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|node| node["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let edges_of = |body: &Value| -> Vec<(String, String)> {
+            body["edges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|edge| {
+                    assert_eq!(edge["type"], json!("derived_from"), "{edge}");
+                    assert_eq!(edge["weight"], json!(1.0), "{edge}");
+                    (
+                        edge["source"].as_str().unwrap().to_string(),
+                        edge["target"].as_str().unwrap().to_string(),
+                    )
+                })
+                .collect()
+        };
+
+        let full = graph(&by_id(1));
+        let again = graph(&by_id(2));
+        let expected_nodes = vec![center.clone(), near_b.clone(), near_a.clone(), hop.clone()];
+        let expected_edges = vec![
+            (center.clone(), near_b.clone()),
+            (center.clone(), near_a.clone()),
+            (near_b.clone(), hop.clone()),
+        ];
+        assert_eq!(ids_of(&full), expected_nodes, "full graph: {full}");
+        assert_eq!(edges_of(&full), expected_edges, "full edges: {full}");
+        assert_eq!(ids_of(&again), expected_nodes, "repeat must be identical");
+        assert_eq!(edges_of(&again), expected_edges);
+        assert_eq!(full["center_id"], json!(center));
+        assert_eq!(full["nodeCount"], json!(4));
+        assert_eq!(full["edgeCount"], json!(3));
+        let center_node = full["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == json!(center))
+            .unwrap();
+        assert_eq!(center_node["isCenter"], json!(true));
+        for absent in [&isolated, &doomed, &beyond] {
+            assert!(
+                !ids_of(&full).iter().any(|id| id == absent),
+                "{absent} must not be inferred into the graph: {full}"
+            );
+        }
+
+        let shallow = graph(&by_id(3));
+        assert_eq!(
+            ids_of(&shallow),
+            vec![center.clone(), near_b.clone(), near_a.clone()],
+            "depth 1 stops before the second hop: {shallow}"
+        );
+        assert_eq!(
+            edges_of(&shallow),
+            vec![
+                (center.clone(), near_b.clone()),
+                (center.clone(), near_a.clone())
+            ]
+        );
+
+        let capped = graph(&by_id(4));
+        assert_eq!(
+            ids_of(&capped),
+            vec![center.clone(), near_b.clone()],
+            "max_nodes keeps the lower id, not the first landed edge: {capped}"
+        );
+        assert_eq!(edges_of(&capped), vec![(center.clone(), near_b.clone())]);
+
+        let refused = by_id(5);
+        assert_eq!(
+            refused["result"]["resultType"],
+            json!("complete"),
+            "{refused}"
+        );
+        assert_eq!(refused["result"]["isError"], json!(true), "{refused}");
+        let message = refused["result"]["structuredContent"]["error"]
+            .as_str()
+            .unwrap_or("");
+        assert!(
+            message.contains("similarity_disabled"),
+            "query must not keyword-match: {refused}"
+        );
+        assert!(!message.contains("not implemented"), "{message}");
+        assert!(!message.contains(&isolated), "{message}");
+    }
 }

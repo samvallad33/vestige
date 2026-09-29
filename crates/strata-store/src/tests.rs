@@ -1657,3 +1657,90 @@ fn retire_without_rule_id_stays_held() {
     drop(store);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn undo_appends_a_compensating_upsert_and_hides_the_create() {
+    let dir = temp_dir("undo");
+    let marker = "undo-marker-content";
+    let frame_seq = {
+        let mut store = StrataStore::open(&dir).expect("open");
+        let id = store.ingest(input(marker, &["kept"])).expect("ingest");
+        let other = store.ingest(input("stays visible", &[])).expect("other");
+        let writes = store.node_writes();
+        let create = writes
+            .iter()
+            .find(|write| write.record.id == id)
+            .expect("create write");
+        assert_eq!(create.op_type, "write");
+        assert_eq!(create.status, "applied");
+        let before = store.log().head().next_seq;
+        let frames_before = store.log().read_frames(1).expect("frames").len();
+        let undo_seq = store.undo_node_write(create.frame_seq).expect("undo");
+        assert!(undo_seq > create.frame_seq);
+        assert!(store.log().head().next_seq > before);
+        let frames = store.log().read_frames(1).expect("frames");
+        assert!(
+            frames.len() > frames_before,
+            "undo appends; it does not truncate"
+        );
+        assert!(
+            frames.iter().any(|frame| {
+                frame.kind == KIND_STORE_WRITE
+                    && frame
+                        .payload
+                        .windows(marker.len())
+                        .any(|window| window == marker.as_bytes())
+            }),
+            "the original content stays in the log"
+        );
+        assert!(!store.get_node(&id).expect("tombstone").is_live());
+        assert!(store.get_node(&other).expect("other").is_live());
+        assert_eq!(store.node_count(), 1);
+        let again = store.undo_node_write(create.frame_seq);
+        assert!(again.is_err(), "the create is no longer the tip");
+        let undo_write = store
+            .node_writes()
+            .into_iter()
+            .find(|write| write.frame_seq == undo_seq)
+            .expect("compensating write");
+        assert_eq!(undo_write.op_type, "undo");
+        let undo_again = store.undo_node_write(undo_seq);
+        assert!(undo_again.is_err(), "cannot undo an undo");
+        store.state_digest()
+    };
+    let reopened = StrataStore::open(&dir).expect("reopen");
+    assert_eq!(reopened.state_digest(), frame_seq);
+    assert_eq!(reopened.node_count(), 1);
+    assert!(reopened
+        .nodes()
+        .iter()
+        .any(|record| record.content == marker && !record.is_live()));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn undo_restores_the_previous_upsert_without_rewriting_it() {
+    let dir = temp_dir("undo-edit");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let id = store.ingest(input("original body", &[])).expect("ingest");
+    store.set_created_at(&id, 50).expect("edit");
+    let writes = store.node_writes();
+    let edit = writes
+        .iter()
+        .rev()
+        .find(|write| write.record.id == id && write.op_type == "write")
+        .expect("edit");
+    assert_eq!(edit.record.created_at_ms, 50);
+    let create_seq = writes
+        .iter()
+        .find(|write| write.record.id == id)
+        .expect("create")
+        .frame_seq;
+    assert!(store.undo_node_write(create_seq).is_err());
+    store.undo_node_write(edit.frame_seq).expect("undo edit");
+    let restored = store.get_node(&id).expect("restored");
+    assert!(restored.is_live());
+    assert_eq!(restored.created_at_ms, 1_700_000_000_000);
+    assert_eq!(restored.content, "original body");
+    std::fs::remove_dir_all(&dir).ok();
+}

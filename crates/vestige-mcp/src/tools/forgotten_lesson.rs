@@ -13,10 +13,16 @@
 //! That combination is a lesson the system once recorded but can no longer
 //! retrieve: the exact condition under which the same root cause bites twice.
 //! Read-only: no graph, strength, or FSRS state is modified.
+//!
+//! On a Strata log the entity-overlap scan is not a recorded edge, so it is
+//! not used. The log path walks backward from the failure along recorded
+//! causal edges only (`corrects`, `derived_from`, `evidence_of`, `closed_by`;
+//! cause → effect) and returns earlier nodes ranked by the store's existing
+//! FSRS retrievability, lowest first, each with the edge path that reached it.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use vestige_core::KnowledgeNode;
@@ -138,6 +144,207 @@ pub fn detect_lesson(
     })
 }
 
+/// Recorded cause → effect edges. `touched` and `anchored_to` point at
+/// files, not causes. Projections and supersession are not causal either.
+const CAUSAL_EDGE_TYPES: &[&str] = &["closed_by", "corrects", "derived_from", "evidence_of"];
+
+/// Hop cap for the backward walk. The failure is depth 0.
+const CAUSAL_WALK_MAX_DEPTH: u32 = 8;
+
+/// How many ranked lessons the tool returns.
+const MAX_LESSONS: usize = 20;
+
+#[derive(Clone)]
+struct CausalStep {
+    source_id: String,
+    target_id: String,
+    link_type: String,
+}
+
+struct WalkHit {
+    node: KnowledgeNode,
+    retention: f64,
+    path: Vec<CausalStep>,
+}
+
+fn is_causal_edge(link_type: &str) -> bool {
+    CAUSAL_EDGE_TYPES.contains(&link_type)
+}
+
+/// A node recorded before the failure. Equal timestamps break on id, which
+/// is the log order for `mem-` ids.
+fn is_earlier(node: &KnowledgeNode, failure: &KnowledgeNode) -> bool {
+    match node.created_at.cmp(&failure.created_at) {
+        std::cmp::Ordering::Less => true,
+        std::cmp::Ordering::Equal => node.id < failure.id,
+        std::cmp::Ordering::Greater => false,
+    }
+}
+
+/// Bounded BFS from `failure` against the reverse of recorded causal edges.
+///
+/// Edges are stored cause → effect (`source` caused `target`). Backward means
+/// `target == current`, predecessor `source`. Expansion order is
+/// `(link_type, source_id, target_id)`. The first path wins. Nodes outside
+/// `scope`, dangling targets, and non-causal edges are skipped. Only nodes
+/// earlier than the failure are hits, and the walk does not continue through
+/// a later node.
+fn walk_recorded_causes(
+    storage: &Storage,
+    failure: &KnowledgeNode,
+    scope: &str,
+    scan_limit: usize,
+) -> Result<(Vec<WalkHit>, usize), String> {
+    struct Frame {
+        id: String,
+        depth: u32,
+        path: Vec<CausalStep>,
+    }
+
+    let mut queue = VecDeque::from([Frame {
+        id: failure.id.clone(),
+        depth: 0,
+        path: Vec::new(),
+    }]);
+    let mut seen = HashSet::from([failure.id.clone()]);
+    // The failure itself consumes one slot of the scan budget.
+    let mut scanned = 1usize;
+    let mut hits = Vec::new();
+
+    while let Some(frame) = queue.pop_front() {
+        if scanned >= scan_limit || frame.depth >= CAUSAL_WALK_MAX_DEPTH {
+            continue;
+        }
+
+        let mut edges = storage
+            .get_connections_for_memory(&frame.id)
+            .map_err(|e| e.to_string())?;
+        edges.retain(|edge| {
+            edge.target_id == frame.id
+                && edge.source_id != frame.id
+                && is_causal_edge(&edge.link_type)
+        });
+        edges.sort_by(|a, b| {
+            a.link_type
+                .cmp(&b.link_type)
+                .then(a.source_id.cmp(&b.source_id))
+                .then(a.target_id.cmp(&b.target_id))
+        });
+
+        for edge in edges {
+            if !seen.insert(edge.source_id.clone()) {
+                continue;
+            }
+            let Some(node) = storage
+                .get_node(&edge.source_id)
+                .map_err(|e| e.to_string())?
+            else {
+                continue;
+            };
+            if !storage
+                .node_is_in_scope(&node.id, scope)
+                .map_err(|e| e.to_string())?
+            {
+                continue;
+            }
+            if scanned >= scan_limit {
+                break;
+            }
+            scanned += 1;
+            let mut path = Vec::with_capacity(frame.path.len() + 1);
+            path.push(CausalStep {
+                source_id: edge.source_id.clone(),
+                target_id: edge.target_id.clone(),
+                link_type: edge.link_type.clone(),
+            });
+            path.extend(frame.path.iter().cloned());
+            // A later node is not a cause of this failure, and the walk does
+            // not continue through it.
+            if !is_earlier(&node, failure) {
+                continue;
+            }
+            let id = node.id.clone();
+            hits.push(WalkHit {
+                retention: node.retrieval_strength,
+                node,
+                path: path.clone(),
+            });
+            queue.push_back(Frame {
+                id,
+                depth: frame.depth + 1,
+                path,
+            });
+        }
+    }
+
+    hits.sort_by(|a, b| {
+        a.retention
+            .total_cmp(&b.retention)
+            .then_with(|| a.node.id.cmp(&b.node.id))
+    });
+    hits.truncate(MAX_LESSONS);
+    Ok((hits, scanned))
+}
+
+fn recorded_causes(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
+    let args: Args = match args {
+        Some(v) => serde_json::from_value(v).map_err(|e| e.to_string())?,
+        None => Args::default(),
+    };
+    let scan_limit =
+        usize::try_from(args.scan_limit.unwrap_or(1000).clamp(10, 5000)).unwrap_or(1000);
+    let scope = args.scope.as_deref().unwrap_or("user").trim();
+    if scope.is_empty() {
+        return Err("scope must not be empty".into());
+    }
+    let failure_id = args
+        .failure_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "failure_id is required".to_string())?;
+
+    if !storage
+        .node_is_in_scope(failure_id, scope)
+        .map_err(|e| e.to_string())?
+    {
+        return Err("failure memory not found in requested scope".into());
+    }
+    let failure = storage
+        .get_node(failure_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "failure memory not found in requested scope".to_string())?;
+
+    let (hits, scanned) = walk_recorded_causes(storage.as_ref(), &failure, scope, scan_limit)?;
+    let lessons: Vec<Value> = hits
+        .iter()
+        .map(|hit| {
+            json!({
+                "lesson_id": hit.node.id,
+                "recorded_at": hit.node.created_at.to_rfc3339(),
+                "retention_pct": (hit.retention * 1000.0).round() / 10.0,
+                "edge_path": hit.path.iter().map(|step| json!({
+                    "source_id": step.source_id,
+                    "target_id": step.target_id,
+                    "link_type": step.link_type,
+                })).collect::<Vec<_>>(),
+                "content_preview": hit.node.content.chars().take(140).collect::<String>(),
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "tool": "forgotten_lesson",
+        "failure_id": failure.id,
+        "scope": scope,
+        "threshold": FORGOTTEN_THRESHOLD,
+        "scanned": scanned,
+        "count": lessons.len(),
+        "forgotten_lessons": lessons,
+        "note": "Backward walk over recorded causal edges only (corrects, derived_from, evidence_of, closed_by; cause→effect reversed). Ranked by existing FSRS retrievability, lowest first. No entity overlap, keyword or FTS search, embeddings, or inferred edges.",
+    }))
+}
+
 pub fn schema() -> Value {
     json!({
         "type": "object",
@@ -173,9 +380,7 @@ struct Args {
 
 pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
     if crate::strata_memory::is_strata_backend(storage.as_ref()) {
-        return Err(
-            "pending_strata: forgotten_lesson entity overlap is not a recorded edge".into(),
-        );
+        return recorded_causes(storage, args);
     }
     let args: Args = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| e.to_string())?,
@@ -479,5 +684,231 @@ mod tests {
         let detected = detect_lesson(&stale, &anchors, at).expect("stale lesson detected");
         assert!(detected.retention < FORGOTTEN_THRESHOLD);
         assert_eq!(detected.shared_anchor, "api_timeout");
+    }
+}
+
+#[cfg(test)]
+mod strata_walk_tests {
+    use super::*;
+    use tempfile::TempDir;
+    use vestige_core::IngestInput;
+
+    fn open() -> (Arc<Storage>, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        (storage, dir)
+    }
+
+    fn ingest(storage: &Arc<Storage>, content: &str) -> KnowledgeNode {
+        storage
+            .ingest(IngestInput {
+                content: content.to_string(),
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
+    fn link(storage: &Arc<Storage>, source: &str, target: &str, link_type: &str) {
+        let now = chrono::Utc::now();
+        storage
+            .save_connection(&vestige_core::ConnectionRecord {
+                source_id: source.to_string(),
+                target_id: target.to_string(),
+                strength: 1.0,
+                link_type: link_type.to_string(),
+                created_at: now,
+                last_activated: now,
+                activation_count: 0,
+            })
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn walks_recorded_edges_and_ignores_overlap_and_noncausal_edges() {
+        let (storage, dir) = open();
+        let lesson = ingest(&storage, "Recorded correction for the pool ceiling");
+        for i in 0..6 {
+            ingest(&storage, &format!("filler {i}"));
+        }
+        let corrected = ingest(&storage, "Earlier correction of the pool ceiling");
+        let touched = ingest(&storage, "Commit that touched the pool ceiling");
+        let decoy = ingest(
+            &storage,
+            "Recorded correction for the pool ceiling, unlinked copy",
+        );
+        let cause = ingest(&storage, "Prior adjustment of the pool ceiling");
+        let failure = ingest(&storage, "Outage crash loop after the pool ceiling change");
+        let forward_only = ingest(&storage, "Later note that the failure points at");
+        link(&storage, &cause.id, &failure.id, "derived_from");
+        link(&storage, &lesson.id, &cause.id, "evidence_of");
+        link(&storage, &corrected.id, &failure.id, "corrects");
+        link(&storage, &touched.id, &failure.id, "touched");
+        link(&storage, &decoy.id, &failure.id, "anchored_to");
+        // Forward edge: failure is the source. The walk must not follow it.
+        link(&storage, &failure.id, &forward_only.id, "derived_from");
+        drop(storage);
+
+        {
+            let mut store = strata_store::StrataStore::open(dir.path()).unwrap();
+            // Easy reviews reset the older cards' review clocks and raise
+            // their stability. The untouched cause then has the lower
+            // retrievability even though `corrected` was ingested first, so
+            // the rank is the FSRS score and not ingest order.
+            for _ in 0..8 {
+                store.review(&lesson.id, 4).unwrap();
+            }
+            store.review(&corrected.id, 4).unwrap();
+        }
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+
+        let out = execute(&storage, Some(json!({"failure_id": failure.id})))
+            .await
+            .unwrap();
+        let again = execute(&storage, Some(json!({"failure_id": failure.id})))
+            .await
+            .unwrap();
+        assert_eq!(out, again, "the walk is deterministic");
+        let body = serde_json::to_string(&out).unwrap();
+        assert!(!body.contains("pending_strata"), "{out}");
+        assert!(!body.contains("shared_anchor"), "{out}");
+
+        let lessons = out["forgotten_lessons"].as_array().unwrap();
+        let ids: Vec<&str> = lessons
+            .iter()
+            .map(|entry| entry["lesson_id"].as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&lesson.id.as_str()), "{out}");
+        assert!(ids.contains(&cause.id.as_str()), "{out}");
+        assert!(ids.contains(&corrected.id.as_str()), "{out}");
+        assert!(
+            !ids.contains(&touched.id.as_str()),
+            "touched is not a cause edge: {out}"
+        );
+        assert!(
+            !ids.contains(&decoy.id.as_str()),
+            "anchored_to is not causal: {out}"
+        );
+        assert!(
+            !ids.contains(&forward_only.id.as_str()),
+            "forward edges are not a backward walk: {out}"
+        );
+
+        let cause_r = lessons
+            .iter()
+            .find(|entry| entry["lesson_id"] == cause.id)
+            .unwrap()["retention_pct"]
+            .as_f64()
+            .unwrap();
+        let lesson_r = lessons
+            .iter()
+            .find(|entry| entry["lesson_id"] == lesson.id)
+            .unwrap()["retention_pct"]
+            .as_f64()
+            .unwrap();
+        assert!(
+            cause_r < lesson_r,
+            "lapsed cause must rank as more forgotten: cause {cause_r} lesson {lesson_r}"
+        );
+        assert_eq!(lessons[0]["lesson_id"], json!(cause.id), "{out}");
+
+        let cause_path = &lessons.iter().find(|e| e["lesson_id"] == cause.id).unwrap()["edge_path"];
+        assert_eq!(cause_path.as_array().unwrap().len(), 1, "{cause_path}");
+        assert_eq!(cause_path[0]["link_type"], "derived_from");
+        assert_eq!(cause_path[0]["source_id"], json!(cause.id));
+        assert_eq!(cause_path[0]["target_id"], json!(failure.id));
+
+        let lesson_path = &lessons
+            .iter()
+            .find(|e| e["lesson_id"] == lesson.id)
+            .unwrap()["edge_path"];
+        assert_eq!(lesson_path.as_array().unwrap().len(), 2, "{lesson_path}");
+        assert_eq!(lesson_path[0]["source_id"], json!(lesson.id));
+        assert_eq!(lesson_path[0]["target_id"], json!(cause.id));
+        assert_eq!(lesson_path[0]["link_type"], "evidence_of");
+        assert_eq!(lesson_path[1]["target_id"], json!(failure.id));
+
+        assert!(
+            execute(
+                &storage,
+                Some(json!({"failure_id": failure.id, "scope": " "}))
+            )
+            .await
+            .is_err()
+        );
+        assert!(execute(&storage, Some(json!({}))).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn depth_and_scan_bounds_stop_the_walk() {
+        let (storage, _dir) = open();
+        let mut ids = Vec::new();
+        for i in 0..12 {
+            ids.push(ingest(&storage, &format!("cause {i}")).id);
+        }
+        let failure = ingest(&storage, "the failure");
+        // ids[0] is earliest. Chain ids[11] → … → ids[0] → failure would put
+        // the earliest node deepest. Link each earlier node as the cause of
+        // the next newer one, then the newest cause to the failure.
+        for pair in ids.windows(2) {
+            link(&storage, &pair[0], &pair[1], "closed_by");
+        }
+        link(&storage, ids.last().unwrap(), &failure.id, "closed_by");
+
+        let out = execute(
+            &storage,
+            Some(json!({"failure_id": failure.id, "scan_limit": 10})),
+        )
+        .await
+        .unwrap();
+        let returned: Vec<&str> = out["forgotten_lessons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["lesson_id"].as_str().unwrap())
+            .collect();
+        assert!(
+            returned.contains(&ids[11].as_str()),
+            "the direct cause is in range: {out}"
+        );
+        assert!(
+            !returned.contains(&ids[0].as_str()),
+            "the far end of a 12-hop chain is past depth {CAUSAL_WALK_MAX_DEPTH}: {out}"
+        );
+        assert!(out["scanned"].as_u64().unwrap() <= 10, "{out}");
+    }
+
+    #[tokio::test]
+    async fn scan_limit_stops_a_wide_backward_frontier() {
+        let (storage, _dir) = open();
+        let mut causes = Vec::new();
+        for i in 0..15 {
+            causes.push(ingest(&storage, &format!("direct cause {i}")).id);
+        }
+        let failure = ingest(&storage, "wide failure");
+        for id in &causes {
+            link(&storage, id, &failure.id, "derived_from");
+        }
+        let out = execute(
+            &storage,
+            Some(json!({"failure_id": failure.id, "scan_limit": 10})),
+        )
+        .await
+        .unwrap();
+        let returned = out["forgotten_lessons"].as_array().unwrap();
+        assert_eq!(out["scanned"], json!(10), "{out}");
+        assert_eq!(
+            returned.len(),
+            9,
+            "failure plus nine causes, then stop: {out}"
+        );
+        let ids: Vec<&str> = returned
+            .iter()
+            .map(|entry| entry["lesson_id"].as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&causes[0].as_str()), "{out}");
+        assert!(
+            !ids.contains(&causes[14].as_str()),
+            "the last cause is past the scan budget: {out}"
+        );
     }
 }

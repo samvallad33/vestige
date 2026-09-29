@@ -404,6 +404,20 @@ fn merge_undo(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, Stri
                 }));
             }
 
+            // Strata has no embedding runtime. Undo appends a compensating
+            // UpsertNode; it does not take the SQLite merge_undo path.
+            if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+                let op = storage.merge_undo(op_id).map_err(|e| e.to_string())?;
+                return Ok(json!({
+                    "undoOperationId": op.id,
+                    "revertedOperationId": op.reverts_op_id,
+                    "status": "reverted",
+                    "affectedIds": op.affected_ids,
+                    "reason": op.reason,
+                    "note": "The append-only log gained a compensating record. The undone change is no longer visible to reads."
+                }));
+            }
+
             #[cfg(vestige_embeddings_removed)]
             {
                 let op = storage.merge_undo(op_id).map_err(|e| e.to_string())?;

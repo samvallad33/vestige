@@ -66,8 +66,8 @@ pub use gate_log::StrataEventLog;
 pub use op::{StoreOp, KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 pub use store::{
     default_policy, effect_receipt_id, permissive_policy, retire_rule_id, AdmissionContext,
-    EffectAction, EffectProof, RecordedOrigin, RetireReceipt, StrataStore, SupersedeHop, RULE_EDIT,
-    RULE_INTENTIONS, RULE_PURGE, RULE_SUPPRESS,
+    EffectAction, EffectProof, NodeWrite, RecordedOrigin, RetireReceipt, StrataStore, SupersedeHop,
+    RULE_EDIT, RULE_INTENTIONS, RULE_PURGE, RULE_SUPPRESS,
 };
 pub use types::{
     looks_like_failure, ConnectionRecord, EdgeDirection, EdgeKind, IngestInput, IntentionRecord,
