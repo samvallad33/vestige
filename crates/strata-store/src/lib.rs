@@ -53,6 +53,7 @@
 mod error;
 mod gate_log;
 pub mod admission;
+pub mod claims;
 pub mod kinds;
 mod op;
 mod store;
