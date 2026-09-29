@@ -72,9 +72,6 @@
 // the SQLite persistence half is gated on `legacy-sqlite` inside the module
 // (dual-mode rule, strata/fix-00a).
 pub mod anchor;
-#[cfg(not(feature = "legacy-sqlite"))]
-#[path = "anchor_absent.rs"]
-pub mod anchor;
 pub mod context;
 #[cfg(feature = "codebase-git")]
 pub mod git;
