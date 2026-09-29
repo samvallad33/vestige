@@ -24,9 +24,11 @@
 //!
 //! The run re-hashes the source after the replay and refuses to seal if a
 //! single byte changed (the reader is read-only at the SQLite VFS level,
-//! so this is belt-and-suspenders). `strata_kernel::verify_with_head` plus
-//! `StrataLog::verify_tail` must both pass before `verify_passed` is
-//! reported true.
+//! so this is belt-and-suspenders). Sealing rolls an empty active segment,
+//! so verification re-checks every sealed segment's frames and trailer,
+//! replays the log, and compares per-kind counts to the MIGRATION_RECEIPT.
+//! `frames_verified` must equal the total frame count; any mismatch is a
+//! hard error.
 //!
 //! ## FSRS fold semantics (read before relying on it)
 //!
@@ -55,6 +57,7 @@
 pub mod records;
 pub mod snapshot;
 pub mod source;
+mod verify;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -65,7 +68,6 @@ use strata_kernel::checkpoint::{checkpoint_hash, Checkpoint};
 use strata_kernel::event::ReviewEvent;
 use strata_kernel::fsrs::ALGO_V1;
 use strata_kernel::kernel::Kernel;
-use strata_kernel::verify::verify_with_head;
 use vestige_core::storage::PortableArchive;
 use vestige_core::storage::PortableValue;
 
@@ -75,6 +77,7 @@ pub use records::{
     RECORD_VERSION,
 };
 pub use snapshot::{read_snapshot, Snapshot};
+pub use verify::{verify_migrated_dir, LogVerify};
 
 /// Parameter set implemented by this migrator. Written as the `PARAMS`
 /// frame on a fresh log.
@@ -175,6 +178,9 @@ pub enum MigrationError {
     /// The determinism kernel refused an operation.
     #[error("strata kernel error: {0}")]
     Kernel(String),
+    /// Sealed-segment, replay, or receipt-count verification failed.
+    #[error("migration verification failed: {0}")]
+    Verify(String),
     /// Filesystem error.
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -191,9 +197,12 @@ pub struct MigrationReport {
     pub fsrs_events: u64,
     /// Source tables that contained rows but have no STRATA mapping.
     pub skipped_tables: Vec<String>,
-    /// Whether kernel replay verification AND log tail verification both
-    /// passed over the finished log.
+    /// Whether sealed-segment, replay, and receipt-count verification passed.
     pub verify_passed: bool,
+    /// Frames covered by sealed-segment frame and trailer checks.
+    pub frames_verified: u64,
+    /// Frames replayed from the log. Equals `frames_verified` when verification passed.
+    pub frames_total: u64,
     /// `node_embeddings` rows whose vector values were never read.
     pub dropped_vectors: u64,
     /// Last verified `receipt_envelopes` entry digest (empty = none).
@@ -336,6 +345,8 @@ fn idempotent_report(
         fsrs_events: table_rows(snapshot, "fsrs_cards"),
         skipped_tables: skipped_tables_for(snapshot),
         verify_passed: true,
+        frames_verified: 0,
+        frames_total: 0,
         dropped_vectors: snapshot.dropped_vectors,
         envelope_head: snapshot.envelope_head.clone().unwrap_or_default(),
         source_blake3: receipt.body.source_blake3_before.clone(),
@@ -390,6 +401,8 @@ fn dry_run_report(
         // A dry run writes nothing; the envelope chain is verified during
         // the read, so reaching this point means the chain held.
         verify_passed: true,
+        frames_verified: 0,
+        frames_total: 0,
         dropped_vectors: snapshot.dropped_vectors,
         envelope_head: snapshot.envelope_head.clone().unwrap_or_default(),
         source_blake3: source_blake3.to_string(),
@@ -601,20 +614,16 @@ fn finish(
     log.seal()
         .map_err(|e| MigrationError::Strata(e.to_string()))?;
 
-    let verify_passed = match verify_migrated(&log, outcome.anchor) {
-        Ok(passed) => passed,
-        Err(reason) => {
-            eprintln!("strata-migrate: verification error: {reason}");
-            false
-        }
-    };
+    let verified = verify::verify_open_log(&log, strata_dir, outcome.anchor)?;
 
     Ok(MigrationReport {
         nodes: outcome.nodes,
         edges: outcome.edges,
         fsrs_events: outcome.fsrs_events,
         skipped_tables: skipped_tables_for(&snapshot),
-        verify_passed,
+        verify_passed: true,
+        frames_verified: verified.frames_verified,
+        frames_total: verified.frames_total,
         dropped_vectors: snapshot.dropped_vectors,
         envelope_head: snapshot.envelope_head.unwrap_or_default(),
         source_blake3: source_blake3.to_string(),
@@ -703,27 +712,6 @@ impl<'a> Writer<'a> {
         }
         Ok(())
     }
-}
-
-/// Kernel replay + log tail verification over the finished log.
-fn verify_migrated(log: &StrataLog, anchor: [u8; 32]) -> Result<bool, MigrationError> {
-    let tail_ok = log.verify_tail().is_ok();
-    let snapshot = read_snapshot(log)?;
-    let events = snapshot
-        .reviews
-        .iter()
-        .map(|event| {
-            let bytes = borsh::to_vec(event)
-                .map_err(|e| MigrationError::Corrupt(format!("re-encode review event: {e}")))?;
-            Ok((event.event_seq, blake3::hash(&bytes).into(), *event))
-        })
-        .collect::<Result<Vec<_>, MigrationError>>()?;
-    let replay = verify_with_head(&snapshot.checkpoints, Some(anchor), events.into_iter());
-    let replay_ok = replay.is_ok();
-    if let Err(error) = replay {
-        eprintln!("strata-migrate: kernel verify failed: {error}");
-    }
-    Ok(tail_ok && replay_ok)
 }
 
 /// Deterministic rating series reproducing an fsrs_cards row exactly:
