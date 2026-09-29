@@ -339,19 +339,24 @@ fn namespace_prefix(trace: &Path) -> Vec<String> {
              so gate_decides_without_llm cannot prove the offline run."
         );
     };
-    net.into_iter()
-        .chain([
-            "strace".to_string(),
-            "-f".into(),
-            "-e".into(),
-            "trace=connect,sendto,sendmsg,sendmmsg".into(),
-            "-o".into(),
-            trace.display().to_string(),
-            "-s".into(),
-            "160".into(),
-            "--".into(),
-        ])
-        .collect()
+    // strace is the parent. `strace` inside `unshare -Urn` dies with
+    // PTRACE_TRACEME EPERM, which would hide every connect. `-f` follows
+    // the binary into the network namespace, so a connect there is still
+    // in this trace.
+    [
+        "strace".to_string(),
+        "-f".into(),
+        "-e".into(),
+        "trace=connect,sendto,sendmsg,sendmmsg".into(),
+        "-o".into(),
+        trace.display().to_string(),
+        "-s".into(),
+        "160".into(),
+        "--".into(),
+    ]
+    .into_iter()
+    .chain(net)
+    .collect()
 }
 
 fn network_connects(trace: &str) -> Vec<String> {
