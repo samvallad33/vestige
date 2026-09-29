@@ -13,6 +13,8 @@ It keeps the decisions a project already made, and it can reach backward from a 
 [![Binary](https://img.shields.io/badge/platforms-5_release_targets-informational)](https://github.com/samvallad33/vestige/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6)](LICENSE)
 
+> Using Vestige today? Install the [v3.1.1 GitHub release](https://github.com/samvallad33/vestige/releases/tag/v3.1.1). Don't build from `main`. `main` is mid-way through the Vestige 4.0 Strata upgrade and may change your database. 4.0 will upgrade your data automatically when it ships.
+
 [Install](#install) · [Why not RAG](#why-not-just-rag) · [The Live Gate](#founding-operator) · [Continuity](#managed-continuity) · [Benchmark](#the-receipts-silent-rotation) · [Science](#the-science) · [Docs](#go-deeper)
 
 <a id="getting-started"></a>
