@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 /// Cap for tool-level and inputSchema-root descriptions.
 const ROOT_DESCRIPTION_CAP: usize = 60;
@@ -113,7 +113,10 @@ fn compact_variants(map: &Map<String, Value>) -> Value {
             .iter()
             .map(|d| d.as_str().unwrap_or_default().to_string())
             .collect();
-        format!("One action per call; variants: {}. {VARIANT_POINTER}", names.join(", "))
+        format!(
+            "One action per call; variants: {}. {VARIANT_POINTER}",
+            names.join(", ")
+        )
     };
     json!({
         "type": "object",
@@ -162,7 +165,8 @@ fn compact(node: &Value, depth: usize, keep_desc: bool) -> Value {
                         out.insert(key.clone(), json!({ "type": item_type }));
                     }
                     _ => {
-                        let child_keeps = keep_desc && matches!(key.as_str(), "action" | "view" | "mode");
+                        let child_keeps =
+                            keep_desc && matches!(key.as_str(), "action" | "view" | "mode");
                         out.insert(key.clone(), compact(value, depth + 1, child_keeps));
                     }
                 }
@@ -327,7 +331,11 @@ mod tests {
         assert!(compact["properties"]["source"]["properties"]["source_author"].is_object());
         assert!(compact["properties"]["filters"]["properties"]["token_budget"].is_object());
         let required = compact["required"].as_array().unwrap();
-        assert_eq!(required, &vec![json!("query")], "folded names leave required");
+        assert_eq!(
+            required,
+            &vec![json!("query")],
+            "folded names leave required"
+        );
     }
 
     #[test]
@@ -359,6 +367,10 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(!action_desc.is_empty() && action_desc.len() <= 120);
-        assert!(compact["properties"]["obscure_field"].get("description").is_none());
+        assert!(
+            compact["properties"]["obscure_field"]
+                .get("description")
+                .is_none()
+        );
     }
 }

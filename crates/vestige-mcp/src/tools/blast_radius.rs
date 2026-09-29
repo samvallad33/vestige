@@ -24,7 +24,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use vestige_core::{Storage, BLAST_LINK_TYPES, BLAST_MAX_DEPTH};
+use vestige_core::{BLAST_LINK_TYPES, BLAST_MAX_DEPTH, Storage};
 
 pub fn schema() -> Value {
     json!({
@@ -195,19 +195,20 @@ async fn retire(storage: &Arc<Storage>, args: Args) -> Result<Value, String> {
     let mut to_execute = Vec::new();
     let mut held_ids = Vec::new();
 
-    for id in ids.iter().map(|id| id.trim().to_string()).collect::<Vec<_>>() {
+    for id in ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .collect::<Vec<_>>()
+    {
         let gate_args = Some(json!({"id": id, "reason": reason}));
         match crate::trace_recorder::gate_pending_memory_mutation(
-            storage,
-            None,
-            run_id,
-            "suppress",
-            &gate_args,
-            mode,
+            storage, None, run_id, "suppress", &gate_args, mode,
         ) {
             Ok(None) => to_execute.push(id),
             Ok(Some(held)) => {
-                let pr_id = held["memoryPrsOpened"][0]["id"].as_str().map(str::to_string);
+                let pr_id = held["memoryPrsOpened"][0]["id"]
+                    .as_str()
+                    .map(str::to_string);
                 held_ids.push(id.clone());
                 results.push(json!({
                     "id": id,
@@ -353,11 +354,13 @@ mod tests {
         assert_eq!(r["total"], 3);
         assert_eq!(r["affected"][0]["id"], cause);
         assert_eq!(r["affected"][0]["via"], "root");
-        assert!(r["affected"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|a| a["id"] == json!(dependent)));
+        assert!(
+            r["affected"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["id"] == json!(dependent))
+        );
     }
 
     #[tokio::test]
@@ -413,7 +416,10 @@ mod tests {
         assert_eq!(r["heldForReview"], 0);
         for a in r["results"].as_array().unwrap() {
             assert_eq!(a["outcome"], "suppressed");
-            let node = storage.get_node(a["id"].as_str().unwrap()).unwrap().unwrap();
+            let node = storage
+                .get_node(a["id"].as_str().unwrap())
+                .unwrap()
+                .unwrap();
             assert_eq!(node.suppression_count, 1, "suppressed, not deleted");
             assert!(node.suppressed_at.is_some());
         }
@@ -454,7 +460,10 @@ mod tests {
             .list_memory_prs(Some(MemoryPrStatus::Pending), 10)
             .unwrap();
         assert_eq!(prs.len(), 3, "one pending Memory PR per id");
-        assert!(prs.iter().all(|pr| pr.diff["pendingAction"] == json!("suppress")));
+        assert!(
+            prs.iter()
+                .all(|pr| pr.diff["pendingAction"] == json!("suppress"))
+        );
         for id in [&cause, &dependent] {
             let node = storage.get_node(id).unwrap().unwrap();
             assert_eq!(node.suppression_count, 0, "pre-gate must not suppress");
@@ -464,19 +473,13 @@ mod tests {
     #[tokio::test]
     async fn retire_requires_ids_and_reason() {
         let (storage, _dir) = test_storage();
-        let err = execute(
-            &storage,
-            Some(json!({"action": "retire", "reason": "x"})),
-        )
-        .await
-        .unwrap_err();
+        let err = execute(&storage, Some(json!({"action": "retire", "reason": "x"})))
+            .await
+            .unwrap_err();
         assert!(err.contains("ids"));
-        let err = execute(
-            &storage,
-            Some(json!({"action": "retire", "ids": []})),
-        )
-        .await
-        .unwrap_err();
+        let err = execute(&storage, Some(json!({"action": "retire", "ids": []})))
+            .await
+            .unwrap_err();
         assert!(err.contains("empty"));
         let err = execute(
             &storage,

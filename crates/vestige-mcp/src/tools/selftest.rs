@@ -164,8 +164,11 @@ pub async fn execute(storage: &Arc<Storage>, _args: Option<Value>) -> Result<Val
             &gap_scope,
         )
         .map_err(|e| format!("round 6: planting unrelated record failed: {e}"))?;
-    copy.set_created_at(&unrelated.id, chrono::Utc::now() - chrono::Duration::days(5))
-        .map_err(|e| format!("round 6: backdating failed: {e}"))?;
+    copy.set_created_at(
+        &unrelated.id,
+        chrono::Utc::now() - chrono::Duration::days(5),
+    )
+    .map_err(|e| format!("round 6: backdating failed: {e}"))?;
     let gap_failure_id = plant_failure(&copy, &gap_scope, 6, false)?;
     let gap_out = run_backfill(&copy, &gap_scope, &gap_failure_id).await?;
 
@@ -180,7 +183,8 @@ pub async fn execute(storage: &Arc<Storage>, _args: Option<Value>) -> Result<Val
                 .collect()
         })
         .unwrap_or_default();
-    let mut missing = missing; missing.sort();
+    let mut missing = missing;
+    missing.sort();
     let named_missing_anchor = missing.iter().find(|e| *e == "planted_cause_6").cloned();
     let gap_calibration = gap_fired && named_missing_anchor.is_some();
 
@@ -246,7 +250,11 @@ mod tests {
         let out = execute(&storage, None).await.expect("selftest must run");
 
         assert_eq!(out["rounds"], json!(5));
-        assert_eq!(out["hits"], json!(5), "every planted cause must be rank 1: {out}");
+        assert_eq!(
+            out["hits"],
+            json!(5),
+            "every planted cause must be rank 1: {out}"
+        );
         assert_eq!(out["misses"], json!(0));
         assert_eq!(out["hit_at_3"], json!(5));
         assert_eq!(out["hit_rate_1"], json!(1.0));
@@ -262,7 +270,11 @@ mod tests {
 
         // Live store untouched: same single node, nothing in the selftest scopes.
         let nodes = storage.get_all_nodes(100, 0).unwrap();
-        assert_eq!(nodes.len(), 1, "no planted record may leak into the live store");
+        assert_eq!(
+            nodes.len(),
+            1,
+            "no planted record may leak into the live store"
+        );
         assert!(
             storage
                 .get_all_nodes_in_scope("selftest-round-1", 100, 0)

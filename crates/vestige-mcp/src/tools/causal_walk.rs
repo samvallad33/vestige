@@ -11,11 +11,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use vestige_core::advanced::causal_walk::{
-    self as core_causal_walk, CausalWalkRequest, StartPoint, persist_evidence_edges,
-    walk_storage,
-};
 use vestige_core::Storage;
+use vestige_core::advanced::causal_walk::{
+    self as core_causal_walk, CausalWalkRequest, StartPoint, persist_evidence_edges, walk_storage,
+};
 
 pub fn schema() -> Value {
     json!({
@@ -116,7 +115,10 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     };
     // Clamp numeric inputs to the documented schema bounds (the dispatch
     // layer does not enforce JSON-schema min/max).
-    let lookback = args.lookback_days.unwrap_or(core_causal_walk::DEFAULT_LOOKBACK_DAYS).clamp(1, 365);
+    let lookback = args
+        .lookback_days
+        .unwrap_or(core_causal_walk::DEFAULT_LOOKBACK_DAYS)
+        .clamp(1, 365);
     let promote = args.promote.unwrap_or(false);
     let scan_limit = args.scan_limit.unwrap_or(500).clamp(10, 5000);
 
@@ -178,7 +180,8 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             if result.causes.len() == 1 { "" } else { "s" }
         )
     } else {
-        "The walk refused: no anchored records from the given start points. See needs_report.".to_string()
+        "The walk refused: no anchored records from the given start points. See needs_report."
+            .to_string()
     };
 
     Ok(json!({
@@ -223,7 +226,12 @@ mod tests {
         c.to_string().repeat(40)
     }
 
-    fn seed(storage: &Arc<Storage>, content: &str, tags: Vec<&str>, days_ago: i64) -> KnowledgeNode {
+    fn seed(
+        storage: &Arc<Storage>,
+        content: &str,
+        tags: Vec<&str>,
+        days_ago: i64,
+    ) -> KnowledgeNode {
         let node = storage
             .ingest(IngestInput {
                 content: content.to_string(),
@@ -252,9 +260,9 @@ mod tests {
             extra_files: 0,
             symbols: vec![],
             mentions: vec![],
-                hunks: vec![],
-                extra_hunks: 0,
-                imports: vec![],
+            hunks: vec![],
+            extra_hunks: 0,
+            imports: vec![],
         });
         seed(storage, &content, vec![git_records::COMMIT_TAG], days_ago)
     }
@@ -271,7 +279,13 @@ mod tests {
             .collect();
         assert_eq!(
             kinds,
-            vec!["failing_test", "stack_frame", "ci_run", "logged_write", "version_range"]
+            vec![
+                "failing_test",
+                "stack_frame",
+                "ci_run",
+                "logged_write",
+                "version_range"
+            ]
         );
     }
 
@@ -307,7 +321,10 @@ mod tests {
             "{out}"
         );
         assert_eq!(
-            out["needs_report"]["required_start_points"].as_array().unwrap().len(),
+            out["needs_report"]["required_start_points"]
+                .as_array()
+                .unwrap()
+                .len(),
             5
         );
 
@@ -321,7 +338,8 @@ mod tests {
             assert_eq!(causes[0]["sha"], json!(sha('a')));
             assert_eq!(
                 causes[0]["path"][0]["via"], "failing_test/co_touch",
-                "{}", preview
+                "{}",
+                preview
             );
             assert!(
                 causes[0]["shared_anchors"]
@@ -340,7 +358,10 @@ mod tests {
             "preview must not write graph edges"
         );
         let before = storage.get_node(&bad.id).unwrap().unwrap();
-        assert_eq!(before.reps, storage.get_node(&bad.id).unwrap().unwrap().reps);
+        assert_eq!(
+            before.reps,
+            storage.get_node(&bad.id).unwrap().unwrap().reps
+        );
 
         // 3) promote: exactly one evidence_of edge from the top cause to the note
         let out = execute(
@@ -358,9 +379,7 @@ mod tests {
         );
         let edges = storage.get_connections_for_memory(&bad.id).unwrap();
         assert!(edges.iter().any(|e| {
-            e.source_id == bad.id
-                && e.target_id == note.id
-                && e.link_type == "evidence_of"
+            e.source_id == bad.id && e.target_id == note.id && e.link_type == "evidence_of"
         }));
         // the runner-up commit was not linked (it shares no evidence_to target
         // other than the same note — one edge per cause is expected too)

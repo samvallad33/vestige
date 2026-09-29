@@ -24,8 +24,8 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use vestige_core::storage::Storage;
 use vestige_core::ConnectionRecord;
+use vestige_core::storage::Storage;
 
 /// JSON schema for the `source_sync` tool.
 pub fn schema() -> Value {
@@ -430,7 +430,8 @@ mod tests {
 
     fn test_storage() -> (Arc<Storage>, TempDir) {
         let dir = TempDir::new().unwrap();
-        let storage = vestige_core::open_storage(Some(dir.path().join("source_sync_test.db"))).unwrap();
+        let storage =
+            vestige_core::open_storage(Some(dir.path().join("source_sync_test.db"))).unwrap();
         (storage, dir)
     }
 
@@ -447,12 +448,7 @@ mod tests {
             .id
     }
 
-    fn upsert_issue(
-        storage: &Arc<Storage>,
-        number: u64,
-        state: &str,
-        scope: &str,
-    ) -> String {
+    fn upsert_issue(storage: &Arc<Storage>, number: u64, state: &str, scope: &str) -> String {
         // SourceEnvelope is #[non_exhaustive]; build via Default + field set.
         let mut envelope = SourceEnvelope::default();
         envelope.source_system = Some("github".to_string());
@@ -498,20 +494,38 @@ mod tests {
     #[test]
     fn source_sync_matcher_rejects_near_misses() {
         // Wrong number with a digit tail: #420 is not #42.
-        assert!(!commit_closes_issue("commit fix: closes #420\nfiles: x.rs", "42"));
-        assert!(!commit_closes_issue("commit fix: closes #4\nfiles: x.rs", "42"));
+        assert!(!commit_closes_issue(
+            "commit fix: closes #420\nfiles: x.rs",
+            "42"
+        ));
+        assert!(!commit_closes_issue(
+            "commit fix: closes #4\nfiles: x.rs",
+            "42"
+        ));
         // Keyword hidden inside another word.
-        assert!(!commit_closes_issue("commit discloses #42\nfiles: x.rs", "42"));
-        assert!(!commit_closes_issue("commit prefixes #42\nfiles: x.rs", "42"));
+        assert!(!commit_closes_issue(
+            "commit discloses #42\nfiles: x.rs",
+            "42"
+        ));
+        assert!(!commit_closes_issue(
+            "commit prefixes #42\nfiles: x.rs",
+            "42"
+        ));
         // Reference without a closing keyword on the line.
-        assert!(!commit_closes_issue("commit see #42 for context\nfiles: x.rs", "42"));
+        assert!(!commit_closes_issue(
+            "commit see #42 for context\nfiles: x.rs",
+            "42"
+        ));
         // Keyword and reference on DIFFERENT lines never pair.
         assert!(!commit_closes_issue(
             "commit fixes the thing\nsee #42 for context",
             "42"
         ));
         // Glued references are not bare references.
-        assert!(!commit_closes_issue("commit fix: abc#42\nfiles: x.rs", "42"));
+        assert!(!commit_closes_issue(
+            "commit fix: abc#42\nfiles: x.rs",
+            "42"
+        ));
         assert!(!commit_closes_issue("commit fix: ##42\nfiles: x.rs", "42"));
         // Non-numeric / empty issue numbers never match.
         assert!(!commit_closes_issue("commit fix: closes #42", "abc"));
@@ -526,20 +540,11 @@ mod tests {
     async fn source_sync_closed_by_edge_appears_after_linking() {
         let (storage, _dir) = test_storage();
         let issue_node = upsert_issue(&storage, 42, "closed", "o/r");
-        let commit_node = ingest_commit(
-            &storage,
-            &"a".repeat(40),
-            "fix: closes #42",
-            "src/pool.rs",
-        );
+        let commit_node =
+            ingest_commit(&storage, &"a".repeat(40), "fix: closes #42", "src/pool.rs");
         // Decoys: open issue, unrelated commit.
         let open_node = upsert_issue(&storage, 43, "open", "o/r");
-        let unrelated = ingest_commit(
-            &storage,
-            &"b".repeat(40),
-            "docs: readme",
-            "README.md",
-        );
+        let unrelated = ingest_commit(&storage, &"b".repeat(40), "docs: readme", "README.md");
 
         let linked = link_closed_by_from_local_commits(&storage, "o/r");
         assert_eq!(linked, 1, "exactly the closes-#42 pair links");
@@ -550,8 +555,14 @@ mod tests {
             .filter(|e| e.link_type == "closed_by")
             .collect();
         assert_eq!(closed_by.len(), 1, "one closed_by edge, not duplicates");
-        assert_eq!(closed_by[0].source_id, issue_node, "source is the issue node");
-        assert_eq!(closed_by[0].target_id, commit_node, "target is the commit node");
+        assert_eq!(
+            closed_by[0].source_id, issue_node,
+            "source is the issue node"
+        );
+        assert_eq!(
+            closed_by[0].target_id, commit_node,
+            "target is the commit node"
+        );
 
         // Negative: the open issue and the unrelated commit carry no edges.
         assert!(
@@ -587,13 +598,11 @@ mod tests {
         upsert_issue(&storage, 7, "closed", "o/r");
         assert_eq!(link_closed_by_from_local_commits(&storage, "o/r"), 0);
         // Wrong scope: the issue is not this connector instance's.
-        let commit_node = ingest_commit(
-            &storage,
-            &"c".repeat(40),
-            "fix: closes #7",
-            "src/x.rs",
+        let commit_node = ingest_commit(&storage, &"c".repeat(40), "fix: closes #7", "src/x.rs");
+        assert_eq!(
+            link_closed_by_from_local_commits(&storage, "other/scope"),
+            0
         );
-        assert_eq!(link_closed_by_from_local_commits(&storage, "other/scope"), 0);
         assert!(
             storage
                 .get_connections_for_memory(&commit_node)

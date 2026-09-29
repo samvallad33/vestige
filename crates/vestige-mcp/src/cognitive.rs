@@ -200,7 +200,13 @@ mod tests {
     /// arms and this expression together.
     #[test]
     fn cognitive_module_count_is_maintained() {
-        let expected = 16 + 10 + if cfg!(feature = "vector-search") { 1 } else { 0 };
+        let expected = 16
+            + 10
+            + if cfg!(feature = "vector-search") {
+                1
+            } else {
+                0
+            };
         assert_eq!(COGNITIVE_MODULE_COUNT, expected);
     }
 

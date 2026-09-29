@@ -119,7 +119,10 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             // Same granularity as the store's UNIQUE source-key index:
             // (system, project, id). Two projects' "issue 42" stay separate.
             let project = env.source_project.as_deref().unwrap_or("");
-            by_source.entry(format!("{system}:{project}:{id}")).or_default().push(i);
+            by_source
+                .entry(format!("{system}:{project}:{id}"))
+                .or_default()
+                .push(i);
         }
     }
     for group in by_content.values().chain(by_source.values()) {
@@ -136,8 +139,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
     }
 
     // Only keep clusters with >1 member, sorted by size descending
-    let mut clusters: Vec<Vec<usize>> =
-        cluster_map.into_values().filter(|c| c.len() > 1).collect();
+    let mut clusters: Vec<Vec<usize>> = cluster_map.into_values().filter(|c| c.len() > 1).collect();
     clusters.sort_by_key(|b| std::cmp::Reverse(b.len()));
     clusters.truncate(limit);
 
@@ -977,12 +979,9 @@ mod tests {
         let unfiltered = execute(&storage, None).await.unwrap();
         assert_eq!(unfiltered["totalClusters"], 1);
 
-        let filtered = execute(
-            &storage,
-            Some(serde_json::json!({ "tags": ["rust"] })),
-        )
-        .await
-        .unwrap();
+        let filtered = execute(&storage, Some(serde_json::json!({ "tags": ["rust"] })))
+            .await
+            .unwrap();
         assert_eq!(
             filtered["totalClusters"], 0,
             "filtering out one member dissolves the cluster: {filtered}"

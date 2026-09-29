@@ -228,7 +228,9 @@ pub async fn execute_system_status(
 
     // Decay risk: memories below the retention floor, with the worst IDs.
     let below_30 = storage.count_memories_below_retention(0.3).unwrap_or(0);
-    let worst = storage.lowest_retention_nodes(DIAGNOSTIC_ID_LIMIT).unwrap_or_default();
+    let worst = storage
+        .lowest_retention_nodes(DIAGNOSTIC_ID_LIMIT)
+        .unwrap_or_default();
     if below_30 > 0 {
         let severity = if stats.total_nodes > 0 && below_30 * 2 >= stats.total_nodes {
             "critical"

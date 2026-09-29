@@ -98,7 +98,10 @@ fn render_html(receipt: &Receipt) -> String {
         body.push_str("<p class=\"empty\">No memories informed this answer.</p>");
     } else {
         body.push_str("<h2>Retrieved");
-        body.push_str(&format!(" <span class=\"count\">{}</span>", receipt.retrieved.len()));
+        body.push_str(&format!(
+            " <span class=\"count\">{}</span>",
+            receipt.retrieved.len()
+        ));
         body.push_str("</h2><ol class=\"ids\">");
         for id in &receipt.retrieved {
             body.push_str(&format!("<li><code>{}</code></li>", escape(id)));
@@ -229,8 +232,8 @@ fn render_html(receipt: &Receipt) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vestige_core::{DecayRisk, Receipt, SuppressedReceiptEntry};
     use vestige_core::trace::SuppressReason;
+    use vestige_core::{DecayRisk, Receipt, SuppressedReceiptEntry};
 
     fn sample_receipt() -> Receipt {
         let mut receipt = Receipt::build_with_unique(

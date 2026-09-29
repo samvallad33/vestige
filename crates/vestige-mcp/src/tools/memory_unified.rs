@@ -1166,11 +1166,16 @@ mod tests {
         // Gate 1: claiming a privileged role without operator membership
         // leaves the actor neutral at 1.0 — the claim never self-grants.
         let args = serde_json::json!({ "action": "promote", "id": id, "role": "operator" });
-        let value = execute(&storage, &test_cognitive(), Some(args)).await.unwrap();
+        let value = execute(&storage, &test_cognitive(), Some(args))
+            .await
+            .unwrap();
         assert_eq!(value["actor"]["claimedRole"], "operator");
         assert_eq!(value["actor"]["effectiveRole"], "unattributed");
         assert_eq!(value["actor"]["resolvedWeight"], 1.0);
-        assert_eq!(value["actor"]["resolutionDisposition"], "unregistered_claim");
+        assert_eq!(
+            value["actor"]["resolutionDisposition"],
+            "unregistered_claim"
+        );
         assert_eq!(value["actor"]["policyVersion"], 1);
         assert_eq!(value["endorsement"]["kind"], "support");
         assert!(value["endorsement"]["eventId"].as_str().is_some());
@@ -1179,7 +1184,9 @@ mod tests {
         // Gate 2: the same actor retrying — even under a different hat —
         // does not create a second vote.
         let retry = serde_json::json!({ "action": "promote", "id": id, "role": "qa" });
-        let value = execute(&storage, &test_cognitive(), Some(retry)).await.unwrap();
+        let value = execute(&storage, &test_cognitive(), Some(retry))
+            .await
+            .unwrap();
         assert_eq!(value["endorsement"]["alreadyRecorded"], true);
         let events = storage
             .list_endorsement_events(Some(&id), None, 50)
@@ -1201,9 +1208,16 @@ mod tests {
             .unwrap();
         let id = ingest_memory(&storage).await;
         let args = serde_json::json!({ "action": "demote", "id": id });
-        let value = execute(&storage, &test_cognitive(), Some(args)).await.unwrap();
+        let value = execute(&storage, &test_cognitive(), Some(args))
+            .await
+            .unwrap();
         assert_eq!(value["endorsement"]["kind"], "oppose");
-        assert!(value["actor"]["id"].as_str().unwrap().starts_with("did:key:z6Mk"));
+        assert!(
+            value["actor"]["id"]
+                .as_str()
+                .unwrap()
+                .starts_with("did:key:z6Mk")
+        );
     }
 
     #[tokio::test]
@@ -1211,11 +1225,21 @@ mod tests {
         let (storage, _dir) = test_storage().await;
         let id = ingest_memory(&storage).await;
         let args = serde_json::json!({ "action": "promote", "id": id });
-        let value = execute(&storage, &test_cognitive(), Some(args)).await.unwrap();
+        let value = execute(&storage, &test_cognitive(), Some(args))
+            .await
+            .unwrap();
         assert_eq!(value["success"], true);
-        assert!(value.get("actor").is_none(), "no bound actor, no provenance claim");
+        assert!(
+            value.get("actor").is_none(),
+            "no bound actor, no provenance claim"
+        );
         assert!(value.get("endorsement").is_none());
-        assert!(storage.list_endorsement_events(Some(&id), None, 10).unwrap().is_empty());
+        assert!(
+            storage
+                .list_endorsement_events(Some(&id), None, 10)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1225,9 +1249,13 @@ mod tests {
         let did = vestige_core::actor::ProcessActor::mint().did().to_string();
         storage.set_process_actor(&did).unwrap();
         // Operator grants qa through the store (never through a tool call).
-        storage.grant_actor_role(&did, "qa", Some("operator reviewed")).unwrap();
+        storage
+            .grant_actor_role(&did, "qa", Some("operator reviewed"))
+            .unwrap();
         let args = serde_json::json!({ "action": "promote", "id": id, "role": "qa" });
-        let value = execute(&storage, &test_cognitive(), Some(args)).await.unwrap();
+        let value = execute(&storage, &test_cognitive(), Some(args))
+            .await
+            .unwrap();
         assert_eq!(value["actor"]["effectiveRole"], "qa");
         assert_eq!(value["actor"]["resolutionDisposition"], "granted");
         assert!((value["actor"]["resolvedWeight"].as_f64().unwrap() - 1.10).abs() < 1e-9);

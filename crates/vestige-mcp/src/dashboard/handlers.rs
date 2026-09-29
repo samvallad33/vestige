@@ -2340,7 +2340,13 @@ pub async fn export_trace(
     // Content-Disposition header or the filename. Falls back to "trace".
     let safe: String = run_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let safe = if safe.trim_matches('_').is_empty() {
         "trace".to_string()
@@ -2450,8 +2456,8 @@ pub async fn act_on_memory_pr(
     State(state): State<AppState>,
     Path((id, action)): Path<(String, String)>,
 ) -> Result<Json<Value>, StatusCode> {
-    let action = vestige_core::MemoryPrAction::from_label(&action)
-        .ok_or(StatusCode::BAD_REQUEST)?;
+    let action =
+        vestige_core::MemoryPrAction::from_label(&action).ok_or(StatusCode::BAD_REQUEST)?;
 
     // Ask Agent Why is read-only — return the self-explaining signals.
     if matches!(action, vestige_core::MemoryPrAction::AskAgentWhy) {
@@ -2611,14 +2617,17 @@ pub async fn set_review_mode(
     State(state): State<AppState>,
     Json(body): Json<ReviewModeBody>,
 ) -> Result<Json<Value>, StatusCode> {
-    let mode = vestige_core::ReviewMode::try_from_label(&body.mode)
-        .ok_or(StatusCode::BAD_REQUEST)?;
+    let mode =
+        vestige_core::ReviewMode::try_from_label(&body.mode).ok_or(StatusCode::BAD_REQUEST)?;
     let path = review_mode_path(&state);
     let payload = serde_json::json!({ "mode": mode.as_str() });
     // B7: atomic write (temp + rename) so a concurrent read can never see a
     // partially-written / corrupt review_mode.json, reusing the same helper the
     // Sanhedrin receipt path uses.
-    write_atomic(&path, &serde_json::to_vec_pretty(&payload).unwrap_or_default())?;
+    write_atomic(
+        &path,
+        &serde_json::to_vec_pretty(&payload).unwrap_or_default(),
+    )?;
     Ok(Json(serde_json::json!({ "mode": mode.as_str() })))
 }
 
@@ -2902,10 +2911,7 @@ fn shared_keywords(a: &str, b: &str) -> String {
     let b_lower = b.to_lowercase();
     let tokenize = |s: &'_ str| -> HashSet<String> {
         s.split_whitespace()
-            .map(|w| {
-                w.trim_matches(|c: char| !c.is_alphanumeric())
-                    .to_string()
-            })
+            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string())
             .filter(|w| w.len() > 3)
             .collect()
     };
@@ -3467,7 +3473,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn default_center_id_recent_returns_newest_node() {
         let (_dir, storage) = seed_storage();
@@ -3625,7 +3630,12 @@ mod tests {
             .unwrap_or_else(|| panic!("plan carried no planId: {plan}"))
             .to_string();
         assert_eq!(plan["memberIds"].as_array().unwrap().len(), 2, "{plan}");
-        assert!(plan["note"].as_str().unwrap().contains("Nothing was changed"));
+        assert!(
+            plan["note"]
+                .as_str()
+                .unwrap()
+                .contains("Nothing was changed")
+        );
 
         let Json(applied) = apply_duplicates_merge(
             State(state),
@@ -3644,7 +3654,10 @@ mod tests {
             .iter()
             .filter_map(Value::as_str)
             .collect();
-        assert!(affected.contains(&a.as_str()) && affected.contains(&b.as_str()), "{applied}");
+        assert!(
+            affected.contains(&a.as_str()) && affected.contains(&b.as_str()),
+            "{applied}"
+        );
 
         // The reflog the dashboard's undo path reads knows the operation.
         let log = crate::tools::dedup::execute_unified(
@@ -3652,8 +3665,8 @@ mod tests {
             None,
             Some(serde_json::json!({ "action": "undo" })),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         let listed = log["operations"]
             .as_array()
             .unwrap()
@@ -3707,11 +3720,7 @@ mod tests {
             "date_diff_days",
             "topic",
         ] {
-            assert!(
-                !pair[field].is_null(),
-                "missing contract field: {}",
-                field
-            );
+            assert!(!pair[field].is_null(), "missing contract field: {}", field);
         }
         // a = older, b = newer (chronological).
         let ids: Vec<&str> = vec![
@@ -4014,8 +4023,7 @@ mod tests {
         assert_eq!(response["runId"], run_id);
         assert_eq!(response["causes"][0]["promoted"], false);
         assert_eq!(
-            response["receipt"]["evidence"]["kind"],
-            "backfill",
+            response["receipt"]["evidence"]["kind"], "backfill",
             "proof must live in typed ReceiptEvidence::Backfill"
         );
         assert_eq!(
@@ -4031,10 +4039,7 @@ mod tests {
             .get_receipt(receipt_id)
             .unwrap()
             .expect("receipt saved");
-        assert_eq!(
-            persisted.backfill_path_ids(),
-            None
-        );
+        assert_eq!(persisted.backfill_path_ids(), None);
         assert!(
             !storage
                 .get_connections_for_memory(&cause.id)
@@ -4048,14 +4053,19 @@ mod tests {
             "preview records candidates in its receipt without persisting graph edges"
         );
         while let Ok(event) = events.try_recv() {
-            assert!(!matches!(event, VestigeEvent::BackfillFired { .. }),
-                "preview must not animate a route that was never persisted");
+            assert!(
+                !matches!(event, VestigeEvent::BackfillFired { .. }),
+                "preview must not animate a route that was never persisted"
+            );
         }
     }
 
     #[test]
     fn audit_action_mapping_covers_real_reason_types() {
-        assert_eq!(audit_action_for("access", "dormant", "active"), Some("accessed"));
+        assert_eq!(
+            audit_action_for("access", "dormant", "active"),
+            Some("accessed")
+        );
         assert_eq!(
             audit_action_for("cue_reactivation", "silent", "active"),
             Some("accessed")

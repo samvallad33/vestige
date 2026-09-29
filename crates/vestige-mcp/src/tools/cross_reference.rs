@@ -901,59 +901,59 @@ fn retrieve_and_rank_candidates(
     valid_at: Option<chrono::DateTime<chrono::Utc>>,
     superseded_ids: &std::collections::HashSet<String>,
 ) -> Result<Vec<vestige_core::SearchResult>, String> {
-// ====================================================================
-// STAGE 1: Broad Retrieval + Reranking
-// ====================================================================
-// Scope and source fields are post-filters because the core hybrid index is
-// not namespace-aware yet. Over-fetch within the storage ceiling so a busy
-// unrelated scope cannot trivially starve the requested namespace.
-let filters_can_thin = !scope_filter.include_cross_scope
-    || source_filter.is_active()
-    || args.tag_prefix.is_some()
-    || valid_at.is_some()
-    || args.min_retention.is_some()
-    || args.min_similarity.is_some();
-let fetch_limit = if filters_can_thin {
-    (depth.saturating_mul(4)).min(100)
-} else {
-    depth
-} as i32;
-let results = storage
-    .hybrid_search_filtered(
-        &args.query,
-        fetch_limit,
-        0.3,
-        0.7,
-        args.include_types.as_deref(),
-        args.exclude_types.as_deref(),
-    )
-    .map_err(|e| e.to_string())?;
+    // ====================================================================
+    // STAGE 1: Broad Retrieval + Reranking
+    // ====================================================================
+    // Scope and source fields are post-filters because the core hybrid index is
+    // not namespace-aware yet. Over-fetch within the storage ceiling so a busy
+    // unrelated scope cannot trivially starve the requested namespace.
+    let filters_can_thin = !scope_filter.include_cross_scope
+        || source_filter.is_active()
+        || args.tag_prefix.is_some()
+        || valid_at.is_some()
+        || args.min_retention.is_some()
+        || args.min_similarity.is_some();
+    let fetch_limit = if filters_can_thin {
+        (depth.saturating_mul(4)).min(100)
+    } else {
+        depth
+    } as i32;
+    let results = storage
+        .hybrid_search_filtered(
+            &args.query,
+            fetch_limit,
+            0.3,
+            0.7,
+            args.include_types.as_deref(),
+            args.exclude_types.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
 
-let mut results =
-    results
-        .into_iter()
-        .try_fold(Vec::new(), |mut kept, result| -> Result<_, String> {
-            if node_matches_reason_filters(
-                storage,
-                &result.node,
-                result.semantic_score,
-                args,
-                scope_filter,
-                source_filter,
-                valid_at,
-                superseded_ids,
-            )? {
-                kept.push(result);
-            }
-            Ok(kept)
-        })?;
-results.truncate(depth);
+    let mut results =
+        results
+            .into_iter()
+            .try_fold(Vec::new(), |mut kept, result| -> Result<_, String> {
+                if node_matches_reason_filters(
+                    storage,
+                    &result.node,
+                    result.semantic_score,
+                    args,
+                    scope_filter,
+                    source_filter,
+                    valid_at,
+                    superseded_ids,
+                )? {
+                    kept.push(result);
+                }
+                Ok(kept)
+            })?;
+    results.truncate(depth);
 
-// w1b: vector reranking was removed with the embedding runtime; the
-// keyword-order ranking from Stage 1 stands as the final ranking.
-let ranked = results;
-        Ok(ranked)
-    }
+    // w1b: vector reranking was removed with the embedding runtime; the
+    // keyword-order ranking from Stage 1 stands as the final ranking.
+    let ranked = results;
+    Ok(ranked)
+}
 
 pub async fn execute(
     storage: &Arc<Storage>,
@@ -1009,7 +1009,6 @@ pub async fn execute(
         });
         return Ok(enforce_reason_token_budget(response, args.token_budget));
     }
-
 
     // ====================================================================
     // STAGE 2: Spreading Activation Expansion
@@ -2854,7 +2853,12 @@ mod reason_envelope_tests {
         Arc::new(Mutex::new(CognitiveEngine::new()))
     }
 
-    fn ingest_in_scope(storage: &Arc<Storage>, scope: &str, content: &str, node_type: &str) -> String {
+    fn ingest_in_scope(
+        storage: &Arc<Storage>,
+        scope: &str,
+        content: &str,
+        node_type: &str,
+    ) -> String {
         storage
             .ingest_in_scope(
                 vestige_core::IngestInput {

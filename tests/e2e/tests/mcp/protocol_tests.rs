@@ -324,13 +324,13 @@ fn test_tools_list_response_format() {
             },
             {
                 "name": "recall",
-                "description": "Search and retrieve knowledge.",
+                "description": "Look up by exact handle (mem:, sha:, path:, sym:, test:, run:, call:, session:...). Free text returns handle_required.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "query": { "type": "string" }
+                        "handle": { "type": "string" }
                     },
-                    "required": ["query"]
+                    "required": ["handle"]
                 }
             }
         ]

@@ -53,16 +53,15 @@ fn purge_tool_purges_refuses_without_confirm_and_alias_matches() {
         "purge e2e fixture alpha: idempotent removal check",
         &["purge-e2e"],
     );
-    let id_b = server.ingest_keyword_only(
-        "purge e2e fixture beta: alias path check",
-        &["purge-e2e"],
-    );
+    let id_b =
+        server.ingest_keyword_only("purge e2e fixture beta: alias path check", &["purge-e2e"]);
 
     // Unconfirmed purge is refused — the destructive call requires
     // confirm=true exactly like memory(action='purge').
     let refused = server.call_tool("purge", json!({ "id": id_a }));
     assert!(
-        refused.get("error").is_some() || refused["isError"] == json!(true)
+        refused.get("error").is_some()
+            || refused["isError"] == json!(true)
             || refused.to_string().contains("confirm"),
         "unconfirmed purge must be refused: {refused}"
     );
@@ -78,7 +77,8 @@ fn purge_tool_purges_refuses_without_confirm_and_alias_matches() {
     );
     let gone = server.call_tool("memory", json!({ "action": "get", "id": id_a }));
     assert!(
-        gone.get("error").is_some() || gone["isError"] == json!(true)
+        gone.get("error").is_some()
+            || gone["isError"] == json!(true)
             || gone["found"] == json!(false),
         "purged memory must be unreachable: {gone}"
     );
@@ -2120,7 +2120,9 @@ fn causal_walk_selftest_and_forgotten_lesson_are_called_over_stdio() {
 
     let r1 = server.call_tool("causal_walk", json!({ "manual": true }));
     assert!(
-        r1.get("needs_report").is_some() || r1.get("error").is_some() || r1["triggered"].is_boolean(),
+        r1.get("needs_report").is_some()
+            || r1.get("error").is_some()
+            || r1["triggered"].is_boolean(),
         "causal_walk must answer with needs_report or a result: {r1}"
     );
     let r2 = server.call_tool(
@@ -2143,7 +2145,9 @@ fn causal_walk_selftest_and_forgotten_lesson_are_called_over_stdio() {
         "missing_entities must be sorted-stable"
     );
     assert!(
-        s1.get("hits").is_some() || s1.get("gap_calibration").is_some() || s1.get("error").is_some(),
+        s1.get("hits").is_some()
+            || s1.get("gap_calibration").is_some()
+            || s1.get("error").is_some(),
         "selftest must report its score or error: {s1}"
     );
 

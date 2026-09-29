@@ -15,11 +15,11 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 mod common;
 
@@ -185,7 +185,11 @@ fn below_floor_recall_returns_the_abstained_envelope_with_nearest_candidates() {
     );
 
     assert_eq!(value["abstained"], json!(true), "{value}");
-    assert_eq!(value["results"], json!([]), "an abstention withholds results");
+    assert_eq!(
+        value["results"],
+        json!([]),
+        "an abstention withholds results"
+    );
     assert_eq!(value["total"], json!(0));
     let confidence = value["confidence"].as_f64().expect("confidence");
     assert!(
@@ -199,10 +203,7 @@ fn below_floor_recall_returns_the_abstained_envelope_with_nearest_candidates() {
         "the reason must state that no memory answers the query: {value}"
     );
     let nearest = value["nearest"].as_array().expect("nearest candidates");
-    let nearest_ids: Vec<&str> = nearest
-        .iter()
-        .filter_map(|n| n["id"].as_str())
-        .collect();
+    let nearest_ids: Vec<&str> = nearest.iter().filter_map(|n| n["id"].as_str()).collect();
     assert!(
         nearest_ids.contains(&alpha.as_str()) && nearest_ids.contains(&beta.as_str()),
         "the nearest block must offer both close candidates: {value}"
@@ -214,7 +215,9 @@ fn below_floor_recall_returns_the_abstained_envelope_with_nearest_candidates() {
         json!({ "query": "zanzibar", "limit": 5, "abstain_floor": 1.0 }),
     );
     assert!(
-        answering.get("abstained").is_none_or(|v| *v == json!(false)),
+        answering
+            .get("abstained")
+            .is_none_or(|v| *v == json!(false)),
         "floor 1.0 disables abstention: {answering}"
     );
     let answered_ids = server.recall_ids(json!({
@@ -407,7 +410,10 @@ fn limit_out_of_range_values_are_clamped_into_working_calls() {
         "recall",
         json!({ "query": "cache warming", "limit": "ten", "concrete": true }),
     );
-    assert!(wrong.get("error").is_some(), "string limit must error: {wrong}");
+    assert!(
+        wrong.get("error").is_some(),
+        "string limit must error: {wrong}"
+    );
 
     server.shutdown();
 }
@@ -520,7 +526,10 @@ fn expired_validity_facts_are_withheld_from_current_results_until_explicitly_aud
     let again = server.recall_ids(json!({
         "query": "staging bastion rotation password", "limit": 10, "concrete": true,
     }));
-    assert!(!again.contains(&expired), "repeat query resurrected it: {again:?}");
+    assert!(
+        !again.contains(&expired),
+        "repeat query resurrected it: {again:?}"
+    );
 
     server.shutdown();
 }
@@ -539,7 +548,10 @@ fn credential_shaped_content_is_refused_without_echoing_the_secret() {
 
     // A Google API key shape: the "AIza" prefix plus exactly 35 URL-safe key
     // characters (the scanner counts prefix and tail, so the length matters).
-    let secret = format!("AIza{}", "Az03".repeat(9).chars().take(35).collect::<String>());
+    let secret = format!(
+        "AIza{}",
+        "Az03".repeat(9).chars().take(35).collect::<String>()
+    );
     assert_eq!(secret.len(), 39);
 
     let refused = server.call_tool(
@@ -560,7 +572,10 @@ fn credential_shaped_content_is_refused_without_echoing_the_secret() {
 
     // Nothing landed.
     let hits = server.recall_ids(json!({ "query": "billing exporter key", "limit": 10 }));
-    assert!(hits.is_empty(), "the refused content leaked into the store: {hits:?}");
+    assert!(
+        hits.is_empty(),
+        "the refused content leaked into the store: {hits:?}"
+    );
 
     server.shutdown();
 }
@@ -715,10 +730,7 @@ fn unknown_tool_names_are_protocol_errors_with_no_result_body() {
     server.handshake();
 
     for name in ["no_such_tool", "", "RECALL", "recall "] {
-        let response = server.request(
-            "tools/call",
-            Some(json!({ "name": name, "arguments": {} })),
-        );
+        let response = server.request("tools/call", Some(json!({ "name": name, "arguments": {} })));
         assert!(
             response.get("result").is_none(),
             "unknown tool {name:?} must not produce a result body: {response}"
@@ -786,7 +798,10 @@ fn wrong_typed_arguments_are_rejected_and_the_server_stays_healthy() {
     let cases = vec![
         ("recall", json!({ "query": 42 })),
         ("suppress", json!({ "id": { "deep": 1 } })),
-        ("smart_ingest", json!({ "content": "ok", "tags": "not-an-array" })),
+        (
+            "smart_ingest",
+            json!({ "content": "ok", "tags": "not-an-array" }),
+        ),
         ("memory", json!({ "action": ["get"] })),
         ("source_sync", json!({ "source": 3 })),
         ("session_start", json!({ "token_budget": "eight hundred" })),
@@ -1122,9 +1137,7 @@ fn dream_below_the_minimum_reports_insufficient_memories() {
     let value = server.call_tool_ok("maintain", json!({ "action": "dream" }));
     assert_eq!(value["status"], json!("insufficient_memories"), "{value}");
     assert!(
-        value["message"]
-            .as_str()
-            .is_some_and(|m| m.contains("5")),
+        value["message"].as_str().is_some_and(|m| m.contains("5")),
         "the message must state the minimum: {value}"
     );
     server.shutdown();
@@ -1144,13 +1157,14 @@ fn gc_defaults_to_dry_run_and_a_wet_run_on_a_healthy_store_deletes_nothing() {
     );
 
     let dry = server.call_tool_ok("maintain", json!({ "action": "gc" }));
-    assert_eq!(dry["dryRun"], json!(true), "gc must default to a dry run: {dry}");
+    assert_eq!(
+        dry["dryRun"],
+        json!(true),
+        "gc must default to a dry run: {dry}"
+    );
     assert_eq!(dry["atomic"], json!(true));
 
-    let wet = server.call_tool_ok(
-        "maintain",
-        json!({ "action": "gc", "dry_run": false }),
-    );
+    let wet = server.call_tool_ok("maintain", json!({ "action": "gc", "dry_run": false }));
     assert_eq!(
         wet["dryRun"],
         json!(false),
@@ -1358,7 +1372,11 @@ fn a_drifted_file_flips_the_anchor_status_to_stale() {
     let repo = tempfile::tempdir().unwrap();
     let src = repo.path().join("src");
     std::fs::create_dir_all(&src).unwrap();
-    std::fs::write(src.join("queue.rs"), "pub fn load_queue() -> u64 {\n    1500\n}\n").unwrap();
+    std::fs::write(
+        src.join("queue.rs"),
+        "pub fn load_queue() -> u64 {\n    1500\n}\n",
+    )
+    .unwrap();
 
     server.call_tool_ok(
         "codebase",
@@ -1387,7 +1405,11 @@ fn a_drifted_file_flips_the_anchor_status_to_stale() {
 
     // Drift the file: same symbol, completely different body — the memory
     // now describes behavior that is gone.
-    std::fs::write(src.join("queue.rs"), "pub fn load_queue() -> u64 {\n    4000\n}\n").unwrap();
+    std::fs::write(
+        src.join("queue.rs"),
+        "pub fn load_queue() -> u64 {\n    4000\n}\n",
+    )
+    .unwrap();
 
     let drifted = server.call_tool_ok(
         "codebase",
@@ -1414,7 +1436,9 @@ fn a_drifted_file_flips_the_anchor_status_to_stale() {
         "the stale reason must name what changed: {drifted}"
     );
     assert!(
-        drifted["staleMemories"].as_array().is_some_and(|s| !s.is_empty()),
+        drifted["staleMemories"]
+            .as_array()
+            .is_some_and(|s| !s.is_empty()),
         "the drifted memory must surface in the staleMemories report: {drifted}"
     );
     server.shutdown();
@@ -1509,7 +1533,10 @@ fn a_redmine_404_keeps_the_exact_api_message_shape() {
     let mut server = Server::spawn_with_env(
         dir.path(),
         &[
-            ("REDMINE_URL", Box::leak(mock.base_url.clone().into_boxed_str()) as &str),
+            (
+                "REDMINE_URL",
+                Box::leak(mock.base_url.clone().into_boxed_str()) as &str,
+            ),
             ("VESTIGE_ALLOW_PRIVATE_CONNECTOR_HOSTS", "1"),
         ],
         &["REDMINE_API_KEY", "GITHUB_TOKEN", "VESTIGE_GITHUB_TOKEN"],
@@ -1548,7 +1575,10 @@ fn reconcile_with_an_empty_live_set_is_guarded_against_mass_tombstoning() {
                     200,
                     redmine_issues_json(&[
                         (4711, "Failure fixture: the export job wedges on retry"),
-                        (4712, "Failure fixture: the dashboard widget drops timezones"),
+                        (
+                            4712,
+                            "Failure fixture: the dashboard widget drops timezones",
+                        ),
                     ]),
                 )
             }
@@ -1595,7 +1625,11 @@ fn reconcile_with_an_empty_live_set_is_guarded_against_mass_tombstoning() {
     let hits = server.recall_ids(json!({
         "query": "export job wedges on retry", "limit": 10, "concrete": true,
     }));
-    assert_eq!(hits.len(), 1, "the synced issue must be retrievable: {hits:?}");
+    assert_eq!(
+        hits.len(),
+        1,
+        "the synced issue must be retrievable: {hits:?}"
+    );
     let synced_id = hits[0].clone();
 
     // The upstream "loses" everything; a guarded reconcile must hold.
@@ -1715,7 +1749,10 @@ fn updating_a_nonexistent_intention_is_a_clean_named_error() {
     }
 
     // Missing id/status are refused by name too.
-    let no_id = server.call_tool("intention", json!({ "action": "update", "status": "complete" }));
+    let no_id = server.call_tool(
+        "intention",
+        json!({ "action": "update", "status": "complete" }),
+    );
     assert_error_mentions(&no_id, "id", "update without id");
     let no_status = server.call_tool(
         "intention",
@@ -1994,7 +2031,10 @@ fn a_burst_of_mixed_frames_answers_every_valid_request() {
     assert_eq!(by_id[&202]["error"]["code"], json!(-32601));
     assert_eq!(by_id[&203]["error"]["code"], json!(-32602));
     assert_eq!(by_id[&204]["result"], json!({}));
-    assert_eq!(parse_errors, 1, "exactly one parse error for one garbage frame");
+    assert_eq!(
+        parse_errors, 1,
+        "exactly one parse error for one garbage frame"
+    );
 
     // The store still works after the storm.
     let id = server.ingest_keyword_only("Written after the mixed-frame storm", &[]);

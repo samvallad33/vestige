@@ -70,7 +70,8 @@ impl TestDatabaseManager {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let db_path = temp_dir.path().join("test_vestige.db");
 
-        let storage = vestige_core::open_storage(Some(db_path.clone())).expect("Failed to create test storage");
+        let storage = vestige_core::open_storage(Some(db_path.clone()))
+            .expect("Failed to create test storage");
 
         Self {
             storage,
@@ -84,7 +85,8 @@ impl TestDatabaseManager {
     ///
     /// The database is NOT automatically deleted.
     pub fn new_at_path(path: PathBuf) -> Self {
-        let storage = vestige_core::open_storage(Some(path.clone())).expect("Failed to create test storage");
+        let storage =
+            vestige_core::open_storage(Some(path.clone())).expect("Failed to create test storage");
 
         Self {
             storage,
@@ -318,8 +320,8 @@ impl TestDatabaseManager {
         let _ = std::fs::remove_file(&self.db_path);
 
         // Recreate storage
-        self.storage =
-            vestige_core::open_storage(Some(self.db_path.clone())).expect("Failed to recreate storage");
+        self.storage = vestige_core::open_storage(Some(self.db_path.clone()))
+            .expect("Failed to recreate storage");
     }
 }
 

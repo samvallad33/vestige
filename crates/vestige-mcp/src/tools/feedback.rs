@@ -94,7 +94,11 @@ pub async fn execute_promote(
     // #252 Phase A: with a bound process actor, the promote is an
     // actor-attributed endorsement (one transaction: mutation + evidence +
     // receipt). Without one, the historical path runs unchanged.
-    let claimed_role = args.role.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    let claimed_role = args
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty());
     let endorsement = if storage.process_actor_did().is_some() {
         Some(
             storage
@@ -106,7 +110,9 @@ pub async fn execute_promote(
     };
     let node = match &endorsement {
         Some(outcome) => outcome.node.clone(),
-        None => storage.promote_memory(&args.id).map_err(|e| e.to_string())?,
+        None => storage
+            .promote_memory(&args.id)
+            .map_err(|e| e.to_string())?,
     };
 
     // ====================================================================
@@ -184,7 +190,11 @@ pub async fn execute_demote(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Node not found: {}", args.id))?;
 
-    let claimed_role = args.role.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    let claimed_role = args
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty());
     let endorsement = if storage.process_actor_did().is_some() {
         Some(
             storage

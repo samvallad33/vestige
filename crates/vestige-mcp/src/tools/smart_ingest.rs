@@ -23,9 +23,9 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::cognitive::CognitiveEngine;
 use vestige_core::{
-    DEFAULT_MEMORY_SCOPE, ImportanceContext, IngestInput, SecretPolicy, Storage,
-    StorageError, SynapticCapturePolicy, SynapticImportanceEvent, SynapticIngestRequest,
-    SynapticSignalSnapshot, SynapticTag, SynapticTaggingConfig, scan_secrets,
+    DEFAULT_MEMORY_SCOPE, ImportanceContext, IngestInput, SecretPolicy, Storage, StorageError,
+    SynapticCapturePolicy, SynapticImportanceEvent, SynapticIngestRequest, SynapticSignalSnapshot,
+    SynapticTag, SynapticTaggingConfig, scan_secrets,
 };
 
 /// Input schema for smart_ingest tool
@@ -1004,7 +1004,10 @@ async fn execute_verbose(
         let labile = current_labile_candidates(cognitive);
         let result = storage
             .smart_ingest_in_scope_with_secret_policy_and_labile(
-                input, &scope, secret_policy, &labile,
+                input,
+                &scope,
+                secret_policy,
+                &labile,
             )
             .map_err(|e| e.to_string())?;
         let node_id = result.node.id.clone();

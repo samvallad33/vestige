@@ -71,7 +71,9 @@ mod tests {
         for i in 0..n {
             storage
                 .ingest(vestige_core::IngestInput {
-                    content: format!("Dream compile wire test memory {i} about the deploy pipeline"),
+                    content: format!(
+                        "Dream compile wire test memory {i} about the deploy pipeline"
+                    ),
                     node_type: "fact".to_string(),
                     source: None,
                     sentiment_score: 0.0,

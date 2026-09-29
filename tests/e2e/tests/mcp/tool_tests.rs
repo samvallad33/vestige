@@ -107,32 +107,30 @@ fn test_ingest_tool_with_all_fields() {
 // RECALL TOOL TESTS (3 tests)
 // ============================================================================
 
-/// Test recall tool with valid query.
+/// Test recall tool with an exact handle (4.0: handle-only).
 #[test]
 fn test_recall_tool_valid_query() {
     let _tool_call = json!({
         "name": "recall",
         "arguments": {
-            "query": "rust programming",
-            "limit": 10
+            "handle": "mem:3d2f0e1a-7b8c-4d9e-a1b2-c3d4e5f60718"
         }
     });
 
     let expected_response = json!({
         "content": [{
             "type": "text",
-            "text": "{\"query\": \"rust programming\", \"total\": 1, \"results\": [{\"id\": \"test-id\", \"content\": \"Rust is safe\"}]}"
+            "text": "{\"handles\": [{\"handle\": \"mem:3d2f0e1a-7b8c-4d9e-a1b2-c3d4e5f60718\", \"kind\": \"mem\", \"nodes\": []}]}"
         }],
         "isError": false
     });
 
     validate_tool_response(&expected_response);
     let parsed = parse_response_text(&expected_response);
-    assert!(parsed["query"].is_string(), "Should echo query");
-    assert!(parsed["results"].is_array(), "Should return results array");
+    assert!(parsed["handles"].is_array(), "Should return handles array");
 }
 
-/// Test recall tool rejects empty query.
+/// Test recall rejects free text: handle_required, never a search.
 #[test]
 fn test_recall_tool_rejects_empty_query() {
     let tool_call = json!({
@@ -142,35 +140,38 @@ fn test_recall_tool_rejects_empty_query() {
         }
     });
 
-    // Empty query should be rejected
-    assert!(tool_call["arguments"]["query"].as_str().unwrap().is_empty());
-    // Expected behavior: return error with isError: true
+    // Free text (even empty) must return handle_required, not a search.
+    assert!(tool_call["arguments"].get("handle").is_none());
+    // Expected behavior: {"error":"handle_required","got":"", ...} with no candidates.
 }
 
-/// Test recall tool clamps limit values.
+/// Test recall accepts at most 16 handles.
 #[test]
 fn test_recall_tool_clamps_limit() {
-    // Test minimum clamping
-    let min_call = json!({
-        "name": "recall",
-        "arguments": {
-            "query": "test",
-            "limit": 0
-        }
-    });
-    let limit = min_call["arguments"]["limit"].as_i64().unwrap();
-    assert!(limit < 1, "Limit 0 should be clamped to 1");
-
-    // Test maximum clamping
+    // Up to 16 handles are accepted.
+    let max_handles: Vec<&str> = std::iter::repeat("mem:3d2f0e1a-7b8c-4d9e-a1b2-c3d4e5f60718")
+        .take(16)
+        .collect();
     let max_call = json!({
         "name": "recall",
-        "arguments": {
-            "query": "test",
-            "limit": 1000
-        }
+        "arguments": { "handle": max_handles }
     });
-    let limit = max_call["arguments"]["limit"].as_i64().unwrap();
-    assert!(limit > 100, "Limit 1000 should be clamped to 100");
+    let handles = max_call["arguments"]["handle"].as_array().unwrap();
+    assert!(handles.len() <= 16, "16 handles is the documented maximum");
+
+    // 17 handles is outside the contract.
+    let over_handles: Vec<&str> = std::iter::repeat("mem:3d2f0e1a-7b8c-4d9e-a1b2-c3d4e5f60718")
+        .take(17)
+        .collect();
+    let over_call = json!({
+        "name": "recall",
+        "arguments": { "handle": over_handles }
+    });
+    let handles = over_call["arguments"]["handle"].as_array().unwrap();
+    assert!(
+        handles.len() > 16,
+        "17 handles must be rejected with handle_required"
+    );
 }
 
 // ============================================================================
@@ -605,7 +606,7 @@ fn test_tool_schemas_are_valid_json_schema() {
 fn test_all_tools_have_schema() {
     let tool_definitions = vec![
         ("ingest", vec!["content"]),
-        ("recall", vec!["query"]),
+        ("recall", vec!["handle"]),
         ("semantic_search", vec!["query"]),
         ("hybrid_search", vec!["query"]),
         ("get_knowledge", vec!["nodeId"]),

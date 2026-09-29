@@ -30,7 +30,10 @@ async fn sized_store() -> (Arc<Storage>, tempfile::TempDir) {
         storage
             .ingest_in_scope(
                 IngestInput {
-                    content: format!("Sized store fixture memory number {index} about topic-{}", index % 40),
+                    content: format!(
+                        "Sized store fixture memory number {index} about topic-{}",
+                        index % 40
+                    ),
                     tags: vec![format!("topic-{}", index % 40)],
                     ..Default::default()
                 },
@@ -80,12 +83,18 @@ async fn every_view_completes_quickly_on_a_sized_store() {
 
     for (view, args) in [
         ("retention", serde_json::json!({ "view": "retention" })),
-        ("timeline", serde_json::json!({ "view": "timeline", "start": "2020-01-01" })),
+        (
+            "timeline",
+            serde_json::json!({ "view": "timeline", "start": "2020-01-01" }),
+        ),
         (
             "timeline-tagged",
             serde_json::json!({ "view": "timeline", "start": "2020-01-01", "tags": ["topic-1"] }),
         ),
-        ("changelog", serde_json::json!({ "view": "changelog", "limit": 100 })),
+        (
+            "changelog",
+            serde_json::json!({ "view": "changelog", "limit": 100 }),
+        ),
         ("stats", serde_json::json!({ "view": "stats" })),
         (
             "stats-all-scopes",
@@ -116,14 +125,11 @@ async fn every_view_completes_quickly_on_a_sized_store() {
         }]
     });
     let started = Instant::now();
-    let inventory = memory_status::tool_guide(&catalog, &serde_json::json!({}))
-        .expect("tools inventory");
+    let inventory =
+        memory_status::tool_guide(&catalog, &serde_json::json!({})).expect("tools inventory");
     assert_eq!(inventory["tools"].as_array().unwrap().len(), 1);
-    let unfolded = memory_status::tool_guide(
-        &catalog,
-        &serde_json::json!({ "tool": "recall" }),
-    )
-    .expect("tools full-schema unfold");
+    let unfolded = memory_status::tool_guide(&catalog, &serde_json::json!({ "tool": "recall" }))
+        .expect("tools full-schema unfold");
     assert!(unfolded["tools"][0]["inputSchema"].is_object());
     assert_within_budget("view=tools (inventory + unfold)", started);
 }
@@ -135,7 +141,8 @@ async fn every_view_completes_quickly_on_a_sized_store() {
 async fn stats_view_scales_linearly_not_quadratically() {
     async fn timed_stats(count: usize) -> std::time::Duration {
         let dir = tempfile::tempdir().expect("temp dir");
-        let storage = vestige_core::open_storage(Some(dir.path().join("scale.db"))).expect("storage");
+        let storage =
+            vestige_core::open_storage(Some(dir.path().join("scale.db"))).expect("storage");
         for index in 0..count {
             storage
                 .ingest_in_scope(

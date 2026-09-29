@@ -72,11 +72,7 @@ impl Server {
     /// the reconsolidation labile window), and `remove` deletes variables a
     /// developer's shell may have exported (so "no REDMINE_URL configured" is
     /// actually testable on a machine that has one).
-    pub(crate) fn spawn_with_env(
-        data_dir: &Path,
-        set: &[(&str, &str)],
-        remove: &[&str],
-    ) -> Self {
+    pub(crate) fn spawn_with_env(data_dir: &Path, set: &[(&str, &str)], remove: &[&str]) -> Self {
         let mut command = Command::new(server_binary());
         command
             .env("VESTIGE_DATA_DIR", data_dir)
@@ -137,7 +133,8 @@ impl Server {
     }
 
     /// Everything the server has written to stderr so far.
-    pub(crate) fn stderr_lines(&self) -> Vec<String> {        self.stderr.lock().expect("stderr sink").clone()
+    pub(crate) fn stderr_lines(&self) -> Vec<String> {
+        self.stderr.lock().expect("stderr sink").clone()
     }
 
     /// Every stderr line that the tracing subscriber marked as an error.

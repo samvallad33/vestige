@@ -223,7 +223,11 @@ fn never_composed(
     }))
 }
 
-fn bounty_mode(storage: &Arc<Storage>, limit: i32, tags: Option<&[String]>) -> Result<Value, String> {
+fn bounty_mode(
+    storage: &Arc<Storage>,
+    limit: i32,
+    tags: Option<&[String]>,
+) -> Result<Value, String> {
     const PAGE_SIZE: i32 = 100;
     const MAX_SCAN_EVENTS: i32 = 1_000;
 
@@ -542,21 +546,21 @@ mod tests {
             )
             .unwrap();
 
-    // GhostLink contract: bounty lanes need typed-edge admission
-    for other in [&first, &second] {
-        let now = chrono::Utc::now();
-        storage
-            .save_connection(&vestige_core::ConnectionRecord {
-                source_id: third.clone(),
-                target_id: other.clone(),
-                strength: 1.0,
-                link_type: "touched".to_string(),
-                created_at: now,
-                last_activated: now,
-                activation_count: 0,
-            })
-            .unwrap();
-    }
+        // GhostLink contract: bounty lanes need typed-edge admission
+        for other in [&first, &second] {
+            let now = chrono::Utc::now();
+            storage
+                .save_connection(&vestige_core::ConnectionRecord {
+                    source_id: third.clone(),
+                    target_id: other.clone(),
+                    strength: 1.0,
+                    link_type: "touched".to_string(),
+                    created_at: now,
+                    last_activated: now,
+                    activation_count: 0,
+                })
+                .unwrap();
+        }
 
         let unrelated = ingest(&storage, "Personal planning lane", &["personal"]);
         storage

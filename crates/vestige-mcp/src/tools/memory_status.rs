@@ -188,9 +188,7 @@ pub async fn execute(
 /// type, and how fresh the indexes that feed code memory are. Read-only, no
 /// lists — counts and ages only, so the output shape is constant.
 pub fn execute_coverage(storage: &Arc<Storage>) -> Result<Value, String> {
-    let snapshot = storage
-        .coverage_snapshot()
-        .map_err(|e| e.to_string())?;
+    let snapshot = storage.coverage_snapshot().map_err(|e| e.to_string())?;
 
     let mut edge_counts = serde_json::Map::new();
     for (link_type, count) in &snapshot.edge_counts_by_type {
@@ -201,8 +199,13 @@ pub fn execute_coverage(storage: &Arc<Storage>) -> Result<Value, String> {
     let commit_age = snapshot.newest_git_commit_record_age_days;
     let trace_age = snapshot.newest_agent_trace_age_hours;
     let staleness_note = match (commit_age, trace_age) {
-        (None, None) => "no git-commit records and no agent traces recorded yet; index freshness is unknown".to_string(),
-        (None, Some(_)) => "no git-commit records in this store; commit coverage is unknown".to_string(),
+        (None, None) => {
+            "no git-commit records and no agent traces recorded yet; index freshness is unknown"
+                .to_string()
+        }
+        (None, Some(_)) => {
+            "no git-commit records in this store; commit coverage is unknown".to_string()
+        }
         (Some(_), None) => "no agent trace events yet; Black Box freshness is unknown".to_string(),
         (Some(days), Some(hours)) => {
             let commit_side = if days > 30 {
@@ -426,8 +429,8 @@ mod tests {
             })
             .unwrap();
         use chrono::Utc;
-        use vestige_core::codebase::CodeAnchor;
         use vestige_core::ConnectionRecord;
+        use vestige_core::codebase::CodeAnchor;
         storage
             .record_code_anchors(&[CodeAnchor {
                 id: "anc_cov".into(),
@@ -541,10 +544,12 @@ mod tests {
         assert_eq!(value["policy"]["roleWeights"]["functional-tester"], 1.15);
         assert_eq!(value["policy"]["roleWeights"]["qa"], 1.10);
         assert_eq!(value["policy"]["roleWeights"]["dev"], 1.00);
-        assert!(value["claimBoundary"]
-            .as_str()
-            .unwrap()
-            .contains("never establishes that a claim is true"));
+        assert!(
+            value["claimBoundary"]
+                .as_str()
+                .unwrap()
+                .contains("never establishes that a claim is true")
+        );
 
         // Filter by actor id.
         let args = Some(serde_json::json!({ "view": "provenance", "actorId": did }));
@@ -552,7 +557,8 @@ mod tests {
         assert_eq!(value["count"], 1);
 
         // Unknown filters return an empty, well-formed list.
-        let args = Some(serde_json::json!({ "view": "provenance", "actorId": "did:key:z6MkNobody" }));
+        let args =
+            Some(serde_json::json!({ "view": "provenance", "actorId": "did:key:z6MkNobody" }));
         let value = execute(&storage, &cognitive, &oc, args).await.unwrap();
         assert_eq!(value["count"], 0);
     }

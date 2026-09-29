@@ -167,10 +167,7 @@ pub(super) fn worst_persisted_status(anchors: &[CodeAnchor]) -> Option<AnchorSta
     if anchors.is_empty() {
         return None;
     }
-    let statuses: Vec<AnchorStatus> = anchors
-        .iter()
-        .filter_map(|a| a.last_status)
-        .collect();
+    let statuses: Vec<AnchorStatus> = anchors.iter().filter_map(|a| a.last_status).collect();
     if statuses.is_empty() {
         return None;
     }
