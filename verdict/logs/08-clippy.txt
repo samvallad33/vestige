@@ -1,0 +1,388 @@
+START 2026-09-29T13:12:34Z
+    Checking libc v0.2.189
+    Checking cfg-if v1.0.5
+    Checking typenum v1.20.1
+    Checking rand_core v0.10.1
+    Checking itoa v1.0.18
+    Checking smallvec v1.16.2
+    Checking once_cell v1.21.4
+    Checking log v0.4.34
+    Checking bytes v1.12.1
+    Checking pin-project-lite v0.2.17
+    Checking zerofrom v0.1.8
+    Checking stable_deref_trait v1.2.1
+    Checking yoke v0.8.3
+    Checking futures-core v0.3.34
+    Checking serde_core v1.0.229
+    Checking cmov v0.5.4
+    Checking hybrid-array v0.4.15
+    Checking memchr v2.8.3
+    Checking getrandom v0.4.3
+    Checking scopeguard v1.2.0
+    Checking lock_api v0.4.14
+    Checking parking_lot_core v0.9.12
+    Checking crypto-common v0.2.2
+    Checking mio v1.2.3
+    Checking errno v0.3.14
+    Checking ctutils v0.4.2
+    Checking zerovec v0.11.8
+    Checking http v1.5.0
+    Checking cpufeatures v0.3.1
+    Checking zeroize v1.9.0
+    Checking signal-hook-registry v1.4.8
+    Checking parking_lot v0.12.5
+    Checking socket2 v0.6.5
+    Checking futures-sink v0.3.34
+    Checking block-buffer v0.12.1
+    Checking tracing-core v0.1.36
+    Checking bitflags v2.13.2
+    Checking tokio v1.53.1
+    Checking tinystr v0.8.4
+    Checking writeable v0.6.4
+    Checking litemap v0.8.3
+    Checking serde v1.0.229
+    Checking percent-encoding v2.3.2
+    Checking icu_locale_core v2.3.0
+    Checking http-body v1.1.0
+    Checking potential_utf v0.1.6
+    Checking zerotrie v0.2.5
+    Checking futures-io v0.3.34
+    Checking tower-service v0.3.3
+    Checking slab v0.4.12
+    Checking subtle v2.6.1
+    Checking utf8_iter v1.0.4
+    Checking futures-task v0.3.34
+    Checking icu_collections v2.3.0
+    Checking futures-util v0.3.34
+    Checking icu_provider v2.3.1
+    Checking tracing v0.1.44
+    Checking httparse v1.10.1
+    Checking zmij v1.0.23
+    Checking aws-lc-sys v0.45.0
+    Checking rustls-pki-types v1.15.1
+    Checking const-oid v0.10.2
+    Checking digest v0.11.3
+    Checking aws-lc-rs v1.18.1
+    Checking serde_json v1.0.151
+    Checking icu_normalizer_data v2.3.0
+    Checking icu_properties_data v2.3.0
+    Checking tower-layer v0.3.3
+    Checking untrusted v0.9.0
+    Checking try-lock v0.2.5
+    Checking rustls-webpki v0.103.15
+    Checking want v0.3.1
+    Checking icu_properties v2.3.0
+    Checking icu_normalizer v2.3.0
+    Checking form_urlencoded v1.2.2
+    Checking futures-channel v0.3.34
+    Checking sync_wrapper v1.0.2
+    Checking arrayvec v0.7.8
+    Checking httpdate v1.0.3
+    Checking atomic-waker v1.1.2
+    Checking constant_time_eq v0.4.2
+    Checking rustls v0.23.45
+    Checking blake3 v1.8.7
+    Checking inout v0.2.2
+    Checking idna_adapter v1.2.2
+    Checking base64 v0.23.1
+    Checking ipnet v2.12.2
+    Checking tokio-util v0.7.19
+    Checking hyper v1.11.1
+    Checking idna v1.1.0
+    Checking tower v0.5.3
+    Checking thiserror v2.0.21
+    Checking http-body-util v0.1.5
+    Checking signature v3.0.0
+    Checking base64ct v1.8.3
+    Checking openssl-probe v0.2.1
+    Checking ryu v1.0.23
+    Checking foldhash v0.2.0
+    Checking serde_urlencoded v0.7.1
+    Checking hyper-util v0.1.21
+    Checking hashbrown v0.17.1
+    Checking phc v0.6.1
+    Checking rustls-native-certs v0.8.4
+    Checking ed25519 v3.0.0
+    Checking curve25519-dalek v5.0.0
+    Checking num-traits v0.2.19
+    Checking inotify-sys v0.1.8
+    Checking url v2.5.8
+    Checking cipher v0.5.2
+    Checking openssl-sys v0.9.117
+    Checking libz-sys v1.1.29
+    Checking sha2 v0.11.0
+    Checking universal-hash v0.6.1
+    Checking same-file v1.0.6
+    Checking option-ext v0.2.0
+    Checking iana-time-zone v0.1.65
+    Checking libgit2-sys v0.18.8+1.9.7
+    Checking chrono v0.4.45
+    Checking tokio-rustls v0.26.5
+    Checking rustls-platform-verifier v0.7.1
+    Checking ed25519-dalek v3.0.0
+    Checking dirs-sys v0.5.0
+    Checking walkdir v2.5.0
+    Checking poly1305 v0.9.1
+    Checking hyper-rustls v0.27.10
+    Checking tower-http v0.6.11
+    Checking chacha20 v0.10.2
+    Checking generic-array v0.14.7
+    Checking borsh v1.8.1
+    Checking inotify v0.11.5
+    Checking libsqlite3-sys v0.38.2
+    Checking hashlink v0.12.2
+    Checking password-hash v0.6.1
+    Checking aead v0.6.1
+    Checking blake2 v0.11.0
+    Checking uuid v1.26.1
+    Checking notify-types v2.1.0
+    Checking linux-raw-sys v0.12.1
+    Checking ryu-js v1.0.3
+    Checking fallible-iterator v0.3.0
+    Checking fallible-streaming-iterator v0.1.9
+    Checking serde_json_canonicalizer v0.3.2
+    Checking notify v8.2.0
+    Checking argon2 v0.6.0
+    Checking rusqlite v0.40.2
+    Checking rustix v1.1.5
+    Checking chacha20poly1305 v0.11.0
+    Checking reqwest v0.13.5
+    Checking getrandom v0.3.4
+    Checking zerocopy v0.8.59
+    Checking directories v6.0.0
+    Checking git2 v0.21.0
+    Checking fastrand v2.5.0
+    Checking rand_core v0.9.5
+    Checking libm v0.2.16
+    Checking tempfile v3.27.0
+    Checking block-buffer v0.10.4
+    Checking crypto-common v0.1.7
+    Checking base64 v0.22.1
+    Checking digest v0.10.7
+    Checking anyhow v1.0.104
+    Checking strata v0.1.0 (/workspace/crates/strata)
+    Checking strata-kernel v0.1.0 (/workspace/crates/strata-kernel)
+    Checking utf8parse v0.2.2
+    Checking cpufeatures v0.2.17
+    Checking anstyle-parse v1.0.0
+    Checking sha1 v0.10.7
+    Checking strata-gate v0.1.0 (/workspace/crates/strata-gate)
+    Checking is_terminal_polyfill v1.70.2
+    Checking anstyle v1.0.14
+    Checking colorchoice v1.0.5
+    Checking data-encoding v2.11.1
+    Checking regex-syntax v0.8.11
+    Checking mime v0.3.17
+    Checking anstyle-query v1.1.5
+    Checking anstream v1.0.0
+    Checking vestige-core v3.1.1 (/workspace/crates/vestige-core)
+    Checking is-docker v0.2.0
+    Checking strsim v0.11.1
+    Checking clap_lex v1.1.1
+    Checking lazy_static v1.5.0
+    Checking sharded-slab v0.1.7
+    Checking ppv-lite86 v0.2.21
+    Checking regex-automata v0.4.18
+    Checking rand_chacha v0.9.0
+    Checking clap_builder v4.6.7
+    Checking rand v0.9.5
+    Checking tungstenite v0.29.0
+    Checking tokio-tungstenite v0.29.0
+    Checking matchers v0.2.0
+    Checking is-wsl v0.4.0
+    Checking axum-core v0.5.6
+    Checking tracing-serde v0.2.0
+    Checking serde_path_to_error v0.1.20
+    Checking tracing-log v0.2.0
+    Checking thread_local v1.1.10
+    Checking tinyvec v1.13.3
+    Checking matchit v0.8.4
+    Checking unicase v2.9.0
+    Checking nu-ansi-term v0.50.3
+    Checking mime_guess v2.0.5
+    Checking tracing-subscriber v0.3.23
+    Checking unicode-normalization v0.1.25
+    Checking axum v0.8.9
+    Checking include_dir v0.7.4
+    Checking clap v4.6.7
+    Checking open v5.4.4
+    Checking tower-http v0.7.1
+    Checking colored v3.1.1
+    Checking byteorder v1.5.0
+    Checking bytemuck v1.25.2
+    Checking roaring v0.11.5
+    Checking vestige-spacetime v0.1.0 (/workspace/crates/vestige-spacetime)
+    Checking strata-migrate v0.1.0 (/workspace/crates/strata-migrate)
+    Checking vestige-e2e-tests v0.1.0 (/workspace/tests/e2e)
+    Checking strata-verify v0.1.0 (/workspace/crates/strata-verify)
+    Checking vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp)
+    Checking vestige-differential-tests v0.1.0 (/workspace/tests/differential)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 29.23s
+WORKSPACE_CLIPPY_EXIT:0
+===== strata =====
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.26
+    Checking typenum v1.20.1
+   Compiling winnow v1.0.4
+   Compiling hashbrown v0.17.1
+    Checking hybrid-array v0.4.15
+   Compiling equivalent v1.0.2
+   Compiling semver v1.0.28
+   Compiling indexmap v2.14.2
+   Compiling toml_parser v1.1.3+spec-1.1.0
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+   Compiling rustc_version v0.4.1
+   Compiling shlex v2.0.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+    Checking cpufeatures v0.3.1
+    Checking cfg-if v1.0.5
+   Compiling find-msvc-tools v0.1.14
+   Compiling curve25519-dalek v5.0.0
+    Checking digest v0.11.3
+   Compiling cc v1.5.1
+   Compiling toml_edit v0.25.15+spec-1.1.0
+   Compiling syn v2.0.119
+   Compiling cfg_aliases v0.2.2
+   Compiling borsh v1.8.1
+   Compiling syn v3.0.6
+   Compiling proc-macro-crate v3.5.0
+    Checking signature v3.0.0
+   Compiling blake3 v1.8.7
+   Compiling once_cell v1.21.4
+    Checking zeroize v1.9.0
+    Checking subtle v2.6.1
+   Compiling libc v0.2.189
+    Checking ed25519 v3.0.0
+    Checking sha2 v0.11.0
+    Checking constant_time_eq v0.4.2
+    Checking arrayvec v0.7.8
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling borsh-derive v1.8.1
+    Checking ed25519-dalek v3.0.0
+    Checking strata v0.1.0 (/workspace/crates/strata)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.92s
+CLIPPY strata:0
+===== strata-kernel =====
+   Compiling libm v0.2.16
+    Checking strata-kernel v0.1.0 (/workspace/crates/strata-kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.66s
+CLIPPY strata-kernel:0
+===== strata-gate =====
+    Checking strata-gate v0.1.0 (/workspace/crates/strata-gate)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
+CLIPPY strata-gate:0
+===== strata-store =====
+    Checking strata-kernel v0.1.0 (/workspace/crates/strata-kernel)
+    Checking strata-gate v0.1.0 (/workspace/crates/strata-gate)
+    Checking strata v0.1.0 (/workspace/crates/strata)
+    Checking strata-store v0.1.0 (/workspace/crates/strata-store)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.37s
+CLIPPY strata-store:0
+===== strata-migrate =====
+    Checking rand_core v0.10.1
+   Compiling syn v2.0.119
+   Compiling serde_core v1.0.229
+    Checking bitflags v2.13.2
+    Checking crypto-common v0.2.2
+    Checking const-oid v0.10.2
+   Compiling curve25519-dalek v5.0.0
+   Compiling getrandom v0.4.3
+   Compiling inotify-sys v0.1.8
+    Checking digest v0.11.3
+   Compiling serde v1.0.229
+   Compiling autocfg v1.5.1
+   Compiling zmij v1.0.23
+   Compiling num-traits v0.2.19
+    Checking signature v3.0.0
+   Compiling serde_derive v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling pkg-config v0.3.34
+    Checking once_cell v1.21.4
+   Compiling vcpkg v0.2.15
+    Checking ed25519 v3.0.0
+    Checking sha2 v0.11.0
+   Compiling libsqlite3-sys v0.38.2
+    Checking log v0.4.34
+   Compiling rustix v1.1.5
+    Checking itoa v1.0.18
+    Checking pin-project-lite v0.2.17
+    Checking foldhash v0.2.0
+    Checking same-file v1.0.6
+   Compiling thiserror v2.0.21
+    Checking memchr v2.8.3
+    Checking option-ext v0.2.0
+    Checking dirs-sys v0.5.0
+    Checking walkdir v2.5.0
+    Checking hashbrown v0.17.1
+    Checking mio v1.2.3
+    Checking inotify v0.11.5
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling tracing-attributes v0.1.31
+    Checking tracing-core v0.1.36
+    Checking notify-types v2.1.0
+   Compiling tokio-macros v2.7.2
+    Checking ed25519-dalek v3.0.0
+   Compiling thiserror-impl v2.0.21
+    Checking ryu-js v1.0.3
+    Checking linux-raw-sys v0.12.1
+   Compiling anyhow v1.0.104
+    Checking iana-time-zone v0.1.65
+    Checking chrono v0.4.45
+    Checking tokio v1.53.1
+    Checking serde_json_canonicalizer v0.3.2
+    Checking tracing v0.1.44
+    Checking notify v8.2.0
+   Compiling trait-variant v0.1.3
+    Checking hashlink v0.12.2
+    Checking directories v6.0.0
+    Checking uuid v1.26.1
+    Checking smallvec v1.16.2
+    Checking fastrand v2.5.0
+    Checking fallible-iterator v0.3.0
+    Checking base64 v0.23.1
+    Checking fallible-streaming-iterator v0.1.9
+    Checking tempfile v3.27.0
+    Checking strata v0.1.0 (/workspace/crates/strata)
+    Checking base64 v0.22.1
+    Checking vestige-core v3.1.1 (/workspace/crates/vestige-core)
+    Checking rusqlite v0.40.2
+    Checking strata-migrate v0.1.0 (/workspace/crates/strata-migrate)
+error: empty line after doc comment
+  --> src/records.rs:65:1
+   |
+65 | / /// both the key and the digest.)
+66 | |
+   | |_^
+...
+69 |   pub struct GenesisRecord {
+   |   ------------------------ the comment documents this struct
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#empty_line_after_doc_comments
+   = note: `-D clippy::empty-line-after-doc-comments` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_doc_comments)]`
+   = help: if the empty line is unintentional, remove it
+help: if the documentation should include the empty line include it in the comment
+   |
+66 | ///
+   |
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> src/lib.rs:836:29
+    |
+836 |         let value = row.get(&column)?;
+    |                             ^^^^^^^ help: change this to: `column`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_borrow
+    = note: `-D clippy::needless-borrow` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: could not compile `strata-migrate` (lib) due to 2 previous errors
+CLIPPY strata-migrate:101
+===== strata-verify =====
+    Checking strata-migrate v0.1.0 (/workspace/crates/strata-migrate)
+    Checking strata-verify v0.1.0 (/workspace/crates/strata-verify)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.53s
+CLIPPY strata-verify:0
+END 2026-09-29T13:13:24Z

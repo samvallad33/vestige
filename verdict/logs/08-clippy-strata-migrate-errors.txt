@@ -1,0 +1,34 @@
+352:error: empty line after doc comment
+353-  --> src/records.rs:65:1
+354-   |
+355-65 | / /// both the key and the digest.)
+356-66 | |
+357-   | |_^
+358-...
+359-69 |   pub struct GenesisRecord {
+360-   |   ------------------------ the comment documents this struct
+361-   |
+362-   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#empty_line_after_doc_comments
+363-   = note: `-D clippy::empty-line-after-doc-comments` implied by `-D warnings`
+364-   = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_doc_comments)]`
+365-   = help: if the empty line is unintentional, remove it
+366-help: if the documentation should include the empty line include it in the comment
+367-   |
+368-66 | ///
+369-   |
+370-
+371-error: this expression creates a reference which is immediately dereferenced by the compiler
+372-   --> src/lib.rs:836:29
+--
+377:    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_borrow
+378-    = note: `-D clippy::needless-borrow` implied by `-D warnings`
+379:    = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+380-
+381-error: could not compile `strata-migrate` (lib) due to 2 previous errors
+382-CLIPPY strata-migrate:101
+383-===== strata-verify =====
+384-    Checking strata-migrate v0.1.0 (/workspace/crates/strata-migrate)
+385-    Checking strata-verify v0.1.0 (/workspace/crates/strata-verify)
+386-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.53s
+387-CLIPPY strata-verify:0
+388-END 2026-09-29T13:13:24Z

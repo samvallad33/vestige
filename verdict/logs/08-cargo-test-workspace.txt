@@ -1,0 +1,2665 @@
+ Downloading crates ...
+  Downloaded byteorder v1.5.0
+  Downloaded bytemuck v1.25.2
+  Downloaded roaring v0.11.5
+   Compiling vestige-core v3.1.1 (/workspace/crates/vestige-core)
+   Compiling byteorder v1.5.0
+   Compiling bytemuck v1.25.2
+   Compiling roaring v0.11.5
+   Compiling vestige-spacetime v0.1.0 (/workspace/crates/vestige-spacetime)
+   Compiling vestige-e2e-tests v0.1.0 (/workspace/tests/e2e)
+   Compiling strata-migrate v0.1.0 (/workspace/crates/strata-migrate)
+   Compiling strata-verify v0.1.0 (/workspace/crates/strata-verify)
+   Compiling vestige-mcp v3.1.1 (/workspace/crates/vestige-mcp)
+   Compiling vestige-differential-tests v0.1.0 (/workspace/tests/differential)
+   Compiling vestige-phase-1-tests v0.0.1 (/workspace/tests/phase_1)
+    Finished `test` profile [optimized + debuginfo] target(s) in 3m 57s
+     Running unittests src/lib.rs (/tmp/cargo-target/debug/deps/vestige_core-2bb4160d831e3813)
+
+running 935 tests
+test actor::tests::aggregate_is_bounded_per_actor_and_in_total ... ok
+test actor::tests::base58_rejects_ambiguous_characters ... ok
+test actor::tests::deterministic_event_ids_make_retries_idempotent ... ok
+test actor::tests::base58_leading_zeros_become_ones ... ok
+test actor::tests::did_key_is_stable_across_mints_of_the_same_seed ... ok
+test actor::tests::base58_known_vector_hello_world ... ok
+test actor::tests::did_key_rejects_foreign_shapes ... ok
+test actor::tests::base58_round_trips_random_payloads ... ok
+test actor::tests::revision_digest_binds_to_exact_content ... ok
+test actor::tests::did_key_uses_ed25519_multicodec_and_round_trips ... ok
+test actor::tests::permissive_key_file_is_rejected ... ok
+test actor::tests::claimed_roles_cannot_self_grant_authority ... ok
+test actor::tests::unclaimed_roles_stay_unattributed_and_neutral ... ok
+test actor::tests::whitespace_only_claim_reads_as_unclaimed ... ok
+test actor::tests::flat_v1_seed_matches_the_issue_table ... ok
+test actor::tests::membership_to_a_deleted_weight_row_falls_back_neutral ... ok
+test actor::tests::membership_and_weight_yield_a_granted_resolution ... ok
+test advanced::causal_walk::tests::commit_sha_and_prefixed_lines_parse_the_record_format ... ok
+test actor::tests::minted_identity_reloads_from_disk_unchanged ... ok
+test advanced::causal_walk::tests::no_start_point_refuses_with_needs_report ... ok
+test advanced::causal_walk::tests::stack_frame_blames_the_last_pre_failure_toucher ... ok
+test advanced::chains::tests::test_build_chain ... ok
+test advanced::chains::tests::test_connection_description ... ok
+test advanced::chains::tests::test_find_bridge_memories ... ok
+test advanced::chains::tests::test_find_paths ... ok
+test advanced::compression::tests::test_can_compress_minimum_size ... ok
+test advanced::compression::tests::test_cosine_similarity ... ok
+test advanced::compression::tests::test_extract_keywords ... ok
+test advanced::compression::tests::test_extract_sentences ... ok
+test advanced::contradiction::tests::bare_negation_word_presence_is_not_a_contradiction ... ok
+test advanced::contradiction::tests::benign_additive_notes_are_not_corrections ... ok
+test advanced::contradiction::tests::correction_signals_need_subject_overlap ... ok
+test advanced::contradiction::tests::short_phrasal_negation_is_seen_by_the_write_path ... ok
+test advanced::contradiction::tests::subject_identity_gate_differs_between_the_two_call_sites ... ok
+test advanced::contradiction::tests::template_instances_with_different_values_diverge ... ok
+test advanced::contradiction::tests::unrelated_memories_are_not_contradictions ... ok
+test advanced::contradiction::tests::write_path_sees_every_measured_correction_shape ... ok
+test advanced::cross_project::tests::test_find_universal_patterns ... ok
+test advanced::cross_project::tests::test_project_context ... ok
+test advanced::cross_project::tests::test_record_pattern_outcome ... ok
+test advanced::dreams::tests::test_activity_rate ... ok
+test advanced::dreams::tests::test_activity_tracker_new ... ok
+test advanced::dreams::tests::test_activity_tracker_record ... ok
+test advanced::dreams::tests::test_calculate_memory_similarity ... ok
+test advanced::dreams::tests::test_connection_graph_add ... ok
+test advanced::dreams::tests::test_connection_graph_decay_and_prune ... ok
+test advanced::dreams::tests::test_connection_graph_stats ... ok
+test advanced::dreams::tests::test_connection_graph_strengthen ... ok
+test advanced::dreams::tests::test_consolidation_cycle ... ok
+test advanced::dreams::tests::test_consolidation_report_new ... ok
+test advanced::dreams::tests::test_content_word_similarity ... ok
+test advanced::dreams::tests::test_cosine_similarity ... ok
+test advanced::causal_walk::tests::promote_persists_evidence_of_edges_and_preview_does_not ... ok
+test advanced::dreams::tests::test_dream_cycle ... ok
+test advanced::causal_walk::tests::ci_run_walks_trace_entities_to_records ... ok
+test advanced::dreams::tests::test_insight_type_description ... ok
+test advanced::dreams::tests::test_dense_dream_keeps_more_than_legacy_connection_cap ... ok
+test advanced::dreams::tests::test_pattern_types ... ok
+test advanced::dreams::tests::test_scheduler_activity_tracking ... ok
+test advanced::dreams::tests::test_memory_replay_structure ... ok
+test advanced::dreams::tests::test_scheduler_new ... ok
+test advanced::dreams::tests::test_scheduler_with_interval ... ok
+test advanced::dreams::tests::test_tag_similarity ... ok
+test advanced::dreams::tests::test_tag_similarity_function ... ok
+test advanced::git_records::tests::file_cap_counts_extras_and_stops_symbol_attribution ... ok
+test advanced::causal_walk::tests::empty_or_unresolvable_ranges_refuse_rather_than_widen ... ok
+test advanced::git_records::tests::hunk_caps_overflow_and_bound_the_content_line ... ok
+test advanced::git_records::tests::hunk_len_omitted_means_one_line ... ok
+test advanced::git_records::tests::modifier_keywords_are_not_symbols ... ok
+test advanced::git_records::tests::import_edges_are_deduped_and_capped ... ok
+test advanced::git_records::tests::import_edges_resolve_against_the_same_commit ... ok
+test advanced::git_records::tests::parse_extracts_files_symbols_and_time ... ok
+test advanced::git_records::tests::hunk_spans_carry_new_side_numbers_and_camel_symbols ... ok
+test advanced::git_records::tests::phantom_records_from_control_chars_are_skipped ... ok
+test advanced::git_records::tests::record_content_tokens_are_live_join_keys ... ok
+test advanced::git_records::tests::versions_ranges_and_rev_list ... ok
+test advanced::git_records::tests::quoted_paths_fall_back_to_plusplus_line ... ok
+test advanced::importance::tests::test_helpfulness_ratio ... ok
+test advanced::importance::tests::test_on_retrieved_helpful ... ok
+test advanced::importance::tests::test_importance_score_calculation ... ok
+test advanced::importance::tests::test_neglected_memories ... ok
+test advanced::importance::tests::test_on_retrieved_unhelpful ... ok
+test advanced::intent::tests::test_action_creation ... ok
+test advanced::intent::tests::test_debugging_detection ... ok
+test advanced::intent::tests::test_intent_tags ... ok
+test advanced::intent::tests::test_learning_detection ... ok
+test advanced::merge_supersede::tests::classify_three_zones ... ok
+test advanced::merge_supersede::tests::match_class_labels ... ok
+test advanced::merge_supersede::tests::compose_merged_content_dedups_and_attributes ... ok
+test advanced::merge_supersede::tests::compose_merged_tags_unions_in_order ... ok
+test advanced::merge_supersede::tests::jaccard_basics ... ok
+test advanced::merge_supersede::tests::policy_clamps_and_orders ... ok
+test advanced::merge_supersede::tests::score_pair_disjoint_is_low ... ok
+test advanced::merge_supersede::tests::score_pair_combines_signals ... ok
+test advanced::merge_supersede::tests::score_pair_identical_content_untagged ... ok
+test advanced::merge_supersede::tests::weights_renormalize_to_one ... ok
+test advanced::prediction_error::tests::strong_memory_is_still_reinforced_by_near_identical_content ... ok
+test advanced::prediction_error::tests::strong_memory_is_not_merged_into_by_similar_content ... ok
+test advanced::prediction_error::tests::benign_one_token_off_note_reinforces ... ok
+test advanced::prediction_error::tests::test_content_similarity_bands ... ok
+test advanced::prediction_error::tests::test_contradiction_detection ... ok
+test advanced::prediction_error::tests::test_contradiction_creates_by_default ... ok
+test advanced::prediction_error::tests::test_different_content_create ... ok
+test advanced::prediction_error::tests::test_demoted_memory_creates_by_default ... ok
+test advanced::prediction_error::tests::test_empty_candidates ... ok
+test advanced::prediction_error::tests::test_force_create_intent ... ok
+test advanced::prediction_error::tests::test_explicit_supersede_intent_is_preserved ... ok
+test advanced::prediction_error::tests::test_force_update_intent ... ok
+test advanced::prediction_error::tests::strong_memory_protection_can_be_disabled ... ok
+test advanced::prediction_error::tests::test_high_similarity_update ... ok
+test advanced::prediction_error::tests::weak_memory_still_merges_with_similar_content ... ok
+test advanced::prediction_error::tests::test_stats ... ok
+test advanced::reconsolidation::tests::labile_window_parse_clamps_to_the_literature_range ... ok
+test advanced::reconsolidation::tests::labile_snapshot_only_for_live_windows ... ok
+test advanced::reconsolidation::tests::test_apply_modification ... ok
+test advanced::reconsolidation::tests::test_access_context ... ok
+test advanced::reconsolidation::tests::labile_candidates_carry_the_snapshot_and_the_deadline ... ok
+test advanced::reconsolidation::tests::test_change_summary ... ok
+test advanced::reconsolidation::tests::test_disabled_manager ... ok
+test advanced::reconsolidation::tests::test_get_labile_memory_ids ... ok
+test advanced::reconsolidation::tests::test_manager_new ... ok
+test advanced::reconsolidation::tests::test_mark_labile ... ok
+test advanced::reconsolidation::tests::test_apply_modification_not_labile ... ok
+test advanced::reconsolidation::tests::test_reconsolidate ... ok
+test advanced::reconsolidation::tests::test_relationship_types ... ok
+test advanced::reconsolidation::tests::test_remaining_labile_time ... ok
+test advanced::reconsolidation::tests::test_retrieval_history ... ok
+test advanced::reconsolidation::tests::test_stats ... ok
+test advanced::retroactive_backfill::tests::backfill_surfaces_the_cause_rag_misses ... ok
+test advanced::retroactive_backfill::tests::boilerplate_matches_lose_to_the_rare_one ... ok
+test advanced::retroactive_backfill::tests::caller_exclusions_surface_in_why_not ... ok
+test advanced::retroactive_backfill::tests::dependency_pinning_is_not_a_failure_marker ... ok
+test advanced::retroactive_backfill::tests::extract_entities_keeps_identifiers_and_rejects_prose ... ok
+test advanced::retroactive_backfill::tests::gap_report_names_the_missing_link ... ok
+test advanced::retroactive_backfill::tests::idf_ignores_post_failure_records ... ok
+test advanced::retroactive_backfill::tests::manual_override_triggers_without_markers ... ok
+test advanced::retroactive_backfill::tests::non_salient_event_does_not_trigger ... ok
+test advanced::retroactive_backfill::tests::ranking_is_purely_structural_no_similarity_anywhere ... ok
+test advanced::retroactive_backfill::tests::rejections_carry_the_rule_that_excluded_each ... ok
+test advanced::retroactive_backfill::tests::requires_a_shared_entity_no_spurious_links ... ok
+test advanced::retroactive_backfill::tests::ties_go_to_the_change_not_the_newest_report ... ok
+test advanced::speculative::tests::test_prediction_context ... ok
+test advanced::speculative::tests::test_learn_co_access_patterns ... ok
+test advanced::speculative::tests::test_record_access ... ok
+test advanced::reconsolidation::tests::test_labile_state ... ok
+test codebase::anchor::tests::a_deleted_file_is_missing ... ok
+test advanced::reconsolidation::tests::test_modification_types ... ok
+test codebase::anchor::tests::a_path_only_anchor_is_unverifiable_until_the_file_disappears ... ok
+test codebase::anchor::tests::a_deleted_symbol_is_missing ... ok
+test codebase::anchor::tests::a_legacy_anchor_without_a_hash_is_unverifiable_never_stale ... ok
+test codebase::anchor::tests::an_unresolvable_symbol_captures_no_hash_and_stays_unverifiable ... ok
+test codebase::anchor::tests::call_sites_in_every_common_shape_are_not_definitions ... ok
+test codebase::anchor::tests::changing_a_single_token_changes_the_hash ... ok
+test codebase::anchor::tests::compact_anchor_forms_parse ... ok
+test codebase::anchor::tests::definition_line_is_preferred_over_a_call_site ... ok
+test codebase::anchor::tests::definitions_in_several_languages_are_recognized ... ok
+test codebase::anchor::tests::brace_blocks_end_at_the_matching_close ... ok
+test codebase::anchor::tests::explicit_line_spans_are_hashed_and_survive_relocation ... ok
+test codebase::anchor::tests::old_hashes_and_unavailable_roots_do_not_claim_freshness_or_deletion ... ok
+test advanced::causal_walk::tests::failing_test_walk_finds_the_cotouch_commit ... ok
+test codebase::anchor::tests::python_indentation_and_string_data_are_not_normalized_away ... ok
+test codebase::anchor::tests::python_style_blocks_end_by_indentation ... ok
+test advanced::causal_walk::tests::logged_write_walks_edges_and_shared_anchors ... ok
+test codebase::anchor::tests::same_symbol_with_a_rewritten_body_is_drifted ... ok
+test codebase::anchor::tests::shifted_but_identical_code_is_moved_not_stale ... ok
+test codebase::anchor::tests::significant_whitespace_changes_the_versioned_hash ... ok
+test codebase::anchor::tests::symbol_search_respects_identifier_boundaries ... ok
+test codebase::anchor::tests::unchanged_code_verifies ... ok
+test advanced::causal_walk::tests::version_range_restricts_candidates_to_the_rev_list ... ok
+test codebase::context::tests::test_detect_frameworks ... ok
+test codebase::context::tests::test_detect_project_name ... ok
+test codebase::context::tests::test_detect_project_type ... ok
+test codebase::context::tests::test_is_test_file ... ok
+test codebase::git::tests::test_get_current_context ... ok
+test codebase::git::tests::test_git_analyzer_creation ... ok
+test codebase::git::tests::test_is_relevant_file ... ok
+test codebase::patterns::tests::test_builtin_patterns ... ok
+test codebase::patterns::tests::test_delete_pattern ... ok
+test codebase::patterns::tests::test_detect_patterns ... ok
+test codebase::patterns::tests::test_get_patterns_for_language ... ok
+test codebase::patterns::tests::test_learn_pattern ... ok
+test codebase::patterns::tests::test_search_patterns ... ok
+test codebase::relationships::tests::test_add_relationship ... ok
+test codebase::relationships::tests::test_build_graph ... ok
+test codebase::relationships::tests::test_delete_relationship ... ok
+test codebase::relationships::tests::test_get_hub_files ... ok
+test codebase::relationships::tests::test_get_related_files ... ok
+test codebase::relationships::tests::test_record_coedit ... ok
+test codebase::staleness::tests::probability_rises_with_age_and_respects_censoring ... ok
+test codebase::staleness::tests::product_limit_matches_hand_computation ... ok
+test codebase::staleness::tests::refuses_to_fit_from_fresh_only_history ... ok
+test codebase::staleness::tests::refuses_to_fit_without_enough_observations ... ok
+test codebase::tests::test_codebase_memory_creation ... ok
+test codebase::tests::test_get_context ... ok
+test codebase::tests::test_query ... ok
+test codebase::tests::test_remember_bug_fix ... ok
+test codebase::tests::test_remember_decision ... ok
+test codebase::tests::test_stats ... ok
+test codebase::types::tests::test_architectural_decision_builder ... ok
+test codebase::types::tests::test_codebase_node_id ... ok
+test codebase::types::tests::test_file_relationship_from_git ... ok
+test codebase::types::tests::test_searchable_text ... ok
+test codebase::watcher::tests::test_detect_language ... ok
+test codebase::watcher::tests::test_edit_session ... ok
+test codebase::watcher::tests::test_glob_match ... ok
+test codebase::watcher::tests::test_should_process ... ok
+test codebase::watcher::tests::test_watcher_config_default ... ok
+test config::config_size_cap::an_oversized_config_file_is_ignored_with_defaults ... ok
+test config::tests::default_preserves_historical_behavior ... ok
+test config::tests::empty_or_missing_file_is_default ... ok
+test config::tests::explicit_defaults_override_profile_presets ... ok
+test config::tests::invalid_values_are_ignored ... ok
+test config::tests::parses_defaults_table ... ok
+test config::tests::precedence_limit_layers ... ok
+test config::tests::precedence_mcp_param_wins ... ok
+test config::tests::profile_presets ... ok
+test config::tests::unknown_sections_and_keys_ignored ... ok
+test config::tests::unquoted_and_commented_values ... ok
+test advanced::causal_walk::tests::wrong_handle_refuses_with_needs_report ... ok
+test codebase::anchor::tests::purging_a_memory_takes_its_anchors_with_it ... ok
+test codebase::anchor::tests::anchors_round_trip_through_storage ... ok
+test codebase::anchor::tests::deleting_anchors_for_a_node_is_explicit_and_scoped ... ok
+test codebase::anchor::tests::reanchor_failure_rolls_back_old_evidence_and_success_preserves_memory ... ok
+test codebase::anchor::tests::verification_status_is_cached_but_not_trusted ... ok
+test codebase::anchor::tests::a_memory_with_no_anchor_row_is_simply_absent ... ok
+test connectors::driver_tests::run_sync_aborts_on_a_long_rate_limit_instead_of_blocking ... ok
+test connectors::driver_tests::run_sync_applies_the_overlap_window_to_the_saved_cursor ... ok
+test connectors::driver_tests::run_sync_persists_the_checkpoint_after_every_page_so_interruptions_resume ... ok
+test connectors::driver_tests::run_sync_clamps_the_cursor_below_a_failed_upsert ... ok
+test connectors::github::http_tests::a_connection_failure_names_the_failing_call ... ok
+test connectors::github::http_tests::a_404_error_names_the_exact_failing_call ... ok
+test connectors::driver_tests::run_sync_reconcile_refuses_to_tombstone_everything_on_an_empty_live_set ... ok
+test connectors::github::http_tests::integration_real_github_sync_readonly_end_to_end ... ok
+test connectors::github::http_tests::comment_fetch_failure_retries_then_skips_without_aborting_the_page ... ok
+test connectors::github::http_tests::comment_fetch_recovers_after_one_transient_failure ... ok
+test connectors::driver_tests::run_sync_sleeps_through_a_short_rate_limit_and_retries_once ... ok
+test connectors::github::http_tests::pagination_follows_link_next_headers ... ok
+test connectors::driver_tests::run_sync_pages_creates_and_then_reports_unchanged ... ok
+test connectors::github::tests::next_link_host_pin_drops_cross_host_url ... ok
+test connectors::github::http_tests::pull_requests_are_dropped_and_never_fetch_comments ... ok
+test connectors::github::http_tests::secondary_rate_limit_403_with_retry_after_is_classified_rate_limited ... ok
+test connectors::github::tests::rejects_empty_owner_repo ... ok
+test connectors::driver_tests::run_sync_reconcile_tombstones_only_records_missing_upstream ... ok
+test connectors::github::tests::since_uses_z_form_not_plus_offset ... ok
+test connectors::github::tests::comments_fold_in_id_order_and_affect_hash ... ok
+test connectors::github::tests::hash_stable_across_label_order_and_changes_on_edit ... ok
+test connectors::redmine::tests::rejects_empty_and_bad_config ... ok
+test connectors::github::tests::normalize_builds_keyed_envelope_with_citation ... ok
+test connectors::redmine::tests::journals_fold_in_id_order_and_affect_hash ... ok
+test connectors::tests::content_hash_changes_with_content ... ok
+test connectors::tests::content_hash_is_order_independent ... ok
+test connectors::tests::content_hash_no_boundary_collision ... ok
+test connectors::tests::normalized_record_carries_envelope_into_input ... ok
+test connectors::redmine::tests::journal_details_and_relations_are_searchable_and_hashed ... ok
+test connectors::redmine::tests::status_change_changes_hash ... ok
+test connectors::redmine::tests::normalize_builds_keyed_envelope_with_citation ... ok
+test connectors::driver_tests::run_sync_respects_max_pages_and_leaves_a_resumable_cursor ... ok
+test connectors::driver_tests::run_sync_turns_skipped_records_into_warnings_and_clamps_the_cursor ... ok
+test consolidation::dream_compile::tests::compile_runs_all_four_phases_and_records_history ... ok
+test consolidation::dream_compile::tests::empty_scope_is_rejected ... ok
+test consolidation::dream_compile::tests::empty_store_reports_insufficient_memories ... ok
+test consolidation::dream_compile::tests::max_prs_budget_is_respected ... ok
+test consolidation::phases::tests::test_content_similarity ... ok
+test consolidation::phases::tests::test_dream_engine_creation ... ok
+test consolidation::phases::tests::test_empty_memories_returns_empty_results ... ok
+test consolidation::phases::tests::test_flashbulb_detected_in_triage ... ok
+test consolidation::phases::tests::test_full_dream_cycle_runs ... ok
+test consolidation::phases::tests::test_integration_validates_insights ... ok
+test consolidation::phases::tests::test_nrem1_triage_categories ... ok
+test consolidation::phases::tests::test_nrem3_consolidation_waves ... ok
+test consolidation::phases::tests::test_phase_durations_are_recorded ... ok
+test consolidation::phases::tests::test_rem_cross_domain_connections ... ok
+test consolidation::phases::tests::test_rem_emotional_processing ... ok
+test consolidation::phases::tests::test_replay_queue_70_30_split ... ok
+test consolidation::phases::tests::test_synaptic_downscaling ... ok
+test consolidation::sleep::tests::test_consolidation_creation ... ok
+test consolidation::sleep::tests::test_consolidation_run ... ok
+test consolidation::sleep::tests::test_decay_calculation ... ok
+test consolidation::sleep::tests::test_retention_calculation ... ok
+test consolidation::sleep::tests::test_should_promote ... ok
+test consolidation::sleep::tests::test_should_prune ... ok
+test fsrs::algorithm::tests::test_forgetting_factor ... ok
+test fsrs::algorithm::tests::test_fsrs6_constants ... ok
+test fsrs::algorithm::tests::test_fuzz_interval ... ok
+test fsrs::algorithm::tests::test_initial_difficulty_bounds ... ok
+test fsrs::algorithm::tests::test_initial_difficulty_order ... ok
+test fsrs::algorithm::tests::test_next_difficulty_mean_reversion ... ok
+test fsrs::algorithm::tests::test_next_interval_round_trip ... ok
+test fsrs::algorithm::tests::test_retrievability_at_zero_days ... ok
+test fsrs::algorithm::tests::test_retrievability_decreases_over_time ... ok
+test fsrs::algorithm::tests::test_retrievability_with_custom_decay ... ok
+test fsrs::algorithm::tests::test_same_day_stability ... ok
+test fsrs::algorithm::tests::test_sentiment_boost ... ok
+test fsrs::optimizer::tests::fit_respects_the_decay_floor ... ok
+test fsrs::optimizer::tests::success_only_history_refuses_to_fit ... ok
+test fsrs::optimizer::tests::test_add_reviews ... ok
+test fsrs::optimizer::tests::test_calculate_loss ... ok
+test fsrs::optimizer::tests::test_optimize_decay ... ok
+test fsrs::optimizer::tests::test_optimizer_creation ... ok
+test fsrs::optimizer::tests::test_reset ... ok
+test fsrs::scheduler::tests::test_custom_parameters ... ok
+test fsrs::scheduler::tests::test_preview_reviews ... ok
+test fsrs::scheduler::tests::test_rating_conversion ... ok
+test fsrs::scheduler::tests::test_scheduler_first_review ... ok
+test fsrs::scheduler::tests::test_scheduler_lapse_tracking ... ok
+test fsrs::scheduler::tests::test_scheduler_same_day_review ... ok
+test fts::tests::or_query_bounds_token_count_and_length ... ok
+test fts::tests::or_query_empty_and_punctuation_only ... ok
+test fts::tests::or_query_neutralizes_fts5_operators_and_injection ... ok
+test fts::tests::or_query_preserves_non_ascii_tokens ... ok
+test fts::tests::or_query_splits_like_ascii_tokenizer ... ok
+test fts::tests::terms_strips_all_bare_operators_even_when_doubled ... ok
+test fts::tests::test_sanitize_fts5_query_basic ... ok
+test fts::tests::test_sanitize_fts5_query_empty ... ok
+test fts::tests::test_sanitize_fts5_query_length_limit ... ok
+test fts::tests::test_sanitize_fts5_query_operators ... ok
+test fts::tests::test_sanitize_fts5_query_special_chars ... ok
+test intention_graph::tests::absence_requires_elapsed_explicit_window_and_complete_coverage ... ok
+test intention_graph::tests::attention_requeues_a_returned_state_but_dedupes_unchanged_revisions ... ok
+test intention_graph::tests::attention_withholding_retains_pending_event ... ok
+test intention_graph::tests::corrupted_empty_version_state_returns_error_instead_of_panicking ... ok
+test intention_graph::tests::coverage_grace_at_timestamp_limit_remains_unknown ... ok
+test intention_graph::tests::evidence_completion_requires_every_requirement_and_exact_retry_is_noop ... ok
+test consolidation::dream_compile::tests::pattern_insight_files_a_reviewable_pr ... ok
+test intention_graph::tests::exact_observation_replay_is_idempotent_and_attention_is_deduplicated ... ok
+test intention_graph::tests::identical_cancel_retry_preserves_original_cancellation ... ok
+test intention_graph::tests::memory_id_requires_exact_memory_source_key ... ok
+test intention_graph::tests::offline_event_is_unknown_and_covered_absence_is_missing ... ok
+test intention_graph::tests::future_coverage_is_rejected_and_windowed_occurrence_must_be_inside_window ... ok
+test intention_graph::tests::plan_priority_defaults_to_normal_during_deserialization ... ok
+test intention_graph::tests::portfolio_reports_shared_requirements_prerequisites_and_conflicts ... ok
+test intention_graph::tests::premise_reversal_disputes_evidence_completion ... ok
+test intention_graph::tests::prerequisite_references_and_cycles_are_rejected_atomically ... ok
+test intention_graph::tests::replay_is_deterministic_and_preserves_original_description ... ok
+test intention_graph::tests::reverse_lexical_dependency_chain_is_disputed_prerequisite_first ... ok
+test consolidation::dream_compile::tests::contradiction_between_replayed_memories_files_a_pr ... ok
+test intention_graph::tests::revising_a_fulfilled_plan_reopens_it_and_invalidates_prior_completion ... ok
+test intention_graph::tests::schema_exposes_all_commands_and_evidence_boundary ... ok
+test intention_graph::tests::stale_revision_and_conflicting_event_reuse_are_rejected_atomically ... ok
+test intention_graph::tests::unrelated_observation_does_not_reevaluate_plan ... ok
+test intention_graph::tests::unsupported_versions_and_out_of_order_mutations_are_rejected ... ok
+test intention_graph::tests::user_completion_and_cancellation_are_explicit_lifecycle_states ... ok
+test memory::node::tests::test_knowledge_node_default ... ok
+test memory::node::tests::test_node_type_roundtrip ... ok
+test memory::node::tests::test_temporal_validity ... ok
+test memory::strength::tests::test_decay_over_time ... ok
+test memory::node::tests::test_ingest_input_deny_unknown_fields ... ok
+test memory::strength::tests::test_dual_strength_default ... ok
+test memory::strength::tests::test_dual_strength_retention ... ok
+test memory::strength::tests::test_lapse ... ok
+test memory::strength::tests::test_sentiment_boost ... ok
+test memory::strength::tests::test_storage_cap ... ok
+test memory::strength::tests::test_strength_decay_calculator ... ok
+test memory::strength::tests::test_successful_recall ... ok
+test memory::temporal::tests::test_range_all ... ok
+test memory::temporal::tests::test_range_default ... ok
+test memory::temporal::tests::test_range_duration ... ok
+test memory::temporal::tests::test_range_from ... ok
+test memory::temporal::tests::test_range_until ... ok
+test memory::temporal::tests::test_temporal_range_contains ... ok
+test memory::temporal::tests::test_temporal_range_overlaps ... ok
+test memory::temporal::tests::test_temporal_validity ... ok
+test memory::temporal::tests::test_validity_is_valid ... ok
+test neuroscience::active_forgetting::tests::test_cascade_attenuation ... ok
+test neuroscience::active_forgetting::tests::test_cascade_retrieval_decrement_capped ... ok
+test neuroscience::active_forgetting::tests::test_default_params_reasonable ... ok
+test neuroscience::active_forgetting::tests::test_labile_window_reversible ... ok
+test neuroscience::active_forgetting::tests::test_remaining_labile_time_expired_returns_none ... ok
+test neuroscience::active_forgetting::tests::test_reversible_until_deadline ... ok
+test neuroscience::active_forgetting::tests::test_sif_penalty_compounds ... ok
+test neuroscience::context_memory::tests::test_context_matcher_different_topics ... ok
+test neuroscience::context_memory::tests::test_context_matcher_same_context ... ok
+test neuroscience::context_memory::tests::test_context_reinstatement ... ok
+test neuroscience::context_memory::tests::test_context_weights_normalization ... ok
+test neuroscience::context_memory::tests::test_emotional_context ... ok
+test neuroscience::context_memory::tests::test_encoding_context ... ok
+test neuroscience::context_memory::tests::test_recency_bucket ... ok
+test neuroscience::context_memory::tests::test_time_of_day ... ok
+test neuroscience::context_memory::tests::test_topical_context ... ok
+test neuroscience::emotional_memory::tests::test_capture_targets ... ok
+test neuroscience::emotional_memory::tests::test_display_emotion_category ... ok
+test neuroscience::emotional_memory::tests::test_emotion_categories ... ok
+test neuroscience::emotional_memory::tests::test_empty_content ... ok
+test neuroscience::emotional_memory::tests::test_flashbulb_detection_with_importance ... ok
+test neuroscience::emotional_memory::tests::test_mood_congruence_boost ... ok
+test neuroscience::emotional_memory::tests::test_mood_tracking ... ok
+test neuroscience::emotional_memory::tests::test_negation_handling ... ok
+test neuroscience::emotional_memory::tests::test_negative_content ... ok
+test neuroscience::emotional_memory::tests::test_neutral_content ... ok
+test neuroscience::emotional_memory::tests::test_new_module ... ok
+test neuroscience::emotional_memory::tests::test_no_flashbulb_for_normal_content ... ok
+test neuroscience::emotional_memory::tests::test_positive_content ... ok
+test neuroscience::emotional_memory::tests::test_stability_multiplier ... ok
+test neuroscience::emotional_memory::tests::test_stats ... ok
+test neuroscience::emotional_memory::tests::test_urgency_markers ... ok
+test neuroscience::hippocampal_index::tests::test_barcode_generation ... ok
+test neuroscience::hippocampal_index::tests::test_barcode_string_roundtrip ... ok
+test neuroscience::hippocampal_index::tests::test_compress_embedding ... ok
+test neuroscience::hippocampal_index::tests::test_associations ... ok
+test neuroscience::hippocampal_index::tests::test_content_pointer ... ok
+test neuroscience::hippocampal_index::tests::test_importance_flags ... ok
+test neuroscience::hippocampal_index::tests::test_index_link_strengthen ... ok
+test neuroscience::hippocampal_index::tests::test_index_memory ... ok
+test neuroscience::hippocampal_index::tests::test_migration ... ok
+test neuroscience::hippocampal_index::tests::test_prune_weak_links ... ok
+test neuroscience::hippocampal_index::tests::test_search_indices ... ok
+test neuroscience::hippocampal_index::tests::test_temporal_marker ... ok
+test neuroscience::importance_signals::tests::test_access_pattern ... ok
+test neuroscience::importance_signals::tests::test_arousal_signal_emotional_content ... ok
+test neuroscience::importance_signals::tests::test_arousal_signal_markers ... ok
+test neuroscience::importance_signals::tests::test_attention_signal_learning_mode ... ok
+test neuroscience::importance_signals::tests::test_composite_importance ... ok
+test neuroscience::importance_signals::tests::test_composite_weights ... ok
+test neuroscience::importance_signals::tests::test_consolidation_priority ... ok
+test neuroscience::importance_signals::tests::test_context_builder ... ok
+test neuroscience::importance_signals::tests::test_importance_score_explanation ... ok
+test neuroscience::importance_signals::tests::test_novelty_signal_basic ... ok
+test neuroscience::importance_signals::tests::test_reward_signal_tracking ... ok
+test neuroscience::importance_signals::tests::test_sentiment_analyzer ... ok
+test neuroscience::memory_states::tests::test_accessibility_calculator ... ok
+test neuroscience::memory_states::tests::test_accessibility_state_multipliers ... ok
+test neuroscience::memory_states::tests::test_batch_update ... ok
+test neuroscience::memory_states::tests::test_competition_manager ... ok
+test neuroscience::memory_states::tests::test_competition_no_similar_candidates ... ok
+test neuroscience::memory_states::tests::test_competition_win_count ... ok
+test neuroscience::memory_states::tests::test_lifecycle_access_reactivates ... ok
+test neuroscience::memory_states::tests::test_lifecycle_creation ... ok
+test neuroscience::memory_states::tests::test_lifecycle_cue_reactivation ... ok
+test neuroscience::memory_states::tests::test_lifecycle_decay_detection ... ok
+test neuroscience::memory_states::tests::test_lifecycle_serialization ... ok
+test neuroscience::memory_states::tests::test_lifecycle_state_history_limit ... ok
+test neuroscience::memory_states::tests::test_lifecycle_suppression ... ok
+test neuroscience::memory_states::tests::test_memory_state_accessibility ... ok
+test neuroscience::memory_states::tests::test_memory_state_info ... ok
+test neuroscience::memory_states::tests::test_memory_state_info_suppressed ... ok
+test neuroscience::memory_states::tests::test_memory_state_retrievability ... ok
+test neuroscience::memory_states::tests::test_memory_state_roundtrip ... ok
+test neuroscience::memory_states::tests::test_memory_state_serialization ... ok
+test neuroscience::memory_states::tests::test_state_time_accumulator ... ok
+test neuroscience::memory_states::tests::test_state_update_resolves_suppression ... ok
+test neuroscience::memory_states::tests::test_state_update_service ... ok
+test neuroscience::predictive_retrieval::tests::test_interest_update ... ok
+test neuroscience::predictive_retrieval::tests::test_novelty_signal ... ok
+test neuroscience::predictive_retrieval::tests::test_predict_needed_memories ... ok
+test neuroscience::predictive_retrieval::tests::test_prediction_accuracy ... ok
+test neuroscience::predictive_retrieval::tests::test_prediction_reason_description ... ok
+test neuroscience::predictive_retrieval::tests::test_predictive_memory_creation ... ok
+test neuroscience::predictive_retrieval::tests::test_query_recording ... ok
+test neuroscience::predictive_retrieval::tests::test_record_interest ... ok
+test neuroscience::predictive_retrieval::tests::test_record_query ... ok
+test neuroscience::predictive_retrieval::tests::test_session_context ... ok
+test neuroscience::predictive_retrieval::tests::test_temporal_patterns ... ok
+test neuroscience::predictive_retrieval::tests::test_user_model_creation ... ok
+test neuroscience::prospective_memory::tests::intention_false_nested_compound_does_not_consume_recurrence ... ok
+test neuroscience::prospective_memory::tests::intention_nested_recurring_base_preserves_both_cadences ... ok
+test neuroscience::prospective_memory::tests::intention_nlp_recurrence_rejects_out_of_range_intervals ... ok
+test neuroscience::prospective_memory::tests::test_check_uses_injected_time_and_wakes_snooze_immediately ... ok
+test neuroscience::prospective_memory::tests::test_context_composite_requires_every_all_condition ... ok
+test neuroscience::prospective_memory::tests::test_context_pattern_matches ... ok
+test neuroscience::prospective_memory::tests::test_duration_trigger ... ok
+test neuroscience::prospective_memory::tests::test_event_trigger ... ok
+test neuroscience::prospective_memory::tests::test_intention_creation ... ok
+test neuroscience::prospective_memory::tests::test_intention_fulfill ... ok
+test neuroscience::prospective_memory::tests::test_intention_snooze ... ok
+test neuroscience::prospective_memory::tests::test_parse_natural_language ... ok
+test neuroscience::prospective_memory::tests::test_priority_escalation ... ok
+test neuroscience::prospective_memory::tests::test_priority_ordering ... ok
+test neuroscience::prospective_memory::tests::test_prospective_memory_create ... ok
+test neuroscience::prospective_memory::tests::test_recurrence_pattern ... ok
+test neuroscience::prospective_memory::tests::test_recurring_event_requires_schedule_and_base_event ... ok
+test neuroscience::prospective_memory::tests::test_recurring_intention_re_arms_after_firing ... ok
+test neuroscience::prospective_memory::tests::test_stats ... ok
+test neuroscience::prospective_memory::tests::test_time_trigger ... ok
+test neuroscience::prospective_memory::tests::test_trigger_pattern_any_of ... ok
+test neuroscience::prospective_memory::tests::test_trigger_pattern_matches ... ok
+test neuroscience::spreading_activation::tests::test_activation_threshold ... ok
+test neuroscience::spreading_activation::tests::test_add_nodes_and_edges ... ok
+test neuroscience::spreading_activation::tests::test_get_associations ... ok
+test neuroscience::spreading_activation::tests::test_network_creation ... ok
+test neuroscience::spreading_activation::tests::test_reinforce_edge ... ok
+test neuroscience::spreading_activation::tests::test_spreading_activation ... ok
+test neuroscience::synaptic_tagging::tests::test_batch_operations ... ok
+test neuroscience::synaptic_tagging::tests::test_capture_window_probability ... ok
+test neuroscience::synaptic_tagging::tests::test_captured_memory_direction ... ok
+test neuroscience::synaptic_tagging::tests::test_clustering ... ok
+test neuroscience::synaptic_tagging::tests::test_decay_function_exponential ... ok
+test neuroscience::synaptic_tagging::tests::test_decay_function_linear ... ok
+test neuroscience::synaptic_tagging::tests::test_get_capture_candidates ... ok
+test neuroscience::synaptic_tagging::tests::test_importance_cluster_creation ... ok
+test neuroscience::synaptic_tagging::tests::test_importance_event_types ... ok
+test neuroscience::synaptic_tagging::tests::test_prp_trigger_captures_tagged_memory ... ok
+test neuroscience::synaptic_tagging::tests::test_stats_tracking ... ok
+test neuroscience::synaptic_tagging::tests::test_synaptic_tag_capture ... ok
+test neuroscience::synaptic_tagging::tests::test_synaptic_tag_creation ... ok
+test neuroscience::synaptic_tagging::tests::test_synaptic_tagging_system_basic ... ok
+test neuroscience::synaptic_tagging::tests::test_weak_event_does_not_trigger_prp ... ok
+test projection::tests::line_diff_reports_the_changed_lines ... ok
+test projection::tests::long_content_is_cut_on_one_line ... ok
+test projection::tests::render_is_deterministic_and_carries_provenance ... ok
+test consolidation::dream_compile::tests::no_direct_memory_mutation_only_prs_and_edge_strengths ... ok
+test consolidation::dream_compile::tests::replay_strengthens_co_hit_edges ... ok
+test projection::tests::splice_replaces_only_the_fence_and_is_idempotent ... ok
+test projection::tests::writes_reject_changed_snapshot_and_preserve_current_text ... ok
+test search::hybrid::tests::test_effective_source_limit ... ok
+test search::hybrid::tests::test_hybrid_searcher ... ok
+test search::hybrid::tests::test_linear_combination ... ok
+test search::hybrid::tests::test_linear_with_unequal_weights ... ok
+test search::hybrid::tests::test_reciprocal_rank_fusion ... ok
+test search::hybrid::tests::test_rrf_with_empty_results ... ok
+test search::temporal::tests::test_is_expiring_soon ... ok
+test search::temporal::tests::test_recency_boost ... ok
+test search::temporal::tests::test_temporal_range ... ok
+test search::temporal::tests::test_temporal_scoring ... ok
+test search::temporal::tests::test_validity_boost ... ok
+test security::scan_budget::findings_are_capped_per_kind ... ok
+test intention_graph::tests::oversized_affected_response_fails_atomically_without_poisoning_graph ... ok
+test security::tests::classifies_labelled_high_entropy_values_for_review_only ... ok
+test security::tests::finds_known_provider_credentials_without_retaining_them ... ok
+test security::tests::finds_unlabelled_azure_client_secret_shape ... ok
+test security::tests::generic_labelled_tilde_text_is_review_only ... ok
+test security::tests::ordinary_configuration_text_is_not_flagged ... ok
+test security::tests::pem_fingerprints_cover_key_material_not_only_the_header ... ok
+test security::tests::requires_exact_structured_provider_shapes ... ok
+test neuroscience::synaptic_tagging::tests::test_decay_cleans_old_tags ... ok
+test security::scan_budget::oversized_content_is_scanned_up_to_the_budget_and_never_panics ... ok
+test consolidation::dream_compile::tests::stale_and_expired_never_enter_the_dream ... ok
+test storage::attestation_store::tests::sidecar_provisioning_is_no_clobber_fsynced_and_permission_bounded ... ok
+test projection::tests::select_durable_keeps_decisions_patterns_and_rule_tagged_facts_only ... ok
+test projection::tests::selection_excludes_future_and_suppressed_memory ... ok
+test consolidation::dream_compile::tests::unreplayed_weak_edges_take_the_downscale ... ok
+test consolidation::dream_compile::tests::report_names_the_dreamed_namespace ... ok
+test storage::attestation_store::tests::legacy_receipts_remain_unsigned_and_failed_bundle_is_atomic ... ok
+test storage::attestation_store::tests::purge_deletes_only_the_target_disclosure_and_keeps_envelope_immutable ... ok
+test storage::attestation_store::tests::retired_key_cannot_sign_new_receipts_after_rotation ... ok
+test storage::attestation_store::tests::signed_receipt_chain_continues_atomically_across_key_rotation ... ok
+test storage::blast::tests::commit_sha_parser_shape ... ok
+test storage::blast::tests::blast_cycle_terminates ... ok
+test storage::blast::tests::blast_diamond_reports_converging_node_once ... ok
+test storage::blast::tests::blast_depth_cap_five ... ok
+test storage::blast::tests::blast_missing_root_is_not_found ... ok
+test storage::attestation_store::tests::signed_write_rejects_receipt_memory_swap_before_any_row_is_committed ... ok
+test storage::cloud_crypto::tests::plaintext_is_not_misdetected_as_envelope ... ok
+test storage::cloud_crypto::tests::rejects_short_or_foreign_envelope ... ok
+test storage::blast::tests::blast_reports_shared_sha_siblings_at_depth_zero ... ok
+test storage::blast::tests::blast_follows_source_to_target_direction ... ok
+test storage::cloud_crypto::tests::wrong_passphrase_fails ... ok
+test storage::cloud_crypto::tests::round_trip ... ok
+test storage::cloud_sync::tests::endpoint_trailing_slash_trimmed ... ok
+test storage::cloud_sync::tests::debug_redacts_sync_key_and_passphrase ... ok
+test storage::cloud_sync::tests::new_rejects_plaintext_http_endpoint ... ok
+test storage::cloud_sync::tests::new_rejects_plaintext_empty_endpoint_and_empty_key ... ok
+test storage::cloud_crypto::tests::tamper_is_detected ... ok
+test storage::cloud_sync::tests::new_rejects_short_encryption_key ... ok
+test storage::cloud_crypto::tests::ciphertext_is_nondeterministic ... ok
+test storage::cloud_sync::tests::read_401_is_error ... ok
+test storage::cloud_sync::tests::read_200_rejects_plaintext_downgrade ... ok
+test storage::cloud_sync::tests::read_404_returns_none ... ok
+test storage::cloud_sync::tests::write_sends_if_none_match_for_first_create ... ok
+test storage::cloud_sync::tests::write_sends_if_match_when_etag_present ... ok
+test storage::cloud_sync::tests::write_412_is_conflict_error ... ok
+test storage::cloud_sync::tests::read_200_parses_and_captures_etag ... ok
+test storage::blast::tests::open_only_filters_expired_valid_until ... ok
+test storage::blast::tests::resolve_commit_sha_prefix_finds_newest ... ok
+test storage::blast::tests::retire_affected_reports_per_id_errors ... ok
+test storage::blast::tests::retire_affected_suppresses_without_deleting ... ok
+test storage::edges::tests::tombstone_is_recorded_on_a_simulated_purge ... ok
+test storage::edges::tests::retire_subgraph_lists_derived_lineage_without_deleting ... ok
+test storage::edges::tests::reachability_is_exact_over_a_diamond_and_survives_cycles ... ok
+test storage::edges::tests::typed_save_accepts_the_vocabulary_and_rejects_unknown_types ... ok
+test storage::intention_claim::tests::intention_claim_batch_conflict_rolls_back_prior_claims ... ok
+test storage::intention_graph_store::tests::graph_corrupt_persisted_plan_returns_error_without_panicking ... ok
+test storage::intention_claim::tests::intention_claim_has_one_winner_across_connections ... ok
+test storage::intention_graph_store::tests::graph_journal_failure_rolls_back_snapshot ... ok
+test storage::memory_store::tests::memory_record_serde_round_trip ... ok
+test storage::memory_store::tests::memory_store_error_from_storage_error ... ok
+test storage::memory_store::tests::model_signature_serde_round_trip ... ok
+test storage::intention_graph_store::tests::graph_rejects_bad_scope_before_storage ... ok
+test storage::migrations::tests::empty_schema_version_on_a_populated_database_fails_closed ... ok
+test storage::intention_graph_store::tests::graph_replay_detects_recorded_output_tampering ... ok
+test storage::migrations::tests::every_migration_replays_as_a_no_op_with_an_identical_schema ... ok
+test storage::migrations::tests::missing_schema_version_on_a_nonempty_database_fails_without_replaying_v1 ... ok
+test storage::maintenance_batches::tests::dream_pages_preserve_other_scopes_and_newer_waking_tags ... ok
+test storage::intention_graph_store::tests::graph_two_connections_preserve_both_commands ... ok
+test storage::intention_graph_store::tests::memory_commitments_change_without_copying_content_or_crossing_scope ... ok
+test storage::migrations::tests::split_add_column_statements_extracts_every_alter_and_keeps_the_rest ... ok
+test storage::maintenance_batches::tests::gc_page_rolls_back_on_failure_and_never_deletes_protected ... ok
+test storage::maintenance_batches::tests::lifecycle_pages_preserve_protected_and_suppressed_state ... ok
+test storage::migrations::tests::concurrent_first_openers_serialize_migration_and_both_succeed ... ok
+test storage::migrations::tests::repair_truncates_v1_raw_768_vectors_to_the_declared_dimension ... ok
+test storage::migrations::tests::repair_drops_undersized_legacy_vectors_for_backfill ... ok
+test storage::migrations::tests::repair_drops_non_blob_legacy_vectors_instead_of_aborting ... ok
+test storage::migrations::tests::test_apply_migrations_advances_to_v16_and_drops_dead_tables ... ok
+test storage::migrations::tests::test_v11_is_idempotent_on_replay ... ok
+test storage::migrations::tests::v16_adds_embedding_model_table ... ok
+test storage::migrations::tests::v16_is_replayable ... ok
+test storage::migrations::tests::v16_adds_domains_columns ... ok
+test storage::migrations::tests::v16_preserves_existing_rows_from_v15 ... ok
+test storage::migrations::tests::v16_default_values_empty_json ... ok
+test storage::migrations::tests::v17_unique_source_key_index_allows_many_null_legacy_rows ... ok
+test storage::migrations::tests::v17_is_replayable ... ok
+test storage::migrations::tests::v17_adds_source_envelope_columns_and_cursor_table ... ok
+test storage::migrations::tests::v20_applies_cleanly_on_a_fresh_database ... ok
+test storage::migrations::tests::v20_clears_connector_cursors_on_a_v19_database ... ok
+test storage::migrations::tests::v20_is_replayable_and_does_not_touch_cursors_when_already_applied ... ok
+test storage::migrations::tests::v21_creates_durable_synaptic_capture_tables ... ok
+test storage::migrations::tests::v23_creates_private_replay_capsules_and_idempotent_branches ... ok
+test storage::migrations::tests::v24_creates_attestation_registry_chain_envelopes_and_disclosures ... ok
+test storage::migrations::tests::v22_closes_v1_events_and_adds_forward_evidence_columns ... ok
+test storage::migrations::tests::v27_preserves_legacy_rows_in_the_user_scope ... ok
+test storage::migrations::tests::v26_adds_replayable_signed_projection_column ... ok
+test storage::migrations::tests::zero_negative_or_out_of_range_schema_version_names_the_corruption ... ok
+test storage::portable::tests::hex_round_trip ... ok
+test storage::portable::tests::rejects_invalid_hex ... ok
+test storage::receipt_attestation::tests::a_swapped_key_id_is_not_trusted ... ok
+test storage::receipt_attestation::tests::canonical_payload_is_stable_and_sequence_is_a_string ... ok
+test storage::receipt_attestation::tests::chain_verification_detects_gaps_and_supports_external_anchor ... ok
+test storage::receipt_attestation::tests::disclosure_commitment_binds_every_field ... ok
+test storage::receipt_attestation::tests::disclosure_is_verifiable_then_intentionally_unavailable_after_purge ... ok
+test storage::receipt_attestation::tests::dsse_optional_keyid_extensions_and_later_valid_signature_are_supported ... ok
+test storage::receipt_attestation::tests::dsse_pae_matches_protocol_encoding ... ok
+test storage::receipt_attestation::tests::duplicate_json_keys_are_rejected_even_when_signature_is_valid ... ok
+test storage::receipt_attestation::tests::entry_digest_ignores_base64_representation_but_binds_key_id ... ok
+test storage::receipt_attestation::tests::envelope_verification_detects_wrong_predecessor ... ok
+test storage::receipt_attestation::tests::key_validity_preserves_pre_revocation_history ... ok
+test storage::receipt_attestation::tests::missing_disclosure_is_neutral_without_matching_verified_erasure ... ok
+test storage::receipt_attestation::tests::normalized_utc_timestamp_is_an_application_invariant ... ok
+test storage::receipt_attestation::tests::payload_tamper_breaks_signature_and_row_digest ... ok
+test storage::receipt_attestation::tests::predecessor_anchor_and_terminal_head_are_separate_across_key_rotation ... ok
+test storage::receipt_attestation::tests::safe_builder_mints_random_ids_nonces_and_fixed_claims ... ok
+test storage::receipt_attestation::tests::signs_and_strictly_verifies_with_specific_metadata ... ok
+test storage::receipt_attestation::tests::unicode_noncharacters_and_resource_exhaustion_inputs_are_rejected ... ok
+test storage::receipt_attestation::tests::unknown_key_is_distinct_from_an_invalid_known_key_signature ... ok
+test storage::receipt_attestation::tests::url_safe_unpadded_dsse_base64_is_accepted ... ok
+test storage::receipt_attestation::tests::valid_signature_over_noncanonical_json_is_application_invalid ... ok
+test storage::receipt_attestation::tests::verification_rejects_a_key_not_valid_at_claimed_signing_time ... ok
+test storage::migrations::tests::v28_isolates_legacy_vectors_and_seeds_only_the_legacy_pointer ... ok
+test storage::migrations::tests::v28_reconciles_a_stale_manifest_vector_count ... ok
+test storage::migrations::tests::v29_creates_the_normalized_scope_expression_index ... ok
+test storage::replay_store::tests::digests_are_keyed_deterministic_and_order_sensitive ... ok
+test storage::replay_store::tests::empty_counterfactual_has_explicit_conservative_metrics ... ok
+test storage::migrations::tests::v29_index_serves_the_scoped_hygiene_scan_query_plan ... ok
+test storage::migrations::tests::v2_historical_partial_migration_recovers_without_duplicate_column_brick ... ok
+test storage::replay_store::tests::capsule_and_replay_are_idempotent_across_restart ... ok
+test storage::replay_store::tests::capsule_integrity_mismatch_blocks_replay ... ok
+test storage::replay_store::tests::pure_ablation_removes_only_named_slots_without_refill ... ok
+test storage::migrations::tests::v3_intentions_upgrade_preserves_suppression_schema ... ok
+test storage::replay_store::tests::conflicting_capsule_retry_cannot_replace_frozen_evidence ... ok
+test storage::migrations::tests::every_migration_with_added_columns_survives_a_half_applied_replay ... ok
+test storage::replay_store::tests::replay_idempotency_normalizes_slot_order_and_duplicates ... ok
+test storage::replay_store::tests::replay_result_json_contains_no_memory_id_or_raw_content ... ok
+test storage::replay_store::tests::materialization_requires_current_content_digest_match ... ok
+test storage::replay_store::tests::legacy_delete_invalidates_replay_without_claiming_full_erasure ... ok
+test storage::replay_store::tests::legacy_receipt_without_capsule_is_not_replayed ... ok
+test storage::replay_store::tests::receipt_and_capsule_transaction_rolls_back_as_one_unit ... ok
+test storage::replay_store::tests::unknown_withheld_slot_is_rejected_instead_of_rerunning_search ... ok
+test storage::replay_store::tests::memory_lifecycle_hooks_invalidate_replay_and_erase_dependency_rows ... ok
+test storage::replay_store::tests::receipt_linking_is_idempotent_and_conflict_safe ... ok
+test storage::replay_store::tests::replay_does_not_mutate_knowledge_node_state ... ok
+test storage::replay_store::tests::replay_rows_fail_closed_on_privacy_or_payload_inconsistency ... ok
+test storage::replay_store::tests::suppression_and_purge_scrub_private_and_size_fingerprints ... ok
+test storage::replay_store::tests::typed_replay_receipt_persists_and_links_atomically ... ok
+test storage::replay_store::tests::tampered_idempotent_replay_is_not_authoritative ... ok
+test storage::resolver::tests::free_prose_resolves_nothing ... ok
+test storage::resolver::tests::file_exact_resolves_and_no_fuzzy_no_prefix ... ok
+test storage::resolver::tests::full_sha_is_exact_and_prefix_resolves_unique ... ok
+test storage::resolver::tests::short_hex_is_an_ambiguity_error_not_a_match ... ok
+test storage::session_queries::tests::files_line_parses_paths_and_strips_the_more_suffix ... ok
+test storage::resolver::tests::symbols_resolve_exact_and_prefix_with_normalization ... ok
+test storage::resolver::tests::run_and_tool_call_ids_resolve_exact ... ok
+test storage::resolver::tests::test_names_and_tags_resolve_exact ... ok
+test storage::resolver::tests::uuid_exact_resolves_memory ... ok
+test storage::session_queries::tests::closed_issue_and_commit_lookups_are_exact ... ok
+test storage::session_queries::tests::failed_calls_cap_at_twenty ... ok
+test storage::session_queries::tests::failed_calls_latest_run_last_twenty_chronological ... ok
+test storage::sqlite::actors::tests::demote_records_opposition_with_the_same_transactional_contract ... ok
+test storage::session_queries::tests::open_failures_match_anchors_and_files_lines_exactly ... ok
+test storage::session_queries::tests::open_failures_skip_non_failures_and_closed_memories ... ok
+test storage::sqlite::actors::tests::gate11_policy_changes_are_versioned_and_recorded ... ok
+test storage::sqlite::actors::tests::gate11_aggregate_is_bounded_across_independent_actors ... ok
+test storage::sqlite::actors::tests::gate11_unknown_roles_and_unregistered_actors_fall_back_neutral ... ok
+test storage::sqlite::actors::tests::gate1_claimed_roles_cannot_override_identity_or_grant_authority ... ok
+test storage::sqlite::actors::tests::gate1_legacy_and_unbound_nodes_default_to_unattributed ... ok
+test storage::sqlite::actors::tests::gate2_same_actor_retries_and_hats_create_no_independent_votes ... ok
+test storage::sqlite::actors::tests::gate2_support_is_revision_bound ... ok
+test storage::sqlite::actors::tests::gate2_self_support_is_marked_zero_independent_prior ... ok
+test storage::sqlite::actors::tests::promote_without_a_bound_actor_fails_closed ... ok
+test storage::sqlite::actors::tests::gate3_evidence_failure_rolls_back_the_mutation ... ok
+test storage::sqlite::actors::tests::reinforce_endorsement_uses_the_reinforce_strength_path ... ok
+test storage::sqlite::actors::tests::gate3_success_commits_mutation_event_and_receipt_together ... ok
+test storage::sqlite::merge::exact_nomination_tests::exact_entity_set_nominate ... ok
+test storage::sqlite::temporal_candidate_tests::newer_policy_remains_eligible_to_replace_an_older_fact ... ok
+test storage::sqlite::temporal_candidate_tests::older_dated_summary_cannot_mutate_newer_current_policy ... ok
+test storage::sqlite::tests::backfill_autofire_gate_defaults_on_and_reads_opt_out ... ok
+test storage::sqlite::merge::exact_nomination_tests::identical_content_hash_nominate_across_different_text ... ok
+test storage::sqlite::merge::exact_nomination_tests::identical_content_nominate ... ok
+test storage::sqlite::merge::exact_nomination_tests::near_identical_content_no_longer_nominate ... ok
+test storage::sqlite::tests::balanced_profile_preserves_normal_sync_only_when_explicit ... ok
+test storage::sqlite::merge::exact_nomination_tests::tag_filter_restricts_nomination ... ok
+test storage::sqlite::search::w1b_search_collapse_tests::hybrid_search_filtered_semantic_weight_is_inert ... ok
+test storage::sqlite::search::w1b_search_collapse_tests::hybrid_search_filtered_semantic_weight_inert_with_type_filters ... ok
+test storage::sqlite::merge::exact_nomination_tests::same_source_key_nominate_even_with_diverged_content ... ok
+test storage::sqlite::tests::durability_profile_parser_is_explicit_and_fail_closed ... ok
+test storage::sqlite::tests::backup_to_captures_committed_wal_frames_in_a_consistent_snapshot ... ok
+test storage::sqlite::tests::composition_candidates_exclude_inactive_memories ... ok
+test storage::sqlite::tests::connector_cursor_round_trips ... ok
+test storage::sqlite::tests::connector_upsert_rejects_probable_github_secret_without_mutating_existing_record ... ok
+test storage::sqlite::tests::due_for_review_node_ids_returns_only_past_due_rows ... ok
+test storage::sqlite::tests::explicit_checkpoint_reports_sqlite_counters ... ok
+test storage::sqlite::tests::consolidation_never_deletes_low_retention_memories ... ok
+test storage::sqlite::tests::hardened_writer_refuses_read_only_non_wal_database ... ok
+test storage::sqlite::tests::explicit_promotion_marks_a_retrieved_memory_useful ... ok
+test storage::sqlite::tests::corrupt_fts_index_is_rebuilt_instead_of_bricking_the_store ... ok
+test storage::sqlite::tests::failure_feedback_demotes_recently_retrieved_memories_by_rank ... ok
+test storage::sqlite::tests::failure_feedback_respects_scope_and_window ... ok
+test storage::sqlite::tests::gc_spares_protected_memories ... ok
+test storage::sqlite::tests::gc_uses_the_privacy_cleanup_deletion_path ... ok
+test storage::sqlite::tests::hardened_profile_is_verified_before_store_is_returned ... ok
+test storage::sqlite::tests::hygiene_snapshot_tolerates_malformed_and_null_legacy_rows ... ok
+test storage::sqlite::tests::hygiene_snapshot_distinguishes_unknown_pruned_access_from_never_accessed ... ok
+test storage::sqlite::tests::ingest_rejects_probable_github_secret_without_persisting_or_echoing_it ... ok
+test storage::sqlite::tests::hygiene_snapshot_covers_more_than_five_hundred_without_full_content ... ok
+test storage::sqlite::tests::legacy_recency_repair_preserves_reviewed_memories ... ok
+test storage::sqlite::tests::legacy_search_hits_cannot_preserve_recency_or_delay_decay ... ok
+test storage::sqlite::tests::legacy_search_hits_cannot_reinforce_or_reactivate_a_memory ... ok
+test storage::sqlite::tests::never_composed_admits_via_typed_edge_hop ... ok
+test storage::sqlite::tests::list_tag_operations_is_not_buried_by_later_merge_rows ... ok
+test storage::sqlite::tests::one_retrieval_links_the_top_pairs_only ... ok
+test storage::sqlite::tests::never_composed_tags_only_returns_empty ... ok
+test storage::sqlite::tests::overlong_source_tags_can_be_renamed_away_end_to_end ... ok
+test storage::sqlite::tests::padded_source_tags_are_reachable_byte_exact ... ok
+test storage::sqlite::tests::passive_recall_records_telemetry_without_reinforcing ... ok
+test storage::sqlite::tests::purge_fails_closed_when_a_referencing_row_cannot_be_read ... ok
+test storage::sqlite::tests::promote_memory_backfill_caps_stability_at_plus_365 ... ok
+test storage::sqlite::tests::promote_memory_backfill_uses_multiply_below_crossover ... ok
+test storage::sqlite::tests::opaque_tombstone_rejects_a_later_node_archive_even_with_newer_timestamp ... ok
+test storage::sqlite::tests::purging_empty_content_does_not_scrub_unrelated_evidence ... ok
+test storage::sqlite::tests::reconcile_tombstones_records_absent_from_live_set ... ok
+test storage::sqlite::tests::sqlite_crash_child ... ok
+test storage::sqlite::tests::startup_rejects_corrupt_database_before_migrations ... ok
+test storage::sqlite::tests::retention_distribution_reports_out_of_range_values_explicitly ... ok
+test storage::sqlite::tests::repeated_co_retrieval_grows_strength_to_a_cap ... ok
+test storage::sqlite::tests::secret_shaped_stored_tags_can_be_renamed_away ... ok
+test storage::sqlite::tests::scoped_tag_operation_listing_includes_all_scopes_operations ... ok
+test storage::sqlite::tests::portable_import_rejects_secret_archive_atomically_before_safe_rows_import ... ok
+test storage::sqlite::tests::single_memory_retrievals_link_nothing ... ok
+test storage::sqlite::tests::startup_rejects_v21_event_without_receipt ... ok
+test storage::sqlite::tests::suppress_then_reverse_restores_fsrs_state ... ok
+test storage::sqlite::tests::state_distribution_covers_every_row_with_sql_thresholds ... ok
+test storage::sqlite::tests::suppression_snapshot_rejects_conflict_expiry_and_legacy ... ok
+test storage::sqlite::tests::suppression_snapshot_restores_floor_and_stack_atomically ... ok
+test storage::sqlite::tests::suppression_cascade_is_idempotent_and_reverses_with_seed ... ok
+test storage::sqlite::tests::tag_apply_and_audit_roll_back_together_on_injected_failure ... ok
+test storage::sqlite::tests::sigkill_before_and_after_commit_respects_atomic_ack_boundary ... ok
+test storage::sqlite::tests::tag_merge_normalizes_sources_and_rejects_stale_preview_or_undo_conflict ... ok
+test storage::sqlite::tests::tag_mutation_rejects_secret_shaped_persistent_fields_without_side_effects ... ok
+test storage::sqlite::tests::tag_rename_all_scopes_is_explicit_and_updates_every_matching_row ... ok
+test storage::sqlite::tests::tag_rename_is_previewed_scoped_exact_atomic_audited_and_reversible ... ok
+test storage::sqlite::tests::tag_vocabulary_rejects_more_than_ten_thousand_tags ... ok
+test storage::sqlite::tests::tag_vocabulary_skips_and_counts_overlong_stored_tags ... ok
+test storage::sqlite::tests::test_composition_save_query_outcome_and_never_composed ... ok
+test storage::sqlite::tests::test_composition_neighbors_count_distinct_events_not_member_roles ... ok
+test storage::sqlite::tests::tag_mutation_row_and_audit_limits_fail_before_writes ... ok
+test storage::sqlite::tests::tag_mutation_validation_and_malformed_json_fail_without_partial_writes ... ok
+test storage::sqlite::tests::test_get_last_backup_timestamp_no_panic ... ok
+test storage::sqlite::tests::test_concrete_search_literal_identifier_lands_first ... ok
+test storage::sqlite::tests::test_delete ... ok
+test storage::sqlite::tests::test_dream_history_empty ... ok
+test storage::sqlite::tests::test_dream_history_save_and_get_last ... ok
+test storage::sqlite::tests::test_count_memories_since ... ok
+test storage::sqlite::tests::test_concrete_search_exact_match_beats_a_doc_that_only_cites_it ... ok
+test storage::sqlite::tests::test_hybrid_search_backward_compat ... ok
+test storage::sqlite::tests::test_include_types_takes_precedence_over_exclude ... ok
+test storage::sqlite::tests::test_parse_timestamp_accepts_rfc3339_and_sqlite_native ... ok
+test storage::sqlite::tests::test_never_composed_carries_prior_outcome_signal ... ok
+test storage::sqlite::tests::test_keyword_search_with_exclude_types ... ok
+test storage::sqlite::tests::test_ingest_and_get ... ok
+test storage::sqlite::tests::test_keyword_search_with_include_types ... ok
+test storage::sqlite::tests::test_never_composed_marks_mixed_prior_outcomes ... ok
+test storage::sqlite::tests::test_file_portable_sync_round_trips_between_devices ... ok
+test storage::sqlite::tests::test_portable_archive_exact_round_trip ... ok
+test storage::sqlite::tests::test_portable_import_rejects_unknown_mode ... ok
+test storage::sqlite::tests::test_portable_import_rejects_non_empty_target ... ok
+test storage::sqlite::tests::test_portable_merge_import_applies_delete_tombstones ... ok
+test storage::sqlite::tests::test_portable_merge_import_combines_non_empty_databases ... ok
+test storage::sqlite::tests::test_portable_merge_import_keeps_children_for_newer_local_memory ... ok
+test storage::sqlite::tests::test_portable_import_rejects_malformed_table_list ... ok
+test storage::sqlite::tests::test_review ... ok
+test storage::sqlite::tests::test_portable_merge_import_keeps_composition_members_for_newer_local_memory ... ok
+test storage::sqlite::tests::test_purge_scrubs_insight_json_orphans_children_and_writes_tombstone ... ok
+test storage::sqlite::tests::test_portable_merge_import_keeps_newer_local_memory ... ok
+test storage::sqlite::tests::test_search ... ok
+test storage::sqlite::tests::test_set_protected_unknown_node_errors ... ok
+test storage::sqlite::tests::test_portable_merge_import_preserves_purge_tombstones ... ok
+test storage::sqlite::tests::test_type_filter_with_no_matches_returns_empty ... ok
+test storage::sqlite::tests::test_storage_creation ... ok
+test storage::sqlite::tests::test_portable_merge_import_purge_wins_over_newer_local_edit ... ok
+test storage::sqlite::tests::trait_add_edge_is_idempotent ... ok
+test storage::sqlite::tests::trait_classify_with_no_domains_returns_empty ... ok
+test storage::sqlite::tests::trait_delete_domain_idempotent ... ok
+test storage::sqlite::tests::trait_count_matches_insert_count ... ok
+test storage::sqlite::tests::trait_delete_removes_record ... ok
+test storage::sqlite::tests::trait_fts_search_returns_tokens_match ... ok
+test storage::sqlite::tests::trait_get_after_insert_round_trip ... ok
+test storage::sqlite::tests::trait_get_due_memories_returns_in_order ... ok
+test storage::sqlite::tests::trait_get_edges_filters_by_type ... ok
+test storage::sqlite::tests::trait_get_missing_returns_none ... ok
+test storage::sqlite::tests::trait_get_neighbors_bfs_depth_zero_returns_self_only ... ok
+test storage::sqlite::tests::trait_get_scheduling_missing_returns_none ... ok
+test storage::sqlite::tests::trait_get_neighbors_bfs_depth_two_expands ... ok
+test storage::sqlite::tests::trait_get_stats_reports_registered_model ... ok
+test storage::sqlite::tests::trait_health_check_reports_healthy_on_fresh_db ... ok
+test storage::sqlite::tests::trait_hybrid_search_multi_word_via_insert ... ok
+test storage::sqlite::tests::trait_init_is_idempotent ... ok
+test storage::sqlite::tests::trait_insert_rejects_secret_shaped_tags_and_source_without_a_row ... ok
+test storage::sqlite::tests::trait_insert_refuses_dimension_mismatch ... ok
+test storage::sqlite::tests::trait_list_domains_empty_in_phase_1 ... ok
+test storage::sqlite::tests::trait_insert_returns_uuid ... ok
+test storage::sqlite::tests::trait_register_model_first_write_succeeds ... ok
+test storage::sqlite::tests::trait_register_model_mismatched_write_refused ... ok
+test storage::sqlite::tests::test_never_composed_tag_filter_includes_older_tagged_candidates ... ok
+test storage::sqlite::tests::trait_register_model_same_signature_idempotent ... ok
+test storage::sqlite::tests::trait_remove_edge_deletes_single ... ok
+test storage::sqlite::tests::trait_update_modifies_content ... ok
+test storage::sqlite::tests::trait_scheduling_round_trip ... ok
+test storage::sqlite::tests::trait_upsert_then_get_domain_round_trip ... ok
+test storage::sqlite::tests::update_node_content_rejects_probable_github_secret_without_mutating_node ... ok
+test storage::sqlite::tests::update_node_validity_merges_bounds_and_validates_the_effective_window ... ok
+test storage::sqlite::tests::trait_vacuum_succeeds ... ok
+test storage::sqlite::tests::upsert_by_source_is_idempotent_across_reruns ... ok
+test storage::sqlite::tests::upsert_by_source_matches_legacy_null_project_row_with_empty_string ... ok
+test storage::sqlite::tests::upsert_by_source_updates_tags_when_content_changes ... ok
+test storage::sqlite::tests::upsert_by_source_scopes_key_by_project ... ok
+test storage::sqlite::tests::upsert_by_source_without_key_falls_back_to_create ... ok
+test storage::sqlite::tests::upsert_clears_superseded_by_when_record_reappears ... ok
+test storage::sqlite::tests::upsert_by_source_updates_in_place_when_hash_changes ... ok
+test storage::sqlite::v3_regression_tests::v3_cascade_journal_failure_rolls_back_neighbor_and_retry_applies_once ... ok
+test storage::sqlite::write_transaction_policy::the_write_transaction_helper_exists_and_is_shared ... ok
+test storage::sqlite::write_transaction_policy::writer_transactions_begin_immediate ... ok
+test storage::sqlite::tests::v22_pair_receipt_bindings_are_version_aware ... ok
+test storage::sqlite::v3_regression_tests::v3_cascade_restart_preserves_undo_and_scope_protection ... ok
+test storage::sqlite::v3_regression_tests::v3_concurrent_cascade_writers_share_one_durable_effect ... ok
+test storage::sqlite::v3_regression_tests::v3_lifecycle_failure_rolls_back_entire_page ... ok
+test storage::synaptic_store::tests::capture_is_atomic_persisted_and_idempotent ... ok
+test storage::synaptic_store::tests::active_tags_survive_reopen ... ok
+test storage::sqlite::v3_regression_tests::v3_purge_erases_neighbor_snapshots_and_keeps_foreign_keys_valid ... ok
+test storage::sqlite::v3_regression_tests::v3_upgrade_preserves_legacy_suppression_without_inventing_undo ... ok
+test storage::sqlite::v3_regression_tests::v3_gc_cursor_survives_deleting_its_own_page ... ok
+test storage::synaptic_store::tests::expired_or_superseded_candidate_is_withheld_by_guarded_transaction ... ok
+test storage::synaptic_store::tests::frozen_snapshot_replay_matches_receipt_and_semantic_state_after_reopen ... ok
+test storage::synaptic_store::tests::retagged_memory_is_promoted_only_once_per_event ... ok
+test storage::synaptic_store::tests::suppressed_candidate_is_audited_without_stable_id_or_promotion ... ok
+test storage::synaptic_store::tests::later_suppression_and_purge_cannot_resurrect_ids_through_receipt_reads ... ok
+test storage::synaptic_store::tests::suppressed_trigger_is_rejected_inside_capture_transaction ... ok
+test storage::synaptic_store::tests::v2_event_restart_then_related_later_tag_captures_once ... ok
+test storage::synaptic_store::tests::v2_future_window_endpoints_are_rejected_before_forward_materialization ... ok
+test storage::synaptic_store::tests::v2_rejects_future_dated_events_before_backward_evaluation ... ok
+test storage::synaptic_store::tests::v2_rejects_future_dated_tags_before_forward_reconciliation ... ok
+test storage::synaptic_store::tests::v2_stale_new_event_is_closed_and_evaluates_backward_only ... ok
+test storage::synaptic_store::tests::v2_suppressed_trigger_withholds_and_child_receipt_redacts_after_purge ... ok
+test storage::synaptic_store::tests::v2_tag_first_then_backdated_event_reconciles_uncaptured_tag ... ok
+test storage::synaptic_store::tests::v2_unrelated_later_tag_is_context_mismatch_without_mutation ... ok
+test storage::trace_store::tests::receipt_local_slots_are_never_resolved_as_memory_ids ... ok
+test storage::synaptic_store::tests::v2_two_open_events_compete_for_one_later_tag ... ok
+test storage::trace_store::tests::ask_agent_why_is_not_a_decision ... ok
+test storage::trace_store::tests::memory_pr_lifecycle ... ok
+test storage::trace_store::tests::promote_releases_a_quarantined_memory_end_to_end ... ok
+test storage::trace_store::tests::prune_agent_traces_survives_hostile_retention_value ... ok
+test storage::trace_store::tests::prune_agent_traces_sweeps_old_events_and_orphaned_runs ... ok
+test storage::trace_store::tests::trace_retention_env_value_is_clamped_and_never_overflows ... ok
+test storage::unlearning::tests::anti_resurrection_commitments_match_exact_inputs_only ... ok
+test storage::unlearning::tests::builder_binds_commitment_kinds_key_and_fence_epoch ... ok
+test storage::unlearning::tests::closure_and_postcondition_commitments_are_stable_and_distinct ... ok
+test storage::unlearning::tests::closure_is_transitive_deterministic_and_cycle_safe ... ok
+test storage::unlearning::tests::commitment_domains_are_separated_and_keyed ... ok
+test storage::unlearning::tests::duplicate_postconditions_are_failed_not_first_match_wins ... ok
+test storage::unlearning::tests::empty_identifiers_are_rejected ... ok
+test storage::unlearning::tests::generation_is_nonzero_and_sqlite_compatible ... ok
+test storage::unlearning::tests::ledger_payload_contains_commitments_and_explicit_boundaries_not_target ... ok
+test storage::unlearning::tests::ledger_rejects_free_form_or_target_bearing_ids ... ok
+test storage::unlearning::tests::legacy_scope_can_never_be_verified ... ok
+test storage::unlearning::tests::passed_status_requires_the_kind_specific_closed_code ... ok
+test storage::unlearning::tests::verification_requires_real_surface_evidence ... ok
+test storage::unlearning::tests::verified_scope_requires_every_positive_postcondition ... ok
+test storage::unlearning_store::tests::loads_cycle_safe_closure_and_writes_content_free_tombstone ... ok
+test storage::unlearning_store::tests::selected_canary_scan_returns_counts_without_returning_canary_values ... ok
+test storage::v3_guard::tests::detect_returns_none_for_missing_and_empty_files ... ok
+test storage::v3_guard::tests::detect_returns_none_for_non_sqlite_bytes ... ok
+test storage::v3_guard::tests::refusal_error_carries_path_schema_and_hint ... ok
+test storage::walk_receipts::tests::canonicalization_is_stable_across_key_order_and_repeats ... ok
+test storage::trace_store::tests::receipts_are_listable_per_run_b5 ... ok
+test storage::trace_store::tests::receipt_roundtrips ... ok
+test trace::receipt::tests::actor_provenance_round_trips_and_legacy_rows_stay_readable ... ok
+test trace::receipt::tests::backfill_evidence_round_trips_and_requires_complete_path ... ok
+test trace::receipt::tests::decay_bands ... ok
+test trace::receipt::tests::empty_trust_scores_floor_to_zero_high_risk ... ok
+test trace::receipt::tests::legacy_receipt_without_backfill_evidence_deserializes_untouched ... ok
+test trace::receipt::tests::matches_published_spec_shape ... ok
+test trace::receipt::tests::receipt_id_is_human_legible_and_dated ... ok
+test trace::receipt::tests::receipt_ids_unique_within_a_run_b3 ... ok
+test trace::receipt::tests::trust_floor_is_the_weakest_link ... ok
+test trace::receipt::tests::v1_synaptic_receipt_deserializes_without_v2_optional_fields ... ok
+test trace::review::review_mode_labels::try_from_label_is_strict_and_from_label_is_lenient ... ok
+test trace::review::tests::action_resulting_status ... ok
+test trace::review::tests::contradiction_against_high_trust_is_risky ... ok
+test trace::review::tests::contradiction_against_low_trust_is_fine ... ok
+test trace::review::tests::credential_shaped_value_in_a_long_note_gates ... ok
+test trace::review::tests::decayed_resurrection_gates ... ok
+test trace::review::tests::dream_consolidation_gates ... ok
+test trace::review::tests::fast_mode_never_gates_even_risky_writes ... ok
+test trace::review::tests::incidental_mention_deep_in_long_note_does_not_gate ... ok
+test trace::review::tests::long_note_that_leads_with_a_sensitive_topic_gates ... ok
+test trace::review::tests::long_note_with_two_sensitive_topics_gates ... ok
+test trace::review::tests::low_confidence_batch_gates_but_confident_batch_does_not ... ok
+test trace::review::tests::mode_label_roundtrip ... ok
+test trace::review::tests::only_accept_actions_release_the_memory ... ok
+test trace::review::tests::ordinary_write_auto_commits_in_risk_gated ... ok
+test trace::review::tests::paranoid_mode_gates_even_ordinary_writes ... ok
+test trace::review::tests::sensitive_node_type_gates ... ok
+test trace::review::tests::sensitive_tag_gates_a_long_note ... ok
+test trace::review::tests::sensitive_topic_word_boundary_no_false_positives_b6 ... ok
+test trace::review::tests::sensitive_topic_word_boundary_still_catches_real_b6 ... ok
+test trace::review::tests::sensitive_topics_gate ... ok
+test trace::review::tests::supersede_forget_merge_protect_all_gate ... ok
+test trace::review::tests::weak_provenance_connector_gates_strong_does_not ... ok
+test trace::tests::retrieve_event_carries_activation_map ... ok
+test trace::tests::suppress_reason_labels_match_ts ... ok
+test trace::tests::trace_event_roundtrips_with_ts_shape ... ok
+test trace::tests::with_at_fills_only_when_unset ... ok
+test storage::trace_store::tests::release_quarantine_is_idempotent_on_unsuppressed ... ok
+test storage::trace_store::tests::release_quarantine_works_past_the_labile_window_c1 ... ok
+test storage::trace_store::tests::trace_append_orders_and_rolls_up ... ok
+test storage::walk_receipts::tests::save_walk_receipt_is_idempotent_and_deterministic ... ok
+test storage::trace_store::tests::trace_reads_redact_suppressed_ids_and_purge_scrubs_raw_payloads ... ok
+test storage::walk_receipts::tests::coverage_math_on_a_seeded_store ... ok
+test storage::synaptic_store::tests::capture_samples_current_validity_after_waiting_for_another_writer ... ok
+
+test result: ok. 935 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.77s
+
+     Running unittests src/lib.rs (/tmp/cargo-target/debug/deps/vestige_differential_tests-6ef0e5d02e4ff3e7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/differential.rs (/tmp/cargo-target/debug/deps/differential-b8ba4dfe57544daa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/differential.rs (/tmp/cargo-target/debug/deps/differential-ba37786e0860a6b7)
+
+running 5 tests
+test strata_store_materializes_and_verifies_green_every_fuzz_seed ... ok
+test script_json_round_trip_matches_documented_shape ... ok
+test fixed_script_cross_engine_full_parity ... ok
+test fixed_script_two_runs_byte_identical_per_engine ... ok
+test fuzz_seeded_scripts_parity_and_byte_identical_reruns ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.35s
+
+     Running unittests src/lib.rs (/tmp/cargo-target/debug/deps/vestige_e2e_tests-4a2584fa89976267)
+
+running 22 tests
+test assertions::tests::test_approx_eq ... ok
+test assertions::tests::test_embedding_assertions ... ok
+test assertions::tests::test_retention_assertions ... ok
+test assertions::tests::test_temporal_assertions ... ok
+test assertions::tests::test_helper_functions ... ok
+test assertions::tests::test_scheduling_assertions ... ok
+test harness::time_travel::tests::test_history_tracking ... ok
+test harness::time_travel::tests::test_retrievability_decay ... ok
+test harness::time_travel::tests::test_time_travel_basic ... ok
+test harness::time_travel::tests::test_time_travel_reset ... ok
+test harness::time_travel::tests::test_due_date_checking ... ok
+test harness::db_manager::tests::test_seed_diverse ... ok
+test harness::db_manager::tests::test_temp_database_creation ... ok
+test mocks::fixtures::tests::test_generate_tags ... ok
+test mocks::fixtures::tests::test_lorem_content ... ok
+test mocks::fixtures::tests::test_create_memory ... ok
+test mocks::fixtures::tests::test_create_decay_scenario ... ok
+test harness::db_manager::tests::test_seed_nodes ... ok
+test mocks::fixtures::tests::test_create_batch ... ok
+test harness::db_manager::tests::test_clear_database ... ok
+test mocks::fixtures::tests::test_create_scheduling_scenario ... ok
+test harness::db_manager::tests::test_snapshot_restore ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+     Running tests/extreme/adversarial_tests.rs (/tmp/cargo-target/debug/deps/adversarial_tests-71a8da612d0d8816)
+
+running 9 tests
+test test_adversarial_empty_inputs ... ok
+test test_adversarial_control_characters ... ok
+test test_adversarial_config_boundaries ... ok
+test test_adversarial_self_loops ... ok
+test test_adversarial_special_numeric_values ... ok
+test test_adversarial_cyclic_graphs ... ok
+test test_adversarial_unicode_handling ... ok
+test test_adversarial_weight_boundaries ... ok
+test test_adversarial_extremely_long_inputs ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/extreme/chaos_tests.rs (/tmp/cargo-target/debug/deps/chaos_tests-bdf6e43c200b7f27)
+
+running 10 tests
+test test_chaos_ancient_memories ... ok
+test test_chaos_add_remove_cycles ... ok
+test test_chaos_capture_window_edge_cases ... ok
+test test_chaos_continuous_growth_under_load ... ok
+test test_chaos_deep_chain_handling ... ok
+test test_chaos_isolated_subsystem_failures ... ok
+test test_chaos_random_operation_sequence ... ok
+test test_chaos_graceful_degradation ... ok
+test test_chaos_high_fanout_handling ... ok
+test test_chaos_high_frequency_activations ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cognitive/mod.rs (/tmp/cargo-target/debug/deps/cognitive_tests-b40673127c51a631)
+
+running 98 tests
+test comparative_benchmarks::test_fsrs6_personalization_improvement ... ok
+test comparative_benchmarks::test_fsrs6_vs_fixed_interval ... ok
+test comparative_benchmarks::test_fsrs6_vs_leitner ... ok
+test comparative_benchmarks::test_fsrs6_vs_sm2_retention_same_reviews ... ok
+test comparative_benchmarks::test_fsrs6_vs_sm2_reviews_same_retention ... ok
+test comparative_benchmarks::test_content_pointer_accuracy ... ok
+test comparative_benchmarks::test_retroactive_semantic_filtering ... ok
+test comparative_benchmarks::test_retroactive_captures_related_memories ... ok
+test comparative_benchmarks::test_fsrs6_vs_sm2_efficiency ... ok
+test comparative_benchmarks::test_proof_unique_to_vestige ... ok
+test comparative_benchmarks::test_fsrs6_hard_penalty_effectiveness ... ok
+test comparative_benchmarks::test_retroactive_vs_timestamp_importance ... ok
+test comparative_benchmarks::test_retroactive_window_effectiveness ... ok
+test comparative_benchmarks::test_fsrs6_same_day_handling ... ok
+test comparative_benchmarks::test_spreading_finds_chains_similarity_misses ... ok
+test comparative_benchmarks::test_spreading_mixed_link_types ... ok
+test comparative_benchmarks::test_spreading_vs_similarity_1_hop ... ok
+test comparative_benchmarks::test_barcode_orthogonality ... ok
+test comparative_benchmarks::test_spreading_dense_vs_sparse ... ok
+test comparative_benchmarks::test_spreading_path_quality ... ok
+test comparative_benchmarks::test_spreading_vs_similarity_2_hop ... ok
+test comparative_benchmarks::test_spreading_vs_similarity_3_hop ... ok
+test dreams_tests::test_connection_graph_comprehensive ... ok
+test dreams_tests::test_activity_tracker_rate_calculation ... ok
+test dreams_tests::test_consolidation_idle_trigger ... ok
+test dreams_tests::test_consolidation_connection_strengthening ... ok
+test dreams_tests::test_consolidation_generates_novel_insights ... ok
+test dreams_tests::test_consolidation_decay_stage ... ok
+test dreams_tests::test_consolidation_integration_stage ... ok
+test dreams_tests::test_consolidation_memory_replay_sequence ... ok
+test dreams_tests::test_consolidation_replay_stage ... ok
+test dreams_tests::test_consolidation_pruning_stage ... ok
+test dreams_tests::test_consolidation_scheduler_activity_detection ... ok
+test comparative_benchmarks::test_spreading_scale_performance ... ok
+test dreams_tests::test_consolidation_transfer_stage ... ok
+test dreams_tests::test_insight_information_gain ... ok
+test dreams_tests::test_dream_empty_memories ... ok
+test dreams_tests::test_insight_source_memory_tracking ... ok
+test dreams_tests::test_pattern_discovery ... ok
+test dreams_tests::test_insight_combines_multiple_memories ... ok
+test dreams_tests::test_insight_novelty_scoring ... ok
+test neuroscience_tests::test_fsrs_custom_decay_parameter ... ok
+test neuroscience_tests::test_fsrs_initial_difficulty_order ... ok
+test neuroscience_tests::test_fsrs_retrievability_at_zero ... ok
+test neuroscience_tests::test_fsrs_retrievability_decreases ... ok
+test neuroscience_tests::test_fsrs_scheduler_first_review ... ok
+test neuroscience_tests::test_fsrs_scheduler_lapse_tracking ... ok
+test dreams_tests::test_consolidation_weak_memory_removal ... ok
+test neuroscience_tests::test_importance_arousal_signal ... ok
+test dreams_tests::test_insight_type_classification ... ok
+test neuroscience_tests::test_fsrs_difficulty_mean_reversion ... ok
+test neuroscience_tests::test_fsrs_interval_retrievability_roundtrip ... ok
+test neuroscience_tests::test_importance_attention_signal ... ok
+test neuroscience_tests::test_importance_reward_signal ... ok
+test neuroscience_tests::test_memory_lifecycle_transitions ... ok
+test neuroscience_tests::test_memory_state_accessibility_calculator ... ok
+test neuroscience_tests::test_memory_state_accessibility_multipliers ... ok
+test neuroscience_tests::test_memory_state_competition_suppression ... ok
+test neuroscience_tests::test_memory_state_competition_tracking ... ok
+test neuroscience_tests::test_memory_state_cue_reactivation ... ok
+test neuroscience_tests::test_memory_state_retrievability ... ok
+test neuroscience_tests::test_reconsolidation_apply_modifications ... ok
+test neuroscience_tests::test_reconsolidation_finalizes_changes ... ok
+test neuroscience_tests::test_reconsolidation_marks_memory_labile ... ok
+test neuroscience_tests::test_reconsolidation_retrieval_history ... ok
+test neuroscience_tests::test_reconsolidation_tracks_access_context ... ok
+test neuroscience_tests::test_stc_batch_operations ... ok
+test neuroscience_tests::test_stc_capture_window_probability ... ok
+test neuroscience_tests::test_stc_decay_functions ... ok
+test neuroscience_tests::test_stc_event_type_strengths ... ok
+test neuroscience_tests::test_stc_importance_clustering ... ok
+test neuroscience_tests::test_stc_prp_trigger_captures_memories ... ok
+test neuroscience_tests::test_stc_statistics_tracking ... ok
+test neuroscience_tests::test_stc_tag_creation ... ok
+test neuroscience_tests::test_stc_tag_with_custom_strength ... ok
+test neuroscience_tests::test_stc_weak_event_no_capture ... ok
+test spreading_activation_tests::test_activation_decay_factor_configurable ... ok
+test spreading_activation_tests::test_activation_decay_per_hop ... ok
+test spreading_activation_tests::test_activation_distance_law ... ok
+test spreading_activation_tests::test_activation_max_hops_limit ... ok
+test spreading_activation_tests::test_activation_minimum_threshold ... ok
+test spreading_activation_tests::test_edge_decay_without_use ... ok
+test spreading_activation_tests::test_edge_strength_increases_with_use ... ok
+test spreading_activation_tests::test_hebbian_reinforcement ... ok
+test spreading_activation_tests::test_link_type_weights ... ok
+test spreading_activation_tests::test_network_batch_construction ... ok
+test spreading_activation_tests::test_network_builds_from_semantic_similarity ... ok
+test spreading_activation_tests::test_network_builds_from_temporal_proximity ... ok
+test spreading_activation_tests::test_network_link_types_differentiated ... ok
+test spreading_activation_tests::test_spreading_3_hop_discovery ... ok
+test spreading_activation_tests::test_spreading_beats_similarity_search ... ok
+test spreading_activation_tests::test_spreading_convergent_activation ... ok
+test spreading_activation_tests::test_spreading_finds_hidden_chains ... ok
+test spreading_activation_tests::test_spreading_semantic_vs_temporal_links ... ok
+test neuroscience_tests::test_importance_composite_score ... ok
+test spreading_activation_tests::test_spreading_path_tracking ... ok
+test neuroscience_tests::test_importance_novelty_signal ... ok
+test spreading_activation_tests::test_traversal_count_tracking ... ok
+
+test result: ok. 98 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cognitive/comparative_benchmarks.rs (/tmp/cargo-target/debug/deps/comparative_benchmarks-ee54d38ffb97b0f1)
+
+running 23 tests
+test test_fsrs6_hard_penalty_effectiveness ... ok
+test test_fsrs6_personalization_improvement ... ok
+test test_content_pointer_accuracy ... ok
+test test_fsrs6_same_day_handling ... ok
+test test_fsrs6_vs_leitner ... ok
+test test_fsrs6_vs_fixed_interval ... ok
+test test_fsrs6_vs_sm2_efficiency ... ok
+test test_fsrs6_vs_sm2_retention_same_reviews ... ok
+test test_fsrs6_vs_sm2_reviews_same_retention ... ok
+test test_proof_unique_to_vestige ... ok
+test test_retroactive_window_effectiveness ... ok
+test test_spreading_finds_chains_similarity_misses ... ok
+test test_retroactive_captures_related_memories ... ok
+test test_retroactive_semantic_filtering ... ok
+test test_spreading_path_quality ... ok
+test test_spreading_mixed_link_types ... ok
+test test_spreading_vs_similarity_1_hop ... ok
+test test_retroactive_vs_timestamp_importance ... ok
+test test_spreading_vs_similarity_2_hop ... ok
+test test_spreading_vs_similarity_3_hop ... ok
+test test_barcode_orthogonality ... ok
+test test_spreading_dense_vs_sparse ... ok
+test test_spreading_scale_performance ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/journeys/consolidation_workflow.rs (/tmp/cargo-target/debug/deps/consolidation_workflow-91c9206704d5f3ab)
+
+running 9 tests
+test test_activity_tracker_calculations ... ok
+test test_connection_graph_decay_and_pruning ... ok
+test test_connections_form_between_related_memories ... ok
+test test_consolidation_run_tracking ... ok
+test test_pruning_removes_weak_memories ... ok
+test test_retention_calculation ... ok
+test test_consolidation_detects_idle_periods ... ok
+test test_decay_applies_to_old_memories ... ok
+test test_dream_cycle_generates_insights ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cognitive/dreams_tests.rs (/tmp/cargo-target/debug/deps/dreams-7af41fb5e4b8837a)
+
+running 20 tests
+test test_activity_tracker_rate_calculation ... ok
+test test_connection_graph_comprehensive ... ok
+test test_consolidation_connection_strengthening ... ok
+test test_consolidation_decay_stage ... ok
+test test_consolidation_generates_novel_insights ... ok
+test test_consolidation_scheduler_activity_detection ... ok
+test test_consolidation_pruning_stage ... ok
+test test_consolidation_idle_trigger ... ok
+test test_consolidation_replay_stage ... ok
+test test_consolidation_integration_stage ... ok
+test test_consolidation_transfer_stage ... ok
+test test_consolidation_weak_memory_removal ... ok
+test test_consolidation_memory_replay_sequence ... ok
+test test_dream_empty_memories ... ok
+test test_insight_combines_multiple_memories ... ok
+test test_insight_source_memory_tracking ... ok
+test test_insight_information_gain ... ok
+test test_insight_novelty_scoring ... ok
+test test_pattern_discovery ... ok
+test test_insight_type_classification ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/extreme/mod.rs (/tmp/cargo-target/debug/deps/extreme_tests-27814ecab6c1f293)
+
+running 33 tests
+test adversarial_tests::test_adversarial_config_boundaries ... ok
+test adversarial_tests::test_adversarial_cyclic_graphs ... ok
+test adversarial_tests::test_adversarial_control_characters ... ok
+test adversarial_tests::test_adversarial_empty_inputs ... ok
+test adversarial_tests::test_adversarial_self_loops ... ok
+test adversarial_tests::test_adversarial_special_numeric_values ... ok
+test adversarial_tests::test_adversarial_weight_boundaries ... ok
+test adversarial_tests::test_adversarial_unicode_handling ... ok
+test adversarial_tests::test_adversarial_extremely_long_inputs ... ok
+test chaos_tests::test_chaos_ancient_memories ... ok
+test chaos_tests::test_chaos_add_remove_cycles ... ok
+test chaos_tests::test_chaos_capture_window_edge_cases ... ok
+test chaos_tests::test_chaos_continuous_growth_under_load ... ok
+test chaos_tests::test_chaos_deep_chain_handling ... ok
+test chaos_tests::test_chaos_graceful_degradation ... ok
+test chaos_tests::test_chaos_random_operation_sequence ... ok
+test chaos_tests::test_chaos_isolated_subsystem_failures ... ok
+test mathematical_tests::test_math_activation_bounds ... ok
+test chaos_tests::test_chaos_high_fanout_handling ... ok
+test mathematical_tests::test_math_exponential_decay_law ... ok
+test proof_of_superiority::test_proof_multi_hop_beats_similarity ... ok
+test proof_of_superiority::test_proof_retroactive_importance_unique ... ok
+test mathematical_tests::test_math_edge_weight_multiplication ... ok
+test mathematical_tests::test_math_embedding_dimensions ... ok
+test proof_of_superiority::test_proof_temporal_capture_accuracy ... ok
+test research_validation_tests::test_research_collins_loftus_spreading_activation ... ok
+test research_validation_tests::test_research_frey_morris_synaptic_tagging ... ok
+test research_validation_tests::test_research_fsrs6_properties ... ok
+test proof_of_superiority::test_proof_comprehensive_capability_summary ... ok
+test research_validation_tests::test_research_ebbinghaus_forgetting_curve ... ok
+test research_validation_tests::test_research_teyler_rudy_hippocampal_indexing ... ok
+test mathematical_tests::test_math_barcode_statistics ... ok
+test chaos_tests::test_chaos_high_frequency_activations ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/journeys/import_export.rs (/tmp/cargo-target/debug/deps/import_export-7052c0641e472637)
+
+running 9 tests
+test test_export_serializes_memories_to_json ... ok
+test test_import_deserializes_json_to_memories ... ok
+test test_export_bundle_metadata ... ok
+test test_roundtrip_preserves_all_data ... ok
+test test_selective_export_by_tags ... ok
+test test_empty_bundle_handling ... ok
+test test_exported_to_ingest_input ... ok
+test test_import_merges_with_existing_data ... ok
+test test_large_bundle_performance ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/journeys/ingest_recall_review.rs (/tmp/cargo-target/debug/deps/ingest_recall_review-a1dd49ea43e6469d)
+
+running 8 tests
+test test_sentiment_affects_memory_consolidation ... ok
+test test_recall_finds_memories_by_content ... ok
+test test_ingest_input_defaults ... ok
+test test_recall_search_modes ... ok
+test test_review_strengthens_memory_with_fsrs ... ok
+test test_memory_lifecycle_follows_expected_pattern ... ok
+test test_fsrs_rating_effects ... ok
+test test_ingest_creates_valid_memory_structure ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/journeys/intentions_workflow.rs (/tmp/cargo-target/debug/deps/intentions_workflow-dfeacc2044482150)
+
+running 10 tests
+test test_action_history_tracking ... ok
+test test_intent_description ... ok
+test test_intent_provides_relevant_tags ... ok
+test test_action_with_metadata ... ok
+test test_debugging_intent_detection ... ok
+test test_maintenance_type_tags ... ok
+test test_optimization_type_tags ... ok
+test test_refactoring_intent_detection ... ok
+test test_learning_intent_detection ... ok
+test test_user_action_creation ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/journeys/mod.rs (/tmp/cargo-target/debug/deps/journey_tests-e76b3063855285f6)
+
+running 45 tests
+test consolidation_workflow::test_consolidation_run_tracking ... ok
+test consolidation_workflow::test_connection_graph_decay_and_pruning ... ok
+test consolidation_workflow::test_retention_calculation ... ok
+test consolidation_workflow::test_decay_applies_to_old_memories ... ok
+test consolidation_workflow::test_connections_form_between_related_memories ... ok
+test consolidation_workflow::test_consolidation_detects_idle_periods ... ok
+test import_export::test_export_bundle_metadata ... ok
+test import_export::test_empty_bundle_handling ... ok
+test consolidation_workflow::test_activity_tracker_calculations ... ok
+test import_export::test_export_serializes_memories_to_json ... ok
+test import_export::test_exported_to_ingest_input ... ok
+test import_export::test_import_deserializes_json_to_memories ... ok
+test import_export::test_import_merges_with_existing_data ... ok
+test import_export::test_roundtrip_preserves_all_data ... ok
+test consolidation_workflow::test_pruning_removes_weak_memories ... ok
+test import_export::test_selective_export_by_tags ... ok
+test consolidation_workflow::test_dream_cycle_generates_insights ... ok
+test ingest_recall_review::test_fsrs_rating_effects ... ok
+test ingest_recall_review::test_ingest_creates_valid_memory_structure ... ok
+test ingest_recall_review::test_ingest_input_defaults ... ok
+test ingest_recall_review::test_memory_lifecycle_follows_expected_pattern ... ok
+test ingest_recall_review::test_recall_finds_memories_by_content ... ok
+test ingest_recall_review::test_recall_search_modes ... ok
+test intentions_workflow::test_intent_description ... ok
+test ingest_recall_review::test_review_strengthens_memory_with_fsrs ... ok
+test ingest_recall_review::test_sentiment_affects_memory_consolidation ... ok
+test intentions_workflow::test_intent_provides_relevant_tags ... ok
+test intentions_workflow::test_action_history_tracking ... ok
+test intentions_workflow::test_action_with_metadata ... ok
+test intentions_workflow::test_debugging_intent_detection ... ok
+test intentions_workflow::test_learning_intent_detection ... ok
+test intentions_workflow::test_user_action_creation ... ok
+test spreading_activation::test_activation_decays_with_distance ... ok
+test intentions_workflow::test_optimization_type_tags ... ok
+test intentions_workflow::test_maintenance_type_tags ... ok
+test spreading_activation::test_different_link_types_affect_activation ... ok
+test intentions_workflow::test_refactoring_intent_detection ... ok
+test spreading_activation::test_edge_reinforcement_hebbian ... ok
+test spreading_activation::test_convergent_paths ... ok
+test spreading_activation::test_max_hops_limit ... ok
+test spreading_activation::test_minimum_threshold ... ok
+test spreading_activation::test_network_builds_from_semantic_links ... ok
+test spreading_activation::test_path_tracking ... ok
+test spreading_activation::test_spreading_finds_hidden_chains ... ok
+test import_export::test_large_bundle_performance ... ok
+
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/extreme/mathematical_tests.rs (/tmp/cargo-target/debug/deps/mathematical_tests-1e36ea9644a2a0c7)
+
+running 5 tests
+test test_math_edge_weight_multiplication ... ok
+test test_math_activation_bounds ... ok
+test test_math_embedding_dimensions ... ok
+test test_math_exponential_decay_law ... ok
+test test_math_barcode_statistics ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mcp/protocol_tests.rs (/tmp/cargo-target/debug/deps/mcp_protocol-1bd07bd1385d86e2)
+
+running 15 tests
+test test_jsonrpc_error_response_format ... ok
+test test_mcp_initialize_request_format ... ok
+test test_jsonrpc_notification_has_no_id ... ok
+test test_jsonrpc_request_required_fields ... ok
+test test_mcp_initialize_response_format ... ok
+test test_jsonrpc_success_response_format ... ok
+test test_mcp_specific_error_codes ... ok
+test test_resources_list_response_format ... ok
+test test_resources_read_request_format ... ok
+test test_server_rejects_requests_before_initialize ... ok
+test test_standard_jsonrpc_error_codes ... ok
+test test_tools_call_request_format ... ok
+test test_tools_call_response_format ... ok
+test test_tools_list_response_format ... ok
+test test_resources_read_response_format ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mcp/mod.rs (/tmp/cargo-target/debug/deps/mcp_tests-b222c93f9b6172ed)
+
+running 38 tests
+test protocol_tests::test_jsonrpc_error_response_format ... ok
+test protocol_tests::test_jsonrpc_request_required_fields ... ok
+test protocol_tests::test_jsonrpc_notification_has_no_id ... ok
+test protocol_tests::test_jsonrpc_success_response_format ... ok
+test protocol_tests::test_mcp_specific_error_codes ... ok
+test protocol_tests::test_resources_list_response_format ... ok
+test protocol_tests::test_resources_read_request_format ... ok
+test protocol_tests::test_server_rejects_requests_before_initialize ... ok
+test protocol_tests::test_standard_jsonrpc_error_codes ... ok
+test protocol_tests::test_tools_call_request_format ... ok
+test protocol_tests::test_tools_call_response_format ... ok
+test tool_tests::test_all_tools_have_schema ... ok
+test protocol_tests::test_mcp_initialize_request_format ... ok
+test protocol_tests::test_mcp_initialize_response_format ... ok
+test tool_tests::test_complete_intention ... ok
+test tool_tests::test_get_stats ... ok
+test tool_tests::test_health_check ... ok
+test protocol_tests::test_resources_read_response_format ... ok
+test protocol_tests::test_tools_list_response_format ... ok
+test tool_tests::test_hybrid_search_default_weights ... ok
+test tool_tests::test_check_intentions_with_context ... ok
+test tool_tests::test_delete_knowledge_by_id ... ok
+test tool_tests::test_get_knowledge_by_id ... ok
+test tool_tests::test_hybrid_search_with_weights ... ok
+test tool_tests::test_ingest_tool_rejects_empty_content ... ok
+test tool_tests::test_ingest_tool_with_all_fields ... ok
+test tool_tests::test_list_intentions_with_filter ... ok
+test tool_tests::test_mark_reviewed_invalid_rating ... ok
+test tool_tests::test_recall_tool_clamps_limit ... ok
+test tool_tests::test_recall_tool_rejects_empty_query ... ok
+test tool_tests::test_semantic_search_embedding_not_ready ... ok
+test tool_tests::test_semantic_search_valid ... ok
+test tool_tests::test_set_intention_basic ... ok
+test tool_tests::test_mark_reviewed_with_rating ... ok
+test tool_tests::test_tool_schemas_are_valid_json_schema ... ok
+test tool_tests::test_ingest_tool_valid_content ... ok
+test tool_tests::test_recall_tool_valid_query ... ok
+test tool_tests::test_set_intention_with_time_trigger ... ok
+
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mcp/tool_tests.rs (/tmp/cargo-target/debug/deps/mcp_tools-a08a660b6cb013b7)
+
+running 23 tests
+test test_delete_knowledge_by_id ... ok
+test test_complete_intention ... ok
+test test_check_intentions_with_context ... ok
+test test_get_stats ... ok
+test test_health_check ... ok
+test test_hybrid_search_default_weights ... ok
+test test_hybrid_search_with_weights ... ok
+test test_ingest_tool_rejects_empty_content ... ok
+test test_ingest_tool_valid_content ... ok
+test test_ingest_tool_with_all_fields ... ok
+test test_list_intentions_with_filter ... ok
+test test_mark_reviewed_invalid_rating ... ok
+test test_mark_reviewed_with_rating ... ok
+test test_recall_tool_clamps_limit ... ok
+test test_recall_tool_rejects_empty_query ... ok
+test test_recall_tool_valid_query ... ok
+test test_semantic_search_embedding_not_ready ... ok
+test test_semantic_search_valid ... ok
+test test_set_intention_basic ... ok
+test test_set_intention_with_time_trigger ... ok
+test test_tool_schemas_are_valid_json_schema ... ok
+test test_all_tools_have_schema ... ok
+test test_get_knowledge_by_id ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cognitive/neuroscience_tests.rs (/tmp/cargo-target/debug/deps/neuroscience_tests-ae0b7794a21c08b3)
+
+running 35 tests
+test test_fsrs_interval_retrievability_roundtrip ... ok
+test test_fsrs_difficulty_mean_reversion ... ok
+test test_fsrs_initial_difficulty_order ... ok
+test test_fsrs_custom_decay_parameter ... ok
+test test_fsrs_retrievability_at_zero ... ok
+test test_fsrs_retrievability_decreases ... ok
+test test_fsrs_scheduler_first_review ... ok
+test test_fsrs_scheduler_lapse_tracking ... ok
+test test_importance_attention_signal ... ok
+test test_importance_reward_signal ... ok
+test test_memory_state_accessibility_calculator ... ok
+test test_importance_composite_score ... ok
+test test_memory_state_competition_suppression ... ok
+test test_importance_arousal_signal ... ok
+test test_memory_state_cue_reactivation ... ok
+test test_memory_state_retrievability ... ok
+test test_reconsolidation_apply_modifications ... ok
+test test_reconsolidation_finalizes_changes ... ok
+test test_reconsolidation_marks_memory_labile ... ok
+test test_reconsolidation_retrieval_history ... ok
+test test_reconsolidation_tracks_access_context ... ok
+test test_stc_capture_window_probability ... ok
+test test_stc_batch_operations ... ok
+test test_stc_decay_functions ... ok
+test test_stc_event_type_strengths ... ok
+test test_stc_importance_clustering ... ok
+test test_stc_prp_trigger_captures_memories ... ok
+test test_stc_statistics_tracking ... ok
+test test_stc_tag_creation ... ok
+test test_stc_tag_with_custom_strength ... ok
+test test_stc_weak_event_no_capture ... ok
+test test_importance_novelty_signal ... ok
+test test_memory_lifecycle_transitions ... ok
+test test_memory_state_accessibility_multipliers ... ok
+test test_memory_state_competition_tracking ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/extreme/proof_of_superiority.rs (/tmp/cargo-target/debug/deps/proof_of_superiority-e5027b6691a7f49c)
+
+running 4 tests
+test test_proof_comprehensive_capability_summary ... ok
+test test_proof_multi_hop_beats_similarity ... ok
+test test_proof_retroactive_importance_unique ... ok
+test test_proof_temporal_capture_accuracy ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cognitive/psychology_tests.rs (/tmp/cargo-target/debug/deps/psychology_tests-7cfd9b8b989a2b43)
+
+running 30 tests
+test test_context_dependent_matching_context ... ok
+test test_context_dependent_encoding_specificity ... ok
+test test_context_dependent_reinstatement ... ok
+test test_drm_convergent_activation ... ok
+test test_context_dependent_state_dependent ... ok
+test test_drm_basic_false_memory ... ok
+test test_context_dependent_transfer_appropriate ... ok
+test test_drm_list_length_effect ... ok
+test test_drm_semantic_relatedness ... ok
+test test_drm_source_monitoring ... ok
+test test_interference_fan_effect ... ok
+test test_interference_release_from_pi ... ok
+test test_interference_similarity_based ... ok
+test test_serial_position_delay_eliminates_recency ... ok
+test test_interference_proactive ... ok
+test test_serial_position_rehearsal_strengthens_primacy ... ok
+test test_serial_position_u_shaped_curve ... ok
+test test_spacing_effect_distributed_vs_massed ... ok
+test test_interference_retroactive ... ok
+test test_spacing_effect_multi_hop_paths ... ok
+test test_serial_position_primacy_effect ... ok
+test test_spacing_effect_semantic_associations ... ok
+test test_serial_position_recency_effect ... ok
+test test_tot_blocking_effect ... ok
+test test_tot_partial_activation ... ok
+test test_tot_phonological_cue_resolution ... ok
+test test_spacing_effect_expanding_retrieval ... ok
+test test_tot_related_words_activated ... ok
+test test_spacing_effect_optimal_interval ... ok
+test test_tot_age_related_increase ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/extreme/research_validation_tests.rs (/tmp/cargo-target/debug/deps/research_validation_tests-6e45858a1b8b8c40)
+
+running 5 tests
+test test_research_frey_morris_synaptic_tagging ... ok
+test test_research_fsrs6_properties ... ok
+test test_research_collins_loftus_spreading_activation ... ok
+test test_research_ebbinghaus_forgetting_curve ... ok
+test test_research_teyler_rudy_hippocampal_indexing ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cognitive/spreading_activation_tests.rs (/tmp/cargo-target/debug/deps/spreading_activation-d7bc9161b965e235)
+
+running 20 tests
+test test_activation_max_hops_limit ... ok
+test test_activation_distance_law ... ok
+test test_activation_decay_factor_configurable ... ok
+test test_edge_decay_without_use ... ok
+test test_activation_minimum_threshold ... ok
+test test_edge_strength_increases_with_use ... ok
+test test_activation_decay_per_hop ... ok
+test test_hebbian_reinforcement ... ok
+test test_link_type_weights ... ok
+test test_network_batch_construction ... ok
+test test_network_builds_from_temporal_proximity ... ok
+test test_network_builds_from_semantic_similarity ... ok
+test test_spreading_beats_similarity_search ... ok
+test test_network_link_types_differentiated ... ok
+test test_spreading_semantic_vs_temporal_links ... ok
+test test_spreading_3_hop_discovery ... ok
+test test_spreading_convergent_activation ... ok
+test test_traversal_count_tracking ... ok
+test test_spreading_finds_hidden_chains ... ok
+test test_spreading_path_tracking ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/journeys/spreading_activation.rs (/tmp/cargo-target/debug/deps/spreading_activation_journey-e8899f4e7a3c2aa4)
+
+running 9 tests
+test test_convergent_paths ... ok
+test test_activation_decays_with_distance ... ok
+test test_different_link_types_affect_activation ... ok
+test test_edge_reinforcement_hebbian ... ok
+test test_max_hops_limit ... ok
+test test_path_tracking ... ok
+test test_network_builds_from_semantic_links ... ok
+test test_minimum_threshold ... ok
+test test_spreading_finds_hidden_chains ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/tmp/cargo-target/debug/deps/vestige_mcp-6dfd81782370ee2b)
+
+running 789 tests
+test cognitive::tests::cognitive_module_count_is_maintained ... ok
+test dashboard::handlers::tests::audit_action_mapping_covers_real_reason_types ... ok
+test dashboard::handlers::tests::changelog_connection_event_uses_pulse_compatible_shape ... ok
+test dashboard::handlers::tests::changelog_dream_event_uses_pulse_compatible_shape ... ok
+test dashboard::handlers::tests::contradictions_reports_pair_with_contract_fields ... ok
+test cognitive::tests::test_hydrate_loads_connections ... ok
+test autopilot::tests::memory_created_preserves_predictive_learning_without_legacy_capture ... ok
+test cognitive::tests::test_hydrate_multiple_link_types ... ok
+test dashboard::handlers::tests::dashboard_stats_reports_coverage_for_the_active_profile ... ok
+test cognitive::tests::test_hydrate_restores_active_synaptic_tags ... ok
+test cognitive::tests::test_hydrate_empty_storage ... ok
+test dashboard::handlers::tests::cross_project_patterns_empty_without_project_attribution ... ok
+test dashboard::handlers::tests::backfill_http_preview_records_receipt_without_graph_mutation ... ok
+test dashboard::handlers::tests::deep_reference_http_does_not_advertise_a_failed_receipt_write ... ok
+test dashboard::handlers::tests::default_center_id_connected_falls_back_to_recent_when_no_edges ... ok
+test dashboard::handlers::tests::deep_reference_http_rejects_invalid_run_identity_before_tracing ... ok
+test dashboard::handlers::tests::cross_project_patterns_finds_transfer_across_two_projects ... ok
+test dashboard::handlers::tests::deep_reference_http_records_exact_returned_evidence ... ok
+test dashboard::handlers::tests::graph_sort_parse_accepts_connected_case_insensitive ... ok
+test dashboard::handlers::tests::graph_sort_parse_defaults_to_recent ... ok
+test dashboard::handlers::tests::default_center_id_recent_returns_newest_node ... ok
+test dashboard::handlers::tests::default_center_id_connected_prefers_hub_over_newest ... ok
+test dashboard::handlers::tests::deep_reference_http_empty_evidence_never_invents_a_receipt ... ok
+test dashboard::handlers::tests::duplicates_clamps_threshold_and_limit ... ok
+test dashboard::handlers::tests::default_center_id_returns_not_found_on_empty_db ... ok
+test dashboard::handlers::tests::duplicates_returns_contract_shape_when_no_embeddings ... ok
+test dashboard::handlers::tests::duplicates_plan_rejects_fewer_than_two_ids ... ok
+test protocol::http::tests::accept_validation_rejects_incompatible_clients ... ok
+test protocol::http::tests::origin_validation_allows_absent_and_configured_origin ... ok
+test protocol::http::tests::protocol_header_must_match_session_when_present ... ok
+test dashboard::handlers::tests::pending_purge_forget_approves_and_executes_mutation ... ok
+test dashboard::handlers::tests::memory_audit_unknown_id_is_404 ... ok
+test dashboard::handlers::tests::memory_audit_prepends_created_and_maps_time_decay_to_demoted ... ok
+test dashboard::handlers::tests::pending_purge_promote_keeps_memory ... ok
+test protocol::stdio::tests::a_guard_for_an_id_less_request_emits_nothing ... ok
+test dashboard::handlers::tests::pending_purge_quarantine_keeps_but_suppresses_memory ... ok
+test dashboard::handlers::tests::pending_suppress_forget_approves_and_executes_suppression ... ok
+test dashboard::handlers::tests::review_mode_changes_persist_without_applying_historical_proposals ... ok
+test protocol::stdio::tests::dropping_an_armed_guard_emits_an_internal_error_for_that_id ... ok
+test protocol::stdio::tests::a_bad_line_does_not_stop_the_loop ... ok
+test protocol::stdio::tests::a_panicking_handler_is_answered_and_the_loop_keeps_serving ... ok
+test protocol::stdio::tests::a_dead_writer_ends_the_loop_and_is_reported ... ok
+test protocol::stdio::tests::logging_notification_has_the_mcp_wire_shape ... ok
+test protocol::stdio::tests::a_parked_request_does_not_block_the_next_one ... ok
+test protocol::stdio::tests::initialize_is_ordered_before_a_following_tools_call ... ok
+test protocol::stdio::tests::queued_notifications_are_delivered_in_order ... ok
+test protocol::stdio::tests::notifications_are_held_until_after_the_handshake ... ok
+test protocol::stdio::tests::a_ping_is_served_when_offered_load_exceeds_the_cap ... ok
+test protocol::stdio::tests::eof_drains_in_flight_responses ... ok
+test protocol::stdio::tests::out_of_order_responses_correlate_by_id ... ok
+test protocol::stdio::tests::responses_never_interleave_under_concurrent_load ... ok
+test protocol::types::tests::test_notification ... ok
+test protocol::types::tests::test_request_serialization ... ok
+test protocol::types::tests::test_response_error ... ok
+test protocol::types::tests::test_response_success ... ok
+test resources::receipt_card::tests::html_carries_receipt_facts_and_nothing_executable ... ok
+test resources::receipt_card::tests::html_escapes_hostile_ids ... ok
+test resources::receipt_card::tests::parse_uri_rejects_traversal_and_foreign_schemes ... ok
+test resources::receipt_card::tests::uri_round_trip ... ok
+test protocol::stdio::tests::a_dead_writer_is_observed_while_the_read_loop_waits_at_the_pending_cap ... ok
+test server::tests::a_panicking_consolidation_worker_releases_the_claim ... ok
+test server::tests::compact_schemas_keep_their_discriminator_enums ... ok
+test server::tests::a_fresh_insight_surfaces_above_a_higher_scoring_fact ... ok
+test protocol::stdio::tests::stdin_eof_is_observed_while_the_read_loop_waits_to_queue_a_line ... ok
+test server::tests::declared_legacy_revision_gets_legacy_shape_without_a_handshake ... ok
+test server::tests::default_mode_keeps_sensitive_memory_available_without_approval ... ok
+test protocol::stdio::tests::stdin_eof_ends_the_loop_even_with_a_handler_parked ... ok
+test server::tests::discover_advertises_both_revisions_without_a_handshake ... ok
+test server::tests::destructive_purge_is_pre_gated_on_the_real_mcp_path ... ok
+test server::tests::full_schema_registry_matches_the_advertised_catalog ... ok
+test server::tests::discover_is_a_schema_shaped_discover_result ... ok
+test server::tests::fast_mode_allows_destructive_call_on_the_real_mcp_path ... ok
+test protocol::stdio::tests::stdin_eof_is_observed_while_the_read_loop_waits_at_the_pending_cap ... ok
+test server::tests::fast_mode_opens_no_memory_pr ... ok
+test server::tests::initialize_requesting_modern_revision_falls_back_to_legacy ... ok
+test server::tests::legacy_results_do_not_carry_result_type ... ok
+test server::tests::modern_envelope_links_receipt_card_from_tool_result ... ok
+test server::tests::legacy_delete_knowledge_is_pre_gated_on_the_real_mcp_path ... ok
+test protocol::stdio::tests::eof_behind_unread_input_waits_for_the_pending_cap_to_clear ... ok
+test protocol::stdio::tests::stdin_eof_ends_the_loop_when_a_handler_is_parked_in_a_blocking_lock ... ok
+test server::tests::logging_capability_is_declared_and_set_level_is_accepted ... ok
+test server::tests::memory_pr_event_precedes_memory_created_event ... ok
+test server::tests::memory_pr_gate_is_wired_into_the_real_tool_path ... ok
+test server::tests::output_schema_present_on_the_four_documented_tools ... ok
+test server::tests::purge_is_the_only_tool_with_the_interaction_flag ... ok
+test server::tests::modern_ping_serves_statelessly_with_result_type ... ok
+test server::tests::recall_tool_advertises_receipt_card_ui ... ok
+test server::tests::modern_request_with_unknown_version_lists_supported ... ok
+test server::tests::modern_request_without_client_capabilities_is_invalid_params ... ok
+test server::tests::modern_request_without_version_is_invalid_params ... ok
+test server::tests::modern_tools_call_serves_statelessly_with_result_type ... ok
+test server::tests::only_one_consolidation_can_be_claimed_at_a_time ... ok
+test server::tests::recall_run_produces_fetchable_decision_receipt ... ok
+test server::tests::receipt_card_read_renders_html_with_app_mime ... ok
+test server::tests::retrieval_receipts_record_actor_provenance ... ok
+test server::tests::receipt_card_template_is_advertised ... ok
+test server::tests::review_mode_defaults_to_automatic_and_preserves_explicit_settings ... ok
+test server::tests::resources_templates_list_is_empty_not_method_not_found ... ok
+test server::tests::server_binds_a_minted_process_actor_and_claims_stay_neutral ... ok
+test server::tests::suppress_is_pre_gated_on_the_real_mcp_path ... ok
+test server::tests::test_initialize_missing_params_returns_error ... ok
+test server::tests::test_initialize_returns_server_info ... ok
+test server::tests::test_high_payload_tools_have_max_result_size_annotation ... ok
+test server::tests::test_deprecated_dedup_aliases_redirect ... ok
+test server::tests::test_initialize_sets_initialized_flag ... ok
+test server::tests::test_graph_actions_and_aliases ... ok
+test server::tests::test_initialize_unsupported_protocol_falls_back_to_latest ... ok
+test server::tests::test_initialized_notification_with_id_returns_invalid_request ... ok
+test server::tests::test_parse_trace_enabled_defaults_on_and_honors_opt_out ... ok
+test server::tests::test_initialized_notification_returns_none ... ok
+test server::tests::test_notification_does_not_emit_response_or_side_effect ... ok
+test server::tests::test_meta_wire_shape_uses_underscore_meta_field ... ok
+test server::tests::test_memory_status_views_and_aliases ... ok
+test server::tests::test_maintain_actions_and_safety ... ok
+test server::tests::test_other_tools_do_not_carry_max_result_size_annotation ... ok
+test server::tests::test_ping_before_initialize_returns_error ... ok
+test server::tests::test_request_before_initialize_returns_error ... ok
+test server::tests::test_ping_returns_empty_object ... ok
+test server::tests::test_recall_lookup_matches_search_shape ... ok
+test server::tests::test_recall_modes_and_aliases ... ok
+test server::tests::test_resources_have_descriptions ... ok
+test server::tests::test_resources_list_returns_all_resources ... ok
+test server::tests::test_tools_call_missing_params_returns_error ... ok
+test server::tests::test_tool_call_populates_agent_black_box_trace ... ok
+test server::tests::test_tools_call_invalid_params_returns_error ... ok
+test server::tests::tools_list_wire_payload_stays_under_20_kib ... ok
+test server::tests::test_tools_call_rejects_non_object_arguments ... ok
+test server::tests::test_tools_have_descriptions_and_schemas ... ok
+test tools::backfill::tests::commits_outside_the_version_range_are_excluded_with_a_reason ... ok
+test server::tests::test_tools_list_returns_all_tools ... ok
+test server::tests::test_unknown_method_returns_error ... ok
+test tools::backfill::tests::superseded_record_passes_its_candidacy_to_the_replacement ... ok
+test tools::backfill::tests::why_not_answers_for_every_disposition ... ok
+test tools::backfill::tests::why_not_answers_for_range_excluded_commits_and_short_prefixes ... ok
+test tools::backfill::tests::explicit_range_failures_are_errors_not_silent_fallbacks ... ok
+test protocol::stdio::tests::a_client_that_stops_reading_stops_stdin_being_drained ... ok
+test server::tests::test_unknown_tool_returns_error ... ok
+test server::tests::unknown_cursors_are_rejected_and_absent_equivalents_are_not ... ok
+test tools::backfill::tests::backfill_scopes_before_limit_and_checks_explicit_failure ... ok
+test tools::blast_radius::tests::report_by_commit_sha_prefix ... ok
+test tools::blast_radius::tests::schema_has_report_and_retire ... ok
+test tools::blast_radius::tests::report_by_root_id_lists_descendants ... ok
+test tools::causal_walk::tests::schema_declares_all_five_start_point_kinds ... ok
+test tools::backfill::tests::live_backfill_surfaces_root_cause_through_storage ... ok
+test server::tests::tool_guide_matches_live_catalog_and_rejects_hidden_names ... ok
+test tools::blast_radius::tests::report_requires_a_root ... ok
+test tools::blast_radius::tests::retire_requires_ids_and_reason ... ok
+test tools::blast_radius::tests::retire_fast_mode_suppresses_through_storage_path ... ok
+test tools::blast_radius::tests::retire_risk_gated_opens_prs_and_does_not_suppress ... ok
+test tools::changelog::tests::test_changelog_filter_field_echoes_start ... ok
+test tools::causal_walk::tests::causal_walk_finds_cotouch_and_persists_edges_only_on_promote ... ok
+test tools::changelog::tests::test_changelog_limit_clamped ... ok
+test tools::changelog::tests::test_changelog_includes_tag_mutations ... ok
+test tools::changelog::tests::test_changelog_limit_high_clamped ... ok
+test tools::changelog::tests::test_schema_has_properties ... ok
+test tools::changelog::tests::test_changelog_malformed_start_returns_error ... ok
+test tools::changelog::tests::test_changelog_no_args_system_wide ... ok
+test tools::changelog::tests::test_changelog_per_memory_no_transitions ... ok
+test tools::changelog::tests::test_changelog_per_memory_nonexistent ... ok
+test tools::changelog::tests::test_changelog_per_memory_invalid_uuid ... ok
+test tools::codebase_unified::tests::compact_schema_truncates_the_action_description_on_a_sentence_boundary ... ok
+test tools::changelog::tests::test_changelog_system_wide_empty ... ok
+test tools::codebase_unified::tests::a_code_memory_whose_source_changed_is_visibly_stale_on_retrieval ... ok
+test tools::changelog::tests::test_changelog_per_memory_valid_id ... ok
+test tools::codebase_unified::tests::schema_advertises_the_verify_action_and_anchor_inputs ... ok
+test tools::codebase_unified::tests::a_deleted_source_file_makes_the_memory_visibly_stale ... ok
+test tools::codebase_unified::tests::a_path_only_anchor_reports_itself_unverifiable ... ok
+test tools::codebase_unified::tests::a_pre_existing_unanchored_memory_is_unverifiable_never_stale ... ok
+test tools::codebase_unified::tests::reanchor_preserves_the_memory_and_its_fsrs_state ... ok
+test tools::codebase_unified::tests::code_that_only_moved_is_not_reported_as_stale ... ok
+test tools::codebase_unified::tests::remember_response_teaches_the_symbol_convention_when_unverifiable ... ok
+test tools::codebase_unified::tests::saving_with_a_symbol_anchor_records_a_verifiable_hash ... ok
+test tools::codebase_unified::tests::test_get_context_empty ... ok
+test tools::codebase_unified::tests::test_get_context_lean_profile_masks_timestamps ... ok
+test tools::codebase_unified::tests::test_get_context_no_codebase ... ok
+test tools::codebase_unified::tests::test_get_context_retrieves_saved_patterns ... ok
+test tools::codebase_unified::tests::test_remember_decision_empty_decision_fails ... ok
+test tools::codebase_unified::tests::test_invalid_action_fails ... ok
+test tools::codebase_unified::tests::test_remember_decision_missing_decision_fails ... ok
+test tools::codebase_unified::tests::test_schema_structure ... ok
+test tools::codebase_unified::tests::test_missing_args_fails ... ok
+test tools::codebase_unified::tests::test_remember_decision_missing_rationale_fails ... ok
+test tools::codebase_unified::tests::test_remember_pattern_empty_name_fails ... ok
+test tools::codebase_unified::tests::test_remember_decision_succeeds ... ok
+test tools::compact::tests::a_dropped_defs_block_turns_refs_into_plain_objects ... ok
+test tools::compact::tests::a_oneof_with_discriminators_becomes_an_enum_and_a_pointer ... ok
+test tools::compact::tests::a_oneof_without_discriminators_never_reads_variants_empty ... ok
+test tools::compact::tests::folded_filter_fields_leave_required_and_land_in_their_group ... ok
+test tools::compact::tests::long_field_descriptions_drop_while_discriminators_keep_a_cap ... ok
+test tools::codebase_unified::tests::test_remember_pattern_missing_description_fails ... ok
+test tools::codebase_unified::tests::test_remember_pattern_succeeds ... ok
+test tools::codebase_unified::tests::test_remember_pattern_missing_name_fails ... ok
+test tools::codebase_unified::tests::unchanged_code_is_reported_fresh ... ok
+test tools::codebase_unified::tests::verification_can_be_turned_off ... ok
+test tools::codebase_unified::tests::verify_action_audits_every_anchored_memory_without_changing_them ... ok
+test tools::composed_graph::tests::test_bounty_mode_guardrail_buckets_are_not_truncated_by_already_limit ... ok
+test tools::codebase_unified::tests::verify_action_persists_the_last_known_verdict ... ok
+test tools::contradictions::tests::contradictions_default_to_user_scope_before_limit ... ok
+test tools::composed_graph::tests::test_purge_removes_composition_event_that_retains_member_data ... ok
+test tools::composed_graph::tests::test_composed_graph_get_label_and_bounty_mode ... ok
+test tools::contradictions::tests::contradictions_reject_inherited_unsupported_fields ... ok
+test tools::contradictions::tests::test_contradictions_reports_conflicting_memories ... ok
+test tools::cross_reference::tests::antonym_detection_does_not_fire_on_agreement_or_unrelated_text ... ok
+test tools::cross_reference::tests::audit_stage5b_gate_predicate_distinguishes_agree_vs_contradict ... ok
+test tools::cross_reference::reason_envelope_tests::activation_expansion_cannot_cross_scope ... ok
+test tools::cross_reference::tests::claim_conflict_gate_is_reachable_for_a_real_claim ... ok
+test tools::cross_reference::tests::claim_conflict_gate_still_rejects_unrelated_claims ... ok
+test tools::cross_reference::tests::elaboration_is_not_flagged_as_contradiction ... ok
+test tools::cross_reference::tests::evidence_report_changes_with_the_evidence ... ok
+test tools::cross_reference::tests::evidence_report_never_claims_consistency_without_comparisons ... ok
+test tools::cross_reference::tests::evidence_report_numbers_match_the_breakdown ... ok
+test tools::cross_reference::tests::opposite_direction_claims_are_contradictions_without_any_negation ... ok
+test tools::cross_reference::tests::same_attribute_different_value_is_a_contradiction ... ok
+test tools::cross_reference::reason_envelope_tests::budget_is_bounded_before_reserved_server_metadata ... ok
+test tools::cross_reference::tests::test_contradiction_requires_shared_words ... ok
+test tools::cross_reference::tests::test_contradiction_with_shared_context ... ok
+test tools::composed_graph::tests::test_bounty_mode_paginates_tag_filter_and_matches_namespaced_tags ... ok
+test tools::cross_reference::reason_envelope_tests::labels_confidence_as_heuristic_and_requires_verification ... ok
+test tools::cross_reference::tests::test_depth_clamped ... ok
+test tools::cross_reference::reason_envelope_tests::defaults_to_user_scope_and_cross_scope_is_explicit ... ok
+test tools::cross_reference::reason_envelope_tests::honors_type_validity_tag_source_and_limit_filters ... ok
+test tools::cross_reference::tests::test_intent_comparison ... ok
+test tools::cross_reference::tests::test_intent_fact_check ... ok
+test tools::cross_reference::tests::test_intent_root_cause ... ok
+test tools::cross_reference::tests::test_intent_synthesis_default ... ok
+test tools::cross_reference::tests::test_intent_timeline ... ok
+test tools::cross_reference::tests::test_confidence_varies_with_query_relevance ... ok
+test tools::cross_reference::tests::test_relation_contradicts ... ok
+test tools::cross_reference::tests::test_relation_irrelevant ... ok
+test tools::cross_reference::tests::test_relation_supports ... ok
+test tools::cross_reference::tests::test_schema_structure ... ok
+test tools::cross_reference::tests::test_topic_overlap_different ... ok
+test tools::cross_reference::tests::test_topic_overlap_similar ... ok
+test tools::cross_reference::tests::test_trust_score_clamped ... ok
+test tools::cross_reference::tests::test_trust_score_high ... ok
+test tools::cross_reference::tests::test_trust_score_low ... ok
+test tools::cross_reference::tests::test_trust_score_medium ... ok
+test tools::cross_reference::tests::test_validity_adjusted_score_only_penalizes_invalid ... ok
+test tools::cross_reference::reason_envelope_tests::rejects_lookup_only_and_unknown_fields ... ok
+test tools::cross_reference::tests::audit_stage5b_noncontradicting_claim_is_not_flagged ... ok
+test tools::cross_reference::tests::test_deep_reference_persists_composition_event ... ok
+test tools::cross_reference::tests::test_deep_reference_skips_empty_composition_event ... ok
+test tools::dedup::tests::identical_content_clusters_by_exact_equality ... ok
+test tools::dedup::tests::identical_content_hash_clusters_across_different_text ... ok
+test tools::dedup::tests::near_identical_content_is_not_clustered ... ok
+test tools::cross_reference::tests::test_recommended_uses_query_relevance_not_just_trust ... ok
+test tools::cross_reference::tests::test_future_valid_until_remains_eligible ... ok
+test tools::cross_reference::tests::test_expired_memory_excluded_from_current_reasoning ... ok
+test tools::dedup::tests::overlong_source_tag_is_renameable_end_to_end ... ok
+test tools::dedup::tests::test_schema ... ok
+test tools::dedup::tests::test_unified_schema ... ok
+test tools::dedup::tests::tag_actions_reject_scope_combined_with_all_scopes ... ok
+test tools::dedup::tests::tag_merge_requires_multiple_sources ... ok
+test tools::dedup::tests::test_unified_scan_empty_storage ... ok
+test tools::dedup::tests::test_empty_storage ... ok
+test tools::dedup::tests::tag_filter_restricts_clusters ... ok
+test tools::dedup::tests::tag_rename_requires_preview_token_and_supports_agent_visible_undo ... ok
+test tools::dream::tests::test_dream_discovers_and_persists_connections ... ok
+test tools::dream::tests::test_dream_custom_memory_count ... ok
+test tools::dream::tests::test_dream_connections_round_trip ... ok
+test tools::dream::tests::test_dream_empty_database ... ok
+test tools::dream::tests::test_dream_insufficient_memories ... ok
+test tools::dream::tests::test_schema_has_properties ... ok
+test tools::dream::tests::test_dream_persists_insights ... ok
+test tools::dream::tests::test_dream_stats_fields_present ... ok
+test tools::dream::tests::test_dream_persists_to_database ... ok
+test tools::dream_compile::tests::schema_is_compact_and_bounded ... ok
+test tools::dream::tests::test_dream_with_exactly_5_memories ... ok
+test tools::dream::tests::test_dream_with_enough_memories ... ok
+test tools::dream::tests::test_save_connection_with_dream_ids ... ok
+test tools::dream_compile::tests::insufficient_memories_is_a_clean_response ... ok
+test tools::dream_compile::tests::compiles_a_small_store_end_to_end ... ok
+test tools::dream_compile::tests::rejects_out_of_range_arguments ... ok
+test tools::explore::tests::test_associations_storage_fallback ... ok
+test tools::explore::tests::test_bridges_missing_to_fails ... ok
+test tools::explore::tests::test_associations_succeeds_empty ... ok
+test tools::explore::tests::test_bridges_no_results ... ok
+test tools::explore::tests::test_associations_with_limit ... ok
+test tools::explore::tests::test_chain_missing_to_fails ... ok
+test tools::explore::tests::test_schema_action_enum ... ok
+test tools::explore::tests::test_schema_has_required_fields ... ok
+test tools::explore::tests::test_bridges_storage_fallback ... ok
+test tools::explore::tests::test_chain_no_path_found ... ok
+test tools::explore::tests::test_missing_action_fails ... ok
+test tools::explore::tests::test_chain_storage_fallback ... ok
+test tools::explore::tests::test_missing_args_fails ... ok
+test tools::feedback::tests::test_demote_schema_has_required_fields ... ok
+test tools::explore::tests::test_missing_from_fails ... ok
+test tools::feedback::tests::test_demote_changes_contain_expected_fields ... ok
+test tools::explore::tests::test_unknown_action_fails ... ok
+test tools::feedback::tests::test_demote_invalid_uuid_fails ... ok
+test tools::feedback::tests::test_demote_missing_args_fails ... ok
+test tools::feedback::tests::test_demote_nonexistent_node_fails ... ok
+test tools::feedback::tests::test_promote_schema_has_required_fields ... ok
+test tools::feedback::tests::test_demote_succeeds ... ok
+test tools::feedback::tests::test_promote_changes_contain_expected_fields ... ok
+test tools::feedback::tests::test_promote_missing_args_fails ... ok
+test tools::feedback::tests::test_promote_invalid_uuid_fails ... ok
+test tools::feedback::tests::test_promote_missing_id_field_fails ... ok
+test tools::feedback::tests::test_request_feedback_schema_has_required_fields ... ok
+test tools::feedback::tests::test_promote_nonexistent_node_fails ... ok
+test tools::feedback::tests::test_promote_succeeds ... ok
+test tools::feedback::tests::test_promote_without_reason_succeeds ... ok
+test tools::forgotten_lesson::tests::marker_matching_is_whole_word_not_substring ... ok
+test tools::feedback::tests::test_request_feedback_invalid_uuid_fails ... ok
+test tools::forgotten_lesson::tests::retention_decreases_with_elapsed_time ... ok
+test tools::forgotten_lesson::tests::schema_is_valid_and_requires_failure_id ... ok
+test tools::graph::tests::test_fruchterman_reingold_connected_graph ... ok
+test tools::graph::tests::test_fruchterman_reingold_empty ... ok
+test tools::graph::tests::test_fruchterman_reingold_single_node ... ok
+test tools::graph::tests::test_fruchterman_reingold_two_nodes ... ok
+test tools::feedback::tests::test_request_feedback_nonexistent_node_fails ... ok
+test tools::dream::tests::test_dream_persists_dense_connection_set_above_legacy_buffer_cap ... ok
+test tools::feedback::tests::test_request_feedback_missing_args_fails ... ok
+test tools::feedback::tests::test_request_feedback_succeeds ... ok
+test tools::graph::tests::test_schema_is_valid ... ok
+test tools::feedback::tests::test_request_feedback_truncates_long_content ... ok
+test tools::graph_unified::tests::test_missing_action_errors ... ok
+test tools::graph_unified::tests::test_schema_action_count ... ok
+test tools::graph::tests::test_graph_empty_database ... ok
+test tools::forgotten_lesson::tests::newer_than_failure_records_are_ignored ... ok
+test tools::forgotten_lesson::tests::detects_decayed_lesson_in_seeded_store ... ok
+test tools::health::tests::test_schema_is_valid ... ok
+test tools::hygiene_stats::tests::age_bucket_boundaries_land_in_the_lower_bucket ... ok
+test tools::hygiene_stats::tests::by_tag_aggregate_is_bounded_to_the_top_entries_by_count ... ok
+test tools::hygiene_stats::tests::detail_limit_is_validated_and_capped ... ok
+test tools::hygiene_stats::tests::detail_lists_redact_blocking_credentials_without_echoing_them ... ok
+test tools::hygiene_stats::tests::deterministic_all_category_fixture_covers_full_agent_response ... ok
+test tools::graph::tests::test_graph_node_has_position ... ok
+test tools::hygiene_stats::tests::malformed_rows_and_defaulted_retention_are_surfaced_as_data_quality ... ok
+test tools::hygiene_stats::tests::pruned_log_unknowns_are_reported_separately_not_as_never_accessed ... ok
+test tools::hygiene_stats::tests::recommended_actions_pair_counts_with_example_ids_and_tools ... ok
+test tools::hygiene_stats::tests::retention_bucket_boundaries_land_in_the_lower_bucket ... ok
+test tools::graph::tests::test_graph_with_center_id ... ok
+test tools::graph::tests::test_graph_with_query ... ok
+test tools::graph_unified::tests::never_composed_obeys_namespace_and_explains_novelty_boundary ... ok
+test tools::health::tests::test_health_distribution_buckets ... ok
+test tools::importance::tests::test_schema_has_required_fields ... ok
+test tools::health::tests::test_health_empty_database ... ok
+test tools::health::tests::test_health_with_memories ... ok
+test tools::hygiene_stats::tests::empty_store_has_all_zero_buckets_and_default_scope ... ok
+test tools::intention_graph::tests::graph_schema_advertises_engine_and_adapter_commands ... ok
+test tools::importance::tests::test_basic_importance_score ... ok
+test tools::hygiene_stats::tests::stats_population_stays_inside_the_requested_scope ... ok
+test tools::hygiene_stats::tests::tag_audit_is_agent_visible_and_scope_filtered ... ok
+test tools::importance::tests::test_empty_content_fails ... ok
+test tools::intention_graph::tests::graph_memory_bridge_derives_values_and_replays_recorded_snapshot ... ok
+test tools::intention_graph::tests::graph_rejects_invalid_clock_and_reserved_memory_assertions ... ok
+test tools::intention_graph::tests::graph_plan_round_trips_through_public_adapter_and_replay ... ok
+test tools::intention_unified::tests::a_matching_cue_surfaces_and_claims_the_occurrence ... ok
+test tools::intention_unified::tests::context_constraints_are_conjunctive_and_invalid_controls_rejected ... ok
+test tools::intention_unified::tests::an_unrelated_query_surfaces_nothing ... ok
+test tools::intention_unified::tests::check_uses_supplied_clock_and_respects_snooze_and_event ... ok
+test tools::intention_unified::tests::cooldown_suppresses_immediate_resurfacing ... ok
+test tools::intention_unified::tests::intentions_never_leak_across_scopes ... ok
+test tools::intention_unified::tests::manual_and_too_generic_triggers_never_surface ... ok
+test tools::intention_unified::tests::scoped_set_round_trips_the_namespace ... ok
+test tools::intention_unified::tests::test_check_action_empty_succeeds ... ok
+test tools::intention_unified::tests::surfacing_caps_at_three_intentions ... ok
+test tools::intention_unified::tests::test_check_action_returns_pending ... ok
+test tools::intention_unified::tests::test_check_action_time_triggered ... ok
+test tools::intention_unified::tests::test_check_action_with_context ... ok
+test tools::intention_unified::tests::test_check_excludes_snoozed_by_default ... ok
+test tools::intention_unified::tests::test_check_includes_snoozed_when_flag_set ... ok
+test tools::intention_unified::tests::test_check_item_exposes_status_field ... ok
+test tools::intention_unified::tests::test_compound_context_is_conjunctive_and_activity_event_branches_work ... ok
+test tools::intention_unified::tests::test_future_recurring_any_of_branch_does_not_disable_event_cooldown ... ok
+test tools::intention_unified::tests::test_intention_full_lifecycle ... ok
+test tools::intention_unified::tests::test_intention_priority_ordering ... ok
+test tools::intention_unified::tests::test_invalid_trigger_time_recurrence_depth_and_public_limits_fail_closed ... ok
+test tools::intention_unified::tests::test_invalid_stored_trigger_is_visible_in_pending_item ... ok
+test tools::intention_unified::tests::test_list_action_all_status ... ok
+test tools::intention_unified::tests::test_list_action_empty_succeeds ... ok
+test tools::intention_unified::tests::test_list_action_returns_created ... ok
+test tools::intention_unified::tests::test_schema_has_action_enum ... ok
+test tools::intention_unified::tests::test_schema_has_check_parameters ... ok
+test tools::intention_unified::tests::test_schema_has_list_parameters ... ok
+test tools::intention_unified::tests::test_schema_has_required_action ... ok
+test tools::intention_unified::tests::test_schema_has_set_parameters ... ok
+test tools::intention_unified::tests::test_schema_has_update_parameters ... ok
+test tools::intention_unified::tests::test_list_action_filter_by_status ... ok
+test tools::intention_unified::tests::test_list_action_with_limit ... ok
+test tools::intention_unified::tests::test_missing_action_fails ... ok
+test tools::intention_unified::tests::test_nlp_fortnight_recurrence_is_persisted_in_full ... ok
+test tools::intention_unified::tests::test_missing_arguments_fails ... ok
+test tools::intention_unified::tests::test_public_recurring_trigger_advances_persistently_without_immediate_duplicate ... ok
+test tools::intention_unified::tests::test_recurring_base_event_is_required_and_snooze_suppresses_delivery ... ok
+test tools::intention_unified::tests::test_set_action_empty_description_fails ... ok
+test tools::intention_unified::tests::test_set_action_basic_succeeds ... ok
+test tools::intention_unified::tests::test_set_action_missing_description_fails ... ok
+test tools::intention_unified::tests::test_set_action_with_deadline ... ok
+test tools::intention_unified::tests::test_set_action_with_duration_trigger ... ok
+test tools::intention_unified::tests::test_set_action_with_duration_trigger_snake_case ... ok
+test tools::intention_unified::tests::test_set_action_with_file_pattern_snake_case ... ok
+test tools::intention_unified::tests::test_set_action_with_time_trigger ... ok
+test tools::intention_unified::tests::test_set_action_with_priority ... ok
+test tools::intention_unified::tests::test_update_action_cancel_succeeds ... ok
+test tools::intention_unified::tests::test_unknown_action_fails ... ok
+test tools::lookup_packet::tests::budgets_hold_for_unicode_and_large_metadata ... ok
+test tools::lookup_packet::tests::content_and_boundary_changes_force_refresh ... ok
+test tools::lookup_packet::tests::incomplete_dissent_is_not_returned_as_one_sided_evidence ... ok
+test tools::lookup_packet::tests::packet_is_stable_across_rank_and_score_changes ... ok
+test tools::intention_unified::tests::test_update_action_complete_nonexistent_fails ... ok
+test tools::intention_unified::tests::test_update_action_complete_succeeds ... ok
+test tools::intention_unified::tests::test_update_action_missing_id_fails ... ok
+test tools::intention_unified::tests::test_update_action_missing_status_fails ... ok
+test tools::maintain::tests::bounded_phases_preview_by_default_and_reject_misapplied_controls ... ok
+test tools::intention_unified::tests::test_update_action_unknown_status_fails ... ok
+test tools::maintain::tests::test_schema_actions ... ok
+test tools::intention_unified::tests::test_update_action_snooze_succeeds ... ok
+test tools::intention_unified::tests::test_update_action_snooze_default_minutes ... ok
+test tools::maintain::tests::dream_compile_dispatches_and_needs_no_engine_lock ... ok
+test tools::maintain::tests::maintenance_fields_are_effective_or_explicitly_rejected ... ok
+test tools::maintain::tests::test_gc_defaults_dry_run ... ok
+test tools::maintain::tests::test_consolidate_resolves ... ok
+test tools::maintenance::tests::test_storage_schema_introspection_method ... ok
+test tools::maintain::tests::test_missing_action_errors ... ok
+test tools::maintenance::tests::test_portable_export_writes_archive_to_storage_exports_dir ... ok
+test tools::maintenance::tests::test_system_status_schema ... ok
+test tools::maintenance::tests::test_system_status_schema_has_schema_introspection_flag ... ok
+test tools::maintenance::tests::test_system_status_camelcase_alias ... ok
+test tools::maintenance::tests::test_system_status_automation_triggers_with_memories ... ok
+test tools::maintenance::tests::test_system_status_empty_store_has_no_diagnostic_noise ... ok
+test tools::maintenance::tests::test_system_status_empty_db ... ok
+test tools::maintenance::tests::test_system_status_diagnostics_name_decayed_memory_ids ... ok
+test tools::maintenance::tests::test_system_status_has_cognitive_health ... ok
+test tools::maintenance::tests::test_system_status_has_automation_triggers ... ok
+test tools::memory_status::tests::test_schema_views ... ok
+test tools::memory_unified::tests::test_accessibility_boundary_active ... ok
+test tools::memory_unified::tests::test_accessibility_boundary_zero ... ok
+test tools::memory_unified::tests::test_accessibility_thresholds ... ok
+test tools::maintenance::tests::test_system_status_with_memories ... ok
+test tools::maintenance::tests::test_system_status_without_schema_flag_omits_schema_block ... ok
+test tools::maintenance::tests::test_system_status_with_schema_flag_emits_schema_block ... ok
+test tools::memory_status::tests::test_all_views_resolve ... ok
+test tools::memory_status::tests::test_default_view_is_health ... ok
+test tools::memory_status::tests::test_coverage_view_math_on_seeded_store ... ok
+test tools::memory_unified::tests::test_delete_nonexistent_memory ... ok
+test tools::memory_status::tests::test_provenance_view_lists_endorsements_and_policy ... ok
+test tools::memory_unified::tests::test_delete_existing_memory_with_confirm ... ok
+test tools::memory_unified::tests::test_delete_requires_confirm ... ok
+test tools::memory_unified::tests::test_delete_then_get_returns_not_found ... ok
+test tools::memory_unified::tests::test_demote_changes_contain_expected_fields ... ok
+test tools::memory_unified::tests::test_demote_nonexistent_node_fails ... ok
+test tools::memory_unified::tests::test_demote_invalid_uuid_fails ... ok
+test tools::memory_unified::tests::test_edit_empty_content_fails ... ok
+test tools::memory_unified::tests::test_demote_records_opposition_with_actor_identity ... ok
+test tools::memory_unified::tests::test_demote_succeeds ... ok
+test tools::memory_unified::tests::test_edit_missing_content_fails ... ok
+test tools::memory_unified::tests::test_edit_preserves_fsrs_state ... ok
+test tools::memory_unified::tests::test_edit_nonexistent_memory_fails ... ok
+test tools::memory_unified::tests::test_edit_succeeds ... ok
+test tools::memory_unified::tests::test_edit_with_multibyte_utf8_content ... ok
+test tools::memory_unified::tests::test_get_existing_memory ... ok
+test tools::memory_unified::tests::test_get_nonexistent_memory ... ok
+test tools::memory_unified::tests::test_invalid_action_fails ... ok
+test tools::memory_unified::tests::test_invalid_uuid_fails ... ok
+test tools::memory_unified::tests::test_missing_args_fails ... ok
+test tools::memory_unified::tests::test_operator_granted_role_resolves_on_promote ... ok
+test tools::memory_unified::tests::test_promote_missing_id_fails ... ok
+test tools::memory_unified::tests::test_promote_changes_contain_expected_fields ... ok
+test tools::memory_unified::tests::test_schema_structure ... ok
+test tools::memory_unified::tests::test_promote_succeeds ... ok
+test tools::memory_unified::tests::test_promote_nonexistent_node_fails ... ok
+test tools::merge::tests::plan_merge_requires_two_ids ... ok
+test tools::merge::tests::schemas_are_objects ... ok
+test tools::memory_unified::tests::test_promote_without_reason_succeeds ... ok
+test tools::memory_unified::tests::test_promote_without_bound_actor_keeps_legacy_shape ... ok
+test tools::memory_unified::tests::test_promote_with_claimed_role_stays_neutral_and_records_endorsement ... ok
+test tools::memory_unified::tests::test_purge_existing_memory ... ok
+test tools::memory_unified::tests::test_state_existing_memory ... ok
+test tools::memory_unified::tests::test_purge_requires_confirm ... ok
+test tools::memory_unified::tests::test_state_nonexistent_memory_fails ... ok
+test tools::predict::tests::test_schema_has_properties ... ok
+test tools::merge::tests::tag_reflog_exposes_source_target_and_normalized_scope ... ok
+test tools::predict::tests::test_predict_empty_context ... ok
+test tools::predict::tests::test_predict_accuracy_is_number ... ok
+test tools::predict::tests::test_predict_with_topics_only ... ok
+test tools::predict::tests::test_predict_degraded_false_on_happy_path ... ok
+test tools::predict::tests::test_predict_with_full_context ... ok
+test tools::predict::tests::test_predict_no_args_succeeds ... ok
+test tools::project::tests::preview_writes_nothing_and_shows_the_diff ... ok
+test tools::project::tests::targets_outside_root_are_refused ... ok
+test tools::recall::tests::test_schema_has_mode_and_no_required ... ok
+test tools::receipt::tests::claim_boundary_tracks_typed_receipt_evidence ... ok
+test tools::project::tests::write_needs_confirm_then_replaces_only_the_fence_and_is_idempotent ... ok
+test tools::recall::tests::test_contradictions_mode_resolves_without_query ... ok
+test tools::recall::tests::free_text_without_handle_returns_handle_required_with_candidates ... ok
+test tools::recall::tests::handle_commit_sha_prefix_and_ambiguity ... ok
+test tools::recall::tests::no_handle_key_keeps_legacy_mode_dispatch ... ok
+test tools::receipt::tests::schema_exposes_only_get_and_controlled_replay ... ok
+test tools::recall::tests::handle_resolves_uuid_and_returns_one_hop_neighbors ... ok
+test tools::recall::tests::test_lookup_is_default_and_resolves ... ok
+test tools::receipt::tests::get_rejects_replay_only_arguments ... ok
+test tools::receipt::tests::legacy_receipt_gets_but_does_not_replay ... ok
+test tools::receipt::tests::receipt_arguments_reject_unknown_fields ... ok
+test tools::receipt::tests::save_walk_is_digest_stable_across_key_order_and_idempotent ... ok
+test tools::receipt::tests::recorded_recall_replays_idempotently_with_typed_noncausal_receipt ... ok
+test tools::receipt::tests::walk_replay_is_deterministic_on_a_seeded_store ... ok
+test tools::receipt::tests::walk_replay_remove_edge_reports_verdict_delta ... ok
+test tools::restore::tests::test_malformed_json_fails ... ok
+test tools::restore::tests::test_missing_path_field_fails ... ok
+test tools::restore::tests::test_missing_args_fails ... ok
+test tools::restore::tests::test_nonexistent_file_fails ... ok
+test tools::restore::tests::test_restore_empty_array_returns_error ... ok
+test tools::restore::tests::test_restore_empty_results_array ... ok
+test tools::restore::tests::test_schema_has_required_fields ... ok
+test tools::restore::tests::test_restore_rejects_arbitrary_path_by_default ... ok
+test tools::restore::tests::test_restore_rejects_oversized_input_without_writes ... ok
+test tools::restore::tests::test_restore_direct_array_format ... ok
+test tools::review::tests::test_review_default_rating_is_good ... ok
+test tools::restore::tests::test_restore_defaults_node_type_to_fact ... ok
+test tools::review::tests::test_review_invalid_uuid_fails ... ok
+test tools::restore::tests::test_restore_recall_result_format ... ok
+test tools::restore::tests::test_restore_portable_archive_from_allowed_exports_dir ... ok
+test tools::review::tests::test_review_missing_arguments_fails ... ok
+test tools::review::tests::test_review_missing_id_fails ... ok
+test tools::restore::tests::test_restore_validation_failure_leaves_target_unchanged ... ok
+test tools::review::tests::test_review_nonexistent_node_fails ... ok
+test tools::review::tests::test_review_multiple_times_increases_reps ... ok
+test tools::review::tests::test_review_rating_again_succeeds ... ok
+test tools::review::tests::test_review_rating_five_fails ... ok
+test tools::review::tests::test_review_rating_easy_succeeds ... ok
+test tools::review::tests::test_review_rating_good_succeeds ... ok
+test tools::review::tests::test_review_rating_hard_succeeds ... ok
+test tools::review::tests::test_schema_has_required_fields ... ok
+test tools::review::tests::test_schema_rating_has_bounds ... ok
+test tools::search_unified::abstention_tests::a_strong_unique_match_does_not_abstain ... ok
+test tools::search_unified::abstention_tests::a_weak_low_trust_match_abstains ... ok
+test tools::search_unified::abstention_tests::empty_results_are_not_an_abstention ... ok
+test tools::search_unified::abstention_tests::the_envelope_states_itself_clearly ... ok
+test tools::search_unified::abstention_tests::the_floor_is_configurable_and_one_disables ... ok
+test tools::search_unified::fresh_insight_tests::a_below_floor_or_stale_insight_stays_put ... ok
+test tools::search_unified::fresh_insight_tests::a_fresh_insight_above_the_floor_takes_the_lead ... ok
+test tools::search_unified::fresh_insight_tests::a_leading_fresh_insight_is_a_no_op ... ok
+test tools::search_unified::fresh_insight_tests::only_same_day_insights_count_as_fresh ... ok
+test tools::search_unified::precision_decay_tests::long_content_gists_at_a_sentence_or_word_boundary ... ok
+test tools::search_unified::precision_decay_tests::precision_decays_faster_than_retention ... ok
+test tools::search_unified::precision_decay_tests::short_content_is_its_own_gist ... ok
+test tools::search_unified::precision_decay_tests::the_floor_sits_where_gist_takes_over ... ok
+test tools::review::tests::test_review_rating_negative_fails ... ok
+test tools::review::tests::test_review_rating_very_high_fails ... ok
+test tools::review::tests::test_review_rating_zero_fails ... ok
+test tools::search_unified::query_rewrite_tests::identifier_queries_split_into_words ... ok
+test tools::search_unified::query_rewrite_tests::plain_prose_never_gains_noise_variants ... ok
+test tools::search_unified::query_rewrite_tests::prose_queries_pass_through_unchanged ... ok
+test tools::search_unified::query_rewrite_tests::telegraphic_queries_get_a_prose_form ... ok
+test tools::search_unified::query_rewrite_tests::the_original_query_is_always_first ... ok
+test tools::search_unified::query_rewrite_tests::very_short_and_very_long_queries_skip_prose ... ok
+test tools::search_unified::supersession_gate_tests::as_of_queries_see_history ... ok
+test tools::search_unified::supersession_gate_tests::closed_windows_are_withheld_by_default ... ok
+test tools::search_unified::supersession_gate_tests::everything_current_is_untouched ... ok
+test tools::search_unified::supersession_gate_tests::include_superseded_keeps_and_downranks ... ok
+test tools::search_unified::supersession_gate_tests::tombstone_audit_source_filter_counts_as_audit_optin ... ok
+test tools::search_unified::tag_case_tests::tag_prefix_match_ignores_case_in_both_directions ... ok
+test tools::review::tests::test_review_response_contains_expected_fields ... ok
+test tools::review::tests::test_review_updates_reps_counter ... ok
+test tools::review::tests::test_review_returns_next_review_date ... ok
+test tools::review::tests::test_same_day_again_does_not_count_as_lapse ... ok
+test tools::search_unified::prospective_resurfacing_tests::cross_scope_recall_cannot_leak_intentions ... ok
+test tools::search_unified::tests::rank_native_fusion_joins_ranked_lists_not_multipliers ... ok
+test tools::search_unified::tests::source_filter_date_bounds_inclusive ... ok
+test tools::search_unified::tests::source_filter_empty_matches_everything ... ok
+test tools::search_unified::tests::source_filter_exact_fields ... ok
+test tools::search_unified::tests::source_filter_excludes_legacy_memories_when_envelope_scoped ... ok
+test tools::search_unified::tests::source_filter_rejects_bad_timestamp_and_status ... ok
+test tools::search_unified::tests::source_filter_status_valid_vs_tombstoned ... ok
+test tools::search_unified::prospective_resurfacing_tests::recall_without_a_matching_cue_has_no_prospective_key ... ok
+test tools::search_unified::prospective_resurfacing_tests::recall_resurfaces_a_fired_intention_exactly_once ... ok
+test tools::search_unified::tests::a_remembered_pattern_surfaces_in_recall_with_its_anchor_evidence ... ok
+test tools::search_unified::tests::current_recall_conservatively_downranks_expired_facts ... ok
+test tools::search_unified::tests::malformed_valid_at_is_rejected ... ok
+test tools::search_unified::tests::lookup_budget_includes_envelope_and_omits_whole_cards ... ok
+test tools::search_unified::tests::project_scope_prevents_cross_project_retrieval_by_default ... ok
+test tools::search_unified::tests::test_concrete_search_env_var_lands_first ... ok
+test tools::search_unified::tests::test_literal_query_detection ... ok
+test tools::search_unified::tests::stable_packets_acknowledge_only_unchanged_retained_context ... ok
+test tools::search_unified::tests::test_schema_has_detail_level ... ok
+test tools::search_unified::tests::test_schema_has_optional_fields ... ok
+test tools::search_unified::tests::test_schema_has_required_fields ... ok
+test tools::search_unified::tests::test_schema_has_source_filters ... ok
+test tools::search_unified::tests::test_schema_has_tag_prefix ... ok
+test tools::search_unified::tests::test_schema_has_token_budget ... ok
+test tools::search_unified::tests::test_schema_limit_has_bounds ... ok
+test tools::search_unified::tests::test_schema_min_retention_has_bounds ... ok
+test tools::search_unified::tests::test_schema_min_similarity_has_bounds ... ok
+test tools::search_unified::tests::test_concrete_search_process_name_lands_first ... ok
+test tools::search_unified::tests::test_concrete_search_uuid_lands_first ... ok
+test tools::search_unified::tests::test_config_detail_level_applies_without_param ... ok
+test tools::search_unified::tests::test_explicit_param_overrides_config ... ok
+test tools::search_unified::tests::test_default_profile_preserves_behavior ... ok
+test tools::search_unified::tests::test_lean_profile_masks_scores_and_timestamps ... ok
+test tools::search_unified::tests::test_no_budget_unchanged ... ok
+test tools::search_unified::tests::test_search_basic_query_succeeds ... ok
+test tools::search_unified::tests::test_search_detail_level_default_is_summary ... ok
+test tools::search_unified::tests::test_search_detail_level_brief_excludes_content ... ok
+test tools::search_unified::tests::test_search_detail_level_invalid_fails ... ok
+test tools::search_unified::tests::test_search_detail_level_full_includes_timestamps ... ok
+test tools::search_unified::tests::test_search_default_limit_is_10 ... ok
+test tools::search_unified::tests::test_search_empty_database_returns_empty_array ... ok
+test tools::search_unified::tests::test_search_empty_query_fails ... ok
+test tools::search_unified::tests::test_search_limit_clamped_to_maximum ... ok
+test tools::search_unified::tests::test_search_limit_clamped_to_minimum ... ok
+test tools::search_unified::tests::test_search_min_retention_clamped_to_one ... ok
+test tools::search_unified::tests::test_search_min_similarity_clamped_to_one ... ok
+test tools::search_unified::tests::test_search_min_similarity_clamped_to_zero ... ok
+test tools::search_unified::tests::test_search_min_retention_clamped_to_zero ... ok
+test tools::search_unified::tests::test_search_missing_arguments_fails ... ok
+test tools::search_unified::tests::test_search_missing_query_field_fails ... ok
+test tools::search_unified::tests::test_search_negative_limit_clamped ... ok
+test tools::search_unified::tests::test_search_result_contains_expected_fields ... ok
+test tools::search_unified::tests::test_tags_match_prefix_unit ... ok
+test tools::search_unified::tests::test_search_returns_matching_content ... ok
+test tools::search_unified::tests::test_search_tag_prefix_concrete_path ... ok
+test tools::search_unified::tests::uniform_signals_cannot_reorder_anything ... ok
+test tools::search_unified::tests::test_search_tag_prefix_filters_results ... ok
+test tools::search_unified::tests::test_search_tag_prefix_excludes_tagless_memories ... ok
+test tools::search_unified::tests::test_search_whitespace_only_query_fails ... ok
+test tools::search_unified::tests::test_search_with_limit ... ok
+test tools::search_unified::tests::test_search_without_tag_prefix_unchanged ... ok
+test tools::search_unified::tests::test_token_budget_limits_results ... ok
+test tools::search_unified::tests::test_token_budget_expandable ... ok
+test tools::search_unified::tests::valid_at_returns_the_fact_true_at_that_time ... ok
+test tools::session_context::tests::session_sections_failed_calls_from_latest_run ... ok
+test tools::selftest::tests::planted_cause_selftest_runs_on_an_empty_store ... ok
+test tools::selftest::tests::planted_cause_selftest_scores_perfectly_and_never_touches_the_live_store ... ok
+test tools::session_context::tests::session_sections_failed_calls_silent_without_outcome_rows ... ok
+test tools::session_context::tests::test_first_sentence_empty ... ok
+test tools::session_context::tests::test_first_sentence_long_truncated ... ok
+test tools::session_context::tests::test_first_sentence_newline ... ok
+test tools::session_context::tests::test_first_sentence_period ... ok
+test tools::session_context::tests::test_first_sentence_short ... ok
+test tools::session_context::tests::test_first_sentence_whitespace ... ok
+test tools::session_context::tests::test_schema_has_properties ... ok
+test tools::session_context::tests::test_schema_token_budget_bounds ... ok
+test tools::session_context::tests::session_sections_open_failures_negative_no_noise ... ok
+test tools::session_context::tests::session_sections_open_failures_populate_from_changed_files ... ok
+test tools::session_context::tests::session_start_now_honors_event_triggers_like_check_does ... ok
+test tools::session_context::tests::test_automation_triggers_booleans ... ok
+test tools::session_context::tests::test_default_no_args ... ok
+test tools::session_context::tests::test_disable_sections ... ok
+test tools::smart_ingest::tests::as_of_inference_is_case_insensitive_deduplicated_and_boundary_safe ... ok
+test tools::session_context::tests::test_session_context_profile_echo_and_lean_dates ... ok
+test tools::session_context::tests::test_expandable_ids ... ok
+test tools::session_context::tests::test_token_budget_respected ... ok
+test tools::session_context::tests::test_with_queries ... ok
+test tools::smart_ingest::tests::bounded_levenshtein_matches_the_naive_distance_at_band_edges ... ok
+test tools::smart_ingest::tests::accepted_tag_suggestions_canonicalize_duplicates_in_first_seen_order ... ok
+test tools::session_context::tests::test_with_codebase_context ... ok
+test tools::smart_ingest::tests::failure_hook_levers_parse_as_documented ... ok
+test tools::smart_ingest::tests::accepted_tag_suggestions_reject_secret_keys_and_values_without_echo_or_write ... ok
+test tools::smart_ingest::tests::inferred_as_of_must_not_cross_an_explicit_valid_until ... ok
+test tools::smart_ingest::tests::lean_response_drops_what_says_nothing_and_keeps_what_matters ... ok
+test tools::smart_ingest::tests::lean_response_keeps_a_tag_status_that_reports_something_and_every_preflight ... ok
+test tools::smart_ingest::tests::lean_response_previews_the_merge_but_keeps_the_replaced_text_whole ... ok
+test tools::smart_ingest::tests::batch_as_of_inference_persists_when_the_item_is_saved ... ok
+test tools::smart_ingest::tests::batch_preflight_has_as_of_and_tag_suggestion_parity_without_writes ... ok
+test tools::smart_ingest::tests::batch_validity_is_per_item_and_invalid_items_do_not_write ... ok
+test tools::smart_ingest::tests::batch_tag_suggestion_acceptance_and_rejection_match_single_mode ... ok
+test tools::smart_ingest::tests::conflicting_inferred_as_of_abstains_and_the_ingest_still_stores ... ok
+test tools::smart_ingest::tests::explicit_valid_from_overrides_as_of_inference ... ok
+test tools::smart_ingest::tests::high_salience_ingest_promotes_earlier_tag_and_saves_capture_receipt ... ok
+test tools::smart_ingest::tests::live_projection_does_not_restore_tag_consumed_by_open_forward_event ... ok
+test tools::smart_ingest::tests::project_failure_hook_preserves_scope_and_previews ... ok
+test tools::smart_ingest::tests::requested_tags_beyond_the_50_bound_are_reported_truncated_and_skipped ... ok
+test tools::smart_ingest::tests::state_nodes_expire_by_default_and_only_state_nodes ... ok
+test tools::smart_ingest::tests::restart_between_tag_and_trigger_preserves_capture_eligibility ... ok
+test tools::smart_ingest::tests::tag_similarity_uses_nfkc_before_case_and_punctuation_comparison ... ok
+test tools::smart_ingest::tests::smart_ingest_does_not_guess_between_multiple_as_of_dates ... ok
+test tools::smart_ingest::tests::smart_ingest_persists_strict_single_item_validity ... ok
+test tools::smart_ingest::tests::smart_ingest_infers_one_strict_as_of_date_and_reports_provenance ... ok
+test tools::smart_ingest::tests::smart_ingest_persists_the_requested_project_scope ... ok
+test tools::smart_ingest::tests::smart_ingest_rejects_invalid_dates_and_reversed_ranges ... ok
+test tools::smart_ingest::tests::smart_ingest_suggests_similar_same_scope_tags_without_rewriting ... ok
+test tools::smart_ingest::tests::suppressed_tag_is_not_promoted_or_exposed_in_a_capture_receipt ... ok
+test tools::smart_ingest::tests::tag_suggestion_cost_bounds_are_explicit_and_tagless_ingest_skips_vocabulary ... ok
+test tools::smart_ingest::tests::tag_suggestion_preflight_is_no_write_and_explicit_acceptance_is_revalidated ... ok
+test tools::smart_ingest::tests::tag_suggestions_cover_issue_variants_and_suppress_noise_deterministically ... ok
+test tools::smart_ingest::tests::tag_suggestions_never_echo_secret_shaped_existing_vocabulary ... ok
+test tools::smart_ingest::tests::test_batch_defaults_to_force_create_for_caller_separated_items ... ok
+test tools::smart_ingest::tests::test_batch_empty_items_fails ... ok
+test tools::smart_ingest::tests::test_batch_exceeds_20_items_fails ... ok
+test tools::smart_ingest::tests::test_batch_force_create_global ... ok
+test tools::smart_ingest::tests::test_batch_exactly_20_items_succeeds ... ok
+test tools::smart_ingest::tests::test_batch_explicit_force_create_false_is_honored ... ok
+test tools::smart_ingest::tests::test_batch_force_create_per_item ... ok
+test tools::smart_ingest::tests::test_batch_has_importance_scores ... ok
+test tools::smart_ingest::tests::test_batch_ingest ... ok
+test tools::smart_ingest::tests::test_batch_ingest_saves_safe_item_and_rejects_secret_item ... ok
+test tools::smart_ingest::tests::test_batch_items_with_all_fields ... ok
+test tools::smart_ingest::tests::test_batch_missing_args_fails ... ok
+test tools::smart_ingest::tests::test_batch_rejects_invalid_merge_policy ... ok
+test tools::smart_ingest::tests::test_schema_has_optional_fields ... ok
+test tools::smart_ingest::tests::test_schema_has_required_fields ... ok
+test tools::smart_ingest::tests::test_batch_results_array_matches_items ... ok
+test tools::smart_ingest::tests::test_batch_single_item_succeeds ... ok
+test tools::smart_ingest::tests::test_batch_skips_whitespace_only_content ... ok
+test tools::smart_ingest::tests::test_batch_skips_empty_content ... ok
+test tools::smart_ingest::tests::test_batch_success_true_when_only_skipped ... ok
+test tools::smart_ingest::tests::test_explicit_secret_override_does_not_echo_content_in_response ... ok
+test tools::smart_ingest::tests::test_no_content_no_items_fails ... ok
+test tools::smart_ingest::tests::test_smart_ingest_default_node_type_is_fact ... ok
+test tools::smart_ingest::tests::test_smart_ingest_basic_content_succeeds ... ok
+test tools::smart_ingest::tests::test_smart_ingest_empty_content_fails ... ok
+test tools::smart_ingest::tests::test_smart_ingest_force_create ... ok
+test tools::smart_ingest::tests::test_smart_ingest_exactly_1mb_succeeds ... ok
+test tools::smart_ingest::tests::test_smart_ingest_missing_args_fails ... ok
+test tools::smart_ingest::tests::test_smart_ingest_missing_content_field_fails ... ok
+test tools::smart_ingest::tests::test_smart_ingest_rejects_secret_even_when_force_created ... ok
+test tools::smart_ingest::tests::test_smart_ingest_whitespace_only_fails ... ok
+test tools::smart_ingest::tests::test_smart_ingest_response_has_importance_score ... ok
+test tools::smart_ingest::tests::test_smart_ingest_too_large_fails ... ok
+test tools::source_sync::tests::source_sync_matcher_accepts_closing_keyword_forms ... ok
+test tools::source_sync::tests::source_sync_matcher_rejects_near_misses ... ok
+test tools::smart_ingest::tests::test_smart_ingest_with_all_optional_fields ... ok
+test tools::smart_ingest::tests::test_smart_ingest_with_source ... ok
+test tools::smart_ingest::tests::test_smart_ingest_with_node_type ... ok
+test tools::smart_ingest::tests::test_smart_ingest_with_tags_and_source ... ok
+test tools::source_sync::tests::source_sync_closed_by_edge_appears_after_linking ... ok
+test tools::suppress::tests::test_schema_is_valid ... ok
+test tools::smart_ingest::tests::vocabulary_beyond_ten_thousand_tags_is_reported_unavailable ... ok
+test tools::source_sync::tests::source_sync_closed_by_silent_without_candidates ... ok
+test tools::suppress::tests::test_cascade_default_off ... ok
+test tools::suppress::tests::test_cascade_risk_gated_holds_targets_behind_prs ... ok
+test tools::suppress::tests::test_cascade_fast_mode_suppresses_derived_chain ... ok
+test tools::suppress::tests::test_reverse_within_window_decrements ... ok
+test tools::suppress::tests::test_reverse_without_prior_suppression_fails ... ok
+test tools::timeline::tests::test_parse_datetime_date_only ... ok
+test tools::timeline::tests::test_parse_datetime_empty ... ok
+test tools::timeline::tests::test_parse_datetime_invalid ... ok
+test tools::timeline::tests::test_parse_datetime_rfc3339 ... ok
+test tools::timeline::tests::test_schema_has_properties ... ok
+test tools::suppress::tests::test_suppress_applies_fsrs_penalty ... ok
+test tools::suppress::tests::test_suppress_invalid_uuid ... ok
+test tools::suppress::tests::test_suppress_is_not_delete ... ok
+test tools::suppress::tests::test_suppress_increments_count ... ok
+test tools::suppress::tests::test_suppress_missing_args ... ok
+test tools::suppress::tests::test_suppress_records_timestamp ... ok
+test tools::tagging::tests::legacy_trigger_fails_closed_without_mutating_memory_state ... ok
+test tools::timeline::tests::test_timeline_config_detail_precedence ... ok
+test tools::timeline::tests::test_timeline_detail_level_full ... ok
+test tools::timeline::tests::test_timeline_detail_level_brief ... ok
+test tools::timeline::tests::test_timeline_empty_database ... ok
+test tools::timeline::tests::test_timeline_invalid_detail_level ... ok
+test tools::timeline::tests::test_timeline_limit_clamped ... ok
+test tools::timeline::tests::test_timeline_no_args_defaults ... ok
+test tools::timeline::tests::test_timeline_node_type_filter ... ok
+test tools::timeline::tests::test_timeline_node_type_filter_sparse ... ok
+test trace_recorder::tests::content_hash_is_stable_and_hides_text ... ok
+test trace_recorder::tests::content_preview_redacts_sensitive_and_truncates ... ok
+test trace_recorder::tests::destructive_decision_classification_c2 ... ok
+test trace_recorder::tests::embedded_synaptic_receipts_are_extracted_for_run_linkage ... ok
+test trace_recorder::tests::extract_dream_proposals_empty_when_not_dream_tool ... ok
+test trace_recorder::tests::extract_dream_proposals_from_real_insights_shape ... ok
+test trace_recorder::tests::extract_retrieved_from_deep_reference_shape ... ok
+test trace_recorder::tests::extract_retrieved_from_search_shape ... ok
+test trace_recorder::tests::extract_suppressed_from_receipt_and_superseded ... ok
+test trace_recorder::tests::extract_writes_ignores_read_actions_b2 ... ok
+test trace_recorder::tests::extract_writes_recognizes_action_shape_b2 ... ok
+test trace_recorder::tests::extract_writes_recognizes_destructive_actions_c2 ... ok
+test trace_recorder::tests::extract_writes_single_and_batch ... ok
+test tools::timeline::tests::test_timeline_tag_filter ... ok
+test tools::timeline::tests::test_timeline_tag_filter_exact_match ... ok
+test tools::timeline::tests::test_timeline_tag_filter_no_match ... ok
+test trace_recorder::tests::hash_is_stable_and_hides_content ... ok
+test tools::timeline::tests::test_timeline_with_date_range ... ok
+test tools::timeline::tests::test_timeline_tag_filter_sparse ... ok
+test tools::timeline::tests::test_timeline_with_memories ... ok
+test trace_recorder::tests::configured_signing_commits_receipt_envelope_and_replay_capsule_together ... ok
+test trace_recorder::tests::gate_opens_pr_for_destructive_write_after_node_deleted_c2 ... ok
+test trace_recorder::tests::gate_redacts_detected_secret_without_sensitive_topic_signal ... ok
+test trace_recorder::tests::gate_redacts_sensitive_content_in_pr_priv ... ok
+test trace_recorder::tests::receipt_persistence_failure_is_explicit_and_never_claims_a_receipt ... ok
+test trace_recorder::tests::rejected_smart_ingest_batch_secret_uses_fixed_trace_marker ... ok
+test trace_recorder::tests::pre_gate_blocks_direct_suppress_before_mutating ... ok
+test trace_recorder::tests::replay_capsule_draft_freezes_only_final_returned_evidence ... ok
+test trace_recorder::tests::replay_capsule_uses_reason_evidence_not_recommended_duplicate ... ok
+test trace_recorder::tests::replay_digest_key_parser_requires_exact_32_byte_hex ... ok
+test trace_recorder::tests::run_id_honours_client_supplied ... ok
+test trace_recorder::tests::run_id_mints_when_absent ... ok
+test trace_recorder::tests::write_tool_set_includes_codebase_b2 ... ok
+test trace_recorder::tests::write_tool_set_includes_purge_tool ... ok
+test trace_recorder::tests::pre_gate_blocks_standalone_purge_tool_c2 ... ok
+test trace_recorder::tests::pre_gate_blocks_purge_before_deleting_c2 ... ok
+test trace_recorder::tests::pre_gate_redacts_detected_secret_without_sensitive_topic_signal ... ok
+test trace_recorder::tests::pre_gate_leaves_fast_mode_direct ... ok
+test trace_recorder::tests::partial_signing_configuration_fails_closed ... ok
+test trace_recorder::tests::rejected_smart_ingest_secret_uses_fixed_non_derived_trace_marker ... ok
+test trace_recorder::tests::receipt_and_final_capsule_persist_atomically_without_raw_replay_material ... ok
+
+test result: ok. 789 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 36.29s
+
+     Running unittests src/bin/cli.rs (/tmp/cargo-target/debug/deps/vestige-ea88daed63eb0009)
+
+running 7 tests
+test tests::source_archive_url_uses_normalized_tag ... ok
+test tests::update_asset_mapping_matches_release_names ... ok
+test glibc_compat::tests::reports_the_unparsed_tail_through_endptr ... ok
+test glibc_compat::tests::forwards_decimal_and_hex_like_strtol ... ok
+test tests::update_url_uses_latest_or_normalized_tag ... ok
+test tests::scrub_vestige_hooks_removes_only_vestige_commands ... ok
+test glibc_compat::tests::calling_cxa_call_terminate_aborts_the_process ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/main.rs (/tmp/cargo-target/debug/deps/vestige_mcp-4e00ce1fcabce99e)
+
+running 12 tests
+test tests::cli_data_dir_takes_precedence_over_env_data_dir ... ok
+test tests::expand_tilde_expands_current_users_home_only ... ok
+test glibc_compat::tests::reports_the_unparsed_tail_through_endptr ... ok
+test tests::prepare_storage_path_creates_dir_and_points_to_vestige_db ... ok
+test glibc_compat::tests::forwards_decimal_and_hex_like_strtol ... ok
+test tests::http_is_opt_in_and_port_flag_enables_it ... ok
+test tests::prepare_storage_path_preserves_existing_data_dir_permissions ... ok
+test tests::prepare_storage_path_reuses_existing_data_dir ... ok
+test tests::vestige_data_dir_env_is_used_when_cli_data_dir_is_absent ... ok
+test glibc_compat::tests::calling_cxa_call_terminate_aborts_the_process ... ok
+test tests::stop_runtime_returns_without_leaving_when_the_runtime_joins ... ok
+test tests::stop_runtime_leaves_without_teardown_when_a_worker_is_parked_in_a_blocking_lock ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+     Running unittests src/bin/restore.rs (/tmp/cargo-target/debug/deps/vestige_restore-634e85cb93cf27ed)
+
+running 3 tests
+test glibc_compat::tests::forwards_decimal_and_hex_like_strtol ... ok
+test glibc_compat::tests::reports_the_unparsed_tail_through_endptr ... ok
+test glibc_compat::tests::calling_cxa_call_terminate_aborts_the_process ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/backfill_trait_wall.rs (/tmp/cargo-target/debug/deps/backfill_trait_wall-afa25ba15a651df2)
+
+running 1 test
+test backfill_tool_runs_purely_against_the_trait_wall ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/e2e_failure_cases.rs (/tmp/cargo-target/debug/deps/e2e_failure_cases-774a95cc14a43e87)
+
+running 36 tests
+test an_unknown_receipt_resource_fails_with_the_era_aware_code ... ok
+test an_internal_address_upstream_is_refused_by_the_ssrf_guard ... ok
+test a_dead_upstream_error_names_the_url ... ok
+test credential_shaped_content_is_refused_without_echoing_the_secret ... ignored, needs a live store: 4.0 creates no SQLite; re-lands with build/wire-strata
+test a_redmine_404_keeps_the_exact_api_message_shape ... ok
+test a_burst_of_mixed_frames_answers_every_valid_request ... ok
+test a_non_matching_context_fires_nothing_and_a_matching_one_fires ... ok
+test a_drifted_file_flips_the_anchor_status_to_stale ... ok
+test a_failed_reanchor_preserves_the_existing_evidence ... ok
+test credential_content_with_explicit_allow_secrets_override_is_stored ... ok
+test dream_below_the_minimum_reports_insufficient_memories ... ok
+test dream_compile_bounds_memory_count_and_reports_insufficiency_cleanly ... ok
+test empty_and_whitespace_only_content_are_refused ... ok
+test gc_defaults_to_dry_run_and_a_wet_run_on_a_healthy_store_deletes_nothing ... ok
+test immediate_eof_before_the_handshake_is_still_a_clean_exit ... ok
+test interleaved_garbage_and_valid_frames_stay_framing_synced ... ok
+test array_frames_and_null_id_frames_do_not_kill_the_server ... ok
+test modern_era_requires_the_full_meta_pair_and_valid_versions_serve_statelessly ... ok
+test maintain_unknown_and_missing_actions_list_the_valid_actions ... ok
+test malformed_scope_values_are_refused_on_the_write_path ... ok
+test reconcile_with_an_empty_live_set_is_guarded_against_mass_tombstoning ... ignored, needs a live store: 4.0 creates no SQLite and the strata boot lands with build/wire-strata
+test malformed_receipt_uris_and_foreign_schemes_are_clean_errors ... ok
+test modern_era_unknown_protocol_version_is_rejected_with_32022_and_a_supported_list ... ok
+test missing_required_arguments_error_per_tool ... ok
+test oversize_content_is_refused_at_the_cap_while_just_under_is_accepted ... ok
+test purge_tool_requires_user_interaction_and_refuses_unconfirmed_calls ... ok
+test redmine_without_a_configured_url_is_a_configuration_error ... ok
+test reanchor_refuses_missing_prerequisites_and_wrong_scope_by_name ... ok
+test snooze_minutes_outside_the_documented_range_are_rejected_with_the_range ... ok
+test source_sync_unknown_source_and_missing_project_are_refused_by_name ... ok
+test the_server_exits_cleanly_on_stdin_eof_within_the_budget ... ok
+test unknown_tool_names_are_protocol_errors_with_no_result_body ... ok
+test updating_a_nonexistent_intention_is_a_clean_named_error ... ok
+test verify_against_a_missing_checkout_reports_unverifiable_honestly ... ok
+test wrong_typed_arguments_are_rejected_and_the_server_stays_healthy ... ok
+test recall_results_stay_under_the_advertised_max_result_size_annotation ... ok
+
+test result: ok. 34 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 3.86s
+
+     Running tests/e2e_real_binary.rs (/tmp/cargo-target/debug/deps/e2e_real_binary-dcd67dc8e55b7284)
+
+running 36 tests
+test a_clean_restart_preserves_every_memory ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test approved_purge_removes_content_and_leaves_a_content_free_tombstone ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test backfill_dry_run_surfaces_an_upstream_cause_and_an_empty_store_errors ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test blank_lines_and_notifications_produce_no_response ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test causal_walk_selftest_and_forgotten_lesson_are_called_over_stdio ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test codebase_remembers_a_decision_returns_context_verifies_and_needs_its_fields ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test concurrent_server_startups_leave_an_intact_store ... ignored, concurrent SQLite-boot race; the 4.0 journey re-lands with build/wire-strata
+test contradictions_are_returned_intact_and_flagged_as_protected ... ignored, free-text recall regression; superseded by handle_required recall
+test correction_must_not_be_swallowed_by_the_ingest_gate ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test corrupt_fts_index_does_not_brick_the_store ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test dedup_scan_policy_and_undo_answer_and_apply_needs_a_plan ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test default_memory_writes_are_immediate_and_survive_restart ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test discover_answers_before_any_handshake_and_does_not_overclaim ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test every_advertised_tool_is_called_at_least_twice_in_this_suite ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test exact_identifier_lookup_beats_a_memory_that_only_cites_it ... ignored, pre-4.0 contract journey; re-lands with wire-strata / PR 1
+test foreign_key_orphans_are_repaired_instead_of_being_fatal ... ignored, pre-4.0 contract journey; re-lands with wire-strata / PR 1
+test graph_recent_predict_and_memory_graph_answer_and_chain_needs_endpoints ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test hostile_input_produces_clean_errors_without_panicking_or_desyncing ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test intention_set_list_check_update_round_trip_and_a_bad_trigger_errors ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test list_methods_reject_unknown_cursors_and_templates_list_is_empty ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test maintain_scores_importance_dry_runs_gc_consolidates_and_restore_needs_a_path ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test memory_status_every_view_has_its_shape_and_an_unknown_view_errors ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test migration_survives_a_concurrent_sqlite_writer ... ignored, pre-4.0 contract journey; re-lands with wire-strata / PR 1
+test project_previews_then_writes_a_fenced_region_and_keeps_the_rest ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test purge_tool_purges_refuses_without_confirm_and_alias_matches ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test purge_with_confirm_is_review_gated_when_opted_in ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test receipt_get_returns_the_receipt_a_recall_produced_and_an_unknown_id_errors ... ignored, pre-4.0 contract journey; re-lands with wire-strata / PR 1
+test session_start_returns_a_budgeted_context_and_rejects_a_bad_budget ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test smart_ingest_and_suppress_reject_calls_without_their_subject ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test smart_ingest_create_response_is_lean ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test source_sync_rejects_an_unknown_source_and_a_missing_repo_without_touching_the_network ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test suppression_survives_a_restart_and_keeps_compounding ... ignored, pre-4.0 contract journey; re-lands with wire-strata / PR 1
+test tag_prefix_filtering_is_case_insensitive_on_the_keyword_path ... ignored, pre-4.0 contract journey; re-lands with wire-strata / PR 1
+test tools_list_is_deterministic_across_restarts_and_carries_cache_hints ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+test unicode_and_typographic_content_stays_findable_by_keyword ... ignored, keyword findability removed in 0b; findability re-lands as handle walk in PR 1
+test uninitialized_requests_are_refused_but_discover_is_exempt ... ignored, 4.0 creates no SQLite store; journey re-lands with build/wire-strata
+
+test result: ok. 0 passed; 0 failed; 36 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stdio_shutdown.rs (/tmp/cargo-target/debug/deps/stdio_shutdown-0102f6f2c8b62a72)
+
+running 1 test
+test stdio_server_exits_cleanly_when_stderr_is_already_closed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/views_sized_store.rs (/tmp/cargo-target/debug/deps/views_sized_store-6eb1cc6dcbd8681a)
+
+running 2 tests
+test every_view_completes_quickly_on_a_sized_store ... ok
+test stats_view_scales_linearly_not_quadratically ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.51s
+
+     Running cognitive_module_isolation.rs (/tmp/cargo-target/debug/deps/cognitive_module_isolation-b26f8be7972db67d)
+
+running 4 tests
+test all_modules_compile_against_dyn_store ... ok
+test synaptic_tagging_consumes_records_via_trait ... ok
+test hippocampal_index_built_from_store ... ok
+test spreading_activation_traverses_via_trait ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+     Running domain_column_migration.rs (/tmp/cargo-target/debug/deps/domain_column_migration-b31cf4419395cc6f)
+
+running 5 tests
+test fresh_db_has_v16_schema ... ok
+test empty_domains_serialize_as_brackets ... ok
+test domains_table_exists ... ok
+test populated_domains_round_trip ... ok
+test v11_db_upgrades_cleanly ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running send_bound_variant.rs (/tmp/cargo-target/debug/deps/send_bound_variant-6b24b4e547aa4937)
+
+running 2 tests
+test concurrent_readers_one_writer ... ok
+test arc_dyn_memory_store_moves_across_tokio_tasks ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+     Running trait_round_trip.rs (/tmp/cargo-target/debug/deps/trait_round_trip-1188a7caa44def74)
+
+running 8 tests
+test list_domains_empty_then_upsert_then_delete ... ok
+test scheduling_upsert_and_due_scan ... ok
+test classify_with_no_domains_returns_empty ... ok
+test edge_crud ... ok
+test search_hybrid_returns_results ... ok
+test insert_get_update_delete ... ok
+test count_and_stats_track_inserts ... ok
+test vacuum_after_deletes_reclaims ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+
+     Running unittests src/lib.rs (/tmp/cargo-target/debug/deps/vestige_spacetime-0efb4732a361c8ed)
+
+running 23 tests
+test leg3_reality_index::ordinal_limits::exhausting_the_ordinal_space_is_a_limit_not_a_panic ... ok
+test leg3_reality_index::tests::reality_checkpoint_ignores_siblings_but_tracks_active_reality ... ok
+test leg4_reality_delta::tests::content_mutation_is_one_update ... ok
+test leg4_reality_delta::tests::snapshot_and_delta_preserve_reality_checkpoint ... ok
+test leg3_reality_index::tests::negative_space_accounts_for_the_complete_store ... ok
+test leg3_reality_index::tests::ineligible_active_context_row_changes_routing_not_authority ... ok
+test leg3_reality_index::tests::page_manifests_are_pure ... ok
+test leg4_reality_delta::tests::unchanged_content_is_not_resent_when_rank_changes ... ok
+test leg5_claim_lattice::tests::stale_quarantined_candidate_cannot_reuse_worldline_pr ... ok
+test leg5_claim_lattice::tests::typed_transition_is_checkpoint_and_revision_bound ... ok
+test leg6_capabilities::tests::sender_constraint_blocks_stolen_token ... ok
+test leg5_claim_lattice::tests::weaker_conflict_is_quarantined_not_worldline_repair ... ok
+test leg6_capabilities::tests::prompt_text_cannot_expand_reality ... ok
+test leg5_claim_lattice::tests::unrelated_predicate_does_not_false_alarm ... ok
+test leg6_capabilities::tests::capability_checkpoint_ignores_sibling_but_revokes_on_active_change ... ok
+test leg7_autograph::tests::approved_synthesis_does_not_bridge_siblings ... ok
+test leg7_autograph::tests::derivation_refuses_to_overwrite_an_existing_memory ... ok
+test leg7_autograph::tests::fault_rolls_back ... ok
+test leg7_autograph::tests::hypothesis_is_revision_bound_and_single_use ... ok
+test leg7_autograph::tests::siblings_create_hypothesis_not_bridge ... ok
+test leg7_autograph::tests::hybrid_bundle_shares_reality_checkpoint_and_blocks_manual_bridge ... ok
+test leg3_reality_index::tests::local_bm25_ignores_sibling_corpus_statistics ... ok
+test leg3_reality_index::tests::sibling_population_never_enters_rank_math ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests vestige_core
+
+running 21 tests
+test crates/vestige-core/src/advanced/chains.rs - advanced::chains (line 23) ... ignored
+test crates/vestige-core/src/advanced/compression.rs - advanced::compression (line 24) ... ignored
+test crates/vestige-core/src/advanced/cross_project.rs - advanced::cross_project (line 23) ... ignored
+test crates/vestige-core/src/advanced/dreams.rs - advanced::dreams (line 40) ... ignored
+test crates/vestige-core/src/advanced/importance.rs - advanced::importance (line 17) ... ignored
+test crates/vestige-core/src/advanced/intent.rs - advanced::intent (line 24) ... ignored
+test crates/vestige-core/src/advanced/prediction_error.rs - advanced::prediction_error (line 24) ... ignored
+test crates/vestige-core/src/advanced/reconsolidation.rs - advanced::reconsolidation (line 23) ... ignored
+test crates/vestige-core/src/advanced/speculative.rs - advanced::speculative (line 17) ... ignored
+test crates/vestige-core/src/lib.rs - (line 43) ... ignored
+test crates/vestige-core/src/neuroscience/context_memory.rs - neuroscience::context_memory (line 33) ... ignored
+test crates/vestige-core/src/neuroscience/emotional_memory.rs - neuroscience::emotional_memory (line 27) ... ignored
+test crates/vestige-core/src/neuroscience/importance_signals.rs - neuroscience::importance_signals (line 27) ... ignored
+test crates/vestige-core/src/lib.rs - codebase (line 149) - compile ... ok
+test crates/vestige-core/src/neuroscience/predictive_retrieval.rs - neuroscience::predictive_retrieval (line 25) ... ignored
+test crates/vestige-core/src/neuroscience/prospective_memory.rs - neuroscience::prospective_memory (line 30) ... ignored
+test crates/vestige-core/src/neuroscience/synaptic_tagging.rs - neuroscience::synaptic_tagging (line 34) ... ignored
+test crates/vestige-core/src/neuroscience/synaptic_tagging.rs - neuroscience::synaptic_tagging::SynapticTaggingSystem (line 843) ... ignored
+test crates/vestige-core/src/neuroscience/memory_states.rs - neuroscience::memory_states::StateUpdateService (line 989) ... ok
+test crates/vestige-core/src/neuroscience/memory_states.rs - neuroscience::memory_states::CompetitionManager (line 760) ... ok
+test crates/vestige-core/src/neuroscience/memory_states.rs - neuroscience::memory_states::MemoryLifecycle (line 382) ... ok
+
+test result: ok. 4 passed; 0 failed; 17 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+all doctests ran in 0.68s; merged doctests compilation took 0.64s
+   Doc-tests vestige_differential_tests
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vestige_e2e_tests
+
+running 5 tests
+test tests/e2e/src/assertions/mod.rs - assertions::assert_retention_decreased (line 18) ... ignored
+test tests/e2e/src/harness/db_manager.rs - harness::db_manager::TestDatabaseManager (line 46) ... ignored
+test tests/e2e/src/harness/time_travel.rs - harness::time_travel::TimeTravelEnvironment (line 24) ... ignored
+test tests/e2e/src/lib.rs - (line 12) ... ignored
+test tests/e2e/src/mocks/fixtures.rs - mocks::fixtures::TestDataFactory (line 44) ... ignored
+
+test result: ok. 0 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.12s; merged doctests compilation took 0.12s
+   Doc-tests vestige_mcp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vestige_spacetime
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+TEST_EXIT:0
+END 2026-09-29T13:11:28Z
