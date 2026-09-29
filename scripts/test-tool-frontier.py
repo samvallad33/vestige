@@ -185,7 +185,8 @@ def run(binary, output):
             assert never["scope"] == "user" and never["globalNoveltyVerified"] is False
             typed("session_start", {"queries": [marker], "include_predictions": False, "include_intentions": False}, "similarity_disabled")
             typed("suppress", {"id": node_id}, "pending_strata")
-            typed("causal_walk", {"scope": "user"}, "pending_strata")
+            walk = tool("causal_walk", {"scope": "user"})
+            assert walk["causes"] == [] and walk["needs_report"]["missing"], walk
             typed("selftest", {}, "pending_strata")
             typed("forgotten_lesson", {"failure_id": node_id}, "pending_strata")
             called = {row["tool"] for row in coverage}

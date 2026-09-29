@@ -11,11 +11,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use vestige_core::advanced::causal_walk::{
-    self as core_causal_walk, CausalWalkRequest, StartPoint, persist_evidence_edges,
-    walk_storage,
-};
 use vestige_core::Storage;
+use vestige_core::advanced::causal_walk::{
+    self as core_causal_walk, CausalWalkRequest, StartPoint, persist_evidence_edges, walk_storage,
+};
 
 pub fn schema() -> Value {
     json!({
@@ -110,18 +109,17 @@ struct Args {
 }
 
 pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Value, String> {
-    if crate::strata_memory::is_strata_backend(storage.as_ref()) {
-        return Err(
-            "pending_strata: causal_walk entity overlap is not a recorded edge".into(),
-        );
-    }
+    let strata = crate::strata_memory::is_strata_backend(storage.as_ref());
     let args: Args = match args {
         Some(v) => serde_json::from_value(v).map_err(|e| e.to_string())?,
         None => Args::default(),
     };
     // Clamp numeric inputs to the documented schema bounds (the dispatch
     // layer does not enforce JSON-schema min/max).
-    let lookback = args.lookback_days.unwrap_or(core_causal_walk::DEFAULT_LOOKBACK_DAYS).clamp(1, 365);
+    let lookback = args
+        .lookback_days
+        .unwrap_or(core_causal_walk::DEFAULT_LOOKBACK_DAYS)
+        .clamp(1, 365);
     let promote = args.promote.unwrap_or(false);
     let scan_limit = args.scan_limit.unwrap_or(500).clamp(10, 5000);
 
@@ -162,8 +160,8 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
         causes.push(v);
     }
 
-    // Persist trail edges ONLY on explicit promote.
-    let (edges_persisted, edge_list) = if promote && !result.causes.is_empty() {
+    // Strata answers from the log and does not record the overlap as an edge.
+    let (edges_persisted, edge_list) = if promote && !strata && !result.causes.is_empty() {
         let written = persist_evidence_edges(&**storage, &result)?;
         (written.len(), written)
     } else {
@@ -183,13 +181,14 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             if result.causes.len() == 1 { "" } else { "s" }
         )
     } else {
-        "The walk refused: no anchored records from the given start points. See needs_report.".to_string()
+        "The walk refused: no anchored records from the given start points. See needs_report."
+            .to_string()
     };
 
     Ok(json!({
         "tool": "causal_walk",
         "scope": scope,
-        "preview": !promote,
+        "preview": !promote || strata,
         "evidence_status": "hypothesis",
         "causality_verified": false,
         "headline": headline,
@@ -206,7 +205,11 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             "edges": edge_list.iter().map(|(s, t)| json!([s, t])).collect::<Vec<_>>(),
             "link_type": core_causal_walk::EVIDENCE_LINK_TYPE,
         },
-        "note": "causal_walk replaces backfill (still dispatchable as a hidden alias). Causes rank by IDF-weighted shared anchors, change-record bonus and older-first ties; scores are ranking heuristics, not probabilities of causation. Preview writes nothing; promote records evidence_of edges only.",
+        "note": if strata {
+            "causal_walk reads the strata log backward through shared entities. Scores rank shared anchors, not similarity. The walk writes nothing."
+        } else {
+            "causal_walk replaces backfill (still dispatchable as a hidden alias). Causes rank by IDF-weighted shared anchors, change-record bonus and older-first ties; scores are ranking heuristics, not probabilities of causation. Preview writes nothing; promote records evidence_of edges only."
+        },
     }))
 }
 
@@ -228,7 +231,12 @@ mod tests {
         c.to_string().repeat(40)
     }
 
-    fn seed(storage: &Arc<Storage>, content: &str, tags: Vec<&str>, days_ago: i64) -> KnowledgeNode {
+    fn seed(
+        storage: &Arc<Storage>,
+        content: &str,
+        tags: Vec<&str>,
+        days_ago: i64,
+    ) -> KnowledgeNode {
         let node = storage
             .ingest(IngestInput {
                 content: content.to_string(),
@@ -257,9 +265,9 @@ mod tests {
             extra_files: 0,
             symbols: vec![],
             mentions: vec![],
-                hunks: vec![],
-                extra_hunks: 0,
-                imports: vec![],
+            hunks: vec![],
+            extra_hunks: 0,
+            imports: vec![],
         });
         seed(storage, &content, vec![git_records::COMMIT_TAG], days_ago)
     }
@@ -276,7 +284,13 @@ mod tests {
             .collect();
         assert_eq!(
             kinds,
-            vec!["failing_test", "stack_frame", "ci_run", "logged_write", "version_range"]
+            vec![
+                "failing_test",
+                "stack_frame",
+                "ci_run",
+                "logged_write",
+                "version_range"
+            ]
         );
     }
 
@@ -312,7 +326,10 @@ mod tests {
             "{out}"
         );
         assert_eq!(
-            out["needs_report"]["required_start_points"].as_array().unwrap().len(),
+            out["needs_report"]["required_start_points"]
+                .as_array()
+                .unwrap()
+                .len(),
             5
         );
 
@@ -326,7 +343,8 @@ mod tests {
             assert_eq!(causes[0]["sha"], json!(sha('a')));
             assert_eq!(
                 causes[0]["path"][0]["via"], "failing_test/co_touch",
-                "{}", preview
+                "{}",
+                preview
             );
             assert!(
                 causes[0]["shared_anchors"]
@@ -345,7 +363,10 @@ mod tests {
             "preview must not write graph edges"
         );
         let before = storage.get_node(&bad.id).unwrap().unwrap();
-        assert_eq!(before.reps, storage.get_node(&bad.id).unwrap().unwrap().reps);
+        assert_eq!(
+            before.reps,
+            storage.get_node(&bad.id).unwrap().unwrap().reps
+        );
 
         // 3) promote: exactly one evidence_of edge from the top cause to the note
         let out = execute(
@@ -363,13 +384,187 @@ mod tests {
         );
         let edges = storage.get_connections_for_memory(&bad.id).unwrap();
         assert!(edges.iter().any(|e| {
-            e.source_id == bad.id
-                && e.target_id == note.id
-                && e.link_type == "evidence_of"
+            e.source_id == bad.id && e.target_id == note.id && e.link_type == "evidence_of"
         }));
         // the runner-up commit was not linked (it shares no evidence_to target
         // other than the same note — one edge per cause is expected too)
         let good_edges = storage.get_connections_for_memory(&good.id).unwrap();
         assert_eq!(good_edges.len(), 1, "every surfaced cause gets its edge");
+    }
+}
+
+#[cfg(test)]
+mod strata_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use std::path::Path;
+    use tempfile::TempDir;
+    use vestige_core::advanced::retroactive_backfill::extract_entities;
+
+    const CAUSE: &str =
+        "Raised POOL_ACQUIRE_MS inside src/billing/pool.rs before the quiet deploy window.";
+    const SYMPTOM: &str = "Checkout lane returned 504. Gateway gave up. POOL_ACQUIRE_MS.";
+    const LATER: &str = "Zephyr quilt inventory lists POOL_ACQUIRE_MS for a different week.";
+    const DECOY: &str = "Oak cupboard stored spare linen beside the stair.";
+
+    fn log_blake3(root: &Path) -> String {
+        let mut files = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+        let mut hasher = blake3::Hasher::new();
+        for path in files {
+            let rel = path.strip_prefix(root).unwrap();
+            hasher.update(rel.to_string_lossy().as_bytes());
+            hasher.update(b"\0");
+            hasher.update(&std::fs::read(&path).unwrap());
+            hasher.update(b"\0");
+        }
+        hasher.finalize().to_hex().to_string()
+    }
+
+    fn seed(store: &mut strata_store::StrataStore, content: &str, at_ms: i64) -> String {
+        store
+            .ingest_in_scope(
+                strata_store::IngestInput {
+                    content: content.to_string(),
+                    created_at_ms: Some(at_ms),
+                    ..Default::default()
+                },
+                "user",
+            )
+            .unwrap()
+    }
+
+    fn open_empty() -> (Arc<Storage>, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        (storage, dir)
+    }
+
+    #[tokio::test]
+    async fn strata_walk_surfaces_shared_entity_cause_and_drops_later_events() {
+        let cause_entities = extract_entities(CAUSE, &[]);
+        let symptom_entities = extract_entities(SYMPTOM, &[]);
+        let shared: BTreeSet<_> = cause_entities
+            .iter()
+            .filter(|entity| symptom_entities.contains(entity))
+            .cloned()
+            .collect();
+        assert_eq!(
+            shared.into_iter().collect::<Vec<_>>(),
+            vec!["pool_acquire_ms".to_string()],
+            "the cause and symptom must share one entity and no prose"
+        );
+
+        let dir = TempDir::new().unwrap();
+        let symptom_ms = 1_700_000_000_000i64;
+        let (cause_id, symptom_id, later_id, decoy_id) = {
+            let mut store = strata_store::StrataStore::open(dir.path()).unwrap();
+            let decoy_id = seed(&mut store, DECOY, symptom_ms - 86_400_000);
+            let cause_id = seed(&mut store, CAUSE, symptom_ms - 1);
+            let symptom_id = seed(&mut store, SYMPTOM, symptom_ms);
+            let later_id = seed(&mut store, LATER, symptom_ms + 1);
+            (cause_id, symptom_id, later_id, decoy_id)
+        };
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        let before = log_blake3(dir.path());
+        let preview = execute(
+            &storage,
+            Some(json!({
+                "start_points": [{"kind": "logged_write", "node_id": symptom_id}]
+            })),
+        )
+        .await
+        .unwrap();
+        let promoted = execute(
+            &storage,
+            Some(json!({
+                "start_points": [{"kind": "logged_write", "node_id": symptom_id}],
+                "promote": true
+            })),
+        )
+        .await
+        .unwrap();
+        let after = log_blake3(dir.path());
+        assert_eq!(
+            before, after,
+            "causal_walk must not append to the strata log"
+        );
+
+        assert_eq!(preview["preview"], json!(true));
+        assert_eq!(promoted["preview"], json!(true));
+        assert_eq!(preview["promote"]["edges_persisted"], json!(0));
+        assert_eq!(promoted["promote"]["edges_persisted"], json!(0));
+
+        let causes = preview["causes"].as_array().unwrap();
+        assert_eq!(causes.len(), 1, "{preview}");
+        assert_eq!(causes[0]["id"], json!(cause_id));
+        assert!(
+            causes[0]["shared_anchors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|anchor| anchor == "pool_acquire_ms"),
+            "{preview}"
+        );
+        assert_eq!(
+            causes[0]["path"][0]["via"],
+            json!("logged_write/shared_anchor")
+        );
+
+        for body in [&preview, &promoted] {
+            let text = body.to_string();
+            assert!(
+                !text.contains(&later_id),
+                "a later event must not be returned: {text}"
+            );
+            assert!(!text.contains(&decoy_id), "{text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn strata_walk_unknown_handle_does_not_guess() {
+        let (storage, _dir) = open_empty();
+        let missing = "mem-0123456789abcdef";
+        let out = execute(
+            &storage,
+            Some(json!({
+                "start_points": [{"kind": "logged_write", "node_id": missing}]
+            })),
+        )
+        .await
+        .unwrap();
+        assert!(out["causes"].as_array().unwrap().is_empty(), "{out}");
+        let missing_report = out["needs_report"]["missing"].to_string();
+        assert!(
+            missing_report.contains(missing),
+            "unknown handle must refuse, not guess: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn strata_walk_rejects_invalid_input() {
+        let (storage, _dir) = open_empty();
+        let empty_scope = execute(&storage, Some(json!({"scope": "  "})))
+            .await
+            .unwrap_err();
+        assert!(empty_scope.contains("scope"), "{empty_scope}");
+        let bad_start = execute(
+            &storage,
+            Some(json!({"start_points": [{"kind": "logged_write"}]})),
+        )
+        .await
+        .unwrap_err();
+        assert!(bad_start.contains("node_id"), "{bad_start}");
     }
 }

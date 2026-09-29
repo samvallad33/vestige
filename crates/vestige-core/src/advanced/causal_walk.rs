@@ -806,16 +806,12 @@ impl CausalWalkOptions {
         let mut candidates: Vec<(&WalkRecord, Seed)> = Vec::new();
         for (id, s) in &seeds {
             let Some(r) = by_id.get(id) else { continue };
-            let age_days = (failure_time - r.created_at).num_seconds() as f64 / 86_400.0;
-            let shared_n = s.anchors.len();
-            if age_days <= 0.0 {
-                rejections.push(WalkRejection {
-                    id: r.id.clone(),
-                    reason: "record is newer than the failure anchor".into(),
-                    shared_anchors: shared_n,
-                });
+            // Strictly earlier than the failure. Later records are omitted.
+            if r.created_at >= failure_time {
                 continue;
             }
+            let age_days = (failure_time - r.created_at).num_seconds() as f64 / 86_400.0;
+            let shared_n = s.anchors.len();
             if age_days > self.lookback_days as f64 {
                 rejections.push(WalkRejection {
                     id: r.id.clone(),

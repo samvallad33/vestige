@@ -156,6 +156,7 @@ tempfile = "3"
 
 [dev-dependencies]
 ctor = "0.4"
+blake3 = "1"
 
 # Integration tests drive the Storage-backed server/tools; the e2e binary
 # test also reads the SQLite file directly (backup WAL). Skipped in a
