@@ -32,6 +32,7 @@
 #![warn(missing_docs)]
 
 pub mod layout;
+pub mod live;
 pub mod migration;
 
 use std::fmt;

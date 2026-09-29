@@ -24,6 +24,7 @@ strata-kernel = { path = "../strata-kernel" }
 strata-migrate = { path = "../strata-migrate" }
 strata = { path = "../strata" }
 strata-gate = { path = "../strata-gate" }
+strata-store = { path = "../strata-store" }
 
 [dev-dependencies]
 ed25519-dalek = { version = "3", default-features = false, features = ["fast", "rand_core"] }

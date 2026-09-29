@@ -1,6 +1,7 @@
 //! PR-0a blocker 3: strata-verify must pass on an untouched migrated log
 //! and fail on flipped bytes, dropped frames, truncation, or the wrong key.
 
+use std::io::Read;
 use std::path::Path;
 
 use strata_verify::migration::verify_migrated_log;
@@ -80,26 +81,31 @@ fn migrated_log_truncated_fails() {
     );
 }
 
-/// A receipt whose verifying key does not match the signature (the
-/// wrong-key forge) fails the authorship check.
+/// The log signing key on disk does not verify the segment trailers.
 #[test]
-fn migrated_log_wrong_receipt_key_fails() {
+fn migrated_log_wrong_key_on_disk_fails() {
     let dir = tempfile::tempdir().unwrap();
     let log_dir = dir.path().join("strata");
     build_log(&log_dir);
-    // Forge at the API level: a receipt that claims someone else's key.
-    let log = strata::StrataLog::open(&log_dir).unwrap();
-    let frames = log.read_frames(1).unwrap();
-    let receipt_frame = frames
-        .iter()
-        .find(|f| f.kind == strata_migrate::records::KIND_MIGRATION_RECEIPT)
-        .expect("receipt frame");
-    let mut receipt = strata_migrate::records::decode_receipt(&receipt_frame.payload).unwrap();
-    let other = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-    receipt.verifying_key = other.verifying_key().to_bytes();
+    let key_path = strata_migrate::log_signing_key_path(&log_dir);
+    let original = std::fs::read(&key_path).expect("external log key");
+    assert_eq!(original.len(), 32);
     assert!(
-        !receipt.verify_signature(),
-        "a receipt claiming the wrong key must fail authorship"
+        !log_dir.join("strata.key").exists(),
+        "the private key must not live inside --to"
     );
-    assert!(receipt.verify_checksum(), "checksum stays key-independent");
+    let mut wrong = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .unwrap()
+        .read_exact(&mut wrong)
+        .unwrap();
+    if wrong.as_slice() == original.as_slice() {
+        wrong[0] ^= 0xff;
+    }
+    std::fs::write(&key_path, wrong).unwrap();
+    let err = verify_migrated_log(&log_dir).expect_err("wrong on-disk key must fail");
+    assert!(
+        !err.contains("kernel.log"),
+        "wrong key is a log failure, not a missing kernel.log: {err}"
+    );
 }

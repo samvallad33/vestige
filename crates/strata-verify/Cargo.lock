@@ -882,6 +882,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-store"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "borsh",
+ "strata",
+ "strata-gate",
+ "strata-kernel",
+]
+
+[[package]]
 name = "strata-verify"
 version = "0.1.0"
 dependencies = [
@@ -894,6 +905,7 @@ dependencies = [
  "strata-gate",
  "strata-kernel",
  "strata-migrate",
+ "strata-store",
  "tempfile",
 ]
 
