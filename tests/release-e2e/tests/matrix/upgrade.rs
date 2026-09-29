@@ -1238,6 +1238,67 @@ fn verify_accepts_untampered_store_with_expect_key() {
     }
 }
 
+/// Inferred v3 `memory_connections` (any `link_type` outside the 8 causal
+/// kinds) must import as edge kind `legacy_inferred`. A declared row
+/// (`touched`, `anchored_to`, `derived_from`, `supersedes`, `corrects`,
+/// `closed_by`, `projected_to`, `evidence_of`) is not an inferred link.
+///
+/// The official fixture is `v3.1.1-sample.sqlite`. A store from
+/// `/workspace/v3-real-stores.tar.gz` is included when that archive is
+/// present. Current `extract_edges` (`crates/strata-migrate/src/lib.rs:1293`)
+/// rewrites every other v3 string to `derived_from`, so this row fails.
+#[test]
+fn imported_inferred_links_are_legacy_inferred() {
+    let work = tempfile::tempdir().unwrap();
+    let mut sources = vec![official_v311_sample(work.path())];
+    match real_store_dbs(work.path()) {
+        Ok(found) => sources.extend(found),
+        Err(err) => panic!("FAIL: {err}"),
+    }
+    assert!(
+        sources
+            .iter()
+            .any(|source| source.label == "v3.1.1-sample.sqlite"),
+        "the official v3.1.1 fixture was not opened"
+    );
+    let mut failures = Vec::new();
+    for source in &sources {
+        let before = sha256_file(&source.db);
+        let inferred = inferred_link_counts(&source.db);
+        let inferred_total: usize = inferred.values().sum();
+        if source.label == "v3.1.1-sample.sqlite" {
+            assert!(
+                inferred_total > 0,
+                "official v3.1.1 fixture has no inferred memory_connections"
+            );
+        }
+        if inferred_total == 0 {
+            continue;
+        }
+        let edges = import_log_edges(work.path(), source);
+        let after = sha256_file(&source.db);
+        if before != after {
+            failures.push(format!(
+                "{}: import modified the source sqlite",
+                source.label
+            ));
+            continue;
+        }
+        if let Some(failure) = inferred_kind_failure(source, &inferred, &edges) {
+            failures.push(failure);
+        }
+    }
+    if !failures.is_empty() {
+        panic!(
+            "FAIL: imported inferred links are not edge kind legacy_inferred. \
+             crates/strata-migrate/src/lib.rs:1293 rewrites a v3 link_type \
+             outside the 8 causal kinds to derived_from. This is a real \
+             failure, not pending_strata.\n{}",
+            failures.join("\n")
+        );
+    }
+}
+
 #[test]
 fn upgrade_legacy_links_are_not_causal_edges() {
     let work = tempfile::tempdir().unwrap();
@@ -2100,6 +2161,220 @@ fn assert_case_c_accepts(out: &CmdOut, label: &str, fingerprint: &str) {
         "case (c) {label} exited 0 without printing `key fingerprint: {fingerprint}`: {}",
         blob.chars().take(800).collect::<String>()
     );
+}
+
+const CAUSAL_EDGE_KINDS: [&str; 8] = [
+    "touched",
+    "anchored_to",
+    "derived_from",
+    "supersedes",
+    "corrects",
+    "closed_by",
+    "projected_to",
+    "evidence_of",
+];
+
+struct InferredSource {
+    label: String,
+    /// Directory or sqlite file passed to `migrate-to-strata --from`.
+    from: std::path::PathBuf,
+    db: std::path::PathBuf,
+    accept_wal: bool,
+}
+
+fn official_v311_sample(work: &std::path::Path) -> InferredSource {
+    let bundled = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/strata-migrate/tests/fixtures/v3.1.1-sample.sqlite");
+    let sha = sha256_file(&bundled);
+    assert_eq!(
+        sha, "961f12d1750dbd2f6e6a8fc365c4a4bb42dd1b7e49cbf465985a36b665e10479",
+        "v3.1.1-sample.sqlite is not the official fixture"
+    );
+    let db = work.join("v3.1.1-sample.sqlite");
+    fs::copy(&bundled, &db).unwrap();
+    InferredSource {
+        label: "v3.1.1-sample.sqlite".into(),
+        from: db.clone(),
+        db,
+        accept_wal: false,
+    }
+}
+
+/// Stores inside `/workspace/v3-real-stores.tar.gz`, or `VESTIGE_V3_REAL_STORES`
+/// when that path is a file. Absent archive means the official fixture only.
+fn real_store_dbs(work: &std::path::Path) -> Result<Vec<InferredSource>, String> {
+    let from_env = std::env::var_os("VESTIGE_V3_REAL_STORES").map(std::path::PathBuf::from);
+    let archive = from_env
+        .into_iter()
+        .chain(std::iter::once(std::path::PathBuf::from(
+            "/workspace/v3-real-stores.tar.gz",
+        )))
+        .find(|path| path.is_file());
+    let Some(archive) = archive else {
+        return Ok(Vec::new());
+    };
+    let extracted = work.join("real-stores");
+    fs::create_dir_all(&extracted).unwrap();
+    let tar = std::process::Command::new("tar")
+        .args(["-xzf"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&extracted)
+        .output()
+        .map_err(|err| format!("tar {}: {err}", archive.display()))?;
+    if !tar.status.success() {
+        return Err(format!(
+            "could not read {}: {}",
+            archive.display(),
+            String::from_utf8_lossy(&tar.stderr)
+        ));
+    }
+    let mut dbs = Vec::new();
+    collect_vestige_dbs(&extracted, &mut dbs);
+    dbs.sort();
+    let mut sources = Vec::new();
+    for db in dbs {
+        let label = db
+            .parent()
+            .and_then(|dir| dir.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("store")
+            .to_string();
+        if label.contains("shim") {
+            continue;
+        }
+        let wal = db.with_file_name("vestige.db-wal");
+        let accept_wal = wal.is_file() && fs::metadata(&wal).map(|m| m.len() > 0).unwrap_or(false);
+        let from = db.parent().unwrap_or(db.as_path()).to_path_buf();
+        sources.push(InferredSource {
+            label,
+            from,
+            db,
+            accept_wal,
+        });
+    }
+    if sources.is_empty() {
+        return Err(format!("{} contained no vestige.db", archive.display()));
+    }
+    Ok(sources)
+}
+
+fn collect_vestige_dbs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_vestige_dbs(&path, out);
+        } else if path.file_name().and_then(|name| name.to_str()) == Some("vestige.db") {
+            out.push(path);
+        }
+    }
+}
+
+fn inferred_link_counts(db: &std::path::Path) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for row in sqlite_text(
+        db,
+        "SELECT link_type, COUNT(*) FROM memory_connections GROUP BY link_type ORDER BY link_type",
+    ) {
+        let link_type = row.first().cloned().unwrap_or_default();
+        if CAUSAL_EDGE_KINDS.contains(&link_type.as_str()) {
+            continue;
+        }
+        let count = row.get(1).and_then(|cell| cell.parse().ok()).unwrap_or(0);
+        if count > 0 {
+            counts.insert(link_type, count);
+        }
+    }
+    counts
+}
+
+fn import_log_edges(work: &std::path::Path, source: &InferredSource) -> Vec<Value> {
+    let dest = work.join(format!("log-{}", source.label));
+    let mut args = vec![
+        "migrate-to-strata".to_string(),
+        "--from".to_string(),
+        source.from.display().to_string(),
+        "--to".to_string(),
+        dest.display().to_string(),
+    ];
+    if source.accept_wal {
+        args.push("--accept-wal-snapshot".into());
+    }
+    let home = tempfile::tempdir().unwrap();
+    let migrated = run_vestige(&args, home.path(), Duration::from_secs(180));
+    assert_eq!(
+        migrated.status,
+        Some(0),
+        "import of {} failed: {}",
+        source.label,
+        cmd_excerpt(&migrated)
+    );
+    let dump = run_driver(&["dump-migration", dest.to_str().unwrap()]);
+    if dump.get("ok") != Some(&Value::Bool(true)) {
+        panic!("edge read failed for {}: {dump}", source.label);
+    }
+    dump["edges"].as_array().cloned().unwrap_or_default()
+}
+
+fn inferred_kind_failure(
+    source: &InferredSource,
+    inferred: &std::collections::BTreeMap<String, usize>,
+    edges: &[Value],
+) -> Option<String> {
+    let inferred_total: usize = inferred.values().sum();
+    let mut mapped: std::collections::BTreeMap<(String, String), usize> =
+        std::collections::BTreeMap::new();
+    let mut legacy_inferred_edges = 0usize;
+    let mut causal_inferred = 0usize;
+    for edge in edges {
+        let kind = edge["link_type"].as_str().unwrap_or("").to_string();
+        if kind == "legacy_inferred" {
+            legacy_inferred_edges += 1;
+        }
+        let v3_type = edge["legacy_link_type"].as_str().unwrap_or("").to_string();
+        if !inferred.contains_key(&v3_type) {
+            continue;
+        }
+        if CAUSAL_EDGE_KINDS.contains(&kind.as_str()) {
+            causal_inferred += 1;
+        }
+        let flag = edge["legacy_inferred"].as_bool().unwrap_or(false);
+        let shown = format!("{kind} (legacy_inferred={flag})");
+        *mapped.entry((v3_type, shown)).or_default() += 1;
+    }
+    let kinds_ok = edges
+        .iter()
+        .filter(|edge| {
+            let v3_type = edge["legacy_link_type"].as_str().unwrap_or("");
+            inferred.contains_key(v3_type)
+        })
+        .all(|edge| edge["link_type"].as_str() == Some("legacy_inferred"));
+    if kinds_ok && causal_inferred == 0 && legacy_inferred_edges == inferred_total {
+        return None;
+    }
+    let histogram = inferred
+        .iter()
+        .map(|(kind, count)| format!("{kind}={count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mapping = if mapped.is_empty() {
+        "no imported edge carried an inferred v3 link_type".to_string()
+    } else {
+        mapped
+            .iter()
+            .map(|((v3_type, kind), count)| format!("  {v3_type} -> {kind} x{count}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Some(format!(
+        "{}: source inferred={inferred_total} [{histogram}]; \
+         legacy_inferred edges={legacy_inferred_edges}; \
+         inferred links imported as a causal kind={causal_inferred}\n{mapping}",
+        source.label
+    ))
 }
 
 fn assert_strata_verify_ok(dir: &std::path::Path) {
