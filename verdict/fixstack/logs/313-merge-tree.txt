@@ -1,0 +1,21 @@
+37e88c128c42dca33f92a0e838b2540d856970aa
+crates/vestige-mcp/src/main.rs
+
+Auto-merging .github/workflows/ci.yml
+Auto-merging Cargo.lock
+Auto-merging crates/vestige-core/src/advanced/causal_walk.rs
+Auto-merging crates/vestige-core/src/connectors/mod.rs
+Auto-merging crates/vestige-core/src/consolidation/dream_compile.rs
+Auto-merging crates/vestige-core/src/projection.rs
+Auto-merging crates/vestige-core/src/storage/attestation_store.rs
+Auto-merging crates/vestige-core/src/storage/blast.rs
+Auto-merging crates/vestige-core/src/storage/receipt_attestation.rs
+Auto-merging crates/vestige-core/src/storage/resolver.rs
+Auto-merging crates/vestige-core/src/storage/sqlite/mod.rs
+Auto-merging crates/vestige-core/src/storage/synaptic_store.rs
+Auto-merging crates/vestige-core/src/storage/walk_receipts.rs
+Auto-merging crates/vestige-core/src/trace/receipt.rs
+Auto-merging crates/vestige-mcp/src/bin/cli.rs
+Auto-merging crates/vestige-mcp/src/main.rs
+CONFLICT (content): Merge conflict in crates/vestige-mcp/src/main.rs
+Auto-merging crates/vestige-mcp/tests/e2e_real_binary.rs

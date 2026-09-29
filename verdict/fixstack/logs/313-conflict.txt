@@ -1,0 +1,29 @@
+#313 merge onto 0a+#308+#309+#311
+ours  4a564c433310fdb4127c656af40bc1917c81c00d
+theirs origin/cursor/wire-strata-stdio-5bf1 dbb6daff47f6ab17d703764ba23abf7f294da649
+only unmerged path: crates/vestige-mcp/src/main.rs
+one conflict region, lines 472-492 of the conflicted file:
+
+<<<<<<< HEAD
+    if let Some(db_path) = storage_path.as_deref()
+        && let Ok(Some(v3)) = vestige_core::detect_v3(db_path)
+    {
+        error!(
+            "v3 SQLite store at {} (schema version {}) cannot be opened by 4.0. {}",
+            v3.path.display(),
+            v3.schema_version,
+            vestige_core::MIGRATION_HINT
+        );
+        eprintln!(
+            "v3 SQLite store at {} (schema version {}) cannot be opened by 4.0. {}",
+            v3.path.display(),
+            v3.schema_version,
+            vestige_core::MIGRATION_HINT
+        );
+        std::process::exit(1);
+=======
+    if let Some(db_path) = storage_path.as_deref() {
+        exit_if_v3(db_path);
+>>>>>>> origin/cursor/wire-strata-stdio-5bf1
+
+Merge aborted. Not resolved.

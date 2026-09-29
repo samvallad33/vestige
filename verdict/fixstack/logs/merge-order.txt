@@ -1,0 +1,7 @@
+STACK-A base origin/strata/fix-00a-v3-guard e5d04a332aee768d5b122b313a28e0f97fd04a96
+308 cursor/strata-migrate-clippy-fmt-ada1 707e63aa31c300fad7e617fb010f766df763a0c0 MERGED d7c6e424d212a5f3409c19d495f1edcbac0ade04
+309 cursor/strata-verify-readonly-7201 3f52f9c5db669b46dd8f1188d62b2fb74313828c MERGED 19c5caeeb20c5f0635417ee8d7606baf24cc1a07
+311 cursor/strata-migrate-staging-7201 87cca7c4fd8a2384b3220438b8fcc41b33d18446 MERGED 4a564c433310fdb4127c656af40bc1917c81c00d
+313 cursor/wire-strata-stdio-5bf1 dbb6daff47f6ab17d703764ba23abf7f294da649 CONFLICT crates/vestige-mcp/src/main.rs
+305 cursor/strata-log-open-guards-bf5f 00c982b19199566fb2bd0251efb939aac5d634cc NOT_ATTEMPTED stack-a incomplete
+prefix_not_a_stack_head 4a564c433310fdb4127c656af40bc1917c81c00d
