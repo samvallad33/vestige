@@ -6,13 +6,16 @@ use std::path::PathBuf;
 
 use borsh::BorshDeserialize;
 use strata_gate::policy::{ANY_KIND, WILDCARD_PREFIX};
-use strata_gate::record::{RecordKind, Verdict};
+use strata_gate::record::{action_kind, EffectRecord, GateRecord, Propose, RecordKind, Verdict};
 use strata_gate::{Policy, Rule};
 
 use crate::op::{KIND_STORE_CHECKPOINT, KIND_STORE_WRITE};
 use crate::store::handle_of;
 use crate::types::{ConnectionRecord, EdgeDirection, EdgeKind, IngestInput};
-use crate::{looks_like_failure, StoreError, StrataStore};
+use crate::{
+    default_policy, effect_receipt_id, looks_like_failure, retire_rule_id, AdmissionContext,
+    RetireReceipt, StoreError, StrataStore, RULE_EDIT, RULE_INTENTIONS, RULE_PURGE, RULE_SUPPRESS,
+};
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("strata-store-test-{}-{name}", std::process::id()));
@@ -495,5 +498,337 @@ fn node_ids_are_log_derived_and_handle_is_stable() {
     assert_eq!(handle_of(&a), handle_of(&a));
     assert_ne!(handle_of(&a), handle_of(&b));
     assert_eq!(store.card_state(&a).map(|c| c.review_count), Some(1));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+fn ctx(rule: Option<&str>, confirm: bool) -> AdmissionContext {
+    AdmissionContext {
+        rule_id: rule.map(str::to_string),
+        confirm,
+    }
+}
+
+fn assert_held(err: StoreError) {
+    assert!(matches!(err, StoreError::Held { .. }), "{err}");
+}
+
+fn effect_frames(store: &StrataStore) -> Vec<(u64, EffectRecord)> {
+    let mut out = Vec::new();
+    let mut gseq = 0u64;
+    for frame in store.log().read_frames(1).expect("frames") {
+        let Some(kind) = RecordKind::from_u8(frame.kind) else {
+            continue;
+        };
+        if kind == RecordKind::Effect {
+            let effect = EffectRecord::try_from_slice(&frame.payload).expect("effect");
+            out.push((gseq, effect));
+        }
+        gseq += 1;
+    }
+    out
+}
+
+fn propose_at(store: &StrataStore, propose_seq: u64) -> Propose {
+    let mut gseq = 0u64;
+    for frame in store.log().read_frames(1).expect("frames") {
+        let Some(kind) = RecordKind::from_u8(frame.kind) else {
+            continue;
+        };
+        if kind == RecordKind::Propose && gseq == propose_seq {
+            return Propose::try_from_slice(&frame.payload).expect("propose");
+        }
+        gseq += 1;
+    }
+    panic!("no propose at gate seq {propose_seq}");
+}
+
+/// The admitting EffectRecord's proposal carries the rule id, and the
+/// receipt id is `eff-` plus that effect seq.
+fn assert_rule_receipt(store: &StrataStore, receipt: &RetireReceipt, rule: &'static str) {
+    assert_eq!(receipt.rule_id, Some(rule));
+    assert_eq!(receipt.receipt_id, effect_receipt_id(receipt.effect_seq));
+    assert!(receipt.receipt_id.starts_with("eff-"));
+    let effect = effect_frames(store)
+        .into_iter()
+        .find(|(seq, _)| *seq == receipt.effect_seq)
+        .map(|(_, effect)| effect)
+        .expect("EffectRecord");
+    let propose = propose_at(store, effect.propose_seq);
+    assert_eq!(propose.action_kind, action_kind::RETIRE);
+    assert_eq!(propose.action_hash, effect.action_hash);
+    assert_eq!(retire_rule_id(&propose.params_hash), Some(rule));
+    let digest_landed = store
+        .log()
+        .read_frames(1)
+        .expect("frames")
+        .into_iter()
+        .any(|frame| {
+            frame.kind == KIND_STORE_WRITE
+                && *blake3::hash(&frame.payload).as_bytes() == effect.payload_digest
+        });
+    assert!(digest_landed, "STORE_WRITE cited by the effect");
+}
+
+fn stored_gate_verdicts(store: &StrataStore) -> Vec<(u64, Verdict)> {
+    let mut out = Vec::new();
+    let mut gseq = 0u64;
+    for frame in store.log().read_frames(1).expect("frames") {
+        let Some(kind) = RecordKind::from_u8(frame.kind) else {
+            continue;
+        };
+        if kind == RecordKind::Gate {
+            let gate = GateRecord::try_from_slice(&frame.payload).expect("gate");
+            out.push((gseq, gate.verdict));
+        }
+        gseq += 1;
+    }
+    out
+}
+
+fn pair(name: &str) -> (PathBuf, StrataStore, String, String) {
+    let dir = temp_dir(name);
+    let mut store = StrataStore::open(&dir).expect("open");
+    let old = store.ingest(input("predecessor", &[])).expect("old");
+    let successor = store.ingest(input("successor", &[])).expect("new");
+    (dir, store, old, successor)
+}
+
+fn expect_allow(
+    dir: &PathBuf,
+    store: StrataStore,
+    receipt: RetireReceipt,
+    rule: &'static str,
+    old: &str,
+) {
+    assert_rule_receipt(&store, &receipt, rule);
+    assert!(store.get_node(old).expect("old").superseded_by.is_some());
+    assert_eq!(
+        store.rederive_verdicts().expect("rederive"),
+        stored_gate_verdicts(&store)
+    );
+    assert!(store.sweep().is_empty());
+    let seq = receipt.effect_seq;
+    let receipt_id = receipt.receipt_id.clone();
+    drop(store);
+    let reopened = StrataStore::open(dir).expect("reopen");
+    let again = reopened.retire_receipt(seq).expect("replayed receipt");
+    assert_eq!(again.rule_id, Some(rule));
+    assert_eq!(again.receipt_id, receipt_id);
+    assert_rule_receipt(&reopened, &again, rule);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn named_retire_rules_precede_the_catchall_hold() {
+    let policy = default_policy();
+    assert_eq!(policy.rules.len(), 6);
+    let ids = [RULE_EDIT, RULE_SUPPRESS, RULE_INTENTIONS, RULE_PURGE];
+    let mut prefixes = Vec::new();
+    for (rule, id) in policy.rules.iter().take(4).zip(ids) {
+        assert_eq!(rule.match_kind, action_kind::RETIRE);
+        assert_eq!(rule.verdict, Verdict::Allow);
+        assert_ne!(rule.match_params_hash_prefix, WILDCARD_PREFIX);
+        let mut hash = [0u8; 32];
+        hash[..8].copy_from_slice(&rule.match_params_hash_prefix);
+        assert_eq!(retire_rule_id(&hash), Some(id));
+        prefixes.push(rule.match_params_hash_prefix);
+    }
+    prefixes.sort();
+    prefixes.dedup();
+    assert_eq!(prefixes.len(), 4, "the four rule prefixes must be distinct");
+    assert_eq!(policy.rules[4].match_kind, action_kind::RETIRE);
+    assert_eq!(policy.rules[4].verdict, Verdict::Hold);
+    assert_eq!(policy.rules[4].match_params_hash_prefix, WILDCARD_PREFIX);
+    assert_eq!(policy.rules[5].match_kind, ANY_KIND);
+    assert_eq!(policy.rules[5].verdict, Verdict::Allow);
+}
+
+#[test]
+fn edit_allows_only_with_rule_id_and_successor_in_the_call() {
+    let dir = temp_dir("edit-allow");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let old = store.ingest(input("edit", &["suppress"])).expect("old");
+    store.begin_tool_call();
+    let successor = store.ingest(input("successor", &[])).expect("successor");
+    let receipt = store
+        .retire(&old, &successor, &ctx(Some(RULE_EDIT), false))
+        .expect("edit allows");
+    expect_allow(&dir, store, receipt, RULE_EDIT, &old);
+}
+
+#[test]
+fn edit_held_without_rule_id() {
+    let (dir, mut store, old, successor) = pair("edit-no-id");
+    store.begin_tool_call();
+    let err = store
+        .retire(&old, &successor, &ctx(None, false))
+        .expect_err("no rule id");
+    assert_held(err);
+    assert!(store.get_node(&old).unwrap().superseded_by.is_none());
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edit_held_with_unknown_rule_id() {
+    let (dir, mut store, old, successor) = pair("edit-unknown");
+    store.begin_tool_call();
+    let err = store
+        .retire(&old, &successor, &ctx(Some("edited"), true))
+        .expect_err("unknown id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn edit_held_when_successor_was_not_admitted_in_this_call() {
+    let (dir, mut store, old, successor) = pair("edit-stale");
+    let err = store
+        .retire(&old, &successor, &ctx(Some(RULE_EDIT), false))
+        .expect_err("successor predates the call");
+    assert_held(err);
+    store.begin_tool_call();
+    store.end_tool_call();
+    let err = store
+        .retire(&old, &successor, &ctx(Some(RULE_EDIT), false))
+        .expect_err("call closed");
+    assert_held(err);
+    assert!(store.get_node(&old).unwrap().superseded_by.is_none());
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn suppress_allows_with_rule_id() {
+    let (dir, mut store, old, successor) = pair("suppress-allow");
+    let receipt = store
+        .retire(&old, &successor, &ctx(Some(RULE_SUPPRESS), false))
+        .expect("suppress allows");
+    expect_allow(&dir, store, receipt, RULE_SUPPRESS, &old);
+}
+
+#[test]
+fn suppress_held_without_rule_id() {
+    let (dir, mut store, old, successor) = pair("suppress-no-id");
+    let err = store
+        .retire(&old, &successor, &ctx(None, true))
+        .expect_err("no rule id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn suppress_held_with_unknown_rule_id() {
+    let (dir, mut store, old, successor) = pair("suppress-unknown");
+    let err = store
+        .retire(&old, &successor, &ctx(Some("suppressed"), false))
+        .expect_err("unknown id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn intentions_allows_with_rule_id() {
+    let (dir, mut store, old, successor) = pair("intentions-allow");
+    let receipt = store
+        .retire(&old, &successor, &ctx(Some(RULE_INTENTIONS), false))
+        .expect("intentions allows");
+    expect_allow(&dir, store, receipt, RULE_INTENTIONS, &old);
+}
+
+#[test]
+fn intentions_held_without_rule_id() {
+    let (dir, mut store, old, successor) = pair("intentions-no-id");
+    let err = store
+        .retire(&old, &successor, &AdmissionContext::default())
+        .expect_err("no rule id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn intentions_held_with_unknown_rule_id() {
+    let (dir, mut store, old, successor) = pair("intentions-unknown");
+    let err = store
+        .retire(&old, &successor, &ctx(Some("intention"), false))
+        .expect_err("unknown id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn purge_allows_with_rule_id_and_confirm() {
+    let (dir, mut store, old, successor) = pair("purge-allow");
+    let receipt = store
+        .retire(&old, &successor, &ctx(Some(RULE_PURGE), true))
+        .expect("purge allows");
+    expect_allow(&dir, store, receipt, RULE_PURGE, &old);
+}
+
+#[test]
+fn purge_held_without_rule_id() {
+    let (dir, mut store, old, successor) = pair("purge-no-id");
+    let err = store
+        .retire(&old, &successor, &ctx(None, true))
+        .expect_err("confirm without a rule id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn purge_held_with_unknown_rule_id() {
+    let (dir, mut store, old, successor) = pair("purge-unknown");
+    let err = store
+        .retire(&old, &successor, &ctx(Some("purged"), true))
+        .expect_err("unknown id");
+    assert_held(err);
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn purge_held_without_confirm() {
+    let (dir, mut store, old, successor) = pair("purge-noconfirm");
+    let err = store
+        .retire(&old, &successor, &ctx(Some(RULE_PURGE), false))
+        .expect_err("purge without confirm");
+    assert_held(err);
+    assert!(store.get_node(&old).unwrap().superseded_by.is_none());
+    drop(store);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn retire_without_rule_id_stays_held() {
+    let dir = temp_dir("no-rule");
+    let mut store = StrataStore::open(&dir).expect("open");
+    let old = store
+        .ingest(input("edit suppress intentions purge", &["purge", "edit"]))
+        .expect("old");
+    let successor = store
+        .ingest(input("suppress", &["intentions"]))
+        .expect("successor");
+    let before = effect_frames(&store).len();
+    let err = store.supersede(&old, &successor).expect_err("supersede");
+    assert_held(err);
+    let err = store
+        .retire(&old, &successor, &AdmissionContext::default())
+        .expect_err("empty context");
+    assert_held(err);
+    assert_eq!(effect_frames(&store).len(), before);
+    assert_eq!(
+        store.rederive_verdicts().expect("rederive"),
+        stored_gate_verdicts(&store)
+    );
+    assert!(store.sweep().is_empty());
+    assert!(store.get_node(&old).unwrap().superseded_by.is_none());
+    assert!(store.supersession_pairs().is_empty());
+    drop(store);
     std::fs::remove_dir_all(&dir).ok();
 }

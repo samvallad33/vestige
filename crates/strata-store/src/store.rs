@@ -5,7 +5,7 @@
 //! is a derived index rebuilt by replay on open — proven bit-identical by
 //! [`StrataStore::state_digest`] across open/close/open cycles.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -44,14 +44,110 @@ struct StoreMeta {
     head_log_seq: u64,
 }
 
-/// The default pinned policy: allow writes, hold destructive actions.
+/// Domain separator for a RETIRE rule id. The prefix is not a hash of node
+/// content, ids, or names.
+const RETIRE_RULE_DOMAIN: &[u8] = b"strata.retire.v1\0";
+
+/// Named RETIRE rule: successor was admitted in this tool call.
+pub const RULE_EDIT: &str = "edit";
+/// Named RETIRE rule: suppression.
+pub const RULE_SUPPRESS: &str = "suppress";
+/// Named RETIRE rule: intention update.
+pub const RULE_INTENTIONS: &str = "intentions";
+/// Named RETIRE rule: purge. Also requires [`AdmissionContext::confirm`].
+pub const RULE_PURGE: &str = "purge";
+
+const NAMED_RETIRE_RULES: [&str; 4] = [RULE_EDIT, RULE_SUPPRESS, RULE_INTENTIONS, RULE_PURGE];
+
+/// What the caller claims about a RETIRE. The gate matches the rule id here,
+/// never node content or names.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AdmissionContext {
+    /// Exact rule id: `edit`, `suppress`, `intentions`, or `purge`.
+    pub rule_id: Option<String>,
+    /// Required for `purge`. Ignored by the other three rules.
+    pub confirm: bool,
+}
+
+/// Receipt for an admitted RETIRE. `receipt_id` is `eff-` plus the effect seq.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetireReceipt {
+    /// `eff-` + 16 lowercase hex digits of [`Self::effect_seq`].
+    pub receipt_id: String,
+    /// Named rule that authorized this RETIRE, when one did.
+    pub rule_id: Option<&'static str>,
+    /// Gate-space seq of the admitting [`EffectRecord`].
+    pub effect_seq: u64,
+}
+
+/// `eff-` + 16 lowercase hex digits of the admitting effect's gate seq.
+pub fn effect_receipt_id(effect_seq: u64) -> String {
+    format!("eff-{effect_seq:016x}")
+}
+
+/// blake3(domain || rule id). Admission copies this into `PROPOSE.params_hash`
+/// only after the context's rule id matches exactly.
+fn rule_id_hash(rule_id: &str) -> [u8; 32] {
+    let mut body = Vec::with_capacity(RETIRE_RULE_DOMAIN.len() + rule_id.len());
+    body.extend_from_slice(RETIRE_RULE_DOMAIN);
+    body.extend_from_slice(rule_id.as_bytes());
+    hash32(&body)
+}
+
+fn rule_id_prefix(rule_id: &str) -> [u8; 8] {
+    let hash = rule_id_hash(rule_id);
+    let mut prefix = [0u8; 8];
+    prefix.copy_from_slice(&hash[..8]);
+    prefix
+}
+
+/// Rule id encoded in `params_hash`, or `None` when it is not one of the four.
+pub fn retire_rule_id(params_hash: &[u8; 32]) -> Option<&'static str> {
+    NAMED_RETIRE_RULES
+        .into_iter()
+        .find(|id| params_hash[..8] == rule_id_prefix(id))
+}
+
+/// `edit` also needs the successor in this tool call. `purge` also needs
+/// `confirm`. Any other id, including a missing one, does not authorize.
+fn named_retire_rule(
+    rule_id: Option<&str>,
+    confirm: bool,
+    successor_in_call: bool,
+) -> Option<&'static str> {
+    match rule_id {
+        Some(RULE_EDIT) if successor_in_call => Some(RULE_EDIT),
+        Some(RULE_SUPPRESS) => Some(RULE_SUPPRESS),
+        Some(RULE_INTENTIONS) => Some(RULE_INTENTIONS),
+        Some(RULE_PURGE) if confirm => Some(RULE_PURGE),
+        _ => None,
+    }
+}
+
+fn retire_allow(rule_id: &str) -> Rule {
+    Rule {
+        match_kind: action_kind::RETIRE,
+        match_params_hash_prefix: rule_id_prefix(rule_id),
+        max_blast_radius: u32::MAX,
+        forbid_forgotten_lessons: false,
+        require_human: false,
+        verdict: Verdict::Allow,
+    }
+}
+
+/// The default pinned policy: four named RETIRE allows, then hold every
+/// other RETIRE, then allow anything else under a blast-radius cap.
 ///
-/// Rule 1 holds every `RETIRE` action (supersession); rule 2 allows anything
-/// else under a generous blast-radius cap. First match wins; empty policy =
-/// deny everything (useful for tests).
+/// First match wins. A named rule matches only when admission copied that
+/// rule id's hash into `params_hash` from [`AdmissionContext`]. Empty policy
+/// denies everything (useful for tests).
 pub fn default_policy() -> Policy {
     Policy {
         rules: vec![
+            retire_allow(RULE_EDIT),
+            retire_allow(RULE_SUPPRESS),
+            retire_allow(RULE_INTENTIONS),
+            retire_allow(RULE_PURGE),
             Rule {
                 match_kind: action_kind::RETIRE,
                 match_params_hash_prefix: WILDCARD_PREFIX,
@@ -130,6 +226,12 @@ pub struct StrataStore {
     checkpoints: Vec<Checkpoint>,
     /// Data frames that had no admitting effect in the log (ignored).
     orphan_writes: u64,
+    /// Tool call is open. `edit` may retire only a successor admitted here.
+    tool_call_open: bool,
+    /// Node ids admitted since [`StrataStore::begin_tool_call`].
+    call_admitted: BTreeSet<String>,
+    /// Admitting effect seq -> named rule, for RETIREs the context authorized.
+    retire_rules: BTreeMap<u64, &'static str>,
 }
 
 impl StrataStore {
@@ -163,6 +265,9 @@ impl StrataStore {
             review_events: Vec::new(),
             checkpoints: Vec::new(),
             orphan_writes: 0,
+            tool_call_open: false,
+            call_admitted: BTreeSet::new(),
+            retire_rules: BTreeMap::new(),
         };
         store.replay()?;
         store.verify_checkpoint_chain()?;
@@ -213,6 +318,11 @@ impl StrataStore {
                                     })
                                 });
                             if covering_propose && admitting_gate {
+                                if let Some(propose) = propose_at.get(&effect.propose_seq) {
+                                    if let Some(rule) = retire_rule_id(&propose.params_hash) {
+                                        self.retire_rules.insert(gseq, rule);
+                                    }
+                                }
                                 pending
                                     .entry(effect.payload_digest)
                                     .or_default()
@@ -317,14 +427,36 @@ impl StrataStore {
         action_kind_code: u8,
         context: Vec<u64>,
     ) -> Result<(u64, u64), StoreError> {
+        self.admit_write_with_params(op, action_kind_code, context, None)
+    }
+
+    /// `params_hash` overrides the default (the op hash) when a named RETIRE
+    /// rule authorized this admission. The override is the rule-id digest,
+    /// never a digest of node content.
+    fn admit_write_with_params(
+        &mut self,
+        op: StoreOp,
+        action_kind_code: u8,
+        context: Vec<u64>,
+        params_hash: Option<[u8; 32]>,
+    ) -> Result<(u64, u64), StoreError> {
+        let fresh_id = match &op {
+            StoreOp::UpsertNode { record }
+                if self.tool_call_open && !self.nodes.contains_key(&record.id) =>
+            {
+                Some(record.id.clone())
+            }
+            _ => None,
+        };
         let op_bytes = borsh_vec(&op)?;
         let action_hash = hash32(&op_bytes);
+        let params_hash = params_hash.unwrap_or(action_hash);
 
         let mut runtime = GateRuntime::new(self.gate_log.clone(), self.policy.clone());
         let propose = Propose {
             action_hash,
             action_kind: action_kind_code,
-            params_hash: action_hash,
+            params_hash,
             context,
         };
         let propose_ack = runtime.commit_propose(propose);
@@ -357,12 +489,18 @@ impl StrataStore {
         let effect_ack: SeqAck = runtime
             .commit_effect(effect)
             .map_err(|r| StoreError::Rejected(r.to_string()))?;
+        if let Some(rule) = retire_rule_id(&params_hash) {
+            self.retire_rules.insert(effect_ack.seq, rule);
+        }
 
         // The data frame lands only after an admitted effect cites its digest.
         let data_acks = self.log.append_batch(vec![(KIND_STORE_WRITE, op_bytes)])?;
         let data_seq = data_acks[0].seq;
 
         self.apply_op(&op, effect_ack.seq, data_seq)?;
+        if let Some(id) = fresh_id {
+            self.call_admitted.insert(id);
+        }
         Ok((effect_ack.seq, data_seq))
     }
 
@@ -531,11 +669,64 @@ impl StrataStore {
         }
     }
 
+    /// Open a tool call. `edit` may retire a node only when its successor was
+    /// admitted after this and before [`Self::end_tool_call`].
+    pub fn begin_tool_call(&mut self) {
+        self.tool_call_open = true;
+        self.call_admitted.clear();
+    }
+
+    /// Close the tool call and drop the successor set.
+    pub fn end_tool_call(&mut self) {
+        self.tool_call_open = false;
+        self.call_admitted.clear();
+    }
+
     /// Mark `id` as superseded by `superseded_by`.
     ///
-    /// Routed as a destructive `RETIRE` action: the default policy HOLDS it;
-    /// a review-gated (permissive) policy lands it.
+    /// Routed as a `RETIRE` with no rule id. The default policy holds it.
     pub fn supersede(&mut self, id: &str, superseded_by: &str) -> Result<(), StoreError> {
+        self.admit_supersede(id, superseded_by, &AdmissionContext::default())
+            .map(|_| ())
+    }
+
+    /// RETIRE `id` in favor of `superseded_by` when `ctx` carries a named rule.
+    ///
+    /// The default policy allows exactly `edit` (successor admitted in this
+    /// tool call), `suppress`, `intentions`, and `purge` (`confirm` set).
+    /// Every other RETIRE is held. An allowed RETIRE returns an `eff-`
+    /// receipt naming the rule.
+    pub fn retire(
+        &mut self,
+        id: &str,
+        superseded_by: &str,
+        ctx: &AdmissionContext,
+    ) -> Result<RetireReceipt, StoreError> {
+        let (seq, rule_id) = self.admit_supersede(id, superseded_by, ctx)?;
+        Ok(RetireReceipt {
+            receipt_id: effect_receipt_id(seq),
+            rule_id,
+            effect_seq: seq,
+        })
+    }
+
+    /// Receipt for an allowed RETIRE, including one rebuilt by replay.
+    pub fn retire_receipt(&self, effect_seq: u64) -> Option<RetireReceipt> {
+        self.retire_rules
+            .get(&effect_seq)
+            .map(|rule| RetireReceipt {
+                receipt_id: effect_receipt_id(effect_seq),
+                rule_id: Some(*rule),
+                effect_seq,
+            })
+    }
+
+    fn admit_supersede(
+        &mut self,
+        id: &str,
+        superseded_by: &str,
+        ctx: &AdmissionContext,
+    ) -> Result<(u64, Option<&'static str>), StoreError> {
         self.require_node(id)?;
         self.require_node(superseded_by)?;
         if id == superseded_by {
@@ -548,16 +739,20 @@ impl StrataStore {
                 "node {id} is already superseded"
             )));
         }
+        let successor_in_call = self.call_admitted.contains(superseded_by);
+        let rule = named_retire_rule(ctx.rule_id.as_deref(), ctx.confirm, successor_in_call);
+        let params = rule.map(rule_id_hash);
         let context = self.context_for(&[id, superseded_by]);
-        self.admit_write(
+        let (effect_seq, _) = self.admit_write_with_params(
             StoreOp::SupersedeNode {
                 id: id.to_string(),
                 superseded_by: superseded_by.to_string(),
             },
             action_kind::RETIRE,
             context,
+            params,
         )?;
-        Ok(())
+        Ok((effect_seq, rule))
     }
 
     /// All (superseded, superseder) pairs, ordered by superseded id.
