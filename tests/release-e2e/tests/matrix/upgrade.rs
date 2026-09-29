@@ -266,6 +266,135 @@ fn cli_first_launch_upgrades_v3() {
     }
 }
 
+/// A real v3.1.1 binary, the official GitHub release asset, must reopen the
+/// original `vestige.db` after 4.0 has auto-upgraded that data dir and written
+/// a new memory. 4.0 leaves the sqlite family byte-identical. v3.1.1 stats
+/// lists the pre-upgrade count, and the 4.0 memory is absent from those rows.
+#[test]
+fn v311_reopens_untouched_db_after_upgrade() {
+    let work = tempfile::tempdir().unwrap();
+    let src = work.path().join("v3");
+    copy_tree(&fixture("fresh-v38-ckpt"), &src);
+    let db = src.join("vestige.db");
+    let before = sqlite_family_hashes(&src);
+    let contents_before = sqlite_text(&db, "SELECT id, content FROM knowledge_nodes ORDER BY id");
+    let pre_count = contents_before.len();
+    assert!(pre_count > 0, "fixture has no memories");
+    let marker = "release-matrix-v311-reopen-only-9f3c2a";
+    assert!(
+        sqlite_text(
+            &db,
+            "SELECT COUNT(*) FROM knowledge_nodes WHERE content LIKE '%release-matrix-v311-reopen-only-9f3c2a%'",
+        )[0][0]
+            == "0",
+        "fixture already contains the 4.0 marker"
+    );
+
+    let home = tempfile::tempdir().unwrap();
+    let stats = run_vestige(
+        &[
+            "--data-dir".into(),
+            src.display().to_string(),
+            "stats".into(),
+        ],
+        home.path(),
+        Duration::from_secs(180),
+    );
+    assert_eq!(
+        before,
+        sqlite_family_hashes(&src),
+        "4.0 first launch changed the v3 sqlite family"
+    );
+    let stats_blob = format!("{}{}", stats.stdout, stats.stderr);
+    if stats.status != Some(0) || v3_refusal(&stats_blob) {
+        panic!(
+            "FAIL: 4.0 did not auto-upgrade the v3.1.1 store on first launch, so the reopen check cannot run. exit {:?} output: {}",
+            stats.status,
+            stats_blob.chars().take(800).collect::<String>()
+        );
+    }
+
+    let home = tempfile::tempdir().unwrap();
+    let ingest = run_vestige(
+        &[
+            "--data-dir".into(),
+            src.display().to_string(),
+            "ingest".into(),
+            marker.into(),
+        ],
+        home.path(),
+        Duration::from_secs(180),
+    );
+    let ingest_blob = format!("{}{}", ingest.stdout, ingest.stderr);
+    assert_eq!(
+        before,
+        sqlite_family_hashes(&src),
+        "4.0 ingest changed the v3 sqlite family"
+    );
+    if ingest.status != Some(0) || !log_contains_marker(&src, marker) {
+        panic!(
+            "FAIL: 4.0 did not record the new memory in the strata log, so a v3 miss would be vacuous. exit {:?} output: {}",
+            ingest.status,
+            ingest_blob.chars().take(800).collect::<String>()
+        );
+    }
+
+    // The digest gate is here, before the v3.1.1 process. That binary's own
+    // `stats` rewrites sqlite bookkeeping on a read of an unmodified file
+    // (header change counter and later pages, same file length), so a digest
+    // taken after it starts is not the 4.0 contract.
+    assert_eq!(
+        before,
+        sqlite_family_hashes(&src),
+        "4.0 left a different vestige.db than the one v3.1.1 is about to open"
+    );
+    let v311 = fetch_v311_vestige(&work.path().join("v311-release"));
+    let home = tempfile::tempdir().unwrap();
+    let reopened = run_cmd(
+        &v311,
+        &[
+            "--data-dir".into(),
+            src.display().to_string(),
+            "stats".into(),
+        ],
+        &[("HOME", home.path().to_str().unwrap())],
+        &["VESTIGE_DATA_DIR"],
+        Duration::from_secs(60),
+    );
+    let blob = format!("{}{}", reopened.stdout, reopened.stderr);
+    assert_eq!(
+        reopened.status,
+        Some(0),
+        "v3.1.1 did not start against the untouched vestige.db: {}",
+        blob.chars().take(800).collect::<String>()
+    );
+    let listed = stats_memory_count(&blob).unwrap_or_else(|| {
+        panic!(
+            "v3.1.1 stats did not list a memory count: {}",
+            blob.chars().take(800).collect::<String>()
+        )
+    });
+    assert_eq!(
+        listed,
+        pre_count,
+        "v3.1.1 stats listed {listed} memories, the pre-upgrade store has {pre_count}: {}",
+        blob.chars().take(500).collect::<String>()
+    );
+    assert!(
+        !blob.contains(marker),
+        "v3.1.1 stats showed the memory written under 4.0"
+    );
+    let contents_after = sqlite_text(&db, "SELECT id, content FROM knowledge_nodes ORDER BY id");
+    assert_eq!(
+        contents_before, contents_after,
+        "vestige.db rows changed; the memory written under 4.0 must stay absent"
+    );
+    assert!(
+        contents_after.iter().all(|row| row[1] != marker),
+        "the memory written under 4.0 is in vestige.db"
+    );
+}
+
 /// Mirror of [`cli_first_launch_upgrades_v3`]. A corrupted v3.1.1 store run
 /// through the same CLI read must leave the v3 file byte-identical and exit
 /// with a message that names the v3.1.1 release. The v3 refusal is not that
@@ -1079,6 +1208,183 @@ fn assert_killed_import_left_no_dest(killed: &KilledImport) {
             killed.staging.display()
         );
     }
+}
+
+struct V311Asset {
+    archive: &'static str,
+    sha256: &'static str,
+}
+
+/// Official `samvallad33/vestige` v3.1.1 release assets. The pin is the
+/// GitHub release digest, not an npm tarball.
+fn v311_release_asset() -> Option<V311Asset> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Some(V311Asset {
+            archive: "vestige-mcp-x86_64-unknown-linux-gnu.tar.gz",
+            sha256: "6b698908cb33b1827d6a75715c7b7c949dae0dc190fc8719114bac24d9e21991",
+        }),
+        ("macos", "aarch64") => Some(V311Asset {
+            archive: "vestige-mcp-aarch64-apple-darwin.tar.gz",
+            sha256: "d63f57c54e1d0f854b5411c7953d203e79118c300e03363c2cb6d69972ee307a",
+        }),
+        ("macos", "x86_64") => Some(V311Asset {
+            archive: "vestige-mcp-x86_64-apple-darwin.tar.gz",
+            sha256: "c78ba5f0ec8f142497a09c310e6c9d728f6ccfad213b3d9df60f678245d6f885",
+        }),
+        ("windows", "x86_64") => Some(V311Asset {
+            archive: "vestige-mcp-x86_64-pc-windows-msvc.zip",
+            sha256: "6a2c258f318be8a5d1211ec90e3a1208e7f5fd9a652f3ac1486a9822e607d7dc",
+        }),
+        _ => None,
+    }
+}
+
+fn skip_release_asset(why: &str) -> ! {
+    panic!("SKIP: {why}");
+}
+
+fn sqlite_family_hashes(dir: &std::path::Path) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for name in ["vestige.db", "vestige.db-wal", "vestige.db-shm"] {
+        let path = dir.join(name);
+        if path.is_file() {
+            out.push((name.to_string(), sha256_file(&path)));
+        }
+    }
+    assert!(
+        out.iter().any(|(name, _)| name == "vestige.db"),
+        "data dir has no vestige.db"
+    );
+    out
+}
+
+fn log_contains_marker(data_dir: &std::path::Path, marker: &str) -> bool {
+    let needle = marker.as_bytes();
+    seg_files(&data_dir.join("log")).into_iter().any(|path| {
+        fs::read(&path)
+            .map(|bytes| bytes.windows(needle.len()).any(|window| window == needle))
+            .unwrap_or(false)
+    })
+}
+
+fn stats_memory_count(blob: &str) -> Option<usize> {
+    let plain = strip_ansi(blob);
+    for line in plain.lines() {
+        let Some(rest) = line.split("Total Memories").nth(1) else {
+            continue;
+        };
+        let digits: String = rest
+            .chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if !digits.is_empty() {
+            return digits.parse().ok();
+        }
+    }
+    None
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn fetch_v311_vestige(dest: &std::path::Path) -> std::path::PathBuf {
+    let Some(asset) = v311_release_asset() else {
+        skip_release_asset(&format!(
+            "no official v3.1.1 GitHub release asset for {}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ));
+    };
+    fs::create_dir_all(dest).unwrap();
+    let archive = dest.join(asset.archive);
+    let url = format!(
+        "https://github.com/samvallad33/vestige/releases/download/v3.1.1/{}",
+        asset.archive
+    );
+    let fetched = Command::new("curl")
+        .args(["-fsSL", "--retry", "3", "--retry-delay", "2", "-o"])
+        .arg(&archive)
+        .arg(&url)
+        .output();
+    let fetched = match fetched {
+        Ok(output) => output,
+        Err(err) => skip_release_asset(&format!("could not run curl to download {url}: {err}")),
+    };
+    if !fetched.status.success() {
+        let err = String::from_utf8_lossy(&fetched.stderr);
+        skip_release_asset(&format!(
+            "could not download the official v3.1.1 asset {url}: {}",
+            err.chars().take(400).collect::<String>()
+        ));
+    }
+    let got = sha256_file(&archive);
+    assert_eq!(
+        got, asset.sha256,
+        "official v3.1.1 asset {} sha256 {got} != pinned {}",
+        asset.archive, asset.sha256
+    );
+    let extracted = dest.join("extract");
+    fs::create_dir_all(&extracted).unwrap();
+    let mut tar = Command::new("tar");
+    if asset.archive.ends_with(".zip") {
+        tar.arg("-xf");
+    } else {
+        tar.arg("-xzf");
+    }
+    let status = tar
+        .arg(&archive)
+        .arg("-C")
+        .arg(&extracted)
+        .status()
+        .unwrap_or_else(|err| panic!("HARNESS: tar failed: {err}"));
+    assert!(status.success(), "could not extract {}", asset.archive);
+    let binary_name = if cfg!(windows) {
+        "vestige.exe"
+    } else {
+        "vestige"
+    };
+    find_file_named(&extracted, binary_name).unwrap_or_else(|| {
+        panic!(
+            "HARNESS: {binary_name} is missing from the official v3.1.1 asset {}",
+            asset.archive
+        )
+    })
+}
+
+fn find_file_named(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.file_name().and_then(|n| n.to_str()) == Some(name) {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 fn inflate_nodes(db: &std::path::Path, extra: usize) {
