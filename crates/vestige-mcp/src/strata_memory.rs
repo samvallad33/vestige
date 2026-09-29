@@ -14,15 +14,15 @@ use serde_json::{Value, json};
 use strata_store::VALID_FOREVER_MS;
 use vestige_core::storage::{
     CompositionEventRecord, ConnectionRecord as VestigeEdge, ConsolidationHistoryRecord,
-    CoverageSnapshot, HandleKind, HandleResolution, HealthStatus, HygieneNodeSummary,
-    HygieneSnapshot, MemoryEdge, MemoryRecord, MemoryStoreError, MemoryStoreResult,
-    MemoryStoreSend, ModelSignature, NeverComposedCandidate, ReceiptAttestationStatus,
-    SchedulingState, SearchQuery, StateTransitionRecord, Storage, StorageError, StoreStats,
-    WalCheckpointMode, WalCheckpointStatus, HANDLE_REQUIRED_DETAIL, MAX_CANDIDATES,
+    CoverageSnapshot, HANDLE_REQUIRED_DETAIL, HandleKind, HandleResolution, HealthStatus,
+    HygieneNodeSummary, HygieneSnapshot, MAX_CANDIDATES, MemoryEdge, MemoryRecord,
+    MemoryStoreError, MemoryStoreResult, MemoryStoreSend, ModelSignature, NeverComposedCandidate,
+    ReceiptAttestationStatus, SchedulingState, SearchQuery, StateTransitionRecord, Storage,
+    StorageError, StoreStats, WalCheckpointMode, WalCheckpointStatus,
 };
 use vestige_core::{
-    scan_secrets, ConsolidationResult, DecayRisk, IngestInput, KnowledgeNode, MemoryStats, Receipt,
-    SecretPolicy,
+    ConsolidationResult, DecayRisk, IngestInput, KnowledgeNode, MemoryStats, Receipt, SecretPolicy,
+    scan_secrets,
 };
 
 const Q32_SCALE: f64 = 4294967296.0;
@@ -43,7 +43,15 @@ pub struct StrataMemory {
     log_dir: PathBuf,
     store: Mutex<strata_store::StrataStore>,
     actor: Mutex<Option<String>>,
+    /// Serializes the merge-policy record. The log has no config op; this
+    /// file sits beside the segments so backup and reopen keep it.
+    policy_io: Mutex<()>,
 }
+
+/// Sibling of the segment files. `backup_to` copies every non-lock file in
+/// the log directory, and the segment scanner ignores anything that is not
+/// `*.seg`, so this record is durable without a new `StoreOp` or frame kind.
+const MERGE_POLICY_FILE: &str = "merge-policy.json";
 
 impl StrataMemory {
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, StorageError> {
@@ -55,6 +63,7 @@ impl StrataMemory {
             data_dir,
             store: Mutex::new(store),
             actor: Mutex::new(None),
+            policy_io: Mutex::new(()),
         })
     }
 
@@ -62,6 +71,63 @@ impl StrataMemory {
         self.store
             .lock()
             .unwrap_or_else(|err| panic!("strata memory lock poisoned: {err}"))
+    }
+
+    fn policy_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.policy_io
+            .lock()
+            .unwrap_or_else(|err| panic!("strata merge policy lock poisoned: {err}"))
+    }
+
+    fn policy_path(&self) -> PathBuf {
+        self.log_dir.join(MERGE_POLICY_FILE)
+    }
+
+    /// Each key is independent, matching `fsrs_config` row reads. A missing
+    /// file is "unset", not an error.
+    fn read_merge_policy_record(&self) -> Result<StoredMergePolicy, StorageError> {
+        let path = self.policy_path();
+        if !path.exists() {
+            return Ok(StoredMergePolicy::default());
+        }
+        let bytes = std::fs::read(&path)?;
+        let value: Value = serde_json::from_slice(&bytes).map_err(|err| {
+            StorageError::Init(format!("merge policy record is unreadable: {err}"))
+        })?;
+        let obj = value
+            .as_object()
+            .ok_or_else(|| StorageError::Init("merge policy record must be an object".into()))?;
+        let number = |key: &str| -> Result<Option<f64>, StorageError> {
+            match obj.get(key) {
+                None | Some(Value::Null) => Ok(None),
+                Some(value) => value.as_f64().map(Some).ok_or_else(|| {
+                    StorageError::Init(format!("merge policy field {key} must be a number"))
+                }),
+            }
+        };
+        Ok(StoredMergePolicy {
+            match_threshold: number("merge_match_threshold")?,
+            possible_threshold: number("merge_possible_threshold")?,
+            auto_apply: number("merge_auto_apply")?,
+        })
+    }
+
+    fn write_merge_policy_record(
+        &self,
+        policy: &vestige_core::MergePolicy,
+    ) -> Result<(), StorageError> {
+        let body = json!({
+            "merge_match_threshold": f64::from(policy.match_threshold),
+            "merge_possible_threshold": f64::from(policy.possible_threshold),
+            "merge_auto_apply": if policy.auto_apply { 1.0 } else { 0.0 },
+        });
+        let bytes = serde_json::to_vec(&body)
+            .map_err(|err| StorageError::Init(format!("merge policy record: {err}")))?;
+        let tmp = self.log_dir.join(format!("{MERGE_POLICY_FILE}.tmp"));
+        let path = self.policy_path();
+        std::fs::write(&tmp, &bytes)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
     }
 
     fn nodes(&self) -> Vec<strata_store::NodeRecord> {
@@ -101,6 +167,48 @@ fn sim_async(op: &str) -> MemoryStoreError {
 
 fn pending_async(op: &str) -> MemoryStoreError {
     MemoryStoreError::Init(pending(op).to_string())
+}
+
+/// One persisted policy row. Absent fields fall through to env, then defaults.
+#[derive(Default)]
+struct StoredMergePolicy {
+    match_threshold: Option<f64>,
+    possible_threshold: Option<f64>,
+    auto_apply: Option<f64>,
+}
+
+/// Fellegi-Sunter thresholds exactly as the SQLite policy reader resolves
+/// them: stored value, then env, then the built-in default. Classification
+/// rules stay in [`vestige_core::MergePolicy::new`].
+fn resolve_merge_policy(stored: StoredMergePolicy) -> vestige_core::MergePolicy {
+    let default = vestige_core::MergePolicy::default();
+    let env_f32 = |name: &str, fallback: f32| -> f32 {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(fallback)
+    };
+    let match_threshold = stored
+        .match_threshold
+        .map(|value| value as f32)
+        .unwrap_or_else(|| env_f32("VESTIGE_MERGE_MATCH_THRESHOLD", default.match_threshold));
+    let possible_threshold = stored
+        .possible_threshold
+        .map(|value| value as f32)
+        .unwrap_or_else(|| {
+            env_f32(
+                "VESTIGE_MERGE_POSSIBLE_THRESHOLD",
+                default.possible_threshold,
+            )
+        });
+    let auto_apply = match stored.auto_apply {
+        Some(value) => value != 0.0,
+        None => std::env::var("VESTIGE_MERGE_AUTO_APPLY")
+            .ok()
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(default.auto_apply),
+    };
+    vestige_core::MergePolicy::new(match_threshold, possible_threshold, auto_apply)
 }
 
 fn is_mem_id(id: &str) -> bool {
@@ -150,9 +258,16 @@ fn to_store_input(input: &IngestInput) -> strata_store::IngestInput {
     }
 }
 
-fn project_node(store: &strata_store::StrataStore, record: &strata_store::NodeRecord) -> KnowledgeNode {
+fn project_node(
+    store: &strata_store::StrataStore,
+    record: &strata_store::NodeRecord,
+) -> KnowledgeNode {
     let card = store.card_state(&record.id);
-    let retrieval = store.retrievability(&record.id).ok().flatten().unwrap_or(0.0);
+    let retrieval = store
+        .retrievability(&record.id)
+        .ok()
+        .flatten()
+        .unwrap_or(0.0);
     let mut node = KnowledgeNode::default();
     node.id = record.id.clone();
     node.content = record.content.clone();
@@ -162,7 +277,8 @@ fn project_node(store: &strata_store::StrataStore, record: &strata_store::NodeRe
     node.last_accessed = node.created_at;
     node.tags = record.tags.clone();
     node.valid_from = Some(ms_to_dt(record.valid_from_ms));
-    node.valid_until = (record.valid_until_ms != VALID_FOREVER_MS).then(|| ms_to_dt(record.valid_until_ms));
+    node.valid_until =
+        (record.valid_until_ms != VALID_FOREVER_MS).then(|| ms_to_dt(record.valid_until_ms));
     // Kernel retrievability is the only strength the log can justify.
     node.stability = card.as_ref().map(|c| q32(c.stability_q)).unwrap_or(0.0);
     node.difficulty = card.as_ref().map(|c| q32(c.difficulty_q)).unwrap_or(0.0);
@@ -328,11 +444,7 @@ impl MemoryStoreSend for StrataMemory {
         Err(pending_async("get_edges"))
     }
 
-    async fn remove_edge(
-        &self,
-        _source: uuid::Uuid,
-        _target: uuid::Uuid,
-    ) -> MemoryStoreResult<()> {
+    async fn remove_edge(&self, _source: uuid::Uuid, _target: uuid::Uuid) -> MemoryStoreResult<()> {
         Err(pending_async("remove_edge"))
     }
 
@@ -413,7 +525,8 @@ impl MemoryStoreSend for StrataMemory {
         *self
             .actor
             .lock()
-            .unwrap_or_else(|err| panic!("strata actor lock poisoned: {err}")) = Some(did.to_string());
+            .unwrap_or_else(|err| panic!("strata actor lock poisoned: {err}")) =
+            Some(did.to_string());
         Ok(())
     }
 
@@ -425,7 +538,12 @@ impl MemoryStoreSend for StrataMemory {
 
     fn resolve_handle(&self, query: &str) -> HandleResolution {
         let query = query.trim();
-        let ids: Vec<String> = self.lock().origins().into_iter().map(|(id, _)| id).collect();
+        let ids: Vec<String> = self
+            .lock()
+            .origins()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
         if query.is_empty() {
             return HandleResolution {
                 kind: HandleKind::Unknown,
@@ -497,7 +615,10 @@ impl MemoryStoreSend for StrataMemory {
         self.lock().backup_to(path).map_err(map_store)
     }
 
-    fn checkpoint_wal(&self, _mode: WalCheckpointMode) -> Result<WalCheckpointStatus, StorageError> {
+    fn checkpoint_wal(
+        &self,
+        _mode: WalCheckpointMode,
+    ) -> Result<WalCheckpointStatus, StorageError> {
         Ok(WalCheckpointStatus {
             busy: 0,
             log_frames: 0,
@@ -518,7 +639,11 @@ impl MemoryStoreSend for StrataMemory {
     }
 
     fn ingest(&self, input: IngestInput) -> Result<KnowledgeNode, StorageError> {
-        self.ingest_in_scope_with_secret_policy(input, vestige_core::DEFAULT_MEMORY_SCOPE, SecretPolicy::Reject)
+        self.ingest_in_scope_with_secret_policy(
+            input,
+            vestige_core::DEFAULT_MEMORY_SCOPE,
+            SecretPolicy::Reject,
+        )
     }
 
     fn ingest_in_scope(
@@ -564,7 +689,10 @@ impl MemoryStoreSend for StrataMemory {
 
     fn get_node(&self, id: &str) -> Result<Option<KnowledgeNode>, StorageError> {
         let store = self.lock();
-        Ok(store.get_node(id).as_ref().map(|record| project_node(&store, record)))
+        Ok(store
+            .get_node(id)
+            .as_ref()
+            .map(|record| project_node(&store, record)))
     }
 
     fn get_all_nodes(&self, limit: i32, offset: i32) -> Result<Vec<KnowledgeNode>, StorageError> {
@@ -626,7 +754,13 @@ impl MemoryStoreSend for StrataMemory {
         let nodes = store.nodes();
         let strengths: Vec<f64> = nodes
             .iter()
-            .map(|record| store.retrievability(&record.id).ok().flatten().unwrap_or(0.0))
+            .map(|record| {
+                store
+                    .retrievability(&record.id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(0.0)
+            })
             .collect();
         let total = strengths.len() as i64;
         let average = if strengths.is_empty() {
@@ -781,8 +915,10 @@ impl MemoryStoreSend for StrataMemory {
     fn code_anchors_for_nodes(
         &self,
         _node_ids: &[String],
-    ) -> Result<std::collections::HashMap<String, Vec<vestige_core::codebase::CodeAnchor>>, StorageError>
-    {
+    ) -> Result<
+        std::collections::HashMap<String, Vec<vestige_core::codebase::CodeAnchor>>,
+        StorageError,
+    > {
         // Anchors are not admitted on this log, so the recorded set is empty.
         Ok(std::collections::HashMap::new())
     }
@@ -977,7 +1113,11 @@ impl MemoryStoreSend for StrataMemory {
         tag_filter: Option<&[String]>,
         scope: Option<&str>,
     ) -> Result<Vec<NeverComposedCandidate>, StorageError> {
-        self.never_composed(scope.or(Some(vestige_core::DEFAULT_MEMORY_SCOPE)), limit, tag_filter)
+        self.never_composed(
+            scope.or(Some(vestige_core::DEFAULT_MEMORY_SCOPE)),
+            limit,
+            tag_filter,
+        )
     }
 
     fn get_recent_composition_events(
@@ -1014,7 +1154,9 @@ impl MemoryStoreSend for StrataMemory {
                     && node_type.is_none_or(|kind| record.node_type == kind)
                     && tags.is_none_or(|tags| {
                         tags.is_empty()
-                            || tags.iter().any(|tag| record.tags.iter().any(|stored| stored == tag))
+                            || tags
+                                .iter()
+                                .any(|tag| record.tags.iter().any(|stored| stored == tag))
                     })
             })
             .map(|record| project_node(&store, record))
@@ -1175,6 +1317,21 @@ impl MemoryStoreSend for StrataMemory {
     fn update_node_content(&self, _id: &str, _new_content: &str) -> Result<(), StorageError> {
         Err(pending("update_node_content"))
     }
+
+    /// Same resolution order as the SQLite `fsrs_config` policy: a stored
+    /// number wins, then `VESTIGE_MERGE_*`, then [`MergePolicy::default`].
+    /// [`MergePolicy::new`] still clamps. No nomination or scoring change.
+    fn get_merge_policy(&self) -> Result<vestige_core::MergePolicy, StorageError> {
+        let _guard = self.policy_lock();
+        Ok(resolve_merge_policy(self.read_merge_policy_record()?))
+    }
+
+    /// Persist the three policy numbers. The caller (the `dedup` policy
+    /// action) already built them with [`MergePolicy::new`].
+    fn set_merge_policy(&self, policy: vestige_core::MergePolicy) -> Result<(), StorageError> {
+        let _guard = self.policy_lock();
+        self.write_merge_policy_record(&policy)
+    }
 }
 
 impl StrataMemory {
@@ -1224,7 +1381,10 @@ impl StrataMemory {
             };
             if let Some(tags) = tag_filter.filter(|tags| !tags.is_empty()) {
                 let has = |record: &strata_store::NodeRecord| {
-                    record.tags.iter().any(|tag| tags.iter().any(|want| want == tag))
+                    record
+                        .tags
+                        .iter()
+                        .any(|tag| tags.iter().any(|want| want == tag))
                 };
                 if !has(a) || !has(b) {
                     continue;
@@ -1258,7 +1418,10 @@ impl StrataMemory {
     }
 }
 
-fn lookup_origin(store: &strata_store::StrataStore, receipt_or_node: &str) -> Option<(String, u64)> {
+fn lookup_origin(
+    store: &strata_store::StrataStore,
+    receipt_or_node: &str,
+) -> Option<(String, u64)> {
     if let Some(seq) = parse_receipt_seq(receipt_or_node) {
         return store
             .origins()
@@ -1330,5 +1493,44 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("similarity_disabled"), "{err}");
+    }
+
+    #[test]
+    fn merge_policy_roundtrip_survives_reopen_and_backup_without_sqlite() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let first = StrataMemory::open(dir.path()).unwrap();
+        let defaults = first.get_merge_policy().unwrap();
+        let builtin = vestige_core::MergePolicy::default();
+        assert!((defaults.match_threshold - builtin.match_threshold).abs() < 1e-6);
+        assert!((defaults.possible_threshold - builtin.possible_threshold).abs() < 1e-6);
+        assert_eq!(defaults.auto_apply, builtin.auto_apply);
+        assert_eq!(first.lock().node_count(), 0);
+
+        let saved = vestige_core::MergePolicy::new(0.91, 0.4, true);
+        first.set_merge_policy(saved).unwrap();
+        assert_eq!(first.lock().node_count(), 0, "policy is not a memory");
+        let live = first.get_merge_policy().unwrap();
+        assert!((live.match_threshold - 0.91).abs() < 1e-6);
+        assert!((live.possible_threshold - 0.4).abs() < 1e-6);
+        assert!(live.auto_apply);
+
+        let backup = tempfile::TempDir::new().unwrap();
+        first.lock().backup_to(backup.path()).unwrap();
+        drop(first);
+
+        let reopened = StrataMemory::open(dir.path()).unwrap();
+        let again = reopened.get_merge_policy().unwrap();
+        assert!((again.match_threshold - 0.91).abs() < 1e-6);
+        assert!((again.possible_threshold - 0.4).abs() < 1e-6);
+        assert!(again.auto_apply);
+        assert!(no_sqlite(dir.path()));
+
+        let restored = StrataMemory::open(backup.path()).unwrap();
+        let from_backup = restored.get_merge_policy().unwrap();
+        assert!((from_backup.match_threshold - 0.91).abs() < 1e-6);
+        assert!((from_backup.possible_threshold - 0.4).abs() < 1e-6);
+        assert!(from_backup.auto_apply);
+        assert_eq!(restored.lock().node_count(), 0);
+        assert!(no_sqlite(backup.path()));
     }
 }

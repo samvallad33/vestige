@@ -1611,4 +1611,110 @@ mod tests {
         assert_eq!(first["params"]["data"]["n"], 1);
         assert_eq!(second["params"]["data"]["n"], 2);
     }
+
+    /// `dedup` action `policy` over the real stdio loop. The result is a
+    /// finished modern call (`resultType: complete`, `isError: false`) with
+    /// the stored thresholds, not `pending_strata` / `not implemented`.
+    #[tokio::test]
+    async fn dedup_policy_over_stdio_returns_a_completed_result() {
+        let (server, _dir) = test_server();
+        let (mut client_w, server_r) = tokio::io::duplex(1 << 16);
+        let (server_w, client_r) = tokio::io::duplex(1 << 20);
+        let handle =
+            tokio::spawn(
+                async move { run_io(server, None, BufReader::new(server_r), server_w).await },
+            );
+
+        let mut reader = BufReader::new(client_r);
+        let call = |id: i64, arguments: Value| {
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientInfo": { "name": "policy-stdio", "version": "1" },
+                        "io.modelcontextprotocol/clientCapabilities": {}
+                    },
+                    "name": "dedup",
+                    "arguments": arguments
+                }
+            })
+            .to_string()
+                + "\n"
+        };
+
+        client_w
+            .write_all(call(1, json!({ "action": "policy" })).as_bytes())
+            .await
+            .unwrap();
+        let got = read_one(&mut reader).await;
+        let body = completed_policy(&got);
+        let defaults = vestige_core::MergePolicy::default();
+        assert!(
+            (body["matchThreshold"].as_f64().unwrap() - f64::from(defaults.match_threshold)).abs()
+                < 1e-5
+        );
+        assert!(
+            (body["possibleThreshold"].as_f64().unwrap() - f64::from(defaults.possible_threshold))
+                .abs()
+                < 1e-5
+        );
+        assert_eq!(body["autoApply"], json!(defaults.auto_apply));
+        assert_eq!(
+            body["note"],
+            "Two-threshold merge policy. Pass match_threshold / possible_threshold / auto_apply to change it."
+        );
+
+        client_w
+            .write_all(
+                call(
+                    2,
+                    json!({
+                        "action": "policy",
+                        "match_threshold": 0.91,
+                        "possible_threshold": 0.4,
+                        "auto_apply": true
+                    }),
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let updated = read_one(&mut reader).await;
+        let saved = completed_policy(&updated);
+        assert_eq!(saved["updated"], json!(true));
+        assert!((saved["matchThreshold"].as_f64().unwrap() - 0.91).abs() < 1e-5);
+        assert!((saved["possibleThreshold"].as_f64().unwrap() - 0.4).abs() < 1e-5);
+        assert_eq!(saved["autoApply"], json!(true));
+
+        client_w
+            .write_all(call(3, json!({ "action": "policy" })).as_bytes())
+            .await
+            .unwrap();
+        let again = read_one(&mut reader).await;
+        let reread = completed_policy(&again);
+        assert!((reread["matchThreshold"].as_f64().unwrap() - 0.91).abs() < 1e-5);
+        assert!((reread["possibleThreshold"].as_f64().unwrap() - 0.4).abs() < 1e-5);
+        assert_eq!(reread["autoApply"], json!(true));
+        assert!(
+            reread.get("updated").is_none(),
+            "a get is not an update: {again}"
+        );
+
+        drop(client_w);
+        let _ = tokio::time::timeout(Duration::from_secs(10), handle).await;
+    }
+
+    fn completed_policy(response: &Value) -> &Value {
+        assert!(response.get("error").is_none(), "{response}");
+        let result = &response["result"];
+        assert_eq!(result["resultType"], json!("complete"), "{response}");
+        assert_eq!(result["isError"], json!(false), "{response}");
+        let text = result["content"][0]["text"].as_str().unwrap_or("");
+        assert!(!text.contains("pending_strata"), "{text}");
+        assert!(!text.contains("not implemented"), "{text}");
+        &result["structuredContent"]
+    }
 }
