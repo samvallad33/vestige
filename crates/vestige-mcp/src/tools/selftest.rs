@@ -1,26 +1,9 @@
-//! `selftest` MCP tool — planted-cause self-calibration.
+//! `selftest` MCP tool.
 //!
-//! End-to-end check that the retroactive backfill actually reaches the quiet
-//! cause a similarity search never surfaces. The flow NEVER touches the live
-//! store:
-//!
-//! 1. `backup_to` the live store into a fresh tempdir (the same consistent
-//!    `VACUUM INTO` snapshot `vestige backup` uses — read-only on the source).
-//! 2. Open the copy as a second `Storage`.
-//! 3. Five rounds: plant a synthetic quiet cause (distinctive env-shaped
-//!    `PLANTED_CAUSE_<k>` anchor + a file path, backdated 5 days via
-//!    `set_created_at`) in an isolated `selftest-round-<k>` scope, ingest a
-//!    synthetic failure sharing EXACTLY that one anchor, then run the real
-//!    `tools::backfill::execute` against the COPY (`failure_id` + `manual=true`,
-//!    preview) and score hit@1 / hit@3.
-//! 4. A 6th round shares NO anchor: the backfill must fire its gap report and
-//!    name the missing anchor (`planted_cause_6`) — the calibration metric
-//!    that says "when the trail breaks, the tool says so instead of guessing".
-//! 5. Delete the temp store.
-//!
-//! Deterministic by construction: each round lives in its own scope, the
-//! only in-window candidate is the planted cause, ages are exact (5.0 days),
-//! and every round runs as a preview (no graph or FSRS writes at all).
+//! On a Strata log this plants a synthetic chain in a temp store, walks
+//! recorded `derived_from` edges backward from the symptom, and reports
+//! pass/fail per check. The user store is only read. The legacy SQLite path
+//! below still scores planted causes through backfill.
 
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -30,7 +13,7 @@ use vestige_core::{IngestInput, Storage};
 pub fn schema() -> Value {
     json!({
         "type": "object",
-        "description": "Planted-cause selftest on a temp copy; read-only.",
+        "description": "Plant a synthetic causal chain in a temp store and score a bounded backward walk over recorded edges. Does not write the user store.",
         "properties": {}
     })
 }
@@ -110,12 +93,266 @@ async fn run_backfill(
     .await
 }
 
+/// Recorded cause→effect edge. Backward walks follow `target → source`.
+const CAUSAL_LINK: &str = "derived_from";
+/// Hop cap. The planted chain is ancestor → cause → intermediate → symptom;
+/// a bound of 2 stops on the cause and leaves the ancestor out.
+const WALK_BOUND: usize = 2;
+
+struct Planted {
+    ancestor: String,
+    cause: String,
+    intermediate: String,
+    symptom: String,
+    noise_a: String,
+    noise_b: String,
+    noise_c: String,
+}
+
+fn plant_node(storage: &Storage, content: &str) -> Result<String, String> {
+    let node = storage
+        .ingest_in_scope(
+            IngestInput {
+                content: content.to_string(),
+                node_type: "fact".to_string(),
+                ..Default::default()
+            },
+            "selftest",
+        )
+        .map_err(|e| format!("planting {content} failed: {e}"))?;
+    Ok(node.id)
+}
+
+fn record_edge(
+    storage: &Storage,
+    source: &str,
+    target: &str,
+    link_type: &str,
+) -> Result<(), String> {
+    let at = chrono::DateTime::<chrono::Utc>::UNIX_EPOCH;
+    storage
+        .save_connection(&vestige_core::ConnectionRecord {
+            source_id: source.to_string(),
+            target_id: target.to_string(),
+            strength: 1.0,
+            link_type: link_type.to_string(),
+            created_at: at,
+            last_activated: at,
+            activation_count: 0,
+        })
+        .map_err(|e| format!("recording {link_type} {source}->{target} failed: {e}"))
+}
+
+fn edge_recorded(
+    storage: &Storage,
+    source: &str,
+    target: &str,
+    link_type: &str,
+) -> Result<bool, String> {
+    let edges = storage
+        .get_connections_for_memory(target)
+        .map_err(|e| format!("reading recorded edges for {target}: {e}"))?;
+    Ok(edges.iter().any(|edge| {
+        edge.source_id == source && edge.target_id == target && edge.link_type == link_type
+    }))
+}
+
+/// Cause → intermediate → symptom, plus an ancestor past the hop bound and
+/// distractors that share no recorded causal incoming edge with the symptom.
+fn plant_chain(storage: &Storage) -> Result<Planted, String> {
+    let ancestor = plant_node(storage, "selftest ancestor")?;
+    let cause = plant_node(storage, "selftest cause")?;
+    let intermediate = plant_node(storage, "selftest intermediate")?;
+    let symptom = plant_node(storage, "selftest symptom")?;
+    let noise_a = plant_node(storage, "selftest noise a")?;
+    let noise_b = plant_node(storage, "selftest noise b")?;
+    let noise_c = plant_node(storage, "selftest noise c")?;
+    record_edge(storage, &ancestor, &cause, CAUSAL_LINK)?;
+    record_edge(storage, &cause, &intermediate, CAUSAL_LINK)?;
+    record_edge(storage, &intermediate, &symptom, CAUSAL_LINK)?;
+    // Forward edge and a non-causal incoming edge must not enter the walk.
+    record_edge(storage, &symptom, &noise_a, CAUSAL_LINK)?;
+    record_edge(storage, &noise_b, &symptom, "evidence_of")?;
+    record_edge(storage, &noise_b, &noise_c, CAUSAL_LINK)?;
+    Ok(Planted {
+        ancestor,
+        cause,
+        intermediate,
+        symptom,
+        noise_a,
+        noise_b,
+        noise_c,
+    })
+}
+
+/// Backward BFS over recorded `derived_from` edges. Ids within a hop are sorted.
+fn backward_walk(storage: &Storage, start: &str, bound: usize) -> Result<Vec<String>, String> {
+    let mut seen = std::collections::BTreeSet::from([start.to_string()]);
+    let mut frontier = vec![start.to_string()];
+    let mut path = Vec::new();
+    for _hop in 0..bound {
+        let mut next = Vec::new();
+        frontier.sort();
+        for node in &frontier {
+            let edges = storage
+                .get_connections_for_memory(node)
+                .map_err(|e| format!("reading recorded edges for {node}: {e}"))?;
+            let mut preds: Vec<String> = edges
+                .into_iter()
+                .filter(|edge| edge.link_type == CAUSAL_LINK && edge.target_id == *node)
+                .map(|edge| edge.source_id)
+                .filter(|id| seen.insert(id.clone()))
+                .collect();
+            preds.sort();
+            preds.dedup();
+            next.extend(preds);
+        }
+        if next.is_empty() {
+            break;
+        }
+        path.extend(next.iter().cloned());
+        frontier = next;
+    }
+    Ok(path)
+}
+
+fn snapshot(storage: &Storage) -> Result<(Vec<String>, Vec<String>), String> {
+    let mut nodes = Vec::new();
+    let mut offset = 0i32;
+    loop {
+        let page = storage
+            .get_all_nodes(500, offset)
+            .map_err(|e| format!("reading the user store failed: {e}"))?;
+        if page.is_empty() {
+            break;
+        }
+        let page_len = page.len();
+        offset += i32::try_from(page_len).unwrap_or(i32::MAX);
+        nodes.extend(
+            page.into_iter()
+                .map(|node| format!("{}\t{}", node.id, node.content)),
+        );
+        if page_len < 500 {
+            break;
+        }
+    }
+    nodes.sort();
+    let mut edges = storage
+        .get_all_connections()
+        .map_err(|e| format!("reading user-store edges failed: {e}"))?
+        .into_iter()
+        .map(|edge| format!("{}\t{}\t{}", edge.source_id, edge.target_id, edge.link_type))
+        .collect::<Vec<_>>();
+    edges.sort();
+    Ok((nodes, edges))
+}
+
+fn check(name: &str, pass: bool) -> Value {
+    json!({"name": name, "pass": pass})
+}
+
+fn strata_selftest(user: &Storage) -> Result<Value, String> {
+    let before = snapshot(user)?;
+    let dir = tempfile::TempDir::new().map_err(|e| format!("tempdir failed: {e}"))?;
+    let (walk, mut checks) = {
+        let temp = crate::strata_memory::open(dir.path())
+            .map_err(|e| format!("opening the selftest temp store failed: {e}"))?;
+        let planted = plant_chain(temp.as_ref())?;
+        let walk = backward_walk(temp.as_ref(), &planted.symptom, WALK_BOUND)?;
+        let chain_ids = [&planted.cause, &planted.intermediate, &planted.symptom];
+        let mut chain_recorded = chain_ids
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == 3;
+        for id in chain_ids {
+            if temp
+                .get_node(id)
+                .map_err(|e| format!("reading planted {id}: {e}"))?
+                .is_none()
+            {
+                chain_recorded = false;
+            }
+        }
+        let causal_edges_recorded = edge_recorded(
+            temp.as_ref(),
+            &planted.ancestor,
+            &planted.cause,
+            CAUSAL_LINK,
+        )? && edge_recorded(
+            temp.as_ref(),
+            &planted.cause,
+            &planted.intermediate,
+            CAUSAL_LINK,
+        )? && edge_recorded(
+            temp.as_ref(),
+            &planted.intermediate,
+            &planted.symptom,
+            CAUSAL_LINK,
+        )?;
+        let distractor_edges_recorded = edge_recorded(
+            temp.as_ref(),
+            &planted.symptom,
+            &planted.noise_a,
+            CAUSAL_LINK,
+        )? && edge_recorded(
+            temp.as_ref(),
+            &planted.noise_b,
+            &planted.symptom,
+            "evidence_of",
+        )? && edge_recorded(
+            temp.as_ref(),
+            &planted.noise_b,
+            &planted.noise_c,
+            CAUSAL_LINK,
+        )?;
+        let walk_order =
+            walk.len() == 2 && walk[0] == planted.intermediate && walk[1] == planted.cause;
+        let distractors = [&planted.noise_a, &planted.noise_b, &planted.noise_c];
+        let distractors_excluded = distractors
+            .iter()
+            .all(|id| !walk.iter().any(|step| step == *id));
+        let bound_held = walk.len() == WALK_BOUND
+            && !walk.iter().any(|id| id == &planted.ancestor)
+            && edge_recorded(
+                temp.as_ref(),
+                &planted.ancestor,
+                &planted.cause,
+                CAUSAL_LINK,
+            )?;
+        let checks = vec![
+            check("chain_recorded", chain_recorded),
+            check("causal_edges_recorded", causal_edges_recorded),
+            check("distractor_edges_recorded", distractor_edges_recorded),
+            check("walk_order", walk_order),
+            check("distractors_excluded", distractors_excluded),
+            check("bound_held", bound_held),
+        ];
+        (walk, checks)
+    };
+    // Drop the temp store before the user-store comparison.
+    let temp_store_deleted = dir.close().is_ok();
+    let user_store_unchanged = snapshot(user)? == before;
+    checks.push(check("user_store_unchanged", user_store_unchanged));
+    checks.push(check("temp_store_deleted", temp_store_deleted));
+    let passed = checks.iter().all(|item| item["pass"] == json!(true));
+    Ok(json!({
+        "tool": "selftest",
+        "kind": "recorded_edge_walk",
+        "passed": passed,
+        "deterministic": true,
+        "live_store_touched": !user_store_unchanged,
+        "temp_store_deleted": temp_store_deleted,
+        "bound": WALK_BOUND,
+        "walk": walk,
+        "checks": checks,
+        "note": "Bounded backward walk over recorded derived_from edges in a temp log. The user store is not written.",
+    }))
+}
+
 pub async fn execute(storage: &Arc<Storage>, _args: Option<Value>) -> Result<Value, String> {
     if crate::strata_memory::is_strata_backend(storage.as_ref()) {
-        return Err(
-            "pending_strata: selftest plants causes and scores entity overlap; that is not a recorded edge"
-                .into(),
-        );
+        return strata_selftest(storage.as_ref());
     }
     // 1. Consistent snapshot of the live store into a throwaway tempdir.
     let dir = tempfile::TempDir::new().map_err(|e| format!("tempdir failed: {e}"))?;
@@ -170,8 +407,11 @@ pub async fn execute(storage: &Arc<Storage>, _args: Option<Value>) -> Result<Val
             &gap_scope,
         )
         .map_err(|e| format!("round 6: planting unrelated record failed: {e}"))?;
-    copy.set_created_at(&unrelated.id, chrono::Utc::now() - chrono::Duration::days(5))
-        .map_err(|e| format!("round 6: backdating failed: {e}"))?;
+    copy.set_created_at(
+        &unrelated.id,
+        chrono::Utc::now() - chrono::Duration::days(5),
+    )
+    .map_err(|e| format!("round 6: backdating failed: {e}"))?;
     let gap_failure_id = plant_failure(&copy, &gap_scope, 6, false)?;
     let gap_out = run_backfill(&copy, &gap_scope, &gap_failure_id).await?;
 
@@ -186,7 +426,8 @@ pub async fn execute(storage: &Arc<Storage>, _args: Option<Value>) -> Result<Val
                 .collect()
         })
         .unwrap_or_default();
-    let mut missing = missing; missing.sort();
+    let mut missing = missing;
+    missing.sort();
     let named_missing_anchor = missing.iter().find(|e| *e == "planted_cause_6").cloned();
     let gap_calibration = gap_fired && named_missing_anchor.is_some();
 
@@ -252,7 +493,11 @@ mod tests {
         let out = execute(&storage, None).await.expect("selftest must run");
 
         assert_eq!(out["rounds"], json!(5));
-        assert_eq!(out["hits"], json!(5), "every planted cause must be rank 1: {out}");
+        assert_eq!(
+            out["hits"],
+            json!(5),
+            "every planted cause must be rank 1: {out}"
+        );
         assert_eq!(out["misses"], json!(0));
         assert_eq!(out["hit_at_3"], json!(5));
         assert_eq!(out["hit_rate_1"], json!(1.0));
@@ -268,7 +513,11 @@ mod tests {
 
         // Live store untouched: same single node, nothing in the selftest scopes.
         let nodes = storage.get_all_nodes(100, 0).unwrap();
-        assert_eq!(nodes.len(), 1, "no planted record may leak into the live store");
+        assert_eq!(
+            nodes.len(),
+            1,
+            "no planted record may leak into the live store"
+        );
         assert!(
             storage
                 .get_all_nodes_in_scope("selftest-round-1", 100, 0)
@@ -290,5 +539,148 @@ mod tests {
         let out = execute(&storage, None).await.expect("selftest must run");
         assert_eq!(out["hits"], json!(5), "{out}");
         assert_eq!(out["gap_calibration"], json!(true));
+    }
+}
+
+#[cfg(test)]
+mod strata_stdio_tests {
+    use super::*;
+    use crate::cognitive::CognitiveEngine;
+    use crate::protocol::stdio::run_io;
+    use crate::server::McpServer;
+    use std::path::Path;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+
+    fn fingerprint(storage: &Storage) -> (Vec<String>, Vec<String>) {
+        snapshot(storage).expect("user store snapshot")
+    }
+
+    fn sqlite_files(dir: &Path) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(path) = stack.pop() {
+            let entries = match std::fs::read_dir(&path) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name.ends_with(".sqlite")
+                    || name.ends_with(".sqlite3")
+                    || name.ends_with(".db")
+                    || name.ends_with(".db-wal")
+                    || name.ends_with(".db-shm")
+                {
+                    found.push(path.display().to_string());
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    #[tokio::test]
+    async fn selftest_over_stdio_passes_every_check_and_leaves_the_user_store_unchanged() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let storage = crate::strata_memory::open(dir.path()).unwrap();
+        storage
+            .ingest(IngestInput {
+                content: "user memory that selftest must not touch".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let server = McpServer::new(
+            Arc::clone(&storage),
+            Arc::new(tokio::sync::Mutex::new(CognitiveEngine::new())),
+        );
+        let before = fingerprint(storage.as_ref());
+
+        let (mut client_w, server_r) = tokio::io::duplex(1 << 16);
+        let (server_w, mut client_r) = tokio::io::duplex(1 << 20);
+        let handle =
+            tokio::spawn(
+                async move { run_io(server, None, BufReader::new(server_r), server_w).await },
+            );
+
+        let mut input = serde_json::to_string(&json!({
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "selftest", "version": "1"}
+            }
+        }))
+        .unwrap();
+        input.push('\n');
+        input.push_str(
+            &serde_json::to_string(&json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+            }))
+            .unwrap(),
+        );
+        input.push('\n');
+        for id in [1, 2] {
+            input.push_str(
+                &serde_json::to_string(&json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "method": "tools/call",
+                    "params": {"name": "selftest", "arguments": {}}
+                }))
+                .unwrap(),
+            );
+            input.push('\n');
+        }
+        client_w.write_all(input.as_bytes()).await.unwrap();
+        drop(client_w);
+        let mut buf = String::new();
+        client_r.read_to_string(&mut buf).await.unwrap();
+        handle.await.unwrap().unwrap();
+
+        let lines: Vec<Value> = buf
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("stdio line is JSON"))
+            .collect();
+        let body = |id: i64| {
+            let msg = lines
+                .iter()
+                .find(|value| value["id"] == json!(id))
+                .unwrap_or_else(|| panic!("missing id {id}: {lines:?}"));
+            assert!(msg.get("error").is_none(), "{msg}");
+            let result = &msg["result"];
+            assert_eq!(result["isError"], json!(false), "{result}");
+            assert!(
+                !result.to_string().contains("pending_strata"),
+                "selftest must complete: {result}"
+            );
+            result["structuredContent"].clone()
+        };
+        let first = body(1);
+        let second = body(2);
+        assert_eq!(first, second, "selftest output must be deterministic");
+        assert_eq!(first["tool"], json!("selftest"));
+        assert_eq!(first["passed"], json!(true), "{first}");
+        assert_eq!(first["deterministic"], json!(true));
+        assert_eq!(first["live_store_touched"], json!(false));
+        assert_eq!(first["temp_store_deleted"], json!(true));
+        assert_eq!(first["walk"].as_array().map(Vec::len), Some(2), "{first}");
+        let checks = first["checks"].as_array().expect("checks");
+        assert!(!checks.is_empty());
+        for item in checks {
+            assert_eq!(item["pass"], json!(true), "{item} in {first}");
+        }
+        assert_eq!(fingerprint(storage.as_ref()), before);
+        assert!(
+            sqlite_files(dir.path()).is_empty(),
+            "selftest must not create a sqlite file: {:?}",
+            sqlite_files(dir.path())
+        );
     }
 }
