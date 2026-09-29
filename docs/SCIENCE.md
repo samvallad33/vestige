@@ -106,14 +106,9 @@ This preserves the Testing Effect without letting stale-but-relevant results bec
 
 ---
 
-## Spreading Activation
+## Spreading Activation — not implemented in 4.0
 
-**Spreading Activation** (Collins & Loftus, 1975) is how activating one memory primes related memories.
-
-In Vestige's implementation:
-- When you search for "React hooks", memories about "useEffect" surface due to **semantic similarity**
-- Semantically related memories are retrieved even without exact keyword matches
-- This comes from embedding vectors capturing conceptual relationships
+**Spreading Activation** (Collins & Loftus, 1975) is how activating one memory primes related memories. 4.0 does not implement it: there is no similarity retrieval to spread across. Adjacency comes only from **recorded typed edges** (`touched`, `anchored_to`, `derived_from`, `supersedes`, `corrects`, `closed_by`, `projected_to`, `evidence_of`), and lookups follow those exact edges. Resemblance is never a link.
 
 ---
 
@@ -138,49 +133,34 @@ When you flag something important, it strengthens ALL memories from the surround
 
 Based on **Tulving's Encoding Specificity (1973)**: we remember better when retrieval context matches encoding context.
 
-`recall` exploits this:
-```
-recall(
-  query="error handling patterns",
-  context_topics=["authentication"]
-)
-```
-
-If you learned something while working on auth, you'll recall it better when working on auth again.
+`session_start` exploits this: memories are gathered under the current
+project/topic context, and receipts record what was used. (The 3.x
+`recall(query=…, context_topics=…)` form is gone — 4.0 recall is
+exact-handle only.)
 
 ---
 
-## Hybrid Search with RRF
+## Hybrid Search with RRF — removed in 4.0
 
-**Reciprocal Rank Fusion (RRF)** combines multiple ranking lists:
-
-```
-RRF_score(d) = Σ 1/(k + rank_i(d))
-```
-
-In Vestige:
-1. BM25 keyword search produces ranking
-2. Semantic search produces ranking
-3. RRF fuses them into final ranking
-4. Retention strength provides additional weighting
-
-This gives you exact keyword matching AND semantic understanding in one search.
+RRF fusion of a BM25 list and a semantic list was the 3.x retriever. 4.0
+removed ranking from retrieval entirely (H1/H2): a lookup is a byte-exact
+handle, and free text returns `handle_required`. What replaces relevance is
+the recorded causal structure — typed edges, walks, and receipts.
 
 ---
 
-## Embedding Model
+## Embedding Model — none in 4.0
 
-**Nomic Embed Text v1.5** (via fastembed):
-- 768-dimensional vectors
-- ~130MB model size
-- Runs 100% local (after first download)
-- Competitive with OpenAI's ada-002
-
-The model is cached in the platform user cache directory after first run, with `./.fastembed_cache` as a fallback. Set `FASTEMBED_CACHE_PATH` to choose a specific cache path.
+4.0 removed embeddings entirely (H1: no vectors, no cosine similarity).
+Migration counts and drops vector rows; they never enter the STRATA log. See
+[MIGRATING-TO-4.0.md](MIGRATING-TO-4.0.md).
 
 ---
 
 ## Performance
+
+The 3.x numbers below are kept for history; 4.0 lookups are exact-handle
+resolutions with no FTS, no HNSW, and no embedding generation.
 
 | Memories | Search Time | Memory Usage |
 |----------|-------------|--------------|
@@ -188,8 +168,3 @@ The model is cached in the platform user cache directory after first run, with `
 | 1,000 | <50ms | ~100MB |
 | 10,000 | <200ms | ~300MB |
 | 100,000 | <1s | ~1GB |
-
-Performance is bounded by:
-- SQLite FTS5 for keyword search (very fast)
-- HNSW index for semantic search (sublinear scaling)
-- Embedding generation (only on ingest, ~100ms each)

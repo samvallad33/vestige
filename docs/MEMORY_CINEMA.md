@@ -1,3 +1,6 @@
+> **Historical feature doc.** Written against the 3.x store; some wording
+> (e.g. similarity-derived visuals) predates 4.0, where the graph comes only
+> from recorded typed edges. The visualization itself is unaffected.
 # Memory Cinema — Complete Feature Reference
 
 Memory Cinema turns your real memory graph into a directed, narrated, infinitely-

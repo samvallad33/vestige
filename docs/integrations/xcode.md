@@ -160,17 +160,10 @@ See [CLAUDE.md templates](../CLAUDE-SETUP.md) for a full setup.
 
 ### Embedding model cache
 
-Vestige does not download or switch embedding models when it starts. If a
-legacy Nomic cache has already been provisioned locally, its Xcode sandbox
-location is:
-
-```
-~/Library/Caches/vestige/fastembed
-```
-
-Optional Qwen profiles require explicit local-artifact verification, evaluation,
-migration, and activation; they never use the Xcode session to download a
-model.
+None needed. 4.0 carries no embedding model on any platform — nothing to
+cache, download, or verify inside the Xcode sandbox. (A 3.x install kept a
+Nomic cache at `~/Library/Caches/vestige/fastembed`; that folder is inert
+under 4.0 and can be deleted.)
 
 ---
 
@@ -229,12 +222,11 @@ Xcode 26.3 has a feature gate (`claudeai-mcp`) that may block custom MCP servers
 <details>
 <summary>Embedding model fails to download</summary>
 
-The first run downloads ~130MB. If Xcode's sandbox blocks the download:
+That 3.x failure mode is gone: 4.0 downloads no model, so the Xcode sandbox
+cannot block one. If you still see a download attempt, you are running a 3.x
+binary — upgrade to 4.0.
 
-1. Run `vestige-mcp` once from your terminal to cache the model
-2. The cache at `~/Library/Caches/vestige/fastembed` will be available to the sandboxed instance
-
-Behind a proxy:
+Behind a proxy (cloud sync only):
 ```bash
 HTTPS_PROXY=your-proxy:port vestige-mcp
 ```

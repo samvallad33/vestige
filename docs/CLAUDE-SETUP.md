@@ -81,7 +81,7 @@ Use `codebase` → `remember_pattern`:
 
 - **Working on a codebase**: Search "[repo name] patterns decisions"
 - **User mentions a person**: Search "[person name]"
-- **Debugging**: Search "[error message keywords]" — check if solved before
+- **Debugging**: Recall the exact failing id/handle first (`recall` is handle-only; free text is never searched)
 
 ---
 

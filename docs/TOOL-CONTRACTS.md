@@ -48,7 +48,11 @@ and `causality_verified` stays false.
 Review candidates against current evidence before explicitly requesting
 `promote=true`: promotion records an `evidence_of` trail edge through the
 ordinary typed-edge surface; it does not create a proven causal relationship.
-Suppressed and superseded memories are not treated as live evidence.
+
+<!-- TODO(comment): the 3.x backfill contract additionally excluded
+suppressed and superseded memories from candidates; whether the 4.0
+causal_walk candidate pool applies the same exclusion is not verifiable at
+this HEAD (walks read recorded walk sources, not the live-node filter). -->
 
 `graph(action="never_composed")` also defaults to `user`. Supply `scope` for a
 project or `includeCrossScope=true` to deliberately investigate across projects.

@@ -1,3 +1,8 @@
+> **3.x measurement, kept for history.** This benchmark measures a *ranker*
+> (embeddings + BM25 arms) against retrieval tasks. 4.0 removed the ranker:
+> recall is exact-handle only, so there is nothing for these arms to measure.
+> The methodology stays relevant to any future decision-quality benchmark; the
+> numbers describe 3.x.
 # Benchmarks
 
 This page documents the only retrieval benchmark Vestige currently stands

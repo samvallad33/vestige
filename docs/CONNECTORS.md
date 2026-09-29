@@ -7,18 +7,20 @@
 Connectors let Vestige act as a durable, local **retrieval and reasoning layer**
 over a long-lived external system — a ticket tracker, an issue board, a support
 queue — **without replacing it**. The external system stays the source of truth.
-Vestige indexes its records, embeds them for semantic recall, links them into the
-memory graph, and **cites back** to the canonical record.
+Vestige indexes its records, links them into the memory graph, and **cites
+back** to the canonical record. Recall over the index is exact-handle only
+(4.0 has no embeddings) — the connector's value is the durable, offline,
+edge-linked copy, not a semantic search box.
 
 ## Why this is different from a ticket-system MCP
 
 The official GitHub / Jira MCP servers are **live API proxies**: every query hits
-the upstream API, is rate-limited, keyword-only, online-only, and has no memory
+the upstream API, is rate-limited, online-only, and has no memory
 of past state. Vestige instead keeps a **durable local index** of the records, so
 you can:
 
-- search the history **offline** and **semantically** (embeddings, not just
-  keywords),
+- search the history **offline** through the store (exact handles and typed
+  edges, not a vendor's keyword box),
 - **join** ticket history with the rest of your memory in one search,
 - see a **point-in-time** view (records carry temporal validity),
 - and re-sync **idempotently** — re-running never duplicates a record.
@@ -129,7 +131,7 @@ Each run:
 3. routes each record through an **idempotent upsert** keyed on
    `(source_system, source_id)`:
    - unseen record → **insert**,
-   - changed content (by content hash) → **update in place** + re-embed,
+   - changed content (by content hash) → **update in place**,
    - unchanged content → **no-op** (only the "last seen" time advances);
 4. advances and persists the cursor only after the run, so an interruption
    re-scans rather than skips.

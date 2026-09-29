@@ -84,7 +84,7 @@ Open Cursor's AI chat and ask:
 
 > "What MCP tools do you have access to?"
 
-You should see Vestige's tools listed (`smart_ingest`, `recall`, `backfill`).
+You should see Vestige's tools listed (`smart_ingest`, `recall`, `causal_walk`, …). `recall` is exact-handle only: free text returns `handle_required` ([HANDLES.md](../HANDLES.md)).
 
 ---
 

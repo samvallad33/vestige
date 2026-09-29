@@ -1,30 +1,24 @@
 # Android (Termux) Installation
 
 Vestige runs on Android inside [Termux](https://termux.dev). Today that means
-building from source in a configuration without embeddings; a prebuilt
-`aarch64-linux-android` release asset and `npm install -g` support are the next
-step, and semantic search through Termux's own ONNX Runtime package is the step
-after that. This page tracks what works right now. Progress is on issue #145.
+building from source; a prebuilt `aarch64-linux-android` release asset and
+`npm install -g` support are the next step. Progress is on issue #145.
+
+> **4.0 note.** There is no "semantic search through Termux's ONNX Runtime"
+> step anymore: 4.0 carries no embedding runtime on any platform. `recall` is
+> exact-handle only, dedup is exact content identity, and neither needs a
+> model. The sections below describe what a Termux build actually ships.
 
 ## What you get in this build
 
 - Every MCP tool, the memory lifecycle (FSRS scheduling, consolidation,
   suppression, purge), receipts, the dashboard, and `vestige`.
-- Keyword recall (SQLite FTS5) and the full graph.
+- Exact-handle recall and the full graph — no FTS, no model, nothing to warm up.
 
 ## What this build does not have
 
-- Semantic recall. There is no embedding runtime, so `recall` is keyword only.
-- The prediction-error gate. `smart_ingest` still stores every memory, but it
-  cannot compare a new memory against existing ones by meaning, so automatic
-  dedup and reinforce decisions are off. Responses say so
-  (`"dedup": "unavailable in this build"`).
 - Git history for the `codebase` tool. libgit2 is left out of this build, and the
   tool reports git history as unavailable instead of failing.
-
-`vestige health` reports `Embedding Service: not compiled into this build`
-rather than "Not Ready", so the missing runtime is never mistaken for a broken
-store.
 
 ## Build
 
@@ -68,7 +62,7 @@ Then connect an MCP client with the usual config:
 | --- | --- | --- |
 | `connectors` | on | GitHub Issues and Redmine connectors; the HTTP client is rustls, no OpenSSL |
 | `cloud-sync` | on | Vestige Pro sync client, same HTTP client |
-| `embeddings`, `vector-search` | off | this build leaves them out on purpose; the pinned `ort-sys` does ship an `aarch64-linux-android` ONNX Runtime prebuilt (NDK-built), and whether it links in a native Termux build is untested, so the embeddings build is the next step rather than part of this one |
+| `embeddings`, `vector-search` | off (always-off stubs) | 4.0 removed the embedding machinery; the feature names exist only so legacy `#[cfg]` sites compile. There is nothing to turn on |
 | `codebase-git` | off | libgit2 needs OpenSSL and libssh2 |
 
 ## Data location
@@ -81,11 +75,8 @@ resolves through `$HOME` (`~/.local/share/vestige/`). Override with
 
 1. A prebuilt `aarch64-linux-android` asset in each release, and
    `npm install -g vestige-mcp-server` working on Termux.
-2. Semantic search on the phone, by whichever of two routes builds first:
-   the pinned `ort-sys` already lists an `aarch64-linux-android` ONNX Runtime
-   prebuilt, so the default `ort-download` feature may link as is; failing
-   that, Termux ships ONNX Runtime as a package (`pkg install onnxruntime`)
-   and Vestige already knows how to load a system `libonnxruntime` through
-   `ORT_DYLIB_PATH` on Intel Macs. Neither has been tested on a phone yet.
+
+(The old "semantic search on the phone" roadmap item is retired with the
+embedding machinery itself.)
 
 Follow or help on [issue #145](https://github.com/samvallad33/vestige/issues/145).

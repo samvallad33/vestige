@@ -129,7 +129,7 @@ unrelated edits, partial coverage, namespace and project selection, checkout
 switches, legacy anchors, output accounting, repeated reads, due intentions and
 an injected anchor-storage failure. It never imports a live tracker or opens an
 existing memory database. Core anchor unit tests additionally cover significant
-whitespace in string content. The no-embeddings CI job runs the MCP fixture.
+whitespace in string content. The MCP fixture runs in CI.
 
 Source-sync coverage, dependency-triggered invalidation, delta handles and
 conditional failed-approach memory are subsequent extensions. This patch

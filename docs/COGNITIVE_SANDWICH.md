@@ -1,3 +1,9 @@
+> **Retired optional stack (3.x).** Sanhedrin — the model-run post-response
+> verifier described here — was removed in 4.0 (H3: no LLM decides). Preflight
+> context remains opt-in; model-verifier receipts are replaced by
+> deterministic, replayable receipts ([RECEIPTS.md](RECEIPTS.md)) and the
+> fail-closed claim gate. This page stays for history of the defense-in-depth
+> design.
 # Cognitive Sandwich
 
 **Vestige's defense-in-depth safety architecture for Claude Code.**
