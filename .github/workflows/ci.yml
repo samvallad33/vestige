@@ -163,7 +163,11 @@ jobs:
         run: cargo clippy -p vestige-mcp -p vestige-core --no-default-features --features vestige-mcp/connectors,vestige-mcp/cloud-sync,vestige-mcp/legacy-sqlite --all-targets -- -D warnings
 
       - name: Test vestige-core without embeddings
-        run: cargo test -p vestige-core --no-default-features --features bundled-sqlite --lib
+        # Reopen tests are the raw engine harness (v3-engine). Without it the
+        # read-write guard refuses the synthetic stores they just created.
+        # The later build step omits v3-engine — the shipped binary stays
+        # creation-blocked.
+        run: cargo test -p vestige-core --no-default-features --features bundled-sqlite,v3-engine --lib
 
       - name: Test vestige-mcp without embeddings
         # Tests are the raw engine harness (v3-engine): they create synthetic

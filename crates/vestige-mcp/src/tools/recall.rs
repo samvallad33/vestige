@@ -191,6 +191,15 @@ pub async fn execute(
         return handled;
     }
 
+    // Strata has no similarity index. Query, reason, and contradiction
+    // recall are exact-handle only; keyword and embedding search stay off.
+    if crate::strata_memory::is_strata_backend(storage.as_ref()) {
+        return Err(
+            "similarity_disabled: recall: embeddings, cosine, BM25, FTS, Jaccard, and keyword or name matching are not Strata operations; pass an exact handle"
+                .into(),
+        );
+    }
+
     let mode = args
         .as_ref()
         .and_then(|a| a.get("mode"))
