@@ -662,9 +662,16 @@ impl SqliteMemoryStore {
         // refused to open it, invisible while the guard was test-disabled).
         #[cfg(all(feature = "legacy-sqlite", not(feature = "v3-engine")))]
         {
-            // A missing path is not a v3 store. Refusing to create it exits
-            // before the stdio handshake. Existing SQLite files stay refused.
             crate::storage::v3_guard::ensure_not_v3(&path)?;
+            // Guard-armed 4.0 builds never CREATE a SQLite store either: a
+            // fresh install must not write a file the very next start would
+            // refuse (audit blocker 1). Strata is the 4.0 store; SQLite is
+            // a read-only migration source.
+            if !path.exists() {
+                return Err(StorageError::Init(
+                    "SQLite store creation is disabled: SQLite is a read-only migration source in 4.0. hint: the Strata backend owns new stores (run: vestige migrate-to-strata --from <path> for existing v3 stores)".to_string(),
+                ));
+            }
         }
 
         // Open writer connection

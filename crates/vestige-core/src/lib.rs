@@ -198,9 +198,7 @@ pub use trace::{
 pub use storage::LegacySqliteDisabled;
 // v3 SQLite guard: refuses the legacy engine at every 4.0 entry point
 // (ungated — the refusal must fire in Strata-only builds too).
-pub use storage::v3_guard::{
-    MIGRATION_HINT, SQLITE_MAGIC, V3Info, detect_v3, ensure_not_v3, v3_rw_guard_armed,
-};
+pub use storage::v3_guard::{MIGRATION_HINT, SQLITE_MAGIC, V3Info, detect_v3, ensure_not_v3};
 #[cfg(feature = "legacy-sqlite")]
 pub use storage::{
     ClassificationResult, Domain, HealthStatus, LocalMemoryStore, MemoryEdge, MemoryRecord,
