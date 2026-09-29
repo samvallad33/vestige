@@ -2925,6 +2925,8 @@ version = "3.1.1"
 dependencies = [
  "anyhow",
  "axum",
+ "blake3",
+ "borsh",
  "chrono",
  "clap",
  "colored",
@@ -2939,6 +2941,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "strata",
+ "strata-gate",
  "strata-migrate",
  "strata-store",
  "strata-verify",

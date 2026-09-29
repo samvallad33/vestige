@@ -488,7 +488,7 @@ enum Commands {
         dashboard_port: u16,
     },
 
-    /// Run the planted-cause selftest against a throwaway copy of the store
+    /// Read-only Strata selftest: log chain, receipts, and a scratch-store gate round-trip
     Selftest,
 
     /// Find decayed fix/lesson memories sharing an anchor with a failure
@@ -2606,12 +2606,11 @@ fn run_backup(output: PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Run the planted-cause selftest (the MCP `selftest` tool) from the CLI.
-/// Snapshots the store to a tempdir copy, plants causes/failures there, runs
-/// the real backfill against the copy, and prints the same payload the MCP
-/// tool returns. The live store is only read.
+/// Run the Strata selftest (the MCP `selftest` tool) from the CLI.
+/// Reads the user's log, checks receipts, and round-trips one write through
+/// the gate in a scratch store. The user's store is only read.
 fn run_selftest() -> anyhow::Result<()> {
-    println!("{}", "=== Planted-Cause Selftest ===".cyan().bold());
+    println!("{}", "=== Strata Selftest ===".cyan().bold());
     println!();
 
     let storage = open_storage()?;
@@ -2620,31 +2619,17 @@ fn run_selftest() -> anyhow::Result<()> {
         .block_on(vestige_mcp::tools::selftest::execute(&storage, None))
         .map_err(|e| anyhow::anyhow!(e))?;
 
-    if result["hits"] == serde_json::json!(result["rounds"]) && result["gap_calibration"] == true {
-        println!(
-            "{}",
-            format!(
-                "hit@1 {}/{} · hit@3 {}/{} · gap calibration OK",
-                result["hits"], result["rounds"], result["hit_at_3"], result["rounds"]
-            )
-            .green()
-            .bold()
-        );
+    let line = format!(
+        "log {} frame(s) · {} receipt(s) · gate round-trip {} · live store untouched",
+        result["checks"]["log_integrity"]["frames"],
+        result["checks"]["receipts"]["effects"],
+        result["checks"]["gate_round_trip"]["read_back"],
+    );
+    if result["ok"] == true && result["live_store_touched"] == false {
+        println!("{}", line.green().bold());
     } else {
-        println!(
-            "{}",
-            format!(
-                "hit@1 {}/{} · hit@3 {}/{} · gap calibration {}",
-                result["hits"],
-                result["rounds"],
-                result["hit_at_3"],
-                result["rounds"],
-                result["gap_calibration"]
-            )
-            .yellow()
-        );
+        println!("{}", line.yellow());
     }
-    println!("{}", "(live store untouched; temp copy deleted)".dimmed());
     println!();
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())

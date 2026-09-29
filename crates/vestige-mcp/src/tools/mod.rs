@@ -95,10 +95,10 @@ pub mod backfill;
 // exact mechanism edges to the change records behind a failure.
 pub mod causal_walk;
 
-// w3d: planted-cause self-calibration + decayed-lesson detection, both
-// built on the backfill surface above.
-pub mod selftest;
+// selftest: Strata log, gate, and receipt checks. forgotten_lesson stays on
+// the backfill surface above.
 pub mod forgotten_lesson;
+pub mod selftest;
 
 // Internal/backwards-compat tools still dispatched by server.rs for specific
 // tool names. Each module below has live callers via string dispatch in

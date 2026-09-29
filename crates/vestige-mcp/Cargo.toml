@@ -95,7 +95,11 @@ strata-migrate = { path = "../strata-migrate", optional = true }
 strata-verify = { path = "../strata-verify", optional = true }
 
 # Strata log the shipped MCP server boots. Workspace-excluded; path dep only.
+strata = { path = "../strata" }
+strata-gate = { path = "../strata-gate" }
 strata-store = { path = "../strata-store" }
+blake3 = "1"
+borsh = { version = "1", features = ["derive"] }
 
 # ============================================================================
 # MCP Server Dependencies

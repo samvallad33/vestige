@@ -1064,13 +1064,8 @@ description: Some("Investigate a failure from explicit start points (failing_tes
                 input_schema: tools::compact::of(&tools::causal_walk::schema()),
                 ..Default::default()
             },
-            // ================================================================
-            // w3d SELF-CALIBRATION — planted-cause selftest. Verifies the
-            // backfill surface end-to-end against a temp COPY of the store
-            // (backup_to snapshot): plants quiet causes + failures, scores
-            // hit@1/hit@3, and checks the gap report fires on a no-anchor
-            // round. Read-only with respect to the live store.
-            // ================================================================
+            // Strata selftest. Reads the user's log, re-derives receipts, and
+            // round-trips one write through the gate in a scratch store.
             ToolDescription {
                 name: "selftest".to_string(),
                 title: Some("Selftest".to_string()),
@@ -1080,7 +1075,7 @@ description: Some("Investigate a failure from explicit start points (failing_tes
                     idempotent_hint: true,
                     open_world_hint: false,
                 }),
-description: Some("Planted-cause selftest: backfill hit@1/hit@3 + gap calibration on a temp copy.".to_string()),
+description: Some("Read-only Strata selftest. Verifies the log chain, re-derives receipts, and round-trips one write through the gate in a scratch store. Does not write the user's store.".to_string()),
                 input_schema: tools::compact::of(&tools::selftest::schema()),
                 ..Default::default()
             },

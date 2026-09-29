@@ -186,7 +186,22 @@ def run(binary, output):
             typed("session_start", {"queries": [marker], "include_predictions": False, "include_intentions": False}, "similarity_disabled")
             typed("suppress", {"id": node_id}, "pending_strata")
             typed("causal_walk", {"scope": "user"}, "pending_strata")
-            typed("selftest", {}, "pending_strata")
+            report = tool("selftest", {})
+            assert report["tool"] == "selftest" and report["ok"] is True
+            assert report["live_store_touched"] is False
+            assert report["scratch_outside_user_store"] is True
+            assert report["user_store_blake3_before"] == report["user_store_blake3_after"]
+            assert len(report["user_store_blake3_before"]) == 64
+            integrity = report["checks"]["log_integrity"]
+            receipts = report["checks"]["receipts"]
+            trip = report["checks"]["gate_round_trip"]
+            assert integrity["ok"] is True and integrity["frames"] >= 1 and integrity["segments"] >= 1
+            assert receipts["ok"] is True and receipts["effects"] >= 1 and receipts["orphans"] == 0
+            assert receipts["gaps"] == 0 and receipts["unmatched_effects"] == 0
+            assert trip["ok"] is True and trip["read_back"] is True and trip["effects"] >= 1
+            assert trip["checkpoint_chain_ok"] is True and trip["tail_frames"] >= 1
+            still = tool("memory", {"action": "get", "id": node_id})
+            assert marker in json.dumps(still)
             typed("forgotten_lesson", {"failure_id": node_id}, "pending_strata")
             called = {row["tool"] for row in coverage}
             missing = [name for name in names if name not in called]
