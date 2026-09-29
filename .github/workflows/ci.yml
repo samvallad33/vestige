@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, v4]
+    branches: [main, v4, release/v4.0.0-rc]
   pull_request:
-    branches: [main, v4]
+    branches: [main, v4, release/v4.0.0-rc]
 
 env:
   CARGO_TERM_COLOR: always
@@ -167,9 +167,9 @@ jobs:
 
       - name: Test vestige-mcp without embeddings
         # Tests are the raw engine harness (v3-engine): they create synthetic
-      # stores. The later build step omits it — the shipped binary stays
-      # creation-blocked.
-      run: cargo test -p vestige-mcp --no-default-features --features connectors,cloud-sync,legacy-sqlite,vestige-mcp/v3-engine --lib
+        # stores. The later build step omits it — the shipped binary stays
+        # creation-blocked.
+        run: cargo test -p vestige-mcp --no-default-features --features connectors,cloud-sync,legacy-sqlite,vestige-mcp/v3-engine --lib
 
       - name: Build disposable context-contract test server
         run: cargo build -p vestige-mcp --no-default-features --features connectors,cloud-sync,legacy-sqlite --bin vestige-mcp

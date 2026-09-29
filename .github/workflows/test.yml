@@ -2,9 +2,9 @@ name: Test Suite
 
 on:
   push:
-    branches: [main, v4]
+    branches: [main, v4, release/v4.0.0-rc]
   pull_request:
-    branches: [main, v4]
+    branches: [main, v4, release/v4.0.0-rc]
 
 env:
   CARGO_TERM_COLOR: always

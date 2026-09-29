@@ -5,7 +5,7 @@ name: Guard — No Private Cloud Code
 # public repo. The public cloud *client* is allowed and does not trip this.
 on:
   push:
-    branches: [main, v4, feat/cloud-sync-mvp]
+    branches: [main, v4, release/v4.0.0-rc, feat/cloud-sync-mvp]
   pull_request:
   workflow_dispatch:
 
