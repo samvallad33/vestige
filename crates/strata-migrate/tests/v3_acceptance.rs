@@ -10,9 +10,9 @@ use std::time::UNIX_EPOCH;
 use strata_migrate::records::KIND_MIGRATION_RECEIPT;
 use strata_migrate::{migrate_with_options, read_snapshot, MigrateOptions, MigrationError};
 
-/// Committed synthetic fixture (schema_version 38, 4 nodes, 3 edges,
-/// 1 fsrs card, 2 tombstones, 2 embeddings, 2-envelope chain, 1 walk
-/// receipt).
+/// Committed schema-38 fixture built by `make-v3-fixture` from vestige-core's
+/// migration SQL (67 tables, no `walk_receipts`). 4 nodes, 3 edges, 1 fsrs
+/// card, 2 tombstones, 2 embeddings, 2-envelope chain.
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v3.1.1-sample.sqlite")
 }
@@ -306,8 +306,8 @@ fn migrate_to_strata_counts_match() {
     )
     .expect("migration succeeds");
 
-    // 4 knowledge_nodes + 1 walk_receipt reference node.
-    assert_eq!(report.nodes, 5);
+    // 4 knowledge_nodes. Schema 38 has no walk_receipts table.
+    assert_eq!(report.nodes, 4);
     // causal lookalike + touched. The semantic row is not an edge.
     assert_eq!(report.edges, 2);
     assert_eq!(report.dropped_vectors, 2);
@@ -435,6 +435,8 @@ fn migrate_refuses_broken_envelope_chain() {
     // digest so recomputation no longer matches.
     {
         let conn = rusqlite::Connection::open(&db).expect("open copy");
+        conn.execute_batch("DROP TRIGGER IF EXISTS receipt_envelopes_reject_update;")
+            .expect("the real schema rejects updates; the copy drops that trigger");
         conn.execute(
             "UPDATE receipt_envelopes SET payload_digest = replace(payload_digest, 'a', 'b')
              WHERE sequence = 0",
@@ -542,8 +544,8 @@ fn migration_receipt_verifies_on_replay() {
     assert_eq!(snapshot.edges.len(), 2);
     assert_eq!(snapshot.legacy_links.len(), 1);
     assert_eq!(count_of("fsrs_cards"), 1);
-    assert_eq!(count_of("walk_receipts"), 1);
-    assert_eq!(snapshot.nodes.len(), 5);
+    assert_eq!(count_of("walk_receipts"), 0);
+    assert_eq!(snapshot.nodes.len(), 4);
     // The receipt is the last frame in the log.
     let frames = opened.log.read_frames(1).unwrap();
     let last = frames.last().expect("frames");
@@ -586,8 +588,8 @@ fn migrate_wal_snapshot_includes_wal_only_rows() {
     )
     .expect("wal snapshot migration succeeds");
 
-    // The WAL-only row is in the log: 2 fixture nodes + 1 wal row + 1 walk
-    // receipt reference.
+    // The WAL-only row is in the log: 4 fixture nodes + 1 wal row.
+    // Schema 38 has no walk_receipts, so those are not extra nodes.
     let opened = strata_migrate::open_migrated(&dest).unwrap();
     let snapshot = read_snapshot(&opened.log).unwrap();
     let contents: Vec<&str> = snapshot.nodes.iter().map(|n| n.content.as_str()).collect();
@@ -595,9 +597,61 @@ fn migrate_wal_snapshot_includes_wal_only_rows() {
         contents.contains(&"WAL_ONLY_ROW_NOT_IN_MAIN"),
         "the WAL-only row must migrate: {contents:?}"
     );
-    assert_eq!(
-        report.nodes, 6,
-        "4 fixture nodes + 1 wal row + 1 walk receipt"
-    );
+    assert_eq!(report.nodes, 5, "4 fixture nodes + 1 wal row");
     drop(conn);
+}
+
+/// Schema 31, 36, and 38 fixtures come from vestige-core's migration SQL.
+/// Schema 38 has 67 tables and no `walk_receipts`.
+#[test]
+fn real_v3_schemas_migrate() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for (file, version, tables) in [
+        ("v3-schema-31.sqlite", 31u32, None),
+        ("v3-schema-36.sqlite", 36, None),
+        ("v3.1.1-sample.sqlite", 38, Some(67i64)),
+    ] {
+        let path = root.join(file);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let schema: u32 = conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(schema, version, "{file}");
+        let walk: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'walk_receipts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(walk, 0, "{file} is before V40");
+        if let Some(expect) = tables {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, expect, "{file} table count");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("strata");
+        let report = migrate_with_options(
+            &path,
+            &dest,
+            MigrateOptions {
+                seed: Some(seed()),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|err| panic!("{file} migrate: {err}"));
+        assert!(report.verify_passed, "{file}");
+        assert_eq!(report.nodes, 4, "{file}");
+        let opened = strata_migrate::open_migrated(&dest).unwrap();
+        let snapshot = read_snapshot(&opened.log).unwrap();
+        assert_eq!(snapshot.genesis.unwrap().schema_version, version);
+    }
 }

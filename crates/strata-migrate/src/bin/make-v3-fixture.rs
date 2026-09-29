@@ -1,183 +1,415 @@
-//! Generate the committed v3.1.1 migration fixture (synthetic rows only).
+//! Build schema 31 / 36 / 38 fixtures from vestige-core's migration SQL.
+//!
+//! The statements are the `MIGRATION_V*_UP` constants (and the ALTER arrays
+//! the runner applies beside them) in
+//! `crates/vestige-core/src/storage/migrations.rs`. This binary executes
+//! that SQL through the requested version, then inserts a small synthetic
+//! dataset. It does not call vestige-core's private `apply_migrations`.
 //!
 //!     cargo run --manifest-path crates/strata-migrate/Cargo.toml \
-//!         --bin make-v3-fixture -- crates/strata-migrate/tests/fixtures/v3.1.1-sample.sqlite
-//!
-//! The output is a v3.1.1-schema SQLite file (schema_version = 38) with a
-//! handful of synthetic rows, a VALID two-entry `receipt_envelopes` chain
-//! (digests computed with the real DSSE digest functions), one V40-style
-//! `walk_receipts` row, and two `node_embeddings` rows whose values are
-//! never read by the migrator (they are only counted as dropped_vectors).
-//! NEVER point this at real user data, and never migrate a real store INTO
-//! the fixture path.
+//!         --bin make-v3-fixture -- <out.sqlite> <31|36|38>
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context};
+use rusqlite::types::Value;
+use rusqlite::Connection;
 
 fn main() -> anyhow::Result<()> {
-    let out = std::env::args()
-        .nth(1)
+    let mut args = std::env::args().skip(1);
+    let out = args
+        .next()
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("v3.1.1-sample.sqlite"));
+        .context("usage: make-v3-fixture <out.sqlite> <31|36|38>")?;
+    let through: u32 = args
+        .next()
+        .context("schema version 31, 36, or 38")?
+        .parse()?;
+    if !matches!(through, 31 | 36 | 38) {
+        bail!("schema version must be 31, 36, or 38");
+    }
     if out.exists() {
-        anyhow::bail!("refusing to overwrite {}", out.display());
+        bail!("refusing to overwrite {}", out.display());
     }
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    build_fixture(&out)?;
-    println!("fixture written: {}", out.display());
+    build(&out, through)?;
+    let conn = Connection::open(&out)?;
+    let version: u32 = conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+        row.get(0)
+    })?;
+    let tables: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        [],
+        |row| row.get(0),
+    )?;
+    let walk: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'walk_receipts'",
+        [],
+        |row| row.get(0),
+    )?;
+    println!("schema={version} tables={tables} walk_receipts={walk}");
+    if version != through {
+        bail!("schema_version {version} != requested {through}");
+    }
+    if through == 38 && tables != 67 {
+        bail!("schema 38 has {tables} tables, expected 67");
+    }
+    if walk != 0 {
+        bail!("walk_receipts must not exist before V40");
+    }
     Ok(())
 }
 
-/// Build the fixture at `path`. Public to the crate for future tooling.
-fn build_fixture(path: &std::path::Path) -> anyhow::Result<()> {
-    let conn = rusqlite::Connection::open(path)?;
+fn migrations_source() -> anyhow::Result<String> {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../vestige-core/src/storage/migrations.rs");
+    std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))
+}
 
-    conn.execute_batch(
-        r#"
-        CREATE TABLE schema_version (
-            version INTEGER PRIMARY KEY,
-            applied_at TEXT NOT NULL
-        );
-        INSERT INTO schema_version (version, applied_at) VALUES (38, '2026-09-28T00:00:00Z');
+fn build(path: &Path, through: u32) -> anyhow::Result<()> {
+    let source = migrations_source()?;
+    let conn = Connection::open(path)?;
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    for version in 1..=through {
+        apply_version(&conn, &source, version)?;
+    }
+    seed(&conn)?;
+    conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
+    conn.pragma_update(None, "journal_mode", "DELETE")?;
+    conn.execute_batch("VACUUM;")?;
+    Ok(())
+}
 
-        CREATE TABLE knowledge_nodes (
-            id TEXT PRIMARY KEY,
-            content TEXT NOT NULL,
-            node_type TEXT NOT NULL DEFAULT 'fact',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            last_accessed TEXT NOT NULL,
-            tags TEXT DEFAULT '[]',
-            source TEXT,
-            superseded_by TEXT
-        );
+fn apply_version(conn: &Connection, source: &str, version: u32) -> anyhow::Result<()> {
+    let up = if version == 25 {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../vestige-core/src/storage/unlearning_store.rs");
+        let text =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        extract_str_const(&text, "V25_UNLEARNING_STORAGE_SCHEMA_EXPECTATION")
+            .context("missing V25 schema SQL")?
+    } else {
+        extract_str_const(source, &format!("MIGRATION_V{version}_UP"))
+            .with_context(|| format!("missing MIGRATION_V{version}_UP"))?
+    };
+    let alters = match version {
+        2 | 16 | 17 | 22 | 26 => {
+            extract_str_array(source, &format!("MIGRATION_V{version}_ALTER_COLUMNS"))
+                .with_context(|| format!("missing V{version} ALTER array"))?
+        }
+        14 => vec![
+            "ALTER TABLE knowledge_nodes ADD COLUMN protected INTEGER NOT NULL DEFAULT 0"
+                .to_string(),
+            "ALTER TABLE knowledge_nodes ADD COLUMN superseded_by TEXT".to_string(),
+        ],
+        _ => Vec::new(),
+    };
+    let tx = conn.unchecked_transaction()?;
+    for stmt in &alters {
+        add_column_if_missing(&tx, stmt).with_context(|| format!("V{version} alter: {stmt}"))?;
+    }
+    let (add_columns, remaining) = split_add_column_statements(&up);
+    for stmt in &add_columns {
+        add_column_if_missing(&tx, stmt)
+            .with_context(|| format!("V{version} add column: {stmt}"))?;
+    }
+    tx.execute_batch(&remaining)
+        .with_context(|| format!("V{version} batch"))?;
+    if version == 25 {
+        tx.execute(
+            "UPDATE schema_version SET version = 25, applied_at = datetime('now')",
+            [],
+        )?;
+    }
+    tx.commit()?;
+    if version == 7 {
+        conn.pragma_update(None, "journal_mode", "DELETE")?;
+        conn.pragma_update(None, "page_size", 8192)?;
+        conn.execute_batch("VACUUM;")?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+    }
+    Ok(())
+}
 
-        CREATE TABLE memory_connections (
-            source_id TEXT NOT NULL,
-            target_id TEXT NOT NULL,
-            strength REAL NOT NULL,
-            link_type TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            last_activated TEXT NOT NULL,
-            activation_count INTEGER DEFAULT 0,
-            PRIMARY KEY (source_id, target_id)
-        );
+fn add_column_if_missing(conn: &Connection, sql: &str) -> rusqlite::Result<()> {
+    match conn.execute(sql, []) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+            if msg.contains("duplicate column name") =>
+        {
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
 
-        CREATE TABLE fsrs_cards (
-            memory_id TEXT PRIMARY KEY,
-            difficulty REAL NOT NULL DEFAULT 5.0,
-            stability REAL NOT NULL DEFAULT 1.0,
-            state TEXT NOT NULL DEFAULT 'new',
-            reps INTEGER DEFAULT 0,
-            lapses INTEGER DEFAULT 0,
-            last_review TEXT,
-            due_date TEXT,
-            elapsed_days INTEGER DEFAULT 0,
-            scheduled_days INTEGER DEFAULT 0
-        );
+fn split_add_column_statements(up: &str) -> (Vec<String>, String) {
+    let mut statements = Vec::new();
+    let mut remaining = String::new();
+    let mut pending: Option<(String, Vec<String>)> = None;
+    for line in up.lines() {
+        if let Some((statement, lines)) = pending.as_mut() {
+            statement.push(' ');
+            statement.push_str(line.trim());
+            lines.push(line.to_string());
+            if line.trim_end().ends_with(';') {
+                let (statement, lines) = pending.take().expect("pending");
+                finish_alter(statement, lines, &mut statements, &mut remaining);
+            }
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.to_ascii_uppercase().starts_with("ALTER TABLE") {
+            if trimmed.ends_with(';') {
+                finish_alter(
+                    trimmed.to_string(),
+                    vec![line.to_string()],
+                    &mut statements,
+                    &mut remaining,
+                );
+            } else {
+                pending = Some((trimmed.to_string(), vec![line.to_string()]));
+            }
+            continue;
+        }
+        remaining.push_str(line);
+        remaining.push('\n');
+    }
+    if let Some((_, lines)) = pending {
+        for line in lines {
+            remaining.push_str(&line);
+            remaining.push('\n');
+        }
+    }
+    (statements, remaining)
+}
 
-        CREATE TABLE sync_tombstones (
-            table_name TEXT NOT NULL,
-            row_id TEXT NOT NULL,
-            deleted_at TEXT NOT NULL,
-            reason TEXT,
-            PRIMARY KEY (table_name, row_id)
-        );
+fn finish_alter(
+    statement: String,
+    lines: Vec<String>,
+    statements: &mut Vec<String>,
+    remaining: &mut String,
+) {
+    if statement.to_ascii_uppercase().contains(" ADD COLUMN ") {
+        statements.push(statement.trim_end_matches(';').trim().to_string());
+    } else {
+        for line in lines {
+            remaining.push_str(&line);
+            remaining.push('\n');
+        }
+    }
+}
 
-        CREATE TABLE deletion_tombstones (
-            memory_id TEXT PRIMARY KEY,
-            deleted_at TEXT NOT NULL,
-            reason TEXT,
-            node_type TEXT NOT NULL,
-            tags TEXT NOT NULL DEFAULT '[]',
-            edges_pruned INTEGER NOT NULL DEFAULT 0,
-            insights_rewritten INTEGER NOT NULL DEFAULT 0,
-            insights_deleted INTEGER NOT NULL DEFAULT 0,
-            children_orphaned INTEGER NOT NULL DEFAULT 0
-        );
+fn extract_str_const(src: &str, name: &str) -> Option<String> {
+    let marker = format!("const {name}:");
+    let at = src.find(&marker)?;
+    let rest = &src[at..];
+    let eq = rest.find('=')?;
+    let after = &rest[eq + 1..];
+    let mut offset = 0usize;
+    let start = loop {
+        let rel = after[offset..].find('r')?;
+        let abs = offset + rel;
+        let next = after.as_bytes().get(abs + 1).copied();
+        if next == Some(b'#') || next == Some(b'"') {
+            break abs;
+        }
+        offset = abs + 1;
+    };
+    let (body, _) = raw_string(&after[start..])?;
+    Some(body)
+}
 
-        CREATE TABLE node_embeddings (
-            node_id TEXT PRIMARY KEY,
-            embedding BLOB NOT NULL,
-            dimensions INTEGER NOT NULL DEFAULT 768,
-            model TEXT NOT NULL DEFAULT 'BAAI/bge-base-en-v1.5',
-            created_at TEXT NOT NULL
-        );
+fn extract_str_array(src: &str, name: &str) -> Option<Vec<String>> {
+    let marker = format!("const {name}:");
+    let at = src.find(&marker)?;
+    let rest = &src[at..];
+    let open = rest.find("= &[")?;
+    let close = rest[open..].find("];")?;
+    let body = &rest[open..open + close];
+    let mut out = Vec::new();
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'"' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let mut s = String::new();
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => {
+                    i += 1;
+                    if i < bytes.len() {
+                        s.push(bytes[i] as char);
+                        i += 1;
+                    }
+                }
+                b'"' => {
+                    i += 1;
+                    break;
+                }
+                c => {
+                    s.push(c as char);
+                    i += 1;
+                }
+            }
+        }
+        if !s.is_empty() {
+            out.push(s);
+        }
+    }
+    Some(out)
+}
 
-        CREATE TABLE receipt_envelopes (
-            receipt_id               TEXT PRIMARY KEY,
-            chain_id                 TEXT NOT NULL,
-            sequence                 INTEGER NOT NULL,
-            previous_entry_digest    TEXT,
-            payload_type             TEXT NOT NULL,
-            envelope_json            TEXT NOT NULL,
-            payload_digest           TEXT NOT NULL,
-            entry_digest             TEXT NOT NULL UNIQUE,
-            signing_key_id           TEXT NOT NULL,
-            signer_key_fingerprint   TEXT NOT NULL,
-            issued_at                TEXT NOT NULL,
-            stored_at                TEXT NOT NULL
-        );
+fn raw_string(src: &str) -> Option<(String, usize)> {
+    if !src.starts_with('r') {
+        return None;
+    }
+    let hashes = src[1..].chars().take_while(|c| *c == '#').count();
+    let quote = 1 + hashes;
+    if src.as_bytes().get(quote) != Some(&b'"') {
+        return None;
+    }
+    let body_start = quote + 1;
+    let closer = format!("\"{}", "#".repeat(hashes));
+    let end = src[body_start..].find(&closer)?;
+    Some((
+        src[body_start..body_start + end].to_string(),
+        body_start + end + closer.len(),
+    ))
+}
 
-        CREATE TABLE walk_receipts (
-            receipt_id     TEXT PRIMARY KEY,
-            digest         TEXT NOT NULL,
-            canonical_json TEXT NOT NULL,
-            engine_version TEXT NOT NULL,
-            created_at     TEXT NOT NULL
-        );
-        "#,
-    )?;
+struct Col {
+    name: String,
+    notnull: bool,
+    defaulted: bool,
+    ty: String,
+}
 
-    // ---- synthetic nodes -------------------------------------------------
+fn table_info(conn: &Connection, table: &str) -> anyhow::Result<Vec<Col>> {
+    let escaped = table.replace('\'', "''");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT name, type, \"notnull\", dflt_value FROM pragma_table_info('{escaped}')"
+    ))?;
+    let rows = stmt.query_map([], |row| {
+        let default: Option<String> = row.get(3)?;
+        Ok(Col {
+            name: row.get(0)?,
+            ty: row.get::<_, String>(1)?.to_ascii_uppercase(),
+            notnull: row.get::<_, i64>(2)? != 0,
+            defaulted: default.is_some(),
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+fn insert_row(conn: &Connection, table: &str, provided: &[(&str, Value)]) -> anyhow::Result<()> {
+    let info = table_info(conn, table)?;
+    if info.is_empty() {
+        bail!("{table} has no columns");
+    }
+    let given: HashMap<&str, &Value> = provided.iter().map(|(k, v)| (*k, v)).collect();
+    let mut names = Vec::new();
+    let mut values = Vec::new();
+    for col in &info {
+        if let Some(value) = given.get(col.name.as_str()) {
+            names.push(col.name.clone());
+            values.push((*value).clone());
+            continue;
+        }
+        if col.notnull && !col.defaulted {
+            names.push(col.name.clone());
+            values.push(filler(&col.name, &col.ty));
+        }
+    }
+    let placeholders = (1..=names.len())
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let quoted = names
+        .iter()
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("INSERT INTO \"{table}\" ({quoted}) VALUES ({placeholders})");
+    conn.execute(&sql, rusqlite::params_from_iter(values.iter()))
+        .with_context(|| format!("{sql}"))?;
+    Ok(())
+}
+
+fn filler(name: &str, ty: &str) -> Value {
+    if ty.contains("INT") {
+        Value::Integer(0)
+    } else if ty.contains("REAL") || ty.contains("FLOA") || ty.contains("DOUB") {
+        Value::Real(0.0)
+    } else if ty.contains("BLOB") {
+        Value::Blob(vec![0; 16])
+    } else if name.ends_with("_at") || name.contains("date") || name.contains("time") {
+        Value::Text("2026-01-15T10:00:00+00:00".into())
+    } else {
+        Value::Text("fixture".into())
+    }
+}
+
+fn text(value: &str) -> Value {
+    Value::Text(value.to_string())
+}
+
+fn seed(conn: &Connection) -> anyhow::Result<()> {
     let nodes = [
         (
             "11111111-1111-4111-8111-111111111111",
             "Synthetic fact: migration fixtures are never real user data",
             "fact",
+            None,
         ),
         (
             "22222222-2222-4222-8222-222222222222",
             "Synthetic fact: the v3 file stays byte-identical after migration",
             "fact",
+            None,
         ),
         (
             "33333333-3333-4333-8333-333333333333",
             "Synthetic procedure: run migrate-to-strata once per store",
             "procedure",
+            None,
         ),
         (
             "44444444-4444-4444-8444-444444444444",
             "Synthetic superseded note kept for lineage provenance",
             "note",
+            Some("22222222-2222-4222-8222-222222222222"),
         ),
     ];
-    for (id, content, node_type) in nodes {
-        conn.execute(
-            "INSERT INTO knowledge_nodes
-             (id, content, node_type, created_at, updated_at, last_accessed, tags, source, superseded_by)
-             VALUES (?1, ?2, ?3, '2026-01-15T10:00:00+00:00', '2026-02-20T11:30:00+00:00',
-                     '2026-03-01T09:15:00+00:00', ?4, 'fixture', ?5)",
-            rusqlite::params![
-                id,
-                content,
-                node_type,
-                if id.starts_with('1') {
-                    r#"["fixture","synthetic"]"#.to_string()
+    for (id, content, node_type, superseded) in nodes {
+        let mut row = vec![
+            ("id", text(id)),
+            ("content", text(content)),
+            ("node_type", text(node_type)),
+            ("created_at", text("2026-01-15T10:00:00+00:00")),
+            ("updated_at", text("2026-02-20T11:30:00+00:00")),
+            ("last_accessed", text("2026-03-01T09:15:00+00:00")),
+            (
+                "tags",
+                text(if id.starts_with('1') {
+                    r#"["fixture","synthetic"]"#
                 } else {
-                    "[]".to_string()
-                },
-                if id.starts_with('4') {
-                    Some("22222222-2222-4222-8222-222222222222".to_string())
-                } else {
-                    Option::<String>::None
-                },
-            ],
-        )?;
+                    "[]"
+                }),
+            ),
+        ];
+        if superseded.is_some() {
+            row.push(("superseded_by", text(superseded.unwrap())));
+        }
+        insert_row(conn, "knowledge_nodes", &row)?;
     }
 
-    // ---- synthetic edges: legacy types + one in-vocabulary type ----------
     let edges = [
         (
             "11111111-1111-4111-8111-111111111111",
@@ -199,118 +431,130 @@ fn build_fixture(path: &std::path::Path) -> anyhow::Result<()> {
         ),
     ];
     for (source, target, strength, link_type) in edges {
-        conn.execute(
-            "INSERT INTO memory_connections
-             (source_id, target_id, strength, link_type, created_at, last_activated, activation_count)
-             VALUES (?1, ?2, ?3, ?4, '2026-01-16T08:00:00+00:00', '2026-03-02T08:00:00+00:00', 2)",
-            rusqlite::params![source, target, strength, link_type],
+        insert_row(
+            conn,
+            "memory_connections",
+            &[
+                ("source_id", text(source)),
+                ("target_id", text(target)),
+                ("strength", Value::Real(strength)),
+                ("link_type", text(link_type)),
+                ("created_at", text("2026-01-16T08:00:00+00:00")),
+                ("last_activated", text("2026-03-02T08:00:00+00:00")),
+                ("activation_count", Value::Integer(2)),
+            ],
         )?;
     }
 
-    // ---- one FSRS card ----------------------------------------------------
-    conn.execute(
-        "INSERT INTO fsrs_cards
-         (memory_id, difficulty, stability, state, reps, lapses, last_review, due_date, elapsed_days, scheduled_days)
-         VALUES ('11111111-1111-4111-8111-111111111111', 4.5, 12.25, 'review', 5, 2,
-                 '2026-03-01T09:00:00+00:00', '2026-04-01T09:00:00+00:00', 3, 14)",
-        [],
+    insert_row(
+        conn,
+        "fsrs_cards",
+        &[
+            ("memory_id", text("11111111-1111-4111-8111-111111111111")),
+            ("difficulty", Value::Real(4.5)),
+            ("stability", Value::Real(12.25)),
+            ("state", text("review")),
+            ("reps", Value::Integer(5)),
+            ("lapses", Value::Integer(2)),
+        ],
     )?;
-
-    // ---- tombstones in both tables ----------------------------------------
-    conn.execute(
-        "INSERT INTO sync_tombstones (table_name, row_id, deleted_at, reason)
-         VALUES ('knowledge_nodes', '99999999-9999-4999-8999-999999999999',
-                 '2026-02-01T00:00:00+00:00', 'fixture deletion')",
-        [],
+    insert_row(
+        conn,
+        "sync_tombstones",
+        &[
+            ("table_name", text("knowledge_nodes")),
+            ("row_id", text("99999999-9999-4999-8999-999999999999")),
+            ("deleted_at", text("2026-02-01T00:00:00+00:00")),
+            ("reason", text("fixture deletion")),
+        ],
     )?;
-    conn.execute(
-        "INSERT INTO deletion_tombstones
-         (memory_id, deleted_at, reason, node_type, tags, edges_pruned, insights_rewritten,
-          insights_deleted, children_orphaned)
-         VALUES ('88888888-8888-4888-8888-888888888888', '2026-02-02T00:00:00+00:00',
-                 'fixture purge', 'note', '[]', 1, 0, 1, 0)",
-        [],
+    insert_row(
+        conn,
+        "deletion_tombstones",
+        &[
+            ("memory_id", text("88888888-8888-4888-8888-888888888888")),
+            ("deleted_at", text("2026-02-02T00:00:00+00:00")),
+            ("reason", text("fixture purge")),
+            ("node_type", text("note")),
+            ("tags", text("[]")),
+        ],
     )?;
-
-    // ---- two dropped vectors ----------------------------------------------
     for id in [
         "11111111-1111-4111-8111-111111111111",
         "22222222-2222-4222-8222-222222222222",
     ] {
-        conn.execute(
-            "INSERT INTO node_embeddings (node_id, embedding, dimensions, model, created_at)
-             VALUES (?1, ?2, 4, 'fixture-model', '2026-01-15T10:01:00+00:00')",
-            rusqlite::params![id, vec![0u8; 16]],
+        insert_row(
+            conn,
+            "node_embeddings",
+            &[
+                ("node_id", text(id)),
+                ("embedding", Value::Blob(vec![0u8; 16])),
+                ("dimensions", Value::Integer(4)),
+                ("model", text("fixture-model")),
+                ("created_at", text("2026-01-15T10:01:00+00:00")),
+            ],
         )?;
     }
+    seed_envelopes(conn)?;
+    Ok(())
+}
 
-    // ---- valid two-envelope receipt chain ----------------------------------
-    // Digests are computed with the production DSSE digest functions so the
-    // migrator's chain verification passes on the committed fixture.
+fn seed_envelopes(conn: &Connection) -> anyhow::Result<()> {
     use base64::Engine as _;
     use vestige_core::storage::receipt_attestation::{entry_digest, payload_digest};
 
-    let envelopes: [(&str, i64, Option<String>, &[u8]); 2] = [
+    let envelopes: [(&str, i64, &[u8]); 2] = [
         (
             "aaaaaaa1-0000-4000-8000-000000000001",
             0,
-            None,
-            b"synthetic receipt payload zero".as_slice(),
+            b"synthetic receipt payload zero",
         ),
         (
             "aaaaaaa1-0000-4000-8000-000000000002",
             1,
-            None, // previous filled below from entry 0
-            b"synthetic receipt payload one".as_slice(),
+            b"synthetic receipt payload one",
         ),
     ];
     let mut prev_entry = String::new();
-    for (receipt_id, sequence, _placeholder, payload) in envelopes {
+    for (receipt_id, sequence, payload) in envelopes {
         let payload_type = "https://vestige.dev/receipt/v1";
         let signature = [0xA5u8; 64];
         let key_id = "fixture-signing-key";
         let pd = payload_digest(payload);
         let ed = entry_digest(payload_type, payload, key_id, &signature);
         let previous = if sequence == 0 {
-            None
+            Value::Null
         } else {
-            Some(prev_entry.clone())
+            text(&prev_entry)
         };
         let envelope = serde_json::json!({
             "payloadType": payload_type,
             "payload": base64::engine::general_purpose::STANDARD.encode(payload),
-            "signatures": [{ "keyid": key_id, "sig": base64::engine::general_purpose::STANDARD.encode(signature) }]
+            "signatures": [{
+                "keyid": key_id,
+                "sig": base64::engine::general_purpose::STANDARD.encode(signature)
+            }]
         });
-        conn.execute(
-            "INSERT INTO receipt_envelopes
-             (receipt_id, chain_id, sequence, previous_entry_digest, payload_type, envelope_json,
-              payload_digest, entry_digest, signing_key_id, signer_key_fingerprint, issued_at, stored_at)
-             VALUES (?1, 'fixture-chain', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
-            rusqlite::params![
-                receipt_id,
-                sequence,
-                previous,
-                payload_type,
-                envelope.to_string(),
-                pd,
-                ed,
-                key_id,
-                "f".repeat(64),
-                "2026-03-05T12:00:00+00:00"
+        let fingerprint = "f".repeat(64);
+        insert_row(
+            conn,
+            "receipt_envelopes",
+            &[
+                ("receipt_id", text(receipt_id)),
+                ("chain_id", text("fixture-chain")),
+                ("sequence", Value::Integer(sequence)),
+                ("previous_entry_digest", previous),
+                ("payload_type", text(payload_type)),
+                ("envelope_json", text(&envelope.to_string())),
+                ("payload_digest", text(&pd)),
+                ("entry_digest", text(&ed)),
+                ("signing_key_id", text(key_id)),
+                ("signer_key_fingerprint", text(&fingerprint)),
+                ("issued_at", text("2026-03-05T12:00:00+00:00")),
+                ("stored_at", text("2026-03-05T12:00:00+00:00")),
             ],
         )?;
         prev_entry = ed;
     }
-
-    // ---- one V40 walk receipt ----------------------------------------------
-    conn.execute(
-        "INSERT INTO walk_receipts (receipt_id, digest, canonical_json, engine_version, created_at)
-         VALUES ('bbbbbbb1-0000-4000-8000-000000000001',
-                 'c0ffee', '{\"kind\":\"walk\",\"synthetic\":true}', 'v3-walk-1',
-                 '2026-03-10T14:00:00+00:00')",
-        [],
-    )?;
-
-    conn.pragma_update(None, "user_version", 38)?;
     Ok(())
 }
