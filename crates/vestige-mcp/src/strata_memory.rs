@@ -42,8 +42,11 @@ pub fn open(dir: impl AsRef<Path>) -> Result<Arc<Storage>, StorageError> {
     Ok(memory)
 }
 
-fn open_slots() -> &'static Mutex<Vec<(PathBuf, Weak<StrataMemory>)>> {
-    static SLOTS: OnceLock<Mutex<Vec<(PathBuf, Weak<StrataMemory>)>>> = OnceLock::new();
+type OpenSlot = (PathBuf, Weak<StrataMemory>);
+type OpenSlots = Mutex<Vec<OpenSlot>>;
+
+fn open_slots() -> &'static OpenSlots {
+    static SLOTS: OnceLock<OpenSlots> = OnceLock::new();
     SLOTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
