@@ -1,18 +1,18 @@
-//! Real v3 fixture upgrades: happy path, injected import/verify failures, and
-//! a SIGKILL mid-upgrade followed by a relaunch.
+//! Process-level first launch. These tests spawn the main binaries, which
+//! must already be in the same target directory as `vestige-upgrade`
+//! (`cargo build -p vestige-mcp --bins`).
 
 use std::fs;
-use std::io::Read;
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
-use vestige_mcp::auto_upgrade::{
-    self, LOG_DIR_NAME, UPGRADE_LOG_NAME, UpgradeOptions, UpgradeStatus, V311_RELEASE,
-    staging_directory,
-};
+use vestige_upgrade::{LOG_DIR_NAME, UPGRADE_LOG_NAME, V311_RELEASE, staging_directory};
+
+const UPGRADE_HINT: &str = "install vestige-upgrade from https://github.com/samvallad33/vestige/releases and place it next to this binary or on PATH";
 
 fn fixture_db() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -75,7 +75,7 @@ fn knowledge_ids(db: &Path) -> Vec<String> {
 }
 
 fn assert_fixture_landed(db: &Path, log_dir: &Path) {
-    let verified = strata_verify::migration::verify_migrated_log(log_dir).unwrap();
+    let verified = strata_verify::verify_path(log_dir);
     assert!(verified.ok, "{verified:?}");
     let snap = snapshot(log_dir);
     let ids = knowledge_ids(db);
@@ -169,120 +169,28 @@ fn assert_v3_source_kept(db: &Path, log_dir: &Path) {
     }
 }
 
-#[test]
-fn v311_upgrade_keeps_source_and_source_updated_at() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = plant(dir.path());
-    let status = auto_upgrade::upgrade_if_needed(&db).unwrap();
-    let UpgradeStatus::StrataReady { log_dir } = status else {
-        panic!("expected an installed strata log");
-    };
-    assert_v3_source_kept(&db, &log_dir);
-}
-
-#[test]
-fn happy_path_on_real_v3_fixture_keeps_the_source_hash() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = plant(dir.path());
-    let before = sha256_file(&db);
-    // A crashed previous attempt must be discarded, not resumed.
-    let staging = staging_directory(dir.path());
-    fs::create_dir_all(&staging).unwrap();
-    fs::write(staging.join("leftover.seg"), b"not a log").unwrap();
-
-    let status = auto_upgrade::upgrade_if_needed(&db).unwrap();
-    let UpgradeStatus::StrataReady { log_dir } = status else {
-        panic!("expected an installed strata log");
-    };
-    assert_eq!(before, sha256_file(&db), "upgrade modified the v3 file");
-    assert!(!staging.exists(), "staging survived a successful swap");
-    assert!(log_dir.join("strata.key").is_file() || dir_has_seg(&log_dir));
-    let backups: Vec<_> = fs::read_dir(dir.path())
-        .unwrap()
-        .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().contains(".v3-backup-"))
-        .map(|entry| entry.path())
-        .collect();
-    assert_eq!(backups.len(), 1, "{backups:?}");
-    assert_eq!(
-        before,
-        sha256_file(&backups[0]),
-        "backup is not a byte copy"
-    );
-    assert_fixture_landed(&db, &log_dir);
-
-    let again = auto_upgrade::upgrade_if_needed(&db).unwrap();
-    assert!(matches!(again, UpgradeStatus::StrataReady { .. }));
-    assert_eq!(before, sha256_file(&db));
-    let backups_after = fs::read_dir(dir.path())
-        .unwrap()
-        .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().contains(".v3-backup-"))
-        .count();
-    assert_eq!(backups_after, 1, "relaunch took another backup");
-}
-
-#[test]
-fn import_failure_leaves_the_v3_hash_and_names_v311() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = plant(dir.path());
-    let file = fs::OpenOptions::new().write(true).open(&db).unwrap();
-    file.set_len(4096).unwrap();
-    drop(file);
-    let before = sha256_file(&db);
-    let err = auto_upgrade::upgrade_if_needed(&db).unwrap_err();
-    let text = err.to_string();
-    assert_failure_message(&text, &dir.path().join(UPGRADE_LOG_NAME));
-    assert!(text.contains("import failed"), "{text}");
-    assert_eq!(before, sha256_file(&db));
-    assert!(!staging_directory(dir.path()).exists());
-    assert!(!dir.path().join(LOG_DIR_NAME).exists());
-}
-
-#[test]
-fn verify_failure_leaves_the_v3_hash_and_names_v311() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = plant(dir.path());
-    let before = sha256_file(&db);
-    let err = auto_upgrade::upgrade_with(
-        &db,
-        UpgradeOptions {
-            after_import: Some(Box::new(|staging| {
-                let seg = fs::read_dir(staging)?
-                    .flatten()
-                    .map(|entry| entry.path())
-                    .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("seg"))
-                    .ok_or_else(|| {
-                        std::io::Error::new(std::io::ErrorKind::NotFound, "no segment to tamper")
-                    })?;
-                let mut bytes = fs::read(&seg)?;
-                let index = bytes.len() / 2;
-                bytes[index] ^= 0xff;
-                fs::write(&seg, bytes)?;
-                Ok(())
-            })),
-        },
-    )
-    .unwrap_err();
-    let text = err.to_string();
-    assert_failure_message(&text, &dir.path().join(UPGRADE_LOG_NAME));
-    assert!(
-        text.contains("strata-verify failed"),
-        "verify injection did not fail closed: {text}"
-    );
-    assert_eq!(before, sha256_file(&db));
-    assert!(!staging_directory(dir.path()).exists());
-    assert!(!dir.path().join(LOG_DIR_NAME).exists());
-}
-
 struct Running {
     child: std::process::Child,
     stdout: Arc<Mutex<String>>,
     stderr: Arc<Mutex<String>>,
 }
 
+fn target_bin(name: &str) -> PathBuf {
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_vestige-upgrade"))
+        .parent()
+        .unwrap()
+        .join(name);
+    assert!(
+        path.is_file(),
+        "missing {}; build the main binaries with `cargo build -p vestige-mcp --bins`",
+        path.display()
+    );
+    path
+}
+
 fn spawn_mcp(data_dir: &Path) -> Running {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_vestige-mcp"))
+    let bin = target_bin("vestige-mcp");
+    let mut child = Command::new(&bin)
         .arg("--data-dir")
         .arg(data_dir)
         .env("HOME", data_dir)
@@ -518,7 +426,8 @@ fn sigkill_mid_upgrade_then_relaunch_succeeds() {
 }
 
 fn run_cli_stats(data_dir: &Path) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_vestige"))
+    let bin = target_bin("vestige");
+    Command::new(&bin)
         .args([
             "--data-dir",
             data_dir.to_str().expect("temp path is utf-8"),
@@ -627,8 +536,9 @@ fn two_cli_processes_upgrade_the_fixture_once() {
     let db = plant(dir.path());
     let before = sha256_file(&db);
     let dir_s = dir.path().to_str().expect("temp path is utf-8");
+    let bin = target_bin("vestige");
     let spawn = || {
-        Command::new(env!("CARGO_BIN_EXE_vestige"))
+        Command::new(&bin)
             .args(["--data-dir", dir_s, "stats"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -678,4 +588,208 @@ fn assert_memory_count(db: &Path, log_dir: &Path) {
         snap.nodes.len(),
         ids.len()
     );
+}
+
+fn copy_exe(src: &Path, dst: &Path) {
+    fs::copy(src, dst).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(dst).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(dst, perms).unwrap();
+    }
+}
+
+fn cargo_bin(name: &str) -> PathBuf {
+    if name == "vestige-upgrade" {
+        PathBuf::from(env!("CARGO_BIN_EXE_vestige-upgrade"))
+    } else {
+        target_bin(name)
+    }
+}
+
+fn isolated_bins(dir: &Path, names: &[&str]) -> PathBuf {
+    let bin_dir = dir.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    for name in names {
+        let src = cargo_bin(name);
+        assert!(
+            src.is_file(),
+            "missing {}; build it before this test",
+            src.display()
+        );
+        copy_exe(&src, &bin_dir.join(name));
+    }
+    bin_dir
+}
+
+/// Real stdio: vestige-mcp finds the sibling importer, upgrades the v3.1.1
+/// fixture, finishes initialize, and `vestige strata-verify` accepts the log.
+#[test]
+fn stdio_upgrade_keeps_source_and_passes_strata_verify() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let db = plant(&data);
+    let before = fs::read(&db).unwrap();
+    let bin_dir = isolated_bins(dir.path(), &["vestige-mcp", "vestige-upgrade"]);
+    let mcp = bin_dir.join("vestige-mcp");
+
+    let mut child = Command::new(&mcp)
+        .arg("--data-dir")
+        .arg(&data)
+        .env("HOME", &data)
+        .env("PATH", "/usr/bin:/bin")
+        .env("VESTIGE_DASHBOARD_ENABLED", "false")
+        .env("VESTIGE_HTTP_ENABLED", "0")
+        .env("VESTIGE_AUTOPILOT_ENABLED", "0")
+        .env("RUST_LOG", "error")
+        .env_remove("VESTIGE_DATA_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn copied vestige-mcp");
+
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut err_pipe = child.stderr.take().unwrap();
+    let stderr = Arc::new(Mutex::new(String::new()));
+    let err_buf = Arc::clone(&stderr);
+    std::thread::spawn(move || {
+        let mut tmp = String::new();
+        let _ = std::io::Read::read_to_string(&mut err_pipe, &mut tmp);
+        *err_buf.lock().unwrap() = tmp;
+    });
+
+    let init = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": { "name": "upgrade-stdio", "version": "1" }
+        }
+    });
+    writeln!(stdin, "{init}").unwrap();
+    stdin.flush().unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        })
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let mut reader = std::io::BufReader::new(stdout);
+    let response = loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line).unwrap();
+        assert!(n > 0, "server closed stdout before initialize");
+        let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        if value.get("id").is_some() {
+            break value;
+        }
+    };
+    assert!(
+        response.get("error").is_none(),
+        "{response} stderr {}",
+        stderr.lock().unwrap()
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+    std::thread::sleep(Duration::from_millis(50));
+
+    assert_eq!(
+        before,
+        fs::read(&db).unwrap(),
+        "stdio upgrade changed vestige.db"
+    );
+    let log_dir = data.join(LOG_DIR_NAME);
+    assert_v3_source_kept(&db, &log_dir);
+
+    let verify = Command::new(target_bin("vestige"))
+        .arg("strata-verify")
+        .arg(&log_dir)
+        .output()
+        .expect("spawn vestige strata-verify");
+    let verify_out = String::from_utf8_lossy(&verify.stdout);
+    let verify_err = String::from_utf8_lossy(&verify.stderr);
+    assert!(
+        verify.status.success(),
+        "strata-verify failed\n{verify_out}\n{verify_err}"
+    );
+    assert!(
+        verify_out.contains("OK"),
+        "strata-verify did not print OK\n{verify_out}"
+    );
+}
+
+/// No importer next to the binary and none on PATH: one-line hint, zero writes.
+#[test]
+fn missing_upgrade_refuses_with_hint_and_leaves_db_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let db = plant(&data);
+    let before = fs::read(&db).unwrap();
+    let bin_dir = isolated_bins(dir.path(), &["vestige-mcp", "vestige"]);
+
+    let mcp = Command::new(bin_dir.join("vestige-mcp"))
+        .arg("--data-dir")
+        .arg(&data)
+        .env("HOME", &data)
+        .env("PATH", "/usr/bin:/bin")
+        .env("VESTIGE_DASHBOARD_ENABLED", "false")
+        .env("VESTIGE_HTTP_ENABLED", "0")
+        .env("VESTIGE_AUTOPILOT_ENABLED", "0")
+        .env("RUST_LOG", "error")
+        .env_remove("VESTIGE_DATA_DIR")
+        .output()
+        .expect("spawn vestige-mcp without importer");
+    assert!(!mcp.status.success(), "missing importer exited 0");
+    let mcp_err = String::from_utf8_lossy(&mcp.stderr);
+    assert!(
+        mcp_err.contains(UPGRADE_HINT),
+        "mcp stderr missing the install hint:\n{mcp_err}"
+    );
+    assert!(
+        mcp_err.contains("was not modified"),
+        "mcp stderr did not say the store was untouched:\n{mcp_err}"
+    );
+    assert_eq!(before, fs::read(&db).unwrap(), "mcp touched vestige.db");
+    assert_no_sqlite_sidecars(&db);
+    assert!(!data.join(LOG_DIR_NAME).exists());
+    assert!(!staging_directory(&data).exists());
+
+    let cli = Command::new(bin_dir.join("vestige"))
+        .args([
+            "--data-dir",
+            data.to_str().expect("temp path is utf-8"),
+            "stats",
+        ])
+        .env("HOME", &data)
+        .env("PATH", "/usr/bin:/bin")
+        .env("RUST_LOG", "error")
+        .env_remove("VESTIGE_DATA_DIR")
+        .output()
+        .expect("spawn vestige without importer");
+    assert!(!cli.status.success(), "missing importer cli exited 0");
+    let cli_err = String::from_utf8_lossy(&cli.stderr);
+    assert!(
+        cli_err.contains(UPGRADE_HINT),
+        "cli stderr missing the install hint:\n{cli_err}"
+    );
+    assert_eq!(
+        before,
+        fs::read(&db).unwrap(),
+        "cli touched vestige.db after the refusal"
+    );
+    assert_no_sqlite_sidecars(&db);
 }

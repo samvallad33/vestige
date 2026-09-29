@@ -6,7 +6,8 @@
   "bin": {
     "vestige-mcp": "bin/vestige-mcp.js",
     "vestige": "bin/vestige.js",
-    "vestige-restore": "bin/vestige-restore.js"
+    "vestige-restore": "bin/vestige-restore.js",
+    "vestige-upgrade": "bin/vestige-upgrade.js"
   },
   "scripts": {
     "test:pnpm-global-install": "node --test tests/pnpm-global-install.test.js"

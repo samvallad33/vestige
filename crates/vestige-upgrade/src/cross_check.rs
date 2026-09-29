@@ -18,8 +18,7 @@ use std::path::Path;
 use strata_migrate::records::{
     KIND_EDGE, KIND_MIGRATION_RECEIPT, KIND_NODE, KIND_TOMBSTONE, decode_receipt,
 };
-
-use crate::readonly;
+use strata_verify::scan_log;
 
 /// Outcome of a full migrated-log verification.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -68,7 +67,7 @@ fn expected_counts(
 pub fn verify_migrated_log(dir: &Path) -> Result<MigrationVerifyReport, String> {
     // Pass 1: chain. A flipped sealed byte, truncation, or the wrong
     // strata.key fails here. The scan only reads.
-    let scan = readonly::scan_log(dir)?;
+    let scan = scan_log(dir)?;
     let frames = scan.frames;
     let frames_total = frames.len() as u64;
 

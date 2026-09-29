@@ -150,7 +150,9 @@ jobs:
           NODE
 
       - name: Build
-        run: cargo build --locked --package vestige-mcp --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
+        run: |
+          cargo build --locked --package vestige-mcp --release --target ${{ matrix.target }} ${{ matrix.cargo_flags }}
+          cargo build --locked --package vestige-upgrade --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
@@ -158,9 +160,9 @@ jobs:
           cp docs/INSTALL-INTEL-MAC.md target/${{ matrix.target }}/release/ 2>/dev/null || true
           cd target/${{ matrix.target }}/release
           if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
-            tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore INSTALL-INTEL-MAC.md
+            tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade INSTALL-INTEL-MAC.md
           else
-            tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore
+            tar -czf ../../../vestige-mcp-${{ matrix.target }}.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade
           fi
 
       - name: Package (Windows)
@@ -168,7 +170,7 @@ jobs:
         shell: pwsh
         run: |
           cd target/${{ matrix.target }}/release
-          Compress-Archive -Path vestige-mcp.exe,vestige.exe,vestige-restore.exe -DestinationPath ../../../vestige-mcp-${{ matrix.target }}.zip
+          Compress-Archive -Path vestige-mcp.exe,vestige.exe,vestige-restore.exe,vestige-upgrade.exe -DestinationPath ../../../vestige-mcp-${{ matrix.target }}.zip
 
       - name: Generate checksum
         shell: bash
@@ -324,12 +326,12 @@ jobs:
           ORT_CXX_STDLIB: static=stdc++
           CXXSTDLIB: static=stdc++
           RUSTFLAGS: -C link-arg=-static-libstdc++ -L native=/usr/lib/gcc/x86_64-linux-gnu/13
-        run: cargo build --locked --package vestige-mcp --release --target x86_64-unknown-linux-gnu
+        run: cargo build --locked --package vestige-mcp --package vestige-upgrade --release --target x86_64-unknown-linux-gnu
 
       - name: Package
         run: |
           cd target/x86_64-unknown-linux-gnu/release
-          tar -czf ../../../vestige-mcp-x86_64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore
+          tar -czf ../../../vestige-mcp-x86_64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade
 
       - name: Check glibc ceiling
         run: bash scripts/check-linux-glibc.sh target/x86_64-unknown-linux-gnu/release/vestige-mcp
@@ -527,12 +529,12 @@ jobs:
           ORT_CXX_STDLIB: static=stdc++
           CXXSTDLIB: static=stdc++
           RUSTFLAGS: -C link-arg=-static-libstdc++ -L native=/usr/lib/gcc/aarch64-linux-gnu/13
-        run: cargo build --locked --package vestige-mcp --release --target aarch64-unknown-linux-gnu
+        run: cargo build --locked --package vestige-mcp --package vestige-upgrade --release --target aarch64-unknown-linux-gnu
 
       - name: Package
         run: |
           cd target/aarch64-unknown-linux-gnu/release
-          tar -czf ../../../vestige-mcp-aarch64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore
+          tar -czf ../../../vestige-mcp-aarch64-unknown-linux-gnu.tar.gz vestige-mcp vestige vestige-restore vestige-upgrade
 
       - name: Check glibc ceiling
         run: bash scripts/check-linux-glibc.sh target/aarch64-unknown-linux-gnu/release/vestige-mcp
@@ -774,6 +776,7 @@ jobs:
           # to cargo as --package, and "unknown package: 24" is what you get.
           cargo ndk -t arm64-v8a --platform "$ANDROID_API" build --release -p vestige-mcp \
             --no-default-features --features connectors,cloud-sync
+          cargo ndk -t arm64-v8a --platform "$ANDROID_API" build --release -p vestige-upgrade
 
       - name: Only bionic may be a runtime dependency
         run: |
@@ -789,7 +792,7 @@ jobs:
       - name: Package
         run: |
           cd target/aarch64-linux-android/release
-          tar czf ../../../vestige-mcp-aarch64-linux-android.tar.gz vestige-mcp
+          tar czf ../../../vestige-mcp-aarch64-linux-android.tar.gz vestige-mcp vestige-upgrade
 
       - name: Upload android artifact
         uses: actions/upload-artifact@v4

@@ -12,11 +12,10 @@ repository = "https://github.com/samvallad33/vestige"
 publish = false
 
 [features]
-# The shipped binaries boot a Strata log and upgrade a v3 file on first open.
-# `migrate-to-strata` is the feature that links strata-migrate and its bundled
-# rusqlite. It is on in the default (shipped) build. `legacy-sqlite` stays off
-# the shipped graph; unit tests and the v3-engine harness opt into it.
-default = ["connectors", "cloud-sync", "codebase-git", "migrate-to-strata"]
+# The shipped binaries boot a Strata log. They do not link SQLite.
+# `vestige-upgrade` (a separate package) owns the v3 reader. `legacy-sqlite`
+# stays off the shipped graph; unit tests and the v3-engine harness opt into it.
+default = ["connectors", "cloud-sync", "codebase-git"]
 # LEGACY SQLITE QUARANTINE (build/t5-legacy-isolation), mirroring
 # vestige-core. Gates every Storage/sqlite-touching module (server, tools,
 # dashboard, cognitive, resources, trace_recorder, autopilot,
@@ -24,9 +23,6 @@ default = ["connectors", "cloud-sync", "codebase-git", "migrate-to-strata"]
 # and forwards to vestige-core's `legacy-sqlite` + `bundled-sqlite`.
 # Off by default. Unit tests and the v3-engine harness opt in.
 legacy-sqlite = ["vestige-core/legacy-sqlite", "vestige-core/bundled-sqlite", "dep:rusqlite"]
-# First-launch upgrade and `vestige migrate-to-strata`. This is the dependency
-# edge that links bundled rusqlite. On in the shipped default build above.
-migrate-to-strata = ["dep:strata", "dep:strata-migrate", "dep:strata-verify"]
 # Raw engine test harness for THIS crate's own test builds (feature-gated
 # restart/creation tests). Never in default; the shipped binary keeps the
 # guard + creation block armed.
@@ -86,15 +82,9 @@ path = "src/bin/cli.rs"
 # always-off stubs (w1b).
 vestige-core = { version = "3.0.0", path = "../vestige-core", default-features = false }
 
-# Segment scan for `vestige stats` after the switch. No rusqlite of its own.
-# Optional so `--no-default-features` stays free of the upgrade stack.
-strata = { path = "../strata", optional = true }
-# One-shot SQLite -> STRATA migration. Optional except through the shipped
-# `migrate-to-strata` feature: this crate depends on bundled rusqlite.
-strata-migrate = { path = "../strata-migrate", optional = true }
-# Read-only verifier. Same feature as migration: it depends on strata-migrate
-# and therefore bundled rusqlite.
-strata-verify = { path = "../strata-verify", optional = true }
+# Strata-log verification only. The v3 receipt cross-check lives in
+# `vestige-upgrade`, so this dependency does not link SQLite.
+strata-verify = { path = "../strata-verify" }
 
 # Strata log the shipped MCP server boots. Workspace-excluded; path dep only.
 strata-store = { path = "../strata-store" }
@@ -159,12 +149,8 @@ libc = "0.2"
 
 [dev-dependencies]
 ctor = "0.4"
-rusqlite = { version = "0.40", features = ["bundled"] }
 sha2 = "0.11"
 tempfile = "3"
-strata = { path = "../strata" }
-strata-migrate = { path = "../strata-migrate" }
-strata-verify = { path = "../strata-verify" }
 
 # Integration tests drive the Storage-backed server/tools; the e2e binary
 # test also reads the SQLite file directly (backup WAL). Skipped in a
@@ -172,10 +158,6 @@ strata-verify = { path = "../strata-verify" }
 # the guard must be armed in test builds too (audit finding: a fresh install
 # created a SQLite store and then refused to open it, invisible while the
 # guard was test-disabled).
-[[test]]
-name = "auto_upgrade"
-required-features = ["migrate-to-strata"]
-
 [[test]]
 name = "e2e_failure_cases"
 required-features = ["legacy-sqlite"]

@@ -10,8 +10,7 @@
 //! `LegacySqliteDisabled` error at runtime.
 
 pub mod actor_surface;
-#[cfg(feature = "migrate-to-strata")]
-pub mod auto_upgrade;
+pub mod upgrade_launch;
 
 pub mod autopilot;
 pub mod cognitive;

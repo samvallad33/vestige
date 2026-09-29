@@ -12,13 +12,18 @@ use strata::{
 };
 
 /// One durable frame, in log order.
-pub(crate) struct ScannedFrame {
+pub struct ScannedFrame {
+    /// Frame kind byte.
     pub kind: u8,
+    /// Frame payload. The scanner already checked its hash.
     pub payload: Vec<u8>,
 }
 
-pub(crate) struct Scan {
+/// A chain-valid scan of every segment in a directory.
+pub struct Scan {
+    /// Frames in log order.
     pub frames: Vec<ScannedFrame>,
+    /// Segment files that passed the chain check.
     pub segments: u32,
 }
 
@@ -35,7 +40,7 @@ pub(crate) fn dir_has_segments(dir: &Path) -> bool {
 /// Walk every segment in `dir`, checking the hash chain, payload hashes,
 /// and sealed-trailer signatures. A torn tail is an error: this scanner
 /// does not truncate it.
-pub(crate) fn scan_log(dir: &Path) -> Result<Scan, String> {
+pub fn scan_log(dir: &Path) -> Result<Scan, String> {
     if !dir.is_dir() {
         return Err(format!("not a directory: {}", dir.display()));
     }

@@ -2388,7 +2388,6 @@ dependencies = [
  "strata",
  "strata-gate",
  "strata-kernel",
- "strata-migrate",
 ]
 
 [[package]]
@@ -2940,8 +2939,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "strata",
- "strata-migrate",
  "strata-store",
  "strata-verify",
  "subtle",
@@ -2979,6 +2976,22 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "vestige-upgrade"
+version = "3.1.1"
+dependencies = [
+ "ed25519-dalek",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "strata",
+ "strata-migrate",
+ "strata-verify",
+ "tempfile",
 ]
 
 [[package]]

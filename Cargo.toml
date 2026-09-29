@@ -4,6 +4,7 @@ members = [
     "crates/vestige-core",
     "crates/vestige-spacetime",
     "crates/vestige-mcp",
+    "crates/vestige-upgrade",
     "tests/e2e",
     "tests/phase_1",
     "tests/differential",

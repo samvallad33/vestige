@@ -1,0 +1,28 @@
+[package]
+name = "vestige-upgrade"
+version = "3.1.1"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "v3 SQLite reader and one-shot upgrade into a Strata log. Not linked into the main 4.0 binaries."
+publish = false
+
+[dependencies]
+strata = { path = "../strata" }
+strata-migrate = { path = "../strata-migrate" }
+strata-verify = { path = "../strata-verify" }
+libc = "0.2"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+ed25519-dalek = { version = "3", default-features = false, features = ["fast"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde_json = "1"
+sha2 = "0.11"
+strata = { path = "../strata" }
+strata-migrate = { path = "../strata-migrate" }
+tempfile = "3"
+
+[[bin]]
+name = "vestige-upgrade"
+path = "src/main.rs"

@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use strata_verify::migration::verify_migrated_log;
+use vestige_upgrade::verify_migrated_log;
 
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

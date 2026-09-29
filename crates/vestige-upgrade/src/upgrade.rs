@@ -1,15 +1,11 @@
-//! First-launch v3 → strata upgrade.
+//! First-launch v3 → strata upgrade, owned by the `vestige-upgrade` binary.
 //!
-//! `vestige-mcp` and the `vestige` CLI both call [`upgrade_if_needed`] before
-//! opening a store. The v3 file is only ever read. The import itself is
+//! The v3 file is only ever read. The import itself is
 //! `strata_migrate::migrate_with_options` into `log/`: that function stages
 //! the log, holds `File::try_lock` until the receipt is sealed, verifies,
-//! and renames. A dead owner's staging directory is wiped there, so SIGKILL
-//! recovery is the same code `migrate-to-strata` runs. This module only
-//! decides that a v3 file needs that import, copies the sqlite family, and
-//! records progress on stderr. [`upgrade_with`] is the only startup decision
-//! that calls `vestige_core::detect_v3`: `vestige-mcp` and the CLI both enter
-//! through [`upgrade_if_needed`].
+//! and renames. A dead owner's staging directory is wiped there. This module
+//! decides that a v3 file needs that import, copies the sqlite family, runs
+//! the receipt cross-check, and records progress on stderr.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -17,6 +13,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use strata_migrate::MigrateOptions;
+
+use crate::cross_check;
 
 /// Installed strata log. Same relative path `StrataStore` opens.
 /// Staging for this destination is `log` plus [`strata_migrate::STAGING_SUFFIX`]:
@@ -89,7 +87,7 @@ pub fn upgrade_with(
         return Ok(status);
     }
 
-    let detected = match vestige_core::detect_v3(db_path) {
+    let detected = match sqlite_header(db_path) {
         Ok(v) => v,
         Err(e) => return Err(fail(&log_path, format!("v3 detection failed: {e}"))),
     };
@@ -144,7 +142,7 @@ pub fn upgrade_with(
                     hook(staging).map_err(|err| format!("import failed: {err}"))?;
                 }
                 note(&log_path_hook, "vestige: verifying strata log");
-                match strata_verify::migration::verify_migrated_log(staging) {
+                match cross_check::verify_migrated_log(staging) {
                     Ok(verified) if verified.ok => Ok(()),
                     Ok(verified) => Err(format!(
                         "strata-verify failed: {}",
@@ -199,6 +197,65 @@ pub fn staging_directory(data_dir: &Path) -> PathBuf {
     let mut name = std::ffi::OsString::from(LOG_DIR_NAME);
     name.push(strata_migrate::STAGING_SUFFIX);
     data_dir.join(name)
+}
+
+struct Detected {
+    path: PathBuf,
+    schema_version: u32,
+}
+
+/// SQLite magic plus the `schema_version` table, read through an immutable URI.
+/// A missing file or a non-SQLite header is `Ok(None)`.
+fn sqlite_header(path: &Path) -> Result<Option<Detected>, String> {
+    const MAGIC: &[u8; 16] = b"SQLite format 3\0";
+    let mut header = [0u8; 16];
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(_) => return Ok(None),
+    };
+    let mut filled = 0usize;
+    while filled < header.len() {
+        match std::io::Read::read(&mut file, &mut header[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(ref err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err.to_string()),
+        }
+    }
+    if filled < MAGIC.len() || &header != MAGIC {
+        return Ok(None);
+    }
+    let schema_version = schema_version_readonly(path).unwrap_or(0);
+    Ok(Some(Detected {
+        path: path.to_path_buf(),
+        schema_version,
+    }))
+}
+
+fn schema_version_readonly(path: &Path) -> Option<u32> {
+    let uri = format!("file:{}?mode=ro&immutable=1", uri_encode_path(path));
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+        | rusqlite::OpenFlags::SQLITE_OPEN_URI
+        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = rusqlite::Connection::open_with_flags(uri, flags).ok()?;
+    conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+        row.get(0)
+    })
+    .ok()
+}
+
+fn uri_encode_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let mut out = String::with_capacity(text.len());
+    for byte in text.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b'-' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 fn data_dir_of(db_path: &Path) -> PathBuf {

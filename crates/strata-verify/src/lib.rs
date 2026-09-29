@@ -33,8 +33,9 @@
 
 pub mod layout;
 mod live;
-pub mod migration;
 mod readonly;
+
+pub use readonly::{Scan, ScannedFrame, scan_log};
 
 use std::fmt;
 use std::path::Path;
@@ -680,13 +681,13 @@ pub struct PathReport {
 /// Verify `dir` without writing.
 ///
 /// Layout detection, in order:
-/// * segment files in `dir` — a migrated log when a receipt frame is
-///   present, otherwise a raw strata log (chain only);
+/// * segment files in `dir` — chain, payload hashes, and sealed trailers.
+///   The v3 receipt cross-check lives in `vestige-upgrade`;
 /// * `log/*.seg` plus `store.meta` — a live strata-store;
 /// * otherwise the kernel.log / gate.log layout.
 ///
-/// A successful migrated-log check does not continue into the kernel
-/// layout. A missing path is a failure and is not created.
+/// A segment directory is not also checked as a kernel.log layout.
+/// A missing path is a failure and is not created.
 pub fn verify_path(dir: &Path) -> PathReport {
     if !dir.exists() {
         return path_failure(format!("path does not exist: {}", dir.display()));
@@ -709,20 +710,6 @@ fn verify_segment_dir(dir: &Path) -> PathReport {
         Ok(scan) => scan,
         Err(err) => return path_failure(err),
     };
-    let has_receipt = scan
-        .frames
-        .iter()
-        .any(|frame| frame.kind == strata_migrate::records::KIND_MIGRATION_RECEIPT);
-    if has_receipt {
-        return match migration::verify_migrated_log(dir) {
-            Ok(report) => {
-                let failures = report.failures.clone();
-                let ok = report.ok;
-                path_from(ok, &report, failures)
-            }
-            Err(err) => path_failure(err),
-        };
-    }
     let report = live::LiveVerifyReport {
         ok: true,
         frames_total: scan.frames.len() as u64,

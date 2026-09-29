@@ -5,6 +5,8 @@ bin/vestige-mcp
 bin/vestige-mcp.exe
 bin/vestige-restore
 bin/vestige-restore.exe
+bin/vestige-upgrade
+bin/vestige-upgrade.exe
 bin/*.tar.gz
 bin/*.zip
 

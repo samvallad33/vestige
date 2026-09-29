@@ -34,7 +34,7 @@ test('a pnpm global install exposes commands when lifecycle scripts are ignored'
       `const fs = require('fs');\n` +
         `const path = require('path');\n` +
         `const binDir = path.join(__dirname, '..', 'bin');\n` +
-        `for (const name of ['vestige', 'vestige-mcp', 'vestige-restore']) {\n` +
+        `for (const name of ['vestige', 'vestige-mcp', 'vestige-restore', 'vestige-upgrade']) {\n` +
         `  const binary = path.join(binDir, name);\n` +
         `  fs.writeFileSync(binary, '#!/bin/sh\\necho "fixture ' + name + ' $@"\\n');\n` +
         `  fs.chmodSync(binary, 0o755);\n` +

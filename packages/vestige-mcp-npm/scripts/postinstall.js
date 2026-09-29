@@ -59,7 +59,9 @@ const targetDir = path.join(__dirname, '..', 'bin');
 const archivePath = path.join(targetDir, archiveName);
 const checksumPath = path.join(targetDir, `${archiveName}.sha256`);
 const expectedArchiveMembers = new Set(
-  ['vestige-mcp', 'vestige', 'vestige-restore'].map((name) => (isWindows ? `${name}.exe` : name))
+  ['vestige-mcp', 'vestige', 'vestige-restore', 'vestige-upgrade'].map((name) =>
+    isWindows ? `${name}.exe` : name
+  )
 );
 // Docs that some release archives legitimately include alongside the binaries
 // (e.g. the x86_64-apple-darwin tarball ships INSTALL-INTEL-MAC.md).
@@ -199,7 +201,7 @@ function validateArchiveEntries(archivePath) {
 function makeExecutable(binDir) {
   if (isWindows) return;
 
-  const binaries = ['vestige-mcp', 'vestige', 'vestige-restore'];
+  const binaries = ['vestige-mcp', 'vestige', 'vestige-restore', 'vestige-upgrade'];
   for (const bin of binaries) {
     const binPath = path.join(binDir, bin);
     if (fs.existsSync(binPath)) {
