@@ -430,26 +430,25 @@ async fn serve() {
         }
     };
 
-    // PR 0a: a v3 SQLite store at the configured path is refused before any
-    // storage constructor runs, so tools never see a half-open store. The
-    // guard itself never writes; detection is a 100-byte header read. The
-    // default-path case (None) is guarded inside the storage constructor.
-    if let Some(db_path) = storage_path.as_deref() {
-        if let Ok(Some(v3)) = vestige_core::detect_v3(db_path) {
-            error!(
-                "v3 SQLite store at {} (schema version {}) cannot be opened by 4.0. {}",
-                v3.path.display(),
-                v3.schema_version,
-                vestige_core::MIGRATION_HINT
-            );
-            eprintln!(
-                "v3 SQLite store at {} (schema version {}) cannot be opened by 4.0. {}",
-                v3.path.display(),
-                v3.schema_version,
-                vestige_core::MIGRATION_HINT
-            );
-            std::process::exit(1);
-        }
+    // Same switch as the constructor guard. With `v3-engine` unified in,
+    // a racing start must reach open_storage and log a storage-init error.
+    if vestige_core::v3_rw_guard_armed()
+        && let Some(db_path) = storage_path.as_deref()
+        && let Ok(Some(v3)) = vestige_core::detect_v3(db_path)
+    {
+        error!(
+            "Failed to initialize storage: v3 SQLite store at {} (schema version {}) cannot be opened by 4.0. {}",
+            v3.path.display(),
+            v3.schema_version,
+            vestige_core::MIGRATION_HINT
+        );
+        eprintln!(
+            "v3 SQLite store at {} (schema version {}) cannot be opened by 4.0. {}",
+            v3.path.display(),
+            v3.schema_version,
+            vestige_core::MIGRATION_HINT
+        );
+        std::process::exit(1);
     }
 
     // Initialize storage with optional custom data directory.
