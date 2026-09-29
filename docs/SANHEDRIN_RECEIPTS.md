@@ -10,6 +10,10 @@
 > [`SANHEDRIN_TEST_INTEGRITY_DELTAS.md`](SANHEDRIN_TEST_INTEGRITY_DELTAS.md)
 > is kept as a historical archive. This page describes what replaced it.
 
+Optional companion schema: [`SANHEDRIN_TEST_INTEGRITY_DELTAS.md`](SANHEDRIN_TEST_INTEGRITY_DELTAS.md) describes mechanical deltas for cases where a verifier command passed but the test artifact changed after implementation.
+
+> **Historical archive.** This companion schema describes the 3.x Sanhedrin receipts and is kept for reference; it is not part of the 4.0 surface.
+
 ## What replaces a model verdict: deterministic claim verdicts
 
 4.0 keeps the *accountability* of Sanhedrin and removes the *judge*. Claims
