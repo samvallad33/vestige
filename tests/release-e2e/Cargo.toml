@@ -30,8 +30,11 @@ tempfile = "3"
 [dev-dependencies]
 # Integration tests are a separate crate. They do not see [dependencies].
 blake3 = "1"
+borsh = { version = "1", features = ["derive"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "rand_core"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json = "1"
 sha2 = "0.10"
+strata = { path = "../../crates/strata" }
 strata-migrate = { path = "../../crates/strata-migrate" }
 tempfile = "3"

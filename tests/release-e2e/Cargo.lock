@@ -1185,6 +1185,7 @@ version = "0.0.0"
 dependencies = [
  "blake3",
  "borsh",
+ "ed25519-dalek",
  "rusqlite",
  "serde_json",
  "sha2 0.10.9",

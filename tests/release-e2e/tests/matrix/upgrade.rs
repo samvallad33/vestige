@@ -13,7 +13,12 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use ed25519_dalek::{Signer, Verifier};
 use serde_json::Value;
+use strata::{
+    frame_hash, header_hash, merkle_root, parse_frame, payload_blake3, signature_message, Frame,
+    SegmentHeader, SegmentTrailer, HEADER_WIRE_SIZE, TRAILER_WIRE_SIZE,
+};
 
 use super::support::*;
 
@@ -1004,6 +1009,20 @@ fn upgrade_sigkill_after_publish_rerun_is_idempotent() {
 /// (`crates/strata-migrate/src/records.rs:295`) into the parent chosen by
 /// `receipt_key_dir_of` (`crates/strata-migrate/src/lib.rs:983`), called from
 /// `finish` (`crates/strata-migrate/src/lib.rs:929`).
+///
+/// `strata-verify` on a migrated log checks a receipt against the public key
+/// embedded in that receipt (`crates/strata-verify/src/migration.rs:89`), not
+/// against the on-disk `receipt-signing.key`. Old receipts verifying says
+/// nothing about the key file. The sha256 of the file is the byte assertion.
+///
+/// After the import, the old store signs a new receipt through the binary.
+/// `vestige ingest` is the gated write; `vestige backup` seals that segment
+/// under the key the log already holds (`strata.key`). The sealed trailer
+/// has to verify against the key snapshotted before the write. That is the
+/// step that fails when the key file was replaced. The later import's
+/// migration receipt is checked the same way against the public key embedded
+/// in the old log, because that signature is the one `receipt-signing.key`
+/// produces.
 #[test]
 fn import_never_overwrites_existing_receipt_key() {
     let work = tempfile::tempdir().unwrap();
@@ -1011,16 +1030,14 @@ fn import_never_overwrites_existing_receipt_key() {
     fs::create_dir_all(&parent).unwrap();
     let src = work.path().join("src");
     copy_tree(&fixture("fresh-v38-ckpt"), &src);
-    let existing = parent.join("existing");
+    fs::copy(src.join("vestige.db"), parent.join("vestige.db")).unwrap();
+    let existing = parent.join("log");
     let first = migrate_to(&src, &existing);
     assert_eq!(
         first.status,
         Some(0),
         "could not build the pre-existing store: {}",
-        format!("{}{}", first.stdout, first.stderr)
-            .chars()
-            .take(600)
-            .collect::<String>()
+        cmd_excerpt(&first)
     );
     let key = parent.join(strata_migrate::records::RECEIPT_KEY_FILE);
     assert!(
@@ -1030,7 +1047,7 @@ fn import_never_overwrites_existing_receipt_key() {
         parent.display()
     );
     let key_sha = sha256_file(&key);
-    assert_strata_verify_ok(&existing);
+    let embedded = embedded_receipt_key(&existing);
 
     let sibling = parent.join("sibling");
     let second = migrate_to(&src, &sibling);
@@ -1038,10 +1055,7 @@ fn import_never_overwrites_existing_receipt_key() {
         second.status,
         Some(0),
         "sibling import failed: {}",
-        format!("{}{}", second.stdout, second.stderr)
-            .chars()
-            .take(600)
-            .collect::<String>()
+        cmd_excerpt(&second)
     );
     assert_eq!(
         key_sha,
@@ -1049,7 +1063,7 @@ fn import_never_overwrites_existing_receipt_key() {
         "sibling import rewrote the pre-existing receipt key (written at \
          crates/strata-migrate/src/records.rs:295)"
     );
-    assert_strata_verify_ok(&existing);
+    assert_new_receipt_matches_old_key(&sibling, &embedded);
 
     let kill_src = work.path().join("kill-src");
     copy_tree(&src, &kill_src);
@@ -1068,10 +1082,7 @@ fn import_never_overwrites_existing_receipt_key() {
         rerun.status,
         Some(0),
         "rerun after the mid-import SIGKILL failed: {}",
-        format!("{}{}", rerun.stdout, rerun.stderr)
-            .chars()
-            .take(600)
-            .collect::<String>()
+        cmd_excerpt(&rerun)
     );
     assert_eq!(
         key_sha,
@@ -1081,7 +1092,135 @@ fn import_never_overwrites_existing_receipt_key() {
          crates/strata-migrate/src/lib.rs:983, called from finish at \
          crates/strata-migrate/src/lib.rs:929)"
     );
-    assert_strata_verify_ok(&existing);
+    assert_new_receipt_matches_old_key(&killed.dest, &embedded);
+
+    let log_key_before = fs::read(existing.join("strata.key")).unwrap();
+    let marker = "release-matrix-old-store-gated-9c1e";
+    let home = tempfile::tempdir().unwrap();
+    let ingest = run_vestige(
+        &[
+            "--data-dir".into(),
+            parent.display().to_string(),
+            "ingest".into(),
+            marker.into(),
+        ],
+        home.path(),
+        Duration::from_secs(120),
+    );
+    assert_eq!(
+        ingest.status,
+        Some(0),
+        "gated ingest on the old store failed: {}",
+        cmd_excerpt(&ingest)
+    );
+    assert_eq!(
+        key_sha,
+        sha256_file(&key),
+        "gated ingest rewrote the pre-existing receipt key"
+    );
+    assert!(
+        log_contains_marker(&parent, marker),
+        "gated ingest did not land in the old store's log"
+    );
+    let backup_to = work.path().join("old-store-backup");
+    let backup = run_vestige(
+        &[
+            "--data-dir".into(),
+            parent.display().to_string(),
+            "backup".into(),
+            backup_to.display().to_string(),
+        ],
+        home.path(),
+        Duration::from_secs(120),
+    );
+    assert_eq!(
+        backup.status,
+        Some(0),
+        "sealing the gated write failed: {}",
+        cmd_excerpt(&backup)
+    );
+    assert_eq!(
+        key_sha,
+        sha256_file(&key),
+        "sealing the gated write rewrote the pre-existing receipt key"
+    );
+    assert!(
+        marker_in_sealed_segment(&existing, marker),
+        "gated write landed, but the segment that holds it was not signed"
+    );
+    assert!(
+        newest_trailer_verifies(&existing, &log_key_before),
+        "gated write did not verify under the key the old log already pinned"
+    );
+}
+
+/// A log rewritten under a fresh key, with that key embedded so the receipt
+/// and the segment trailer agree, must still be rejected. The pin is the
+/// on-disk `receipt-signing.key` left beside the store. Expected to fail:
+/// `strata-verify` trusts `strata.key` (`crates/strata-verify/src/readonly.rs:89`)
+/// and the receipt's own embedded key
+/// (`crates/strata-verify/src/migration.rs:89`).
+#[test]
+fn verify_rejects_resigned_log_with_new_embedded_key() {
+    let work = tempfile::tempdir().unwrap();
+    let src = work.path().join("src");
+    copy_tree(&fixture("fresh-v38-ckpt"), &src);
+    let store = work.path().join("store");
+    let migrated = migrate_to(&src, &store);
+    assert_eq!(
+        migrated.status,
+        Some(0),
+        "could not build the store to resign: {}",
+        cmd_excerpt(&migrated)
+    );
+    let pin = work.path().join(strata_migrate::records::RECEIPT_KEY_FILE);
+    assert!(pin.is_file(), "store published no receipt key to pin");
+    let pinned_public = public_key_of_seed(&fs::read(&pin).unwrap());
+    resign_log_under_fresh_key(&store);
+    let embedded = embedded_receipt_key(&store);
+    assert_ne!(
+        embedded, pinned_public,
+        "resigned log still embeds the pinned receipt key"
+    );
+    let pin_sha = sha256_file(&pin);
+
+    let help = run_cmd(
+        &product_bin("strata-verify"),
+        &[],
+        &[],
+        &[],
+        Duration::from_secs(20),
+    );
+    let help_blob = format!("{}{}", help.stdout, help.stderr);
+    let pin_flag = key_pin_flag(&help_blob);
+    let plain = run_cmd(
+        &product_bin("strata-verify"),
+        &[store.display().to_string()],
+        &[],
+        &[],
+        Duration::from_secs(60),
+    );
+    let home = tempfile::tempdir().unwrap();
+    let via_vestige = run_vestige(
+        &["strata-verify".into(), store.display().to_string()],
+        home.path(),
+        Duration::from_secs(60),
+    );
+    let pinned = pin_flag.map(|flag| {
+        run_cmd(
+            &product_bin("strata-verify"),
+            &[flag, pin.display().to_string(), store.display().to_string()],
+            &[],
+            &[],
+            Duration::from_secs(60),
+        )
+    });
+    assert_eq!(pin_sha, sha256_file(&pin), "verify rewrote the pinned key");
+    assert_verify_rejects_foreign_key(&plain, "strata-verify");
+    assert_verify_rejects_foreign_key(&via_vestige, "vestige strata-verify");
+    if let Some(pinned_run) = pinned.as_ref() {
+        assert_verify_rejects_foreign_key(pinned_run, "strata-verify with the pinned key");
+    }
 }
 
 #[test]
@@ -1486,6 +1625,327 @@ fn assert_same_frames(got: &FrameCounts, want: &FrameCounts) {
         got.edges_body, want.edges_body,
         "edge frame payloads diverged"
     );
+}
+
+fn cmd_excerpt(out: &CmdOut) -> String {
+    format!("{}{}", out.stdout, out.stderr)
+        .chars()
+        .take(600)
+        .collect()
+}
+
+fn embedded_receipt_key(dir: &std::path::Path) -> [u8; 32] {
+    migration_receipt(dir).verifying_key
+}
+
+fn migration_receipt(dir: &std::path::Path) -> strata_migrate::records::MigrationReceipt {
+    for path in segment_paths(dir) {
+        let (_header, frames, _trailer) = split_segment(&fs::read(&path).unwrap())
+            .unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+        for frame in frames {
+            if frame.kind == strata_migrate::records::KIND_MIGRATION_RECEIPT {
+                return strata_migrate::records::decode_receipt(&frame.payload)
+                    .unwrap_or_else(|err| panic!("receipt decode {}: {err}", path.display()));
+            }
+        }
+    }
+    panic!("no migration receipt in {}", dir.display());
+}
+
+/// The new receipt was signed by the on-disk key. Checking it with
+/// `verify_signature` alone uses the key embedded in that same receipt.
+/// Swap in the old log's embedded key so a replaced file fails here.
+fn assert_new_receipt_matches_old_key(dir: &std::path::Path, old_embedded: &[u8; 32]) {
+    let receipt = migration_receipt(dir);
+    let mut under_old = receipt.clone();
+    under_old.verifying_key = *old_embedded;
+    assert!(
+        under_old.verify_signature(),
+        "new receipt does not verify under the public key embedded in the old log"
+    );
+    assert_eq!(
+        receipt.verifying_key, *old_embedded,
+        "new receipt embedded a different key than the old log"
+    );
+}
+
+fn public_key_of_seed(bytes: &[u8]) -> [u8; 32] {
+    let seed: [u8; 32] = bytes
+        .try_into()
+        .unwrap_or_else(|_| panic!("signing seed is {} bytes", bytes.len()));
+    ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes()
+}
+
+fn segment_paths(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut paths = seg_files(dir);
+    paths.sort();
+    paths
+}
+
+fn split_segment(
+    bytes: &[u8],
+) -> Result<(SegmentHeader, Vec<Frame>, Option<SegmentTrailer>), String> {
+    if bytes.len() < HEADER_WIRE_SIZE {
+        return Err("segment shorter than a header".into());
+    }
+    let header: SegmentHeader =
+        borsh::from_slice(&bytes[..HEADER_WIRE_SIZE]).map_err(|err| format!("header: {err}"))?;
+    let mut frames = Vec::new();
+    let mut off = HEADER_WIRE_SIZE;
+    loop {
+        let rem = bytes.len().saturating_sub(off);
+        if rem == 0 {
+            return Ok((header, frames, None));
+        }
+        if rem == TRAILER_WIRE_SIZE {
+            let trailer: SegmentTrailer =
+                borsh::from_slice(&bytes[off..]).map_err(|err| format!("trailer: {err}"))?;
+            return Ok((header, frames, Some(trailer)));
+        }
+        let (frame, used) =
+            parse_frame(&bytes[off..]).map_err(|err| format!("frame at {off}: {err}"))?;
+        off += used;
+        frames.push(frame);
+    }
+}
+
+fn reseal(
+    header: &SegmentHeader,
+    frames: &[Frame],
+    signing: &ed25519_dalek::SigningKey,
+) -> Vec<u8> {
+    let mut body = borsh::to_vec(header).unwrap();
+    let mut prev = header_hash(header);
+    let mut leaves = Vec::with_capacity(frames.len());
+    for frame in frames {
+        let linked = Frame {
+            kind: frame.kind,
+            payload: frame.payload.clone(),
+            payload_blake3: payload_blake3(frame.kind, &frame.payload),
+            prev_frame_hash: prev,
+        };
+        prev = frame_hash(&linked);
+        leaves.push(linked.payload_blake3);
+        body.extend(borsh::to_vec(&linked).unwrap());
+    }
+    let root = merkle_root(&leaves);
+    let message = signature_message(&header.segment_id, &header.prev_segment_hash, &root);
+    let trailer = SegmentTrailer {
+        frame_count: frames.len() as u64,
+        merkle_root: root,
+        signature: signing.sign(&message).to_bytes(),
+    };
+    body.extend(borsh::to_vec(&trailer).unwrap());
+    body
+}
+
+/// Rewrite one node, re-sign the receipt and every segment trailer under a
+/// fresh key, and store that seed as `strata.key`. The parent
+/// `receipt-signing.key` is left untouched, so the log is internally
+/// consistent under a key the pin file does not authorize.
+fn resign_log_under_fresh_key(dir: &std::path::Path) {
+    let mut seed = [0u8; 32];
+    fs::File::open("/dev/urandom")
+        .unwrap()
+        .read_exact(&mut seed)
+        .unwrap();
+    let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let paths = segment_paths(dir);
+    assert!(!paths.is_empty(), "store has no segment to resign");
+    let mut prev_segment = strata::GENESIS_PREV_SEGMENT_HASH;
+    let mut changed_node = false;
+    let mut changed_receipt = false;
+    for path in &paths {
+        let bytes = fs::read(path).unwrap();
+        let (mut header, mut frames, trailer) =
+            split_segment(&bytes).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+        assert!(
+            trailer.is_some(),
+            "migration segment {} is unsealed",
+            path.display()
+        );
+        header.prev_segment_hash = prev_segment;
+        for frame in &mut frames {
+            if frame.kind == strata_migrate::records::KIND_NODE && !changed_node {
+                let mut node = strata_migrate::records::decode_node(&frame.payload)
+                    .unwrap_or_else(|err| panic!("node decode: {err}"));
+                node.content.push_str(" release-matrix-resigned");
+                frame.payload = borsh::to_vec(&node).unwrap();
+                changed_node = true;
+            }
+            if frame.kind == strata_migrate::records::KIND_MIGRATION_RECEIPT {
+                let receipt = strata_migrate::records::decode_receipt(&frame.payload)
+                    .unwrap_or_else(|err| panic!("receipt decode: {err}"));
+                let resealed =
+                    strata_migrate::records::MigrationReceipt::seal(receipt.body, &signing);
+                frame.payload = borsh::to_vec(&resealed).unwrap();
+                changed_receipt = true;
+            }
+        }
+        let encoded = reseal(&header, &frames, &signing);
+        prev_segment = *blake3::hash(&encoded).as_bytes();
+        fs::write(path, &encoded).unwrap();
+    }
+    assert!(changed_node, "resign found no node frame");
+    assert!(changed_receipt, "resign found no receipt frame");
+    fs::write(dir.join("strata.key"), seed).unwrap();
+}
+
+fn newest_trailer_verifies(dir: &std::path::Path, seed: &[u8]) -> bool {
+    let Some(seed) = seed_array(seed) else {
+        return false;
+    };
+    log_continues_under(dir, &seed)
+}
+
+fn seed_array(bytes: &[u8]) -> Option<[u8; 32]> {
+    bytes.try_into().ok()
+}
+
+fn log_continues_under(dir: &std::path::Path, seed: &[u8; 32]) -> bool {
+    let verifying = ed25519_dalek::SigningKey::from_bytes(seed).verifying_key();
+    let mut prev_segment = strata::GENESIS_PREV_SEGMENT_HASH;
+    let paths = segment_paths(dir);
+    if paths.is_empty() {
+        return false;
+    }
+    for (index, path) in paths.iter().enumerate() {
+        let bytes = fs::read(path).unwrap_or_default();
+        if bytes.len() < HEADER_WIRE_SIZE {
+            return false;
+        }
+        let Ok((header, frames, trailer)) = split_segment(&bytes) else {
+            return false;
+        };
+        if header.prev_segment_hash != prev_segment {
+            return false;
+        }
+        if frames.is_empty() {
+            match trailer {
+                // `seal` rolls a header-only segment after the signed one.
+                None => return index + 1 == paths.len(),
+                Some(trailer) => {
+                    if trailer.frame_count != 0 || !sealed_under(&verifying, &header, &trailer, &[])
+                    {
+                        return false;
+                    }
+                    prev_segment = *blake3::hash(&bytes).as_bytes();
+                    continue;
+                }
+            }
+        }
+        let mut prev = header_hash(&header);
+        let mut leaves = Vec::new();
+        for frame in &frames {
+            if frame.payload_blake3 != payload_blake3(frame.kind, &frame.payload)
+                || frame.prev_frame_hash != prev
+            {
+                return false;
+            }
+            prev = frame_hash(frame);
+            leaves.push(frame.payload_blake3);
+        }
+        match trailer {
+            Some(trailer) => {
+                if !sealed_under(&verifying, &header, &trailer, &leaves) {
+                    return false;
+                }
+                if trailer.frame_count != frames.len() as u64 {
+                    return false;
+                }
+                prev_segment = *blake3::hash(&bytes).as_bytes();
+            }
+            None if index + 1 == paths.len() => return true,
+            None => return false,
+        }
+    }
+    true
+}
+
+fn sealed_under(
+    verifying: &ed25519_dalek::VerifyingKey,
+    header: &SegmentHeader,
+    trailer: &SegmentTrailer,
+    leaves: &[[u8; 32]],
+) -> bool {
+    if trailer.merkle_root != merkle_root(leaves) {
+        return false;
+    }
+    let message = signature_message(
+        &header.segment_id,
+        &header.prev_segment_hash,
+        &trailer.merkle_root,
+    );
+    let signature = ed25519_dalek::Signature::from_bytes(&trailer.signature);
+    verifying.verify(&message, &signature).is_ok()
+}
+
+/// The marker's bytes have to sit in a segment that carries a trailer.
+/// An unsealed tail proves the write was appended, not that it was signed.
+fn marker_in_sealed_segment(dir: &std::path::Path, marker: &str) -> bool {
+    let needle = marker.as_bytes();
+    segment_paths(dir).into_iter().any(|path| {
+        let Ok(bytes) = fs::read(&path) else {
+            return false;
+        };
+        if needle.is_empty() || !bytes.windows(needle.len()).any(|window| window == needle) {
+            return false;
+        }
+        split_segment(&bytes)
+            .map(|(_, _, trailer)| trailer.is_some())
+            .unwrap_or(false)
+    })
+}
+
+fn key_pin_flag(help: &str) -> Option<String> {
+    for token in [
+        "--receipt-key",
+        "--signing-key",
+        "--key-pin",
+        "--pinned-key",
+        "--public-key",
+    ] {
+        if help
+            .split_whitespace()
+            .any(|word| word == token || word.starts_with(token))
+        {
+            return Some(token.to_string());
+        }
+    }
+    None
+}
+
+fn assert_verify_rejects_foreign_key(out: &CmdOut, label: &str) {
+    let blob = format!("{}{}", out.stdout, out.stderr);
+    let accepted = out.status == Some(0) || blob.lines().any(|line| line.trim() == "OK");
+    if accepted {
+        panic!(
+            "FAIL: {label} accepted a log re-signed under a fresh key. The embedded \
+             verifying key does not match the pinned receipt-signing.key. Verify loads \
+             the key it trusts at crates/strata-verify/src/readonly.rs:89 \
+             (read_verifying_key reads strata.key) and checks the receipt against the \
+             key embedded in the receipt at crates/strata-verify/src/migration.rs:89 \
+             (verify_signature). The default binaries take no key-pin option \
+             (`strata-verify <dir>`). This is a real failure, not pending_strata. \
+             output: {}",
+            blob.chars().take(800).collect::<String>()
+        );
+    }
+    let lower = blob.to_lowercase();
+    let names_mismatch = lower.contains("embedded")
+        || (lower.contains("key") && (lower.contains("pin") || lower.contains("match")));
+    if !names_mismatch {
+        panic!(
+            "FAIL: {label} exited {:?} without naming an embedded-key mismatch against \
+             the pinned key. The key choice is crates/strata-verify/src/readonly.rs:89 \
+             and crates/strata-verify/src/migration.rs:89. This is a real failure, not \
+             pending_strata. output: {}",
+            out.status,
+            blob.chars().take(800).collect::<String>()
+        );
+    }
 }
 
 fn assert_strata_verify_ok(dir: &std::path::Path) {
